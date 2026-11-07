@@ -6,10 +6,11 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone, tzinfo
 from types import MappingProxyType
-from typing import Final, Literal, Protocol, TypedDict, cast
+from typing import Final, Literal, Protocol, SupportsFloat, SupportsIndex, TypedDict, cast
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from typing_extensions import ReadOnly
+from pydantic import TypeAdapter
+from typing_extensions import Buffer, ReadOnly
 
 import litellm
 from litellm._internal_context import current_billing_time
@@ -48,10 +49,10 @@ _IMAGE_RESPONSE_CALL_TYPES: Final = frozenset(
     }
 )
 
-# Pre-resolved DataResidency enum values for fast membership checks
 _VALID_DATA_RESIDENCIES: Final = frozenset(r.value for r in DataResidency)
 
 _DEPLOYMENT_PRICING_KEYS: Final[frozenset[str]] = frozenset(CustomPricingLiteLLMParams.model_fields)
+_IMAGE_REQUEST_PARAMS: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
 
 _BASE_CACHE_WRITE_RATE_KEY: Final = "cache_creation_input_token_cost"
 
@@ -1428,6 +1429,13 @@ def get_regional_uplift_multiplier(model_info: ModelInfo, data_residency: str | 
     multiplier: Final = model_info.get(f"regional_processing_uplift_multiplier_{residency}")
     if multiplier is None:
         return 1.0
+    if not isinstance(multiplier, (str, Buffer, SupportsFloat, SupportsIndex)):
+        verbose_logger.error(
+            "Invalid regional_processing_uplift_multiplier_%s for model (got %s); defaulting to 1.0",
+            residency,
+            type(multiplier).__name__,
+        )
+        return 1.0
     try:
         return float(multiplier)
     except (TypeError, ValueError):
@@ -2318,6 +2326,20 @@ class CostCalculatorUtils:
         )
         resolved_n: Final = n if n is not None else (len(completion_response.data) if completion_response.data else 0)
         pricing: Final = deployment_pricing(model_info)
+        if custom_llm_provider == litellm.LlmProviders.XAI.value:
+            from litellm.llms.xai.image_generation.cost_calculator import cost_calculator as xai_image_cost_calculator
+
+            xai_cost: Final = xai_image_cost_calculator(
+                model=model,
+                image_response=completion_response,
+                quality=quality,
+                n=resolved_n,
+                optional_params=_IMAGE_REQUEST_PARAMS.validate_python(optional_params),
+                call_type=call_type,
+                model_info=pricing,
+            )
+            if xai_cost is not None:
+                return xai_cost
         model_priced_calculator: Final = _model_priced_image_cost_calculator(custom_llm_provider, model, pricing)
 
         if model_priced_calculator is not None:

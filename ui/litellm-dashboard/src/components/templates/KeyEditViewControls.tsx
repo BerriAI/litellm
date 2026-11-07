@@ -11,6 +11,7 @@ import { FormField } from "@/components/shared/form/FormField";
 import { toast } from "@/lib/toast";
 import AgentSelector from "../agent_management/AgentSelector";
 import RateLimitTypeFormItem from "../common_components/RateLimitTypeFormItem";
+import { StorePromptsMetadataToggle } from "../common_components/StorePromptsToggle";
 import NumericalInput from "../shared/numerical_input";
 import SkillSelector from "../skills/SkillSelector";
 import { moveTagsOutOfMetadataJson } from "./keyEditFieldNormalizers";
@@ -195,15 +196,18 @@ export const KeyMetadataField = ({ form }: { form: KeyEditForm }) => {
       description={t("keyDetail.keyEditViewControls.metadata.description")}
     >
       {(field) => (
-        <Textarea
-          {...field}
-          value={(field.value as string | undefined) ?? ""}
-          rows={10}
-          onBlur={() => {
-            field.onBlur();
-            moveMetadataTagsToTagsField(form, t);
-          }}
-        />
+        <>
+          <StorePromptsMetadataToggle value={field.value as string | undefined} onChange={field.onChange} />
+          <Textarea
+            {...field}
+            value={(field.value as string | undefined) ?? ""}
+            rows={10}
+            onBlur={() => {
+              field.onBlur();
+              moveMetadataTagsToTagsField(form, t);
+            }}
+          />
+        </>
       )}
     </FormField>
   );

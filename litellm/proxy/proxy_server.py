@@ -164,6 +164,7 @@ from litellm.proxy._types import (
     ProxyException,
     ProxyLifespanState,
     SpecialModelNames,
+    SSOUserDefinedValues,
     SupportedDBObjectType,
     TeamDefaultSettings,
     TokenCountRequest,
@@ -174,7 +175,6 @@ from litellm.proxy.common_utils.callback_utils import (
     is_sensitive_callback_key,
     normalize_callback_names,
     process_callback,
-    strip_callback_config,
 )
 from litellm.proxy.common_utils.realtime_utils import (  # noqa: F401, RUF100  # legacy module exports
     _realtime_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -525,6 +525,7 @@ from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
     publish_auth_cache_invalidations,
 )
 from litellm.proxy.common_utils.callback_utils import initialize_callbacks_on_proxy
+from litellm.proxy.common_utils.codex_catalog_source import codex_catalog_source
 from litellm.proxy.common_utils.codex_model_catalog import CodexCatalogRow, codex_catalog_rows, codex_model_list_body
 from litellm.proxy.common_utils.config_includes import resolve_include_file_path, resolve_includes
 from litellm.proxy.common_utils.config_sync_pubsub import ConfigSyncSubscriber
@@ -604,7 +605,7 @@ from litellm.proxy.common_utils.periodic_reload_schedule import (
 from litellm.proxy.common_utils.proxy_state import ProxyState
 from litellm.proxy.common_utils.registry_read_through import resync_model_deployments_by_ids
 from litellm.proxy.common_utils.reset_budget_job import ResetBudgetJob
-from litellm.proxy.common_utils.responses_stream_errors import ResponsesStreamErrorState
+from litellm.proxy.common_utils.responses_stream_errors import ResponsesStreamErrorState, responses_chunk_data
 from litellm.proxy.common_utils.scheduled_job_stagger import (
     apply_scheduled_job_stagger,
     attach_job_timing_logger,
@@ -1140,7 +1141,6 @@ from litellm.types.utils import (
     SelectTokenizerResponse,
     StandardLoggingPayload,
 )
-from litellm.types.utils import ModelInfo as ModelMapInfo
 from litellm.utils import add_custom_logger_callback_to_specific_event
 
 try:
@@ -3221,16 +3221,23 @@ def _apply_background_response_settings(value: SettingsJsonValue) -> None:
     )
 
 
-user_custom_auth = None
-user_custom_key_generate = None
+_CustomKeyHook: TypeAlias = Callable[..., Awaitable[Mapping[str, object]]]
+
+
+class _CustomSsoHandler(Protocol):
+    async def __call__(self, sso_response: object) -> SSOUserDefinedValues | None: ...
+
+
+user_custom_auth: Callable[..., Awaitable[object]] | None = None
+user_custom_key_generate: _CustomKeyHook | None = None
 # Sentinel: prevents PKCE-no-Redis advisory from re-logging on config hot-reload.
 # Tests that need to reset it can patch 'litellm.proxy.proxy_server._pkce_no_redis_warning_emitted'.
 _pkce_no_redis_warning_emitted: bool = False
 _cp_no_redis_warning_emitted: bool = False
-user_custom_key_update = None
-user_custom_key_policy = None
-user_custom_sso = None
-user_custom_ui_sso_sign_in_handler = None
+user_custom_key_update: _CustomKeyHook | None = None
+user_custom_key_policy: _CustomKeyHook | None = None
+user_custom_sso: _CustomSsoHandler | None = None
+user_custom_ui_sso_sign_in_handler: object | None = None
 use_background_health_checks = None
 use_shared_health_check = None
 use_queue = False
@@ -4688,9 +4695,13 @@ async def _add_spend_to_shared_global_proxy_spend(cache: UserApiKeyCache, respon
 
 
 async def _add_spend_to_global_proxy_spend(cache: UserApiKeyCache, response_cost: float) -> None:
-    local_before: Final = cache.get_cache(key=GLOBAL_PROXY_SPEND_CACHE_KEY, local_only=True)
+    local_before: Final = _UNTYPED_VALUE.validate_python(
+        cache.get_cache(key=GLOBAL_PROXY_SPEND_CACHE_KEY, local_only=True)
+    )
     shared_total: Final = await _add_spend_to_shared_global_proxy_spend(cache, response_cost)
-    local_total: Final = cache.get_cache(key=GLOBAL_PROXY_SPEND_CACHE_KEY, local_only=True)
+    local_total: Final = _UNTYPED_VALUE.validate_python(
+        cache.get_cache(key=GLOBAL_PROXY_SPEND_CACHE_KEY, local_only=True)
+    )
     if not isinstance(local_total, (int, float)):
         return
     if shared_total is not None and local_total != local_before and shared_total < local_total:
@@ -6021,8 +6032,16 @@ class _DbCallbackRegistration:
     displaced: tuple[tuple[str, object], ...] = ()
 
 
+class _CallbackList(Protocol):
+    def __contains__(self, value: object, /) -> bool: ...
+
+    def append(self, value: object, /) -> None: ...
+
+
 def _restore_displaced_callback(list_name: str, entry: object) -> None:
-    callback_list: Final = getattr(litellm, list_name)
+    callback_list: Final = require_attributes(
+        _UNTYPED_VALUE.validate_python(getattr(litellm, list_name)), _CallbackList, "append"
+    )
     if entry not in callback_list:
         callback_list.append(entry)
 
@@ -7517,9 +7536,11 @@ class ProxyConfig:
 
             custom_ui_sso_sign_in_handler: Final = general_settings.get("custom_ui_sso_sign_in_handler", None)
             if custom_ui_sso_sign_in_handler is not None:
-                user_custom_ui_sso_sign_in_handler = get_instance_fn(
-                    value=custom_ui_sso_sign_in_handler,
-                    config_file_path=config_file_path,
+                user_custom_ui_sso_sign_in_handler = _UNTYPED_VALUE.validate_python(
+                    get_instance_fn(
+                        value=custom_ui_sso_sign_in_handler,
+                        config_file_path=config_file_path,
+                    )
                 )
 
             if enterprise_proxy_config is not None:
@@ -8821,7 +8842,7 @@ class ProxyConfig:
         environment_read: Final = next(self._environment_read_numbers)
         sections: Final = tuple(self._settings_stores)
         responses: Final = await asyncio.gather(*(get_config_param(prisma_client, section) for section in sections))
-        general_settings_response: Final = responses[sections.index("general_settings")]
+        general_settings_response: Final[_ConfigParamValueRow | None] = responses[sections.index("general_settings")]
         general_settings_value: Final[Mapping[str, SettingsJsonValue]] = (
             self._prepared_db_settings_values("general_settings", general_settings_response.param_value)
             if general_settings_response is not None and general_settings_response.param_value is not None
@@ -10672,6 +10693,15 @@ def _format_streaming_sse_chunk(chunk: object) -> str | bytes:
     return f"data: {chunk}\n\n"
 
 
+def _format_responses_sse_chunk(chunk: object) -> str | bytes:
+    data: Final = responses_chunk_data(chunk)
+    return _format_streaming_sse_chunk(chunk=chunk) if data is None else f"data: {data}\n\n"
+
+
+def _observed_frames(frames: str, error_state: ResponsesStreamErrorState | None) -> str:
+    return frames if error_state is None else error_state.observe_frames(frames)
+
+
 _SSE_FRAME_DELIMITERS: Final = ("\r\n\r\n", "\n\n", "\r\r")
 _OPENAI_STREAM_DONE_FRAME: Final = "data: [DONE]\n\n"
 _MAX_RAW_SSE_BUFFER_CHARS: Final = 8 * 1024 * 1024
@@ -10931,7 +10961,9 @@ async def async_data_generator(
     stream_completed = False
     client_disconnected = False
     error_state: Final = ResponsesStreamErrorState() if responses_stream_errors else None
-    ends_with_openai_done: Final = not request_data.get("_litellm_skip_openai_stream_done")
+    ends_with_openai_done: Final = not responses_stream_errors and not request_data.get(
+        "_litellm_skip_openai_stream_done"
+    )
     needs_iterator_wrap: Final = proxy_logging_obj.needs_iterator_wrap()
     stream_iterator: Final = _object_stream(
         proxy_logging_obj.async_post_call_streaming_iterator_hook(
@@ -11066,12 +11098,14 @@ async def async_data_generator(
                         frame, raw_sse_buffer = _pop_complete_sse_frame(raw_sse_buffer)
                         if frame is None:
                             break
-                        yield frame
+                        yield _observed_frames(frame, error_state)
                     if len(raw_sse_buffer) > _MAX_RAW_SSE_BUFFER_CHARS:
                         raise ValueError("Raw SSE stream exceeded maximum buffered size without a frame delimiter")
                     raw_passthrough = True
                 elif chunk.startswith(("data:", "event:", ":")):
-                    yield (chunk if chunk.endswith(_SSE_FRAME_DELIMITERS) else chunk + "\n\n")
+                    yield _observed_frames(
+                        chunk if chunk.endswith(_SSE_FRAME_DELIMITERS) else chunk + "\n\n", error_state
+                    )
                     raw_passthrough = True
             elif isinstance(chunk, str) and is_raw_sse_stream:
                 raw_sse_buffer += chunk
@@ -11079,7 +11113,7 @@ async def async_data_generator(
                     frame, raw_sse_buffer = _pop_complete_sse_frame(raw_sse_buffer)
                     if frame is None:
                         break
-                    yield frame
+                    yield _observed_frames(frame, error_state)
                 if len(raw_sse_buffer) > _MAX_RAW_SSE_BUFFER_CHARS:
                     raise ValueError("Raw SSE stream exceeded maximum buffered size without a frame delimiter")
                 raw_passthrough = True
@@ -11090,7 +11124,7 @@ async def async_data_generator(
             if not raw_passthrough:
                 try:
                     if error_state is not None:
-                        yield error_state.mark_emitted(_format_streaming_sse_chunk(chunk=chunk))
+                        yield error_state.mark_emitted(_format_responses_sse_chunk(chunk=chunk))
                     else:
                         yield _format_streaming_sse_chunk(chunk=chunk)
                 except Exception as e:
@@ -11113,11 +11147,14 @@ async def async_data_generator(
             ProxyLogging.fire_deferred_stream_logging(request_data)
 
         if raw_sse_buffer:
-            yield (raw_sse_buffer if raw_sse_buffer.endswith(_SSE_FRAME_DELIMITERS) else raw_sse_buffer + "\n\n")
+            yield _observed_frames(
+                raw_sse_buffer if raw_sse_buffer.endswith(_SSE_FRAME_DELIMITERS) else raw_sse_buffer + "\n\n",
+                error_state,
+            )
 
         if error_message is not None:
-            yield error_message
-        # OpenAI-compatible streams terminate with data: [DONE]; Google GenAI (?alt=sse) does not.
+            yield error_message if error_state is None else error_state.format_error_message(error_message)
+        # Chat Completions streams terminate with data: [DONE]; Responses and Google GenAI (?alt=sse) streams do not.
         if ends_with_openai_done:
             yield _OPENAI_STREAM_DONE_FRAME
     except (asyncio.CancelledError, GeneratorExit):
@@ -11179,7 +11216,7 @@ async def async_data_generator(
         await ProxyBaseLLMRequestProcessing.finalize_streaming_generator_cleanup(
             request=request,
             request_data=request_data,
-            response=response,
+            response=_UNTYPED_VALUE.validate_python(response),
             stream_completed=stream_completed,
             client_disconnected=client_disconnected,
             user_api_key_dict=user_api_key_dict,
@@ -13042,6 +13079,7 @@ async def model_list(
 
         admin_listing: Final = cast(Sequence[ModelInfoResponse], model_data)  # cast-ok: rows built above
         if client_version is not None:
+            admin_codex_stock: Final = await codex_catalog_source.stock(client_version)
             return Response(
                 content=await asyncio.to_thread(
                     codex_model_list_body,
@@ -13050,6 +13088,8 @@ async def model_list(
                     llm_router,
                     team_id or user_api_key_dict.team_id,
                     client_version=client_version,
+                    stock=admin_codex_stock.models,
+                    instructions=admin_codex_stock.instructions,
                 ),
                 media_type="application/json",
             )
@@ -13089,6 +13129,7 @@ async def model_list(
     entries: Final = key_listing.entries
     labels: Final = key_listing.labels
     if client_version is not None:
+        codex_stock: Final = await codex_catalog_source.stock(client_version)
         return Response(
             content=await asyncio.to_thread(
                 codex_model_list_body,
@@ -13098,6 +13139,8 @@ async def model_list(
                 team_id or user_api_key_dict.team_id,
                 labels,
                 client_version=client_version,
+                stock=codex_stock.models,
+                instructions=codex_stock.instructions,
             ),
             media_type="application/json",
         )
@@ -16163,10 +16206,9 @@ async def _count_request_tokens(
 
     deployment: dict[str, Any] | None = None if routed is None else dict(routed)
     litellm_model_name = None
-    model_info: ModelMapInfo | None = None
+    model_info: Final = None if routed is None else routed.get("model_info", {})
     if deployment is not None:
         litellm_model_name = deployment.get("litellm_params", {}).get("model")
-        model_info = deployment.get("model_info", {})
         deployment = {  # rebind-ok: merge the named credential into a copy
             **deployment,
             "litellm_params": with_named_credential(
@@ -16344,7 +16386,7 @@ async def _count_request_tokens(
     if model_info is not None:
         custom_tokenizer = cast(
             CustomHuggingfaceTokenizer | None,
-            model_info.get("custom_tokenizer", None),
+            _with_get(model_info).get("custom_tokenizer", None),
         )
     system_message: Final = _system_message(local_system)
     prompt_turn: Final = prompt_only and not (system_message is None and not tools)
@@ -19381,7 +19423,7 @@ async def async_queue_request(
         logged_api_key: Final = LiteLLMProxyRequestSetup.get_logged_api_key(user_api_key_dict)
         data["metadata"]["user_api_key"] = logged_api_key
         data["metadata"]["user_api_key_hash"] = logged_api_key
-        data["metadata"]["user_api_key_metadata"] = strip_callback_config(user_api_key_dict.metadata)
+        data["metadata"].update(LiteLLMProxyRequestSetup.get_tenant_logging_metadata(user_api_key_dict))
         _headers: Final = safe_get_request_headers(request).copy()
         _headers.pop("authorization", None)  # do not store the original `sk-..` api key in the db
         data["metadata"]["headers"] = _headers
@@ -20865,7 +20907,7 @@ async def update_config_general_settings(
             detail={"error": CommonProxyErrors.not_allowed_access.value},
         )
 
-    requested_value: Final[object] = data.field_value
+    requested_value: Final = _UNTYPED_VALUE.validate_python(data.field_value)
     if data.field_name in _GENERAL_SETTINGS_UI_LITELLM_FIELDS:
         return await _persist_general_settings_ui_litellm_field(data.field_name, requested_value, user_api_key_dict)
 

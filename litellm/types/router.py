@@ -659,6 +659,7 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     tag_regex: list[str] | None = None
 
     # auto-router params
+    switchyard_router_config: Mapping[str, object] | None = None
     auto_router_config_path: str | None = None
     auto_router_config: str | None = None
     auto_router_default_model: str | None = None
@@ -1461,6 +1462,7 @@ class PreRoutingStrategy(Protocol):
         messages: list[dict[str, Any]] | None = None,
         input: "str | list[Any] | None" = None,
         specific_deployment: bool | None = False,
+        call_type: str | None = None,
     ) -> "PreRoutingHookResponse | None": ...
 
 

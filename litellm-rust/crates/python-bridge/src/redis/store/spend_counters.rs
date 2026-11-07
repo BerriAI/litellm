@@ -1,10 +1,10 @@
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use litellm_redis_store::{
     Number,
     spend_counters::{LostSeed, Reading, SpendCounter, SpendCounters},
 };
-use pyo3::{prelude::*, types::PyDict};
+use pyo3::prelude::*;
 
 use super::{
     NativePending, PyData, PyNumber, kind_error, pending, redis_async, remote,
@@ -273,11 +273,13 @@ impl NativeSpendCounters {
         self.0.flush_local().map_err(kind_error)
     }
 
-    fn snapshot<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
-        let snapshot = PyDict::new(py);
-        for (key, spend) in self.0.snapshot().map_err(kind_error)? {
-            snapshot.set_item(key, PyNumber(spend))?;
-        }
-        Ok(snapshot)
+    fn snapshot(&self) -> PyResult<HashMap<String, PyNumber>> {
+        Ok(self
+            .0
+            .snapshot()
+            .map_err(kind_error)?
+            .into_iter()
+            .map(|(key, spend)| (key, PyNumber(spend)))
+            .collect())
     }
 }
