@@ -51,6 +51,7 @@ from litellm.proxy.auth.auth_checks import (
 )
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import AuthCacheInvalidationSubscriber
+from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
 from litellm.proxy.common_utils.user_api_key_cache import (
     UserApiKeyCache,
     budget_windows_absent_cache_key,
@@ -101,6 +102,7 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
     persist_deleted_verification_tokens,
     prepare_key_update_data,
     prepare_metadata_fields,
+    raise_on_logging_credential_change,
     reset_key_spend_fn,
     update_key_fn,
     validate_key_list_check,
@@ -112,6 +114,7 @@ from litellm.types.proxy.management_endpoints.key_management_endpoints import (
     BulkUpdateKeyResponse,
     CustomKeyPolicyRequest,
 )
+from litellm.types.utils import CredentialItem
 from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
 
 client = TestClient(app)
@@ -24243,3 +24246,29 @@ async def test_key_aliases_answers_503_when_the_database_is_unreachable(monkeypa
         )
 
     assert (exc_info.value.code, exc_info.value.type) == ("503", "no_db_connection")
+
+
+def test_non_admin_resaving_referencing_key_metadata_read_back_encrypted_is_not_a_logging_change(monkeypatch):
+    monkeypatch.setenv("LITELLM_SALT_KEY", "test-salt-32-bytes-aaaaaaaaaaaaaa")
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [CredentialItem(credential_name="space-a", credential_values={"arize_api_key": "k"}, credential_info={})],
+    )
+    stored = encrypt_callback_vars(
+        {
+            "logging": [
+                {"callback_name": "arize", "litellm_credential_name": "space-a", "callback_vars": {}},
+                {"callback_name": "langfuse", "callback_vars": {"langfuse_secret_key": "sk-lf-secret"}},
+            ]
+        }
+    )
+    assert stored["logging"][1]["callback_vars"]["langfuse_secret_key"] != "sk-lf-secret"
+    key_row = LiteLLM_VerificationToken(token="hashed", metadata=stored)
+    internal_user = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER)
+
+    raise_on_logging_credential_change({**stored, "note": "unrelated edit"}, key_row, internal_user)
+    with pytest.raises(HTTPException) as removed:
+        raise_on_logging_credential_change({"note": "unrelated edit"}, key_row, internal_user)
+
+    assert removed.value.status_code == 403

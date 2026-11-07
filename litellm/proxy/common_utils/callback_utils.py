@@ -26,8 +26,10 @@ from litellm.litellm_core_utils.core_helpers import (
     get_metadata_variable_name_from_kwargs,
     get_or_create_metadata_bucket,
 )
+from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
-from litellm.proxy._types import CommonProxyErrors, LiteLLMPromptInjectionParams
+from litellm.proxy._types import CALLBACK_VAR_NAMES, CommonProxyErrors, LiteLLMPromptInjectionParams
+from litellm.proxy.common_utils.callback_config_validation import object_sequence, string_keyed
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
@@ -734,6 +736,44 @@ def decrypt_callback_vars(metadata: object) -> Any:
     Legacy plaintext rows pass through unchanged (decrypt failure → original).
     """
     return _transform_callback_vars(metadata, _decrypt_or_passthrough)
+
+
+def decrypted_callback_metadata(metadata: object) -> object:
+    return _transform_callback_vars(metadata, _decrypt_or_passthrough)
+
+
+def decrypted_logging_entries(metadata: object) -> object:
+    return string_keyed(decrypted_callback_metadata(metadata)).get("logging")
+
+
+def key_logging_entries(metadata: object) -> tuple[Mapping[str, object], ...] | None:
+    entries: Final = decrypted_logging_entries(metadata)
+    if entries is None:
+        return None
+    return tuple(
+        resolved
+        for entry in object_sequence(entries) or ()
+        if (resolved := _with_credential(string_keyed(entry))) is not None
+    )
+
+
+def _with_credential(entry: Mapping[str, object]) -> Mapping[str, object] | None:
+    credential_name: Final = entry.get("litellm_credential_name")
+    if not isinstance(credential_name, str):
+        return entry
+    if CredentialAccessor.find_credential(credential_name) is None:
+        verbose_proxy_logger.warning(
+            "Ignoring key logging entry for %s: credential %r is not defined",
+            entry.get("callback_name"),
+            credential_name,
+        )
+        return None
+    credential_vars: Final = {
+        name: str(value)
+        for name, value in CredentialAccessor.get_credential_values(credential_name).items()
+        if name in CALLBACK_VAR_NAMES and value is not None
+    }
+    return {**entry, "callback_vars": {**credential_vars, **string_keyed(entry.get("callback_vars"))}}
 
 
 def _transform_callback_vars(metadata: object, transform: Callable[[str, object], object]) -> object:
