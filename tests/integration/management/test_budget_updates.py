@@ -1,3 +1,4 @@
+import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Final
@@ -6,7 +7,7 @@ import pytest
 from pydantic import JsonValue, TypeAdapter
 
 from tests.integration._support.client import Gateway, string_value
-from tests.integration._support.database import read_rows
+from tests.integration._support.database import read_rows, write_rows
 from tests.integration._support.process import owned_proxy
 
 pytestmark: Final = pytest.mark.shares_worker_state
@@ -213,3 +214,38 @@ def test_model_max_budget_update_is_refused_by_the_handler_without_a_license(gat
             served: Final = unlicensed.request("POST", "/budget/update", {"budget_id": budget_id, "max_budget": 20.0})
             assert served.status_code == 200, served.text
             assert _budget_row(budget_id) == {**before, "max_budget": 20.0}
+
+
+@pytest.mark.parametrize("model_max_budget", [None, {}], ids=["null", "empty-object"])
+def test_clearing_model_budgets_preserves_other_limits(
+    gateway: Gateway, model_max_budget: dict[str, JsonValue] | None
+) -> None:
+    stored_model_budgets: Final = {
+        "qa-budget-a": {"max_budget": 1.0, "budget_duration": "1d"},
+        "qa-budget-b": {"max_budget": 2.0, "budget_duration": "7d"},
+    }
+    with gateway.scenario() as scenario:
+        budget_id: Final = scenario.budget(
+            max_budget=20.0,
+            soft_budget=5.0,
+            tpm_limit=1000,
+            rpm_limit=60,
+            budget_duration="30d",
+        )
+        write_rows(
+            'UPDATE "LiteLLM_BudgetTable" SET model_max_budget = %s::jsonb WHERE budget_id = %s',
+            (json.dumps(stored_model_budgets), budget_id),
+        )
+        before_row: Final = _budget_row(budget_id)
+        before_info: Final = _budget_info(gateway, budget_id)
+        assert before_row["model_max_budget"] == stored_model_budgets
+
+        response: Final = gateway.request(
+            "POST", "/budget/update", {"budget_id": budget_id, "model_max_budget": model_max_budget}
+        )
+
+        assert response.status_code == 200, response.text
+        assert _budget_row(budget_id) == {**before_row, "model_max_budget": {}}
+        info: Final = _budget_info(gateway, budget_id)
+        assert info == {**before_info, "model_max_budget": {}, "updated_at": info["updated_at"]}
+        assert response.json() == info, response.text

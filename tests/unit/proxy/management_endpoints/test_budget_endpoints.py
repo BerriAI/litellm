@@ -477,3 +477,33 @@ async def test_update_budget_serializes_model_max_budget_for_prisma(
         "gpt4o": {"max_budget": 5.0, "budget_duration": "1d"},
         "glm-5.2": {"max_budget": 7.5, "budget_duration": "30d"},
     }
+
+
+@pytest.mark.parametrize(
+    ("model_patch", "expected_model_patch"),
+    [
+        pytest.param({}, {}, id="omitted"),
+        pytest.param({"model_max_budget": None}, {"model_max_budget": "{}"}, id="null"),
+        pytest.param({"model_max_budget": {}}, {"model_max_budget": "{}"}, id="empty-object"),
+    ],
+)
+def test_update_budget_preserves_omitted_model_budgets_and_clears_explicit_empty_values(
+    client_and_mocks: tuple[TestClient, MagicMock, MagicMock],
+    model_patch: dict[str, object],
+    expected_model_patch: dict[str, object],
+) -> None:
+    client, _, mock_table = client_and_mocks
+    captured: Final = _capture_update_data(mock_table)
+
+    response: Final = client.post(
+        "/budget/update",
+        json={"budget_id": "budget_model_clear", "soft_budget": None, **model_patch},
+    )
+
+    assert response.status_code == 200, response.text
+    assert captured == {
+        "budget_id": "budget_model_clear",
+        "soft_budget": None,
+        "updated_by": "test_user",
+        **expected_model_patch,
+    }
