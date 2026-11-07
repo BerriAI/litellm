@@ -78,6 +78,7 @@ from litellm.llms.openai.responses.guardrail_translation.tool_merge import (
     append_returned_tools,
     merge_guardrailed_tools,
 )
+from litellm.responses.additional_tools import additional_tools_in_input
 from litellm.responses.litellm_completion_transformation.compaction_items import (
     compaction_summary,
     decode_compaction_item,
@@ -776,7 +777,7 @@ class OpenAIResponsesHandler(BaseTranslation):
     delivers_ended_stream_rewrites = True
     assembles_streamed_response = True
 
-    def get_structured_messages(self, data: dict) -> list[AllMessageValues] | None:
+    def get_structured_messages(self, data: dict, *, keep_tool_errors: bool = False) -> list[AllMessageValues] | None:
         """
         Convert Responses API request data to OpenAI-spec structured messages.
 
@@ -989,9 +990,14 @@ class OpenAIResponsesHandler(BaseTranslation):
 
     def extract_request_tool_names(self, data: Mapping[str, object]) -> list[str]:
         """Extract tool names from Responses API request (tools[].name for function
-        and custom, tools[].server_label for mcp)."""
+        and custom, tools[].server_label for mcp), including tools carried by
+        ``additional_tools`` input items."""
         names: Final[list[str]] = []
-        for tool in list_field(data, "tools"):
+        request_tools: Final[tuple[object, ...]] = (
+            *list_field(data, "tools"),
+            *additional_tools_in_input(data.get("input")),
+        )
+        for tool in request_tools:
             if not isinstance(tool, dict):
                 continue
             if tool.get("type") in ("function", "custom") and tool.get("name"):

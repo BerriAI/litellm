@@ -659,6 +659,7 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     tag_regex: list[str] | None = None
 
     # auto-router params
+    switchyard_router_config: Mapping[str, object] | None = None
     auto_router_config_path: str | None = None
     auto_router_config: str | None = None
     auto_router_default_model: str | None = None
@@ -1041,6 +1042,21 @@ def _resolved_annotations(model_class: type[object]) -> Mapping[str, object]:
     return MappingProxyType(get_type_hints(model_class))
 
 
+class PriceTier(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    range: tuple[float, float]
+    costs: Mapping[str, float]
+
+
+class DeploymentPricing(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    provider: str
+    costs: Mapping[str, float]
+    tiered_pricing: tuple[PriceTier, ...] = ()
+
+
 class ModelGroupInfo(LiteLLMBaseModel):
     model_group: str
     providers: list[str]
@@ -1071,6 +1087,7 @@ class ModelGroupInfo(LiteLLMBaseModel):
     configurable_clientside_auth_params: CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS = None
     description: str | None = None
     supported_endpoints: tuple[str, ...] | None = None
+    deployment_pricing: tuple[DeploymentPricing, ...] = ()
 
     def __init__(self, **data) -> None:
         for field_name, field_type in _resolved_annotations(self.__class__).items():
@@ -1445,6 +1462,7 @@ class PreRoutingStrategy(Protocol):
         messages: list[dict[str, Any]] | None = None,
         input: "str | list[Any] | None" = None,
         specific_deployment: bool | None = False,
+        call_type: str | None = None,
     ) -> "PreRoutingHookResponse | None": ...
 
 

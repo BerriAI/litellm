@@ -4,6 +4,7 @@ import copy
 import logging
 import math
 import re
+import sys
 from collections.abc import Collection, Iterable, Iterator, Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeVar, cast, runtime_checkable
@@ -133,7 +134,7 @@ class _SupportsIter(Protocol):
 
 @runtime_checkable
 class _SupportsGetItem(Protocol):
-    def __getitem__(self, index: int, /) -> object: ...
+    def __getitem__(self, key: str | int, /) -> object: ...
 
 
 def attribute_or_none(source: object, name: str) -> object:
@@ -164,6 +165,28 @@ def iter_items(value: object) -> Iterable[object]:
     if isinstance(value, _SupportsGetItem):
         return iter(value)
     raise TypeError(f"'{type(value).__name__}' object is not iterable")
+
+
+@runtime_checkable
+class _SupportsContains(Protocol):
+    def __contains__(self, key: object, /) -> bool: ...
+
+
+_NOT_A_CONTAINER: Final = "is not a container or iterable" if sys.version_info >= (3, 14) else "is not iterable"
+
+
+def json_contains(value: object, key: object) -> bool:
+    if isinstance(value, _SupportsContains):
+        return key in value
+    if isinstance(value, (_SupportsIter, _SupportsGetItem)):
+        return key in tuple(iter_items(value))
+    raise TypeError(f"argument of type '{type(value).__name__}' {_NOT_A_CONTAINER}")
+
+
+def subscript(value: object, key: str | int) -> object:
+    if isinstance(value, _SupportsGetItem):
+        return value[key]
+    raise TypeError(f"'{type(value).__name__}' object is not subscriptable")
 
 
 def attribute_items(source: object, name: str) -> Iterable[object]:

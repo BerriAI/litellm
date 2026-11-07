@@ -16,7 +16,7 @@ from types import NoneType
 from typing import Annotated, Final, Literal, TypeAlias
 
 from packaging.version import Version
-from pydantic import ConfigDict, Field, StringConstraints
+from pydantic import ConfigDict, Field, StringConstraints, field_serializer
 
 from litellm.litellm_core_utils.reasoning_effort_strength import nearest_declared_reasoning_effort
 from litellm.types.llms.base_model import LiteLLMBaseModel
@@ -116,6 +116,10 @@ class CodexDeploymentCapabilities(LiteLLMBaseModel):
     supports_reasoning: bool | None = None
     prices_tokens: bool = False
     priced_service_tier_keys: frozenset[str] = frozenset()
+
+    @field_serializer("priced_service_tier_keys")
+    def _sorted_priced_service_tier_keys(self, keys: frozenset[str]) -> tuple[str, ...]:
+        return tuple(sorted(keys))
 
 
 @cache

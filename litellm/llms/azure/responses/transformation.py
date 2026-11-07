@@ -251,9 +251,8 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
     def compact_url(self, api_base: str) -> str:
         params: Final = httpx.URL(api_base).params
-        v1_params: Final = (
-            params if BaseAzureLLM.is_azure_v1_api_version(params.get("api-version")) else params.remove("api-version")
-        )
+        api_version: Final = next(iter(params.get_list("api-version")), None)
+        v1_params: Final = params if BaseAzureLLM.is_azure_v1_api_version(api_version) else params.remove("api-version")
         return super().compact_url(str(_v1_responses_url(api_base).copy_with(params=v1_params)))
 
     #########################################################

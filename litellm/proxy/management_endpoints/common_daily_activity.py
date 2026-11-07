@@ -5,7 +5,7 @@ from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta
 from itertools import groupby
 from types import MappingProxyType
-from typing import Final, Literal, NoReturn, Protocol
+from typing import Final, Literal, NoReturn, Protocol, TypeVar
 
 from fastapi import HTTPException, status
 from typing_extensions import ReadOnly, TypedDict, assert_never
@@ -14,6 +14,7 @@ from litellm import constants
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import PTU_SENTINEL_API_KEY, SUBSCRIPTION_BACKED_PROVIDERS
 from litellm.proxy._types import CommonProxyErrors
+from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.spend_tracking.key_metadata_recovery import (
     attach_user_details,
     recover_cli_session_key_metadata,
@@ -55,6 +56,8 @@ from litellm.types.repositories.daily_activity import (
     RollupMetricsRow,
     SpendLogsWindow,
 )
+
+_T = TypeVar("_T")
 
 
 @dataclass(frozen=True, slots=True)
@@ -188,9 +191,11 @@ class _AggregatedSpendData(TypedDict):
     totals: ReadOnly[SpendMetrics]
 
 
-def _key_metadata(api_key_metadata: Mapping[str, KeyMetadataRow], api_key: str | None) -> KeyMetadata:
+def _key_metadata(api_key_metadata: Mapping[str, KeyMetadataRow] | None, api_key: str | None) -> KeyMetadata:
     if not api_key:
         return KeyMetadata(key_alias="Unattributed", key_exists=False)
+    if api_key_metadata is None:
+        return KeyMetadata()
     meta: Final = api_key_metadata.get(api_key)
     return KeyMetadata(
         key_alias=meta.key_alias if meta is not None else None,
@@ -306,7 +311,7 @@ def update_breakdown_metrics(
     record: DailySpendRecord,
     model_metadata: Mapping[str, dict[str, object]],
     provider_metadata: Mapping[str, dict[str, object]],
-    api_key_metadata: Mapping[str, KeyMetadataRow],
+    api_key_metadata: Mapping[str, KeyMetadataRow] | None,
     entity_id_field: str | None = None,
     entity_metadata_field: Mapping[str, dict[str, object]] | None = None,
 ) -> BreakdownMetrics:
@@ -626,7 +631,7 @@ async def get_api_key_metadata(
 def _aggregate_spend_records_sync(
     *,
     records: Sequence[DailySpendRecord],
-    api_key_metadata: Mapping[str, KeyMetadataRow],
+    api_key_metadata: Mapping[str, KeyMetadataRow] | None,
     entity_id_field: str | None,
     entity_metadata_field: Mapping[str, dict[str, object]] | None,
 ) -> _AggregatedSpendData:
@@ -685,22 +690,10 @@ async def _aggregate_spend_records(
     The per-row loop is offloaded to a worker thread via asyncio.to_thread so
     a large result set doesn't peg the event loop.
     """
-    api_keys: Final[set[str]] = {
-        record.api_key for record in records if record.api_key and record.api_key != PTU_SENTINEL_API_KEY
-    }
-
-    api_key_metadata: Final[Mapping[str, KeyMetadataRow]] = (
-        await repository.key_metadata(
-            frozenset(api_keys), spend_logs_window(frozenset(record.date for record in records))
-        )
-        if api_keys
-        else MappingProxyType({})
-    )
-
     return await asyncio.to_thread(
         _aggregate_spend_records_sync,
         records=records,
-        api_key_metadata=api_key_metadata,
+        api_key_metadata=await _key_metadata_unless_database_fails(repository, records),
         entity_id_field=entity_id_field,
         entity_metadata_field=entity_metadata_field,
     )
@@ -783,7 +776,7 @@ def _record_to_spend_metrics(record: RollupMetricsRow) -> SpendMetrics:
 def _aggregate_grouping_sets_records_sync(
     *,
     records: Sequence[GroupingSetsRow],
-    api_key_metadata: Mapping[str, KeyMetadataRow],
+    api_key_metadata: Mapping[str, KeyMetadataRow] | None,
 ) -> _AggregatedSpendData:
     """Build the response from rollup rows produced by the GROUPING SETS query.
 
@@ -919,24 +912,40 @@ def _aggregate_grouping_sets_records_sync(
     return {"results": results, "totals": total_metrics}
 
 
+async def unless_database_fails(lookup: Awaitable[_T], fallback: _T, left_out: str) -> _T:
+    try:
+        return await lookup
+    except Exception as exc:
+        if not PrismaDBExceptionHandler.is_database_service_unavailable_error(exc):
+            raise
+        verbose_proxy_logger.warning("Returning daily activity without %s: %s", left_out, exc)
+        return fallback
+
+
+async def _key_metadata_unless_database_fails(
+    repository: DailyActivityRepository,
+    rows: Sequence[GroupingSetsRow] | Sequence[EntityRollupRow] | Sequence[DailySpendRecord],
+) -> Mapping[str, KeyMetadataRow] | None:
+    api_keys: Final = frozenset(row.api_key for row in rows if row.api_key and row.api_key != PTU_SENTINEL_API_KEY)
+    if not api_keys:
+        return MappingProxyType({})
+    return await unless_database_fails(
+        repository.key_metadata(api_keys, spend_logs_window(frozenset(row.date for row in rows))),
+        None,
+        "its key metadata",
+    )
+
+
 async def _aggregate_grouping_sets_records(
     *,
     repository: DailyActivityRepository,
     records: Sequence[GroupingSetsRow],
 ) -> _AggregatedSpendData:
     """Async wrapper: fetch api_key_metadata, then dispatch on a worker thread."""
-    api_keys: Final[set[str]] = {r.api_key for r in records if r.api_key and r.api_key != PTU_SENTINEL_API_KEY}
-
-    api_key_metadata: Final[Mapping[str, KeyMetadataRow]] = (
-        await repository.key_metadata(frozenset(api_keys), spend_logs_window(frozenset(r.date for r in records)))
-        if api_keys
-        else MappingProxyType({})
-    )
-
     return await asyncio.to_thread(
         _aggregate_grouping_sets_records_sync,
         records=records,
-        api_key_metadata=api_key_metadata,
+        api_key_metadata=await _key_metadata_unless_database_fails(repository, records),
     )
 
 
@@ -991,7 +1000,13 @@ async def get_daily_activity(
         if resolve_entity_metadata is not None:
             resolved_entity_metadata = {
                 **(entity_metadata_field or {}),
-                **(await resolve_entity_metadata(daily_spend_data)),
+                **(
+                    await unless_database_fails(
+                        resolve_entity_metadata(daily_spend_data),
+                        MappingProxyType[str, dict[str, object]]({}),
+                        "its entity metadata",
+                    )
+                ),
             }
         aggregated: Final = await _aggregate_spend_records(
             repository=repository,
@@ -1038,7 +1053,7 @@ def _fold_entity_rollups_sync(
     *,
     results: Sequence[DailySpendData],
     entity_rows: Sequence[EntityRollupRow],
-    api_key_metadata: Mapping[str, KeyMetadataRow],
+    api_key_metadata: Mapping[str, KeyMetadataRow] | None,
     entity_metadata_field: Mapping[str, Mapping[str, object]] | None,
 ) -> None:
     """Write breakdown.entities onto the already-built per-day results."""
@@ -1107,7 +1122,7 @@ async def _guardrail_spend_or_empty(
     from prisma.errors import PrismaError
 
     try:
-        return await repository.guardrail_spend(scope)
+        return await unless_database_fails(repository.guardrail_spend(scope), (), "its guardrail breakdown")
     except PrismaError as exc:
         verbose_proxy_logger.warning("Returning daily activity without its guardrail breakdown: %s", exc)
         return ()
@@ -1117,7 +1132,9 @@ async def _user_entity_metadata(
     repository: DailyActivityRepository, entity_rows: Sequence[EntityRollupRow]
 ) -> Mapping[str, Mapping[str, object]]:
     user_ids: Final = frozenset(row.entity_id for row in entity_rows if row.entity_id)
-    users: Final = await repository.user_metadata(user_ids)
+    users: Final = await unless_database_fails(
+        repository.user_metadata(user_ids), MappingProxyType({}), "its entity user metadata"
+    )
     return MappingProxyType(
         {
             user_id: MappingProxyType({"user_email": user.user_email, "user_alias": user.user_alias})
@@ -1160,16 +1177,7 @@ async def get_daily_activity_aggregated(
         )
         if aggregated_rows.entity_rows:
             entity_records: Final = aggregated_rows.entity_rows
-            entity_api_keys: Final = frozenset(
-                row.api_key for row in entity_records if row.api_key and row.api_key != PTU_SENTINEL_API_KEY
-            )
-            entity_key_metadata: Final[Mapping[str, KeyMetadataRow]] = (
-                await repository.key_metadata(
-                    entity_api_keys, spend_logs_window(frozenset(row.date for row in entity_records))
-                )
-                if entity_api_keys
-                else MappingProxyType({})
-            )
+            entity_key_metadata: Final = await _key_metadata_unless_database_fails(repository, entity_records)
             user_entity_metadata: Final[Mapping[str, Mapping[str, object]]] = (
                 await _user_entity_metadata(repository, entity_records)
                 if scope.table is DailyActivityTable.USER

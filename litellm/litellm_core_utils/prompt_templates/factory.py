@@ -10,7 +10,7 @@ from collections.abc import Callable, Container, Iterable, Iterator, Mapping, Se
 from dataclasses import dataclass, replace
 from enum import Enum
 from types import MappingProxyType
-from typing import Annotated, Any, Final, TypeAlias, TypedDict, TypeVar, cast, overload
+from typing import Annotated, Any, Final, Protocol, TypeAlias, TypedDict, TypeVar, cast, overload
 
 from jinja2.sandbox import ImmutableSandboxedEnvironment
 from pydantic import BaseModel, BeforeValidator, ConfigDict, JsonValue, TypeAdapter, ValidationError, model_validator
@@ -22,7 +22,7 @@ import litellm.types.llms
 from litellm import verbose_logger
 from litellm._uuid import uuid
 from litellm.constants import REDACTED_BY_LITELLM
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or_none
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or_none, require_attributes
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import (
     anthropic_system_messages,
     find_anthropic_server_tool_result,
@@ -4150,7 +4150,7 @@ class BedrockImageProcessor:
     _validate_format = validate_format
 
     @staticmethod
-    def _get_document_format(mime_type: str, supported_doc_formats: list[str]) -> str:
+    def _get_document_format(mime_type: str, supported_doc_formats: Sequence[str]) -> str:
         """
         Get the document format from the mime type
 
@@ -6571,6 +6571,20 @@ def has_tool_with_name(tools: object, tool_name: str) -> bool:
     return False
 
 
+class _SupportsModelDump(Protocol):
+    def model_dump(self) -> dict[str, object]: ...
+
+
+class _StructuredMessagesSource(Protocol):
+    def get_structured_messages(self, data: dict[str, object], /) -> Sequence[object] | None: ...
+
+
+def _instantiate_structured_message_sources(
+    source_classes: Iterable[Callable[[], _StructuredMessagesSource]],
+) -> Sequence[_StructuredMessagesSource]:
+    return [source_cls() for source_cls in source_classes]
+
+
 def resolve_structured_messages(
     messages: list[dict[str, object]] | None,
     request_kwargs: dict[str, Any],
@@ -6608,16 +6622,17 @@ def resolve_structured_messages(
                     break
 
     # 2. Fallback: try each mapped handler until one produces messages
-    handlers_to_try: Final[list[Any]] = []
-    if call_type is not None and call_type in mappings:
-        handlers_to_try.append(mappings[call_type]())
-    else:
-        handlers_to_try.extend(handler_cls() for handler_cls in mappings.values())
+    handlers_to_try: Final = _instantiate_structured_message_sources(
+        (mappings[call_type],) if call_type is not None and call_type in mappings else mappings.values()
+    )
 
     for handler in handlers_to_try:
         structured = handler.get_structured_messages(request_kwargs)
         if structured:
-            return [msg if isinstance(msg, dict) else msg.model_dump() for msg in structured]
+            return [
+                msg if isinstance(msg, dict) else require_attributes(msg, _SupportsModelDump, "model_dump").model_dump()
+                for msg in structured
+            ]
     return None
 
 

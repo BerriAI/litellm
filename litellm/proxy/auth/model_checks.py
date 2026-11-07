@@ -192,34 +192,25 @@ def get_team_models(
     - Empty list if no models set
     - If model_access_groups is provided, only return models that are in the access groups
     """
-    all_models_set: Final[set[str]] = set()
-    if len(team_models) > 0:
-        all_models_set.update(team_models)
-        if SpecialModelNames.all_team_models.value in all_models_set:
-            all_models_set.update(team_models)
-            # GH#30619: expand all-team-models sentinel
-            # to the actual proxy model list
-            all_models_set.discard(SpecialModelNames.all_team_models.value)
-            all_models_set.update(proxy_model_list)
-            if include_model_access_groups:
-                all_models_set.update(model_access_groups.keys())
-        if SpecialModelNames.all_proxy_models.value in all_models_set:
-            all_models_set.update(proxy_model_list)
-            if include_model_access_groups:
-                all_models_set.update(model_access_groups.keys())
-
-    all_models = _get_models_from_access_groups(
+    expands_to_proxy_models: Final = (
+        SpecialModelNames.all_team_models.value in team_models
+        or SpecialModelNames.all_proxy_models.value in team_models
+    )
+    expansion: Final = (
+        (*proxy_model_list, *(model_access_groups if include_model_access_groups else ()))
+        if expands_to_proxy_models
+        else ()
+    )
+    named_models: Final = (model for model in team_models if model != SpecialModelNames.all_team_models.value)
+    all_models: Final = _get_models_from_access_groups(
         model_access_groups=model_access_groups,
-        all_models=list(all_models_set),
+        all_models=list(dict.fromkeys((*named_models, *expansion))),
         include_model_access_groups=include_model_access_groups,
         proxy_model_list=proxy_model_list,
     )
 
-    # deduplicate while preserving order
-    all_models = list(dict.fromkeys(all_models))
-
     verbose_proxy_logger.debug("ALL TEAM MODELS - %s", len(all_models))
-    return all_models
+    return list(dict.fromkeys(all_models))
 
 
 def get_complete_model_list(
