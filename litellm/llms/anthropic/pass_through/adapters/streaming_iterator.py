@@ -24,6 +24,7 @@ from typing_extensions import assert_never
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.exceptions import ContextWindowExceededError, MidStreamFallbackError
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.hidden_params import set_hidden_params
 from litellm.llms.anthropic.pass_through.safeguards import StreamedSafeguardResults
 from litellm.llms.anthropic.pass_through.utils import anthropic_sse_frame
@@ -69,6 +70,14 @@ def _optional_attr(obj: object, name: str) -> object:
 def _optional_attr_sequence(obj: object, name: str) -> Sequence[object]:
     value: Final = getattr(obj, name, None)
     return value if value else ()
+
+
+def _first_thinking_block_index(chunk: "ModelResponseStream") -> int | None:
+    delta: Final = _optional_attr(chunk.choices[0], "delta") if chunk.choices else None
+    blocks: Final = _optional_attr_sequence(delta, "thinking_blocks")
+    first_block: Final = as_str_mapping(blocks[0]) if blocks else None
+    index: Final = first_block.get("index") if first_block is not None else None
+    return index if isinstance(index, int) else None
 
 
 def _error_status_and_message(exc: Exception) -> tuple[int, str]:
@@ -464,6 +473,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
     holding_stop_reason_chunk: MessageBlockDelta | None = None
     queued_usage_chunk: bool = False
     current_content_block_index: int = 0
+    current_thinking_block_index: int | None = None
 
     def __init__(
         self,
@@ -1352,8 +1362,21 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 original_name: Final = self.tool_name_mapping.get(truncated_name, truncated_name)
                 tool_block["name"] = original_name
 
+        thinking_block_index: Final = _first_thinking_block_index(chunk)
+        previous_thinking_block_index: Final = self.current_thinking_block_index
+        if thinking_block_index is not None or block_type != self.current_content_block_type:
+            self.current_thinking_block_index = thinking_block_index
+
         if block_type != self.current_content_block_type:
             self.current_content_block_type = block_type
+            self.current_content_block_start = content_block_start
+            return True
+
+        if (
+            thinking_block_index is not None
+            and previous_thinking_block_index is not None
+            and thinking_block_index != previous_thinking_block_index
+        ):
             self.current_content_block_start = content_block_start
             return True
 

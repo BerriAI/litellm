@@ -2,6 +2,7 @@ import base64
 import functools
 import json
 import logging
+from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import Any, Final, cast
 
@@ -5615,3 +5616,75 @@ async def test_openai_thinking_on_the_chat_adapter_keeps_reasoning_its_responses
 
     assert route.call_count == 1
     assert [item["encrypted_content"] for item in _sent_reasoning_items(route.calls[0].request)] == ["gAAA_same_org"]
+
+
+def _responses_sse(events: Sequence[Mapping[str, object]]) -> bytes:
+    return b"".join(
+        f"event: {event['type']}\ndata: {json.dumps({**event, 'sequence_number': number})}\n\n".encode()
+        for number, event in enumerate(events)
+    )
+
+
+def _reasoning_item(item_id: str, encrypted: str) -> dict[str, object]:
+    return {"type": "reasoning", "id": item_id, "summary": [], "encrypted_content": encrypted}
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_chat_bridge_httpx")
+async def test_streamed_consecutive_reasoning_items_each_become_their_own_block(
+    respx_mock: respx.MockRouter,
+) -> None:
+    response: Final = {**_RETRY_REPLY, "id": "resp_two_reasoning", "status": "in_progress", "output": []}
+    message: Final = {
+        "type": "message",
+        "id": "msg_two_reasoning",
+        "status": "completed",
+        "role": "assistant",
+        "content": [{"type": "output_text", "text": "Oslo", "annotations": []}],
+    }
+    first: Final = _reasoning_item("rs_1", "gAAA_first")
+    second: Final = _reasoning_item("rs_2", "gAAA_second")
+    completed: Final = {**response, "status": "completed", "output": [first, second, message]}
+    events: Final = (
+        {"type": "response.created", "response": response},
+        {"type": "response.output_item.added", "output_index": 0, "item": _reasoning_item("rs_1", "")},
+        {"type": "response.output_item.done", "output_index": 0, "item": first},
+        {"type": "response.output_item.added", "output_index": 1, "item": _reasoning_item("rs_2", "")},
+        {"type": "response.output_item.done", "output_index": 1, "item": second},
+        {"type": "response.output_item.added", "output_index": 2, "item": {**message, "content": []}},
+        {
+            "type": "response.output_text.delta",
+            "output_index": 2,
+            "item_id": "msg_two_reasoning",
+            "content_index": 0,
+            "delta": "Oslo",
+        },
+        {"type": "response.output_item.done", "output_index": 2, "item": message},
+        {"type": "response.completed", "response": completed},
+    )
+    respx_mock.post(url__regex=_RETRY_URL).mock(
+        return_value=httpx.Response(200, headers={"content-type": "text/event-stream"}, content=_responses_sse(events))
+    )
+
+    stream: Final = await litellm.anthropic.messages.acreate(
+        model="azure/gpt-5.4-nano",
+        api_base=_RETRY_API_BASE,
+        api_key="fake-key",
+        api_version="2025-04-01-preview",
+        max_tokens=64,
+        tools=_RETRY_TOOLS,
+        stream=True,
+        messages=[{"role": "user", "content": "Which city is colder?"}],
+    )
+    frames: Final = b"".join([chunk async for chunk in stream]).decode()
+    starts: Final = tuple(
+        json.loads(line.removeprefix("data: "))["content_block"]
+        for line in frames.splitlines()
+        if line.startswith("data: ") and '"content_block_start"' in line
+    )
+
+    assert [(block["type"], block.get("data")) for block in starts] == [
+        ("redacted_thinking", encrypted_reasoning_signature("gAAA_first")),
+        ("redacted_thinking", encrypted_reasoning_signature("gAAA_second")),
+        ("text", None),
+    ]
