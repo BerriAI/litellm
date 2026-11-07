@@ -137,7 +137,6 @@ class Scheduler:
         """
         set_scheduler_redis_cache(redis_cache)
         self.queue: Final[list[QueueEntry]] = []
-        self.queues: Final[dict[str, list[QueueEntry]]] = {}
         self.slot_limits: Final = slot_limits
         default_in_memory_ttl: float | None = None
         if redis_cache is not None:
@@ -148,7 +147,7 @@ class Scheduler:
 
     async def add_request(self, request: FlowItem):
         # We use the priority directly, as lower values indicate higher priority
-        cache_key: Final = self._cache_key(request.model_name, request.deployment_id)
+        cache_key: Final = self._cache_key(request.model_name)
         queue: Final = await self.get_queue(cache_key=cache_key)
         # update the queue
         heapq.heappush(queue, (request.priority, request.request_id))
@@ -187,14 +186,14 @@ class Scheduler:
             return True
         return await self._poll_legacy(request=request)
 
-    def _cache_key(self, model_name: str, deployment_id: str | None) -> str:
-        return f"{SchedulerCacheKeys.queue.value}:{model_name}:{deployment_id or '_'}"
+    def _cache_key(self, model_name: str) -> str:
+        return f"{SchedulerCacheKeys.queue.value}:{model_name}"
 
     def _slot_limits(self) -> _DeploymentSlotLimits | None:
         return self.slot_limits
 
     async def _poll_legacy(self, request: FlowItem) -> bool:
-        cache_key: Final = self._cache_key(request.model_name, request.deployment_id)
+        cache_key: Final = self._cache_key(request.model_name)
         queue: Final = await self.get_queue(cache_key=cache_key)
         entry: Final = (request.priority, request.request_id)
         print_verbose(f"queue: {queue}, seeking {entry}")
@@ -233,27 +232,26 @@ class Scheduler:
                     self.remove_request(
                         request_id=request.request_id,
                         model_name=request.model_name,
-                        deployment_id=request.deployment_id,
                     )
                 )
         if not admitted:
             raise Timeout(message="Request timed out while polling queue", model=request.model_name, llm_provider="openai")
 
-    async def remove_request(self, request_id: str, model_name: str, deployment_id: str | None = None) -> None:
+    async def remove_request(self, request_id: str, model_name: str) -> None:
         """
         Remove a specific request from the priority queue for a model.
         Used when a request times out while waiting in the queue.
         """
-        cache_key: Final = self._cache_key(model_name, deployment_id)
+        cache_key: Final = self._cache_key(model_name)
         queue: Final = await self.get_queue(cache_key=cache_key)
         filtered_queue: Final = [item for item in queue if item[1] != request_id]
         heapq.heapify(filtered_queue)  # restore heap invariant after filtering
         await self.save_queue(queue=filtered_queue, cache_key=cache_key)
         print_verbose(f"Removed request_id: {request_id} from queue for model: {model_name}")
 
-    async def peek(self, id: str, model_name: str, health_deployments: list, deployment_id: str | None = None) -> bool:
+    async def peek(self, id: str, model_name: str, health_deployments: list) -> bool:
         """Return if the id is at the top of the queue. Don't pop the value from heap."""
-        cache_key: Final = self._cache_key(model_name, deployment_id)
+        cache_key: Final = self._cache_key(model_name)
         queue: Final = await self.get_queue(cache_key=cache_key)
         if not queue:
             raise Exception(f"Incorrectly setup. Queue is invalid. Queue={queue}")
@@ -270,7 +268,7 @@ class Scheduler:
 
     def get_queue_status(self):
         """Get the status of items in the queue"""
-        return self.queue if not self.queues else {key: queue for key, queue in self.queues.items() if queue}
+        return self.queue
 
     @with_service_target(SCHEDULER_QUEUE_TARGET)
     async def get_queue(self, cache_key: str) -> list[QueueEntry]:
@@ -300,8 +298,4 @@ class Scheduler:
             target.extend(queue)
 
     def _in_memory_queue(self, cache_key: str) -> list[QueueEntry]:
-        model_name: Final = cache_key.split(f"{SchedulerCacheKeys.queue.value}:", 1)[1].rsplit(":", 1)[0]
-        if cache_key == self._cache_key(model_name, None):
-            return self.queue
-        deployment_id: Final = cache_key.rsplit(":", 1)[1]
-        return self.queues.setdefault(deployment_id, [])
+        return self.queue

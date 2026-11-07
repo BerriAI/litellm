@@ -1962,13 +1962,23 @@ class RustEndpoints:
             try:
                 healthy: Final = await self._core.select(model, dict(request), kind="healthy")
             except Exception:  # noqa: BLE001  # `_async_get_healthy_deployments` lists none on any lookup failure
-                # It lists none while every deployment cools down, or for a group it cannot look up:
-                # the request keeps its place in the queue, and the call itself raises the error.
                 return []
             return list(healthy) if isinstance(healthy, Sequence) else [healthy]
 
+        try:
+            selected: Final = await self._core.select(model, dict(request), kind="healthy")
+        except Exception:  # noqa: BLE001
+            selected = []
+        healthy_list: Final = list(selected) if isinstance(selected, Sequence) else ([selected] if selected else [])
+        deployment_id: Final = (
+            as_dict(healthy_list[0].get("model_info")).get("id") if healthy_list else None
+        )
+        queued_key: Final = model if deployment_id is None else f"{model}:{deployment_id}"
+
         await scheduler.wait_for_turn(
-            request=FlowItem(priority=priority, request_id=str(uuid.uuid4()), model_name=model),
+            request=FlowItem(
+                priority=priority, request_id=str(uuid.uuid4()), model_name=model, deployment_id=deployment_id
+            ),
             timeout=self._core.resolved.timeout,  # pyright: ignore[reportArgumentType]  # the router timeout
             get_healthy_deployments=healthy_deployments,
         )
@@ -1981,7 +1991,13 @@ class RustEndpoints:
         if hidden is not None:
             headers: Final = hidden.setdefault("additional_headers", {})
             if isinstance(headers, dict):
-                headers.update({"x-litellm-request-prioritization-used": True})  # pyright: ignore[reportUnknownMemberType]  # litellm's untyped helpers and request values
+                headers.update(
+                    {
+                        "x-litellm-request-prioritization-used": True,
+                        "x-litellm-queued": True,
+                        "x-litellm-queued-key": queued_key,  # pyright: ignore[reportUnknownMemberType]
+                    }
+                )
         return response
 
     async def acompletion(self, request: Mapping[str, object]) -> object:

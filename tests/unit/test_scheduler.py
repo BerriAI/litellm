@@ -28,7 +28,7 @@ _cache_key = f"{SchedulerCacheKeys.queue.value}"
 
 
 def legacy_key(model_name: str) -> str:
-    return f"{_cache_key}:{model_name}:_"
+    return f"{_cache_key}:{model_name}"
 
 
 @pytest.mark.asyncio
@@ -359,10 +359,10 @@ class _HeldRemovalScheduler(Scheduler):
         self.removing: Final = asyncio.Event()
         self.finish_removal: Final = asyncio.Event()
 
-    async def remove_request(self, request_id: str, model_name: str, deployment_id: str | None = None) -> None:
+    async def remove_request(self, request_id: str, model_name: str) -> None:
         self.removing.set()
         await self.finish_removal.wait()
-        await super().remove_request(request_id=request_id, model_name=model_name, deployment_id=deployment_id)
+        await super().remove_request(request_id=request_id, model_name=model_name)
 
 
 @pytest.mark.asyncio

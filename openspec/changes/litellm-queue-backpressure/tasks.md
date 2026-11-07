@@ -15,19 +15,19 @@ defect, no AI-slop comments.
 
 ### `litellm/scheduler.py`
 
-- [ ] 1.1 Add `deployment_id: str | None` field to `FlowItem`,
+- [x] 1.1 Add `deployment_id: str | None` field to `FlowItem`,
       default `None`.
-- [ ] 1.2 Thread `deployment_id` through `Scheduler.add_request` and
+- [x] 1.2 Thread `deployment_id` through `Scheduler.add_request` and
       `Scheduler.wait_for_turn` into the new `cache_key` parameter.
-- [ ] 1.3 Change `Scheduler.get_queue`, `Scheduler.save_queue`, and
+- [x] 1.3 Change `Scheduler.get_queue`, `Scheduler.save_queue`, and
       `Scheduler.remove_request` to take a `cache_key` parameter
       instead of deriving `model_name` alone. Build the key as
       `scheduler:queue:{model_name}:{deployment_id or "_"}`. Reuse the
       `SchedulerCacheKeys.queue` enum value as the prefix.
-- [ ] 1.4 Keep the legacy in-memory single list for
+- [x] 1.4 Keep the legacy in-memory single list for
       `deployment_id=None`. Add a `dict[str, list[QueueEntry]]` keyed
       by deployment id for the per-deployment path.
-- [ ] 1.5 Make `poll` slot-aware on the per-deployment path: ask the
+- [x] 1.5 Make `poll` slot-aware on the per-deployment path: ask the
       router's `MaxParallelRequestsLimit` for the target deployment's
       current `in_flight` and `max_parallel_requests`. If
       `in_flight < max_parallel_requests`, pop the entry from that
@@ -35,7 +35,7 @@ defect, no AI-slop comments.
       max_parallel_requests`, the entry stays and the next poller on
       that deployment id is the one who releases. The group-keyed
       legacy path keeps today's `poll` semantics.
-- [ ] 1.6 Have `MaxParallelRequestsLimit.release` publish a
+- [x] 1.6 Have `MaxParallelRequestsLimit.release` publish a
       `slot_freed` event on Redis pub/sub channel
       `litellm:slots:{deployment_id}`. In the single-worker in-memory
       case, replace the pub/sub channel with an `asyncio.Condition` per
@@ -43,21 +43,21 @@ defect, no AI-slop comments.
 
 ### `litellm/router_rust/invoke/endpoints.py`
 
-- [ ] 2.1 In `_schedule`, resolve a healthy deployment via
+- [x] 2.1 In `_schedule`, resolve a healthy deployment via
       `select(model, dict(request), kind="healthy")` before
       `wait_for_turn`. Thread that deployment id into the `FlowItem`.
       If `select` returns empty, build the `FlowItem` with
       `deployment_id=None` so the request waits on the group-keyed
       queue.
-- [ ] 2.2 Set the response header `x-litellm-queued: True` on the
+- [x] 2.2 Set the response header `x-litellm-queued: True` on the
       success path for either queue keying.
-- [ ] 2.3 Set the new response header
+- [x] 2.3 Set the new response header
       `x-litellm-queued-key: <model_name>[:<deployment_id>]` so an
       operator can audit which keying a request used.
 
 ### `litellm/router_utils/client_initalization_utils.py`
 
-- [ ] 3.1 No change to `MaxParallelRequestsLimit` itself, but
+- [x] 3.1 No change to `MaxParallelRequestsLimit` itself, but
       `release` now publishes the `slot_freed` event (task 1.6).
 
 ## Remediation 1: proxy gate deferral
