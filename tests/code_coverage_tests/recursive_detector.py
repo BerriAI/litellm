@@ -3,6 +3,7 @@ import os
 
 IGNORE_FUNCTIONS = [
     "_json_cost",  # bounded at depth 32 and consumed under byte/node limits.
+    "_compact_actor_value",
     "detached",  # router_config: copies only the plain containers of the router's own constructor arguments, once per build or changeset
     "_format_type",
     "remove_additional_properties",
@@ -81,6 +82,7 @@ IGNORE_FUNCTIONS = [
     "with_id_fields_replaced",  # harness/opencode: bounded by the nesting depth of the JsonValue that validate_json parsed from `opencode export`, which refuses nesting past ~200 levels.
     "completion_cost",  # max depth 1: recursion only fires for mixed-tier Responses WS logging objects, and each split part carries a single service_tier so _split_responses_ws_logging_object_by_service_tier returns None.
     "_string_leaves",  # bounded by the nesting depth of a safe_json_structure output (a finite JSON tree, no cycles possible).
+    "_compact_actor_value",  # OCSF actors have schema-bounded depth.
     "_replace_string_leaves",  # bounded by the nesting depth of a safe_json_structure output (a finite JSON tree, no cycles possible).
     "_redacted_client_field",  # bounded by the nesting depth of a JSON-decoded error body (a finite JSON tree, no cycles possible).
     "_sort_processed_sets",  # bounded by the nesting depth of the log-record extra it walks (a finite JSON tree, no cycles possible).
