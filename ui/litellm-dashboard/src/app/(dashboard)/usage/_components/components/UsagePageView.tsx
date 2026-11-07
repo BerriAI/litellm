@@ -7,7 +7,9 @@
  */
 
 import { Download, Link2, Search, X } from "lucide-react";
-import { useQueryStates } from "nuqs";
+import { useQueryState, useQueryStates } from "nuqs";
+import UsageAlertContext from "@/components/UsageAlerts/UsageAlertContext";
+import { activityPresets, entityActivityParsers } from "@/components/UsagePage/entityActivityState";
 import type { DateRangePickerValue } from "@/components/shared/date_picker_types";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Trans, useTranslation } from "react-i18next";
@@ -122,6 +124,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
   const defaultRange = useMemo(() => defaultUsageDateRange(defaultTimeRange), [defaultTimeRange]);
 
   const [urlParams, setUrlParams] = useQueryStates(usageUrlParsers);
+  const [alertId] = useQueryState("alert", entityActivityParsers.alert);
   const { range, from, to } = urlParams;
   const dateValue = useMemo<DateRangePickerValue>(
     () => dateRangeFromParams({ range, from, to }) ?? defaultRange.value,
@@ -168,6 +171,8 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
   const [topKeysLimit, setTopKeysLimit] = useState<number>(5);
   // For non-admins or "my-usage" view, always pass their own user_id
   const effectiveUserId = usageView === "my-usage" || !isAdmin ? userID || null : urlParams.user;
+  const isDeploymentUsage = isAdmin && usageView === "global" && effectiveUserId === null;
+  const showUsageAlert = Boolean(alertId && isDeploymentUsage);
 
   const clientScopeInput = {
     userId: userID,
@@ -256,9 +261,10 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
             startTime,
             endTime,
             entityIds: effectiveUserId ? [effectiveUserId] : null,
+            timezoneOffsetMinutes: showUsageAlert ? 0 : undefined,
           }
         : null,
-    [accessToken, startTime, endTime, effectiveUserId],
+    [accessToken, startTime, endTime, effectiveUserId, showUsageAlert],
   );
   const {
     data: aggregatedRaw,
@@ -269,7 +275,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
   } = useAggregatedDailyActivity({
     fetch: () => ENTITY_API.user.aggregated(dailyActivityRequest as DailyActivityRequest),
     enabled: dailyActivityRequest !== null,
-    deps: [accessToken, startTime, endTime, effectiveUserId],
+    deps: [accessToken, startTime, endTime, effectiveUserId, showUsageAlert],
   });
   // Tag data is deployment-wide with no per-user dimension, so Top agents only appears where the
   // rest of the page is deployment-wide too: an admin's global view with no user selected.
@@ -278,13 +284,13 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
   const globalClientSelected = isAdmin && selectedClient !== null && globalClientScope;
   const needsAgentSummary = showTopAgents || globalClientSelected;
   const tagDailyRequest = useMemo<DailyActivityRequest | null>(
-    () => (accessToken && startTime && endTime ? { accessToken, startTime, endTime, entityIds: null } : null),
-    [accessToken, startTime, endTime],
+    () => (dailyActivityRequest ? { ...dailyActivityRequest, entityIds: null } : null),
+    [dailyActivityRequest],
   );
   const { data: tagDailyRaw, loading: tagDailyLoading } = useAggregatedDailyActivity({
     fetch: () => ENTITY_API.tag.aggregated(tagDailyRequest as DailyActivityRequest),
     enabled: tagDailyRequest !== null && needsAgentSummary,
-    deps: [accessToken, startTime, endTime, needsAgentSummary],
+    deps: [tagDailyRequest, needsAgentSummary],
   });
   const tagDaily = useMemo(() => toDailyData(tagDailyRaw), [tagDailyRaw]);
   const openAgentActivity = useCallback(
@@ -369,8 +375,8 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
 
   const handleDateChange = useCallback(
     (newValue: DateRangePickerValue, presetShortLabel: string | null) =>
-      void setUrlParams(dateRangePatch(newValue, presetShortLabel)),
-    [setUrlParams],
+      void setUrlParams(dateRangePatch(newValue, showUsageAlert ? null : presetShortLabel)),
+    [setUrlParams, showUsageAlert],
   );
 
   const totals = useMemo(
@@ -456,6 +462,11 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
 
   return (
     <div ref={pageRef} className="relative w-full px-4 pt-3 pb-8 sm:px-6">
+      {showUsageAlert && alertId && (
+        <div className="mb-3">
+          <UsageAlertContext alertId={alertId} scope="deployment" entityId={null} />
+        </div>
+      )}
       <header className="mb-3 flex w-full flex-wrap items-center justify-between gap-3 border-b pb-3">
         <UsageViewSelect
           value={usageView}
@@ -479,8 +490,10 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
             </div>
           )}
           <div className="flex items-center gap-2">
+            {showUsageAlert && <span className="text-sm text-muted-foreground">UTC</span>}
             <AdvancedDatePicker
               value={dateValue}
+              presets={showUsageAlert ? activityPresets : undefined}
               onValueChange={handleDateChange}
               presetShortLabel={presetShortLabel}
             />

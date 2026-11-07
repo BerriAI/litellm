@@ -1,23 +1,20 @@
 import { renderWithProviders, screen } from "../../../../tests/test-utils";
 import { AUTO_ROUTER_DOCS_URL, NotificationsBell, NotificationsBellView } from "./NotificationsBell";
 import type { LatestReleaseInfo } from "@/app/(dashboard)/hooks/latestRelease/useLatestReleaseInfo";
+import { SPEND_ISSUE, RETIREMENT_ISSUE } from "@/components/Issues/issueFixtures";
 import React from "react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
-vi.mock("@/components/ModelDeprecationAlerts/useDeprecationAlerts", () => ({
-  useDeprecationAlerts: () => ({
-    data: [],
-    scope: "test",
-    range: { start_date: "2026-10-06", end_date: "2026-11-04" },
-  }),
-}));
 
 vi.mock("@/app/(dashboard)/hooks/healthReadiness/useHealthReadinessDetails", () => ({
   useHealthReadinessDetails: vi.fn(),
 }));
 vi.mock("@/app/(dashboard)/hooks/latestRelease/useLatestReleaseInfo", () => ({
   useLatestReleaseInfo: vi.fn(),
+}));
+vi.mock("@/components/Issues/issueApi", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/components/Issues/issueApi")>()),
+  useIssues: () => ({ data: undefined, enabled: false }),
 }));
 
 import { useHealthReadinessDetails } from "@/app/(dashboard)/hooks/healthReadiness/useHealthReadinessDetails";
@@ -49,6 +46,7 @@ describe("NotificationsBellView", () => {
     const user = userEvent.setup();
     renderWithProviders(<NotificationsBellView currentVersion="1.102.0" latestRelease={RELEASE} />);
     await user.click(bell(2));
+    await user.click(screen.getByRole("button", { name: /What's new/ }));
 
     const titles = screen.getAllByRole("article").map((item) => item.getAttribute("aria-label"));
     expect(titles).toEqual(["LiteLLM v1.103.0 is available", "LiteLLM Auto Router"]);
@@ -72,6 +70,7 @@ describe("NotificationsBellView", () => {
       />,
     );
     await user.click(bell(2));
+    await user.click(screen.getByRole("button", { name: /What's new/ }));
     expect(announcement("LiteLLM v1.103.0 is available")).toHaveTextContent("1 new feature, 1 fix, and 1 other update");
   });
 
@@ -84,6 +83,7 @@ describe("NotificationsBellView", () => {
     const user = userEvent.setup();
     renderWithProviders(<NotificationsBellView currentVersion={currentVersion} latestRelease={latestRelease} />);
     await user.click(bell(1));
+    await user.click(screen.getByRole("button", { name: /What's new/ }));
     expect(screen.getAllByRole("article").map((item) => item.getAttribute("aria-label"))).toEqual([
       "LiteLLM Auto Router",
     ]);
@@ -93,6 +93,7 @@ describe("NotificationsBellView", () => {
     const user = userEvent.setup();
     renderWithProviders(<NotificationsBellView currentVersion="1.102.0" latestRelease={RELEASE} />);
     await user.click(bell(2));
+    await user.click(screen.getByRole("button", { name: /What's new/ }));
     await user.click(screen.getAllByRole("button", { name: /^mark as read$/i })[0]);
 
     expect(bell(1).querySelector("[data-slot=badge]")).not.toBeNull();
@@ -111,6 +112,7 @@ describe("NotificationsBellView", () => {
     const user = userEvent.setup();
     const first = renderWithProviders(<NotificationsBellView currentVersion="1.102.0" latestRelease={RELEASE} />);
     await user.click(bell(2));
+    await user.click(screen.getByRole("button", { name: /What's new/ }));
     await user.click(screen.getAllByRole("button", { name: /^mark as read$/i })[0]);
     first.unmount();
 
@@ -124,6 +126,7 @@ describe("NotificationsBellView", () => {
       <NotificationsBellView currentVersion="1.102.0" latestRelease={RELEASE} />,
     );
     await user.click(bell(2));
+    await user.click(screen.getByRole("button", { name: /What's new/ }));
     await user.click(screen.getAllByRole("button", { name: /^mark as read$/i })[0]);
     expect(bell(1)).toBeInTheDocument();
 
@@ -145,6 +148,7 @@ describe("NotificationsBellView", () => {
     const user = userEvent.setup();
     renderWithProviders(<NotificationsBellView currentVersion="1.103.0" latestRelease={RELEASE} />);
     await user.click(bell(0));
+    await user.click(screen.getByRole("button", { name: /What's new/ }));
     expect(announcement("LiteLLM Auto Router")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^mark as read$/i })).not.toBeInTheDocument();
   });
@@ -159,6 +163,7 @@ describe("NotificationsBellView", () => {
     );
     const [bellA] = screen.getAllByRole("button", { name: "Notifications, 2 unread" });
     await user.click(bellA);
+    await user.click(screen.getByRole("button", { name: /What's new/ }));
     await user.click(screen.getAllByRole("button", { name: /^mark as read$/i })[0]);
 
     expect(screen.getAllByRole("button", { name: "Notifications, 1 unread" })).toHaveLength(2);
@@ -178,80 +183,67 @@ describe("NotificationsBell", () => {
     const user = userEvent.setup();
     renderWithProviders(<NotificationsBell accessToken="token" />);
     await user.click(bell(2));
+    await user.click(screen.getByRole("button", { name: /What's new/ }));
     expect(announcement("LiteLLM v1.103.0 is available")).toHaveTextContent("Your current version is v1.102.0");
   });
 });
 
-const DEPRECATION = {
-  id: "sonnet:2026-11-30:imminent",
-  usageModel: "anthropic/claude-sonnet-4-5",
-  requests: 18432,
-  lastUsedDate: "2026-11-04",
-  lastDayRequests: 123,
-  model: {
-    model_name: "support",
-    litellm_model: "anthropic/claude-sonnet-4-5",
-    deprecation_date: "2026-11-30",
-    days_until_deprecation: 26,
-    status: "imminent" as const,
-    successor_model: "recommended-model",
-  },
-};
+const ISSUES = { data: [SPEND_ISSUE, RETIREMENT_ISSUE], total: 2, limit: 3, offset: 0 };
 
-describe("model deprecation notifications", () => {
+describe("issue notifications", () => {
   beforeEach(() => localStorage.clear());
   afterEach(() => localStorage.clear());
-  it("should show last seen and link to the migration workspace and open alerts inbox", async () => {
+
+  it.each([
+    ["unavailable", undefined],
+    ["empty", { data: [], total: 0, limit: 3, offset: 0 }],
+    ["active", ISSUES],
+  ] as const)("keeps updates collapsed when alerts are %s", async (_state, issues) => {
     const user = userEvent.setup();
-    renderWithProviders(
-      <NotificationsBellView currentVersion={null} latestRelease={null} deprecationAlerts={[DEPRECATION]} />,
-    );
-    await user.click(screen.getByRole("button", { name: /1 model deprecation alert/ }));
-    expect(screen.getByRole("article", { name: /retires in 26 days/ })).toHaveTextContent("Last seen 2026-11-04 UTC");
-    expect(screen.getByRole("link", { name: "Review migration" })).toHaveAttribute(
-      "href",
-      "/ui/alerts?type=model-deprecations&model=anthropic%2Fclaude-sonnet-4-5",
-    );
-    expect(screen.getByRole("link", { name: "View all 1" })).toHaveAttribute(
-      "href",
-      "/ui/alerts?type=model-deprecations",
-    );
-    expect(screen.getByText("recommended-model")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Dismiss", exact: true })).not.toBeInTheDocument();
+    renderWithProviders(<NotificationsBellView currentVersion={null} latestRelease={null} issues={issues} />);
+    await user.click(screen.getByRole("button", { name: /^Notifications/ }));
+    expect(screen.getByRole("button", { name: /What's new/ })).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("article", { name: "LiteLLM Auto Router" })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Docs", exact: true })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: /What's new/ }));
+    const update = announcement("LiteLLM Auto Router");
+    expect(screen.getByLabelText("Notification content")).toContainElement(update);
   });
-  it("should clear the warning when the alert has a shared resolved acknowledgement", () => {
-    const state = {
-      model: DEPRECATION.usageModel,
-      deprecation_date: "2026-11-30",
-      status: "resolved" as const,
-      last_seen_date: "2026-11-04",
-      last_seen_requests: 123,
-    };
-    renderWithProviders(
-      <NotificationsBellView
-        currentVersion={null}
-        latestRelease={null}
-        deprecationAlerts={[{ ...DEPRECATION, state }]}
-      />,
-    );
-    expect(bell(1)).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /model deprecation alert/ })).not.toBeInTheDocument();
+
+  it("opens issue-owned investigations and keeps resources outside the scrolling content", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<NotificationsBellView currentVersion={null} latestRelease={null} issues={ISSUES} />);
+    await user.click(screen.getByRole("button", { name: "Notifications, 2 alerts need attention" }));
+    const destination = screen.getByRole("link", { name: SPEND_ISSUE.title });
+    expect(destination).toHaveAttribute("href", "/ui/alerts?issue=issue-checkout-spend");
+    expect(screen.getByRole("article", { name: SPEND_ISSUE.title })).toHaveTextContent("↑ 20× · $600.00 vs $30.00");
+    expect(screen.getByRole("link", { name: "View all 2" })).toHaveAttribute("href", "/ui/alerts");
+    const content = screen.getByLabelText("Notification content");
+    expect(content).toContainElement(destination);
+    expect(content).not.toContainElement(screen.getByRole("link", { name: "Docs", exact: true }));
+    expect(content).not.toContainElement(screen.getByRole("link", { name: "Blog", exact: true }));
+    expect(screen.queryByRole("article", { name: "LiteLLM Auto Router" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /What's new/ }));
+    expect(announcement("LiteLLM Auto Router")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /^mark as read$/i }));
+    expect(screen.getByRole("button", { name: "Notifications, 2 alerts need attention" })).toBeInTheDocument();
   });
-  it("should reopen a resolved alert when more requests arrive on the last-seen day", () => {
-    const state = {
-      model: DEPRECATION.usageModel,
-      deprecation_date: "2026-11-30",
-      status: "resolved" as const,
-      last_seen_date: "2026-11-04",
-      last_seen_requests: 122,
-    };
-    renderWithProviders(
-      <NotificationsBellView
-        currentVersion={null}
-        latestRelease={null}
-        deprecationAlerts={[{ ...DEPRECATION, state }]}
-      />,
+
+  it("preserves retirement recommendation provenance alongside performance issues", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<NotificationsBellView currentVersion={null} latestRelease={null} issues={ISSUES} />);
+    await user.click(screen.getByRole("button", { name: "Notifications, 2 alerts need attention" }));
+    expect(screen.getByRole("link", { name: RETIREMENT_ISSUE.title })).toHaveAttribute(
+      "href",
+      "/ui/alerts?issue=issue-model-retirement",
     );
-    expect(screen.getByRole("button", { name: /1 model deprecation alert/ })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "LiteLLM model cost map" })).toHaveAttribute(
+      "href",
+      "https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json",
+    );
+    const notice = screen.getByRole("link", { name: /Provider deprecation notice/ });
+    expect(notice).toHaveAttribute("href", "https://provider.example/model-retirements");
+    expect(notice).toHaveAttribute("rel", "noopener noreferrer");
+    expect(screen.getByRole("article", { name: RETIREMENT_ISSUE.title })).toContainElement(notice);
   });
 });

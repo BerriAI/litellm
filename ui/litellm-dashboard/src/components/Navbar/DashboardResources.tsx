@@ -83,63 +83,65 @@ export function DashboardCommunityLinks({ className }: { className?: string }) {
   );
 }
 
+export function DashboardBlogPosts() {
+  const { t } = useTranslation();
+  const hideBlog = useDisableBlogPosts();
+  const { data, isPending, isError, refetch } = useBlogPosts();
+  if (hideBlog) return null;
+  return (
+    <section aria-label={t("shell.dashboardResources.latestPosts")} className="border-t border-border py-2">
+      {isPending && <p className="py-2 text-xs text-muted-foreground">{t("shell.dashboardResources.loadingPosts")}</p>}
+      {isError && (
+        <Button variant="ghost" size="sm" onClick={() => void refetch()}>
+          {t("shell.dashboardResources.retryPosts")}
+        </Button>
+      )}
+      {data?.posts.slice(0, 3).map((post) => (
+        <a
+          key={post.url}
+          href={post.url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="flex items-baseline justify-between gap-4 rounded-md py-2 text-xs leading-5 hover:underline focus-visible:outline-ring"
+        >
+          <span className="line-clamp-2">{post.title}</span>
+          <time dateTime={post.date} className="shrink-0 text-[11px] text-muted-foreground">
+            {new Date(`${post.date}T00:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+          </time>
+        </a>
+      ))}
+    </section>
+  );
+}
+
 export function DashboardResources({ children }: { children?: ReactNode }) {
   const { t } = useTranslation();
   const hideBlog = useDisableBlogPosts();
   const hideCommunity = useDisableShowPrompts();
-  const { data, isPending, isError, refetch } = useBlogPosts();
   const links = [
     ...[...DOCS, ...(hideBlog ? [] : [BLOG])].map((link) => ({ ...link, label: t(link.label) })),
     ...(hideCommunity ? [] : COMMUNITY),
   ];
   return (
-    <>
-      {!hideBlog && (
-        <section aria-label={t("shell.dashboardResources.latestPosts")} className="border-t border-border px-2 py-2">
-          {isPending && (
-            <p className="px-2 py-3 text-xs text-muted-foreground">{t("shell.dashboardResources.loadingPosts")}</p>
-          )}
-          {isError && (
-            <Button variant="ghost" size="sm" onClick={() => void refetch()}>
-              {t("shell.dashboardResources.retryPosts")}
-            </Button>
-          )}
-          {data?.posts.slice(0, 3).map((post) => (
-            <a
-              key={post.url}
-              href={post.url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="flex items-baseline justify-between gap-4 rounded-md px-2 py-2 text-[13px] leading-5 hover:bg-muted focus-visible:outline-ring"
-            >
-              <span className="line-clamp-2">{post.title}</span>
-              <time dateTime={post.date} className="shrink-0 text-[11px] text-muted-foreground">
-                {new Date(`${post.date}T00:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
-              </time>
-            </a>
-          ))}
-        </section>
-      )}
-      <div className="border-t border-border bg-muted/25 p-2">
-        <nav aria-label={t("shell.dashboardResources.helpAndResources")} className="grid grid-cols-3 gap-1">
-          {links.map(({ href, label, Icon }) => (
-            <a
-              key={label}
-              href={href}
-              target="_blank"
-              rel="noopener noreferrer"
-              className={cn(
-                buttonVariants({ variant: "ghost", size: "sm" }),
-                "justify-start gap-2 text-xs font-normal text-muted-foreground",
-              )}
-            >
-              <Icon />
-              {label}
-            </a>
-          ))}
-        </nav>
-        {children}
-      </div>
-    </>
+    <div className="shrink-0 border-t border-border bg-muted/25 p-2">
+      <nav aria-label={t("shell.dashboardResources.helpAndResources")} className="grid grid-cols-3 gap-1">
+        {links.map(({ href, label, Icon }) => (
+          <a
+            key={label}
+            href={href}
+            target="_blank"
+            rel="noopener noreferrer"
+            className={cn(
+              buttonVariants({ variant: "ghost", size: "sm" }),
+              "justify-start gap-2 text-xs font-normal text-muted-foreground",
+            )}
+          >
+            <Icon />
+            {label}
+          </a>
+        ))}
+      </nav>
+      {children}
+    </div>
   );
 }

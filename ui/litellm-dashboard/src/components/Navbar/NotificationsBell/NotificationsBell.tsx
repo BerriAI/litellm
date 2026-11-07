@@ -12,18 +12,24 @@ import {
 } from "@/app/(dashboard)/hooks/useAnnouncementRead";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
-import { DashboardResources } from "@/components/Navbar/DashboardResources";
+import { DashboardBlogPosts, DashboardResources } from "@/components/Navbar/DashboardResources";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
 import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/cva.config";
 import { isNewerVersion } from "@/utils/versionUtils";
-import { AlertTriangle, ArrowUpRight, Bell } from "lucide-react";
-import DeprecationAlertItem from "@/components/ModelDeprecationAlerts/DeprecationAlertItem";
-import { type DeprecationAlert } from "@/components/ModelDeprecationAlerts/deprecationAlerts";
-import { useDeprecationAlerts } from "@/components/ModelDeprecationAlerts/useDeprecationAlerts";
-import { AlertStatus, effectiveAlertStatus } from "@/components/ModelDeprecationAlerts/migrationState";
-import { migrationHref } from "@/components/ModelDeprecationAlerts/migrationRoute";
-import React, { Fragment } from "react";
+import { AlertTriangle, ArrowUpRight, Bell, ChevronDown } from "lucide-react";
+import RecommendedReplacement from "@/components/ModelDeprecationAlerts/RecommendedReplacement";
+import {
+  IssuePage,
+  issueComparisonText,
+  issueDate,
+  issueHref,
+  issueResource,
+  issuesHref,
+  useIssues,
+} from "@/components/Issues/issueApi";
+import React, { Fragment, useState } from "react";
 import { useTranslation } from "react-i18next";
 import i18n from "@/i18n/i18n";
 
@@ -106,8 +112,53 @@ const AnnouncementItem: React.FC<{ announcement: Announcement }> = ({ announceme
   );
 };
 
+function ProductUpdates({
+  announcements,
+  unreadCount,
+  showAlerts,
+}: {
+  announcements: Announcement[];
+  unreadCount: number;
+  showAlerts: boolean;
+}) {
+  const { t } = useTranslation();
+  const [expanded, setExpanded] = useState(false);
+  return (
+    <Collapsible
+      open={expanded}
+      onOpenChange={setExpanded}
+      className={cn("px-4 py-2", showAlerts && "border-t border-border")}
+    >
+      <CollapsibleTrigger className="flex w-full items-center justify-between gap-2 py-1 text-sm font-medium">
+        <span>
+          {unreadCount > 0
+            ? t("shell.notifications.bell.updatesUnread", { count: unreadCount })
+            : t("shell.notifications.bell.title")}
+        </span>
+        <ChevronDown
+          className={cn("size-4 text-muted-foreground transition-transform", expanded && "rotate-180")}
+          aria-hidden
+        />
+      </CollapsibleTrigger>
+      <CollapsibleContent>
+        <div className="space-y-3 pt-3">
+          {announcements.map((announcement, index) => (
+            <Fragment key={announcement.readKey}>
+              {index > 0 ? <Separator /> : null}
+              <AnnouncementItem announcement={announcement} />
+            </Fragment>
+          ))}
+          <DashboardBlogPosts />
+        </div>
+      </CollapsibleContent>
+    </Collapsible>
+  );
+}
+
 interface NotificationsBellViewProps {
-  deprecationAlerts?: readonly DeprecationAlert[];
+  issues?: IssuePage;
+  issuesPending?: boolean;
+  issuesFailed?: boolean;
   deploymentHealthLink?: React.ReactNode;
   currentVersion: string | null | undefined;
   latestRelease: LatestReleaseInfo | null | undefined;
@@ -117,22 +168,23 @@ export const NotificationsBellView: React.FC<NotificationsBellViewProps> = ({
   currentVersion,
   latestRelease,
   deploymentHealthLink,
-  deprecationAlerts,
+  issues,
+  issuesPending,
+  issuesFailed,
 }) => {
   const { t } = useTranslation();
   const upgrade = upgradeAnnouncement(currentVersion, latestRelease);
   const announcements = upgrade ? [upgrade, autoRouterAnnouncement()] : [autoRouterAnnouncement()];
   const unreadCount = useUnreadAnnouncementCount(announcements.map((announcement) => announcement.readKey));
 
-  const openAlerts = (deprecationAlerts ?? []).filter((alert) => effectiveAlertStatus(alert) === AlertStatus.Open);
-  const openDeprecations = openAlerts.length;
+  const count = issues?.total ?? 0;
+  const needsAttention = count > 0;
+  const showIssues = Boolean(issues || issuesPending || issuesFailed);
   let label =
     unreadCount > 0
       ? t("shell.notifications.bell.triggerUnread", { unread: unreadCount })
       : t("shell.notifications.bell.trigger");
-  if (openDeprecations > 0) {
-    label = t("shell.notifications.bell.triggerDeprecations", { count: openDeprecations });
-  }
+  if (needsAttention) label = t("shell.notifications.bell.triggerAlerts", { count });
 
   return (
     <Popover>
@@ -141,13 +193,13 @@ export const NotificationsBellView: React.FC<NotificationsBellViewProps> = ({
         aria-label={label}
       >
         <span className="relative inline-flex">
-          <Bell className={cn("size-4", openDeprecations > 0 && "text-amber-700")} aria-hidden />
-          {openDeprecations > 0 ? (
+          <Bell className={cn("size-4", needsAttention && "text-amber-700")} aria-hidden />
+          {needsAttention ? (
             <span className="absolute -top-2 -right-2 rounded-full bg-background p-px text-amber-600" aria-hidden>
               <AlertTriangle className="size-3" fill="currentColor" stroke="var(--background)" strokeWidth={1.5} />
             </span>
           ) : null}
-          {openDeprecations === 0 && unreadCount > 0 ? (
+          {!needsAttention && unreadCount > 0 ? (
             <Badge className="absolute -top-0.5 -right-1 size-1.5 p-0" aria-hidden />
           ) : null}
         </span>
@@ -155,53 +207,55 @@ export const NotificationsBellView: React.FC<NotificationsBellViewProps> = ({
       <PopoverContent
         align="end"
         aria-label={t("shell.notifications.bell.trigger")}
-        className="w-96 max-w-[calc(100vw-1rem)] gap-0 overflow-hidden p-0"
+        className="flex max-h-[min(40rem,calc(100dvh-6rem))] w-96 max-w-[calc(100vw-1rem)] flex-col gap-0 overflow-hidden p-0"
       >
-        <PopoverTitle className="border-b border-border px-4 py-3 text-sm font-semibold">
-          {t("shell.notifications.bell.title")}
+        <PopoverTitle className="shrink-0 border-b border-border px-4 py-3 text-sm font-semibold">
+          {t("shell.notifications.bell.trigger")}
         </PopoverTitle>
-        <div className="max-h-[min(32rem,calc(100dvh-10rem))] overflow-y-auto">
-          <div className="space-y-4 p-4">
-            {openAlerts.length > 0 && (
-              <>
-                <div>
-                  <div className="flex items-center justify-between gap-3">
-                    <p className="text-sm font-semibold">{t("shell.notifications.bell.deprecationsTitle")}</p>
-                    <a className="text-xs text-primary hover:underline" href={migrationHref()}>
-                      {t("shell.notifications.bell.viewAllDeprecations", { total: openDeprecations })}
-                    </a>
-                  </div>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    {t("shell.notifications.bell.deprecationsDescription")}
-                  </p>
-                </div>
-                {openAlerts.slice(0, 3).map((alert) => (
-                  <Fragment key={alert.id}>
-                    <Separator />
-                    <DeprecationAlertItem alert={alert} />
-                  </Fragment>
-                ))}
-                <Separator />
-                <p className="text-xs font-medium text-muted-foreground">
-                  {t("shell.notifications.bell.announcementsHeading")}
+        <div aria-label={t("shell.notifications.bell.content")} className="min-h-0 overflow-y-auto overscroll-contain">
+          {showIssues && (
+            <div className="space-y-3 p-4">
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-sm font-medium">{t("shell.nav.items.alerts")}</p>
+                <a className="text-xs text-primary hover:underline" href={issuesHref()}>
+                  {count > 0
+                    ? t("shell.notifications.bell.viewAllAlerts", { count })
+                    : t("shell.notifications.bell.viewAlerts")}
+                </a>
+              </div>
+              {issuesPending && (
+                <p role="status" className="text-xs text-muted-foreground">
+                  {t("shell.notifications.bell.loadingAlerts")}
                 </p>
-              </>
-            )}
-            {deprecationAlerts && openAlerts.length === 0 && (
-              <a href={migrationHref()} className="text-sm font-medium text-primary hover:underline">
-                {t("shell.notifications.bell.viewDeprecations")}
-              </a>
-            )}
-
-            {announcements.map((announcement, index) => (
-              <Fragment key={announcement.readKey}>
-                {index > 0 ? <Separator /> : null}
-                <AnnouncementItem announcement={announcement} />
-              </Fragment>
-            ))}
-          </div>
-          <DashboardResources>{deploymentHealthLink}</DashboardResources>
+              )}
+              {issuesFailed && (
+                <p className="text-xs text-muted-foreground">{t("shell.notifications.bell.loadError")}</p>
+              )}
+              {issues?.data.map((issue) => (
+                <article key={issue.id} className="space-y-1 border-t pt-3" aria-label={issue.title}>
+                  <a
+                    href={issueHref(issue.id)}
+                    className="block truncate text-sm font-medium hover:underline"
+                    title={issue.title}
+                  >
+                    {issue.title}
+                  </a>
+                  <p className="truncate text-xs text-muted-foreground" title={issue.cohort.scope_id ?? "Gateway"}>
+                    {issueResource(issue)}
+                  </p>
+                  <p className="text-xs text-muted-foreground">{issueComparisonText(issue)}</p>
+                  <p className="text-xs text-muted-foreground">{issueDate(issue.observed_on)} UTC</p>
+                  {issue.deprecation && <RecommendedReplacement recommendation={issue.deprecation.model} />}
+                </article>
+              ))}
+              {issues?.total === 0 && (
+                <p className="text-xs text-muted-foreground">{t("shell.notifications.bell.empty")}</p>
+              )}
+            </div>
+          )}
+          <ProductUpdates announcements={announcements} unreadCount={unreadCount} showAlerts={showIssues} />
         </div>
+        <DashboardResources>{deploymentHealthLink}</DashboardResources>
       </PopoverContent>
     </Popover>
   );
@@ -213,12 +267,14 @@ export const NotificationsBell: React.FC<{ accessToken: string | null; deploymen
 }) => {
   const { data: healthData } = useHealthReadinessDetails(accessToken);
   const { data: latestRelease } = useLatestReleaseInfo(accessToken);
-  const { data: deprecationAlerts } = useDeprecationAlerts(accessToken);
+  const issueQuery = useIssues(accessToken, { limit: 3 });
   return (
     <NotificationsBellView
       currentVersion={healthData?.litellm_version}
       latestRelease={latestRelease}
-      deprecationAlerts={deprecationAlerts}
+      issues={issueQuery.data}
+      issuesPending={issueQuery.enabled && issueQuery.isPending}
+      issuesFailed={issueQuery.enabled && issueQuery.isError}
       deploymentHealthLink={deploymentHealthLink}
     />
   );

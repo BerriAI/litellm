@@ -3,6 +3,7 @@ import { useQueryStates } from "nuqs";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useAggregatedDailyActivity } from "@/app/(dashboard)/usage/_components/hooks/useAggregatedDailyActivity";
 import { ENTITY_API } from "@/app/(dashboard)/usage/_components/components/EntityUsage/entityFetchFns";
+import UsageAlertContext from "@/components/UsageAlerts/UsageAlertContext";
 import { ModelSection } from "@/components/activity_metrics";
 import AdvancedDatePicker from "@/components/shared/advanced_date_picker";
 import { useTranslation } from "react-i18next";
@@ -98,6 +99,7 @@ export default function EntityActivity({ scope, id, teamId }: Props) {
 
   return (
     <div className="space-y-4">
+      {params.alert && <UsageAlertContext alertId={params.alert} scope={scope} entityId={id} />}
       <div className="flex items-center justify-end gap-2">
         <span className="text-sm text-muted-foreground">UTC</span>
         <AdvancedDatePicker

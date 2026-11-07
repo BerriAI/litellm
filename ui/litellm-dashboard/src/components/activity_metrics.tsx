@@ -286,18 +286,26 @@ export const ModelSection = ({
           <Stat
             label={t("activityMetrics.stats.totalTokens")}
             value={<StatValue>{metrics.total_tokens.toLocaleString()}</StatValue>}
-            hint={t("activityMetrics.stats.avgTokensPerRequest", {
-              value: Math.round(metrics.total_tokens / metrics.total_successful_requests),
-            })}
+            hint={
+              metrics.total_successful_requests > 0
+                ? t("activityMetrics.stats.avgTokensPerRequest", {
+                    value: Math.round(metrics.total_tokens / metrics.total_successful_requests),
+                  })
+                : undefined
+            }
           />
         </StatCell>
         <StatCell>
           <Stat
             label={t("activityMetrics.stats.totalSpend")}
             value={<StatValue>${formatNumberWithCommas(metrics.total_spend, 2)}</StatValue>}
-            hint={t("activityMetrics.stats.spendPerRequest", {
-              value: formatNumberWithCommas(metrics.total_spend / metrics.total_successful_requests, 3),
-            })}
+            hint={
+              metrics.total_successful_requests > 0
+                ? t("activityMetrics.stats.spendPerRequest", {
+                    value: formatNumberWithCommas(metrics.total_spend / metrics.total_successful_requests, 3),
+                  })
+                : undefined
+            }
           />
         </StatCell>
         <StatCell>
