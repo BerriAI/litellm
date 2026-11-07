@@ -7989,6 +7989,49 @@ class TestChildSessionTierPins:
             router.discard()
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("surface", ["chat", "responses", "messages"])
+    async def test_claude_code_subagent_background_request_does_not_overwrite_pin(self, surface: str) -> None:
+        router: Final = self._router()
+        agent_headers: Final = self._claude_code_headers("subagent-01")
+        parent_headers: Final = self._claude_code_headers()
+        try:
+            # Subagent starts with a reasoning task and pins REASONING
+            subagent_deployment: Final = await self._route(
+                router, surface, None, "reason carefully", "REASONING", "literal_keyword_match",
+                headers=agent_headers, model="child-tier-router",
+            )
+            await self._route(
+                router, surface, None, None, "REASONING", "user_turn_continuation",
+                headers=agent_headers, model="child-tier-router", expected_deployment=subagent_deployment,
+            )
+            # Background request shares the subagent ID and classifies as SIMPLE, but must not overwrite the subagent's pin
+            await self._route(
+                router, surface, None, "Hello!", "SIMPLE", "heuristic_scorer",
+                headers=agent_headers, model="child-tier-router",
+            )
+            # Next subagent tool continuation stays on REASONING
+            await self._route(
+                router, surface, None, None, "REASONING", "user_turn_continuation",
+                headers=agent_headers, model="child-tier-router", expected_deployment=subagent_deployment,
+            )
+
+            # In contrast, the parent session without a subagent ID updates its pin normally on new asks
+            await self._route(
+                router, surface, None, "reason carefully", "REASONING", "literal_keyword_match",
+                headers=parent_headers, model="child-tier-router",
+            )
+            await self._route(
+                router, surface, None, "Hello!", "SIMPLE", "heuristic_scorer",
+                headers=parent_headers, model="child-tier-router",
+            )
+            await self._route(
+                router, surface, None, None, "SIMPLE", "user_turn_continuation",
+                headers=parent_headers, model="child-tier-router",
+            )
+        finally:
+            router.discard()
+
+    @pytest.mark.asyncio
     async def test_session_affinity_still_shares_the_parent_tier_with_claude_code_subagents(self) -> None:
         router: Final = self._router(session_affinity=True)
         try:
