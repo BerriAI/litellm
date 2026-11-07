@@ -93,7 +93,6 @@ from litellm.types.llms.openai import (
     ResponsesAPIResponse,
     ResponsesAPIStatus,
     ToolChoice,
-    ValidChatCompletionMessageContentTypes,
     ValidChatCompletionMessageContentTypesLiteral,
 )
 from litellm.types.responses.main import (
@@ -105,6 +104,7 @@ from litellm.types.responses.main import (
     OutputImageGenerationCall,
     OutputText,
     OutputToolSearchCall,
+    OutputToolSearchOutput,
 )
 from litellm.types.utils import (
     ChatCompletionAnnotation,
@@ -141,9 +141,17 @@ from .tool_search import (
     is_anthropic_tool_search_use,
     is_server_tool_search_tool,
     provider_builds_anthropic_request,
+    request_runs_tool_search,
+    route_runs_tool_search,
     tool_search_call_ids,
     without_tool_search_calls,
     without_tool_search_uses,
+)
+from .tool_search_results import (
+    converted_with_tool_searches_replayed,
+    holds_tool_search_items,
+    tool_search_results_by_call_id,
+    with_tool_search_outputs,
 )
 
 NamespaceNameMap: TypeAlias = Mapping[str, tuple[str, str]]
@@ -220,6 +228,20 @@ TOOL_CALLS_CACHE: Final = InMemoryCache()
 _ANY_KEY_DICT_ADAPTER: Final = TypeAdapter(dict[object, object])
 _STR_KEY_DICT_ADAPTER: Final = TypeAdapter(dict[str, object])
 _OBJECT_LIST_ADAPTER: Final = TypeAdapter(list[object])
+
+
+_CONTENT_TYPE_ADAPTER: Final[TypeAdapter[ValidChatCompletionMessageContentTypesLiteral]] = TypeAdapter(
+    ValidChatCompletionMessageContentTypesLiteral
+)
+
+
+def _valid_content_type(content_type: str) -> ValidChatCompletionMessageContentTypesLiteral | None:
+    try:
+        return _CONTENT_TYPE_ADAPTER.validate_python(content_type)
+    except ValidationError:
+        return None
+
+
 _CACHED_CONTENT_ADAPTER: Final = TypeAdapter(ChatCompletionCachedContent)
 _DICT_ITEMS_LIST_ADAPTER: Final = TypeAdapter(list[dict[object, object]])
 _TEXT_ADAPTER: Final = TypeAdapter(str)
@@ -694,16 +716,11 @@ class LiteLLMCompletionResponsesConfig:
     def _without_unsupported_tool_search(
         tools: ResponseTools, model: str, custom_llm_provider: str | None
     ) -> ResponseTools:
-        from litellm.utils import supports_tool_search
-
         if not has_server_tool_search(tools):
             return tools
         if any(is_anthropic_tool_search_chat_tool(tool) for tool in tools or ()):
             return [tool for tool in tools or () if not is_server_tool_search_tool(tool)]
-        route_runs_tool_search: Final = supports_tool_search(
-            model=model, custom_llm_provider=custom_llm_provider
-        ) and provider_builds_anthropic_request(model, custom_llm_provider)
-        if route_runs_tool_search:
+        if route_runs_tool_search(model, custom_llm_provider):
             return tools
         verbose_logger.warning(
             "Dropping Responses API tool of type 'tool_search': model '%s' (provider '%s') cannot run tool search "
@@ -866,6 +883,8 @@ class LiteLLMCompletionResponsesConfig:
             responses_api_request=responses_api_request,
             replay_reasoning=True,
             item_cache_control=keeps_item_marks,
+            replay_tool_search=holds_tool_search_items(input)
+            and request_runs_tool_search(request_tools or (), model, custom_llm_provider),
         )
 
         litellm_completion_request: dict = {
@@ -927,6 +946,7 @@ class LiteLLMCompletionResponsesConfig:
         responses_api_request: ResponsesAPIOptionalRequestParams | dict,
         replay_reasoning: bool = False,
         item_cache_control: bool = False,
+        replay_tool_search: bool = False,
     ) -> list[
         AllMessageValues
         | GenericChatCompletionMessage
@@ -948,6 +968,11 @@ class LiteLLMCompletionResponsesConfig:
         guardrail scanning) leave both off, because they need every piece of text
         in the request to stay readable as message ``content``, with no item mark
         a strict message schema could refuse.
+
+        ``replay_tool_search`` belongs to callers building history for a target
+        that builds an Anthropic request: a Claude ``tool_search_call`` and its
+        ``tool_search_output`` then go back as the search Claude ran. Everyone
+        else drops both items.
         """
         messages: list[
             AllMessageValues
@@ -963,20 +988,24 @@ class LiteLLMCompletionResponsesConfig:
                 )
             )
 
+        item_input: Final = input if item_cache_control else without_item_cache_control(input)
+        convert: Final = partial(
+            LiteLLMCompletionResponsesConfig._transform_response_input_param_to_chat_completion_message,
+            replay_reasoning=replay_reasoning,
+        )
         messages.extend(
-            LiteLLMCompletionResponsesConfig._transform_response_input_param_to_chat_completion_message(
-                input=input if item_cache_control else without_item_cache_control(input),
-                replay_reasoning=replay_reasoning,
-            )
+            converted_with_tool_searches_replayed(item_input, convert) if replay_tool_search else convert(item_input)
         )
 
         return messages
 
     @staticmethod
-    def _without_tool_search_uses_off_anthropic(
-        messages: Sequence[SessionMessage], route: CompletionRoute
+    def _without_tool_search_uses_the_request_cannot_run(
+        messages: Sequence[SessionMessage], route: CompletionRoute, tools: Sequence[object]
     ) -> tuple[SessionMessage, ...]:
-        if provider_builds_anthropic_request(route.model, route.custom_llm_provider):
+        if any(is_anthropic_tool_search_chat_tool(tool) for tool in tools) and provider_builds_anthropic_request(
+            route.model, route.custom_llm_provider
+        ):
             return tuple(messages)
         search_call_ids: Final = tool_search_call_ids(messages)
         return tuple(
@@ -1015,8 +1044,10 @@ class LiteLLMCompletionResponsesConfig:
         _messages: Final = litellm_completion_request.get("messages") or []
         stored_messages: Final = chat_completion_session.get("messages") or []
         replayed_messages: Final = (
-            LiteLLMCompletionResponsesConfig._without_tool_search_uses_off_anthropic(
-                stored_messages, CompletionRoute.model_validate(litellm_completion_request)
+            LiteLLMCompletionResponsesConfig._without_tool_search_uses_the_request_cannot_run(
+                stored_messages,
+                CompletionRoute.model_validate(litellm_completion_request),
+                _OBJECT_LIST_ADAPTER.validate_python(request_fields.get("tools") or []),
             )
             if any(holds_tool_search_use(message) for message in stored_messages)
             else stored_messages
@@ -2345,8 +2376,8 @@ class LiteLLMCompletionResponsesConfig:
         if content_type.startswith("input_"):
             stripped: Final = content_type[len("input_") :]
             # Validate stripped type is valid, otherwise default to "text"
-            if stripped in ValidChatCompletionMessageContentTypes:
-                return stripped
+            if valid_stripped := _valid_content_type(stripped):
+                return valid_stripped
             # Handle input_audio -> input_audio (it's already valid)
             if stripped == "audio":
                 return "input_audio"
@@ -2357,10 +2388,7 @@ class LiteLLMCompletionResponsesConfig:
             return "text"
 
         # Return as-is if it's a valid type, otherwise default to "text"
-        if content_type in ValidChatCompletionMessageContentTypes:
-            return content_type
-
-        return "text"
+        return _valid_content_type(content_type) or "text"
 
     @staticmethod
     def transform_instructions_to_system_message(
@@ -2632,7 +2660,13 @@ class LiteLLMCompletionResponsesConfig:
     def transform_chat_completion_tools_to_responses_tools(
         chat_completion_response: ModelResponse,
         responses_api_request: ResponsesAPIOptionalRequestParams | None = None,
-    ) -> list[ResponseFunctionToolCall | ResponseFunctionWebSearch | CustomToolCallOutputItem | OutputToolSearchCall]:
+    ) -> list[
+        ResponseFunctionToolCall
+        | ResponseFunctionWebSearch
+        | CustomToolCallOutputItem
+        | OutputToolSearchCall
+        | OutputToolSearchOutput
+    ]:
         """
         Transform a Chat Completion tools into a Responses API tools.
 
@@ -2640,7 +2674,8 @@ class LiteLLMCompletionResponsesConfig:
         with ``type="custom_tool_call"``. For regular function tools, returns
         ``ResponseFunctionToolCall`` with ``type="function_call"``. A provider-side
         tool search call made for a request's ``tool_search`` tool returns
-        ``OutputToolSearchCall`` with ``type="tool_search_call"``.
+        ``OutputToolSearchCall`` with ``type="tool_search_call"``, followed by
+        an ``OutputToolSearchOutput`` listing the tools it loaded.
         """
         all_chat_completion_tools: Final[list[ChatCompletionMessageToolCall]] = []
         for choice in chat_completion_response.choices:
@@ -2730,7 +2765,15 @@ class LiteLLMCompletionResponsesConfig:
                         )
 
                     responses_tools.append(output_tool_call)
-        return responses_tools
+        return list(
+            with_tool_search_outputs(
+                responses_tools,
+                tool_search_results_by_call_id(
+                    choice.message.provider_specific_fields for choice in chat_completion_response.choices
+                ),
+                request_tools,
+            )
+        )
 
     @staticmethod
     def _server_tool_call_item(
@@ -3020,6 +3063,7 @@ class LiteLLMCompletionResponsesConfig:
         | ResponseFunctionWebSearch
         | CustomToolCallOutputItem
         | OutputToolSearchCall
+        | OutputToolSearchOutput
     ]:
         responses_output: list[
             GenericResponseOutputItem
@@ -3030,6 +3074,7 @@ class LiteLLMCompletionResponsesConfig:
             | ResponseFunctionWebSearch
             | CustomToolCallOutputItem
             | OutputToolSearchCall
+            | OutputToolSearchOutput
         ] = []
 
         responses_output.extend(
