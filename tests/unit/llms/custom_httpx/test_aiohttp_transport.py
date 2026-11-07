@@ -6,7 +6,9 @@ import sys
 import struct
 import threading
 import weakref
-from typing import Final
+from types import SimpleNamespace
+from typing import Final, cast
+from unittest.mock import Mock
 
 import aiohttp
 import aiohttp.abc
@@ -14,6 +16,7 @@ import aiohttp.client_exceptions
 import aiohttp.http_exceptions
 import httpx
 import pytest
+from multidict import CIMultiDict
 
 
 from litellm.llms.custom_httpx.aiohttp_transport import (
@@ -67,9 +70,11 @@ class MockAiohttpResponse:
         content_chunks=None,
         exception_to_raise=None,
         exception_at_chunk=None,
+        raw_headers: tuple[tuple[bytes, bytes], ...] = (),
     ):
         self.status = status
         self.headers = headers or {}
+        self.raw_headers = raw_headers
         self.closed = False
         self.content = MockContent(
             content_chunks, exception_to_raise, exception_at_chunk
@@ -77,6 +82,9 @@ class MockAiohttpResponse:
 
     def close(self):
         self.closed = True
+
+    async def __aenter__(self) -> "MockAiohttpResponse":
+        return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         pass
@@ -97,6 +105,34 @@ class MockContent:
                 # Raise exception at specified chunk to simulate partial transfer
                 raise self.exception_to_raise
             yield chunk
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("filename", (b"clip.mp4", "视频.mp4".encode(), b"caf\xe9.mp4", b"clip-\xff.mp4"))
+async def test_response_headers_preserve_wire_bytes_and_repeated_values(filename: bytes) -> None:
+    raw_headers: Final = (
+        (b"Content-Disposition", b"attachment; filename=" + filename),
+        (b"Set-Cookie", b"first=one"),
+        (b"Set-Cookie", b"second=two"),
+    )
+    upstream: Final = MockAiohttpResponse(
+        headers=CIMultiDict(
+            (name.decode("ascii"), value.decode("utf-8", errors="surrogateescape")) for name, value in raw_headers
+        ),
+        raw_headers=raw_headers,
+        content_chunks=[b"video bytes"],
+    )
+    session: Final = cast(ClientSession, SimpleNamespace(
+        closed=False,
+        _loop=asyncio.get_running_loop(),
+        request=Mock(return_value=upstream),
+    ))
+    transport: Final = LiteLLMAiohttpTransport(client=lambda: session, owns_session=False)
+    async with httpx.AsyncClient(transport=transport) as client:
+        response: Final = await client.get("https://example.invalid/video.mp4")
+    assert response.content == b"video bytes"
+    assert response.headers.raw == list(raw_headers)
+    assert response.headers.get_list("set-cookie") == ["first=one", "second=two"]
 
 
 @pytest.mark.asyncio
@@ -356,6 +392,7 @@ async def test_handle_async_request_uses_env_proxy(monkeypatch):
             class Resp:
                 status = 200
                 headers = {}
+                raw_headers: Final[tuple[tuple[bytes, bytes], ...]] = ()
 
                 async def __aenter__(self):
                     return self
@@ -404,6 +441,7 @@ async def test_handle_async_request_empty_body_sends_no_data():
             class Resp:
                 status = 200
                 headers = {}
+                raw_headers: Final[tuple[tuple[bytes, bytes], ...]] = ()
 
                 async def __aenter__(self):
                     return self
@@ -468,6 +506,7 @@ async def test_handle_async_request_uses_env_proxy_per_url(monkeypatch):
             class Resp:
                 status = 200
                 headers = {}
+                raw_headers: Final[tuple[tuple[bytes, bytes], ...]] = ()
 
                 async def __aenter__(self):
                     return self
@@ -526,6 +565,7 @@ def _make_mock_response(should_fail=False, fail_count={"count": 0}):
     class MockResp:
         status = 200
         headers = {}
+        raw_headers: Final[tuple[tuple[bytes, bytes], ...]] = ()
 
         async def __aenter__(self):
             if should_fail and fail_count["count"] < 1:
