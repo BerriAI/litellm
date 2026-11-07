@@ -462,7 +462,15 @@ def tool_output_to_chat_content(
 
 
 TOOL_CALL_OUTPUT_ITEM_TYPES: Final = frozenset(
-    {"function_call_output", "custom_tool_call_output", "computer_call_output", "tool_result"}
+    {
+        "function_call_output",
+        "custom_tool_call_output",
+        "computer_call_output",
+        "tool_result",
+        "local_shell_call_output",
+        "shell_call_output",
+        "apply_patch_call_output",
+    }
 )
 
 

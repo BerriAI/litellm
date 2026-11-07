@@ -294,7 +294,7 @@ _OUTPUT_TEXT_EVENT_TYPES: Final = frozenset({"response.output_text.delta", "resp
 _TEXT_DELTA_EVENT_TYPES: Final = frozenset({"response.output_text.delta", "response.refusal.delta"})
 _TOOL_OUTPUT_TEXT_PART_TYPES: Final = frozenset({"input_text", "output_text", "text"})
 _PATCHABLE_ITEM_FIELDS: Final[Mapping[str, str]] = MappingProxyType(
-    {"function_call_output": "output", "custom_tool_call_output": "output", "message": "content"}
+    {tool_type: "output" for tool_type in TOOL_CALL_OUTPUT_ITEM_TYPES} | {"message": "content"}
 )
 
 _EMPTY_RESPONSES_REQUEST: Final[ResponsesAPIOptionalRequestParams] = {}
