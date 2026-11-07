@@ -1,4 +1,6 @@
 import json
+import logging
+from typing import Final
 
 import pytest
 
@@ -115,3 +117,14 @@ def _distinct_json_objects(count: int) -> str:
 )
 def test_salvage_concatenated_tool_arguments(raw: str, expected: tuple[dict[str, object], ...]) -> None:
     assert salvage_concatenated_tool_arguments(raw) == expected
+
+
+def test_parse_tool_call_arguments_repair_warning_leaves_out_argument_content(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        result: Final = parse_tool_call_arguments('{"patient": "Jane Doe"', tool_name="lookup", context="test")
+
+    assert result == {"patient": "Jane Doe"}
+    assert "Repaired truncated tool call arguments for tool 'lookup'" in caplog.text
+    assert "Jane Doe" not in caplog.text
