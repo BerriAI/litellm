@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { CategoryFilter, PiiEntityList, QuickActions } from "./pii_components";
 import { PiiConfigurationProps } from "@/components/guardrails/types";
 
@@ -15,6 +16,7 @@ const PiiConfiguration: React.FC<PiiConfigurationProps> = ({
   onActionSelect,
   entityCategories = [],
 }) => {
+  const { t } = useTranslation();
   const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
 
   // Create a lookup map to quickly find an entity's category
@@ -54,9 +56,11 @@ const PiiConfiguration: React.FC<PiiConfigurationProps> = ({
     <div className="pii-configuration">
       <div className="flex justify-between items-center mb-5">
         <div className="flex items-center">
-          <h4 className="m-0 text-lg font-semibold text-foreground">Configure PII Protection</h4>
+          <h4 className="m-0 text-lg font-semibold text-foreground">{t("guardrails.pii.configuration.title")}</h4>
         </div>
-        <span className="text-muted-foreground">{selectedEntities.length} items selected</span>
+        <span className="text-muted-foreground">
+          {t("guardrails.pii.configuration.selectedCount", { count: selectedEntities.length })}
+        </span>
       </div>
 
       <div className="mb-6">

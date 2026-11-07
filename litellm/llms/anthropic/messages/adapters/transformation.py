@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, TypeVar, cast
 from pydantic import JsonValue, TypeAdapter
 
 import litellm
-from litellm.litellm_core_utils.core_helpers import normalize_drop_params
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, normalize_drop_params
 from litellm.litellm_core_utils.hidden_params import get_hidden_params
 from litellm.llms.anthropic.messages.convertible_blocks import tool_result_text_part
 from litellm.llms.anthropic.messages.utils import (
@@ -44,6 +44,25 @@ def _thought_signature(provider_specific_fields: object) -> str | None:
         return None
     signature: Final = fields.get("thought_signature")
     return signature if isinstance(signature, str) else None
+
+
+def _object_sequence(value: object) -> Sequence[object] | None:
+    return value if isinstance(value, (list, tuple)) else None
+
+
+def _server_tool_blocks(message: object) -> tuple[Mapping[str, object], ...]:
+    server_tool_calls: Final = anthropic_server_tool_call_params(message)
+    if not server_tool_calls:
+        return ()
+    fields: Final = _as_string_mapping(_optional_attr(message, "provider_specific_fields")) or {}
+    return tuple(
+        convert_to_anthropic_tool_invoke(
+            server_tool_calls,
+            web_search_results=_object_sequence(fields.get("web_search_results")),
+            tool_results=_object_sequence(fields.get("tool_results")),
+            server_tool_call_ids=frozenset(tool_call["id"] for tool_call in server_tool_calls),
+        )
+    )
 
 
 def _compaction_blocks(provider_specific_fields: object) -> tuple[Mapping[str, object], ...]:
@@ -123,19 +142,30 @@ def create_tool_name_mapping(
 from openai.types.chat.chat_completion_chunk import Choice as OpenAIStreamingChoice
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
-    anthropic_image_source_to_openai_url,
     anthropic_inline_document,
-    parse_tool_call_arguments,
-    reasoning_content_from_thinking_blocks,
-    with_prompt_cache_breakpoint,
 )
 from litellm.litellm_core_utils.prompt_templates.factory import (
     THOUGHT_SIGNATURE_SEPARATOR,
+    convert_to_anthropic_tool_invoke,
+)
+from litellm.litellm_core_utils.prompt_templates.prompt_cache_breakpoint_utils import (
+    with_prompt_cache_breakpoint,
+)
+from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
+    reasoning_content_from_thinking_blocks,
+)
+from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import (
+    parse_tool_call_arguments,
+)
+from litellm.litellm_core_utils.prompt_templates.tpm_media_utils import (
+    anthropic_image_source_to_openai_url,
 )
 from litellm.litellm_core_utils.reasoning_effort_utils import (
     reasoning_effort_from_thinking,
+    reasoning_effort_from_thinking_silently,
 )
 from litellm.llms.anthropic.common_utils import (
+    anthropic_server_tool_call_params,
     eager_input_streaming_flag,
     is_empty_unsigned_thinking_block,
     normalize_anthropic_tool_use_id,
@@ -149,7 +179,9 @@ from litellm.llms.anthropic.messages.native.mid_conversation_system import (
     is_system_role_message,
 )
 from litellm.llms.anthropic.messages.native.utils import (
-    openai_chat_refusal_text,
+    anthropic_refusal_stop_details,
+    anthropic_stop_reason,
+    refusal_reply_text,
     refusal_stop_details,
 )
 from litellm.types.llms.anthropic import (
@@ -226,6 +258,29 @@ def target_supports_mid_conversation_system(model: str | None, custom_llm_provid
     return supports_mid_conversation_system(model=model, custom_llm_provider=custom_llm_provider)
 
 
+def _is_azure_responses_target(
+    model: str | None,
+    custom_llm_provider: str | None,
+    deployment_model_info: Mapping[str, object] | None,
+) -> bool:
+    if not model:
+        return False
+    if custom_llm_provider not in (None, LlmProviders.AZURE.value):
+        return False
+    if custom_llm_provider is None and not model.startswith("azure/"):
+        return False
+
+    from litellm.responses.bridge_check import responses_api_bridge_check
+
+    resolved_model, provider, _, _ = litellm.get_llm_provider(model=model, custom_llm_provider=custom_llm_provider)
+    model_info, _ = responses_api_bridge_check(
+        model=resolved_model,
+        custom_llm_provider=provider,
+        deployment_model_info=deployment_model_info,
+    )
+    return model_info.get("mode") == "responses"
+
+
 def _chat_tool_param(function_chunk: ChatCompletionToolParamFunctionChunk, tool: object) -> ChatCompletionToolParam:
     eager_input_streaming: Final = eager_input_streaming_flag(tool)
     if eager_input_streaming is None:
@@ -261,6 +316,7 @@ class AnthropicAdapter:
         *,
         custom_llm_provider: str | None = None,
         api_base: str | None = None,
+        deployment_model_info: Mapping[str, object] | None = None,
         drop_params: bool = True,
     ) -> tuple[ChatCompletionRequest | None, dict[str, str]]:
         """
@@ -296,7 +352,9 @@ class AnthropicAdapter:
             anthropic_message_request=request_body,
             custom_llm_provider=custom_llm_provider,
             api_base=api_base,
+            deployment_model_info=deployment_model_info,
             drop_params=drop_params,
+            report_reasoning_drops=True,
         )
 
         return translated_body, tool_name_mapping
@@ -376,8 +434,9 @@ _CLAUDE_OVER_REASONING_EFFORT_PROVIDERS: Final = frozenset({LlmProviders.KYMA.va
 
 
 class LiteLLMAnthropicMessagesAdapter:
-    def __init__(self):
-        pass
+    def __init__(self, *, keep_cache_control: bool = False, keep_tool_errors: bool = False) -> None:
+        self.keep_cache_control: Final = keep_cache_control
+        self.keep_tool_errors: Final = keep_tool_errors
 
     ### FOR [BETA] `/v1/messages` endpoint support
 
@@ -395,6 +454,10 @@ class LiteLLMAnthropicMessagesAdapter:
             return _thought_signature(function_fields)
 
         return None
+
+    def _streamed_tool_call_signature(self, tool_call_id: str, tool_call: object) -> str | None:
+        id_parts: Final = tool_call_id.split(THOUGHT_SIGNATURE_SEPARATOR, 1)
+        return id_parts[1] if len(id_parts) > 1 else self._extract_signature_from_tool_call(tool_call)
 
     def _extract_signature_from_tool_use_content(self, content: Mapping[str, object]) -> str | None:
         """
@@ -429,7 +492,7 @@ class LiteLLMAnthropicMessagesAdapter:
         cache_control: Final = (
             source.get("cache_control") if isinstance(source, dict) else getattr(source, "cache_control", None)
         )
-        if cache_control and model and self.target_consumes_cache_control(model):
+        if cache_control and (self.keep_cache_control or (model and self.target_consumes_cache_control(model))):
             # TypedDict objects support dict operations at runtime
             # Use type ignore consistent with codebase pattern (see anthropic/chat/transformation.py:432)
             if isinstance(target, dict):
@@ -486,10 +549,15 @@ class LiteLLMAnthropicMessagesAdapter:
         model: str | None = None,
         *,
         custom_llm_provider: str | None = None,
+        deployment_model_info: Mapping[str, object] | None = None,
         preserve_midturn_system: bool = False,
     ) -> list[AllMessageValues]:
         new_messages: Final[list[AllMessageValues]] = []
-        replayable_messages: Final = strip_encrypted_reasoning_blocks_from_anthropic_messages(messages)
+        replayable_messages: Final = (
+            messages
+            if _is_azure_responses_target(model, custom_llm_provider, deployment_model_info)
+            else strip_encrypted_reasoning_blocks_from_anthropic_messages(messages)
+        )
         leading_count: Final = next(
             (i for i, m in enumerate(replayable_messages) if not is_system_role_message(m)),
             len(replayable_messages),
@@ -548,11 +616,7 @@ class LiteLLMAnthropicMessagesAdapter:
                                 self._add_cache_control_if_applicable(content, doc_obj, model)
                                 new_user_content_list.append(doc_obj)
                         elif content.get("type") == "tool_result":
-                            tool_result = ChatCompletionToolMessage(
-                                role="tool",
-                                tool_call_id=content.get("tool_use_id", ""),
-                                content=self._tool_result_content(content.get("content")),
-                            )
+                            tool_result = self._tool_message(content)
                             self._add_cache_control_if_applicable(content, tool_result, model)
                             tool_message_list.append(tool_result)
 
@@ -666,7 +730,9 @@ class LiteLLMAnthropicMessagesAdapter:
     def translate_anthropic_thinking_to_reasoning_effort(
         thinking: AnthropicThinkingParam,
         *,
+        model: str,
         drop_params: bool = True,
+        report_reasoning_drops: bool = False,
     ) -> str | None:
         """
         Translate Anthropic's thinking parameter to OpenAI's reasoning_effort.
@@ -685,7 +751,9 @@ class LiteLLMAnthropicMessagesAdapter:
         if thinking_type == "disabled":
             return "none"
         elif thinking_type == "enabled":
-            return reasoning_effort_from_thinking(thinking, drop_params=drop_params)
+            if report_reasoning_drops:
+                return reasoning_effort_from_thinking(thinking, model=model, drop_params=drop_params)
+            return reasoning_effort_from_thinking_silently(thinking, drop_params=drop_params)
         elif thinking_type == "adaptive":
             # Adaptive thinking: effort is controlled by output_config.effort,
             # not budget_tokens. Return a default; caller should override with
@@ -752,7 +820,7 @@ class LiteLLMAnthropicMessagesAdapter:
             return {"thinking": thinking}
         else:
             reasoning_effort: Final = LiteLLMAnthropicMessagesAdapter.translate_anthropic_thinking_to_reasoning_effort(
-                thinking
+                thinking, model=model
             )
             if reasoning_effort:
                 return {
@@ -1147,6 +1215,7 @@ class LiteLLMAnthropicMessagesAdapter:
         *,
         custom_llm_provider: str | None = None,
         drop_params: bool = True,
+        report_reasoning_drops: bool = False,
     ) -> None:
         """Translate Anthropic thinking to either thinking or reasoning_effort.
 
@@ -1207,7 +1276,10 @@ class LiteLLMAnthropicMessagesAdapter:
             return
 
         reasoning_effort: Final = declared_effort or self.translate_anthropic_thinking_to_reasoning_effort(
-            cast(AnthropicThinkingParam, thinking), drop_params=drop_params
+            cast(AnthropicThinkingParam, thinking),
+            model=model,
+            drop_params=drop_params,
+            report_reasoning_drops=report_reasoning_drops,
         )
         if not reasoning_effort:
             return
@@ -1265,8 +1337,10 @@ class LiteLLMAnthropicMessagesAdapter:
         *,
         custom_llm_provider: str | None = None,
         api_base: str | None = None,
+        deployment_model_info: Mapping[str, object] | None = None,
         preserve_midturn_system: bool = False,
         drop_params: bool = True,
+        report_reasoning_drops: bool = False,
     ) -> tuple[ChatCompletionRequest, dict[str, str]]:
         """
         This is used by the beta Anthropic Adapter, for translating anthropic `/v1/messages` requests to the openai format.
@@ -1289,6 +1363,7 @@ class LiteLLMAnthropicMessagesAdapter:
             messages=messages_list,
             model=anthropic_message_request.get("model"),
             custom_llm_provider=custom_llm_provider,
+            deployment_model_info=deployment_model_info,
             preserve_midturn_system=preserve_midturn_system,
         )
         ## ADD SYSTEM MESSAGE TO MESSAGES
@@ -1321,6 +1396,7 @@ class LiteLLMAnthropicMessagesAdapter:
             new_kwargs=new_kwargs,
             custom_llm_provider=custom_llm_provider,
             drop_params=drop_params,
+            report_reasoning_drops=report_reasoning_drops,
         )
         ## CONVERT STOP_SEQUENCES
         self._translate_stop_sequences_to_openai(
@@ -1352,6 +1428,15 @@ class LiteLLMAnthropicMessagesAdapter:
         if not isinstance(image_source, dict):
             return None
         return anthropic_image_source_to_openai_url(image_source)
+
+    def _tool_message(self, block: object) -> ChatCompletionToolMessage:
+        fields: Final = as_str_mapping(block) or {}
+        is_error: Final = fields.get("is_error")
+        tool_call_id: Final = tool_use_id if isinstance(tool_use_id := fields.get("tool_use_id"), str) else ""
+        content: Final = self._tool_result_content(fields.get("content"))
+        if self.keep_tool_errors and isinstance(is_error, bool):
+            return ChatCompletionToolMessage(role="tool", tool_call_id=tool_call_id, content=content, is_error=is_error)
+        return ChatCompletionToolMessage(role="tool", tool_call_id=tool_call_id, content=content)
 
     def _tool_result_content(self, raw_content: object) -> ToolResultContent:
         if isinstance(raw_content, str):
@@ -1450,12 +1535,13 @@ class LiteLLMAnthropicMessagesAdapter:
                     ).model_dump()
                 )
 
+            new_content.extend(dict(block) for block in _server_tool_blocks(choice.message))
             # Handle text content
             if choice.message.content is not None and (choice.message.content != "" or not compaction_blocks):
                 new_content.append(
                     AnthropicResponseContentBlockText(type="text", text=choice.message.content).model_dump()
                 )
-            if (refusal_text := openai_chat_refusal_text(choice.message)) is not None:
+            if (refusal_text := refusal_reply_text(choice.message)) is not None:
                 new_content.append(AnthropicResponseContentBlockText(type="text", text=refusal_text).model_dump())
             # Handle tool calls (in parallel to text content)
             if choice.message.tool_calls is not None and len(choice.message.tool_calls) > 0:
@@ -1622,7 +1708,15 @@ class LiteLLMAnthropicMessagesAdapter:
             tool_name_mapping=tool_name_mapping,
         )
         refusal_text: Final = next(
-            (text for choice in response.choices if (text := openai_chat_refusal_text(choice.message)) is not None),
+            (text for choice in response.choices if (text := refusal_reply_text(choice.message)) is not None),
+            None,
+        )
+        claude_refusal_stop_details: Final = next(
+            (
+                details
+                for choice in response.choices
+                if (details := anthropic_refusal_stop_details(choice.message)) is not None
+            ),
             None,
         )
 
@@ -1631,8 +1725,10 @@ class LiteLLMAnthropicMessagesAdapter:
 
         ## extract finish reason
         openai_finish_reason: Final = response.choices[0].finish_reason if response.choices else "stop"
-        translated_finish_reason: Final = self._translate_openai_finish_reason_to_anthropic(
-            openai_finish_reason=openai_finish_reason
+        translated_finish_reason: Final = (
+            "pause_turn"
+            if response.choices and anthropic_stop_reason(response.choices[0].message) == "pause_turn"
+            else self._translate_openai_finish_reason_to_anthropic(openai_finish_reason=openai_finish_reason)
         )
         anthropic_finish_reason: Final = (
             "compaction"
@@ -1674,7 +1770,11 @@ class LiteLLMAnthropicMessagesAdapter:
             usage=anthropic_usage,
             content=anthropic_content,
             stop_reason=anthropic_finish_reason,
-            stop_details=(refusal_stop_details(refusal_text) if anthropic_finish_reason == "refusal" else None),
+            stop_details=(
+                (claude_refusal_stop_details or refusal_stop_details(refusal_text))
+                if anthropic_finish_reason == "refusal"
+                else None
+            ),
         )
 
         applied_edits: Final = polyfill_result.applied_edits_for_response() if polyfill_result else None
@@ -1700,10 +1800,7 @@ class LiteLLMAnthropicMessagesAdapter:
             ):
                 raw_id = choice.delta.tool_calls[0].id or str(uuid.uuid4())
                 tool_name = choice.delta.tool_calls[0].function.name or ""
-                thought_sig: str | None = None
-                if THOUGHT_SIGNATURE_SEPARATOR in raw_id:
-                    parts = raw_id.split(THOUGHT_SIGNATURE_SEPARATOR, 1)
-                    thought_sig = parts[1] if len(parts) > 1 else None
+                thought_sig = self._streamed_tool_call_signature(raw_id, choice.delta.tool_calls[0])
                 tool_block: dict[str, object] = {
                     "type": "tool_use",
                     "id": normalize_anthropic_tool_use_id(raw_id),
@@ -1715,7 +1812,7 @@ class LiteLLMAnthropicMessagesAdapter:
                         "signature": thought_sig,
                     }
                 return "tool_use", cast("ContentBlockContentBlockDict", tool_block)
-            elif (choice.delta.content is not None and len(choice.delta.content) > 0) or openai_chat_refusal_text(
+            elif (choice.delta.content is not None and len(choice.delta.content) > 0) or refusal_reply_text(
                 choice.delta
             ) is not None:
                 return "text", TextBlock(type="text", text="")
@@ -1798,7 +1895,7 @@ class LiteLLMAnthropicMessagesAdapter:
             return "thinking_delta", ContentThinkingBlockDelta(type="thinking_delta", thinking=reasoning_content)
         else:
             refusal_text: Final = "".join(
-                refusal for choice in choices if (refusal := openai_chat_refusal_text(choice.delta)) is not None
+                refusal for choice in choices if (refusal := refusal_reply_text(choice.delta)) is not None
             )
             return "text_delta", ContentTextBlockDelta(type="text_delta", text=text + refusal_text)
 

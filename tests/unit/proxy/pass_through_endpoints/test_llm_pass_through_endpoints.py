@@ -25,12 +25,14 @@ from starlette.datastructures import FormData
 import litellm
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.prometheus import PrometheusLogger
 from tests._master_key import MASTER_KEY as SHARED_MASTER_KEY
 from litellm.caching.caching import DualCache
-from litellm.types.utils import CallTypesLiteral
+from litellm.types.utils import CallTypes, CallTypesLiteral
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException, ModifyResponseException
 from litellm.proxy._types import AwsErrorTypeProxyException, ProxyException
+from litellm.proxy.spend_tracking.spend_tracking_utils import get_spend_logs_id
 from litellm.proxy.utils import ProxyLogging
 from litellm.passthrough.main import raise_for_provider_status
 from litellm.llms.bedrock.common_utils import BedrockError
@@ -2757,6 +2759,68 @@ class TestVLLMProxyRoute:
 
         assert result == "factory_success"
         mock_factory_route.assert_awaited_once()
+
+
+@pytest.mark.parametrize(
+    ("vllm_api_base", "request_path"),
+    [
+        ("http://vllm-upstream.test:8090", "/vllm/v1/chat/completions"),
+        ("http://vllm-upstream.test:8090/v1", "/vllm/v1/chat/completions"),
+        ("http://vllm-upstream.test:8090/v1", "/vllm/chat/completions"),
+    ],
+)
+def test_vllm_provider_route_reaches_v1_paths_with_its_key_as_a_bearer(
+    monkeypatch: pytest.MonkeyPatch, vllm_api_base: str, request_path: str
+) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setenv("VLLM_API_BASE", vllm_api_base)
+    monkeypatch.setenv("VLLM_API_KEY", "sk-vllm-upstream")
+    monkeypatch.setattr(proxy_server, "llm_router", None)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    monkeypatch.setitem(
+        proxy_server.app.dependency_overrides, user_api_key_auth, lambda: UserAPIKeyAuth(api_key="sk-virtual")
+    )
+
+    with respx.mock(assert_all_called=True) as upstream:
+        route: Final = upstream.post("http://vllm-upstream.test:8090/v1/chat/completions").mock(
+            return_value=httpx.Response(200, json={"id": "chatcmpl-1"})
+        )
+        response: Final = TestClient(proxy_server.app).post(
+            request_path,
+            json={"model": "Qwen/Qwen3-0.6B", "messages": [{"role": "user", "content": "hi"}]},
+        )
+
+    assert (response.status_code, response.json()) == (200, {"id": "chatcmpl-1"})
+    assert route.calls.last.request.headers["authorization"] == "Bearer sk-vllm-upstream"
+    assert route.calls.last.request.headers["x-api-key"] == "sk-vllm-upstream"
+
+
+def test_vllm_provider_route_with_an_empty_key_sends_no_credential_headers(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setenv("VLLM_API_BASE", "http://vllm-upstream.test:8090")
+    monkeypatch.setenv("VLLM_API_KEY", "")
+    monkeypatch.setattr(proxy_server, "llm_router", None)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    monkeypatch.setitem(
+        proxy_server.app.dependency_overrides, user_api_key_auth, lambda: UserAPIKeyAuth(api_key="sk-virtual")
+    )
+
+    with respx.mock(assert_all_called=True) as upstream:
+        route: Final = upstream.post("http://vllm-upstream.test:8090/v1/chat/completions").mock(
+            return_value=httpx.Response(200, json={"id": "chatcmpl-1"})
+        )
+        response: Final = TestClient(proxy_server.app).post(
+            "/vllm/v1/chat/completions",
+            json={"model": "Qwen/Qwen3-0.6B", "messages": [{"role": "user", "content": "hi"}]},
+        )
+
+    assert (response.status_code, response.json()) == (200, {"id": "chatcmpl-1"})
+    assert "authorization" not in route.calls.last.request.headers
+    assert "x-api-key" not in route.calls.last.request.headers
 
 
 class TestGigachatProxyRoute:
@@ -6428,6 +6492,55 @@ class TestVertexAILiveWebsocketPassthrough:
         assert "default_vertex_config" in close_kwargs["reason"]
         assert len(close_kwargs["reason"].encode("utf-8")) <= 123
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("model, expected_model", [("gemini-3.8-live", "gemini-3.8-live"), (None, "")])
+    async def test_credential_failure_logs_the_named_model_under_vertex_ai(
+        self, monkeypatch: pytest.MonkeyPatch, model: str | None, expected_model: str
+    ):
+        from litellm.proxy.pass_through_endpoints import (
+            llm_passthrough_endpoints as passthrough_module,
+        )
+
+        class _FailureRecorder(CustomLogger):
+            def __init__(self) -> None:
+                super().__init__()
+                self.request_data: tuple[dict[str, object], ...] = ()
+
+            async def async_post_call_failure_hook(
+                self,
+                request_data: dict[str, object],
+                original_exception: Exception,
+                user_api_key_dict: UserAPIKeyAuth,
+                traceback_str: str | None = None,
+            ) -> None:
+                self.request_data = (*self.request_data, request_data)
+
+        recorder: Final = _FailureRecorder()
+        monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.proxy_logging_obj", ProxyLogging(user_api_key_cache=DualCache())
+        )
+        monkeypatch.setattr(litellm, "callbacks", [recorder])
+        monkeypatch.setattr(passthrough_module.passthrough_endpoint_router, "default_vertex_config", None)
+        self._clear_vertex_env(monkeypatch)
+        ensure_token: Final = AsyncMock(side_effect=Exception("Unable to find your credentials"))
+
+        with patch.object(passthrough_module.vertex_llm_base, "ensure_access_token_async", ensure_token):
+            await passthrough_module.vertex_ai_live_websocket_passthrough(
+                websocket=self._websocket(),
+                model=model,
+                user_api_key_dict=UserAPIKeyAuth(),
+            )
+
+        assert [
+            (
+                d["model"],
+                PrometheusLogger._extract_api_provider_from_request_data(d),
+                get_spend_logs_id(CallTypes.pass_through.value, {}, d) is not None,
+            )
+            for d in recorder.request_data
+        ] == [(expected_model, "vertex_ai", True)]
+
 
 class TestAnthropicProxyRoute:
     """The /anthropic passthrough route: custom auth headers must not clobber the
@@ -6904,7 +7017,7 @@ class TestAzureRouterModelStreamingDispatch:
         logging_obj = MagicMock()
         logging_obj.async_flush_passthrough_collected_chunks = AsyncMock()
 
-        from litellm.router_utils.add_retry_fallback_headers import prepare_response_for_header_attachment
+        from litellm.litellm_core_utils.add_retry_fallback_headers import prepare_response_for_header_attachment
 
         class StreamingRouter:
             async def allm_passthrough_route(self, **kwargs):
@@ -7127,6 +7240,178 @@ class TestRouterModelRelayUpstreamContract:
         assert result.status_code == 404
         assert json.loads(result.body) == upstream_body
         assert result.headers["x-ms-request-id"] == "req-1"
+
+    @pytest.mark.asyncio
+    async def test_azure_relay_answers_401_when_entra_rejects_the_deployment_credential(self, monkeypatch):
+        from litellm.llms.azure.common_utils import EntraRejectionError
+        from litellm.llms.base_llm.chat.transformation import BaseLLMException
+
+        reason: Final = "Failed to get Azure AD token: AADSTS7000215: Invalid client secret provided."
+
+        class EntraRejectingRouter:
+            async def allm_passthrough_route(self, **kwargs):
+                try:
+                    raise EntraRejectionError(status_code=401, message=reason)
+                except EntraRejectionError as rejection:
+                    raise BaseLLMException(status_code=401, message=str(rejection)) from rejection
+
+        self._install_router(monkeypatch, EntraRejectingRouter(), {"model": "gpt-5", "stream": False})
+
+        with pytest.raises(ProxyException) as excinfo:
+            await azure_proxy_route(
+                endpoint="openai/deployments/gpt-5/chat/completions",
+                request=self._request("application/json"),
+                fastapi_response=MagicMock(spec=Response),
+                user_api_key_dict=UserAPIKeyAuth(api_key="hashed-token"),
+            )
+
+        assert (excinfo.value.code, excinfo.value.message) == ("401", reason)
+
+    @pytest.mark.asyncio
+    async def test_azure_relay_entra_rejection_hides_an_internal_issuer_host(self, monkeypatch):
+        from litellm.llms.azure.common_utils import EntraRejectionError
+
+        reason: Final = (
+            "Failed to get Azure AD token: AADSTS700211: No matching federated identity record found for "
+            "presented assertion issuer 'https://oidc.build.internal:8443/realms/ci'."
+        )
+
+        class EntraRejectingRouter:
+            async def allm_passthrough_route(self, **kwargs):
+                raise EntraRejectionError(status_code=401, message=reason)
+
+        self._install_router(monkeypatch, EntraRejectingRouter(), {"model": "gpt-5", "stream": False})
+
+        with pytest.raises(ProxyException) as excinfo:
+            await azure_proxy_route(
+                endpoint="openai/deployments/gpt-5/chat/completions",
+                request=self._request("application/json"),
+                fastapi_response=MagicMock(spec=Response),
+                user_api_key_dict=UserAPIKeyAuth(api_key="hashed-token"),
+            )
+
+        assert excinfo.value.code == "401"
+        assert "AADSTS700211" in excinfo.value.message
+        assert "oidc.build.internal" not in excinfo.value.message
+
+    @pytest.mark.asyncio
+    async def test_azure_relay_keeps_a_failure_entra_did_not_cause(self, monkeypatch):
+        from litellm.llms.base_llm.chat.transformation import BaseLLMException
+
+        upstream_failure: Final = BaseLLMException(status_code=500, message="Connection reset by Azure")
+
+        class FailingRouter:
+            async def allm_passthrough_route(self, **kwargs):
+                raise upstream_failure
+
+        self._install_router(monkeypatch, FailingRouter(), {"model": "gpt-5", "stream": False})
+
+        with pytest.raises(BaseLLMException) as excinfo:
+            await azure_proxy_route(
+                endpoint="openai/deployments/gpt-5/chat/completions",
+                request=self._request("application/json"),
+                fastapi_response=MagicMock(spec=Response),
+                user_api_key_dict=UserAPIKeyAuth(api_key="hashed-token"),
+            )
+
+        assert excinfo.value is upstream_failure
+
+    @pytest.mark.asyncio
+    async def test_azure_relay_keeps_entra_throttling_the_oidc_token_exchange_as_a_429(self, monkeypatch):
+        monkeypatch.setenv("LITELLM_QA_FEDERATED_TOKEN", "federated-token")
+        monkeypatch.delenv("AZURE_AUTHORITY_HOST", raising=False)
+        router: Final = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "gpt-5",
+                    "litellm_params": {
+                        "model": "azure/gpt-5",
+                        "api_base": "https://litellm-qa.openai.azure.com",
+                        "api_version": "2025-04-01-preview",
+                        "tenant_id": "throttled-tenant",
+                        "client_id": "qa-client",
+                        "azure_ad_token": "oidc/env/LITELLM_QA_FEDERATED_TOKEN",
+                    },
+                }
+            ],
+            num_retries=0,
+        )
+        self._install_router(monkeypatch, router, {"model": "gpt-5", "stream": False})
+
+        with respx.mock:
+            respx.post("https://login.microsoftonline.com/throttled-tenant/oauth2/v2.0/token").mock(
+                return_value=httpx.Response(
+                    429,
+                    headers={"Retry-After": "7"},
+                    json={"error": "temporarily_unavailable", "error_codes": [90055]},
+                )
+            )
+            deployment_route: Final = respx.post(url__startswith="https://litellm-qa.openai.azure.com").mock(
+                return_value=httpx.Response(200, json={"ok": True})
+            )
+            response: Final = await azure_proxy_route(
+                endpoint="openai/deployments/gpt-5/chat/completions",
+                request=self._request("application/json"),
+                fastapi_response=MagicMock(spec=Response),
+                user_api_key_dict=UserAPIKeyAuth(api_key="hashed-token"),
+            )
+
+        assert (response.status_code, response.headers.get("retry-after")) == (429, "7")
+        assert not deployment_route.called
+
+
+    @pytest.mark.asyncio
+    async def test_azure_relay_keeps_a_later_deployment_failure_after_an_entra_rejection(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from azure.core.exceptions import ClientAuthenticationError
+        from litellm.llms.base_llm.chat.transformation import BaseLLMException
+
+        def rejected_token() -> str:
+            raise ClientAuthenticationError(message="AADSTS7000215: Invalid client secret provided.")
+
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        router: Final = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "gpt-5",
+                    "litellm_params": {
+                        "model": "azure/gpt-5",
+                        "api_base": "https://litellm-qa.openai.azure.com",
+                        "api_version": "2025-04-01-preview",
+                        "azure_ad_token_provider": rejected_token,
+                        "order": 1,
+                    },
+                },
+                {
+                    "model_name": "gpt-5",
+                    "litellm_params": {
+                        "model": "azure/gpt-5",
+                        "api_base": "https://litellm-qa-unreachable.openai.azure.com",
+                        "api_version": "2025-04-01-preview",
+                        "api_key": "configured-key",
+                        "order": 2,
+                    },
+                },
+            ],
+            num_retries=1,
+        )
+        self._install_router(monkeypatch, router, {"model": "gpt-5", "stream": False})
+
+        with respx.mock:
+            unreachable_route: Final = respx.post(url__startswith="https://litellm-qa-unreachable.openai.azure.com").mock(
+                side_effect=httpx.ConnectError("Connection refused")
+            )
+            with pytest.raises(BaseLLMException) as excinfo:
+                await azure_proxy_route(
+                    endpoint="openai/deployments/gpt-5/chat/completions",
+                    request=self._request("application/json"),
+                    fastapi_response=MagicMock(spec=Response),
+                    user_api_key_dict=UserAPIKeyAuth(api_key="hashed-token"),
+                )
+
+        assert unreachable_route.called
+        assert excinfo.value.status_code == 500
 
 
 NIM_INFER_BODY = {

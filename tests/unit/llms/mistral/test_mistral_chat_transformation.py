@@ -1,5 +1,7 @@
+import copy
 import json
-from collections.abc import Mapping
+import logging
+from collections.abc import Mapping, Sequence
 from typing import Final, List, cast
 from unittest.mock import MagicMock, patch
 from urllib.parse import urlparse
@@ -9,13 +11,14 @@ import pytest
 import respx
 from openai import AsyncOpenAI
 
+from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import TOOL_RESULT_IMAGE_BOUNDARY
 from litellm.llms.mistral.chat.transformation import (
     MistralChatResponseIterator,
     MistralConfig,
 )
 from litellm.llms.vertex_ai.vertex_ai_partner_models.mistral.transformation import VertexAIMistralConfig
-from litellm.types.llms.openai import AllMessageValues
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
 from litellm.types.utils import ModelResponse
 from litellm.utils import supports_reasoning
 
@@ -737,6 +740,25 @@ class TestMistralEmptyContentHandling:
         assert MistralConfig._is_empty_assistant_message(message) is False
 
 
+@pytest.mark.parametrize("body", [[], "ok"])
+def test_transform_response_rejects_a_body_that_is_not_a_json_object(body: object) -> None:
+    logging_obj: Final = MagicMock()
+    logging_obj.model_call_details = {}
+
+    with pytest.raises(AttributeError, match=f"^'{type(body).__name__}' object has no attribute 'get'$"):
+        MistralConfig().transform_response(
+            model="mistral/mistral-large-latest",
+            raw_response=httpx.Response(200, json=body),
+            model_response=ModelResponse(),
+            logging_obj=logging_obj,
+            request_data={},
+            messages=[{"role": "user", "content": "Hi"}],
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+        )
+
+
 class TestMistralFileHandling:
     """Test suite for Mistral file handling functionality."""
 
@@ -1210,7 +1232,10 @@ def test_mistral_sends_only_the_text_items_of_a_native_thinking_chunk_beside_an_
                 "content": [
                     {
                         "type": "thinking",
-                        "thinking": [{"type": "text", "text": "It has whiskers."}, {"type": "reference", "reference_ids": [1]}],
+                        "thinking": [
+                            {"type": "text", "text": "It has whiskers."},
+                            {"type": "reference", "reference_ids": [1]},
+                        ],
                     },
                     {"type": "text", "text": "A cat."},
                 ],
@@ -1670,6 +1695,123 @@ def test_mistral_transform_request_drops_an_empty_tool_message_whose_call_id_is_
     assert [m.get("role") for m in request["messages"]] == ["user", "assistant"]
 
 
+def test_mistral_request_drops_a_user_name_without_touching_the_callers_message() -> None:
+    messages: Final = [{"role": "user", "content": "Hi"}, {"role": "user", "content": "", "name": "alice"}]
+    messages_before: Final = copy.deepcopy(messages)
+
+    body: Final = MistralConfig().transform_request(
+        model="mistral-medium-latest", messages=messages, optional_params={}, litellm_params={}, headers={}
+    )
+
+    assert "name" not in json.dumps(body["messages"])
+    assert messages == messages_before
+
+
+def _warnings_naming(caplog: pytest.LogCaptureFixture, param: str) -> tuple[str, ...]:
+    return tuple(
+        r.getMessage()
+        for r in caplog.records
+        if r.levelno == logging.WARNING and f"Dropping {param}=" in r.getMessage()
+    )
+
+
+@pytest.mark.parametrize(
+    "param, value",
+    (
+        ("reasoning_effort", "none"),
+        ("reasoning_effort", "xhigh"),
+        ("thinking", {"type": "disabled"}),
+        ("thinking", {"type": ["enabled"]}),
+    ),
+)
+def test_magistral_reasoning_request_replaced_by_prompt_warns_once(
+    param: str, value: object, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        result: Final = MistralConfig().map_openai_params(
+            non_default_params={param: value},
+            optional_params={},
+            model="magistral-medium-latest",
+            drop_params=False,
+        )
+
+    warnings: Final = _warnings_naming(caplog, param)
+    assert result["_add_reasoning_prompt"] is True
+    assert len(warnings) == 1
+    assert "magistral-medium-latest" in warnings[0]
+
+
+@pytest.mark.parametrize(
+    "param, value",
+    (
+        ("reasoning_effort", "low"),
+        ("reasoning_effort", "medium"),
+        ("reasoning_effort", "high"),
+        ("thinking", {"type": "enabled", "budget_tokens": 1024}),
+    ),
+)
+def test_magistral_reasoning_request_the_prompt_honors_does_not_warn(
+    param: str, value: object, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        result: Final = MistralConfig().map_openai_params(
+            non_default_params={param: value},
+            optional_params={},
+            model="magistral-medium-latest",
+            drop_params=False,
+        )
+
+    assert result["_add_reasoning_prompt"] is True
+    assert _warnings_naming(caplog, param) == ()
+
+
+def test_non_magistral_reasoning_effort_is_sent_without_warning(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        result: Final = MistralConfig().map_openai_params(
+            non_default_params={"reasoning_effort": "high"},
+            optional_params={},
+            model="mistral-medium-latest",
+            drop_params=False,
+        )
+
+    assert result["reasoning_effort"] == "high"
+    assert _warnings_naming(caplog, "reasoning_effort") == ()
+
+
+@pytest.mark.parametrize("reasoning_effort", [5, {"effort": 5}, {"effort": 5, "summary": "auto"}])
+def test_mistral_warns_once_when_drop_params_drops_a_level_it_cannot_send(
+    caplog: pytest.LogCaptureFixture, reasoning_effort: object
+) -> None:
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        result: Final = MistralConfig().map_openai_params(
+            non_default_params={"reasoning_effort": reasoning_effort},
+            optional_params={},
+            model="mistral-medium-latest",
+            drop_params=True,
+        )
+
+    assert "reasoning_effort" not in result
+    warnings: Final = _warnings_naming(caplog, "reasoning_effort")
+    assert len(warnings) == 1
+    assert "model='mistral-medium-latest'" in warnings[0]
+    assert "(drop_params=True)" in warnings[0]
+
+
+@pytest.mark.parametrize("reasoning_effort", [{"summary": "auto"}, {"effort": "high", "summary": "auto"}])
+def test_mistral_stays_quiet_under_drop_params_when_no_level_is_lost(
+    caplog: pytest.LogCaptureFixture, reasoning_effort: object
+) -> None:
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        MistralConfig().map_openai_params(
+            non_default_params={"reasoning_effort": reasoning_effort},
+            optional_params={},
+            model="mistral-medium-latest",
+            drop_params=True,
+        )
+
+    assert _warnings_naming(caplog, "reasoning_effort") == ()
+
+
 @pytest.mark.parametrize(
     ("model", "custom_llm_provider"),
     [
@@ -1939,3 +2081,125 @@ def test_prompt_cache_key_stays_unsupported_for_vertex_hosted_mistral(local_mode
         model="mistral-medium-3", custom_llm_provider="vertex_ai", prompt_cache_key="s", drop_params=True
     )
     assert "prompt_cache_key" not in dropped
+
+
+class TestMistralToolChoice:
+    """Mistral takes tool_choice as an enum or as {"type": "function", "function": {"name": ...}}, per
+    https://docs.mistral.ai/api/endpoint/chat (checked 2026-11-03)"""
+
+    TOOLS: Final[Sequence[ChatCompletionToolParam]] = [
+        {
+            "type": "function",
+            "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {}}},
+        }
+    ]
+
+    UNUSABLE_TOOL_CHOICES: Final[Sequence[str | Mapping[str, object]]] = (
+        {"type": "function", "function": {}},
+        {"type": "function", "function": {"name": ""}},
+        {"type": "function", "function": {"name": 123}},
+        {"type": "function"},
+        "foo",
+    )
+
+    def _request_body(
+        self,
+        tool_choice: str | Mapping[str, object],
+        drop_params: bool = False,
+        tools: Sequence[ChatCompletionToolParam] | None = TOOLS,
+    ) -> Mapping[str, object]:
+        import litellm
+
+        optional_params: Final = litellm.get_optional_params(
+            model="mistral-large-latest",
+            custom_llm_provider="mistral",
+            tools=None if tools is None else list(tools),
+            tool_choice=tool_choice,
+            drop_params=drop_params,
+        )
+        return MistralConfig().transform_request(
+            model="mistral-large-latest",
+            messages=[{"role": "user", "content": "what is the weather in Madrid"}],
+            optional_params=optional_params,
+            litellm_params={},
+            headers={},
+        )
+
+    def test_named_function_is_forwarded_to_mistral(self, local_model_cost_map: None) -> None:
+        body: Final = self._request_body({"type": "function", "function": {"name": "get_weather"}})
+
+        assert body["tool_choice"] == {"type": "function", "function": {"name": "get_weather"}}
+
+    @pytest.mark.parametrize(
+        "custom_llm_provider, model",
+        [("mistral", "mistral-large-latest"), ("codestral", "codestral-latest"), ("vertex_ai", "mistral-small-2503")],
+    )
+    def test_named_function_is_kept_on_every_mistral_route(
+        self, local_model_cost_map: None, custom_llm_provider: str, model: str
+    ) -> None:
+        import litellm
+
+        optional_params: Final = litellm.get_optional_params(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            tools=list(self.TOOLS),
+            tool_choice={"type": "function", "function": {"name": "get_weather"}},
+        )
+
+        assert optional_params["tool_choice"] == {"type": "function", "function": {"name": "get_weather"}}
+
+    def test_keys_mistral_does_not_define_are_not_replayed(self, local_model_cost_map: None) -> None:
+        body: Final = self._request_body(
+            {
+                "type": "function",
+                "function": {"name": "get_weather", "strict": True},
+                "cache_control": {"type": "ephemeral"},
+            }
+        )
+
+        assert body["tool_choice"] == {"type": "function", "function": {"name": "get_weather"}}
+
+    @pytest.mark.parametrize(
+        "tool_choice, expected",
+        [("auto", "auto"), ("none", "none"), ("required", "any"), ("any", "any")],
+    )
+    def test_enum_tool_choice_is_mapped(self, local_model_cost_map: None, tool_choice: str, expected: str) -> None:
+        assert self._request_body(tool_choice)["tool_choice"] == expected
+
+    @pytest.mark.parametrize("tool_choice", UNUSABLE_TOOL_CHOICES)
+    def test_unusable_tool_choice_is_rejected_without_drop_params(
+        self, local_model_cost_map: None, tool_choice: str | Mapping[str, object]
+    ) -> None:
+        import litellm
+
+        with pytest.raises(litellm.UnsupportedParamsError, match="tool_choice"):
+            self._request_body(tool_choice)
+
+    @pytest.mark.parametrize("tools", [None, ()])
+    @pytest.mark.parametrize("tool_choice", UNUSABLE_TOOL_CHOICES)
+    def test_unusable_tool_choice_without_tools_is_not_sent(
+        self,
+        local_model_cost_map: None,
+        tool_choice: str | Mapping[str, object],
+        tools: Sequence[ChatCompletionToolParam] | None,
+    ) -> None:
+        assert "tool_choice" not in self._request_body(tool_choice, tools=tools)
+
+    @pytest.mark.parametrize("tool_choice", UNUSABLE_TOOL_CHOICES)
+    def test_unusable_tool_choice_is_dropped_with_a_warning_under_drop_params(
+        self, local_model_cost_map: None, tool_choice: str | Mapping[str, object], caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+            body: Final = self._request_body(tool_choice, drop_params=True)
+
+        assert "tool_choice" not in body
+        assert len(_warnings_naming(caplog, "tool_choice")) == 1
+
+    def test_unusable_tool_choice_is_dropped_under_proxy_wide_drop_params(
+        self, local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import litellm
+
+        monkeypatch.setattr(litellm, "drop_params", True)
+
+        assert "tool_choice" not in self._request_body({"type": "function", "function": {}})

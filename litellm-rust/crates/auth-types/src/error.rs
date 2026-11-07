@@ -92,6 +92,11 @@ impl Error {
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum ErrorDetail {
+    #[error("{operation} returned HTTP {status}")]
+    UnexpectedStatus {
+        operation: &'static str,
+        status: u16,
+    },
     #[error("{field} must be {expected}")]
     InvalidType {
         field: String,
