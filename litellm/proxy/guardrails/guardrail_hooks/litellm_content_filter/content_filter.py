@@ -12,7 +12,7 @@ import json
 import os
 import re
 import time
-from collections.abc import AsyncGenerator, AsyncIterable, Callable, Coroutine, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterable, Callable, Coroutine, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime
 from re import Pattern
@@ -226,6 +226,32 @@ class _StreamedScanPlan:
     holdback_chars: int
     exception_phrases: tuple[str, ...]
     conditional_words: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _RedactionSpan:
+    start: int
+    end: int
+    tag: str
+
+
+def _merge_redaction_spans(spans: Iterable[_RedactionSpan]) -> tuple[_RedactionSpan, ...]:
+    ordered: Final = sorted(spans, key=lambda span: (span.start, -span.end))
+    reach: Final = tuple(itertools.accumulate((span.end for span in ordered), max))
+    first_indices: Final = tuple(
+        index for index, span in enumerate(ordered) if index == 0 or span.start >= reach[index - 1]
+    )
+    last_indices: Final = (*(index - 1 for index in first_indices[1:]), len(ordered) - 1)
+    return tuple(
+        _RedactionSpan(ordered[first].start, reach[last], ordered[first].tag)
+        for first, last in zip(first_indices, last_indices)
+    )
+
+
+def _apply_redaction_spans(text: str, spans: tuple[_RedactionSpan, ...]) -> str:
+    previous_ends: Final = (0, *(span.end for span in spans))
+    kept_parts: Final = (text[previous_end : span.start] + span.tag for previous_end, span in zip(previous_ends, spans))
+    return "".join((*kept_parts, text[previous_ends[-1] :]))
 
 
 class CategoryFileData(TypedDict, total=False):
@@ -988,21 +1014,6 @@ class ContentFilterGuardrail(CustomGuardrail):
                 merged.append((start, end))
         return merged
 
-    def _mask_spans(self, text: str, spans: list[tuple[int, int]], redaction: str) -> str:
-        """Apply masking for the provided spans using the given redaction tag."""
-
-        if not spans:
-            return text
-
-        result_parts: Final[list[str]] = []
-        previous_end = 0
-        for start, end in spans:
-            result_parts.append(text[previous_end:start])
-            result_parts.append(redaction)
-            previous_end = end
-        result_parts.append(text[previous_end:])
-        return "".join(result_parts)
-
     def _convert_word_number_sequence(self, sequence: str) -> str | None:
         """Convert a spelled-out digit sequence (e.g., 'One-Two') into digits."""
 
@@ -1393,10 +1404,8 @@ class ContentFilterGuardrail(CustomGuardrail):
         self,
         pattern_name: str,
         action: ContentFilterAction,
-        text: str,
-        spans: list[tuple[int, int]],
         detections: list[ContentFilterDetection] | None,
-    ) -> str:
+    ) -> None:
         """Handle regex pattern match detection and action."""
         if detections is not None:
             pattern_detection: Final[PatternDetection] = {
@@ -1414,11 +1423,20 @@ class ContentFilterGuardrail(CustomGuardrail):
                 detail={"error": error_msg, "pattern": pattern_name},
             )
         elif action == ContentFilterAction.MASK:
-            redaction_tag: Final = self.pattern_redaction_format.format(pattern_name=pattern_name.upper())
-            text = self._mask_spans(text, spans, redaction_tag)
             verbose_proxy_logger.info("Masked all %s matches in content", pattern_name)
 
-        return text
+    def _iter_pattern_redaction_spans(
+        self, matched_patterns: Iterable[tuple[CompiledPatternEntry, list[tuple[int, int]]]]
+    ) -> Iterator[_RedactionSpan]:
+        for pattern_entry, spans in matched_patterns:
+            if pattern_entry["action"] != ContentFilterAction.MASK:
+                continue
+            yield from (
+                _RedactionSpan(
+                    start, end, self.pattern_redaction_format.format(pattern_name=pattern_entry["pattern_name"].upper())
+                )
+                for start, end in spans
+            )
 
     def _handle_blocked_word_match(
         self,
@@ -1507,13 +1525,16 @@ class ContentFilterGuardrail(CustomGuardrail):
             keyword, category_name, severity, action = category_keyword_match
             text = self._handle_category_keyword_match(keyword, category_name, severity, action, text, detections)
 
-        # Check regex patterns - process ALL patterns, not just first match
-        for pattern_entry in self.compiled_patterns:
-            spans = self._find_pattern_spans(text, pattern_entry)
-            if spans:
-                pattern_name = pattern_entry["pattern_name"]
-                action = pattern_entry["action"]
-                text = self._handle_pattern_match(pattern_name, action, text, spans, detections)
+        matched_patterns: Final = tuple(
+            (pattern_entry, pattern_spans)
+            for pattern_entry in self.compiled_patterns
+            if (pattern_spans := self._find_pattern_spans(text, pattern_entry))
+        )
+        for pattern_entry, _ in matched_patterns:
+            self._handle_pattern_match(pattern_entry["pattern_name"], pattern_entry["action"], detections)
+        text = _apply_redaction_spans(
+            text, _merge_redaction_spans(self._iter_pattern_redaction_spans(matched_patterns))
+        )
 
         # Check blocked words - iterate through ALL blocked words
         text_lower = text.lower()

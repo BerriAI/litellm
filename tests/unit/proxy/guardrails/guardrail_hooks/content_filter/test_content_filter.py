@@ -248,6 +248,34 @@ class TestContentFilterGuardrail:
         assert "test@example.com" not in result[0]
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "pattern_names",
+        [("aws_secret_key", "openai_api_key"), ("openai_api_key", "aws_secret_key")],
+    )
+    async def test_apply_guardrail_masks_whole_key_when_another_pattern_matches_inside_it(
+        self, pattern_names: tuple[str, str]
+    ):
+        guardrail: Final = ContentFilterGuardrail(
+            guardrail_name="test-overlapping-patterns",
+            patterns=[
+                ContentFilterPattern(pattern_type="prebuilt", pattern_name=name, action=ContentFilterAction.MASK)
+                for name in pattern_names
+            ],
+        )
+        openai_key: Final = "sk-proj-" + "Ab3" * 13 + "x-" + "Cd4" * 11 + "T3BlbkFJ" + "Ef5" * 24 + "gh"
+        aws_secret_key: Final = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+
+        guardrailed_inputs: Final = await guardrail.apply_guardrail(
+            inputs={"texts": [f"key {openai_key} and secret {aws_secret_key}"]},
+            request_data={},
+            input_type="request",
+        )
+
+        assert guardrailed_inputs.get("texts") == [
+            "key [OPENAI_API_KEY_REDACTED] and secret [AWS_SECRET_KEY_REDACTED]"
+        ]
+
+    @pytest.mark.asyncio
     async def test_apply_guardrail_blocked_word_mask(self):
         """
         Test apply_guardrail with blocked word MASK action
