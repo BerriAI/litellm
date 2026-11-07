@@ -72,7 +72,8 @@ from litellm.litellm_core_utils.reasoning_effort_utils import OPAQUE_VALUE, warn
 from litellm.litellm_core_utils.tool_fields import tool_params_without_hosted_mcp
 from litellm.llms.base_llm.base_utils import (
     ResponseFormatSchema,
-    decoded_json_object,
+    answer_json_text,
+    decoded_answer_object,
     response_format_answer_json,
     response_format_schema,
     split_response_format_answer,
@@ -3415,8 +3416,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             )
         )
         if split_answer is not None:
-            return litellm.Message(content=split_answer)
-        payload_object: Final = decoded_json_object(json_mode_content_str)
+            return litellm.Message(content=response_format_answer_json(split_answer))
+        payload_object: Final = decoded_answer_object(json_mode_content_str)
         if payload_object is None:
             return litellm.Message(content=json_mode_content_str)
         if response_format_schema is not None:
@@ -3428,7 +3429,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         # a lot of the times the `values` key is not present in the tool response
         # relevant issue: https://github.com/BerriAI/litellm/issues/6741
         values: Final = payload_object.get("values")
-        return litellm.Message(content=json.dumps(payload_object if values is None else values))
+        return litellm.Message(
+            content=answer_json_text(payload_object if values is None else values, ensure_ascii=True)
+        )
 
     @classmethod
     def convert_tool_response_to_message(
