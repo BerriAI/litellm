@@ -104,6 +104,7 @@ POST /guardrails/validate_blocked_words_file
 POST /key/bulk_update
 POST /key/health
 POST /key/regenerate
+POST /key/revoke
 POST /key/service-account/generate
 POST /key/{key}/regenerate
 POST /key/{key}/reset_spend

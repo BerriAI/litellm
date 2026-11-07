@@ -15,6 +15,7 @@ from litellm.proxy.deps.repositories import (
     DeploymentWarningIgnoreRepositoryDep,
     GatewayActivityRepositoryDep,
     UserBannerRepositoryDep,
+    VerificationTokenRepositoryDep,
 )
 from litellm.repositories import database as database_runtime
 from tests._support.native_database import native_database
@@ -40,6 +41,10 @@ def _app(database: database_runtime.Database | None) -> FastAPI:
     @app.get("/activity")
     async def activity(activity: GatewayActivityRepositoryDep) -> tuple[GatewayActivity, ...] | None:
         return None if activity is None else await activity.get_activity("2026-01-01", "2026-01-31")
+
+    @app.get("/revocable")
+    async def revocable(tokens: VerificationTokenRepositoryDep) -> tuple[str | None, ...] | None:
+        return None if tokens is None else tuple(row.token for row in await tokens.find_by_tokens(["hashed"]))
 
     return app
 
@@ -103,6 +108,16 @@ def test_gateway_activity_reads_the_lifespan_reader_not_the_writer() -> None:
         response: Final = client.get("/activity")
         assert response.status_code == 200
         assert response.json() == [row]
+
+
+def test_key_revocation_looks_keys_up_on_the_writer_so_a_lagging_replica_cannot_hide_one() -> None:
+    prisma: Final = MagicMock()
+    prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    prisma.writer_db.litellm_verificationtoken.find_many = AsyncMock(return_value=[{"token": "hashed"}])
+    with TestClient(_app(database_runtime.Database(prisma=prisma, native=NATIVE))) as client:
+        response: Final = client.get("/revocable")
+        assert response.status_code == 200
+        assert response.json() == ["hashed"]
 
 
 def test_gateway_activity_without_database_is_unavailable() -> None:
