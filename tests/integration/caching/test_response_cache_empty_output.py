@@ -53,6 +53,7 @@ from tests.integration.caching.response_cache_case import (
     choices,
     content_of_first_choice,
     emptied,
+    entry_key,
     flip_entry_to_empty,
     json_response,
     message_body,
@@ -603,32 +604,46 @@ def test_embeddings_are_still_served_from_the_cache(gateway: Gateway) -> None:
         assert second is not None and second["data"] == first["data"], second
 
 
-@pytest.mark.parametrize(
-    "choice",
-    (
-        pytest.param(
-            {"index": 0, "message": {"role": "assistant", "content": ""}, "finish_reason": "content_filter"},
-            id="blocked-empty-content",
-        ),
-        pytest.param(
-            {
-                "index": 0,
-                "message": {
-                    "role": "assistant",
-                    "content": None,
-                    "tool_calls": [
-                        {"id": "call_1", "type": "function", "function": {"name": "lookup", "arguments": "{}"}}
-                    ],
-                },
-                "finish_reason": "tool_calls",
-            },
-            id="tool-calls-only",
-        ),
-    ),
-)
-def test_chat_answers_with_a_choice_but_no_text_are_still_cached(
-    gateway: Gateway, choice: dict[str, JsonValue]
-) -> None:
+def test_chat_empty_content_filter_reply_is_not_cached_and_reaches_upstream_again(gateway: Gateway) -> None:
+    upstream: Final = Upstream(gateway.upstream_url)
+    store: Final = redis_store()
+    choice: Final[dict[str, JsonValue]] = {
+        "index": 0,
+        "message": {"role": "assistant", "content": ""},
+        "finish_reason": "content_filter",
+    }
+    with gateway.scenario() as scenario:
+        handle: Final = scripted(scenario, json_response({**CHAT, "choices": [choice]}))
+        model: Final = scenario.model(api_base=handle.api_base())
+        request: Final = chat_body(model, prompt())
+        empty: Final = _chat(gateway, request)
+        assert object_value(choices(empty)[0])["finish_reason"] == "content_filter", empty.text
+        assert content_of_first_choice(empty) == "", empty.text
+        assert upstream.calls(handle.scenario_id) == 1
+        rescript(handle, json_response(CHAT))
+        control: Final = _chat(gateway, chat_body(model, prompt()))
+        assert content_of_first_choice(control) == "scripted", control.text
+        await_entry(store, response_id(control))
+        assert entry_key(store, response_id(empty)) is None
+        real: Final = _chat(gateway, request)
+        assert content_of_first_choice(real) == "scripted" and response_id(real) != response_id(empty), real.text
+        assert upstream.calls(handle.scenario_id) == 3
+        await_entry(store, response_id(real))
+        hit: Final = _chat(gateway, request)
+        assert response_id(hit) == response_id(real) and choices(hit) == choices(real), hit.text
+        assert upstream.calls(handle.scenario_id) == 3
+
+
+def test_chat_tool_calls_without_text_are_still_cached(gateway: Gateway) -> None:
+    choice: Final[dict[str, JsonValue]] = {
+        "index": 0,
+        "message": {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "lookup", "arguments": "{}"}}],
+        },
+        "finish_reason": "tool_calls",
+    }
     upstream: Final = Upstream(gateway.upstream_url)
     store: Final = redis_store()
     with gateway.scenario() as scenario:
