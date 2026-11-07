@@ -27,17 +27,19 @@ from litellm.types.proxy.issues import (
     IssueActivityResponse,
     IssueCohort,
     IssueComparison,
+    IssueDeliveryBinding,
     IssueDeliveryInput,
     IssueFamilyPolicyUpdate,
     IssueFamilyUpdate,
     IssueInput,
     IssueList,
     IssueModelPair,
+    IssueSignal,
     IssueSignalInput,
     IssueSignalList,
 )
 from litellm.types.proxy.usage_alert_defaults import default_usage_rule_id, default_usage_rules
-from litellm.types.proxy.usage_alerts import UsageAlert, UsageAlertObservation, UsageAlertRuleInput
+from litellm.types.proxy.usage_alerts import UsageAlert, UsageAlertObservation, UsageAlertRule, UsageAlertRuleInput
 
 
 def _issue(cohort: IssueCohort) -> IssueInput:
@@ -68,6 +70,16 @@ def _issue(cohort: IssueCohort) -> IssueInput:
                 baseline_sample_days=7,
             ),
         ),
+    )
+
+
+def _signals(issue_id: str, inputs: tuple[IssueSignalInput, ...]) -> tuple[IssueSignal, ...]:
+    return tuple(IssueSignal.model_validate({**signal.model_dump(), "issue_id": issue_id}) for signal in inputs)
+
+
+def _delivery(data: IssueDeliveryInput, rule: UsageAlertRule, source: UsageAlert) -> IssueDeliveryBinding:
+    return IssueDeliveryBinding(
+        delivery=data, rule_id=rule.id, rule_revision=rule.updated_at.isoformat(), source_id=source.id
     )
 
 
@@ -141,18 +153,20 @@ async def test_issue_http_scope_pagination_and_source_visibility(gateway: Gatewa
                     "baseline_value": 9999,
                 }
             )
-            await store.add_signals(
-                first.id,
-                (
-                    IssueSignalInput(source="usage_alert", source_id=source.id, usage_alert=source),
-                    IssueSignalInput(
-                        source="usage_alert",
-                        source_id=broader.id,
-                        usage_alert=broader,
-                        grouping_reason="dominant_key",
-                        explanation="Parent contribution evidence.",
+            await store.add_signal_batch(
+                _signals(
+                    first.id,
+                    (
+                        IssueSignalInput(source="usage_alert", source_id=source.id, usage_alert=source),
+                        IssueSignalInput(
+                            source="usage_alert",
+                            source_id=broader.id,
+                            usage_alert=broader,
+                            grouping_reason="dominant_key",
+                            explanation="Parent contribution evidence.",
+                        ),
                     ),
-                ),
+                )
             )
             path: Final = f"/issues/{first.id}"
             own: Final = gateway.request("GET", path, key=owner_key)
@@ -312,7 +326,7 @@ async def test_issue_activity_bounds_models_without_losing_totals(gateway: Gatew
         model_count,
     )
     try:
-        await store.upsert_issue(issue)
+        await store.upsert_issues((issue,))
         scope: Final = issue_activity_scope(cohort, day, day + timedelta(days=2))
         original: Final = await get_daily_activity_aggregated(repository.activity, scope, api_key_limit=20)
         response: Final = gateway.request("GET", f"/issues/{issue.id}/activity")
@@ -425,7 +439,7 @@ async def test_issue_provider_pairs_filter_activity_pages_counts_and_exports(
     store: Final = IssuesRepository.from_prisma(db.prisma)
     issue: Final = _issue(cohort).model_copy(update={"range_start": day, "range_end": day})
     try:
-        await store.upsert_issue(issue)
+        await store.upsert_issues((issue,))
         activity_http: Final = gateway.request("GET", f"/issues/{issue.id}/activity")
         assert activity_http.status_code == 200 and activity_http.json()["metadata"]["total_api_requests"] == 100
         keys_http: Final = gateway.request("GET", f"/issues/{issue.id}/keys", params={"limit": "1"})
@@ -503,7 +517,7 @@ async def test_issue_delivery_guards_snapshot_freeze_and_delayed_recovery(db: Ma
     next_issue_id: Final = str(uuid4())
     try:
         source: Final = (await alerts.record_observations(rule, (observation,)))[0]
-        initial: Final = await store.upsert_issue(original)
+        initial: Final = (await store.upsert_issues((original,)))[0]
         assert tuple(
             item.alert.id
             for item in await store.active_signals(
@@ -512,11 +526,11 @@ async def test_issue_delivery_guards_snapshot_freeze_and_delayed_recovery(db: Ma
         ) == (source.id,)
         assert await store.active_signals(original.observed_on, scope_ids=()) == ()
         assert await store.active_signals(original.observed_on, scope_ids=("other-example-user",)) == ()
-        await store.add_signals(
-            initial.id, (IssueSignalInput(source="usage_alert", source_id=source.id, usage_alert=source),)
+        await store.add_signal_batch(
+            _signals(initial.id, (IssueSignalInput(source="usage_alert", source_id=source.id, usage_alert=source),))
         )
-        await store.queue_delivery(delivery, rule.id, rule.updated_at.isoformat(), source.id)
-        await store.queue_delivery(invalid, rule.id, rule.updated_at.isoformat(), source.id)
+        await store.queue_deliveries((_delivery(delivery, rule, source),))
+        await store.queue_deliveries((_delivery(invalid, rule, source),))
         pending: Final = await store.pending_delivery(delivery.id)
         assert pending is not None and pending.alert.id == source.id and pending.issue.id == initial.id
         assert await store.pending_delivery(invalid.id) is None
@@ -526,7 +540,7 @@ async def test_issue_delivery_guards_snapshot_freeze_and_delayed_recovery(db: Ma
         assert enabled is not None and await store.pending_delivery(delivery.id) is None
         reevaluated: Final = await alerts.record_observations(enabled, (observation,))
         assert len(reevaluated) == 1 and reevaluated[0].id == source.id
-        await store.queue_delivery(delivery, enabled.id, enabled.updated_at.isoformat(), source.id)
+        await store.queue_deliveries((_delivery(delivery, enabled, source),))
         assert await store.pending_delivery(delivery.id) is not None
         await alerts.set_status(source.id, "dismissed")
         assert await store.pending_delivery(delivery.id) is None
@@ -541,7 +555,7 @@ async def test_issue_delivery_guards_snapshot_freeze_and_delayed_recovery(db: Ma
                 "comparisons": (original.comparisons[0].model_copy(update={"observed_value": 999}),),
             }
         )
-        continued: Final = await store.upsert_issue(later)
+        continued: Final = (await store.upsert_issues((later,)))[0]
         assert continued.status == "dismissed" and continued.comparisons == initial.comparisons
         assert continued.title == initial.title and continued.observed_on == initial.observed_on
         assert continued.last_seen > initial.last_seen
@@ -558,7 +572,7 @@ async def test_issue_delivery_guards_snapshot_freeze_and_delayed_recovery(db: Ma
             retried is not None and retried.delivery.attempts == 1 and retried.delivery.last_error == "delivery_failed"
         )
         await store.mark_delivery_sent(delivery.id)
-        await store.queue_delivery(delivery, enabled.id, enabled.updated_at.isoformat(), source.id)
+        await store.queue_deliveries((_delivery(delivery, enabled, source),))
         assert await store.pending_delivery(delivery.id) is None
         healthy: Final = observation.model_copy(
             update={"day": observation.day + timedelta(days=1), "breached": False, "observed": 120}
@@ -567,24 +581,28 @@ async def test_issue_delivery_guards_snapshot_freeze_and_delayed_recovery(db: Ma
         await store.recover_issues(observation.day + timedelta(days=2))
         recovered: Final = await store.get_issue(initial.id)
         assert recovered is not None and not recovered.active and recovered.status == "resolved"
-        assert await store.find_active_issue(original.cohort_key) is None
+        assert await store.find_active_issues((original.cohort_key,)) == ()
         repeated: Final = (
             await alerts.record_observations(
                 enabled, (observation.model_copy(update={"day": observation.day + timedelta(days=2)}),)
             )
         )[0]
         assert repeated.id != source.id
-        new_episode: Final = await store.upsert_issue(
-            original.model_copy(
-                update={
-                    "id": next_issue_id,
-                    "observed_on": repeated.day,
-                    "observed_at": later.observed_at + timedelta(minutes=1),
-                }
+        new_episode: Final = (
+            await store.upsert_issues(
+                (
+                    original.model_copy(
+                        update={
+                            "id": next_issue_id,
+                            "observed_on": repeated.day,
+                            "observed_at": later.observed_at + timedelta(minutes=1),
+                        }
+                    ),
+                )
             )
-        )
+        )[0]
         assert new_episode.active and new_episode.status == "open" and new_episode.id != initial.id
-        assert (await store.find_active_issue(original.cohort_key)) == new_episode
+        assert await store.find_active_issues((original.cohort_key,)) == (new_episode,)
     finally:
         await _remove_issues(db, (original.id, next_issue_id))
         await alerts.delete_rule(rule.id)
@@ -664,14 +682,11 @@ async def test_late_default_override_stops_queued_delivery_and_recovers_on_fresh
         await store.upsert_issues(issues)
         for issue in issues:
             source: UsageAlert = next(source for source in sources if source.scope_id == issue.cohort.scope_id)
-            await store.add_signals(
-                issue.id, (IssueSignalInput(source="usage_alert", source_id=source.id, usage_alert=source),)
+            await store.add_signal_batch(
+                _signals(issue.id, (IssueSignalInput(source="usage_alert", source_id=source.id, usage_alert=source),))
             )
-            await store.queue_delivery(
-                IssueDeliveryInput(id=issue.id, issue_id=issue.id, channel="slack"),
-                rule.id,
-                rule.updated_at.isoformat(),
-                source.id,
+            await store.queue_deliveries(
+                (_delivery(IssueDeliveryInput(id=issue.id, issue_id=issue.id, channel="slack"), rule, source),)
             )
             assert await store.pending_delivery(issue.id) is not None
         definition: Final = UsageAlertRuleInput(
@@ -796,7 +811,7 @@ async def test_family_edit_requires_a_new_evaluation(db: ManagementDatabase) -> 
         await alerts.ensure_default_rules(default_usage_rules())
         rule: Final = await alerts.get_rule(default_usage_rule_id("key", "spend", "increase"))
         assert rule is not None
-        await alerts.record_evaluation_status(rule, date.today() - timedelta(days=1), "complete")
+        await alerts.record_evaluations(((rule, "complete"),), date.today() - timedelta(days=1), completed=True)
         result: Final = await store.update_family(
             "spend", IssueFamilyUpdate(policies=(IssueFamilyPolicyUpdate(direction="increase", multiplier=5),))
         )
@@ -826,7 +841,7 @@ async def test_deleted_key_owner_retains_historical_issue_access(gateway: Gatewa
             owner,
         )
         try:
-            await store.upsert_issue(issue)
+            await store.upsert_issues((issue,))
             path: Final = f"/issues/{issue.id}"
             detail: Final = gateway.request("GET", path, key=owner_key)
             assert detail.status_code == 200, "Deleted key owner must retain historical issue access"
@@ -884,23 +899,23 @@ async def test_issue_status_rechecks_changed_scope_set_and_caps_sources(db: Mana
                 ),
             )
         )[0]
-        await store.upsert_issue(issue)
-        await store.add_signals(
-            issue.id, (IssueSignalInput(source="usage_alert", source_id=source.id, usage_alert=source),)
+        await store.upsert_issues((issue,))
+        await store.add_signal_batch(
+            _signals(issue.id, (IssueSignalInput(source="usage_alert", source_id=source.id, usage_alert=source),))
         )
         authorized: Final = await store.status_scopes(issue.id)
         assert authorized == (issue.cohort,)
         assert await store.set_status(issue.id, "dismissed", "open", authorized_scopes=authorized) is not None
         context: Final = source.model_copy(update={"id": str(uuid4()), "metric": "spend"})
         same_scope: Final = (IssueSignalInput(source="usage_alert", source_id=context.id, usage_alert=context),)
-        await store.add_signals(issue.id, same_scope)
+        await store.add_signal_batch(_signals(issue.id, same_scope))
         unchanged: Final = await store.get_issue(issue.id)
         assert unchanged is not None and unchanged.status == "dismissed"
-        await store.add_signals(issue.id, same_scope)
+        await store.add_signal_batch(_signals(issue.id, same_scope))
         assert await store.get_issue(issue.id) == unchanged
         broader: Final = source.model_copy(update={"id": str(uuid4()), "scope_type": "deployment", "scope_id": None})
-        await store.add_signals(
-            issue.id, (IssueSignalInput(source="usage_alert", source_id=broader.id, usage_alert=broader),)
+        await store.add_signal_batch(
+            _signals(issue.id, (IssueSignalInput(source="usage_alert", source_id=broader.id, usage_alert=broader),))
         )
         assert await store.set_status(issue.id, "dismissed", "open", authorized_scopes=authorized) is None
         current: Final = await store.get_issue(issue.id)
@@ -908,9 +923,11 @@ async def test_issue_status_rechecks_changed_scope_set_and_caps_sources(db: Mana
         all_scopes: Final = await store.status_scopes(issue.id)
         assert await store.set_status(issue.id, "dismissed", "open", authorized_scopes=all_scopes) is not None
         broader_context: Final = broader.model_copy(update={"id": str(uuid4()), "metric": "spend"})
-        await store.add_signals(
-            issue.id,
-            (IssueSignalInput(source="usage_alert", source_id=broader_context.id, usage_alert=broader_context),),
+        await store.add_signal_batch(
+            _signals(
+                issue.id,
+                (IssueSignalInput(source="usage_alert", source_id=broader_context.id, usage_alert=broader_context),),
+            )
         )
         repeated_scope: Final = await store.get_issue(issue.id)
         assert repeated_scope is not None and repeated_scope.status == "dismissed"
@@ -943,22 +960,28 @@ async def test_issue_status_rechecks_changed_scope_set_and_caps_sources(db: Mana
                 locked: Final = IssuesRepository(
                     cast(AlertDatabase, transaction)  # cast-ok: generated Prisma transaction query delegate
                 )
-                await locked.add_signals(
-                    issue.id, (IssueSignalInput(source="usage_alert", source_id=racing.id, usage_alert=racing),)
+                await locked.add_signal_batch(
+                    _signals(
+                        issue.id, (IssueSignalInput(source="usage_alert", source_id=racing.id, usage_alert=racing),)
+                    )
                 )
         assert update.result() is None
         raced: Final = await store.get_issue(issue.id)
         assert raced is not None and raced.status == "open"
-        await store.add_signals(
-            issue.id,
-            tuple(
-                IssueSignalInput(
-                    source="usage_alert",
-                    source_id=f"scope-{index}",
-                    usage_alert=source.model_copy(update={"id": f"scope-{index}", "scope_id": f"other-user-{index}"}),
-                )
-                for index in range(20)
-            ),
+        await store.add_signal_batch(
+            _signals(
+                issue.id,
+                tuple(
+                    IssueSignalInput(
+                        source="usage_alert",
+                        source_id=f"scope-{index}",
+                        usage_alert=source.model_copy(
+                            update={"id": f"scope-{index}", "scope_id": f"other-user-{index}"}
+                        ),
+                    )
+                    for index in range(20)
+                ),
+            )
         )
         limited: Final = await store.status_scopes(issue.id)
         assert len(limited) == 11
@@ -1015,12 +1038,15 @@ async def test_resource_recovery_ignores_broader_and_traffic_context(db: Managem
                 if rule is not None
             ]
         )
-        await store.upsert_issue(issue)
-        await store.add_signals(
-            issue.id,
-            tuple(
-                IssueSignalInput(source="usage_alert", source_id=source.id, usage_alert=source) for source in sources
-            ),
+        await store.upsert_issues((issue,))
+        await store.add_signal_batch(
+            _signals(
+                issue.id,
+                tuple(
+                    IssueSignalInput(source="usage_alert", source_id=source.id, usage_alert=source)
+                    for source in sources
+                ),
+            )
         )
         primary: Final = rules[0]
         assert primary is not None
@@ -1127,12 +1153,11 @@ async def test_issue_prune_removes_expired_children_in_bounded_passes(
                 ),
             )
         )[0]
-        await store.add_signals(
-            expired.id,
-            (IssueSignalInput(source="usage_alert", source_id=source.id, usage_alert=source),),
+        await store.add_signal_batch(
+            _signals(expired.id, (IssueSignalInput(source="usage_alert", source_id=source.id, usage_alert=source),))
         )
         for delivery in deliveries:
-            await store.queue_delivery(delivery, rule.id, rule.updated_at.isoformat(), source.id)
+            await store.queue_deliveries((_delivery(delivery, rule, source),))
         assert await store.set_status(expired.id, "resolved", "open") is not None
         assert await store.set_status(recent.id, "resolved", "open") is not None
         await _query(
@@ -1231,7 +1256,7 @@ async def test_issue_resource_metadata_bounds_labels_and_deleted_history(
                 day.isoformat(),
                 reporting_key,
             )
-            await store.upsert_issue(issue)
+            await store.upsert_issues((issue,))
             keys: Final = await repository.keys(issue.cohort, day, day, 1, 0)
             assert keys.total_api_keys == 1 and len(keys.api_keys) == 1
             key: Final = keys.api_keys[0]
@@ -1293,12 +1318,15 @@ async def test_disabled_later_breach_requires_new_healthy_primary_evidence(db: M
     )
     try:
         sources: Final = tuple([(await alerts.record_observations(rule, (breach,)))[0] for rule in (first, second)])
-        await store.upsert_issue(issue)
-        await store.add_signals(
-            issue.id,
-            tuple(
-                IssueSignalInput(source="usage_alert", source_id=source.id, usage_alert=source) for source in sources
-            ),
+        await store.upsert_issues((issue,))
+        await store.add_signal_batch(
+            _signals(
+                issue.id,
+                tuple(
+                    IssueSignalInput(source="usage_alert", source_id=source.id, usage_alert=source)
+                    for source in sources
+                ),
+            )
         )
         await alerts.record_observations(
             first,
