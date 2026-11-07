@@ -3,10 +3,13 @@ from typing import Final, cast
 
 import httpx
 import pytest
+from pydantic import TypeAdapter
 
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy.control_plane.container import HandlerTransport, _shared_http_handler
 from litellm.proxy.control_plane.settings import ControlPlaneSettings
+
+_JSON_COUNT: Final = TypeAdapter(dict[str, int])
 
 
 def test_shared_http_handler_does_not_follow_redirects() -> None:
@@ -35,9 +38,11 @@ class _RecyclingHandler:  # mutable-ok: counts how often the pool is re-read
 async def test_transport_rereads_the_handlers_pool_on_every_request() -> None:
     handler: Final = _RecyclingHandler()
     transport: Final = HandlerTransport(cast(AsyncHTTPHandler, handler))  # cast-ok: only the client property is used
-    first: Final = await transport.request("GET", "https://dp.test/health", timeout=1.0)
-    second: Final = await transport.request("GET", "https://dp.test/health", timeout=1.0)
-    assert (first.json(), second.json()) == ({"n": 1}, {"n": 2}), "a pool closed by eviction must not be reused"
+    async with transport.stream("GET", "https://dp.test/health", timeout=1.0) as first_response:
+        first: Final = _JSON_COUNT.validate_json(await first_response.aread())
+    async with transport.stream("GET", "https://dp.test/health", timeout=1.0) as second_response:
+        second: Final = _JSON_COUNT.validate_json(await second_response.aread())
+    assert (first, second) == ({"n": 1}, {"n": 2}), "a pool closed by eviction must not be reused"
 
 
 @dataclass
@@ -59,5 +64,6 @@ class _RedirectingHandler:  # mutable-ok: counts the hops a following pool would
 async def test_transport_never_follows_a_dataplane_redirect_even_on_a_following_pool() -> None:
     handler: Final = _RedirectingHandler()
     transport: Final = HandlerTransport(cast(AsyncHTTPHandler, handler))  # cast-ok: only the client property is used
-    reply: Final = await transport.request("GET", "https://dp.test/v1/mcp/server/oauth/x/authorize", timeout=1.0)
-    assert reply.status_code == 302 and handler.hops == ["https://dp.test/v1/mcp/server/oauth/x/authorize"]
+    async with transport.stream("GET", "https://dp.test/v1/mcp/server/oauth/x/authorize", timeout=1.0) as response:
+        status: Final = response.status_code
+    assert status == 302 and handler.hops == ["https://dp.test/v1/mcp/server/oauth/x/authorize"]
