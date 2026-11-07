@@ -62,6 +62,7 @@ OPTIONAL_KWARGS_KEYS: Final = (
             "bucket_name",
             "s3_bucket_name",
             "s3_output_bucket_name",
+            "stored_s3_bucket_name",
             "allow_legacy_cloud_file_ids",
             "s3_endpoint_url",
             "s3_region_name",

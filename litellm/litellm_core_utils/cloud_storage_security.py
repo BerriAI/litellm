@@ -17,6 +17,16 @@ BEDROCK_MANAGED_S3_PREFIXES: Final = (
     BEDROCK_MANAGED_S3_OUTPUT_PREFIX,
 )
 MANAGED_CLOUD_STORAGE_SCHEMES: Final = ("s3://", "gs://")
+STORED_S3_BUCKET_PARAM: Final = "stored_s3_bucket_name"
+
+
+def stored_s3_bucket_kwargs(stored_file_id: str) -> Mapping[str, str]:
+    """The bucket of an ``s3://`` file id LiteLLM recorded itself, as the param that lets Bedrock read it back.
+
+    Only pass ids from LiteLLM's own records (managed file rows, provider batch responses), never one a caller sent.
+    """
+    bucket: Final = stored_file_id.removeprefix("s3://").split("/", 1)[0] if stored_file_id.startswith("s3://") else ""
+    return {STORED_S3_BUCKET_PARAM: bucket} if bucket else {}
 
 
 MAX_FILE_ID_DECODE_PASSES: Final = 8

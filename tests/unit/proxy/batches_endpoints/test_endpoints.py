@@ -426,6 +426,60 @@ async def test_create__model_from_body(harness):
     assert resp.id == encode_file_id_with_model("batch-provider-id", "vertex-model", id_type="batch")
 
 
+_TEAM_A_KEY: Final = UserAPIKeyAuth(
+    api_key="sk-team-a", team_id="team-a", team_metadata={"allowed_s3_buckets": ["team-a-bucket"]}
+)
+
+
+def _batch_body_with_output_bucket(bucket: str) -> dict[str, object]:
+    return {
+        "input_file_id": "file-plain",
+        "endpoint": "/v1/chat/completions",
+        "completion_window": "24h",
+        "model": "vertex-model",
+        "s3_output_bucket_name": bucket,
+    }
+
+
+@pytest.mark.asyncio
+async def test_create__output_bucket_on_the_team_allowlist_reaches_the_provider(harness):
+    set_body(harness, _batch_body_with_output_bucket("team-a-bucket"))
+
+    await call_create(harness, user=_TEAM_A_KEY)
+
+    assert harness.acreate_kwargs()["s3_output_bucket_name"] == "team-a-bucket"
+
+
+@pytest.mark.asyncio
+async def test_create__team_with_an_allowlist_and_no_request_bucket_leaves_the_bucket_to_the_model(harness):
+    set_body(
+        harness,
+        {
+            "input_file_id": "file-plain",
+            "endpoint": "/v1/chat/completions",
+            "completion_window": "24h",
+            "model": "vertex-model",
+        },
+    )
+
+    await call_create(harness, user=_TEAM_A_KEY)
+
+    assert "s3_output_bucket_name" not in harness.acreate_kwargs()
+
+
+@pytest.mark.asyncio
+async def test_create__output_bucket_off_the_team_allowlist_is_rejected_before_the_provider(harness):
+    set_body(harness, _batch_body_with_output_bucket("team-b-bucket"))
+
+    with pytest.raises(ProxyException) as rejection:
+        await call_create(harness, user=_TEAM_A_KEY)
+
+    assert str(rejection.value.code) == "401"
+    assert "s3_output_bucket_name is not allowed in request body" in rejection.value.message
+    harness.litellm_acreate.assert_not_called()
+    harness.router_acreate.assert_not_called()
+
+
 @pytest.mark.asyncio
 async def test_create__model_from_header(harness):
     set_body(
