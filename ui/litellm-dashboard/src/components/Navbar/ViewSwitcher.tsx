@@ -1,7 +1,7 @@
 import { useTerminology } from "@/contexts/TerminologyContext";
 import React from "react";
 import { useTranslation } from "react-i18next";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -58,6 +58,7 @@ export default function ViewSwitcher({ className, contentClassName }: ViewSwitch
   const { mode, setMode, plugins } = usePluginMode();
   const { data: uiSettings } = useUISettings();
   const pathname = usePathname();
+  const router = useRouter();
 
   const chatEnabled = Boolean(uiSettings?.values?.enable_chat_ui);
   const moyaiUrl = (uiSettings?.values?.moyai_url as string | undefined) ?? null;
@@ -81,15 +82,15 @@ export default function ViewSwitcher({ className, contentClassName }: ViewSwitch
   ];
 
   const selectMode = (key: string) => {
-    setMode(key);
     if (key === CUSTOMER_PORTAL) {
-      window.location.assign(uiHref("customers"));
+      router.push(uiHref("customers"));
       return;
     }
     if (mode === CUSTOMER_PORTAL && key === GATEWAY) {
-      window.location.assign(uiHref("api-keys"));
+      router.push(uiHref("api-keys"));
       return;
     }
+    setMode(key);
     if (isStandaloneRoute) {
       window.location.assign(uiHref(""));
     }
