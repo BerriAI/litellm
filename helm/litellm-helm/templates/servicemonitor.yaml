@@ -1,5 +1,8 @@
 {{- with .Values.serviceMonitor }}
 {{- if and (eq .enabled true) }}
+{{- if and .authSecret.enabled (ne .scheme "https") }}
+{{- fail "serviceMonitor.scheme must be https when serviceMonitor.authSecret.enabled is true" }}
+{{- end }}
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
@@ -30,7 +33,11 @@ spec:
     path: /metrics/
     interval: {{ .interval }}
     scrapeTimeout: {{ .scrapeTimeout }}
-    scheme: http
+    scheme: {{ .scheme }}
+    {{- with .tlsConfig }}
+    tlsConfig:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
     {{- if .authSecret.enabled }}
     authorization:
       credentials:

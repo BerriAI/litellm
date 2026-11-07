@@ -645,6 +645,8 @@ pdb:
 
 serviceMonitor:
   enabled: false
+  scheme: http
+  tlsConfig: {}
   labels:
     {}
     # test: test
