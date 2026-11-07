@@ -21,6 +21,7 @@ from typing_extensions import NotRequired, TypedDict
 import litellm
 from litellm import verbose_logger
 from litellm._uuid import uuid
+from litellm.exceptions import InternalServerError
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, get_hidden_params
 from litellm.litellm_core_utils.model_response_utils import (
@@ -28,6 +29,7 @@ from litellm.litellm_core_utils.model_response_utils import (
 )
 from litellm.litellm_core_utils.redact_messages import LiteLLMLoggingObject
 from litellm.litellm_core_utils.thread_pool_executor import executor
+from litellm.llms.base_llm.base_model_iterator import UPSTREAM_ABORT_MESSAGE
 from litellm.llms.ollama.common_utils import OllamaResponseIdNormalizer
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import OpenAIChatCompletionChunk
@@ -718,13 +720,23 @@ class CustomStreamWrapper:
         except Exception as e:
             raise e
 
-    def handle_openai_text_completion_chunk(self, chunk):
+    def _upstream_abort_error(self, model: str) -> InternalServerError:
+        return InternalServerError(
+            message=UPSTREAM_ABORT_MESSAGE,
+            model=model,
+            llm_provider=self.custom_llm_provider,
+        )
+
+    def handle_openai_text_completion_chunk(self, chunk: object):
         try:
             text = ""
             is_finished = False
             finish_reason = None
             usage = None
             choices: Final[Sequence[_TextCompletionChoiceLike]] = getattr(chunk, "choices", [])
+            if any(choice.finish_reason == "abort" for choice in choices):
+                chunk_model: Final[str] = getattr(chunk, "model", "")
+                raise self._upstream_abort_error(chunk_model)
             if len(choices) > 0:
                 text = choices[0].text
                 if choices[0].finish_reason is not None:
@@ -1402,11 +1414,7 @@ class CustomStreamWrapper:
             if isinstance(chunk, ChatCompletionChunk) and any(
                 str(choice.finish_reason) == "abort" for choice in chunk.choices or ()
             ):
-                raise litellm.InternalServerError(
-                    message="Upstream generation aborted (finish_reason=abort)",
-                    model=chunk.model,
-                    llm_provider=self.custom_llm_provider,
-                )
+                raise self._upstream_abort_error(chunk.model)
             if self.custom_llm_provider in [
                 LlmProviders.AZURE.value,
                 LlmProviders.AZURE_AI.value,

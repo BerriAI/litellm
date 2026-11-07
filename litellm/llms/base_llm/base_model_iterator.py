@@ -2,7 +2,10 @@ import json
 from abc import abstractmethod
 from typing import TYPE_CHECKING, Final, cast
 
+from pydantic import BaseModel, ConfigDict, ValidationError
+
 import litellm
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
 if TYPE_CHECKING:
     import httpx
@@ -61,6 +64,28 @@ def convert_model_response_to_streaming(
         return processed_chunk
     except Exception as e:
         raise ValueError(f"Failed to convert ModelResponse to ModelResponseStream: {model_response}. Error: {e}")
+
+
+UPSTREAM_ABORT_MESSAGE: Final = "Upstream generation aborted (finish_reason=abort)"
+
+
+class _StreamedChoice(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    finish_reason: object = None
+
+
+class _StreamedChunk(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    choices: tuple[_StreamedChoice, ...] | None = None
+
+
+def raise_on_upstream_abort(chunk: object) -> None:
+    try:
+        choices: Final = _StreamedChunk.model_validate(chunk).choices or ()
+    except ValidationError:
+        return
+    if any(choice.finish_reason == "abort" for choice in choices):
+        raise BaseLLMException(status_code=500, message=UPSTREAM_ABORT_MESSAGE)
 
 
 class BaseModelResponseIterator:
@@ -132,6 +157,7 @@ class BaseModelResponseIterator:
                 tool_use=None,
             )
         elif stripped_json_chunk:
+            raise_on_upstream_abort(stripped_json_chunk)
             return self.chunk_parser(chunk=stripped_json_chunk)
         else:
             return GenericStreamingChunk(
