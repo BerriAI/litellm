@@ -38,7 +38,7 @@ const RoutingStrategySelector: React.FC<RoutingStrategySelectorProps> = ({
           onValueChange={(strategy: string | null) => strategy && onStrategyChange(strategy)}
           disabled={ownedByConfig}
         >
-          <SelectTrigger className="w-full" aria-label={ownedByConfig ? CONFIG_OWNED_HINT : undefined}>
+          <SelectTrigger className="w-full" aria-label={ownedByConfig ? t(CONFIG_OWNED_HINT) : undefined}>
             <SelectValue />
           </SelectTrigger>
           <SelectContent>

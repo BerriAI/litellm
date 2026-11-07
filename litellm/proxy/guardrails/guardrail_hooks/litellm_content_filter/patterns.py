@@ -11,7 +11,7 @@ import re
 from collections.abc import Iterator, Sequence
 from enum import Enum
 from re import Pattern
-from typing import Any, Final
+from typing import Final
 
 from pydantic import ConfigDict, TypeAdapter, with_config
 from typing_extensions import ReadOnly, TypedDict
@@ -33,7 +33,21 @@ class _PatternsFile(TypedDict):
     patterns: ReadOnly[Sequence[_PatternEntry]]
 
 
+class _CategoryFileSummary(TypedDict, total=False):
+    category_name: ReadOnly[str]
+    display_name: ReadOnly[str]
+    description: ReadOnly[str]
+    default_action: ReadOnly[str]
+
+
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
+class _PatternExtraConfig(TypedDict, total=False):
+    keyword_pattern: ReadOnly[str]
+    allow_word_numbers: ReadOnly[bool]
+
+
 _PATTERNS_FILE: Final = TypeAdapter(_PatternsFile)
+_PATTERN_EXTRAS: Final = TypeAdapter(_PatternExtraConfig)
 
 
 def _load_patterns_from_json() -> _PatternsFile:
@@ -72,9 +86,11 @@ KNOWN_PATTERN_KEYS: Final = {
     "description",
 }
 
-PATTERN_EXTRA_CONFIG: Final[dict[str, dict[str, Any]]] = {}
+PATTERN_EXTRA_CONFIG: Final[dict[str, _PatternExtraConfig]] = {}
 for pattern_data in _PATTERNS_DATA["patterns"]:
-    extra_config = {key: value for key, value in pattern_data.items() if key not in KNOWN_PATTERN_KEYS}
+    extra_config = _PATTERN_EXTRAS.validate_python(
+        {key: value for key, value in pattern_data.items() if key not in KNOWN_PATTERN_KEYS}
+    )
     PATTERN_EXTRA_CONFIG[pattern_data["name"]] = extra_config
 
 
@@ -154,7 +170,7 @@ def _category_entry(categories_dir: str, filename: str) -> dict[str, str] | None
     if filename.endswith((".yaml", ".yml")):
         try:
             with open(category_file_path, "r") as f:
-                category_data = yaml.safe_load(f)
+                category_data: Final[_CategoryFileSummary] = yaml.safe_load(f)
         except Exception as e:
             from litellm._logging import verbose_proxy_logger
 

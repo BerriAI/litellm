@@ -41,6 +41,14 @@ class PluginArchiveMetadata:
     description: str | None = None
     has_agent_skill_metadata: bool = False
     updated_at: datetime | None = None
+    created_at: datetime | None = None
+    created_by: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class PluginReview:
+    approved_by: str
+    security_scan_passed: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,6 +59,7 @@ class PluginPublication:
     manifest: Mapping[str, object]
     created_by: str | None
     content: bytes | None = None
+    review: PluginReview | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,6 +75,10 @@ class PublishedPlugin:
     version: str
     enabled: bool
     updated_at: datetime
+    created_at: datetime | None = None
+    created_by: str | None = None
+    review: PluginReview | None = None
+    published_by: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

@@ -24,6 +24,7 @@ from litellm.llms.bedrock_mantle.responses.transformation import (
 )
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
+from litellm.utils import ProviderConfigManager
 
 LOOKALIKE_MANTLE_HOSTS = (
     "https://bedrock-mantle.us-east-1.api.aws.internal.example.com",
@@ -902,11 +903,10 @@ class TestBedrockMantleCodexInputItemNormalization:
     on the Codex history item types agent_message, context_compaction, and
     local_shell_call (verified against bedrock-mantle.us-east-1.api.aws with
     openai.gpt-5.6-sol), so the config must rewrite them into supported
-    equivalents. agent_message is what every Codex multi-agent v2 session sends,
-    and its encrypted_content slot carries the verbatim plaintext payload when
-    the upstream model never issued encrypted args, so that slot must be
-    preserved, not dropped. Mantle also rejects assistant messages with
-    input_text content, so the rewrite must use output_text."""
+    equivalents. agent_message is what every Codex multi-agent v2 session sends.
+    One carrying an encrypted_content block is ciphertext only Mantle can decrypt,
+    so it is forwarded intact. Mantle also rejects assistant messages with
+    input_text content, so the plaintext rewrite must use output_text."""
 
     _USER_MESSAGE = {
         "type": "message",
@@ -914,10 +914,11 @@ class TestBedrockMantleCodexInputItemNormalization:
         "content": [{"type": "input_text", "text": "Continue."}],
     }
 
-    def _transform(self, input):
-        cfg = BedrockMantleResponsesAPIConfig()
+    def _transform(self, input, model="openai.gpt-5.6-sol"):
+        cfg = ProviderConfigManager.get_provider_responses_api_config(LlmProviders.BEDROCK_MANTLE, model)
+        assert isinstance(cfg, BedrockMantleResponsesAPIConfig)
         return cfg.transform_responses_api_request(
-            model="openai.gpt-5.6-sol",
+            model=model,
             input=input,
             response_api_optional_request_params={},
             litellm_params=GenericLiteLLMParams(),
@@ -946,31 +947,48 @@ class TestBedrockMantleCodexInputItemNormalization:
             },
         ]
 
-    def test_agent_message_encrypted_content_payload_is_preserved(self):
+    def test_agent_message_with_encrypted_content_reaches_mantle_intact_and_unlogged(self, caplog):
+        """Only Mantle can decrypt the block for the recipient model; as assistant text it is gibberish."""
+        agent_message = {
+            "type": "agent_message",
+            "author": "/root/reviewer",
+            "recipient": "/root",
+            "content": [
+                {"type": "input_text", "text": "Worker message:\n"},
+                {"type": "encrypted_content", "encrypted_content": "gAAAAABpZ3ciphertext=="},
+            ],
+        }
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            body = self._transform(input=[copy.deepcopy(agent_message), self._USER_MESSAGE])
+        assert body["input"] == [agent_message, self._USER_MESSAGE]
+        assert not [record for record in caplog.records if "rewrote Codex input item" in record.getMessage()]
+
+    @pytest.mark.parametrize("model", ["openai.gpt-oss-120b", "google.gemma-4-31b", "xai.grok-4.3"])
+    def test_models_that_never_lock_worker_messages_keep_the_text_rewrite(self, model):
+        """Codex puts plain text in the locked slot for these models, which Mantle rejects unless rewritten."""
         body = self._transform(
             input=[
                 {
                     "type": "agent_message",
                     "author": "/root",
-                    "recipient": "/root/arithmetic",
+                    "recipient": "/root/codeword",
                     "content": [
                         {"type": "input_text", "text": "Message Type: NEW_TASK\nPayload:\n"},
-                        {"type": "encrypted_content", "encrypted_content": "Answer the question 'what is 2+2'."},
+                        {"type": "encrypted_content", "encrypted_content": "Reply with ZEPHYR-1."},
                     ],
                 },
                 self._USER_MESSAGE,
-            ]
+            ],
+            model=model,
         )
-        assert body["input"][0] == {
-            "type": "message",
-            "role": "assistant",
-            "content": (
-                {
-                    "type": "output_text",
-                    "text": "Message Type: NEW_TASK\nPayload:\nAnswer the question 'what is 2+2'.",
-                },
-            ),
-        }
+        assert body["input"] == [
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": ({"type": "output_text", "text": "Message Type: NEW_TASK\nPayload:\nReply with ZEPHYR-1."},),
+            },
+            self._USER_MESSAGE,
+        ]
 
     def test_agent_message_without_any_text_is_dropped(self):
         body = self._transform(
