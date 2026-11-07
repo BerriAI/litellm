@@ -6,13 +6,18 @@ import httpx
 import pytest
 
 import litellm
-
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.vertex_ai.common_utils import VertexAIError
 from litellm.llms.vertex_ai.context_caching.known_cached_contents import KnownCachedContents
 from litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching import (
     ContextCachingEndpoints,
+)
+from litellm.types.llms.openai import (
+    AllMessageValues,
+    ChatCompletionAssistantMessage,
+    ChatCompletionSystemMessage,
+    ChatCompletionUserMessage,
 )
 
 
@@ -1790,6 +1795,58 @@ class TestContextCachingEndpoints:
         self.mock_async_client.post.assert_not_called()
 
 
+def _marked_user(text: str) -> ChatCompletionUserMessage:
+    return {"role": "user", "content": [{"type": "text", "text": text, "cache_control": {"type": "ephemeral"}}]}
+
+
+_SYSTEM: Final[ChatCompletionSystemMessage] = {"role": "system", "content": "sys"}
+_Q1: Final[ChatCompletionUserMessage] = {"role": "user", "content": "Q1"}
+_A1: Final[ChatCompletionAssistantMessage] = {"role": "assistant", "content": "A1"}
+_A2: Final[ChatCompletionAssistantMessage] = {"role": "assistant", "content": "A2"}
+_Q3: Final[ChatCompletionUserMessage] = {"role": "user", "content": "Q3"}
+_MARKED_Q2: Final = _marked_user("Q2")
+_MARKED_SYSTEM: Final[ChatCompletionSystemMessage] = {
+    "role": "system",
+    "content": [{"type": "text", "text": "sys", "cache_control": {"type": "ephemeral"}}],
+}
+
+
+@pytest.mark.parametrize(
+    ("messages", "expected_cached", "expected_non_cached"),
+    [
+        pytest.param(
+            [_SYSTEM, _Q1, _A1, _MARKED_Q2],
+            [_SYSTEM, _Q1, _A1, _MARKED_Q2],
+            [],
+            id="marked-latest-turn",
+        ),
+        pytest.param(
+            [_Q1, _A1, _MARKED_Q2, _A2, _Q3],
+            [_Q1, _A1, _MARKED_Q2],
+            [_A2, _Q3],
+            id="marked-middle-turn",
+        ),
+        pytest.param(
+            [_MARKED_SYSTEM, _Q1],
+            [_MARKED_SYSTEM],
+            [_Q1],
+            id="marked-system",
+        ),
+    ],
+)
+def test_separate_cached_messages_caches_prefix_through_marked_block(
+    messages: list[AllMessageValues],
+    expected_cached: list[AllMessageValues],
+    expected_non_cached: list[AllMessageValues],
+) -> None:
+    from litellm.llms.vertex_ai.context_caching.transformation import separate_cached_messages
+
+    cached_messages, non_cached_messages = separate_cached_messages(messages)
+
+    assert cached_messages == expected_cached
+    assert non_cached_messages == expected_non_cached
+
+
 def test_cached_messages_end_on_supported_turn():
     from litellm.llms.vertex_ai.context_caching.transformation import (
         cached_messages_end_on_supported_turn,
@@ -2545,7 +2602,9 @@ def test_a_plain_system_prompt_goes_into_the_gemini_cache_instead_of_beside_it(l
     )
 
     created: Final = next(
-        json.loads(call.content) for call in calls if call.method == "POST" and call.url.path.endswith("/cachedContents")
+        json.loads(call.content)
+        for call in calls
+        if call.method == "POST" and call.url.path.endswith("/cachedContents")
     )
     generated: Final = next(json.loads(call.content) for call in calls if call.url.path.endswith(":generateContent"))
     assert created["system_instruction"] == {"parts": [{"text": "You are terse."}]}
