@@ -117,6 +117,11 @@ def test_responses_layout_round_trips_back_to_what_the_caller_sent():
         {"type": "allowed_tools", "mode": "auto", "tools": [{"type": "custom", "name": ""}]},
         {
             "type": "allowed_tools",
+            "mode": "required",
+            "tools": [{"type": "function", "name": "get_time", "function": {"name": "get_weather"}}],
+        },
+        {
+            "type": "allowed_tools",
             "mode": "auto",
             "tools": [{"type": "function", "name": "get_time"}],
             "allowed_tools": {"mode": "auto", "tools": [{"type": "function", "name": "get_time"}]},

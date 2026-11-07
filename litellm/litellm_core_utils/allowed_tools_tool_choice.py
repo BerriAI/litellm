@@ -64,21 +64,22 @@ def is_allowed_tools_tool_choice(tool_choice: object) -> bool:
         return False
 
 
-def raise_if_allowed_tools_tool_choice_unsupported(
+def drops_unsupported_allowed_tools_tool_choice(
     tool_choice: object,
     custom_llm_provider: str,
     model: str,
-) -> None:
-    """Providers outside the set would silently send the request with no tool restriction at all, so the call stops
-    here with a 400. ``drop_params`` is deliberately not consulted: dropping a restriction widens what the model may call."""
+    drop_params: bool,
+) -> bool:
     if not is_allowed_tools_tool_choice(tool_choice) or custom_llm_provider in ALLOWED_TOOLS_TOOL_CHOICE_PROVIDERS:
-        return
+        return False
+    if drop_params:
+        return True
     raise BadRequestError(
         message=(
             "tool_choice type 'allowed_tools' is only supported for "
             f"{', '.join(sorted(ALLOWED_TOOLS_TOOL_CHOICE_PROVIDERS))}, got custom_llm_provider={custom_llm_provider}. "
-            "drop_params does not drop it, since that would let the model call tools the request excluded. "
-            "Send only the allowed tools in `tools` with tool_choice='auto' or 'required' instead."
+            "Send only the allowed tools in `tools` with tool_choice='auto' or 'required', or set drop_params=True "
+            "to drop the tool_choice, which lets the model call any tool in `tools`."
         ),
         model=model,
         llm_provider=custom_llm_provider,
@@ -92,8 +93,10 @@ def _has_name(selector: Mapping[str, object]) -> bool:
 
 def _chat_allowed_tool(tool: Mapping[str, object]) -> Mapping[str, object] | None:
     tool_type: Final = tool.get("type")
-    if not isinstance(tool_type, str) or tool_type not in ("function", "custom") or tool_type in tool:
+    if not isinstance(tool_type, str) or tool_type not in ("function", "custom"):
         return tool
+    if tool_type in tool:
+        return None if "name" in tool else tool
     if not _has_name(tool):
         return None
     return {**{key: value for key, value in tool.items() if key != "name"}, tool_type: {"name": tool["name"]}}
