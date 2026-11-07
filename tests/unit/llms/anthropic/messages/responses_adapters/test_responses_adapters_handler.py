@@ -1175,6 +1175,12 @@ def _replayed_reasoning_counts(upstream: respx.Route) -> list[int]:
 
 
 def _upstream(respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, first: httpx.Response, stream: bool):
+    return _upstream_after(respx_mock, monkeypatch, (first,), stream)
+
+
+def _upstream_after(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, failures: tuple[httpx.Response, ...], stream: bool
+) -> respx.Route:
     monkeypatch.setenv("OPENAI_API_KEY", "sk-replay-test")
     monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
     litellm.in_memory_llm_clients_cache.flush_cache()
@@ -1183,7 +1189,7 @@ def _upstream(respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, fir
         if stream
         else httpx.Response(200, json=TEXT_RESPONSE)
     )
-    return respx_mock.post("https://api.openai.com/v1/responses").mock(side_effect=[first, served])
+    return respx_mock.post("https://api.openai.com/v1/responses").mock(side_effect=[*failures, served])
 
 
 @pytest.mark.asyncio
@@ -1228,7 +1234,6 @@ def test_sync_openai_turn_is_sent_again_once_without_replayed_reasoning_the_back
     assert cast(Mapping[str, object], response)["content"] == [{"type": "text", "text": "done"}]
 
 
-
 @pytest.mark.asyncio
 async def test_openai_turn_with_num_retries_sends_the_rejected_reasoning_only_once(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
@@ -1246,9 +1251,10 @@ async def test_openai_turn_with_num_retries_sends_the_rejected_reasoning_only_on
     assert _replayed_reasoning_counts(upstream) == [1, 0]
 
 
-def test_sync_openai_turn_with_num_retries_sends_the_rejected_reasoning_only_once(
+def test_sync_openai_turn_with_global_num_retries_sends_the_rejected_reasoning_once_and_keeps_the_setting(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setattr(litellm, "num_retries", 2)
     upstream: Final = _upstream(respx_mock, monkeypatch, httpx.Response(400, json=REJECTED_REPLAYED_REASONING), False)
 
     litellm.anthropic.messages.create(
@@ -1256,10 +1262,60 @@ def test_sync_openai_turn_with_num_retries_sends_the_rejected_reasoning_only_onc
         messages=_history(replayed_reasoning=True),
         model="openai/gpt-5.6-luna",
         tools=[dict(BASH_TOOL)],
-        num_retries=2,
     )
 
     assert _replayed_reasoning_counts(upstream) == [1, 0]
+    assert litellm.num_retries == 2
+
+
+_SERVER_ERROR: Final = {
+    "error": {"message": "The server had an error while processing your request.", "type": "server_error"}
+}
+
+
+@pytest.mark.asyncio
+async def test_openai_turn_retries_a_server_error_with_the_reasoning_and_drops_it_only_once_rejected(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    upstream: Final = _upstream_after(
+        respx_mock,
+        monkeypatch,
+        (httpx.Response(500, json=_SERVER_ERROR), httpx.Response(400, json=REJECTED_REPLAYED_REASONING)),
+        False,
+    )
+
+    response: Final = await litellm.anthropic.messages.acreate(
+        max_tokens=64,
+        messages=_history(replayed_reasoning=True),
+        model="openai/gpt-5.6-luna",
+        tools=[dict(BASH_TOOL)],
+        num_retries=2,
+    )
+
+    assert _replayed_reasoning_counts(upstream) == [1, 1, 0]
+    assert cast(Mapping[str, object], response)["content"] == [{"type": "text", "text": "done"}]
+
+
+def test_sync_openai_turn_retries_a_server_error_with_the_reasoning_and_drops_it_only_once_rejected(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    upstream: Final = _upstream_after(
+        respx_mock,
+        monkeypatch,
+        (httpx.Response(500, json=_SERVER_ERROR), httpx.Response(400, json=REJECTED_REPLAYED_REASONING)),
+        False,
+    )
+
+    response: Final = litellm.anthropic.messages.create(
+        max_tokens=64,
+        messages=_history(replayed_reasoning=True),
+        model="openai/gpt-5.6-luna",
+        tools=[dict(BASH_TOOL)],
+        num_retries=2,
+    )
+
+    assert _replayed_reasoning_counts(upstream) == [1, 1, 0]
+    assert cast(Mapping[str, object], response)["content"] == [{"type": "text", "text": "done"}]
 
 
 class _FailureLog(CustomLogger):
