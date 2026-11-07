@@ -60,3 +60,22 @@ def test_dataplanes_environment_and_file_cannot_both_be_configured(monkeypatch: 
 
     with pytest.raises(ValueError, match="CONTROL_PLANE_DATAPLANES and CONTROL_PLANE_DATAPLANES_FILE"):
         load_settings()
+
+
+def test_fanout_concurrency_must_be_positive() -> None:
+    with pytest.raises(ValidationError):
+        ControlPlaneSettings.model_validate({"LITELLM_MASTER_KEY": MASTER_KEY, "fanout_concurrency": 0})
+
+
+def test_master_key_minimum_length_uses_utf8_bytes() -> None:
+    with pytest.raises(ValidationError):
+        ControlPlaneSettings.model_validate({"LITELLM_MASTER_KEY": "é" * 15 + "x"})
+    settings: Final = ControlPlaneSettings.model_validate({"LITELLM_MASTER_KEY": "é" * 16})
+    assert len(settings.master_key.get_secret_value().encode("utf-8")) == 32
+
+
+def test_usage_window_maximum_is_configurable() -> None:
+    settings: Final = ControlPlaneSettings.model_validate(
+        {"LITELLM_MASTER_KEY": MASTER_KEY, "usage_max_window_days": 12}
+    )
+    assert settings.usage_max_window_days == 12

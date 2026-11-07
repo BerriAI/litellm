@@ -110,7 +110,8 @@ class ControlPlaneSettings(BaseSettings):
     dataplanes_file: str | None = None
     dataplane_timeout_seconds: float = DEFAULT_DATAPLANE_TIMEOUT_SECONDS
     dataplane_retry_attempts: int = 3
-    fanout_concurrency: int = 16
+    fanout_concurrency: int = Field(default=16, ge=1)
+    usage_max_window_days: int = Field(default=366, ge=1)
     api_prefix: str = "/api/v1"
 
     @field_validator("master_key")
