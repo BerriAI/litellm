@@ -58,6 +58,7 @@ class Connection:
         self.extend = self
         self.standard = self
         self.searches: list[tuple[str, str, str]] = []
+        self.requested_attributes: list[tuple[str, ...]] = []  # mutable-ok: records attributes each search asked for
         self.closed = False
         self.tls_ok = tls_ok
         self.stop_after_search = stop_after_search
@@ -86,6 +87,7 @@ class Connection:
         time_limit: int,
         generator: bool,
     ) -> object:
+        self.requested_attributes.append(tuple(attributes))
         return self.groups
 
     def search(
@@ -98,6 +100,7 @@ class Connection:
         time_limit: int,
     ) -> bool:
         self.searches.append((search_base, search_filter, search_scope))
+        self.requested_attributes.append(tuple(attributes))
         if search_base in self.raising:
             result_code, exception = self.raising[search_base]
             if result_code is not None:
@@ -211,6 +214,31 @@ def test_standard_user_object_classes_resolve_as_members(object_class: str):
         [group(member=[ALICE])], {ALICE: [entry(ALICE, mail=["a@example.org"], objectClass=["top", object_class])]}
     )
     assert read_directory(SETTINGS, connection) == (DirectoryGroup("project-a", "project-a", ("a@example.org",)),)
+
+
+def test_configured_group_id_and_name_attributes_identify_the_team():
+    settings = SETTINGS.model_copy(update={"group_id_attribute": "entryUUID", "group_name_attribute": "description"})
+    connection = Connection(
+        [group(member=[ALICE], entryUUID=["0b6f-team"], description=["Project A"])],
+        {ALICE: [user("alice@example.org")]},
+    )
+    assert read_directory(settings, connection) == (DirectoryGroup("0b6f-team", "Project A", ("alice@example.org",)),)
+    assert connection.requested_attributes[0] == ("entryUUID", "description", "member")
+
+
+def test_configured_user_match_attribute_supplies_member_identity():
+    settings = SETTINGS.model_copy(update={"user_match_attribute": "uid"})
+    connection = Connection([group(member=[ALICE])], {ALICE: [user("alice@example.org", uid=["alice"])]})
+    assert read_directory(settings, connection) == (DirectoryGroup("project-a", "project-a", ("alice",)),)
+    assert connection.requested_attributes[1] == ("uid", "objectClass")
+
+
+@pytest.mark.parametrize("member_attribute", ["uniqueMember", "roleOccupant"])
+def test_dn_valued_member_attributes_resolve_member_entries(member_attribute: str):
+    settings = SETTINGS.model_copy(update={"member_attribute": member_attribute})
+    connection = Connection([group(**{member_attribute: [ALICE]})], {ALICE: [user("alice@example.org")]})
+    assert read_directory(settings, connection) == (DirectoryGroup("project-a", "project-a", ("alice@example.org",)),)
+    assert connection.searches == [(ALICE, "(objectClass=*)", "BASE")]
 
 
 def test_duplicate_ids_are_rejected_even_when_one_group_cannot_resolve_members():

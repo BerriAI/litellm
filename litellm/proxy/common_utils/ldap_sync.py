@@ -209,7 +209,11 @@ class LDAPSync:
             is not True
         ):
             return
-        await self._sync()
+        try:
+            await self._sync()
+        finally:
+            # Release on completion so a restart (e.g. dry_run -> apply) syncs immediately.
+            await self.pod_lock_manager.release_lock(cronjob_id=LDAP_SYNC_JOB_ID)
 
 
 def ldap_sync_settings(general_settings: Mapping[str, object]) -> LDAPSyncSettings | None:

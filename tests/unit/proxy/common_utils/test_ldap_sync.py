@@ -107,6 +107,9 @@ class LeaseRedis:
     async def async_get_cache(self, key: str) -> object | None:
         return self.values.get(key)
 
+    async def async_delete_cache(self, key: str) -> int:
+        return 1 if self.values.pop(key, None) is not None else 0
+
 
 def job_for(
     prisma: _FakePrisma,
@@ -165,17 +168,55 @@ async def test_dry_run_leaves_users_teams_memberships_and_keys_untouched(team_ex
 
 
 @pytest.mark.asyncio
-async def test_second_worker_cannot_sync_while_first_workers_lease_is_held():
+async def test_second_worker_cannot_sync_while_first_workers_run_holds_the_lock(monkeypatch: pytest.MonkeyPatch):
+    prisma: Final = _FakePrisma(teams=[_team()])
+    redis: Final = LeaseRedis()
+    first: Final = job_for(prisma, Connection([group(TEAM, member=[])]), redis=redis)
+    second_connection: Final = Connection([group(TEAM, member=[])])
+    entered: Final = asyncio.Event()
+    release: Final = asyncio.Event()
+    original: Final = first.sync_group
+
+    async def held_sync_group(group: DirectoryGroup) -> None:
+        entered.set()
+        await release.wait()
+        await original(group)
+
+    monkeypatch.setattr(first, "sync_group", held_sync_group)
+    running: Final = asyncio.create_task(first.run())
+    await entered.wait()
+    await job_for(prisma, second_connection, redis=redis).run()
+    release.set()
+    await running
+    assert not second_connection.closed
+    assert redis.values == {}
+
+
+@pytest.mark.asyncio
+async def test_finished_run_releases_the_lock_so_a_restarted_worker_syncs_immediately():
     prisma: Final = _FakePrisma(teams=[_team()])
     redis: Final = LeaseRedis()
     first: Final = Connection([group(TEAM, member=[])])
-    second: Final = Connection([group(TEAM, member=[])])
+    restarted: Final = Connection([group(TEAM, member=[])])
     await job_for(prisma, first, redis=redis).run()
-    transactions: Final = prisma.transactions
-    await job_for(prisma, second, redis=redis).run()
+    assert redis.values == {}
+    await job_for(prisma, restarted, redis=redis).run()
     assert first.closed
-    assert not second.closed
-    assert prisma.transactions == transactions
+    assert restarted.closed
+
+
+@pytest.mark.asyncio
+async def test_failed_run_still_releases_the_lock(monkeypatch: pytest.MonkeyPatch):
+    redis: Final = LeaseRedis()
+    job: Final = job_for(_FakePrisma(teams=[_team()]), Connection([group(TEAM, member=[])]), redis=redis)
+
+    async def failing_sync() -> None:
+        raise RuntimeError("database unavailable")
+
+    monkeypatch.setattr(job, "_sync", failing_sync)
+    with pytest.raises(RuntimeError):
+        await job.run()
+    assert redis.values == {}
 
 
 @pytest.mark.asyncio
@@ -378,3 +419,34 @@ def test_initialize_requires_shared_redis():
             UserApiKeyCache(),
             None,  # pyright: ignore[reportArgumentType]  # proxy logging is unused at registration
         )
+
+
+@pytest.mark.asyncio
+async def test_configured_ldap_and_litellm_identity_fields_create_and_fill_the_team(monkeypatch: pytest.MonkeyPatch):
+    from litellm.proxy import proxy_server
+    from tests.unit.proxy.management_helpers.test_team_roster_sync import (
+        _UserRow,  # pyright: ignore[reportPrivateUsage]  # fake user row with extra columns
+    )
+
+    alice: Final = _UserRow.model_validate(
+        {"user_id": "alice", "user_email": "alice@example.com", "sso_user_id": "z-alice"}
+    )
+    prisma: Final = _FakePrisma(users=[alice, _user("bob")])
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    settings: Final = SETTINGS.model_copy(
+        update={
+            "group_id_attribute": "entryUUID",
+            "group_name_attribute": "description",
+            "user_match_attribute": "uid",
+            "litellm_match_field": "sso_user_id",
+        }
+    )
+    connection: Final = Connection(
+        [group(member=[ALICE], entryUUID=[TEAM], description=["Project A"])],
+        {ALICE: [user("alice@example.org", uid=["z-alice"])]},
+    )
+    await job_for(prisma, connection, settings).run()
+    created: Final = prisma.writer_db.litellm_teamtable.rows[TEAM]
+    assert created.team_alias == "Project A"
+    assert [member.user_id for member in created.members_with_roles] == ["alice"]
+    assert prisma.writer_db.litellm_usertable.rows["bob"].teams == []
