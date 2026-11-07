@@ -1,0 +1,109 @@
+.canvas {
+  position: relative;
+  height: 640px;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--foreground);
+  background-color: var(--background);
+  background-image: radial-gradient(color-mix(in oklch, var(--muted-foreground) 24%, transparent) 1px, transparent 1px);
+  background-size: 20px 20px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border);
+}
+
+.surface {
+  position: absolute;
+  inset: 0;
+  touch-action: none;
+  cursor: grab;
+  outline-offset: -3px;
+}
+
+.surface:active {
+  cursor: grabbing;
+}
+
+.stage {
+  position: absolute;
+  transform-origin: 0 0;
+}
+
+.node {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+  gap: 8px;
+  padding: 16px;
+  text-align: left;
+  cursor: pointer;
+  color: var(--foreground);
+  background: linear-gradient(135deg, var(--card), color-mix(in oklch, var(--card) 92%, var(--muted)));
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 20%);
+}
+
+.node:hover {
+  border-color: var(--muted-foreground);
+}
+
+.node[aria-pressed="true"],
+.node:focus-visible {
+  border-color: var(--info);
+  outline: 2px solid color-mix(in oklch, var(--info) 35%, transparent);
+  outline-offset: 3px;
+}
+
+.port {
+  position: absolute;
+  left: calc(50% - 4px);
+  width: 8px;
+  height: 8px;
+  border: 2px solid var(--info);
+  border-radius: 50%;
+  background: var(--background);
+}
+
+.terminal {
+  position: absolute;
+  width: 160px;
+  left: 120px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  background: var(--card);
+  font-size: 12px;
+}
+
+.state {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--muted-foreground);
+}
+
+.state[data-state="completed"] {
+  color: var(--success);
+}
+
+.state[data-state="running"] {
+  color: var(--info);
+}
+
+.state[data-state="failed"] {
+  color: var(--destructive);
+}
+
+@media (max-width: 640px) {
+  .canvas {
+    height: 520px;
+  }
+}
