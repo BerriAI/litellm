@@ -1369,12 +1369,24 @@ def _tiktoken_o200k_model_name(model: str) -> str | None:
 
 
 def _listed_openai_model_name(model: str) -> str | None:
-    segments: Final = model.split("/")
-    suffixes: Final = ("/".join(segments[start:]) for start in range(len(segments)))
-    listed: Final = any(
-        _is_openai_cost_map_model(suffix) or _is_openai_cost_map_model(f"azure/{suffix}") for suffix in suffixes
-    )
-    return segments[-1] if listed else None
+    # The candidates are the name with its leading segments dropped, and building one copies whatever is left of the
+    # name, so a name made of thousands of slash-separated bits costs a copy per segment for no reason. `model` comes
+    # straight off the request, so that is free work for whoever wants it.
+    #
+    # A candidate longer than the longest listed name cannot match anything, so the walk only looks one up while it is
+    # short enough. Skipping is just moving to the next slash, which keeps the whole thing linear in the name length.
+    tail: Final = model.rsplit("/", 1)[-1]
+    length: Final = len(model)
+    start: Final = 0
+    while True:
+        if length - start <= _LONGEST_LISTED_OPENAI_MODEL:
+            rest: Final = model[start:]
+            if _is_openai_cost_map_model(rest) or _is_openai_cost_map_model(f"azure/{rest}"):
+                return tail
+        next_separator: Final = model.find("/", start)
+        if next_separator < 0:
+            return None
+        start = next_separator + 1
 
 
 def _is_openai_cost_map_model(model: str) -> bool:
@@ -1386,6 +1398,24 @@ def _is_openai_cost_map_model(model: str) -> bool:
 
 
 _TEXT_MODEL_MODES: Final = frozenset({"chat", "completion", "responses", "realtime"})
+
+
+def _is_azure_text_cost_info(cost_info: object) -> bool:
+    return (
+        isinstance(cost_info, Mapping)
+        and cost_info.get("litellm_provider") == "azure"
+        and cost_info.get("mode") in _TEXT_MODEL_MODES
+    )
+
+
+_LONGEST_LISTED_OPENAI_MODEL: Final = max(
+    len(name)
+    for name in chain(
+        litellm.azure_llms,
+        litellm.open_ai_chat_completion_models,
+        (name for name, cost_info in litellm.model_cost.items() if _is_azure_text_cost_info(cost_info)),
+    )
+)
 
 
 def _is_azure_openai_text_model(model: str) -> bool:
