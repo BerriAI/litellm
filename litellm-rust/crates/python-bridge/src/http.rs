@@ -117,6 +117,28 @@ pub(crate) fn call_config(
     Ok(resolution.config)
 }
 
+/// The client config for a value of `litellm.rust_bridge.host.settings.http_settings()` the caller handed in, under
+/// the process environment. `None` reads the environment alone
+pub(crate) fn settings_config(
+    py: Python<'_>,
+    http_settings: Option<&Bound<'_, PyAny>>,
+) -> PyResult<HttpClientConfig> {
+    let configured = match http_settings {
+        Some(value) => configured(&PythonSettings::Http.snapshot(value.clone()))?,
+        None => HttpSettingsLayer::default(),
+    };
+    let settings = HttpSettings::from_layers([
+        HttpSettingsLayer::from_environment(&ProcessEnvironment),
+        configured,
+    ])
+    .without_missing_files(&|path: &Path| path.exists());
+    let resolution = Resolution::from(&settings);
+    for unsupported in unreported(&REPORTED_UNSUPPORTED, resolution.unsupported) {
+        crate::logger::capture(py).scope(|| litellm_tracing::warn!("{unsupported}"));
+    }
+    Ok(resolution.config)
+}
+
 pub(crate) fn provider_client(
     py: Python<'_>,
     kwargs: &Bound<'_, PyDict>,

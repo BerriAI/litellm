@@ -23,6 +23,97 @@ def bundled_model_cost_map() -> bytes: ...
 def native_redis_breaker_states() -> list[str]: ...
 
 @final
+class NativeCostMapSource:
+    def __new__(
+        cls, url: str, *, http_settings: object | None, aws_region: str, aws_endpoint_url: str | None = None
+    ) -> NativeCostMapSource: ...
+
+@final
+class NativeFetchPolicy:
+    def __new__(
+        cls,
+        *,
+        max_attempts: int,
+        max_wait_seconds: float,
+        timeout_seconds: float,
+        backoff_base_seconds: float = 2.0,
+        jitter_min_seconds: float = 0.0,
+        jitter_max_seconds: float = 1.0,
+    ) -> NativeFetchPolicy: ...
+
+@final
+class NativeFetched:
+    @property
+    def body(self) -> bytes: ...
+    @property
+    def etag(self) -> str | None: ...
+
+@final
+class NativeFetchFailed:
+    @property
+    def reason(self) -> str: ...
+    @property
+    def retryable(self) -> bool: ...
+    @property
+    def retry_after(self) -> float | None: ...
+
+@final
+class NativeInstalled:
+    @property
+    def rows(self) -> dict[str, dict[str, object]]: ...
+    @property
+    def model_count(self) -> int: ...
+    @property
+    def fallback_generalizations(self) -> JsonValue: ...
+
+@final
+class NativeRejected:
+    @property
+    def reason(self) -> str: ...
+    @property
+    def integrity(self) -> bool: ...
+
+@final
+class NativeProvenance:
+    @property
+    def revision(self) -> str: ...
+    @property
+    def etag(self) -> str | None: ...
+
+@final
+class NativeModelCostMap:
+    @staticmethod
+    def bundled(min_model_count: int, max_shrink_ratio: float) -> NativeModelCostMap: ...
+    def fetch(self, source: NativeCostMapSource, policy: NativeFetchPolicy) -> Future[NativeFetched | NativeFetchFailed]: ...
+    def fetch_blocking(
+        self, source: NativeCostMapSource, policy: NativeFetchPolicy, resume_from: NativeFetchFailed | None = None
+    ) -> NativeFetched | NativeFetchFailed: ...
+    def install(self, body: bytes, etag: str | None = None) -> NativeInstalled | NativeRejected: ...
+    def install_bundled(self) -> NativeInstalled: ...
+    def register(
+        self,
+        rows: dict[str, dict[str, object]],
+        entries: Mapping[str, Mapping[str, object]],
+        persist: bool,
+        custom_llm_provider: str | None = None,
+        warning_display_name: str | None = None,
+    ) -> list[str]: ...
+    def reapply(self, rows: dict[str, dict[str, object]]) -> None: ...
+    def registered_row(self, key: str) -> dict[str, object] | None: ...
+    def registered_keys(self) -> list[str]: ...
+    def loaded(self) -> dict[str, dict[str, object]]: ...
+    def find_key(self, rows: dict[str, dict[str, object]], name: str) -> str | None: ...
+    def keys_in(self, rows: dict[str, dict[str, object]], provider: str) -> list[str]: ...
+    def invalidate(self) -> None: ...
+    def snapshot(self) -> NativeModelCostMapState: ...
+    def restore(self, state: NativeModelCostMapState) -> None: ...
+    @property
+    def provenance(self) -> NativeProvenance: ...
+
+@final
+class NativeModelCostMapState: ...
+
+@final
 class NativeClickHouseSpendConfig:
     def __new__(cls, database: str, url: str, retention_days: int) -> NativeClickHouseSpendConfig: ...
 
@@ -566,12 +657,21 @@ __all__ = [
     "NativeAuthCache",
     "NativeClickHouseSpendConfig",
     "NativeClickHouseSpendStorage",
+    "NativeCostMapSource",
     "NativeDatabase",
     "NativeDiagnosticProcessor",
+    "NativeFetchFailed",
+    "NativeFetchPolicy",
+    "NativeFetched",
+    "NativeInstalled",
+    "NativeModelCostMap",
+    "NativeModelCostMapState",
     "NativePending",
+    "NativeProvenance",
     "NativeRateLimits",
     "NativeRedisClient",
     "NativeRedisStoreError",
+    "NativeRejected",
     "NativeRequestRedis",
     "NativeRouterCooldowns",
     "NativeRouterUsage",

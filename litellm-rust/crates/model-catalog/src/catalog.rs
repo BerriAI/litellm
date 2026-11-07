@@ -378,6 +378,19 @@ impl Catalog {
         })
     }
 
+    /// The row under an exact model or alias key, an alias reading its owner's row
+    pub fn get(&self, key: &str) -> Option<&Fields> {
+        self.rows().fields(key)
+    }
+
+    /// A top-level value that is not a model row, such as `sample_spec`
+    pub fn section(&self, key: &str) -> Option<&Value> {
+        self.sections
+            .iter()
+            .find(|section| section.key == key)
+            .map(|section| &section.value)
+    }
+
     pub fn model_count(&self) -> usize {
         self.rows().entries.len()
     }

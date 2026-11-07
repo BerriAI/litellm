@@ -37,7 +37,7 @@ from litellm.types.llms.xai import RealtimeMeteredUsage
 from litellm.types.rerank import RerankResponse
 from litellm.types.utils import CacheCreationTokenDetails, CallTypes, Choices, CompletionTokensDetailsWrapper, EmbeddingResponse, ImageObject, ImageResponse, ImageUsage, ImageUsageInputTokensDetails, LiteLLMRealtimeStreamLoggingObject, Message, ModelInfo, ModelResponse, PromptTokensDetails, PromptTokensDetailsWrapper, Usage
 from litellm.types.videos.main import VideoObject
-from litellm.utils import _invalidate_model_cost_lowercase_map, cached_get_model_info_helper, supports_prompt_caching
+from litellm.utils import model_cost_changed, cached_get_model_info_helper, supports_prompt_caching
 import os
 import threading
 from unittest.mock import MagicMock, patch
@@ -724,7 +724,7 @@ def test_completion_cost_bills_a_requested_model_priced_after_an_unpriced_lookup
         requested_model,
         {"litellm_provider": "fireworks_ai", "mode": "chat", "input_cost_per_token": 3e-6, "output_cost_per_token": 7e-6},
     )
-    _invalidate_model_cost_lowercase_map()
+    model_cost_changed()
 
     cost: Final = completion_cost(completion_response=display_name_response())
 
@@ -11077,7 +11077,6 @@ def test_bedrock_converse_profile_preserves_registered_price_override(
     import litellm.utils as model_utils
     from litellm.cost_calculator import pricing_entry_for_cost_calc
 
-    monkeypatch.setattr(model_utils, "_runtime_registered_model_cost", {})
     catalog: Final = dict(litellm.model_cost)
     model: Final = "openai.gpt-5.6-sol"
     litellm.register_model(
@@ -11142,7 +11141,7 @@ def test_bedrock_converse_profile_preserves_registered_price_override(
     ) == pytest.approx(10 * updated_rate + 5 * rate)
 
     monkeypatch.setattr(litellm, "model_cost", catalog)
-    model_utils._invalidate_model_cost_lowercase_map()
+    model_utils.model_cost_changed()
     model_utils.reapply_runtime_model_cost_registrations()
     profile_prices: Final = litellm.get_model_info(f"us.{model}", custom_llm_provider="bedrock")
     expected_after_reload: Final = (
@@ -11161,9 +11160,6 @@ def test_bedrock_converse_profile_preserves_registered_price_override(
 def test_bedrock_converse_profile_ignores_registered_capabilities_without_prices(
     _local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import litellm.utils as model_utils
-
-    monkeypatch.setattr(model_utils, "_runtime_registered_model_cost", {})
     model: Final = "openai.gpt-6-sol"
     litellm.register_model({model: {"supports_function_calling": True}})
     response: Final = ModelResponse(model=model, usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15))
@@ -11196,7 +11192,6 @@ def test_bedrock_converse_profile_preserves_cache_only_registered_prices(
     import litellm.utils as model_utils
     from litellm.cost_calculator import pricing_entry_for_cost_calc
 
-    monkeypatch.setattr(model_utils, "_runtime_registered_model_cost", {})
     model: Final = "openai.cache-overlay-test"
     profile: Final = f"{profile_prefix}.{model}"
     catalog: Final = {
@@ -11217,7 +11212,7 @@ def test_bedrock_converse_profile_preserves_cache_only_registered_prices(
     }
     profile_before: Final = dict(catalog[profile])
     monkeypatch.setattr(litellm, "model_cost", dict(catalog))
-    model_utils._invalidate_model_cost_lowercase_map()
+    model_utils.model_cost_changed()
     litellm.register_model({model: {cache_field: rate}}, persist_across_reloads=persist_across_reloads)
     response: Final = ModelResponse(
         model=model,
@@ -11268,7 +11263,7 @@ def test_bedrock_converse_profile_preserves_cache_only_registered_prices(
     assert litellm.model_cost[profile] == profile_before
 
     monkeypatch.setattr(litellm, "model_cost", dict(catalog))
-    model_utils._invalidate_model_cost_lowercase_map()
+    model_utils.model_cost_changed()
     model_utils.reapply_runtime_model_cost_registrations()
     expected_after_reload: Final = (
         10 * 0.02 + 3 * 0.04 + 5 * (rate if persist_across_reloads else catalog[profile][cache_field])
@@ -11303,7 +11298,7 @@ def test_bedrock_cache_registration_with_unpriced_profile_keeps_registered_rates
             "us.openai.unpriced-profile-test": {"litellm_provider": "bedrock", "mode": "chat"},
         },
     )
-    model_utils._invalidate_model_cost_lowercase_map()
+    model_utils.model_cost_changed()
     litellm.register_model({model: {"cache_read_input_token_cost": 0.001}}, persist_across_reloads=False)
     response: Final = ModelResponse(
         model=model,
@@ -11417,7 +11412,7 @@ def test_bedrock_registered_cache_prices_preserve_dynamic_threshold_rates(
             },
         },
     )
-    model_utils._invalidate_model_cost_lowercase_map()
+    model_utils.model_cost_changed()
     litellm.register_model(
         {
             model: {
@@ -11700,7 +11695,7 @@ def test_per_call_custom_prices_keep_the_regional_and_speed_multipliers(
     multiplier: float,
 ) -> None:
     monkeypatch.setitem(litellm.model_cost, call_kwargs["model"], {**row, **_PER_CALL_RATES})
-    _invalidate_model_cost_lowercase_map()
+    model_cost_changed()
 
     response: Final = litellm.completion(
         messages=[{"role": "user", "content": "hello"}],

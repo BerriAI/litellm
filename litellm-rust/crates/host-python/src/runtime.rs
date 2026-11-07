@@ -68,6 +68,20 @@ fn runtime() -> PyResult<&'static Runtime> {
     Ok(pyo3_async_runtimes::tokio::get_runtime())
 }
 
+const ISOLATED_SHUTDOWN: Duration = Duration::from_secs(5);
+
+/// Runs `future` on a current-thread runtime built and shut down inside the call, its blocking pool joined before
+/// it returns. No thread outlives the call, so unlike every other door this one never claims the process in the fork
+/// gate: a process that only used it can still fork. The future must not hold resources tied to another runtime
+pub fn run_isolated<F: Future>(future: F) -> std::io::Result<F::Output> {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    let output = runtime.block_on(future);
+    runtime.shutdown_timeout(ISOLATED_SHUTDOWN);
+    Ok(output)
+}
+
 /// The native runtime, for work that must outlive the call that schedules it.
 pub fn runtime_handle() -> PyResult<Handle> {
     Ok(runtime()?.handle().clone())

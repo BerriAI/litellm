@@ -27,7 +27,7 @@ from litellm.caching.llm_caching_handler import LLMClientCache
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy import proxy_server
 from litellm.proxy._types import LiteLLM_ProxyModelTable
-from litellm.utils import _invalidate_model_cost_lowercase_map
+from litellm.utils import model_cost_changed
 
 from .conftest import normalize, route_entry_points_to_stubs  # type: ignore[import-not-found]
 
@@ -76,7 +76,7 @@ async def test_discovery_preserves_model_info_fallbacks(
             "fallback-deployment": {"litellm_provider": "openai", "mode": "chat"},
         },
     )
-    _invalidate_model_cost_lowercase_map()
+    model_cost_changed()
     monkeypatch.setattr(proxy_server, "llm_router", router)
     handler: Final = AsyncHTTPHandler()
     await handler.client.aclose()
@@ -117,7 +117,7 @@ async def test_discovery_preserves_model_info_fallbacks(
         assert info["input_cost_per_token"] == builtin["input_cost_per_token"]
         assert info["output_cost_per_token"] == builtin["output_cost_per_token"]
         assert info["mode"] is None
-    _invalidate_model_cost_lowercase_map()
+    model_cost_changed()
 
 
 async def test_upstream_limits_reach_model_info_routes(
@@ -163,7 +163,7 @@ async def test_upstream_limits_reach_model_info_routes(
             group_response: Final = client.get("/model_group/info")
             assert group_response.status_code == 200, group_response.text
             assert group_response.json()["data"][0]["max_input_tokens"] == 4096
-    _invalidate_model_cost_lowercase_map()
+    model_cost_changed()
 
 
 # ---------------------------------------------------------------------------
@@ -582,7 +582,7 @@ def test_model_info_id_lookup_reports_the_same_cost_as_the_list(
         "vllm-priced-id": (declared["input_cost_per_token"], declared["output_cost_per_token"]),
     }
     assert by_id == listed
-    _invalidate_model_cost_lowercase_map()
+    model_cost_changed()
 
 
 async def test_v1_model_info_star_wildcard_filter_keeps_provider_expansion(monkeypatch):

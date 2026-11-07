@@ -17,6 +17,8 @@
 //!   failing the document.
 //! - `FallbackGeneralizations` / `FallbackRule`: regex rules that map unknown model ids onto known
 //!   families. They are data in the file, not entries.
+//! - `CostMap`: the inputs a host builds its live table from, the installed document plus the ordered
+//!   `register_model` overlay, materialized as the rows Python's `litellm.model_cost` holds.
 //! - Validation: `Catalog::check_size` checks a catalog against `IntegrityLimits` (a remote copy
 //!   that lost most of its models is refused), and `Catalog::row_errors` validates one row.
 //!
@@ -37,9 +39,9 @@ macro_rules_attribute::attribute_alias! {
 
 mod bundled;
 mod catalog;
+mod cost_map;
 mod error;
 mod fallback;
-mod layers;
 mod lower;
 mod model;
 mod model_info;
@@ -51,9 +53,9 @@ pub mod wire;
 
 pub use bundled::*;
 pub use catalog::*;
+pub use cost_map::*;
 pub use error::*;
 pub use fallback::*;
-pub use layers::*;
 pub use model::*;
 pub use model_info::*;
 pub use register::*;

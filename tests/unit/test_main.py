@@ -5514,16 +5514,16 @@ def local_cost_map(monkeypatch):
     Prices are read through two separate lru_caches, so pinning ``model_cost`` is not
     enough on its own: an entry warmed against the network-fetched map keeps its old
     prices and billing reads those while the assertions read the pinned map.
-    ``_invalidate_model_cost_lowercase_map`` clears both caches, where
+    ``model_cost_changed`` clears both caches, where
     ``get_model_info.cache_clear`` reaches only one. Invalidate on the way in and out
     so entries never leak across tests in either direction."""
-    from litellm.utils import _invalidate_model_cost_lowercase_map
+    from litellm.utils import model_cost_changed
 
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
-    _invalidate_model_cost_lowercase_map()
+    model_cost_changed()
     yield
-    _invalidate_model_cost_lowercase_map()
+    model_cost_changed()
 
 
 def test_a_streamed_response_bills_the_usage_the_provider_reported(local_cost_map):

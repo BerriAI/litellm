@@ -57,13 +57,13 @@ def bundled_cost_map(monkeypatch):
     litellm caches model-info lookups, so swapping ``model_cost`` only takes
     effect once those caches are invalidated -- on the way in and back out.
     """
-    from litellm.utils import _invalidate_model_cost_lowercase_map
+    from litellm.utils import model_cost_changed
 
     monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
-    _invalidate_model_cost_lowercase_map()
+    model_cost_changed()
     yield
     monkeypatch.undo()
-    _invalidate_model_cost_lowercase_map()
+    model_cost_changed()
 
 
 class TestParallelAISearch:

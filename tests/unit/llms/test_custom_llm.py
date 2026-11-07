@@ -35,7 +35,7 @@ from litellm.types.utils import (
     ModelResponseStream,
     StreamingChoices,
 )
-from litellm.utils import ModelResponseIterator, _invalidate_model_cost_lowercase_map
+from litellm.utils import ModelResponseIterator, model_cost_changed
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 
@@ -729,7 +729,7 @@ def isolate_litellm_state():
     for attr, original_value in original_state.items():
         if hasattr(litellm, attr):
             setattr(litellm, attr, original_value)
-    _invalidate_model_cost_lowercase_map()
+    model_cost_changed()
 
 
 _SCALAR_DEFAULTS = {
