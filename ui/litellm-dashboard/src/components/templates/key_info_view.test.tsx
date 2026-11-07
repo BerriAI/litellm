@@ -5,7 +5,13 @@ import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { KeyResponse, Team } from "../key_team_helpers/key_list";
-import { dailyActivityAggregatedCall, keyDeleteCall, keyUpdateCall, regenerateKeyCall, teamInfoCall } from "../networking";
+import {
+  dailyActivityAggregatedCall,
+  keyDeleteCall,
+  keyUpdateCall,
+  regenerateKeyCall,
+  teamInfoCall,
+} from "../networking";
 import { EMPTY_DAILY_ACTIVITY_RESPONSE } from "../UsagePage/dailyActivityApi";
 import { QueryClient } from "@tanstack/react-query";
 import KeyInfoView, { needsLifetimeSpendBackfill } from "./key_info_view";
