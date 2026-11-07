@@ -397,18 +397,25 @@ async fn check_and_increment_is_all_or_nothing(
     assert_eq!(applied.iter().map(|a| a.count).collect::<Vec<_>>(), [1, 60]);
     assert!(applied.iter().all(|a| (a.window_start - now).abs() <= 2));
 
-    assert_eq!(
-        limits
-            .check_and_increment(RedisSend::Now, &both(1, 41))
-            .unwrap()
-            .await
-            .unwrap(),
-        AtomicReply::OverLimit {
-            index: 1,
-            current: 60,
-            limit: 100
-        }
-    );
+    let denied = limits
+        .check_and_increment(RedisSend::Now, &both(1, 41))
+        .unwrap()
+        .await
+        .unwrap();
+    let AtomicReply::OverLimit {
+        index,
+        current,
+        limit,
+        window_start,
+        window_observed_at,
+    } = denied
+    else {
+        panic!("{denied:?}");
+    };
+    assert_eq!((index, current, limit), (1, 60, 100));
+    assert_eq!(window_start, applied[1].window_start);
+    assert!(window_observed_at >= now);
+    assert!(window_observed_at <= redis_now(&raw).await);
     assert_eq!(
         raw_text(&raw, "{model_per_key:k1:gpt}:requests").await,
         Some("1".to_owned())
@@ -426,18 +433,21 @@ async fn check_and_increment_is_all_or_nothing(
     assert!(
         matches!(at_limit, AtomicReply::Applied(ref applied) if applied[0].count == 2 && applied[1].count == 100)
     );
-    assert_eq!(
-        limits
-            .check_and_increment(RedisSend::Now, &both(0, 0))
-            .unwrap()
-            .await
-            .unwrap(),
+    let read_only_denied = limits
+        .check_and_increment(RedisSend::Now, &both(0, 0))
+        .unwrap()
+        .await
+        .unwrap();
+    assert!(matches!(
+        read_only_denied,
         AtomicReply::OverLimit {
             index: 0,
             current: 2,
-            limit: 2
-        }
-    );
+            limit: 2,
+            window_start: start,
+            window_observed_at: observed,
+        } if start == applied[0].window_start && observed >= window_observed_at && observed <= redis_now(&raw).await
+    ));
 }
 
 #[rstest]
