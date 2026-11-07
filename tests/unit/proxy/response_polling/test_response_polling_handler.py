@@ -1917,3 +1917,71 @@ async def test_create_initial_state_rejects_request_metadata_that_is_not_an_obje
     assert [(error["loc"], error["type"], repr(error["input"])) for error in rejected.value.errors()] == [
         (("metadata",), "dict_type", repr(metadata))
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "delta_type",
+    [
+        "response.output_text.delta",
+        "response.reasoning_text.delta",
+        "response.reasoning_summary_text.delta",
+        "response.reasoning.delta",
+        None,
+    ],
+)
+async def test_background_timings_survive_retrieval_after_completion(delta_type):
+    from litellm.caching.redis_cache import RedisCache
+    from litellm.proxy.response_polling.background_streaming import background_streaming_task
+
+    cache = {}
+    redis = AsyncMock(spec=RedisCache)
+    redis.async_get_cache.side_effect = lambda key: cache.get(key)
+
+    async def save_cache(key, value, **kwargs):
+        cache[key] = value
+
+    redis.async_set_cache.side_effect = save_cache
+    handler = ResponsePollingHandler(redis_cache=redis)
+    await handler.create_initial_state("litellm_poll_timing", {"model": "gpt-4o"})
+    clock = [100.0]
+
+    async def stream():
+        clock[0] = 101.0
+        yield 'data: {"type":"response.output_text.delta","delta":""}\n\n'
+        yield 'data: {"type":"response.mcp_call.in_progress"}\n\n'
+        if delta_type:
+            clock[0] = 102.0
+            yield f"data: {json.dumps({'type': delta_type, 'delta': 'Hello'})}\n\n"
+            partial = await handler.get_state("litellm_poll_timing")
+            assert partial is not None
+            assert partial["status"] == "in_progress"
+            assert partial["litellm_response_timing"] == {"time_to_first_token_ms": 2000.0}
+        clock[0] = 110.0
+        yield 'data: {"type":"response.completed","response":{"status":"completed","output":[]}}\n\n'
+        clock[0] = 5000.0
+        yield "data: [DONE]\n\n"
+
+    from starlette.responses import StreamingResponse
+
+    with (
+        patch(
+            "litellm.proxy.response_polling.background_streaming.perf_counter",
+            create=True,
+            side_effect=lambda: clock[0],
+        ),
+        patch(
+            # test-quality-ok: processor is constructed inside the task; supply the upstream SSE boundary like sibling tests
+            "litellm.proxy.response_polling.background_streaming.ProxyBaseLLMRequestProcessing"
+        ) as processor,
+    ):
+        processor.return_value.base_process_llm_request = AsyncMock(return_value=StreamingResponse(stream()))
+        await background_streaming_task(**_make_background_streaming_kwargs("litellm_poll_timing", handler))
+        state = await handler.get_state("litellm_poll_timing")
+        assert state is not None
+        expected = {"total_latency_ms": 10000.0}
+        if delta_type:
+            expected["time_to_first_token_ms"] = 2000.0
+        assert state["litellm_response_timing"] == expected
+        clock[0] = 10000.0
+        assert (await handler.get_state("litellm_poll_timing"))["litellm_response_timing"] == expected

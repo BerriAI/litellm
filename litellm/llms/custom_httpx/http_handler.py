@@ -44,6 +44,7 @@ from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
 from litellm.litellm_core_utils.request_timeout_resolver import (
     get_configured_request_timeout,
 )
+from litellm.llms.custom_httpx.aiohttp_pool_diagnostics import build_pool_wait_trace_config
 from litellm.llms.custom_httpx.http2_connection_spread import AsyncHTTP2ConnectionSpread
 from litellm.types.llms.custom_http import *
 
@@ -1456,6 +1457,7 @@ class AsyncHTTPHandler:
                 connector=TCPConnector(**transport_connector_kwargs),
                 cookie_jar=DummyCookieJar(),
                 trust_env=trust_env,
+                trace_configs=[build_pool_wait_trace_config()],
             )
 
         # Use shared session if provided and valid

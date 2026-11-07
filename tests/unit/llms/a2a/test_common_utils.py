@@ -2,6 +2,7 @@
 
 from collections.abc import Mapping
 from types import MappingProxyType
+from typing import Final
 
 import pytest
 
@@ -50,3 +51,42 @@ async def test_agent_without_entra_credentials_gets_no_bearer():
 
     assert header is None
     assert resolver.calls == []
+
+
+@pytest.mark.parametrize(
+    ("api_key", "expected"),
+    (
+        ("secret", "Bearer secret"),
+        ("Bearer secret", "Bearer Bearer secret"),
+        ("os.environ/SYNTHETIC_KEY", "Bearer os.environ/SYNTHETIC_KEY"),
+        ("", None),
+        (None, None),
+        (42, None),
+    ),
+)
+async def test_plain_agent_key_is_used_verbatim_only_for_nonempty_strings(
+    api_key: object, expected: str | None
+) -> None:
+    header: Final = await resolve_a2a_hop_auth_header({"api_key": api_key}, None)
+    assert header == ({"Authorization": expected} if expected is not None else None)
+
+
+@pytest.mark.parametrize("provider", ("azure_ai", "databricks_agent"))
+async def test_completion_bridge_api_key_is_not_used_for_a2a_hop(provider: str) -> None:
+    assert await resolve_a2a_hop_auth_header({"api_key": "secret"}, provider) is None
+
+
+async def test_entra_bearer_overrides_agent_key_and_passthrough() -> None:
+    resolver: Final = _RecordingEntraResolver()
+    params: Final = {**_SERVICE_PRINCIPAL, "api_key": "secret"}
+    header: Final = await resolve_a2a_hop_auth_header(params, None, resolver, {"authorization": "Bearer forwarded"})
+    assert header == {"Authorization": "Bearer minted-entra-token"}
+    assert resolver.calls == [params]
+
+
+@pytest.mark.parametrize("name", ("Authorization", "aUtHoRiZaTiOn"))
+async def test_passthrough_authorization_takes_precedence_over_plain_agent_key(name: str) -> None:
+    assert (
+        await resolve_a2a_hop_auth_header({"api_key": "secret"}, None, agent_extra_headers={name: "Bearer forwarded"})
+        is None
+    )
