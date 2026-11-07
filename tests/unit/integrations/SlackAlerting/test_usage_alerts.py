@@ -45,6 +45,31 @@ _ALERT: Final = UsageAlert(
 )
 
 
+_ISSUE: Final = Issue(
+    id="issue-example",
+    cohort_key="cohort-example",
+    kind="performance",
+    family="traffic",
+    title="Traffic increased",
+    cohort=IssueCohort(scope_type="key", scope_id="reporting-key"),
+    observed_on=_ALERT.day,
+    observed_at=_NOW,
+    range_start=_ALERT.baseline_start,
+    range_end=_ALERT.day,
+    grouping_reason="same_resource",
+    status="open",
+    first_seen=_NOW,
+    last_seen=_NOW,
+    updated_at=_NOW,
+)
+_PENDING: Final = IssuePendingDelivery(
+    issue=_ISSUE,
+    rule=_RULE,
+    alert=_ALERT,
+    delivery=IssueDelivery(id="delivery-example", issue_id=_ISSUE.id, channel="slack"),
+)
+
+
 def test_activity_link_retains_dashboard_mount_and_entity_query() -> None:
     assert activity_url(_ALERT, "https://gateway.example.com/") == (
         "https://gateway.example.com/ui/api-keys?key=reporting-key&detail_tab=activity"
@@ -76,10 +101,10 @@ async def test_slack_ack_requires_successful_http_response(status: int, monkeypa
     delivery: Final = UsageAlertDelivery(slack)
     try:
         if status == 200:
-            assert await delivery.send(_ALERT, _RULE, "slack") is True
+            assert await delivery.send_issue(_PENDING) is True
         else:
             with pytest.raises(httpx.HTTPStatusError):
-                await delivery.send(_ALERT, _RULE, "slack")
+                await delivery.send_issue(_PENDING)
         assert len(requests) == 1
         assert (
             b"https://gateway.example.com/ui/api-keys?key=reporting-key&amp;detail_tab=activity" in requests[0].content
@@ -99,35 +124,12 @@ async def test_issue_delivery_links_to_investigation_and_preserves_the_bound_sou
         requests.append(request)
         return httpx.Response(200)
 
-    issue: Final = Issue(
-        id="issue-example",
-        cohort_key="cohort-example",
-        kind="performance",
-        family="traffic",
-        title="Traffic increased",
-        cohort=IssueCohort(scope_type="key", scope_id="reporting-key"),
-        observed_on=_ALERT.day,
-        observed_at=_NOW,
-        range_start=_ALERT.baseline_start,
-        range_end=_ALERT.day,
-        grouping_reason="same_resource",
-        status="open",
-        first_seen=_NOW,
-        last_seen=_NOW,
-        updated_at=_NOW,
-    )
     handler: Final = AsyncHTTPHandler(transport=httpx.MockTransport(transport))
     slack: Final = SlackAlerting(
         alerting=["slack"], default_webhook_url="https://hooks.example.com/test", async_http_handler=handler
     )
-    pending: Final = IssuePendingDelivery(
-        issue=issue,
-        rule=_RULE,
-        alert=_ALERT,
-        delivery=IssueDelivery(id="delivery-example", issue_id=issue.id, channel="slack"),
-    )
     try:
-        assert await UsageAlertDelivery(slack).send_issue(pending)
+        assert await UsageAlertDelivery(slack).send_issue(_PENDING)
         assert len(requests) == 1
         assert b"https://gateway.example.com/ui/alerts?issue=issue-example" in requests[0].content
         assert (
@@ -151,12 +153,14 @@ async def test_slack_source_labels_cannot_inject_mentions_or_links() -> None:
         alerting=["slack"], default_webhook_url="https://hooks.example.com/test", async_http_handler=handler
     )
     try:
-        assert await UsageAlertDelivery(slack).send(
-            _ALERT.model_copy(
-                update={"rule_name": "<!channel> & <https://example.com|fake>", "scope_id": "<@someone>"}
-            ),
-            _RULE,
-            "slack",
+        assert await UsageAlertDelivery(slack).send_issue(
+            _PENDING.model_copy(
+                update={
+                    "alert": _ALERT.model_copy(
+                        update={"rule_name": "<!channel> & <https://example.com|fake>", "scope_id": "<@someone>"}
+                    )
+                }
+            )
         )
         assert b"<!channel>" not in requests[0].content
         assert b"&lt;!channel&gt; &amp; &lt;https://example.com|fake&gt;" in requests[0].content

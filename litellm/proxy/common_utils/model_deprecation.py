@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -14,7 +15,6 @@ from typing import (
     TypeAlias,
     cast,  # noqa: TID251  # router exposes its live validated deployment list
 )
-from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
@@ -431,6 +431,40 @@ def _scan_deprecation_model(
     ), None
 
 
+async def _retirement_fingerprint(
+    deployment: Mapping[str, object], router: Router, today: date, catalog: Mapping[str, object]
+) -> bytes:
+    info: Final = _build_info(
+        deployment, router, today, DEFAULT_DEPRECATION_WARN_DAYS, catalog, logging.DEBUG, check_successor=False
+    )
+    model_name: Final = _as_model_key(deployment.get("model_name"))
+    fields: Final = (
+        (model_name,)
+        if info is None
+        else (
+            model_name,
+            info.info.model_name,
+            info.info.team_public_model_name,
+            info.info.litellm_model,
+            info.info.litellm_provider,
+            info.info.deprecation_date.isoformat(),
+            str(info.info.days_until_deprecation),
+            info.info.successor_model,
+            info.info.successor_model_source,
+            info.info.deprecation_source,
+        )
+    )
+    digest: Final = hashlib.sha256()
+    for value in fields:
+        digest.update(b"\x00" if value is None else b"\x01")
+        if value is not None:
+            digest.update(len(value).to_bytes(8, "big"))
+            for offset in range(0, len(value), 4096):
+                digest.update(value[offset : offset + 4096].encode())
+                await asyncio.sleep(0)
+    return digest.digest()
+
+
 class RouterDeprecationSource:
     """Read pages from router-owned views; never retain a second deployment catalog."""
 
@@ -439,14 +473,48 @@ class RouterDeprecationSource:
     ) -> None:
         self._router = router
         self._loaded_catalog = loaded_catalog
-        self._instance = str(uuid4())
+        self._generation: tuple[int, int, int, int] | None = None
+        self._revision_day: date | None = None
+        self._revision = ""
+        self._revision_position = 0
+        self._revision_digest = b""
 
-    @property
-    def revision(self) -> str:
+    def _local_generation(self) -> tuple[int, int, int, int]:
         router: Final = self._router()
         version: Final = router.registry().version if router is not None else 0
         model_cost_identity: Final = id(litellm.model_cost)  # pyright: ignore[reportUnknownMemberType,reportUnknownArgumentType]  # identity only, from the legacy untyped catalog
-        return f"{self._instance}:{id(router)}:{version}:{model_cost_identity}:{id(self._loaded_catalog())}"
+        return id(router), version, model_cost_identity, id(self._loaded_catalog())
+
+    @property
+    def revision(self) -> str:
+        return self._revision if self._generation == self._local_generation() else ""
+
+    async def prepare_revision(self, today: date) -> str | None:
+        router: Final = self._router()
+        if router is None:
+            return None
+        generation: Final = self._local_generation()
+        if self._generation != generation or self._revision_day != today:
+            self._generation = generation
+            self._revision_day = today
+            self._revision = ""
+            self._revision_position = 0
+            self._revision_digest = b""
+        deployments: Final = cast(  # cast-ok: router validated each deployment
+            Sequence[Mapping[str, object]], router.registry().all()
+        )
+        catalog: Final = self._loaded_catalog()
+        while self._local_generation() == generation:
+            if self._revision_position >= len(deployments):
+                self._revision = hashlib.sha256(self._revision_digest).hexdigest()
+                return self._revision
+            for position in range(self._revision_position, min(self._revision_position + 100, len(deployments))):
+                self._revision_digest = hashlib.sha256(
+                    self._revision_digest + await _retirement_fingerprint(deployments[position], router, today, catalog)
+                ).digest()
+                self._revision_position = position + 1
+            await asyncio.sleep(0.01)
+        return None
 
     def page(self, today: date, cursor: DeprecationScanCursor) -> DeprecationModelPage:
         router: Final = self._router()

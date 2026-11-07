@@ -4,6 +4,7 @@ These tests focus on the helper itself — not on the proxy endpoint or
 Slack integration — so they can run without the full proxy stack.
 """
 
+import asyncio
 import logging
 from collections.abc import Mapping
 from datetime import date, datetime, timezone
@@ -813,7 +814,8 @@ def test_retirement_pages_preserve_distinct_models_sharing_an_alias_and_date() -
     )
 
 
-def test_retirement_source_bounds_pages_and_restarts_identity_after_router_replacement() -> None:
+@pytest.mark.asyncio
+async def test_retirement_source_bounds_pages_and_resumes_identical_router_replacements() -> None:
     router = Router(
         model_list=[
             {
@@ -832,10 +834,14 @@ def test_retirement_source_bounds_pages_and_restarts_identity_after_router_repla
     third = source.page(date(2026, 11, 5), second.cursor)
     assert len(third.models) == 5 and third.complete
     assert len({model.model_name for model in (*first.models, *second.models, *third.models)}) == 25
-    revision = source.revision
+    revision = await source.prepare_revision(date(2026, 11, 5))
+    replica = Router(model_list=list(router.registry().all()))
+    replacement = RouterDeprecationSource(lambda: replica)
+    assert await replacement.prepare_revision(date(2026, 11, 5)) == revision
+    assert replacement.page(date(2026, 11, 5), first.cursor) == second
     router = Router(model_list=[])
     assert source.revision != revision
-    assert source.revision != RouterDeprecationSource(lambda: router).revision
+    assert await source.prepare_revision(date(2026, 11, 5)) != revision
 
 
 def test_unavailable_retirement_router_is_not_a_completed_empty_catalog() -> None:
@@ -843,3 +849,62 @@ def test_unavailable_retirement_router_is_not_a_completed_empty_catalog() -> Non
     cursor = DeprecationScanCursor()
     page = source.page(date(2026, 11, 5), cursor)
     assert page.models == () and page.cursor == cursor and not page.complete
+
+
+@pytest.mark.asyncio
+async def test_retirement_revision_rejects_reordered_or_changed_model_metadata() -> None:
+    models = [
+        {
+            "model_name": f"alias-{index}",
+            "litellm_params": {"model": f"openai/retired-{index}"},
+            "model_info": {"id": str(index), "deprecation_date": "2026-11-20"},
+        }
+        for index in range(3)
+    ]
+    router = Router(model_list=models)
+    source = RouterDeprecationSource(lambda: router)
+    today = date(2026, 11, 5)
+    revision = await source.prepare_revision(today)
+    reordered = Router(model_list=list(reversed(models)))
+    assert await RouterDeprecationSource(lambda: reordered).prepare_revision(today) != revision
+    changed = Router(
+        model_list=[
+            {**model, "model_info": {**model["model_info"], "deprecation_date": "2026-11-21"}} for model in models
+        ]
+    )
+    assert await RouterDeprecationSource(lambda: changed).prepare_revision(today) != revision
+
+
+@pytest.mark.asyncio
+async def test_retirement_revision_resumes_cancelled_preparation_and_invalidates_changed_catalog(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    router = Router(
+        model_list=[
+            {
+                "model_name": f"alias-{index}",
+                "litellm_params": {"model": "openai/revision-model"},
+                "model_info": {"id": str(index)},
+            }
+            for index in range(250)
+        ]
+    )
+    catalog = {"openai/revision-model": {"deprecation_date": "2026-11-20"}}
+    monkeypatch.setattr(litellm, "model_cost", catalog)
+    source = RouterDeprecationSource(lambda: router, lambda: catalog)
+    today = date(2026, 11, 5)
+    preparation = asyncio.create_task(source.prepare_revision(today))
+    await asyncio.sleep(0)
+    preparation.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await preparation
+    revision = await source.prepare_revision(today)
+    copied_catalog = dict(catalog)
+    equivalent = RouterDeprecationSource(lambda: router, lambda: copied_catalog)
+    assert revision is not None
+    assert await equivalent.prepare_revision(today) == revision
+    catalog = {"openai/revision-model": {"deprecation_date": "2026-11-21"}}
+    monkeypatch.setattr(litellm, "model_cost", catalog)
+    assert source.revision != revision
+    changed = await source.prepare_revision(today)
+    assert changed is not None and changed != revision

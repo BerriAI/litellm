@@ -195,15 +195,16 @@ class DeprecationIssueProjector:
         stored: Final = _ProjectionCheckpoint.model_validate(previous.param_value) if previous is not None else None
         if stored is not None and stored.complete and stored.hour >= hour:
             return
+        revision: Final = await self._source.prepare_revision(hour.date())
+        if revision is None:
+            return
         state = (  # rebind-ok: durable continuation after each completed page
             stored
             if stored is not None
             and not stored.complete
-            and stored.source_revision == self._source.revision
+            and stored.source_revision == revision
             and stored.hour.date() == hour.date()
-            else _ProjectionCheckpoint(
-                hour=hour, observed_at=now, source_revision=self._source.revision, complete=False
-            )
+            else _ProjectionCheckpoint(hour=hour, observed_at=now, source_revision=revision, complete=False)
         )
         while self._source.revision == state.source_revision:
             page = self._source.page(state.hour.date(), state.cursor)

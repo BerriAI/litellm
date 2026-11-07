@@ -397,7 +397,7 @@ async def test_same_day_rule_revision_requires_a_fresh_observation(db: Managemen
         await alerts.set_status(original.alert.id, "dismissed")
         revised: Final = await alerts.save_rule(definition.model_copy(update={"multiplier": 5}), None, existing=rule)
         assert revised is not None
-        await alerts.finish_day(revised, _DAY)
+        await alerts.record_evaluations(((revised, "complete"),), _DAY, completed=True)
         assert await issues.active_signals(_DAY) == ()
         await alerts.record_observations(revised, (observation.model_copy(update={"observed": 6, "threshold": 5}),))
         updated: Final = (await issues.active_signals(_DAY))[0]
@@ -417,7 +417,9 @@ async def test_late_custom_key_rule_only_overrides_that_keys_default_signal(db: 
         )
         job: Final = UsageAlertJob.from_prisma(prisma, SlackAlerting(alerting=[], alert_types=[]))
         # A rule can change after the daily observations, before Issue projection.
-        await UsageAlertJob(job._store, job._metrics, job._health, job._delivery)._run(_NOW)
+        await job._store.ensure_default_rules(job._defaults)
+        await job._store.ensure_projection_work(_DAY)
+        await job._evaluate(_DAY, asyncio.get_running_loop().time() + 60)
         issues: Final = IssuesRepository.from_prisma(prisma)
         original: Final = await issues.active_signals(_DAY, scope_type="key", metric="spend")
         assert len(original) == 2
@@ -570,7 +572,11 @@ async def test_missing_drop_coverage_does_not_block_established_spend_issue(db: 
         )
         job: Final = UsageAlertJob.from_prisma(prisma, SlackAlerting(alerting=[], alert_types=[]))
         await job._run(_NOW)
-        rules: Final = await UsageAlertsRepository.from_prisma(prisma).list_enabled_rules(limit=100)
+        rules: Final = tuple(
+            rule
+            for rule in (await UsageAlertsRepository.from_prisma(prisma).list_rules(limit=100)).data
+            if rule.enabled
+        )
         assert any(rule.direction == "decrease" and rule.evaluation_status == "insufficient_coverage" for rule in rules)
         issues: Final = await IssuesRepository.from_prisma(prisma).list_issues()
         assert any(issue.family == "spend" and issue.cohort.scope_id == _KEY_A for issue in issues.data)
@@ -606,7 +612,7 @@ async def test_entity_page_progress_resumes_old_day_without_early_completion(db:
         partial: Final = await job._store.get_rule(rule.id)
         assert partial is not None and partial.evaluation_status == "delayed"
         assert partial.evaluation_progress is not None and partial.evaluation_progress.cursor is not None
-        assert not await job._store.is_day_complete(rule, _DAY)
+        assert not await job._store.completed_rule_ids((rule,), _DAY)
         assert "evaluation_progress" not in partial.model_dump()
         assert "evaluation_progress" not in UsageAlertRule.model_json_schema(mode="serialization")["properties"]
         first: Final = await job._store.list_alerts(limit=500)
@@ -627,7 +633,7 @@ async def test_entity_page_progress_resumes_old_day_without_early_completion(db:
         await job._store.finish_projection_work(next_work)
         assert (await IssuesRepository.from_prisma(prisma).list_issues()).total == 20
         await job._run(_NOW + timedelta(days=1))
-        assert await job._store.is_day_complete(rule, _DAY)
+        assert await job._store.completed_rule_ids((rule,), _DAY)
         final: Final = await job._store.list_alerts(limit=500)
         assert sum(1 for item in final.data if item.rule_id == rule.id) == 31
         count: Final = await prisma.writer_db.query_raw(
@@ -742,7 +748,7 @@ async def test_rule_edit_discards_old_cursor_and_rejects_stale_progress(db: Mana
         assert current is not None and current.evaluation_progress is None
         assert current.updated_at == edited.updated_at
         await store.record_evaluations(((rule, "complete"),), _DAY, completed=True)
-        assert not await store.is_day_complete(edited, _DAY)
+        assert not await store.completed_rule_ids((edited,), _DAY)
 
 
 @pytest.mark.asyncio(loop_scope="session")
@@ -798,7 +804,7 @@ async def test_partial_broad_default_waits_for_its_key_family_only(db: Managemen
         assert await projector.run_pending(_NOW, work, job._store, asyncio.get_running_loop().time() + 10)
         partial: Final = await sources.list_issues()
         assert len(partial.data) == 1 and partial.data[0].cohort.scope_type == "key"
-        while not await job._store.is_day_complete(spend[0], _DAY):
+        while not await job._store.completed_rule_ids((spend[0],), _DAY):
             current: Final = await job._store.get_rule(spend[0].id)
             assert current is not None
             await job._scope_page((current,), _DAY, True)
@@ -818,7 +824,7 @@ async def test_projection_resume_keeps_spend_and_traffic_in_one_episode(db: Mana
         await _seed(prisma)
         job: Final = UsageAlertJob.from_prisma(prisma, SlackAlerting(alerting=[], alert_types=[]))
         await job._store.ensure_default_rules(job._defaults)
-        await job._evaluate(_DAY, asyncio.get_running_loop().time() + 10)
+        await job._evaluate(_DAY, asyncio.get_running_loop().time() + 60)
         work: Final = await job._store.pending_projection_work()
         projector: Final = job._performance_projection
         assert work is not None and projector is not None
@@ -849,7 +855,7 @@ async def test_projection_resume_keeps_spend_and_traffic_in_one_episode(db: Mana
             _NOW + timedelta(hours=1), latest, restarted._store, asyncio.get_running_loop().time() + 10
         )
         assert await restarted._performance_projection.run_pending(
-            _NOW + timedelta(hours=2), latest, restarted._store, asyncio.get_running_loop().time() + 10
+            _NOW + timedelta(hours=2), latest, restarted._store, asyncio.get_running_loop().time() + 60
         )
         after: Final = await IssuesRepository.from_prisma(prisma).list_issues()
         assert tuple(item.id for item in after.data) == tuple(item.id for item in before.data)

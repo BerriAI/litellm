@@ -87,8 +87,8 @@ class UsageAlertFlushRecorder:
         prior: Final = self._user_hour if source == "user" else self._team_hour
         if prior == hour:
             return
-        database: Final = cast(MetricsDatabase, prisma_client.writer_db)  # cast-ok: generated Prisma delegate
         try:
+            database: Final = cast(MetricsDatabase, prisma_client.writer_db)  # cast-ok: generated Prisma delegate
             if not await UsageAlertHealthRepository(database).record(source, now):
                 return
         except Exception:  # noqa: BLE001  # observability must not fail or requeue a committed spend flush

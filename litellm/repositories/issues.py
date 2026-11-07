@@ -17,7 +17,6 @@ from litellm.types.proxy.issues import (
     Issue,
     IssueCohort,
     IssueDeliveryBinding,
-    IssueDeliveryInput,
     IssueFamily,
     IssueFamilyList,
     IssueFamilySetting,
@@ -29,7 +28,6 @@ from litellm.types.proxy.issues import (
     IssueProjectionSignal,
     IssueScope,
     IssueSignal,
-    IssueSignalInput,
     IssueSignalList,
 )
 from litellm.types.proxy.usage_alert_defaults import DEFAULT_USAGE_RULE_IDS, PerformanceIssueFamily
@@ -109,12 +107,6 @@ class IssuesRepository:
     @classmethod
     def from_prisma(cls, prisma: "PrismaClient") -> "IssuesRepository":
         return cls(cast(AlertDatabase, prisma.writer_db))  # cast-ok: generated Prisma delegate implements query_raw
-
-    async def upsert_issue(
-        self, data: IssueInput, reopen: bool = False, status: UsageAlertStatus | None = None
-    ) -> Issue:
-        rows: Final = await self.upsert_issues((data,), reopen=reopen, status=status)
-        return rows[0]
 
     async def upsert_issues(
         self,
@@ -228,10 +220,6 @@ class IssuesRepository:
             for issue in issues
         )
 
-    async def find_active_issue(self, cohort_key: str) -> Issue | None:
-        rows: Final = await self.find_active_issues((cohort_key,))
-        return rows[0] if rows else None
-
     async def find_active_issues(self, cohort_keys: tuple[str, ...]) -> tuple[Issue, ...]:
         if len(cohort_keys) > 500:
             raise ValueError("Read at most 500 issue cohorts per batch")
@@ -303,11 +291,6 @@ class IssuesRepository:
                 FROM "LiteLLM_IssueSignal" WHERE issue_id=$1 ORDER BY scope_type,scope_id LIMIT 11""",
                 issue_id,
             )
-        )
-
-    async def add_signals(self, issue_id: str, signals: tuple[IssueSignalInput, ...]) -> None:
-        await self.add_signal_batch(
-            tuple(IssueSignal.model_validate({**signal.model_dump(), "issue_id": issue_id}) for signal in signals)
         )
 
     async def add_signal_batch(self, signals: tuple[IssueSignal, ...]) -> None:
@@ -529,7 +512,7 @@ class IssuesRepository:
                 """WITH changed AS (
                 UPDATE "LiteLLM_Issue" SET active=false,
                     status=CASE WHEN status='open' THEN 'resolved' ELSE status END,updated_at=CURRENT_TIMESTAMP
-                WHERE id=ANY($1::text[]) AND kind='performance' AND active AND last_seen<=$2::timestamp(3)
+                WHERE id=ANY($1::text[]) AND kind='performance' AND active AND last_seen<$2::timestamp(3)
                 RETURNING id
             ) SELECT count(*)::int AS count FROM changed""",
                 list(ids),
@@ -578,17 +561,6 @@ class IssuesRepository:
         from litellm.repositories.issue_families import update_family
 
         return await update_family(self.database, family, data)
-
-    async def queue_delivery(
-        self,
-        data: IssueDeliveryInput,
-        rule_id: str,
-        rule_revision: str,
-        source_id: str,
-    ) -> None:
-        await self.queue_deliveries(
-            (IssueDeliveryBinding(delivery=data, rule_id=rule_id, rule_revision=rule_revision, source_id=source_id),)
-        )
 
     async def queue_deliveries(self, bindings: tuple[IssueDeliveryBinding, ...]) -> None:
         if not bindings:

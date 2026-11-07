@@ -10,7 +10,7 @@ from litellm.types.proxy.usage_alerts import UsageAlertRuleInput
 
 
 @pytest.mark.asyncio(loop_scope="session")
-async def test_provider_pair_pages_skip_oversized_names_and_continue(db: ManagementDatabase) -> None:
+async def test_provider_lookup_skips_oversized_names_and_preserves_valid_models(db: ManagementDatabase) -> None:
     prefix = f"provider-width-{uuid4()}"
     day = date(2038, 1, 12)
     provider = prefix + "-valid"
@@ -39,15 +39,15 @@ async def test_provider_pair_pages_skip_oversized_names_and_continue(db: Managem
             tuple(pair[1] for pair in pairs),
         )
         expected = tuple(IssueModelPair(provider=p, model=m) for p, m in pairs[2:5])
-        first = await repository.candidate_pairs(day, limit=1)
-        second = await repository.candidate_pairs(day, first[0], limit=1)
-        third = await repository.candidate_pairs(day, second[0], limit=1)
-        assert len(first) == len(second) == len(third) == 1
-        assert frozenset((*first, *second, *third)) == frozenset(expected)
-        assert await repository.candidate_pairs(day, third[0], limit=1) == ()
-        assert frozenset(await repository.provider_pairs(provider, day)) == frozenset(expected[:2])
-        assert await repository.provider_pairs(wide_provider, day) == expected[2:]
-        assert await repository.provider_pairs("a" * 257, day) == ()
+        first = await repository.provider_pairs(provider, day)
+        second = await repository.provider_pairs(wide_provider, day)
+        invalid = await repository.provider_pairs("a" * 257, day)
+        assert len(first) == 2 and len(second) == 1 and len(invalid) == 0
+        assert frozenset((*first, *second)) == frozenset(expected)
+        assert await repository.provider_pairs(prefix + "-absent", day) == ()
+        assert frozenset(first) == frozenset(expected[:2])
+        assert second == expected[2:]
+        assert invalid == ()
     finally:
         await db.prisma.writer_db.query_raw(
             'DELETE FROM "LiteLLM_DailyUserSpend" WHERE id LIKE $1 RETURNING id', prefix + "%"
@@ -81,9 +81,8 @@ async def test_provider_latency_requires_established_within_model_regressions(db
             FROM "LiteLLM_DailyUserSpend" WHERE custom_llm_provider=$1 RETURNING id""",
             prefix,
         )
-        first = await repository.candidate_pairs(day, IssueModelPair(provider=prefix, model="0"), limit=1)
-        assert first == pairs[:1]
-        assert await repository.candidate_pairs(day, first[0], limit=1) == pairs[1:]
+        assert await repository.provider_pairs(prefix, day) == pairs
+        assert await repository.provider_pairs(prefix + "-other", day) == ()
         evidence = await repository.latency_cohort(pairs, day, rule)
         assert evidence is not None
         assert evidence.cohort.model_pairs == pairs

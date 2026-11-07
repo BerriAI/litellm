@@ -1,3 +1,5 @@
+SET LOCAL lock_timeout = '10s';
+
 CREATE TABLE IF NOT EXISTS "LiteLLM_UsageAlertRule" (
  "id" TEXT PRIMARY KEY, "scope_type" TEXT NOT NULL, "scope_id" TEXT,
  "enabled" BOOLEAN NOT NULL DEFAULT true, "record" JSONB NOT NULL,
