@@ -314,5 +314,10 @@
       "supports_function_calling": true,
       "supports_reasoning": true
     }
+  },
+  "apimodels": {
+    "base_url": "https://api.apimodels.app/v1",
+    "api_key_env": "APIMODELS_API_KEY",
+    "api_base_env": "APIMODELS_API_BASE"
   }
 }
