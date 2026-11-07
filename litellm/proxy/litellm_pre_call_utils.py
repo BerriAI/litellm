@@ -2628,6 +2628,26 @@ def refresh_proxy_server_request_body_snapshot(
         )
 
 
+def redact_proxy_server_request_body_on_guardrail_block(
+    data: MutableMapping[str, object],
+) -> None:
+    """
+    Redact prompt/messages fields in data['proxy_server_request']['body'] when a pre-call
+    guardrail blocks a request (#50127).
+    This ensures that raw PII or secret content that triggered a guardrail rejection is not
+    persisted in plain text in LiteLLM_SpendLogs via async_post_call_failure_hook.
+    """
+    proxy_server_request: Final = data.get("proxy_server_request")
+    if not isinstance(proxy_server_request, dict):
+        return
+    body: Final = proxy_server_request.get("body")
+    if not isinstance(body, dict):
+        return
+    for field in ("messages", "prompt", "input", "instructions", "system"):
+        if field in body:
+            body[field] = "[REDACTED - BLOCKED BY GUARDRAIL]"
+
+
 async def add_litellm_data_to_request(
     data: dict,
     request: Request,
