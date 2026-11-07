@@ -1704,6 +1704,46 @@ def test_count_reasoning_tokens_counts_visible_reasoning():
     assert processor.count_reasoning_tokens(response) > 0
 
 
+def test_stream_chunk_builder_includes_reasoning_in_estimated_completion_tokens() -> None:
+    reasoning_content: Final = "let me count the primes under thirty"
+    visible_content: Final = "10"
+    chunks: Final = [
+        ModelResponseStream(
+            id="chatcmpl-estimated-reasoning",
+            model="claude-opus-4-8",
+            choices=[
+                StreamingChoices(
+                    finish_reason=None,
+                    index=0,
+                    delta=Delta(role="assistant", reasoning_content=reasoning_content),
+                )
+            ],
+        ),
+        ModelResponseStream(
+            id="chatcmpl-estimated-reasoning",
+            model="claude-opus-4-8",
+            choices=[
+                StreamingChoices(
+                    finish_reason="stop",
+                    index=0,
+                    delta=Delta(content=visible_content),
+                )
+            ],
+        ),
+    ]
+
+    response: Final = stream_chunk_builder(chunks=chunks, messages=[{"role": "user", "content": "count"}])
+
+    assert response is not None
+    expected_reasoning_tokens: Final = litellm.token_counter(text=reasoning_content, count_response_tokens=True)
+    expected_text_tokens: Final = litellm.token_counter(
+        model=chunks[0].model, text=visible_content, count_response_tokens=True
+    )
+    assert response.usage.completion_tokens_details.reasoning_tokens == expected_reasoning_tokens
+    assert response.usage.completion_tokens == expected_text_tokens + expected_reasoning_tokens
+    assert response.usage.total_tokens == response.usage.prompt_tokens + response.usage.completion_tokens
+
+
 @pytest.mark.parametrize(
     "estimated_reasoning_tokens, expected_reasoning_tokens, expected_text_tokens",
     [(40, 40, 60), (250, 100, 0)],
