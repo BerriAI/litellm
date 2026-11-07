@@ -32,6 +32,7 @@ _MessageT: Final = TypeVar("_MessageT")
 
 _MAPPING_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _TOOL_SEARCH_ITEM_TYPES: Final = frozenset({"tool_search_call", "tool_search_output"})
+_BM25_TOOL_SEARCH_TOOL_NAME: Final = "tool_search_tool_bm25"
 
 
 class _ProviderToolResults(LiteLLMBaseModel):
@@ -213,13 +214,26 @@ def _anthropic_tool_search_result(output: _ToolSearchOutputItem) -> Mapping[str,
     return result.model_dump(mode="json")
 
 
+def _search_arguments(arguments: object) -> Mapping[str, object]:
+    try:
+        if isinstance(arguments, str):
+            return _MAPPING_ADAPTER.validate_json(arguments)
+        return _MAPPING_ADAPTER.validate_python(arguments)
+    except ValidationError:
+        return MappingProxyType({})
+
+
+def _search_tool_name(arguments: object) -> str:
+    return _BM25_TOOL_SEARCH_TOOL_NAME if "query" in _search_arguments(arguments) else ANTHROPIC_TOOL_SEARCH_TOOL_NAME
+
+
 def _replayed_item(item: ResponseInputItemParam, replayed_ids: frozenset[str]) -> ResponseInputItemParam | None:
     call: Final = _tool_search_call(item)
     if call is not None and call.call_id in replayed_ids:
         return ResponseFunctionToolCallParam(
             type="function_call",
             call_id=call.call_id,
-            name=ANTHROPIC_TOOL_SEARCH_TOOL_NAME,
+            name=_search_tool_name(call.arguments),
             arguments=serialize_tool_call_arguments(call.arguments, "{}"),
         )
     output: Final = _tool_search_output(item)
