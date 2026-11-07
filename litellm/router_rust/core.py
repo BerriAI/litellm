@@ -4587,10 +4587,15 @@ class _Driver:
         self._fallback_depth = depth if isinstance(depth, int) else self._fallback_depth + 1
 
     def _carry_superseded_usage(self) -> None:
-        """``carry_superseded_attempt_usage``, before each same-group retry and each fallback hop."""
-        from litellm.router_utils.fallback_event_handlers import carry_superseded_attempt_usage
+        """``carry_superseded_attempt_usage`` and ``reopen_success_logging_for_next_attempt``, before each
+        same-group retry and each fallback hop."""
+        from litellm.router_utils.fallback_event_handlers import (
+            carry_superseded_attempt_usage,
+            reopen_success_logging_for_next_attempt,
+        )
 
         carry_superseded_attempt_usage(self._request)
+        reopen_success_logging_for_next_attempt(self._request)
 
     def _order_chain_failed(self, event: Mapping[str, object]) -> None:
         """The order path of ``async_function_with_fallbacks_common_utils`` raised: the chain's last
