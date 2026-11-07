@@ -1,6 +1,8 @@
+import json
 import os
 import sys
 from datetime import datetime, timezone
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -42,6 +44,12 @@ nr_module._newrelic_agent = _mock_newrelic_agent
 NR_ENV = {
     "NEW_RELIC_LICENSE_KEY": "test-license-key",
     "NEW_RELIC_APP_NAME": "test-app",
+}
+
+_SERVER_CALL: Final = {
+    "id": "srvtoolu_01",
+    "type": "function",
+    "function": {"name": "web_search", "arguments": '{"query": "persimmon"}'},
 }
 
 
@@ -360,6 +368,21 @@ class TestExtractMessageContent:
         assert "get_weather" in result
         assert "call_1" in result
 
+    @pytest.mark.parametrize(
+        "message",
+        [
+            {"role": "assistant", "content": None, "provider_specific_fields": {"server_tool_calls": [_SERVER_CALL]}},
+            litellm.Message(
+                role="assistant", content=None, provider_specific_fields={"server_tool_calls": [_SERVER_CALL]}
+            ),
+        ],
+        ids=["dict", "message"],
+    )
+    def test_server_tool_call_only_message_serializes_the_server_call(
+        self, message: dict[str, object] | litellm.Message
+    ) -> None:
+        assert json.loads(self.logger._extract_message_content(message)) == [_SERVER_CALL]
+
     def test_multimodal_list_serialized_as_json(self):
         msg = {
             "content": [
@@ -489,6 +512,18 @@ class TestExtractAllMessagesTimestamps:
         )
 
         input_msg = next(m for m in messages if not m.get("is_response"))
+        assert input_msg["timestamp"] == int(1_000_000.0 * 1000.0)
+
+    def test_input_messages_read_a_start_time_that_only_exposes_timestamp(self):
+        class EpochSeconds:
+            def timestamp(self) -> float:
+                return 1_000_000.0
+
+        kwargs: Final = {**make_kwargs(messages=[{"role": "user", "content": "Hi"}]), "start_time": EpochSeconds()}
+
+        messages: Final = self.logger._extract_all_messages(kwargs, make_response(), response_model="gpt-4", vendor="openai")
+
+        input_msg: Final = next(m for m in messages if not m.get("is_response"))
         assert input_msg["timestamp"] == int(1_000_000.0 * 1000.0)
 
     def test_output_messages_get_end_time_timestamp(self):

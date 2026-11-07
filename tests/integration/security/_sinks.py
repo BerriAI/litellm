@@ -62,7 +62,7 @@ from typing import Final
 import yaml
 from integration._support.client import Gateway, Scenario, eventually, gateway_from_environment
 from integration._support.database import read_rows
-from integration._support.process import OwnedProxy, owned_proxy_process
+from integration._support.process import OwnedProxy, OwnedState, owned_proxy_process
 from integration._support.wire import Reply, Request, Wire, wire_server
 from integration.security._canary import Canary, canary
 
@@ -232,11 +232,17 @@ def canary_rig(
             **{name: "127.0.0.1,localhost" for name in ("NO_PROXY", "no_proxy")},
             "OPENAI_BASE_URL": provider.url + "/v1",
             "OPENAI_API_BASE": provider.url + "/v1",
+            "ANTHROPIC_API_BASE": provider.url,
+            "ANTHROPIC_BASE_URL": provider.url,
+            "ANTHROPIC_API_KEY": b1.value,
+            "ANTHROPIC_AUTH_TOKEN": "",
             "GENERIC_LOGGER_ENDPOINT": sink.url,
             "GENERIC_LOGGER_HEADERS": f"Authorization=Bearer {token}",
             **(environment or {}),
         }
-        with owned_proxy_process(gateway, root, overrides, config=config) as owned:
+        with owned_proxy_process(
+            gateway, root, overrides, config=config, state=OwnedState.SHARED_WITH_WORKER
+        ) as owned:
             admin = Gateway(
                 owned.gateway.client, overrides.get("LITELLM_MASTER_KEY", owned.gateway.key), owned.gateway.upstream_url
             )

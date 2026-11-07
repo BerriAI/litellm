@@ -1,8 +1,14 @@
-from collections.abc import Mapping
-from typing import Final
+from collections.abc import Iterable, Iterator, Mapping
+from dataclasses import dataclass
+from typing import Final, cast
+
+from pydantic import TypeAdapter
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
+from litellm.litellm_core_utils.get_llm_provider_logic import inferred_provider
+from litellm.litellm_core_utils.model_retirement import is_past_deprecation_date
 
 
 def _form_field_value(value: object) -> str:
@@ -106,7 +112,7 @@ def serialize_multipart_form_fields(data: Mapping[str, object]) -> tuple[tuple[s
     )
 
 
-def _ensure_extra_body_is_safe(extra_body: dict | None) -> dict | None:
+def ensure_extra_body_is_safe(extra_body: dict[str, object] | None) -> dict[str, object] | None:
     """
     Ensure that the extra_body sent in the request is safe,  otherwise users will see this error
 
@@ -117,20 +123,26 @@ def _ensure_extra_body_is_safe(extra_body: dict | None) -> dict | None:
     """
     if extra_body is None:
         return None
-
     if not isinstance(extra_body, dict):
         return extra_body
-
     if "metadata" in extra_body and isinstance(extra_body["metadata"], dict):
-        if "prompt" in extra_body["metadata"]:
-            _prompt: Final = extra_body["metadata"].get("prompt")
-
+        if "prompt" in cast(dict[str, object], extra_body["metadata"]):
+            prompt: Final = cast(  # cast-ok: request metadata is caller-provided
+                dict[str, object], extra_body["metadata"]
+            ).get("prompt")
             # users can send Langfuse TextPromptClient objects, so we need to convert them to dicts
             # Langfuse TextPromptClients have .__dict__ attribute
-            if _prompt is not None and hasattr(_prompt, "__dict__"):
-                extra_body["metadata"]["prompt"] = _prompt.__dict__
+            if prompt is not None and hasattr(prompt, "__dict__"):
+                cast(dict[str, object], extra_body["metadata"])["prompt"] = (
+                    cast(  # cast-ok: prompt is an external SDK object
+                        object, getattr(prompt, "__dict__")
+                    )
+                )
 
     return extra_body
+
+
+_ensure_extra_body_is_safe = ensure_extra_body_is_safe
 
 
 def pick_cheapest_chat_models_from_llm_provider(custom_llm_provider: str, n=1):
@@ -144,27 +156,68 @@ def pick_cheapest_chat_models_from_llm_provider(custom_llm_provider: str, n=1):
     Returns:
         list[str]: A list of the n cheapest chat models.
     """
-    if custom_llm_provider not in litellm.models_by_provider:
-        return []
+    return [ranked_model.model for ranked_model in rank_chat_models_from_llm_provider(custom_llm_provider)[:n]]
 
-    known_models: Final = litellm.models_by_provider.get(custom_llm_provider, [])
-    model_costs: Final = []
 
-    for model in known_models:
+@dataclass(frozen=True, slots=True)
+class RankedChatModel:
+    model: str
+    route_rank: int
+    cost: float
+    is_past_deprecation_date: bool
+
+
+def rank_chat_models_from_llm_provider(custom_llm_provider: str) -> tuple[RankedChatModel, ...]:
+    from litellm.utils import bundled_provider_models
+
+    known_models: Final = bundled_provider_models(custom_llm_provider)
+    ranked_models: Final = (
+        RankedChatModel(
+            model=model, route_rank=route_rank, cost=cost, is_past_deprecation_date=is_past_deprecation_date
+        )
+        for model, cost, is_past_deprecation_date in _chat_row_costs(known_models, custom_llm_provider)
+        if (route_rank := _route_rank(model, custom_llm_provider)) is not None
+    )
+    return tuple(sorted(ranked_models, key=lambda ranked_model: (ranked_model.route_rank, ranked_model.cost)))
+
+
+class _CostMapDeprecation(TypedDict):
+    deprecation_date: NotRequired[ReadOnly[object]]
+
+
+_COST_MAP_DEPRECATION: Final = TypeAdapter(_CostMapDeprecation)
+
+
+def _is_past_deprecation_date(cost_map_key: str) -> bool:
+    return is_past_deprecation_date(
+        _COST_MAP_DEPRECATION.validate_python(
+            litellm.model_cost.get(cost_map_key) or {}  # pyright: ignore[reportUnknownMemberType]  # untyped cost map JSON
+        )
+    )
+
+
+def _chat_row_costs(models: Iterable[str], custom_llm_provider: str) -> Iterator[tuple[str, float, bool]]:
+    for model in models:
         try:
             model_info = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
         except Exception:
             continue
         if model_info.get("mode") != "chat":
             continue
-        _cost = (model_info.get("input_cost_per_token") or 0.0) + (model_info.get("output_cost_per_token") or 0.0)
-        model_costs.append((model, _cost))
+        yield (
+            model,
+            (model_info.get("input_cost_per_token") or 0.0) + (model_info.get("output_cost_per_token") or 0.0),
+            _is_past_deprecation_date(model_info["key"]),
+        )
 
-    # Sort by cost (ascending)
-    model_costs.sort(key=lambda x: x[1])
 
-    # Return the top n cheapest models
-    return [model for model, _ in model_costs[:n]]
+def _route_rank(model: str, custom_llm_provider: str) -> int | None:
+    routed_provider: Final = inferred_provider(model)
+    if routed_provider is None:
+        return 1
+    if routed_provider == inferred_provider(f"{custom_llm_provider}/{model}"):
+        return 0
+    return None
 
 
 def get_proxy_server_request_headers(litellm_params: dict | None) -> dict:

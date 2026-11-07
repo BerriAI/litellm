@@ -13,7 +13,7 @@ from fastapi import HTTPException
 
 from litellm.caching.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.hooks.max_iterations_limiter import _PROXY_MaxIterationsHandler
+from litellm.proxy.hooks.max_iterations_limiter import PROXY_MaxIterationsHandler
 from litellm.proxy.utils import InternalUsageCache
 from litellm.types.agents import AgentResponse
 
@@ -36,7 +36,7 @@ async def test_max_iterations_basic_enforcement():
     - 4th request should raise 429
     """
     local_cache = DualCache()
-    handler = _PROXY_MaxIterationsHandler(
+    handler = PROXY_MaxIterationsHandler(
         internal_usage_cache=InternalUsageCache(local_cache),
     )
     user_api_key_dict = UserAPIKeyAuth(
@@ -46,9 +46,7 @@ async def test_max_iterations_basic_enforcement():
 
     mock_agent = _make_mock_agent(max_iterations=3)
 
-    with patch(
-        "litellm.proxy.agent_endpoints.agent_registry.global_agent_registry"
-    ) as mock_registry:
+    with patch("litellm.proxy.agent_endpoints.agent_registry.global_agent_registry") as mock_registry:
         mock_registry.get_agent_by_id.return_value = mock_agent
 
         # First 3 requests should succeed
@@ -81,7 +79,7 @@ async def test_max_iterations_different_sessions_independent():
     - Exhausting Session A does not affect Session B
     """
     local_cache = DualCache()
-    handler = _PROXY_MaxIterationsHandler(
+    handler = PROXY_MaxIterationsHandler(
         internal_usage_cache=InternalUsageCache(local_cache),
     )
     user_api_key_dict = UserAPIKeyAuth(
@@ -91,9 +89,7 @@ async def test_max_iterations_different_sessions_independent():
 
     mock_agent = _make_mock_agent(max_iterations=2)
 
-    with patch(
-        "litellm.proxy.agent_endpoints.agent_registry.global_agent_registry"
-    ) as mock_registry:
+    with patch("litellm.proxy.agent_endpoints.agent_registry.global_agent_registry") as mock_registry:
         mock_registry.get_agent_by_id.return_value = mock_agent
 
         # Session A: 2 calls succeed
@@ -140,7 +136,7 @@ async def test_max_iterations_no_agent_id_passes():
     When no agent_id is set on the key, all requests pass through.
     """
     local_cache = DualCache()
-    handler = _PROXY_MaxIterationsHandler(
+    handler = PROXY_MaxIterationsHandler(
         internal_usage_cache=InternalUsageCache(local_cache),
     )
     user_api_key_dict = UserAPIKeyAuth(
@@ -154,3 +150,42 @@ async def test_max_iterations_no_agent_id_passes():
         call_type="",
     )
     assert result is None
+
+
+class _SharedCounterRedis:
+    def __init__(self) -> None:
+        self.counts: dict[str, int] = {}
+        self.script_args: list[list[int]] = []
+
+    def async_register_script(self, script: str):
+        async def increment(keys: list[str], args: list[int]) -> int:
+            self.script_args.append(args)
+            self.counts[keys[0]] = self.counts.get(keys[0], 0) + 1
+            return self.counts[keys[0]]
+
+        return increment
+
+
+@pytest.mark.asyncio
+async def test_max_iterations_counts_one_session_across_proxy_instances_through_redis():
+    shared_redis = _SharedCounterRedis()
+    first, second = (
+        PROXY_MaxIterationsHandler(internal_usage_cache=InternalUsageCache(DualCache(redis_cache=shared_redis)))
+        for _ in range(2)
+    )
+    user_api_key_dict = UserAPIKeyAuth(api_key="sk-test-key-1234", metadata={"max_iterations": 3})
+    data = {"metadata": {"session_id": "session-shared"}}
+
+    for handler in (first, second, first):
+        await handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict, cache=DualCache(), data=data, call_type=""
+        )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await second.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict, cache=DualCache(), data=data, call_type=""
+        )
+
+    assert exc_info.value.status_code == 429
+    assert "Current count: 4" in str(exc_info.value.detail)
+    assert shared_redis.script_args == [[first.ttl]] * 4

@@ -5,7 +5,7 @@ teardown) instead of relying on a statically configured model, so the check is
 self-contained and never inherits pricing another suite or a stale config left on
 the shared proxy. custom-priced-flash sets input/output rates deliberately far
 above the canonical gemini price; the isolation sibling shares the same
-gemini/gemini-2.5-flash backend but sets no override. Three behaviors are checked
+gemini/gemini-3.8-flash backend but sets no override. Three behaviors are checked
 independently:
 
 - billing: a real call's logged cost breakdown charges input and output tokens at
@@ -23,6 +23,7 @@ import pytest
 from pydantic import BaseModel, RootModel
 
 from e2e_config import unique_marker
+from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from proxy_client import ProxyClient
 from e2e_http import Success, unwrap
 from lifecycle import ResourceManager
@@ -36,10 +37,8 @@ from models import (
 
 pytestmark = pytest.mark.e2e
 
-BACKEND_MODEL = "gemini/gemini-2.5-flash"
+BACKEND_MODEL = "gemini/gemini-3.8-flash"
 GEMINI_API_KEY = "os.environ/GEMINI_API_KEY"
-# Deliberately ~100x above canonical gemini-2.5-flash (input 3e-7 / output 2.5e-6)
-# so an override that is ignored or under-applied bills at the base rate and fails.
 CUSTOM_INPUT_RATE = 5e-05
 CUSTOM_OUTPUT_RATE = 1e-04
 
@@ -77,7 +76,7 @@ def _provision(
     input_cost_per_token: float | None,
     output_cost_per_token: float | None,
 ) -> str:
-    """Register a fresh gemini/gemini-2.5-flash deployment (deleted on teardown) and
+    """Register a fresh gemini/gemini-3.8-flash deployment (deleted on teardown) and
     return its model name. With the cost fields set the deployment carries a custom
     pricing override; with them None it is a plain sibling on the same backend. The
     marker keeps the name unique so concurrent runs on the shared proxy never
@@ -148,6 +147,15 @@ def _poll_breakdown_row(proxy: ProxyClient, key: str, response_id: str | None) -
 
 
 class TestCustomPricing:
+    @meta(
+        Subject(
+            domain=Domain.COST_MAP,
+            route=Route.SPEND_REPORTING,
+            providers=(Provider.GEMINI,),
+            models=(BACKEND_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_custom_pricing_is_billed_at_configured_rate(
         self,
         proxy: ProxyClient,
@@ -193,6 +201,12 @@ class TestCustomPricing:
             f"= {completion * CUSTOM_OUTPUT_RATE}"
         )
 
+    @meta(
+        Subject(
+            domain=Domain.COST_MAP,
+            route=Route.MODEL_MANAGEMENT,
+        )
+    )
     def test_model_info_reports_custom_pricing(
         self, proxy: ProxyClient, resources: ResourceManager
     ) -> None:
@@ -208,6 +222,12 @@ class TestCustomPricing:
             f"{entry.litellm_params.output_cost_per_token} != configured {CUSTOM_OUTPUT_RATE}"
         )
 
+    @meta(
+        Subject(
+            domain=Domain.COST_MAP,
+            route=Route.MODEL_MANAGEMENT,
+        )
+    )
     def test_custom_pricing_is_isolated_from_sibling_deployment(
         self, proxy: ProxyClient, resources: ResourceManager
     ) -> None:
@@ -229,7 +249,7 @@ class TestCustomPricing:
         assert sibling_entry is not None, f"{sibling} absent from /model/info"
 
         # custom-priced-flash overrides pricing; the sibling shares the same
-        # gemini/gemini-2.5-flash backend but sets no override, so it must keep its
+        # gemini/gemini-3.8-flash backend but sets no override, so it must keep its
         # own price. Equal rates mean the override leaked into the shared cost map.
         assert (
             sibling_entry.model_info.input_cost_per_token

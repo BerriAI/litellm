@@ -3,7 +3,7 @@
 type ListParams = {
   page?: number;
   limit?: number;
-  filters?: Record<string, string | number>;
+  filters?: Record<string, string | number | boolean>;
 };
 
 /**

@@ -73,6 +73,12 @@ type TeamResponse struct {
 	ModelRPMLimit            map[string]interface{} `json:"model_rpm_limit,omitempty"`
 	ModelTPMLimit            map[string]interface{} `json:"model_tpm_limit,omitempty"`
 	AllowedPassthroughRoutes []string               `json:"allowed_passthrough_routes,omitempty"`
+	TeamMemberBudgetTable    *TeamMemberBudgetTable `json:"team_member_budget_table,omitempty"`
+}
+
+// TeamMemberBudgetTable is the team's default member budget row, the only place /team/info returns team_member_model_max_budget.
+type TeamMemberBudgetTable struct {
+	ModelMaxBudget map[string]interface{} `json:"model_max_budget,omitempty"`
 }
 
 // OrganizationResponse represents a response from the API containing organization information.
@@ -114,6 +120,7 @@ type LiteLLMParams struct {
 	VertexProject                  string                 `json:"vertex_project,omitempty"`
 	VertexLocation                 string                 `json:"vertex_location,omitempty"`
 	VertexCredentials              string                 `json:"vertex_credentials,omitempty"`
+	AdditionalDropParams           interface{}            `json:"additional_drop_params,omitempty"`
 }
 
 // ModelInfo represents information about a model.
@@ -131,6 +138,7 @@ type ModelInfo struct {
 type Key struct {
 	Key                      string                 `json:"key,omitempty"`
 	TokenID                  string                 `json:"token_id,omitempty"`
+	KeyType                  string                 `json:"key_type,omitempty"`
 	Models                   []string               `json:"models"`
 	Spend                    float64                `json:"spend,omitempty"`
 	MaxBudget                *float64               `json:"max_budget,omitempty"`
@@ -199,6 +207,15 @@ type MCPServerRequest struct {
 	Command         string            `json:"command,omitempty"`
 	Args            []string          `json:"args,omitempty"`
 	Env             map[string]string `json:"env,omitempty"`
+	Credentials     *MCPCredentials   `json:"credentials,omitempty"`
+}
+
+// MCPCredentials is the secret material the proxy uses against an MCP server.
+// The proxy encrypts it at rest and redacts it on read, so it is never read back.
+type MCPCredentials struct {
+	AuthValue    string `json:"auth_value,omitempty"`
+	ClientID     string `json:"client_id,omitempty"`
+	ClientSecret string `json:"client_secret,omitempty"`
 }
 
 // MCPServerResponse represents a response from the API containing MCP server information.

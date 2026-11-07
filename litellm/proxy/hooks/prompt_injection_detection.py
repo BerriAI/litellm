@@ -76,7 +76,7 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
             "and start from scratch",
         ]
 
-    def print_verbose(self, print_statement, level: Literal["INFO", "DEBUG"] = "DEBUG"):
+    def print_verbose(self, print_statement, level: Literal["INFO", "DEBUG"] = "DEBUG") -> None:
         if level == "INFO":
             verbose_proxy_logger.info(print_statement)
         elif level == "DEBUG":
@@ -85,7 +85,7 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
         if litellm.set_verbose is True:
             print(print_statement)  # noqa: T201
 
-    def update_environment(self, router: Router | None = None):
+    def update_environment(self, router: Router | None = None) -> None:
         self.llm_router = router
 
         if self.prompt_injection_params is not None and self.prompt_injection_params.llm_api_check is True:
@@ -94,12 +94,13 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
                     "PromptInjectionDetection: Model List not set. Required for Prompt Injection detection."
                 )
 
+            model_names = self.llm_router.registry().names(kind="group_set")
             self.print_verbose(
-                f"model_names: {self.llm_router.model_names}; self.prompt_injection_params.llm_api_name: {self.prompt_injection_params.llm_api_name}"
+                f"model_names: {model_names}; self.prompt_injection_params.llm_api_name: {self.prompt_injection_params.llm_api_name}"
             )
             if (
                 self.prompt_injection_params.llm_api_name is None
-                or self.prompt_injection_params.llm_api_name not in self.llm_router.model_names
+                or self.prompt_injection_params.llm_api_name not in model_names
             ):
                 raise Exception(
                     "PromptInjectionDetection: Invalid LLM API Name. LLM API Name must be a 'model_name' in 'model_list'."
@@ -150,9 +151,9 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
         self,
         user_api_key_dict: UserAPIKeyAuth,
         cache: DualCache,
-        data: dict,
+        data: dict[str, object],
         call_type: str,  # "completion", "embeddings", "image_generation", "moderation"
-    ):
+    ) -> dict[str, object] | str | None:
         try:
             """
             - check if user id part of call
@@ -278,3 +279,6 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
             )
 
         return is_prompt_attack
+
+
+OPTIONAL_PromptInjectionDetection = _OPTIONAL_PromptInjectionDetection

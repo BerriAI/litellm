@@ -192,6 +192,19 @@ async def _run(prisma, users, caller=ADMIN, license=None, generate_key=_no_keys)
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("user_id", [None, "", "  employee-42  ", " \t"])
+async def test_bulk_keeps_existing_user_id_generation_and_whitespace_behavior(user_id: str | None) -> None:
+    prisma: Final = _FakePrisma()
+    response: Final = await _run(prisma, [{"user_id": user_id}])
+    result: Final = response.data[0]
+    assert result.success
+    assert result.user_id
+    assert result.user_id in prisma.db.litellm_usertable.rows
+    if user_id:
+        assert result.user_id == user_id
+
+
+@pytest.mark.asyncio
 async def test_creates_users_and_team_membership_in_every_store():
     prisma = _FakePrisma(teams=[_team("t1", [Member(user_id="existing", role="admin")]), _team("t2")])
     response = await _run(
@@ -388,6 +401,37 @@ async def test_non_admin_cannot_create_admin_users_but_other_rows_proceed():
     assert [r.success for r in response.data] == [False, True]
     assert "Only proxy admins" in (response.data[0].error or "")
     assert set(prisma.db.litellm_usertable.rows) == {"u2"}
+
+
+@pytest.mark.asyncio
+async def test_only_proxy_admin_sets_batch_limits_on_a_created_key():
+    limits = {"max_file_downloads_per_minute": 1000}
+    calls: list[dict[str, object]] = []
+
+    async def generate_key(**kwargs: object) -> dict[str, object]:
+        calls.append(kwargs)
+        return {"token": f"sk-{kwargs['user_id']}"}
+
+    rows = [
+        {"user_id": "u1", "auto_create_key": True, "metadata": limits},
+        {"user_id": "u2", "auto_create_key": False, "metadata": limits},
+        {"user_id": "u3", "auto_create_key": True},
+    ]
+
+    prisma = _FakePrisma()
+    response = await _run(prisma, rows, caller=INTERNAL, generate_key=generate_key)
+
+    assert [r.success for r in response.data] == [False, True, True]
+    assert "Only proxy admins can set max_file_downloads_per_minute on a key" in (response.data[0].error or "")
+    assert set(prisma.db.litellm_usertable.rows) == {"u2", "u3"}
+    assert [call["user_id"] for call in calls] == ["u3"]
+
+    admin_prisma = _FakePrisma()
+    admin_response = await _run(admin_prisma, rows[:1], caller=ADMIN, generate_key=generate_key)
+
+    assert [r.key for r in admin_response.data] == ["sk-u1"]
+    assert calls[-1]["user_id"] == "u1"
+    assert calls[-1]["metadata"] == limits
 
 
 @pytest.mark.asyncio

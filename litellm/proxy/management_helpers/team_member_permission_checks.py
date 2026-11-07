@@ -65,7 +65,7 @@ class TeamMemberPermissionChecks:
         Main handler for checking if a team member can update a key
         """
         from litellm.proxy.management_endpoints.key_management_endpoints import (
-            _get_caller_team_role,
+            get_caller_team_role,
         )
 
         # 1. Don't execute these checks if the user role is proxy admin
@@ -85,7 +85,7 @@ class TeamMemberPermissionChecks:
             check_db_only=True,
         )
 
-        caller_team_role: Final = _get_caller_team_role(team_table=team_table, user_api_key_dict=user_api_key_dict)
+        caller_team_role: Final = get_caller_team_role(team_table=team_table, user_api_key_dict=user_api_key_dict)
 
         # 4. Check if the team member has permissions for the endpoint
         has_permission: Final = TeamMemberPermissionChecks.does_team_member_have_permissions_for_endpoint(
@@ -100,6 +100,13 @@ class TeamMemberPermissionChecks:
                 param=route,
                 code=401,
             )
+
+    @staticmethod
+    def is_route_granted_to_team_members(team_table: LiteLLM_TeamTableCachedObj, route: str) -> bool:
+        granted_routes: Final = TeamMemberPermissionChecks._get_list_of_route_enum_as_str(
+            TeamMemberPermissionChecks.get_permissions_for_team_member(team_table=team_table)
+        )
+        return RouteChecks.check_route_access(route=route, allowed_routes=granted_routes)
 
     @staticmethod
     def does_team_member_have_permissions_for_endpoint(
@@ -118,12 +125,10 @@ class TeamMemberPermissionChecks:
         if team_member_role == "admin":
             return True
 
-        _team_member_permissions: Final = TeamMemberPermissionChecks.get_permissions_for_team_member(
-            team_table=team_table,
-        )
-        team_member_permissions = TeamMemberPermissionChecks._get_list_of_route_enum_as_str(_team_member_permissions)
-
-        if not RouteChecks.check_route_access(route=route, allowed_routes=team_member_permissions):
+        if not TeamMemberPermissionChecks.is_route_granted_to_team_members(team_table=team_table, route=route):
+            team_member_permissions: Final = TeamMemberPermissionChecks._get_list_of_route_enum_as_str(
+                TeamMemberPermissionChecks.get_permissions_for_team_member(team_table=team_table)
+            )
             raise ProxyException(
                 message=f"Team member does not have permissions for endpoint: {route}. You only have access to the following endpoints: {team_member_permissions} for team {team_table.team_id}. To create keys for this team, please ask your proxy admin to check the team member permission settings and update the settings to allow team member users to create keys.",
                 type=ProxyErrorTypes.team_member_permission_error,
@@ -152,7 +157,7 @@ class TeamMemberPermissionChecks:
         from fastapi import HTTPException
 
         from litellm.proxy.management_endpoints.key_management_endpoints import (
-            _get_caller_team_role,
+            get_caller_team_role,
         )
 
         # No-op when the request does not assign any access groups.
@@ -173,7 +178,7 @@ class TeamMemberPermissionChecks:
                 ),
             )
 
-        caller_team_role: Final = _get_caller_team_role(team_table=team_table, user_api_key_dict=user_api_key_dict)
+        caller_team_role: Final = get_caller_team_role(team_table=team_table, user_api_key_dict=user_api_key_dict)
 
         # Team admins always bypass (consistent with other member-permission checks).
         if caller_team_role == "admin":
@@ -209,7 +214,7 @@ class TeamMemberPermissionChecks:
         Returns True if the user belongs to the team that the key is assigned to
         """
         from litellm.proxy.management_endpoints.key_management_endpoints import (
-            _get_caller_team_role,
+            get_caller_team_role,
         )
         from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
@@ -223,7 +228,7 @@ class TeamMemberPermissionChecks:
             check_db_only=True,
         )
 
-        caller_team_role: Final = _get_caller_team_role(team_table=team_table, user_api_key_dict=user_api_key_dict)
+        caller_team_role: Final = get_caller_team_role(team_table=team_table, user_api_key_dict=user_api_key_dict)
         return caller_team_role is not None
 
     @staticmethod

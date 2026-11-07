@@ -1,4 +1,5 @@
 import React from "react";
+import i18n from "@/i18n/i18n";
 import {
   NUMERIC_CELL_CLASS,
   Table,
@@ -28,14 +29,14 @@ interface SimpleTableProps<T> {
 
 /**
  * Simple table component for forms and settings pages
- * For complex tables with sorting/filtering, use DataTable from view_logs
+ * For complex tables with sorting/filtering, use DataTable from shared/DataTable
  */
 export function SimpleTable<T>({
   data,
   columns,
   isLoading = false,
-  loadingMessage = "Loading...",
-  emptyMessage = "No data",
+  loadingMessage = i18n.t("simpleTable.loading"),
+  emptyMessage = i18n.t("simpleTable.empty"),
   getRowKey,
 }: SimpleTableProps<T>) {
   return (

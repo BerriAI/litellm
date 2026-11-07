@@ -18,12 +18,15 @@ def cache_key(
         return None
     value: Final = json.dumps(
         (
-            "pull-v1",
-            settings.github_api_url.rstrip("/"),
+            "pull-v2-branches",
+            settings.source_provider,
+            settings.source_api_url.rstrip("/"),
             context,
-            repo.casefold(),
+            repo.casefold() if settings.source_provider == "github" else repo,
             pull.number,
             head,
+            pull.head.ref if pull.head is not None else "",
+            pull.head.repo.full_name if pull.head is not None and pull.head.repo is not None else "",
             pull.title,
             pull.body or "",
             login.casefold(),
@@ -36,7 +39,8 @@ def cache_key(
 def settings_fingerprint(settings: ROISettings) -> str:
     value: Final = json.dumps(
         (
-            settings.github_api_url.rstrip("/"),
+            settings.source_provider,
+            settings.source_api_url.rstrip("/"),
             settings.repos,
             settings.estimator_model,
             settings.estimator_prompt,

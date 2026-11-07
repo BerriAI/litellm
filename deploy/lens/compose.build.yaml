@@ -1,6 +1,0 @@
-services:
-  lens-worker:
-    build:
-      context: ../..
-      dockerfile: deploy/lens/Dockerfile
-    image: litellm-lens-worker:local

@@ -1,7 +1,5 @@
 import asyncio
-import base64
 import json
-import os
 import re
 import signal
 import threading
@@ -10,23 +8,23 @@ from collections import deque
 from collections.abc import Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from functools import partial
 from pathlib import Path
 from typing import Final
 
 import anthropic
 import httpx
 import openai
-import psutil
 import pytest
 import yaml
 from integration._support.client import Gateway, eventually, gateway_from_environment, object_value, string_value
 from integration._support.database import read_rows
-from integration._support.process import OwnedProxy, owned_proxy_process
+from integration._support.process import OwnedProxy, owned_proxy_process, stop_root_process
 from integration._support.wire import Reply, Request, Wire, wire_server
 from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceRequest
 from opentelemetry.proto.common.v1.common_pb2 import AnyValue
 from pydantic import JsonValue, TypeAdapter
+
+pytestmark: Final = pytest.mark.shares_worker_state
 
 MARKER: Final = re.compile(rb"signoz-[0-9a-f]{32}")
 JSON: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
@@ -137,17 +135,6 @@ def _upstream(request: Request) -> Reply:
     return _chat_reply(f"chatcmpl-{marker}", stream)
 
 
-def _decoded_responses_id(identity: str) -> str:
-    try:
-        return base64.b64decode(identity.removeprefix("resp_").encode()).decode()
-    except (ValueError, UnicodeDecodeError):
-        return identity
-
-
-def _canonical_id(identity: str) -> str:
-    return _decoded_responses_id(identity).rpartition("response_id:")[2]
-
-
 def _sse_events(text: str) -> tuple[dict[str, JsonValue], ...]:
     return tuple(
         object_value(JSON.validate_json(line[6:]))
@@ -232,8 +219,7 @@ class Collector:
         return tuple(
             span
             for span in self.spans()
-            if RESPONSE_ID in span.attributes
-            and _canonical_id(span.attributes[RESPONSE_ID]) == _canonical_id(response_id)
+            if RESPONSE_ID in span.attributes and span.attributes[RESPONSE_ID] == response_id
         )
 
     def single_span(self, response_id: str, *, elsewhere: "Collector | None" = None) -> Span:
@@ -249,11 +235,8 @@ class Collector:
     def landed(self, response_ids: Sequence[str]) -> dict[str, int]:
         spans: Final = self.spans()
         return {
-            _canonical_id(identity): sum(
-                1
-                for span in spans
-                if RESPONSE_ID in span.attributes
-                and _canonical_id(span.attributes[RESPONSE_ID]) == _canonical_id(identity)
+            identity: sum(
+                1 for span in spans if RESPONSE_ID in span.attributes and span.attributes[RESPONSE_ID] == identity
             )
             for identity in response_ids
         }
@@ -394,7 +377,6 @@ class RigFactory:
                 "callbacks": ["signoz"],
                 "provider_url_destination_allowed_hosts": [self.tenant_sink.wire.url],
             },
-            "general_settings": {**object_value(loaded["general_settings"]), "disable_model_info_refresh": True},
         }
         path: Final = self.directory / f"signoz-{uuid.uuid4().hex}.yaml"
         path.write_text(yaml.safe_dump(config))
@@ -425,7 +407,7 @@ class RigFactory:
             yield Rig(owned.gateway, owned, model, self.provider, self.sink, self.tenant_sink)
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def rig(
     provider: Wire, operator_sink: Collector, tenant_sink: Collector, tmp_path_factory: pytest.TempPathFactory
 ) -> Iterator[Rig]:
@@ -435,7 +417,7 @@ def rig(
     yield from factory.start()
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def v2_rig(
     provider: Wire, operator_sink: Collector, tenant_sink: Collector, tmp_path_factory: pytest.TempPathFactory
 ) -> Iterator[Rig]:
@@ -449,7 +431,7 @@ def _assert_operator_span(rig: Rig, response_id: str, marker: str) -> Span:
     span: Final = rig.sink.single_span(response_id)
     assert span.target == "/v1/traces", span
     assert span.ingestion_key == OPERATOR_KEY, span
-    assert rig.tenant_sink.landed((response_id,)) == {_canonical_id(response_id): 0}
+    assert rig.tenant_sink.landed((response_id,)) == {response_id: 0}
     bodies: Final = rig.upstream_bodies(marker)
     assert len(bodies) == 1, bodies
     assert "signoz" not in json.dumps(bodies[0]).replace(marker, ""), bodies[0]
@@ -523,7 +505,7 @@ def test_responses_stream_raw_httpx_span_lands_once_after_the_stream_is_consumed
     marker: Final = _marker()
     response: Final = rig.proxy.request("POST", "/v1/responses", {"model": rig.model, "input": marker, "stream": True})
     assert response.status_code == 200, response.text
-    _assert_operator_span(rig, _responses_id(response, marker), marker)
+    _assert_operator_span(rig, _responses_id(response), marker)
 
 
 def test_v2_flag_on_still_delivers_the_operator_span_with_the_ingestion_key(v2_rig: Rig) -> None:
@@ -822,7 +804,7 @@ def _chat_id(response: httpx.Response) -> str:
     return next(iter(identities))
 
 
-def _responses_id(response: httpx.Response, marker: str) -> str:
+def _responses_id(response: httpx.Response) -> str:
     if not _is_event_stream(response):
         return _body_id(response)
     completed: Final = tuple(
@@ -831,7 +813,7 @@ def _responses_id(response: httpx.Response, marker: str) -> str:
         if event.get("type") == "response.completed"
     )
     assert len(completed) == 1 and completed[0].startswith("resp_"), response.text
-    return f"resp_{marker}"
+    return completed[0]
 
 
 def _message_id(response: httpx.Response) -> str:
@@ -853,7 +835,7 @@ def _burst(rig: Rig, count: int) -> tuple[tuple[int, str, str | None], ...]:
         stream: Final = index % 2 == 0
         path, body, identity_of = (
             ("/v1/chat/completions", {"model": rig.model, "messages": [{"role": "user", "content": marker}]}, _chat_id),
-            ("/v1/responses", {"model": rig.model, "input": marker}, partial(_responses_id, marker=marker)),
+            ("/v1/responses", {"model": rig.model, "input": marker}, _responses_id),
             (
                 "/v1/messages",
                 {"model": rig.model, "max_tokens": 16, "messages": [{"role": "user", "content": marker}]},
@@ -875,8 +857,8 @@ def _assert_exactly_once(rig: Rig, identities: Sequence[str]) -> None:
     landed: Final = eventually(
         lambda: rig.sink.landed(identities), lambda seen: all(count >= 1 for count in seen.values()), seconds=80
     )
-    assert landed == {_canonical_id(identity): 1 for identity in identities}, landed
-    charged: Final = frozenset(identity for identity in identities if not identity.startswith("resp_"))
+    assert landed == {identity: 1 for identity in identities}, landed
+    charged: Final = frozenset(identities)
     spend: Final = eventually(
         lambda: read_rows(
             'SELECT request_id FROM "LiteLLM_SpendLogs" WHERE request_id = ANY(%s::text[])',
@@ -916,28 +898,25 @@ def test_slow_sink_during_a_burst_lands_every_response_exactly_once(rig: Rig) ->
 
 
 def test_killing_one_of_two_workers_mid_burst_keeps_serving_and_never_duplicates_a_span(rig: Rig) -> None:
-    root: Final = psutil.Process(rig.process.process.pid)
-    workers: Final = eventually(
-        lambda: tuple(child for child in root.children() if "resource_tracker" not in " ".join(child.cmdline())),
-        lambda found: len(found) == 2,
-        seconds=30,
-    )
+    workers: Final = eventually(rig.process.worker_pids, lambda found: len(found) == 2, seconds=30)
     markers: Final = tuple(_marker() for _ in range(24))
 
-    def one(index: int) -> tuple[str, str | None]:
-        if index == 8:
-            os.kill(workers[0].pid, signal.SIGKILL)
-        try:
-            response: Final = rig.chat(markers[index])
-            return f"chatcmpl-{markers[index]}", None if response.status_code == 200 else response.text
-        except httpx.HTTPError as error:
-            return f"chatcmpl-{markers[index]}", repr(error)
+    with rig.process.replacing_worker(min(workers)) as kill:
 
-    with ThreadPoolExecutor(max_workers=6) as pool:
-        results: Final = tuple(pool.map(one, range(24)))
-    assert rig.process.process.poll() is None, "Proxy root exited after a worker was killed"
-    after: Final = rig.chat(_marker())
-    assert after.status_code == 200, after.text
+        def one(index: int) -> tuple[str, str | None]:
+            if index == 8:
+                kill()
+            try:
+                response: Final = rig.chat(markers[index])
+                return f"chatcmpl-{markers[index]}", None if response.status_code == 200 else response.text
+            except httpx.HTTPError as error:
+                return f"chatcmpl-{markers[index]}", repr(error)
+
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            results: Final = tuple(pool.map(one, range(24)))
+        assert rig.process.process.poll() is None, "Proxy root exited after a worker was killed"
+        after: Final = rig.chat(_marker())
+        assert after.status_code == 200, after.text
     rig.sink.single_span(_body_id(after))
     failures: Final = tuple(error for _, error in results if error)
     assert all(error.startswith(("ReadError(", "RemoteProtocolError(", "ConnectError(")) for error in failures), (
@@ -954,7 +933,6 @@ def test_killing_one_of_two_workers_mid_burst_keeps_serving_and_never_duplicates
 def test_terminating_the_proxy_right_after_a_burst_flushes_every_span_before_exit(
     provider: Wire, operator_sink: Collector, tenant_sink: Collector, tmp_path_factory: pytest.TempPathFactory
 ) -> None:
-    pytest.skip("BUG: spans still queued in the OTel batch processor at SIGTERM never reach the sink (4 of 10 lost)")
     factory: Final = RigFactory(
         provider,
         operator_sink,
@@ -970,8 +948,8 @@ def test_terminating_the_proxy_right_after_a_burst_flushes_every_span_before_exi
     assert all(response.status_code == 200 for response in responses), [response.text for response in responses]
     identities: Final = tuple(_body_id(response) for response in responses)
     pending_at_signal: Final = rig.sink.landed(identities)
-    rig.process.process.terminate()
-    assert rig.process.process.wait(timeout=40) in (0, -signal.SIGTERM)
+    assert stop_root_process(rig.process.process), "Proxy did not exit within the graceful stop budget"
+    assert rig.process.process.returncode in (0, -signal.SIGTERM)
     with pytest.raises(httpx.ConnectError):
         next(started)
     landed: Final = rig.sink.landed(identities)

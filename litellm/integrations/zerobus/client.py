@@ -14,7 +14,7 @@ from collections.abc import Callable, Mapping, Sequence
 from typing import Final
 
 import httpx
-from pydantic import BaseModel, ValidationError
+from pydantic import ValidationError
 
 import litellm
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
@@ -25,12 +25,13 @@ from litellm.types.integrations.zerobus import (
     ZerobusConnection,
     ZerobusIngestFailure,
 )
+from litellm.types.llms.base import LiteLLMBaseModel
 
 TOKEN_PATH: Final = "/oidc/v1/token"
 OAUTH_SCOPE: Final = "all-apis"
 
 
-class _TokenResponse(BaseModel):
+class _TokenResponse(LiteLLMBaseModel):
     access_token: str
     expires_in: float = 3600
 

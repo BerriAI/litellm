@@ -34,7 +34,9 @@ PUBLIC_NAMES = [
     "ClaudeCodeOptions",
     "CodexOptions",
     "OpenCodeOptions",
+    "PiOptions",
     "DeepAgentsOptions",
+    "ToolLoopOptions",
     "HarnessError",
     "CapabilityUnsupported",
     "OptionsMismatch",
@@ -89,7 +91,9 @@ def test_adapter_registry_paths_cover_every_harness():
 def test_litellm_agent_is_top_level_and_lazy():
     code = (
         "import sys, litellm; assert 'litellm.harness' not in sys.modules; "
-        "assert litellm.agent is litellm.harness.agent; assert litellm.Harness.CODEX.value == 'codex'"
+        "assert litellm.agent is litellm.harness.agent; "
+        "assert litellm.Harness.CODEX.value == 'codex'; "
+        "assert litellm.ToolLoopOptions is litellm.harness.ToolLoopOptions"
     )
     out = run_child_interpreter(code, timeout=120)
     assert out.returncode == 0, out.stderr

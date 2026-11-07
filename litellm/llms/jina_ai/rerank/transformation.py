@@ -6,10 +6,11 @@ Why separate file? Make it easy to see how transformation works
 Docs - https://jina.ai/reranker
 """
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from typing import Final
 
 from httpx import URL, Response
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm._uuid import uuid
 from litellm.llms.base_llm.chat.transformation import LiteLLMLoggingObj
@@ -22,6 +23,12 @@ from litellm.types.rerank import (
     RerankTokens,
 )
 from litellm.types.utils import ModelInfo
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_JSON_OBJECTS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=ConfigDict(hide_input_in_errors=True))
+_BILLED_UNITS: Final = TypeAdapter(RerankBilledUnits)
+_TOKENS: Final = TypeAdapter(RerankTokens)
+_STR: Final = TypeAdapter(str)
 
 
 class JinaAIRerankConfig(BaseRerankConfig):
@@ -100,13 +107,11 @@ class JinaAIRerankConfig(BaseRerankConfig):
 
         logging_obj.post_call(original_response=raw_response.text)
 
-        _json_response: Final = raw_response.json()
+        _json_response: Final = _JSON_OBJECT.validate_python(raw_response.json())
 
-        _billed_units: Final = RerankBilledUnits(**_json_response.get("usage", {}))
-        _tokens: Final = RerankTokens(**_json_response.get("usage", {}))
-        rerank_meta: Final = RerankResponseMeta(billed_units=_billed_units, tokens=_tokens)
+        usage: Final = _JSON_OBJECT.validate_python(_json_response.get("usage", {}))
 
-        _results: Final[list[dict] | None] = _json_response.get("results")
+        _results: Final = _json_response.get("results")
 
         if _results is None:
             raise ValueError(f"No results found in the response={_json_response}")
@@ -115,7 +120,7 @@ class JinaAIRerankConfig(BaseRerankConfig):
         # Jina AI returns: {"index": 0, "relevance_score": 0.72, "document": "hello"}
         # LiteLLM expects: {"index": 0, "relevance_score": 0.72, "document": {"text": "hello"}}
         transformed_results: Final = []
-        for result in _results:
+        for result in _JSON_OBJECTS.validate_python(_results):
             transformed_result = {
                 "index": result["index"],
                 "relevance_score": result["relevance_score"],
@@ -128,8 +133,12 @@ class JinaAIRerankConfig(BaseRerankConfig):
                 transformed_result["document"] = result["document"]
             transformed_results.append(transformed_result)
 
+        _billed_units: Final = _BILLED_UNITS.validate_python(usage)
+        _tokens: Final = _TOKENS.validate_python(usage)
+        rerank_meta: Final = RerankResponseMeta(billed_units=_billed_units, tokens=_tokens)
+
         return RerankResponse(
-            id=_json_response.get("id") or str(uuid.uuid4()),
+            id=_STR.validate_python(_json_response.get("id") or str(uuid.uuid4())),
             results=transformed_results,
             meta=rerank_meta,
         )  # Return response

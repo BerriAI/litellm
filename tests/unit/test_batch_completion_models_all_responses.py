@@ -1,6 +1,11 @@
 import concurrent.futures
+import json
+from typing import Final
 
+import httpx
 import litellm
+import pytest
+import respx
 from litellm.batch_completion.main import batch_completion_models_all_responses
 
 
@@ -120,3 +125,51 @@ def test_batch_completion_models_all_responses_accepts_single_model_string(monke
 
     assert called_models == ["model-a"]
     assert responses == [{"model": "model-a"}]
+
+
+def test_batch_completion_models_all_responses_returns_each_model_response(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+
+    def _response_for_model(request: httpx.Request) -> httpx.Response:
+        requested_model: Final = str(json.loads(request.content)["model"])
+        return httpx.Response(
+            200,
+            json={
+                "id": f"chatcmpl-{requested_model}",
+                "object": "chat.completion",
+                "created": 1,
+                "model": requested_model,
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": f"answer from {requested_model}"},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+
+    route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        side_effect=_response_for_model
+    )
+    models: Final = ("openai/model-a", "openai/model-b")
+    responses: Final = batch_completion_models_all_responses(
+        models=models,
+        messages=[{"role": "user", "content": "hello"}],
+        api_key="test-key",
+    )
+
+    assert route.call_count == 2
+    assert tuple(sorted(str(json.loads(call.request.content)["model"]) for call in route.calls)) == (
+        "model-a",
+        "model-b",
+    )
+    assert tuple(sorted(response.model for response in responses)) == ("model-a", "model-b")
+    assert tuple(sorted(response.choices[0].message.content for response in responses)) == (
+        "answer from model-a",
+        "answer from model-b",
+    )

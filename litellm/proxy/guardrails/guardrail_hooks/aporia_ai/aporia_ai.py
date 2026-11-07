@@ -11,15 +11,17 @@ import sys
 sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import json
 import sys
-from typing import TYPE_CHECKING, Any, Final, Literal
+from typing import TYPE_CHECKING, Final, Literal
 
 from fastapi import HTTPException
+from pydantic import TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
+from litellm.litellm_core_utils.core_helpers import decoded_json_object
 from litellm.litellm_core_utils.logging_utils import (
     convert_litellm_response_object_to_str,
 )
@@ -31,6 +33,7 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.guardrails import GuardrailEventHooks
 
 GUARDRAIL_NAME: Final = "aporia"
+_DECODED_JSON: Final = TypeAdapter(object)
 
 if TYPE_CHECKING:
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
@@ -70,7 +73,7 @@ class AporiaGuardrail(CustomGuardrail):
         return new_messages
 
     async def prepare_aporia_request(self, new_messages: list[dict], response_string: str | None = None) -> dict:
-        data: Final[dict[str, Any]] = {}
+        data: Final[dict[str, object]] = {}
         if new_messages is not None:
             data["messages"] = new_messages
         if response_string is not None:
@@ -128,8 +131,8 @@ class AporiaGuardrail(CustomGuardrail):
         verbose_proxy_logger.debug("Aporia AI response: %s", response.text)
         if response.status_code == 200:
             # check if the response was flagged
-            _json_response: Final = response.json()
-            action: str = _json_response.get("action")  # possible values are modify, passthrough, block, rephrase
+            _json_response: Final = decoded_json_object(_DECODED_JSON.validate_python(response.json()))
+            action: Final = _json_response.get("action")  # possible values are modify, passthrough, block, rephrase
             if action == "block":
                 raise HTTPException(
                     status_code=400,

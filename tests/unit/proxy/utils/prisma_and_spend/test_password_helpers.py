@@ -4,6 +4,7 @@ Symbols pinned here:
   - ``hash_token``
   - ``hash_password``
   - ``verify_password``
+  - ``run_off_loop_if_fips``
   - ``migrate_passwords_to_scrypt_async``
   - ``_hash_token_if_needed``
   - ``PrismaClient._is_sha256_hex`` (a nested helper inside
@@ -13,20 +14,31 @@ Symbols pinned here:
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
+import ssl
+import threading
 from types import SimpleNamespace
-from typing import List
+from typing import Final, List
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from litellm.proxy.utils import (
-    _hash_token_if_needed,
+    hash_token_if_needed,
     hash_password,
     hash_token,
     migrate_passwords_to_scrypt_async,
+    run_off_loop_if_fips,
     verify_password,
 )
+
+PASSWORD: Final = "Seed-Lamp-4-River"
+PBKDF2_ROW: Final = "pbkdf2:AAECAwQFBgcICQoLDA0OD+uxhNqRo/3ZFLEaKARqFBT+N3Kqek/SGM/5AvocSN0T"
+EIGHT_CHARACTER_PBKDF2_ROW: Final = "pbkdf2:AAECAwQFBgcICQoLDA0ODxhpezknSiGV0cY8wgaSXYf/xzxcPw49uGdOt/TBvPPH"
+SEVEN_CHARACTER_PBKDF2_ROW: Final = "pbkdf2:AAECAwQFBgcICQoLDA0ODxFIwl/XKIAeyWEnfqz8H9vNQX4uo7/u1HiJhB7Ro+N7"
+SCRYPT_ROW: Final = "scrypt:AAECAwQFBgcICQoLDA0OD7hIwlM/k8ytnffjFDt6AuO+BvqtmZvDkWXJP+A3bf0N"
+SHA256_ROW: Final = hashlib.sha256(PASSWORD.encode()).hexdigest()
 
 
 def test_hash_token_returns_sha256_hex_of_input() -> None:
@@ -116,9 +128,9 @@ def test_hash_token_if_needed_handles_sk_prefix() -> None:
     already_hashed = hashlib.sha256(plain.encode()).hexdigest()
     not_a_secret = "token-without-sk-prefix"
     actual = {
-        "sk_input_is_hashed": _hash_token_if_needed(plain) == already_hashed,
-        "non_sk_passthrough": _hash_token_if_needed(not_a_secret) == not_a_secret,
-        "double_hash_stable": _hash_token_if_needed(already_hashed) == already_hashed,
+        "sk_input_is_hashed": hash_token_if_needed(plain) == already_hashed,
+        "non_sk_passthrough": hash_token_if_needed(not_a_secret) == not_a_secret,
+        "double_hash_stable": hash_token_if_needed(already_hashed) == already_hashed,
     }
     assert actual == {
         "sk_input_is_hashed": True,
@@ -129,7 +141,7 @@ def test_hash_token_if_needed_handles_sk_prefix() -> None:
 
 def test_hash_token_if_needed_error_on_non_string() -> None:
     with pytest.raises(AttributeError):
-        _hash_token_if_needed(None)  # type: ignore[arg-type]
+        hash_token_if_needed(None)  # pyright: ignore[reportArgumentType]  # intentional invalid input checks the error
 
 
 # ---------------------------------------------------------------------------
@@ -191,12 +203,10 @@ async def test_migrate_passwords_upgrades_only_plaintext_rows() -> None:
     result = await migrate_passwords_to_scrypt_async(pc)
 
     updated_user_ids = sorted(
-        call.kwargs["where"]["user_id"]
-        for call in pc.db.litellm_usertable.update.await_args_list
+        call.kwargs["where"]["user_id"] for call in pc.db.litellm_usertable.update.await_args_list
     )
     new_password_prefixes = sorted(
-        call.kwargs["data"]["password"][:7]
-        for call in pc.db.litellm_usertable.update.await_args_list
+        call.kwargs["data"]["password"][:7] for call in pc.db.litellm_usertable.update.await_args_list
     )
     outcome = {
         "message": result,
@@ -216,8 +226,136 @@ async def test_migrate_passwords_upgrades_only_plaintext_rows() -> None:
 async def test_migrate_passwords_raises_on_db_failure() -> None:
     pc = MagicMock()
     pc.db = MagicMock()
-    pc.db.litellm_usertable.find_many = AsyncMock(
-        side_effect=RuntimeError("db unavailable")
-    )
+    pc.db.litellm_usertable.find_many = AsyncMock(side_effect=RuntimeError("db unavailable"))
     with pytest.raises(RuntimeError, match="db unavailable"):
         await migrate_passwords_to_scrypt_async(pc)
+
+
+@pytest.mark.usefixtures("fips_openssl")
+def test_a_fips_openssl_without_fips_mode_stays_on_scrypt() -> None:
+    assert hash_password(PASSWORD).startswith("scrypt:")
+
+
+@pytest.mark.usefixtures("fips_mode")
+def test_fips_hash_is_pbkdf2_sha256_at_600k_salted_by_openssl(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(ssl, "RAND_bytes", lambda size: bytes(range(size)))
+    assert hash_password(PASSWORD) == PBKDF2_ROW
+
+
+@pytest.mark.usefixtures("fips_mode")
+def test_fips_hash_salts_every_row_and_verifies() -> None:
+    first: Final = hash_password(PASSWORD)
+    assert first != hash_password(PASSWORD)
+    assert verify_password(PASSWORD, first)
+
+
+@pytest.mark.usefixtures("fips_mode")
+def test_fips_verify_needs_the_right_password_of_at_least_eight_characters() -> None:
+    outcome: Final = {
+        "right": verify_password(PASSWORD, PBKDF2_ROW),
+        "wrong": verify_password("Seed-Lamp-4-Rivet", PBKDF2_ROW),
+        "lone_surrogate": verify_password("\ud800" + PASSWORD, PBKDF2_ROW),
+        "eight_characters": verify_password("Seed-Lam", EIGHT_CHARACTER_PBKDF2_ROW),
+        "seven_characters": verify_password("Seed-La", SEVEN_CHARACTER_PBKDF2_ROW),
+    }
+    assert outcome == {
+        "right": True,
+        "wrong": False,
+        "lone_surrogate": False,
+        "eight_characters": True,
+        "seven_characters": False,
+    }
+
+
+@pytest.mark.usefixtures("fips_mode")
+@pytest.mark.parametrize(
+    "row",
+    [
+        SCRYPT_ROW,
+        SHA256_ROW,
+        PASSWORD,
+        "pbkdf2:",
+        PBKDF2_ROW[:-1],
+        PBKDF2_ROW + "A",
+        PBKDF2_ROW + "\n",
+        "pbkdf2:" + "@" * 64,
+        "pbkdf2:sha256:1000:AAECAwQFBgcICQoLDA0ODw==:67GE2pGj/dkUsRooBGoUFP43cqp6T9IYz/kC+hxI3RM=",
+    ],
+    ids=[
+        "scrypt",
+        "sha256",
+        "plaintext",
+        "prefix-only",
+        "short",
+        "long",
+        "newline",
+        "not-base64",
+        "stored-iterations",
+    ],
+)
+def test_fips_refuses_any_other_row_with_one_error_that_hides_it(caplog: pytest.LogCaptureFixture, row: str) -> None:
+    with caplog.at_level("ERROR", logger="LiteLLM Proxy"):
+        assert verify_password(PASSWORD, row) is False
+    assert [record.levelname for record in caplog.records] == ["ERROR"]
+    assert row not in caplog.text
+
+
+@pytest.mark.parametrize(
+    "row, verifies",
+    [(SCRYPT_ROW, True), (SHA256_ROW, True), (PBKDF2_ROW, False)],
+    ids=["scrypt", "sha256", "pbkdf2"],
+)
+def test_standard_mode_verifies_the_rows_it_always_did(row: str, verifies: bool) -> None:
+    assert verify_password(PASSWORD, row) is verifies
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fips_mode")
+async def test_fips_boot_migration_writes_no_row() -> None:
+    pc: Final = MagicMock()
+    pc.db.litellm_usertable.find_many = AsyncMock(
+        return_value=[_make_user("plaintext-user", PASSWORD), _make_user("fips-user", PBKDF2_ROW)]
+    )
+    pc.db.litellm_usertable.update = AsyncMock()
+
+    await migrate_passwords_to_scrypt_async(pc)
+
+    pc.db.litellm_usertable.update.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_standard_boot_migration_hashes_a_plaintext_row_but_not_a_pbkdf2_row() -> None:
+    pc: Final = MagicMock()
+    pc.db.litellm_usertable.find_many = AsyncMock(
+        return_value=[_make_user("plaintext-user", "pbkdf2:plaintext"), _make_user("fips-user", PBKDF2_ROW)]
+    )
+    pc.db.litellm_usertable.update = AsyncMock()
+
+    await migrate_passwords_to_scrypt_async(pc)
+
+    updated: Final = pc.db.litellm_usertable.update.await_args_list
+    assert [update.kwargs["where"]["user_id"] for update in updated] == ["plaintext-user"]
+
+
+def _on_event_loop() -> bool:
+    return asyncio._get_running_loop() is not None
+
+
+@pytest.mark.asyncio
+async def test_password_kdf_runs_on_the_event_loop_in_standard_mode() -> None:
+    assert await run_off_loop_if_fips(_on_event_loop) is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fips_mode")
+async def test_password_kdfs_leave_the_event_loop_on_a_single_thread_in_fips_mode() -> None:
+    release_first: Final = threading.Event()
+    first_kdf: Final = asyncio.ensure_future(run_off_loop_if_fips(lambda: release_first.wait(timeout=5)))
+    second_kdf: Final = asyncio.ensure_future(run_off_loop_if_fips(_on_event_loop))
+    await asyncio.sleep(0)
+    kdf_threads: Final = [thread for thread in threading.enumerate() if thread.name.startswith("fips-password-kdf")]
+    release_first.set()
+
+    assert len(kdf_threads) == 1
+    assert await first_kdf is True
+    assert await second_kdf is False

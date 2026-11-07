@@ -1,7 +1,7 @@
 """The opt-in REPLICA IDENTITY FULL step, without a database.
 
 The behavior against real Postgres is covered by
-tests/proxy_migration_tests/test_replica_identity_full.py; these pin the two
+tests/integration/database/migrations/test_replica_identity_full.py; these pin the two
 things that hold with no database at all: the statement handed to the Prisma
 CLI, and the promise that no failure of this optional step escapes into a
 migration run that already succeeded.
@@ -83,3 +83,48 @@ def test_an_unusable_migrations_dir_skips_the_step_instead_of_killing_the_run(
     monkeypatch.setenv("LITELLM_MIGRATION_DIR", str(blocker / "migrations"))
 
     assert ProxyExtrasDBManager.apply_replica_identity_full_if_requested() is False
+
+
+def test_reports_an_unrunnable_prisma_cli_without_raising(tmp_path):
+    """A deployment without the Prisma CLI on PATH must still finish its
+    migration run instead of dying on the optional replication step."""
+    assert (
+        apply_replica_identity_full(
+            schema_path=str(tmp_path / "schema.prisma"),
+            prisma_command=str(tmp_path / "no-such-prisma"),
+            prisma_env={},
+        )
+        is False
+    )
+
+
+def test_setup_database_applies_after_a_successful_migration_run(monkeypatch):
+    applied = []
+    monkeypatch.setattr(
+        ProxyExtrasDBManager, "_run_migrations", staticmethod(lambda **kwargs: True)
+    )
+    monkeypatch.setattr(
+        ProxyExtrasDBManager,
+        "apply_replica_identity_full_if_requested",
+        staticmethod(lambda: applied.append(True)),
+    )
+
+    assert ProxyExtrasDBManager.setup_database(use_migrate=True) is True
+    assert applied == [True]
+
+
+def test_setup_database_skips_replica_identity_when_migrations_fail(monkeypatch):
+    applied = []
+    monkeypatch.setattr(
+        ProxyExtrasDBManager, "_run_migrations", staticmethod(lambda **kwargs: False)
+    )
+    monkeypatch.setattr(
+        ProxyExtrasDBManager,
+        "apply_replica_identity_full_if_requested",
+        staticmethod(lambda: applied.append(True)),
+    )
+
+    assert ProxyExtrasDBManager.setup_database(use_migrate=True) is False
+    assert applied == []
+
+

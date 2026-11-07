@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import userEvent from "@testing-library/user-event";
 import { FormProvider, useForm } from "react-hook-form";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { renderWithProviders } from "../../tests/test-utils";
 import { alertingSettingsCall, getCallbackConfigsCall, getCallbacksCall, setCallbacksCall } from "./networking";
 import Settings, { backendCallbackLogoSrc, CallbackSelector } from "./settings";
 
@@ -77,15 +78,21 @@ describe("Settings", () => {
   });
 
   it("should render the logging callbacks tab when access token is provided", async () => {
-    render(<Settings {...defaultProps} />);
+    renderWithProviders(<Settings {...defaultProps} />);
 
     await waitFor(() => {
       expect(screen.getByText("Active Logging Callbacks")).toBeInTheDocument();
     });
   });
 
+  it("opens the tab selected by the URL", async () => {
+    renderWithProviders(<Settings {...defaultProps} />, { searchParams: { tab: "alerting-types" } });
+
+    expect(await screen.findByRole("tab", { name: "Alerting Types" })).toHaveAttribute("aria-selected", "true");
+  });
+
   it("should display additional settings tabs", async () => {
-    render(<Settings {...defaultProps} />);
+    renderWithProviders(<Settings {...defaultProps} />);
 
     await waitFor(() => {
       expect(screen.getByText("CloudZero Cost Tracking")).toBeInTheDocument();
@@ -96,7 +103,7 @@ describe("Settings", () => {
   });
 
   it("should load callback configs from the backend when access token is provided", async () => {
-    render(<Settings {...defaultProps} />);
+    renderWithProviders(<Settings {...defaultProps} />);
 
     await waitFor(() => {
       expect(mockGetCallbackConfigsCall).toHaveBeenCalledWith(defaultProps.accessToken);
@@ -140,7 +147,7 @@ describe("Settings", () => {
     ]);
 
     const user = userEvent.setup();
-    render(<Settings {...defaultProps} />);
+    renderWithProviders(<Settings {...defaultProps} />);
 
     await waitFor(() => {
       expect(screen.getByText("Active Logging Callbacks")).toBeInTheDocument();
@@ -250,7 +257,7 @@ describe("Settings", () => {
 
   const openOtelEditModal = async () => {
     const user = userEvent.setup();
-    render(<Settings {...defaultProps} />);
+    renderWithProviders(<Settings {...defaultProps} />);
     await user.click(await screen.findByTestId("callback-actions-otel-success"));
     await user.click(await screen.findByTestId("callback-action-edit"));
     return user;
@@ -340,7 +347,7 @@ describe("Settings", () => {
 
   const openS3EditModal = async (callbackName = "s3") => {
     const user = userEvent.setup();
-    render(<Settings {...defaultProps} />);
+    renderWithProviders(<Settings {...defaultProps} />);
     await user.click(await screen.findByTestId(`callback-actions-${callbackName}-success`));
     await user.click(await screen.findByTestId("callback-action-edit"));
     return user;
@@ -439,6 +446,40 @@ describe("Settings", () => {
     });
   });
 
+  it("should post the saved s3_v2 folder partitioning when unchanged", async () => {
+    mockS3Callback({ S3_LOG_PROMPTS_ONLY: null, S3_PARTITION_GRANULARITY: "hour" }, "s3_v2");
+    const user = await openS3EditModal("s3_v2");
+
+    const dialog = screen.getByRole("dialog");
+    const partitioning = await within(dialog).findByRole("combobox", { name: "Folder Partitioning" });
+    expect(partitioning).toHaveTextContent("hour");
+
+    await user.click(await within(dialog).findByRole("button", { name: "Save Changes" }));
+    await waitFor(() => {
+      expect(vi.mocked(setCallbacksCall)).toHaveBeenCalledTimes(1);
+    });
+    const [, payload] = vi.mocked(setCallbacksCall).mock.calls[0];
+    expect(payload.environment_variables.s3_partition_granularity).toBe("hour");
+  });
+
+  it("should leave an unset s3_v2 folder partitioning out of the save payload", async () => {
+    mockS3Callback({ S3_LOG_PROMPTS_ONLY: null, S3_PARTITION_GRANULARITY: null }, "s3_v2");
+    const user = await openS3EditModal("s3_v2");
+
+    const dialog = screen.getByRole("dialog");
+    const partitioning = await within(dialog).findByRole("combobox", { name: "Folder Partitioning" });
+    expect(partitioning).toHaveTextContent("Select folder partitioning");
+    expect(partitioning).not.toHaveTextContent(/day|hour/i);
+
+    await user.click(await within(dialog).findByRole("button", { name: "Save Changes" }));
+    await waitFor(() => {
+      expect(vi.mocked(setCallbacksCall)).toHaveBeenCalledTimes(1);
+    });
+    const [, payload] = vi.mocked(setCallbacksCall).mock.calls[0];
+    expect(Object.keys(payload.environment_variables)).not.toContain("s3_partition_granularity");
+    expect(payload.environment_variables.callback).toBe("s3_v2");
+  });
+
   it("should not offer folder partitioning for the legacy s3 callback, which cannot honour it", async () => {
     mockS3Callback({ S3_LOG_PROMPTS_ONLY: null, S3_PARTITION_GRANULARITY: null });
     const user = await openS3EditModal();
@@ -458,7 +499,7 @@ describe("Settings", () => {
 
   it("should send the typed webhook url for an alert type when the alerting tab is saved", async () => {
     const user = userEvent.setup();
-    render(<Settings {...defaultProps} />);
+    renderWithProviders(<Settings {...defaultProps} />);
 
     await user.click(await screen.findByRole("tab", { name: "Alerting Types" }));
 
@@ -491,7 +532,7 @@ describe("Settings", () => {
       }),
     );
 
-    render(<Settings {...defaultProps} />);
+    renderWithProviders(<Settings {...defaultProps} />);
 
     expect(screen.getAllByTestId("skeleton-row").length).toBeGreaterThan(0);
 
@@ -506,7 +547,7 @@ describe("Settings", () => {
   });
 
   it("should resolve loading without fetching when the user id is missing", async () => {
-    render(<Settings {...defaultProps} userID={null as unknown as string} />);
+    renderWithProviders(<Settings {...defaultProps} userID={null as unknown as string} />);
 
     await waitFor(() => {
       expect(screen.queryByTestId("skeleton-row")).not.toBeInTheDocument();
@@ -516,7 +557,7 @@ describe("Settings", () => {
   });
 
   it("should display CloudZero Cost Tracking tab", async () => {
-    render(<Settings {...defaultProps} />);
+    renderWithProviders(<Settings {...defaultProps} />);
 
     await waitFor(() => {
       expect(screen.getByText("Active Logging Callbacks")).toBeInTheDocument();

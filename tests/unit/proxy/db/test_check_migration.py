@@ -1,6 +1,12 @@
+import json
+import logging
+import sys
+from typing import Final
 
 import pytest
 
+import litellm
+from litellm._logging import turn_on_json, verbose_logger, verbose_proxy_logger
 
 
 def test_check_migration_out_of_sync(mocker):
@@ -69,3 +75,33 @@ def test_migrate_diff_without_the_prisma_runner_skips_instead_of_crashing_boot(m
     monkeypatch.setitem(sys.modules, "litellm_proxy_extras.prisma_toolchain", None)
 
     assert check_prisma_schema_diff_helper("postgresql://u:p@localhost:9/x") == (False, [])
+
+
+def test_a_skipped_migration_diff_is_one_json_record_in_json_mode(
+    monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]
+) -> None:
+    """
+    With json_logs on, the notice that the migration diff was skipped is one WARNING record on stdout,
+    also while the loggers sit at WARNING, as they do at boot without LITELLM_LOG.
+    """
+    from litellm.proxy.db.check_migration import check_prisma_schema_diff_helper
+
+    monkeypatch.setitem(sys.modules, "litellm_proxy_extras.prisma_toolchain", None)
+    monkeypatch.setattr(litellm, "json_logs", True)
+    monkeypatch.setattr(sys, "excepthook", sys.excepthook)
+    turn_on_json()
+    verbose_logger.setLevel(logging.WARNING)
+    verbose_proxy_logger.setLevel(logging.WARNING)
+
+    assert check_prisma_schema_diff_helper("postgresql://u:p@localhost:9/x") == (False, [])
+
+    out, err = capfd.readouterr()
+    assert err == ""
+    lines: Final = [raw for raw in out.splitlines() if raw.strip()]
+    assert len(lines) == 1, lines
+    record: Final = json.loads(lines[0])
+    assert (record["level"], record["message"]) == (
+        "WARNING",
+        "Skipping the migration diff: litellm-proxy-extras has no Prisma runner. "
+        "Error: import of litellm_proxy_extras.prisma_toolchain halted; None in sys.modules",
+    )

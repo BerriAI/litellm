@@ -13,6 +13,8 @@ from integration._support.process import owned_proxy
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 _ATTACK_MARKER: Final = "synthetic-attack-marker"
 
 _AZURE_TARGET_PREFIX: Final = "/contentsafety/text:shieldPrompt?api-version="

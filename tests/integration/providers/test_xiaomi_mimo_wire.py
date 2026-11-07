@@ -136,7 +136,6 @@ def test_xiaomi_mimo_nonstream_surfaces_reasoning_and_charges_registry_price(gat
                     "role": "assistant",
                     "content": "43",
                     "reasoning_content": "17 plus 26 is 43.",
-                    "provider_specific_fields": {"refusal": None},
                 },
                 "provider_specific_fields": {},
             }
@@ -250,7 +249,6 @@ def test_xiaomi_mimo_tool_call_is_forwarded_and_returned(gateway: Gateway) -> No
                     "content": None,
                     "reasoning_content": "Need the tool.",
                     "tool_calls": [tool_call],
-                    "provider_specific_fields": {"refusal": None},
                 },
                 "provider_specific_fields": {},
             }

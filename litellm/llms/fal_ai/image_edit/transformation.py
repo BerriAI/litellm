@@ -1,14 +1,12 @@
-import base64
-import os
 from collections.abc import Mapping
-from pathlib import Path
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Final
 
 import httpx
 from httpx._types import RequestFiles
+from pydantic import ConfigDict, TypeAdapter
 
-from litellm.images.utils import ImageEditRequestUtils
+from litellm.images.utils import image_to_data_url
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.llms.fal_ai.image_generation.gpt_image_2_transformation import (
     map_gpt_image_quality,
@@ -23,6 +21,8 @@ from litellm.types.utils import FileTypes, ImageResponse
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
+_JSON_VALUE: Final = TypeAdapter(object)
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 DEFAULT_BASE_URL: Final[str] = "https://fal.run"
 EDIT_SUFFIX: Final[str] = "/edit"
 SUPPORTED_OPENAI_PARAMS: Final[tuple[str, ...]] = ("background", "mask", "n", "quality", "size")
@@ -34,39 +34,6 @@ PARAM_TRANSLATION: Final[Mapping[str, str]] = MappingProxyType(
         "size": "image_size",
     }
 )
-
-
-@runtime_checkable
-class _SeekableBinaryReader(Protocol):
-    def tell(self) -> int: ...
-
-    def seek(self, offset: int) -> int: ...
-
-    def read(self) -> bytes: ...
-
-
-def _read_image_bytes(image: object) -> bytes:
-    if isinstance(image, bytes):
-        return image
-    if isinstance(image, tuple):
-        return _read_image_bytes(image[1])
-    if isinstance(image, os.PathLike):
-        return Path(image).read_bytes()
-    if isinstance(image, _SeekableBinaryReader):
-        position: Final = image.tell()
-        image.seek(0)
-        data: Final = image.read()
-        image.seek(position)
-        return data
-    raise ValueError(f"Unsupported image type for Fal AI image edit: {type(image).__name__}")
-
-
-def to_data_url(image: object) -> str:
-    if isinstance(image, str):
-        return image
-    image_bytes: Final = _read_image_bytes(image)
-    mime_type: Final = ImageEditRequestUtils.get_image_content_type(image_bytes)
-    return f"data:{mime_type};base64,{base64.b64encode(image_bytes).decode('utf-8')}"
 
 
 def _first(value: object) -> object:
@@ -143,14 +110,14 @@ class FalAIImageEditConfig(BaseImageEditConfig):
             raise ValueError("Fal AI image edit requires at least one input image")
         mask: Final = _first(image_edit_optional_request_params.get("mask"))
         mask_field: Final[Mapping[str, str]] = (
-            MappingProxyType({"mask_url": to_data_url(mask)}) if mask is not None else MappingProxyType({})
+            MappingProxyType({"mask_url": image_to_data_url(mask)}) if mask is not None else MappingProxyType({})
         )
         provider_params: Final[Mapping[str, object]] = MappingProxyType(
             {key: value for key, value in image_edit_optional_request_params.items() if key != "mask"}
         )
         request_body: Final[dict[str, object]] = {  # mutable-ok: base class contract returns a dict
             "prompt": prompt,
-            "image_urls": tuple(to_data_url(img) for img in images),
+            "image_urls": tuple(image_to_data_url(img) for img in images),
             **mask_field,
             **provider_params,
         }
@@ -163,7 +130,7 @@ class FalAIImageEditConfig(BaseImageEditConfig):
         logging_obj: "LiteLLMLoggingObj",
     ) -> ImageResponse:
         try:
-            response_json: Final = raw_response.json()
+            response_json: Final = _JSON_VALUE.validate_python(raw_response.json())
         except Exception as e:
             raise self.get_error_class(
                 error_message=f"Error parsing Fal AI image edit response: {e}",
@@ -171,5 +138,7 @@ class FalAIImageEditConfig(BaseImageEditConfig):
                 headers=raw_response.headers,
             )
         model_response: Final = ImageResponse()
-        model_response.data = list(fal_images_to_image_objects(response_json.get("images", ())))
+        model_response.data = list(
+            fal_images_to_image_objects(_JSON_OBJECT.validate_python(response_json).get("images", ()))
+        )
         return model_response

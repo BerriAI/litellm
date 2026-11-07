@@ -1,7 +1,8 @@
 import { useEffect, type RefObject } from "react";
+import type { ParseKeys } from "i18next";
 import { ArrowDown, Check, ChevronDown } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { MessageScroller, useMessageScroller } from "@shadcn/react/message-scroller";
-import { ChatMessageContent } from "@/components/chat/ChatMessages";
 import CopyButton from "@/components/shared/CopyButton";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -11,13 +12,36 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableRow } from "@/components/ui/table";
 import type { ActionEntry, ConversationEntry } from "./useLiteAdmin";
+import { AriaAnswer } from "./AriaAnswer";
+import { ARIA_AGENT_LABEL } from "./aria-brand";
 
-const ACTION_STATUS: Record<ActionEntry["status"], string> = {
-  review: "Review change",
-  applying: "Applying…",
-  completed: "Completed",
-  cancelled: "Cancelled",
-  unknown: "Check result",
+const ACTION_STATUS: Record<ActionEntry["status"], ParseKeys> = {
+  review: "aria.conversation.status.review",
+  applying: "aria.conversation.status.applying",
+  completed: "aria.conversation.status.completed",
+  cancelled: "aria.conversation.status.cancelled",
+  unknown: "aria.conversation.status.unknown",
+};
+
+const ACTION_TITLES: Record<string, ParseKeys> = {
+  key_create: "aria.actions.keyCreate",
+  key_update: "aria.actions.keyUpdate",
+  key_detach_from_team: "aria.actions.keyDetachFromTeam",
+  key_delete: "aria.actions.keyDelete",
+  key_block: "aria.actions.keyBlock",
+  key_unblock: "aria.actions.keyUnblock",
+  team_create: "aria.actions.teamCreate",
+  team_update: "aria.actions.teamUpdate",
+  team_delete: "aria.actions.teamDelete",
+  team_member_add: "aria.actions.teamMemberAdd",
+  team_member_update: "aria.actions.teamMemberUpdate",
+  team_member_delete: "aria.actions.teamMemberDelete",
+  user_create: "aria.actions.userCreate",
+  user_update: "aria.actions.userUpdate",
+  user_delete: "aria.actions.userDelete",
+  budget_create: "aria.actions.budgetCreate",
+  budget_update: "aria.actions.budgetUpdate",
+  budget_delete: "aria.actions.budgetDelete",
 };
 
 interface ConversationProps {
@@ -29,24 +53,28 @@ interface ConversationProps {
 }
 
 export function LiteAdminConversation({ entries, thinking, open, reviewRef, onAnswer }: ConversationProps) {
+  const { t } = useTranslation();
   return (
     <MessageScroller.Provider autoScroll>
       <MessageScroller.Root className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
         <MessageScroller.Viewport
           className="min-h-0 flex-1 overflow-y-auto overscroll-contain data-pending-scroll:invisible"
-          aria-label="LiteAdmin conversation"
+          aria-label={t("aria.conversation.ariaLabel", { agent: ARIA_AGENT_LABEL })}
         >
-          <MessageScroller.Content className="flex flex-col gap-4 p-4" aria-busy={thinking}>
+          <MessageScroller.Content className="flex flex-col gap-6 p-4 sm:p-6" aria-busy={thinking}>
             {entries.map((entry) => (
               <MessageScroller.Item key={entry.id} messageId={entry.id}>
-                {entry.kind === "message" && (
-                  <ChatMessageContent
-                    message={entry.message}
-                    allowImages={false}
-                    isLastMessage={false}
-                    isStreaming={false}
-                  />
-                )}
+                {entry.kind === "message" &&
+                  (entry.message.role === "assistant" ? (
+                    <AriaAnswer message={entry.message} chart={entry.chart} question={entry.question} />
+                  ) : (
+                    <article
+                      aria-label={t("aria.conversation.yourQuestion")}
+                      className="ml-auto w-fit max-w-[90%] whitespace-pre-wrap break-words rounded-xl bg-muted px-4 py-3 text-sm leading-relaxed"
+                    >
+                      {entry.message.content}
+                    </article>
+                  ))}
                 {entry.kind === "action" && (
                   <ActionCard entry={entry} open={open} reviewRef={reviewRef} onAnswer={onAnswer} />
                 )}
@@ -59,25 +87,21 @@ export function LiteAdminConversation({ entries, thinking, open, reviewRef, onAn
             ))}
             {thinking && (
               <MessageScroller.Item messageId="thinking">
-                <div role="status" aria-label="LiteAdmin is working" className="space-y-2">
+                <div
+                  role="status"
+                  aria-label={t("aria.conversation.workingLabel", { agent: ARIA_AGENT_LABEL })}
+                  className="space-y-2"
+                >
                   <Skeleton className="h-3 w-3/4" />
                   <Skeleton className="h-3 w-1/2" />
-                  <span className="sr-only">Working…</span>
+                  <span className="sr-only">{t("aria.conversation.working")}</span>
                 </div>
               </MessageScroller.Item>
             )}
           </MessageScroller.Content>
         </MessageScroller.Viewport>
-        {entries.length === 0 && (
-          <div className="pointer-events-none absolute inset-0 flex flex-col justify-center gap-2 p-6">
-            <p className="font-medium">How can I help?</p>
-            <p className="text-sm text-muted-foreground">
-              Check budgets, inspect usage, or manage keys and teams. You review every change before it runs.
-            </p>
-          </div>
-        )}
         <MessageScroller.Button
-          aria-label="Jump to latest"
+          aria-label={t("aria.conversation.jumpToLatest")}
           className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full shadow-sm data-[active=false]:pointer-events-none data-[active=false]:opacity-0"
           render={<Button variant="outline" size="icon-sm" />}
         >
@@ -94,13 +118,16 @@ function ActionCard({
   reviewRef,
   onAnswer,
 }: Pick<ConversationProps, "open" | "reviewRef" | "onAnswer"> & { entry: ActionEntry }) {
+  const { t } = useTranslation();
   const { scrollToEnd } = useMessageScroller();
   const review = entry.status === "review";
+  const title = Object.hasOwn(ACTION_TITLES, entry.action.name)
+    ? t(ACTION_TITLES[entry.action.name])
+    : entry.action.title;
   useEffect(() => {
     if (!open || !review) return;
     scrollToEnd();
-    reviewRef.current?.focus({ preventScroll: true });
-  }, [entry.id, open, review, reviewRef, scrollToEnd]);
+  }, [entry.id, open, review, scrollToEnd]);
   const answer = (approved: boolean) => {
     scrollToEnd();
     onAnswer(entry.id, approved);
@@ -128,14 +155,14 @@ function ActionCard({
       ref={review ? reviewRef : undefined}
       tabIndex={review ? -1 : undefined}
       role="region"
-      aria-label={entry.action.title}
+      aria-label={title}
       size="sm"
     >
       <CardHeader className="gap-2">
-        <CardTitle>{entry.action.title}</CardTitle>
+        <CardTitle>{title}</CardTitle>
         <Badge variant={entry.status === "unknown" ? "destructive" : "secondary"} role="status">
           {entry.status === "completed" && <Check className="size-3" />}
-          {ACTION_STATUS[entry.status]}
+          {t(ACTION_STATUS[entry.status])}
         </Badge>
       </CardHeader>
       <CardContent className="space-y-3">
@@ -145,7 +172,7 @@ function ActionCard({
           <Collapsible>
             <CollapsibleTrigger render={<Button variant="ghost" size="xs" />}>
               <ChevronDown className="size-3" />
-              Details
+              {t("aria.conversation.details")}
             </CollapsibleTrigger>
             <CollapsibleContent>{fields}</CollapsibleContent>
           </Collapsible>
@@ -159,19 +186,19 @@ function ActionCard({
           <div className="space-y-2">
             <div className="flex items-start gap-2">
               <code className="min-w-0 flex-1 break-all text-xs">{entry.key}</code>
-              <CopyButton value={entry.key} label="Copy generated key" />
+              <CopyButton value={entry.key} label={t("aria.conversation.copyGeneratedKey")} />
             </div>
-            <p className="text-xs text-muted-foreground">Copy this key now. It stays only in this chat session.</p>
+            <p className="text-xs text-muted-foreground">{t("aria.conversation.keyNotice")}</p>
           </div>
         )}
       </CardContent>
       {review && (
         <CardFooter className="justify-end gap-2">
           <Button variant="outline" onClick={() => answer(false)}>
-            Cancel
+            {t("aria.conversation.cancel")}
           </Button>
           <Button variant={entry.action.destructive ? "destructive" : "default"} onClick={() => answer(true)}>
-            Confirm change
+            {t("aria.conversation.confirmChange")}
           </Button>
         </CardFooter>
       )}

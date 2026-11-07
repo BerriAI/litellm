@@ -10,6 +10,8 @@ from litellm.types.utils import CallTypes
 guardrail_translation_mappings: Final = {
     CallTypes.image_generation: OpenAIImageGenerationHandler,
     CallTypes.aimage_generation: OpenAIImageGenerationHandler,
+    CallTypes.image_edit: OpenAIImageGenerationHandler,
+    CallTypes.aimage_edit: OpenAIImageGenerationHandler,
 }
 
 __all__ = ["OpenAIImageGenerationHandler", "guardrail_translation_mappings"]

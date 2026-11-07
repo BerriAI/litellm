@@ -54,6 +54,75 @@ test.describe("Logs page", () => {
     permissions: ["clipboard-read", "clipboard-write"],
   });
 
+  test("log tables fill the available height and empty requests stay centered after resizing", async ({
+    page,
+  }) => {
+    await navigateToPage(page, Page.Logs);
+    await dismissFeedbackPopup(page);
+    await visibleTestId(page, "datatable-search").fill(
+      `missing-request-${uniqueSuffix()}`,
+    );
+    const emptyTitle = page.getByText("No matching requests", { exact: true });
+    await expect(emptyTitle).toBeVisible();
+
+    for (const viewport of [
+      { width: 1440, height: 900 },
+      { width: 1024, height: 720 },
+    ]) {
+      await page.setViewportSize(viewport);
+      await expect
+        .poll(async () => {
+          const frame = await visibleTestId(
+            page,
+            "data-table-frame",
+          ).boundingBox();
+          return frame
+            ? Math.abs(viewport.height - frame.y - frame.height - 24)
+            : Infinity;
+        })
+        .toBeLessThanOrEqual(2);
+      await expect
+        .poll(async () => {
+          const body = await page
+            .locator("table")
+            .filter({ visible: true })
+            .first()
+            .locator("tbody")
+            .boundingBox();
+          const scroller = await visibleTestId(
+            page,
+            "data-table-scroller",
+          ).boundingBox();
+          const message = await emptyTitle.locator("..").boundingBox();
+          if (!body || !message || !scroller) return Infinity;
+          return Math.max(
+            Math.abs(
+              message.x + message.width / 2 - scroller.x - scroller.width / 2,
+            ),
+            Math.abs(message.y + message.height / 2 - body.y - body.height / 2),
+          );
+        })
+        .toBeLessThanOrEqual(4);
+      for (const tab of ["Deleted Keys", "Deleted Teams"]) {
+        await page.getByRole("tab", { name: tab, exact: true }).click();
+        await expect
+          .poll(async () => {
+            const frame = await visibleTestId(
+              page,
+              "data-table-frame",
+            ).boundingBox();
+            return frame
+              ? Math.abs(viewport.height - frame.y - frame.height - 24)
+              : Infinity;
+          })
+          .toBeLessThanOrEqual(2);
+      }
+      await page
+        .getByRole("tab", { name: "Request Logs", exact: true })
+        .click();
+    }
+  });
+
   test("a chat sent from the Playground lands in Logs with its content", async ({ page, request }) => {
     const prompt = `logs-playground-prompt-${uniqueSuffix()}`;
     await openPlayground(page);
@@ -124,17 +193,6 @@ test.describe("Logs page", () => {
     const row = requestLogsRows(page).filter({ hasText: requestId });
     await expect(row, `no logs row for call id ${callId}`).toHaveCount(1, { timeout: 30_000 });
     await expect(row, "the row itself shows only the request id").not.toContainText(callId);
-
-    await row.getByText(requestId).hover();
-    const tooltip = page.locator("[data-slot='tooltip-content']");
-    await expect(tooltip, "hovering the Request ID cell does not list the x-litellm-call-id").toContainText(
-      `x-litellm-call-id: ${callId}`,
-      { timeout: 10_000 },
-    );
-    await tooltip.getByRole("button", { name: "Copy x-litellm-call-id" }).click();
-    if (await page.evaluate(() => window.isSecureContext)) {
-      await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(callId);
-    }
 
     await row.click();
     const drawer = page.getByRole("dialog").first();

@@ -9,7 +9,9 @@ from sys import float_info
 from types import MappingProxyType
 from typing import Final, Literal, NamedTuple, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, Field, StrictFloat, TypeAdapter, model_validator
+from pydantic import ConfigDict, Field, StrictFloat, TypeAdapter, model_validator
+
+from litellm.types.llms.base import LiteLLMBaseModel
 
 CapabilityBoundary: TypeAlias = Literal["supported", "uncertain", "unsupported", "unmatched"]
 CapabilityRule: TypeAlias = Literal[
@@ -111,7 +113,7 @@ _RULE_BOUNDARIES: Final = MappingProxyType(
 )
 
 
-class CapabilityClassifierVerdict(BaseModel):
+class CapabilityClassifierVerdict(LiteLLMBaseModel):
     """Strict structured verdict returned by the capability forecaster."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -207,7 +209,7 @@ _JSON_DECODER: Final = json.JSONDecoder()
 
 def _complete_json_object_at(content: str, start: int) -> str | None:
     try:
-        _, end = _JSON_DECODER.raw_decode(content, start)
+        end: Final = _JSON_DECODER.raw_decode(content, start)[1]
     except (ValueError, RecursionError):
         return None
     return content[start:end]

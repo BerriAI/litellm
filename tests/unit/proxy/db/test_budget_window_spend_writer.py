@@ -1,5 +1,6 @@
 import math
 from contextlib import asynccontextmanager
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -8,12 +9,14 @@ import pytest
 from litellm.proxy.db.budget_window_spend_writer import (
     WindowSeedTotals,
     commit_window_spend_updates,
+    open_window_spend_row,
     roll_window_spend_row,
     spend_logs_seed_totals,
 )
 from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import (
     build_window_spend_transaction,
 )
+from litellm.proxy.db.log_db_metrics import record_db_io
 
 WINDOW_A = datetime(2026, 8, 1, tzinfo=timezone.utc)
 WINDOW_B = datetime(2026, 8, 31, tzinfo=timezone.utc)
@@ -42,10 +45,12 @@ class _FakeDB:
         self.committed = False
 
     async def query_raw(self, query: str, *args: Any) -> list[dict[str, str]]:
+        record_db_io()
         self.query_raw_calls.append((query, args))
         return self.existing_rows
 
     async def execute_raw(self, query: str, *args: Any) -> int:
+        record_db_io()
         self.execute_raw_calls.append((query, args))
         return 1
 
@@ -59,6 +64,7 @@ class _FakeDB:
     @asynccontextmanager
     async def _batch(self):
         yield self.batcher
+        record_db_io()
         self.committed = True
 
     def batch_(self):
@@ -401,6 +407,29 @@ async def test_roll_window_spend_row_is_conditional_on_the_stored_window_being_o
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(("replaces_window_start", "replaced_param"), [(None, None), (WINDOW_A, datetime(2026, 8, 1))])
+async def test_open_window_spend_row_moves_only_the_window_the_caller_saw_end(replaces_window_start, replaced_param):
+    db = _FakeDB()
+
+    await open_window_spend_row(
+        prisma_client=_FakePrismaClient(db),
+        entity_type="model_max_budget",
+        entity_id="k1",
+        window_duration="1d",
+        window_start=WINDOW_B,
+        replaces_window_start=replaces_window_start,
+    )
+
+    ((query, params),) = db.execute_raw_calls
+    normalized = " ".join(query.split())
+    assert "ON CONFLICT (entity_type, entity_id, window_duration) DO UPDATE" in normalized
+    assert normalized.endswith(
+        "WHERE \"LiteLLM_BudgetWindowSpend\".window_start <= ($5::timestamptz AT TIME ZONE 'UTC')"
+    )
+    assert params == ("model_max_budget", "k1", "1d", datetime(2026, 8, 31), replaced_param)
+
+
+@pytest.mark.asyncio
 async def test_seed_receives_the_batch_earliest_start_as_its_cutoff():
     db = _FakeDB(existing_rows=[])
     aggregate = _RecordingAggregate(total=0.0)
@@ -532,7 +561,12 @@ async def test_seed_aggregate_sql_splits_the_window_at_the_batch_start(entity_ty
     ((query, params),) = db.query_raw_calls
     normalized = " ".join(query.split())
     assert expected_column in normalized
-    assert "FILTER (WHERE \"startTime\" < ($3::timestamptz AT TIME ZONE 'UTC'))" in normalized
+    assert (
+        'FILTER (WHERE EXISTS (SELECT 1 FROM "LiteLLM_SpendLogDelivery" delivery '
+        'WHERE delivery.request_id = "LiteLLM_SpendLogs".request_id) '
+        "OR \"startTime\" < ($3::timestamptz AT TIME ZONE 'UTC'))"
+        in normalized
+    )
     assert 'FROM "LiteLLM_SpendLogs"' in normalized
     # startTime is TIMESTAMP(3): the bound is floored to the second so the
     # batch's own earliest row cannot round under it.
@@ -592,3 +626,35 @@ async def test_seed_aggregate_treats_an_entity_with_no_rows_as_zero():
     )
 
     assert totals == WindowSeedTotals(total=0.0, before_batch=0.0)
+
+
+@pytest.mark.asyncio
+async def test_rolling_a_window_row_renders_a_postgres_update_span(
+    postgres_span_names: Callable[[], Awaitable[tuple[str, ...]]],
+) -> None:
+    await roll_window_spend_row(
+        prisma_client=_FakePrismaClient(_FakeDB()),
+        entity_type="team",
+        entity_id="t1",
+        window_duration="30d",
+        new_window_start=WINDOW_B,
+    )
+    assert await postgres_span_names() == ("postgres.update LiteLLM_BudgetWindowSpend",)
+
+
+@pytest.mark.asyncio
+async def test_window_reads_inside_an_enclosing_transaction_use_its_connection():
+    client_db = _FakeDB()
+    transaction = _FakeDB(existing_rows=[])
+
+    await commit_window_spend_updates(
+        prisma_client=_FakePrismaClient(client_db),
+        transactions=(
+            build_window_spend_transaction("key", "k1", "30d", WINDOW_A, 1.0, started_at=BATCH_STARTED_AT),
+        ),
+        outer_transaction=transaction,
+    )
+
+    assert client_db.query_raw_calls == []
+    assert len(transaction.query_raw_calls) == 2
+    assert len(transaction.batcher.calls) == 1

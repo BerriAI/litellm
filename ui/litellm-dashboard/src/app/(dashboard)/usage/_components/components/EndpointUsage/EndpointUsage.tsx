@@ -56,10 +56,12 @@ const EndpointUsage: React.FC<EndpointUsageProps> = ({ userSpendData }) => {
   }, [userSpendData]);
 
   return (
-    <div className="space-y-4">
+    <div className="grid gap-3">
+      <div className="grid gap-3 xl:grid-cols-2">
+        <EndpointUsageBarChart endpointData={endpointData} />
+        <EndpointUsageLineChart dailyData={userSpendData} />
+      </div>
       <EndpointUsageTable endpointData={endpointData} />
-      <EndpointUsageBarChart endpointData={endpointData} />
-      <EndpointUsageLineChart dailyData={userSpendData} />
     </div>
   );
 };

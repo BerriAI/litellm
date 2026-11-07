@@ -10,12 +10,16 @@ This ensures cost tracking is not disrupted by premature file deletion.
 
 import base64
 import json
+from datetime import datetime, timezone
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
 
 from litellm.proxy._types import UserAPIKeyAuth
+
+NOW: Final = datetime(2026, 10, 1, tzinfo=timezone.utc)
 
 
 def _make_unified_file_id(file_id: str = "file-abc123") -> str:
@@ -50,7 +54,7 @@ def _make_batch_db_record(
     mock_batch.status = status
     mock_batch.file_object = json.dumps(file_object)
     mock_batch.created_by = created_by
-    mock_batch.created_at = 1700000000
+    mock_batch.created_at = NOW
     return mock_batch
 
 
@@ -60,7 +64,7 @@ def _make_managed_files_instance_with_batches(
     file_created_by: str = "user-A",
 ):
     """
-    Create a _PROXY_LiteLLMManagedFiles instance with mocked DB and batches.
+    Create a PROXY_LiteLLMManagedFiles instance with mocked DB and batches.
     
     Args:
         file_id: The unified file ID
@@ -68,7 +72,7 @@ def _make_managed_files_instance_with_batches(
         file_created_by: The user who created the file
     """
     from litellm_enterprise.proxy.hooks.managed_files import (
-        _PROXY_LiteLLMManagedFiles,
+        PROXY_LiteLLMManagedFiles,
     )
 
     # Mock file record
@@ -102,9 +106,10 @@ def _make_managed_files_instance_with_batches(
     })
     mock_cache.async_set_cache = AsyncMock()
 
-    instance = _PROXY_LiteLLMManagedFiles(
+    instance = PROXY_LiteLLMManagedFiles(
         internal_usage_cache=mock_cache,
         prisma_client=mock_prisma,
+        clock=lambda: NOW,
     )
     return instance
 
@@ -115,10 +120,10 @@ def _make_managed_files_instance_with_batches(
 def test_is_batch_polling_enabled_when_job_registered():
     """Test that batch polling is detected as enabled when scheduler job is registered."""
     from litellm_enterprise.proxy.hooks.managed_files import (
-        _PROXY_LiteLLMManagedFiles,
+        PROXY_LiteLLMManagedFiles,
     )
     
-    instance = _PROXY_LiteLLMManagedFiles(
+    instance = PROXY_LiteLLMManagedFiles(
         internal_usage_cache=MagicMock(),
         prisma_client=MagicMock(),
     )
@@ -135,10 +140,10 @@ def test_is_batch_polling_enabled_when_job_registered():
 def test_is_batch_polling_disabled_when_job_not_registered():
     """Test that batch polling is detected as disabled when scheduler job is not registered."""
     from litellm_enterprise.proxy.hooks.managed_files import (
-        _PROXY_LiteLLMManagedFiles,
+        PROXY_LiteLLMManagedFiles,
     )
     
-    instance = _PROXY_LiteLLMManagedFiles(
+    instance = PROXY_LiteLLMManagedFiles(
         internal_usage_cache=MagicMock(),
         prisma_client=MagicMock(),
     )
@@ -154,10 +159,10 @@ def test_is_batch_polling_disabled_when_job_not_registered():
 def test_is_batch_polling_disabled_when_no_scheduler():
     """Test that batch polling is detected as disabled when scheduler is not available."""
     from litellm_enterprise.proxy.hooks.managed_files import (
-        _PROXY_LiteLLMManagedFiles,
+        PROXY_LiteLLMManagedFiles,
     )
     
-    instance = _PROXY_LiteLLMManagedFiles(
+    instance = PROXY_LiteLLMManagedFiles(
         internal_usage_cache=MagicMock(),
         prisma_client=MagicMock(),
     )

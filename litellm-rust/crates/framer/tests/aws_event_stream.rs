@@ -6,7 +6,7 @@ use std::io;
 
 use bytes::Bytes;
 use futures_util::{StreamExt, TryStreamExt, stream};
-use litellm_framing::{
+use litellm_framer::{
     EventStreamError,
     aws_event_stream::{AwsEventStreamCodec, Header, HeaderValue, Message},
     frames,

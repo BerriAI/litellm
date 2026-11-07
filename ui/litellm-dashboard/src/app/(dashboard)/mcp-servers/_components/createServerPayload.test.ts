@@ -201,6 +201,22 @@ describe("buildCreateServerPayload credentials", () => {
     },
   );
 
+  it.each([["true_passthrough"], ["oauth_delegate"]])(
+    "carries the admin-entered authorization URL, token URL and scopes for %s",
+    (authType) => {
+      const entraServer = {
+        auth_type: authType,
+        authorization_url: "https://login.microsoftonline.com/tenant/oauth2/v2.0/authorize",
+        token_url: "https://login.microsoftonline.com/tenant/oauth2/v2.0/token",
+        credentials: { client_id: "org-app", scopes: ["api://mcp/.default", "offline_access", ""] },
+      };
+      const payload = payloadOf(build(entraServer));
+      expect(payload.authorization_url).toBe("https://login.microsoftonline.com/tenant/oauth2/v2.0/authorize");
+      expect(payload.token_url).toBe("https://login.microsoftonline.com/tenant/oauth2/v2.0/token");
+      expect(payload.credentials).toEqual({ client_id: "org-app", scopes: ["api://mcp/.default", "offline_access"] });
+    },
+  );
+
   it("merges the DCR-minted client into an oauth2 payload", () => {
     const payload = payloadOf(
       build(

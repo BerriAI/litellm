@@ -1,6 +1,7 @@
 import type { DateRangePickerValue } from "@/components/shared/date_picker_types";
 import { Download } from "lucide-react";
 import React, { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import {
   Combobox,
@@ -27,7 +28,7 @@ interface UsageExportHeaderProps {
   showFilters?: boolean;
   filterLabel?: string;
   filterPlaceholder?: string;
-  selectedFilters?: string[];
+  selectedFilters?: readonly string[];
   onFiltersChange?: (filters: string[]) => void;
   filterOptions?: Array<{ label: string; value: string }>;
   filterSlot?: React.ReactNode;
@@ -51,6 +52,7 @@ const UsageExportHeader: React.FC<UsageExportHeaderProps> = ({
   compactLayout = false,
   teams = [],
 }) => {
+  const { t } = useTranslation();
   const anchor = useComboboxAnchor();
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
 
@@ -58,14 +60,14 @@ const UsageExportHeader: React.FC<UsageExportHeaderProps> = ({
   const optionValues = filterOptions.map((option) => option.value);
   const labelOf = (value: string) => filterOptions.find((option) => option.value === value)?.label ?? value;
   const hasNoOptions = filterOptions.length === 0;
-  const emptyPlaceholder = `No ${entityType}s with usage in this range`;
+  const emptyPlaceholder = t("usage.export.header.noOptionsPlaceholder", { entityType });
   // A selection carried over from a range that did have options still scopes
   // the data below, so the control has to stay usable long enough to clear it.
   const isFilterDisabled = hasNoOptions && selectedFilters.length === 0;
 
   const filterList = (
     <ComboboxContent anchor={anchor}>
-      <ComboboxEmpty>No options found</ComboboxEmpty>
+      <ComboboxEmpty>{t("usage.export.header.noOptionsFound")}</ComboboxEmpty>
       <ComboboxList>
         {(value: string) => (
           <ComboboxItem key={value} value={value}>
@@ -81,7 +83,7 @@ const UsageExportHeader: React.FC<UsageExportHeaderProps> = ({
       multiple
       disabled={isFilterDisabled}
       items={optionValues}
-      value={selectedFilters}
+      value={[...selectedFilters]}
       onValueChange={(next: string[]) => onFiltersChange?.(next)}
     >
       <ComboboxChips render={<div ref={anchor} />} className="w-full">
@@ -98,7 +100,11 @@ const UsageExportHeader: React.FC<UsageExportHeaderProps> = ({
           placeholder={hasNoOptions ? emptyPlaceholder : filterPlaceholder}
           aria-label={hasNoOptions ? emptyPlaceholder : filterPlaceholder}
         />
-        {selectedFilters.length > 0 && <ComboboxClear aria-label={`Clear ${filterLabel ?? "filters"}`} />}
+        {selectedFilters.length > 0 && (
+          <ComboboxClear
+            aria-label={t("usage.export.header.clear", { label: filterLabel ?? t("usage.export.header.filters") })}
+          />
+        )}
       </ComboboxChips>
       {filterList}
     </Combobox>
@@ -106,13 +112,13 @@ const UsageExportHeader: React.FC<UsageExportHeaderProps> = ({
 
   return (
     <>
-      <div className="mb-4">
+      <div className="mb-3">
         {/**
          * Use CSS grid with items-end so all cells (filter, button)
          * align to the same baseline regardless of label heights. This removes
          * vertical drift when the right column has a label above the input.
          */}
-        <div className={`grid ${hasFilters ? "grid-cols-[1fr_auto]" : "grid-cols-[auto]"} items-end gap-4`}>
+        <div className={`grid ${hasFilters ? "grid-cols-[1fr_auto]" : "grid-cols-[auto]"} items-end gap-3`}>
           {hasFilters && (
             <div>
               {filterLabel && <label className="text-sm font-medium text-foreground block mb-2">{filterLabel}</label>}
@@ -121,9 +127,9 @@ const UsageExportHeader: React.FC<UsageExportHeaderProps> = ({
           )}
 
           <div className="justify-self-end">
-            <Button onClick={() => setIsExportModalOpen(true)}>
+            <Button variant="outline" size="sm" onClick={() => setIsExportModalOpen(true)}>
               <Download />
-              Export Data
+              {t("usage.export.header.exportData")}
             </Button>
           </div>
         </div>

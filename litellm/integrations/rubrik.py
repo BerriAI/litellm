@@ -44,7 +44,7 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import (
         Logging as LiteLLMLoggingObj,
     )
-    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
 _WEBHOOK_PATH_RESPONSE_MODERATION: Final = "/v1/after_completion/openai/v1"
 _WEBHOOK_PATH_PROMPT_MODERATION: Final = "/v1/before_prompt/openai/v1"

@@ -3,6 +3,7 @@ from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Final
 
+from litellm._internal_context import with_service_target
 from litellm.proxy.agent_endpoints.managed_identity import classify_agent_subject
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, get_management_object_ttl
 from litellm.repositories.table_repositories import (
@@ -19,6 +20,8 @@ from litellm.types.proxy.agent_identity import (
     MicrosoftInteractiveSubject,
     VerifiedHumanSubject,
 )
+
+_AGENT_IDENTITIES_TARGET: Final = "agent_identities"
 
 if TYPE_CHECKING:
     from prisma.models import LiteLLM_VerifiedSubject
@@ -90,6 +93,7 @@ class AgentIdentityStore:
                 return AgentIdentityFailure(message="This agent identity binding has been retired")
         return None
 
+    @with_service_target(_AGENT_IDENTITIES_TARGET)
     async def _bound_agent_id(self, tenant_id: str, client_id: str) -> str | AgentIdentityFailure | None:
         cache_key: Final = f"agent_identity:{json.dumps((tenant_id, client_id))}"
         cached: Final[object] = await self.cache.async_get_cache(key=cache_key) if self.cache is not None else None
