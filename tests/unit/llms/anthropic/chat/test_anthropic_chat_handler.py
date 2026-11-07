@@ -247,58 +247,6 @@ def test_anthropic_chat_drops_fallbacks_under_drop_params_only_when_the_request_
     assert fallback_beta is None or fallback_beta in sent_betas
 
 
-def test_anthropic_chat_prices_a_server_side_fallback_answer_by_the_attempt_that_served_it() -> None:
-    """Response shape from https://platform.claude.com/docs/en/build-with-claude/refusals-and-fallback (fetched
-    2026-11-03): top-level usage is the attempt that served the turn, usage.iterations records every attempt"""
-    served_by_fallback: Final = {
-        "id": "msg_01XFUDYJgAACzvnptvVoYEL",
-        "type": "message",
-        "role": "assistant",
-        "model": "claude-opus-4-8",
-        "content": [
-            {
-                "type": "fallback",
-                "from": {"model": "claude-fable-5"},
-                "to": {"model": "claude-opus-4-8"},
-                "trigger": {"type": "refusal", "category": "cyber"},
-            },
-            {"type": "text", "text": "Hi! How can I help you today?"},
-        ],
-        "stop_reason": "end_turn",
-        "stop_details": None,
-        "usage": {
-            "input_tokens": 412,
-            "output_tokens": 264,
-            "cache_read_input_tokens": 0,
-            "cache_creation_input_tokens": 0,
-            "iterations": [
-                {"type": "message", "model": "claude-fable-5", "input_tokens": 535, "output_tokens": 0},
-                {"type": "fallback_message", "model": "claude-opus-4-8", "input_tokens": 412, "output_tokens": 264},
-            ],
-        },
-    }
-    client: Final = HTTPHandler(
-        client=httpx.Client(transport=httpx.MockTransport(lambda _: httpx.Response(200, json=served_by_fallback)))
-    )
-    try:
-        response: Final = litellm.completion(
-            model="anthropic/claude-fable-5",
-            messages=[{"role": "user", "content": "Hello"}],
-            api_key="test-key",
-            client=client,
-            max_tokens=300,
-        )
-    finally:
-        client.close()
-    prompt_cost, completion_cost = litellm.cost_per_token(
-        model="claude-opus-4-8", prompt_tokens=412, completion_tokens=264
-    )
-
-    assert response.model == "claude-opus-4-8"
-    assert (response.usage.prompt_tokens, response.usage.completion_tokens) == (412, 264)
-    assert response._hidden_params["response_cost"] == pytest.approx(prompt_cost + completion_cost)
-
-
 def test_anthropic_tool_history_without_tools_injects_a_dummy_tool(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -340,7 +340,6 @@ def _validated_defer_loading(value: object) -> bool:
 class _AnthropicUsageIteration(TypedDict, total=False):
     """One entry of the ``usage.iterations`` array on an Anthropic response."""
 
-    type: ReadOnly[str]
     input_tokens: ReadOnly[int | None]
     output_tokens: ReadOnly[int | None]
     cache_creation_input_tokens: ReadOnly[int | None]
@@ -2864,17 +2863,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         )
 
     @staticmethod
-    def _summable_iterations(usage: Mapping[str, Any]) -> Sequence[_AnthropicUsageIteration] | None:
-        """``usage.iterations`` when every entry ran on the response's model. A server-side fallback chain spans
-        models, and its top-level usage already is the attempt that served the turn, so it is never summed."""
-        iterations: Final[Sequence[_AnthropicUsageIteration] | None] = usage.get("iterations")
-        if not iterations or any(iteration.get("type") == "fallback_message" for iteration in iterations):
-            return None
-        return iterations
-
-    @staticmethod
     def _resolve_cache_creation_token_details(usage: Mapping[str, Any]) -> CacheCreationTokenDetails | None:
-        iterations: Final = AnthropicConfig._summable_iterations(usage)
+        iterations: Final = usage.get("iterations")
         if iterations:
             aggregated: Final = AnthropicConfig._aggregate_cache_creation_token_details(iterations)
             if aggregated is not None:
@@ -2915,7 +2905,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         raw_speed: Final = _usage.get("speed")
         resolved_speed: Final = raw_speed if isinstance(raw_speed, str) else speed
 
-        iterations: Final = self._summable_iterations(_usage)
+        iterations: Final[Sequence[_AnthropicUsageIteration] | None] = _usage.get("iterations")
         if iterations:
             prompt_tokens = sum(it.get("input_tokens", 0) or 0 for it in iterations)
             completion_tokens = sum(it.get("output_tokens", 0) or 0 for it in iterations)
