@@ -5,7 +5,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, cast  # noqa: TID251  # narrows untyped **kwargs for the tag check
+from typing import TYPE_CHECKING, Any, Final
+from typing import cast  # noqa: TID251  # narrows untyped **kwargs for the tag check
 
 import httpx
 from pydantic import TypeAdapter
