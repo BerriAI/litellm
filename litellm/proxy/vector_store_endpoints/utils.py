@@ -4,11 +4,13 @@ from collections.abc import Iterable, Mapping
 from types import MappingProxyType
 from typing import Final, Literal
 
+import httpx
 from fastapi import HTTPException, Request
 from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreConfig
 from litellm.proxy._types import (
     LiteLLM_ObjectPermissionTable,
     LitellmUserRoles,
@@ -19,9 +21,10 @@ from litellm.proxy.mcp_server.ui_session_utils import (
     resolve_ui_session_team_ids,
 )
 from litellm.types.utils import LlmProviders
-from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
+from litellm.types.vector_stores import LiteLLM_ManagedVectorStore, VectorStoreIndexEndpoints
 from litellm.utils import ProviderConfigManager
 
+_PLAIN_PROVIDER_PATH: Final = re.compile(r"[\w\-/:.$]+")
 _JSON_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
 
 
@@ -427,6 +430,38 @@ async def assert_user_can_read_vector_store_id(
     if vector_store is not None:
         await assert_user_can_read_vector_store(vector_store, user_api_key_dict)
     return vector_store
+
+
+def _is_provider_read_request(endpoints: VectorStoreIndexEndpoints, method: str, endpoint: str) -> bool:
+    """A substring match could hide a write, so a read needs a plain path the forwarder keeps as is, ending with a
+    read entry. A GET only has to contain one."""
+    path: Final = endpoint if endpoint.startswith("/") else f"/{endpoint}"
+    if _PLAIN_PROVIDER_PATH.fullmatch(path) is None or not {"", ".", ".."}.isdisjoint(path.split("/")[1:]):
+        return False
+    if httpx.URL(endpoint).path != endpoint:
+        return False
+    if any(write_method == method and write_path in path for write_method, write_path in endpoints["write"]):
+        return False
+    return any(
+        read_method == method and (path.endswith(read_path) or (method == "GET" and read_path in path))
+        for read_method, read_path in endpoints["read"]
+    )
+
+
+async def assert_user_can_call_vector_store_passthrough(
+    vector_store: LiteLLM_ManagedVectorStore,
+    user_api_key_dict: UserAPIKeyAuth,
+    provider_config: BaseVectorStoreConfig | None,
+    method: str,
+    endpoint: str,
+) -> None:
+    """Pass-through routes also carry writes, so groups count only on a read the provider's table names."""
+    if provider_config is not None and _is_provider_read_request(
+        provider_config.get_vector_store_endpoints_by_type(), method, endpoint
+    ):
+        await assert_user_can_read_vector_store(vector_store, user_api_key_dict)
+        return
+    await assert_user_can_access_vector_store(vector_store, user_api_key_dict)
 
 
 def _does_endpoint_match(endpoint_path: str, request_path: str) -> bool:
