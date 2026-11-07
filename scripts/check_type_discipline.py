@@ -583,7 +583,7 @@ def _node_bindings(node: ast.AST, in_loop: bool) -> Iterator[Binding]:
                     yield from (Binding(n, line, "unpack", in_loop) for n, line in _bound_names(target))
         case ast.AnnAssign(target=ast.Name(id=name, lineno=line), annotation=annotation, value=value):
             if _declares_constant(annotation):
-                yield Binding(name, line, "final_type_variable" if _creates_type_variable(value) else "declared", in_loop)
+                yield Binding(name, line, "declared", in_loop)
             elif value is not None:
                 yield Binding(name, line, "annassign", in_loop)
         case ast.AugAssign(target=ast.Name(id=name, lineno=line)):
@@ -660,15 +660,6 @@ def iter_final_violations(path: Path, tree: ast.AST) -> Iterator[Violation]:
         declared = frozenset(b.name for b in bindings if b.form == "declared")
         first = _first_binding_index(bindings)
         for i, b in enumerate(bindings):
-            if b.form == "final_type_variable":
-                yield Violation(
-                    path,
-                    b.line,
-                    "LIT010",
-                    f"`{b.name}` is a type variable declared Final: mypy then reads it as a plain "
-                    f"variable and every signature using it as Any, so remove the Final",
-                )
-                continue
             if b.name in declared or b.name in params or b.in_loop:
                 continue
             if _exempt_final_name(b.name):
@@ -694,6 +685,23 @@ def iter_final_violations(path: Path, tree: ast.AST) -> Iterator[Violation]:
                     f"walrus targets cannot carry Final, so their names are implicitly final; "
                     f"bind a fresh name instead, or suppress with `# rebind-ok: <reason>`",
                 )
+
+
+def iter_final_type_variable_violations(path: Path, tree: ast.AST) -> Iterator[Violation]:
+    for node in ast.walk(tree):
+        match node:
+            case ast.AnnAssign(target=ast.Name(id=name, lineno=line), annotation=annotation, value=value) if (
+                _declares_constant(annotation) and _creates_type_variable(value)
+            ):
+                yield Violation(
+                    path,
+                    line,
+                    "LIT010",
+                    f"`{name}` is a type variable declared Final: mypy then reads it as a plain "
+                    f"variable and every signature using it as Any, so remove the Final",
+                )
+            case _:
+                pass
 
 
 def _mutation_sites(scope: ast.AST) -> Iterator[tuple[str, int]]:
@@ -1167,6 +1175,7 @@ def check_file(path: Path) -> tuple[Violation, ...]:
                 *iter_cast_violations(path, tree),
                 *iter_guard_violations(path, tree),
                 *iter_final_violations(path, tree),
+                *iter_final_type_variable_violations(path, tree),
                 *iter_param_violations(path, tree),
                 *iter_typeddict_violations(path, tree),
                 *iter_pydantic_violations(path, tree),

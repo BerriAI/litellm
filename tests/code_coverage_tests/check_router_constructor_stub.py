@@ -46,10 +46,11 @@ def main() -> int:
         probe: Final = Path(directory) / "router_constructor_probe.py"
         probe.write_text(PROBE)
         errors: Final = mypy_errors(probe)
-    if len(errors) == 1 and EXPECTED_ERROR in errors[0]:
+    probe_errors: Final = tuple(error for error in errors if Path(error.partition(":")[0]).name == probe.name)
+    if len(probe_errors) == 1 and EXPECTED_ERROR in probe_errors[0]:
         print("mypy reads the Router constructor stub")
         return 0
-    print(f"expected only {EXPECTED_ERROR!r} from mypy, got: {errors}")
+    print(f"expected only {EXPECTED_ERROR!r} from the probe, got: {errors}")
     return 1
 
 
