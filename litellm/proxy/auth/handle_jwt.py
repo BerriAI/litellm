@@ -279,6 +279,8 @@ class JWTHandler:
         self.leeway = 0
         # Per-cache-key locks so a TTL lapse triggers one refresh instead of one per in-flight request.
         self._refresh_locks: dict[str, asyncio.Lock] = {}  # mutable-ok: lock registry, keyed by JWKS url
+        # Per-cache-key background refresh tasks so concurrent requests share one off-path refresh.
+        self._refresh_tasks: dict[str, asyncio.Task[None]] = {}  # mutable-ok: task registry, keyed by JWKS url
         self.agent_lookup: AgentLookup = _NoRegisteredAgents()
 
     def bind_agent_lookup(self, agent_lookup: AgentLookup) -> None:
@@ -819,6 +821,10 @@ class JWTHandler:
     async def _put_cached_value(self, cache_key: str, value: JWKKeyValue | str | float, ttl: float) -> None:
         await self.user_api_key_cache.async_set_cache(key=cache_key, value=value, ttl=ttl)
 
+    @with_service_target(AUTH_OBJECTS_TARGET)
+    async def _delete_cached_value(self, cache_key: str) -> None:
+        await self.user_api_key_cache.async_delete_cache(key=cache_key)
+
     async def _cached_with_stale_fallback(
         self,
         cache_key: str,
@@ -826,10 +832,28 @@ class JWTHandler:
         refresh: Callable[[], Awaitable[_CachedValueT]],
         log_context: str,
     ) -> _CachedValueT:
-        """Read ``cache_key``, refreshing it through a single-flight lock on a miss."""
+        """Read ``cache_key``, refreshing in the background while a trusted copy exists.
+
+        On a fresh-cache miss the last-known-good copy is served immediately and one background refresh
+        is scheduled for the expiry window, so a slow identity provider cannot stall every concurrent
+        request behind the single-flight lock. Callers block on the lock only when no trusted copy exists
+        at all (cold start) or the last-known-good copy has aged past ``public_key_ttl`` +
+        ``public_key_stale_ttl``.
+        """
         cached: Final[_CachedValueT | None] = await self._get_cached_value(cache_key)
         if cached is not None:
             return cached
+
+        servable: Final[tuple[_CachedValueT, float] | None] = await self._get_servable_stale_copy(
+            cache_key=cache_key, ttl=ttl
+        )
+        if servable is not None:
+            stale, _ = servable
+            verbose_proxy_logger.debug(
+                "JWT Auth: serving a stale JWKS copy for %s while a background refresh runs", cache_key
+            )
+            self._schedule_background_refresh(cache_key=cache_key, ttl=ttl, refresh=refresh, log_context=log_context)
+            return stale
 
         lock: Final = self._refresh_locks.setdefault(cache_key, asyncio.Lock())
         async with lock:
@@ -839,6 +863,100 @@ class JWTHandler:
             return await self._refresh_or_serve_stale(
                 cache_key=cache_key, ttl=ttl, refresh=refresh, log_context=log_context
             )
+
+    def _schedule_background_refresh(
+        self,
+        cache_key: str,
+        ttl: float,
+        refresh: Callable[[], Awaitable[_CachedValueT]],
+        log_context: str,
+    ) -> None:
+        """Schedule one background refresh for ``cache_key``, skipping when one is already in flight.
+
+        The check and the schedule run with no await between them, so concurrent requests on one event
+        loop cannot schedule the same window twice.
+        """
+        in_flight: Final = self._refresh_tasks.get(cache_key)
+        if in_flight is not None and not in_flight.done():
+            return
+        self._refresh_tasks[cache_key] = asyncio.get_running_loop().create_task(
+            self._background_refresh(cache_key=cache_key, ttl=ttl, refresh=refresh, log_context=log_context)
+        )
+
+    async def _background_refresh(
+        self,
+        cache_key: str,
+        ttl: float,
+        refresh: Callable[[], Awaitable[_CachedValueT]],
+        log_context: str,
+    ) -> None:
+        """Refresh ``cache_key`` off the request path.
+
+        Takes the single-flight lock so a concurrent cold-start caller cannot start a second fetch, and
+        reuses the unreachable backoff so a sustained outage still costs one fetch per window. An
+        unreachable IdP keeps the bounded stale copy in use; a reachable IdP that answers badly
+        invalidates it, so the next request takes the blocking path and surfaces the error instead of
+        trusting keys the IdP may have rotated away.
+        """
+        try:
+            lock: Final = self._refresh_locks.setdefault(cache_key, asyncio.Lock())
+            async with lock:
+                cached: Final[_CachedValueT | None] = await self._get_cached_value(cache_key)
+                if cached is not None:
+                    return
+                stale_ttl: Final = self._get_public_key_stale_ttl()
+                outcome: Final = await self._refresh_or_record_outage(
+                    cache_key=cache_key, ttl=ttl, stale_ttl=stale_ttl, refresh=refresh
+                )
+                if isinstance(outcome, JWKSUnreachableError):
+                    servable: Final[tuple[_CachedValueT, float] | None] = await self._get_servable_stale_copy(
+                        cache_key=cache_key, ttl=ttl
+                    )
+                    if servable is None:
+                        verbose_proxy_logger.warning(
+                            "JWT Auth: background JWKS refresh for %s failed and no trusted copy remains: %s",
+                            log_context,
+                            outcome,
+                        )
+                    else:
+                        _, age = servable
+                        self._warn_stale_copy_in_use(
+                            cache_key=cache_key,
+                            ttl=ttl,
+                            stale_ttl=stale_ttl,
+                            log_context=log_context,
+                            outcome=outcome,
+                            age=age,
+                        )
+        except Exception as e:  # noqa: BLE001  # only non-transport failures reach here; unreachable is an outcome value
+            # A reachable IdP that answers badly must surface its error, not keep the stale copy
+            # trusted: drop it so the next request takes the blocking refresh path and raises.
+            await self._delete_cached_value(f"{STALE_CACHE_KEY_PREFIX}{cache_key}")
+            await self._delete_cached_value(f"{STALE_WRITTEN_AT_CACHE_KEY_PREFIX}{cache_key}")
+            verbose_proxy_logger.warning(
+                "JWT Auth: background JWKS refresh for %s raised unexpectedly: %s", log_context, e
+            )
+        finally:
+            self._refresh_tasks.pop(cache_key, None)
+
+    async def _get_servable_stale_copy(self, cache_key: str, ttl: float) -> tuple[_CachedValueT, float] | None:
+        """Return the last-known-good copy and its age when it is still trusted, else None.
+
+        Trust is bounded by ``public_key_ttl`` + ``public_key_stale_ttl`` measured from when the copy was
+        taken, enforced on every read rather than baked into the cache entry's own expiry. An operator who
+        lowers ``public_key_stale_ttl``, or sets it to 0 to fail closed, is usually doing it mid-incident,
+        and a copy written under the old longer setting would otherwise stay servable until it aged out on
+        its own. A copy whose write time cannot be established is not servable, so the bound cannot be
+        dodged by losing the timestamp.
+        """
+        stale_ttl: Final = self._get_public_key_stale_ttl()
+        if stale_ttl <= 0:
+            return None
+        stale: Final[_CachedValueT | None] = await self._get_cached_value(f"{STALE_CACHE_KEY_PREFIX}{cache_key}")
+        age: Final = await self._stale_copy_age(cache_key)
+        if stale is None or age is None or age > ttl + stale_ttl:
+            return None
+        return (stale, age)
 
     async def _refresh_or_serve_stale(
         self,
@@ -866,11 +984,33 @@ class JWTHandler:
         if stale_ttl <= 0:
             raise outcome
 
-        stale: Final[_CachedValueT | None] = await self._get_cached_value(f"{STALE_CACHE_KEY_PREFIX}{cache_key}")
-        age: Final = await self._stale_copy_age(cache_key)
-        lifetime: Final = ttl + stale_ttl
-        if stale is None or age is None or age > lifetime:
+        servable: Final[tuple[_CachedValueT, float] | None] = await self._get_servable_stale_copy(
+            cache_key=cache_key, ttl=ttl
+        )
+        if servable is None:
             raise outcome
+        stale, age = servable
+        self._warn_stale_copy_in_use(
+            cache_key=cache_key,
+            ttl=ttl,
+            stale_ttl=stale_ttl,
+            log_context=log_context,
+            outcome=outcome,
+            age=age,
+        )
+        return stale
+
+    def _warn_stale_copy_in_use(
+        self,
+        cache_key: str,
+        ttl: float,
+        stale_ttl: float,
+        log_context: str,
+        outcome: JWKSUnreachableError,
+        age: float,
+    ) -> None:
+        """Log that requests are being authenticated against the stale copy because the refresh failed."""
+        lifetime: Final = ttl + stale_ttl
         verbose_proxy_logger.warning(
             "JWT Auth: identity provider unreachable, authenticating %s against a stale JWKS copy of %s "
             "(last refreshed %.0fs ago, stops being trusted in %.0fs). Refresh failed: %s",
@@ -880,7 +1020,6 @@ class JWTHandler:
             max(lifetime - age, 0),
             outcome,
         )
-        return stale
 
     async def _stale_copy_age(self, cache_key: str) -> float | None:
         written_at: Final = await self._get_cached_timestamp(f"{STALE_WRITTEN_AT_CACHE_KEY_PREFIX}{cache_key}")
