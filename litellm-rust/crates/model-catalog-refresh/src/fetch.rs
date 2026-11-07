@@ -12,7 +12,6 @@ use litellm_s3::S3Uri;
 
 use crate::{Attempts, Cause, Error, Failure, Fetched, Reply, RetryPolicy, Source, Step};
 
-/// Where to fetch the document from. The host resolves the AWS region and endpoint, this crate reads no env
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Target {
     pub url: String,
@@ -20,7 +19,6 @@ pub struct Target {
     pub aws_endpoint_url: Option<String>,
 }
 
-/// A fetch that ended without a document, in the words main reported it
 #[derive(Clone, Debug, PartialEq)]
 pub struct Failed {
     pub reason: String,
@@ -36,8 +34,6 @@ pub enum Start {
     After(Failed),
 }
 
-/// Fetches the document at `target`, retrying as `policy` allows. The caller owns the HTTP client, the credentials an
-/// S3 source is read with, and the runtime this future is driven on
 pub async fn fetch(
     client: &Client,
     credentials: &(impl ProvideCredentials + Clone + 'static),
@@ -159,13 +155,15 @@ async fn s3_attempt(
             .bucket(&object.bucket)
             .key(&object.key)
             .send()
-            .await
-            .map_err(Error::s3)?;
+            .await?;
         let etag = output.e_tag().map(str::to_owned);
-        let body = output.body.collect().await.map_err(Error::s3)?;
+        let body = output.body.collect().await?;
         Ok::<_, Error>((etag, body.to_vec()))
     };
-    match fetched.await {
+    match tokio::time::timeout(timeout, fetched)
+        .await
+        .unwrap_or_else(|elapsed| Err(Error::from(elapsed)))
+    {
         Ok((etag, body)) => Reply::Response {
             status: 200,
             etag,

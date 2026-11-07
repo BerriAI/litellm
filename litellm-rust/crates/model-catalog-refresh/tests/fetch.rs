@@ -28,6 +28,7 @@ const NOT_FOUND: &str = "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnecti
 enum Answer {
     Raw(&'static str),
     Stall,
+    StallBody,
 }
 
 /// A scripted upstream: the n-th request gets the n-th answer, repeating the last, and every request head is kept
@@ -61,6 +62,12 @@ impl Upstream {
                     match answer {
                         Answer::Raw(raw) => stream.write_all(raw.as_bytes()).unwrap(),
                         Answer::Stall => std::thread::sleep(Duration::from_secs(5)),
+                        Answer::StallBody => {
+                            stream
+                                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{")
+                                .unwrap();
+                            std::thread::sleep(Duration::from_secs(5));
+                        }
                     }
                 });
             }
@@ -344,6 +351,37 @@ async fn an_s3_fetch_sends_a_signed_get_object_to_the_endpoint() {
             && authorization.contains("/us-west-2/s3/aws4_request"),
         "{authorization}"
     );
+}
+
+#[rstest]
+#[tokio::test]
+async fn an_s3_body_that_stalls_after_the_headers_times_out() {
+    let upstream = Upstream::serve(vec![Answer::StallBody]);
+    let url = "s3://prices/cost.json";
+    let policy = RetryPolicy {
+        timeout: Duration::from_millis(200),
+        ..POLICY
+    };
+    let failed = tokio::time::timeout(
+        Duration::from_secs(2),
+        fetch(
+            &Client::for_test(),
+            &keys(),
+            &s3_target(url, &upstream),
+            policy,
+            Start::Fresh,
+        ),
+    )
+    .await
+    .expect("the attempt timeout bounds the body read")
+    .unwrap_err();
+    assert!(
+        failed.reason.starts_with(&format!("S3 error fetching {url}: ")),
+        "{}",
+        failed.reason
+    );
+    assert!(!failed.retryable);
+    assert_eq!(upstream.heads().len(), 1);
 }
 
 #[rstest]

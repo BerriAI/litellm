@@ -11,8 +11,7 @@ use aws_sdk_s3::config::{BehaviorVersion, Builder, Region};
 
 use crate::transport::ReqwestHttpClient;
 
-/// An S3 client config that sends through `http` and signs with `credentials`. A custom endpoint is addressed path
-/// style, as boto3 addresses one
+/// A custom endpoint is addressed path style, as boto3 addresses one
 pub fn config(
     region: String,
     endpoint_url: Option<&str>,

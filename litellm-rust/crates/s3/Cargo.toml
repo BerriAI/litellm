@@ -14,7 +14,6 @@ aws-smithy-types = { version = "1.6.0", features = ["http-body-1-x"] }
 http.workspace = true
 reqwest.workspace = true
 thiserror.workspace = true
-url.workspace = true
 
 [dev-dependencies]
 rstest.workspace = true

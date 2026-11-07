@@ -1,6 +1,5 @@
 use std::time::Duration;
 
-/// Main's defaults are 3 attempts, a 30 s max wait, a 5 s timeout, backoff base 2.0 and a jitter of 0.0 to 1.0 s
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RetryPolicy {
     pub max_attempts: u32,
@@ -11,7 +10,6 @@ pub struct RetryPolicy {
     pub jitter_max_seconds: f64,
 }
 
-/// Statuses main retries, every other error status ends the fetch
 pub const RETRYABLE_STATUSES: [u16; 5] = [429, 500, 502, 503, 504];
 
 /// Main's default `LITELLM_MODEL_COST_MAP_URL`

@@ -11,12 +11,11 @@ pub enum Source {
 }
 
 impl Source {
-    /// An `http`, `https` or `s3://bucket/key` URL, the schemes main fetches
     pub fn parse(url: &str) -> Result<Self, Error> {
         let parsed = Url::parse(url)?;
         match parsed.scheme() {
             "http" | "https" => Ok(Self::Http(parsed)),
-            "s3" => Ok(Self::S3(S3Uri::try_from(&parsed)?)),
+            "s3" => Ok(Self::S3(S3Uri::try_from(url)?)),
             scheme => Err(Error::unsupported_scheme(scheme.to_owned())),
         }
     }

@@ -1,10 +1,13 @@
+use litellm_s3::sdk::config::http::HttpResponse;
+use litellm_s3::sdk::error::SdkError;
+use litellm_s3::sdk::operation::get_object::GetObjectError;
+use litellm_s3::sdk::primitives::ByteStreamError;
 use thiserror::Error;
+use tokio::time::error::Elapsed;
 
 #[derive(Debug, Error)]
 #[error(transparent)]
 pub struct Error(Box<Repr>);
-
-type Cause = Box<dyn std::error::Error + Send + Sync>;
 
 #[derive(Debug, Error)]
 enum Repr {
@@ -17,16 +20,34 @@ enum Repr {
     #[error("invalid S3 URL")]
     S3Uri(#[source] litellm_s3::Error),
     #[error("S3 GetObject failed")]
-    S3(#[source] Cause),
+    S3GetObject(#[source] Box<SdkError<GetObjectError, HttpResponse>>),
+    #[error("S3 GetObject body read failed")]
+    S3Body(#[source] ByteStreamError),
+    #[error("S3 GetObject timed out")]
+    S3Timeout(#[source] Elapsed),
 }
 
 impl Error {
     pub fn unsupported_scheme(scheme: String) -> Self {
         Self(Box::new(Repr::UnsupportedScheme { scheme }))
     }
+}
 
-    pub fn s3(cause: impl Into<Cause>) -> Self {
-        Self(Box::new(Repr::S3(cause.into())))
+impl From<SdkError<GetObjectError, HttpResponse>> for Error {
+    fn from(cause: SdkError<GetObjectError, HttpResponse>) -> Self {
+        Self(Box::new(Repr::S3GetObject(Box::new(cause))))
+    }
+}
+
+impl From<ByteStreamError> for Error {
+    fn from(cause: ByteStreamError) -> Self {
+        Self(Box::new(Repr::S3Body(cause)))
+    }
+}
+
+impl From<Elapsed> for Error {
+    fn from(cause: Elapsed) -> Self {
+        Self(Box::new(Repr::S3Timeout(cause)))
     }
 }
 
@@ -59,7 +80,9 @@ mod tests {
 
     #[rstest]
     fn an_s3_failure_keeps_its_typed_cause_once() {
-        let error = Error::s3(io::Error::from(io::ErrorKind::ConnectionReset));
+        let error = Error::from(SdkError::<GetObjectError, HttpResponse>::timeout_error(
+            io::Error::from(io::ErrorKind::ConnectionReset),
+        ));
         let cause = find::<io::Error>(&error).expect("typed I/O cause");
         assert_eq!(cause.kind(), io::ErrorKind::ConnectionReset);
         assert_eq!(

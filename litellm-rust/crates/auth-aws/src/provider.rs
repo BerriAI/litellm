@@ -7,7 +7,6 @@ use crate::{AwsAuthConfig, AwsAuthService};
 
 type Environment = Arc<dyn Fn(&str) -> Option<String> + Send + Sync>;
 
-/// AWS credentials for an SDK client. The host picks where they come from and supplies the environment they read
 #[derive(Clone)]
 pub struct AwsCredentialsProvider {
     auth: AwsAuthService,

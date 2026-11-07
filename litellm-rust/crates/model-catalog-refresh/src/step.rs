@@ -3,14 +3,12 @@ use std::time::Duration;
 use crate::Error;
 use crate::policy::{RETRYABLE_STATUSES, RetryPolicy};
 
-/// What one attempt got back
 #[derive(Debug)]
 pub enum Reply {
     /// An HTTP answer. The body is read for every status, since a non-error one is the document
     Response {
         status: u16,
         etag: Option<String>,
-        /// `Retry-After` in seconds, when it parsed as a non-negative number
         retry_after: Option<f64>,
         body: Vec<u8>,
     },
@@ -39,10 +37,8 @@ pub struct Failure {
     pub retry_after: Option<f64>,
 }
 
-/// What the driver does next
 #[derive(Debug)]
 pub enum Step {
-    /// Wait, then make the next attempt
     Sleep(Duration),
     Done(Result<Fetched, Failure>),
 }
@@ -74,7 +70,6 @@ impl Attempts {
         self.policy.timeout
     }
 
-    /// Attempts made so far
     pub fn made(&self) -> u32 {
         self.made
     }
