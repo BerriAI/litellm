@@ -15,13 +15,18 @@ class CollieAiGuardrailConfigModelOptionalParams(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     deadline_ms: int | None = Field(
-        default=2500,
+        default=None,
         gt=0,
-        description="Each phase's whole deadline in milliseconds: connection, send, reply and parse.",
+        description=(
+            "Each phase's whole deadline in milliseconds: connection, send, reply and parse. "
+            "Leave empty for the package default."
+        ),
     )
     forward_conversation_id: bool | None = Field(
-        default=False,
-        description="Forward the caller's x-collieai-conversation-id header, and only that header.",
+        default=None,
+        description=(
+            "Forward the caller's x-collieai-conversation-id header, and only that header. Leave empty to keep it off."
+        ),
     )
 
 
@@ -33,8 +38,8 @@ class CollieAiGuardrailConfigModel(GuardrailConfigModel[CollieAiGuardrailConfigM
         description="CollieAi project API key, starting with clai_. Leave empty to use COLLIEAI_API_KEY.",
     )
     api_base: str | None = Field(
-        default=DEFAULT_API_BASE,
-        description="CollieAi's LiteLLM integration base URL.",
+        default=None,
+        description="CollieAi's LiteLLM integration base URL. Leave empty for CollieAi's hosted service.",
     )
 
     @staticmethod

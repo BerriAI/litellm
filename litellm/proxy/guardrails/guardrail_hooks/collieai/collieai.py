@@ -17,12 +17,10 @@ from litellm.types.proxy.guardrails.guardrail_hooks.collieai import CollieAiGuar
 PACKAGE_MODULE: Final = "collieai_guardrail.guardrail"
 MISSING_PACKAGE_MESSAGE: Final = (
     "collieai-litellm-guardrail>=1.0.0 (Python 3.11 or newer) is required for the CollieAi guardrail. "
-    'Install it with: pip install "collieai-litellm-guardrail>=1.0.0"'
+    'Install it with: pip install "collieai-litellm-guardrail>=1.0.0". '
+    "The LiteLLM Docker image does not include it, "
+    "see https://docs.collieai.io/integrations/litellm to add it to an image."
 )
-
-
-class CollieAiSetupError(Exception):
-    pass
 
 
 def has_readiness_guard(package: object) -> bool:
@@ -89,7 +87,6 @@ __all__ = (
     "MISSING_PACKAGE_MESSAGE",
     "PACKAGE_MODULE",
     "CollieAiGuardrail",
-    "CollieAiSetupError",
     "has_readiness_guard",
     "load_base",
     "missing_package",

@@ -12,7 +12,7 @@ from fastapi import HTTPException
 import litellm
 from litellm.caching.dual_cache import DualCache
 from litellm.exceptions import GuardrailRaisedException
-from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.integrations.custom_guardrail import CustomGuardrail, GuardrailSetupError
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_endpoints import (
     CreateGuardrailRequest,
@@ -23,7 +23,6 @@ from litellm.proxy.guardrails.guardrail_endpoints import (
 from litellm.proxy.guardrails.guardrail_hooks.collieai import CollieAiGuardrail, initialize_guardrail
 from litellm.proxy.guardrails.guardrail_hooks.collieai.collieai import (
     MISSING_PACKAGE_MESSAGE,
-    CollieAiSetupError,
     PACKAGE_MODULE,
     has_readiness_guard,
     load_base,
@@ -151,7 +150,7 @@ def test_a_cleared_optional_setting_leaves_the_package_its_default() -> None:
 def test_a_stream_scope_the_package_refuses_is_a_setup_error_and_adds_no_callback() -> None:
     litellm_params: Final = _params(enforcement_mode="block", stream_scope="streaming")
 
-    with pytest.raises(CollieAiSetupError, match="stream_scope"):
+    with pytest.raises(GuardrailSetupError, match="stream_scope"):
         initialize_guardrail(litellm_params, _guardrail(litellm_params), guardrail_cls=_RefusesStreamScope)
 
     assert litellm.callbacks == []
@@ -182,16 +181,15 @@ def test_takes_the_key_from_collieai_api_key_only_when_the_entry_has_none(monkey
     assert _init(_params()).given["api_key"] == API_KEY
 
 
-def test_ui_form_defaults_are_what_the_package_gets() -> None:
-    optional: Final = CollieAiGuardrailConfigModelOptionalParams()
+def test_an_untouched_ui_form_leaves_every_setting_to_the_package() -> None:
     model: Final = CollieAiGuardrailConfigModel(api_key=API_KEY)
+    optional: Final = CollieAiGuardrailConfigModelOptionalParams()
     callback: Final = _init(
         _params(**model.model_dump(exclude={"api_key", "optional_params"}), **optional.model_dump())
     )
 
-    assert callback.given["api_base"] == model.api_base
-    assert callback.given["deadline_ms"] == optional.deadline_ms
-    assert callback.given["forward_conversation_id"] == optional.forward_conversation_id
+    assert callback.given["api_base"] == DEFAULT_API_BASE
+    assert set(callback.given) == {"api_base", "api_key", "guardrail_name", "event_hook", "default_on", "stream_scope"}
 
 
 @pytest.mark.asyncio
@@ -202,8 +200,9 @@ async def test_ui_offers_collieai_fields_without_the_package() -> None:
 
     assert fields["ui_friendly_name"] == "CollieAi"
     assert fields["api_key"]["required"] is False
-    assert fields["api_base"]["default_value"] == DEFAULT_API_BASE
     assert set(fields["optional_params"]["fields"]) == {"deadline_ms", "forward_conversation_id"}
+    assert [name for name in ("api_key", "api_base") if "default_value" in fields[name]] == []
+    assert [name for name, field in fields["optional_params"]["fields"].items() if "default_value" in field] == []
 
 
 @pytest.mark.asyncio
@@ -277,7 +276,7 @@ def test_an_installed_package_that_fails_to_load_says_so_instead_of_asking_to_in
 
 @pytest.mark.skipif(PACKAGE_INSTALLED, reason="exercises the missing-package fallback")
 def test_missing_package_fails_at_config_load_with_install_hint() -> None:
-    with pytest.raises(CollieAiSetupError, match="pip install") as raised:
+    with pytest.raises(GuardrailSetupError, match="pip install") as raised:
         InMemoryGuardrailHandler().initialize_guardrail(_guardrail(_params()))
 
     assert not isinstance(raised.value, (ValueError, TypeError))

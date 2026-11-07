@@ -4,10 +4,11 @@ from collections.abc import Callable, Mapping
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
+from litellm.integrations.custom_guardrail import GuardrailSetupError
 from litellm.types.guardrails import SupportedGuardrailIntegrations
 from litellm.types.proxy.guardrails.guardrail_hooks.collieai import DEFAULT_API_BASE
 
-from .collieai import CollieAiGuardrail, CollieAiSetupError
+from .collieai import CollieAiGuardrail
 
 if TYPE_CHECKING:
     from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -40,7 +41,7 @@ def initialize_guardrail(
             }
         )
     except Exception as setup_error:
-        raise CollieAiSetupError(str(setup_error)) from setup_error
+        raise GuardrailSetupError(str(setup_error)) from setup_error
     litellm.logging_callback_manager.add_litellm_callback(_callback)
     return _callback
 
