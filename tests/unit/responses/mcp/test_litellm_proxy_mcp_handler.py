@@ -18,7 +18,9 @@ from openai.types.responses.tool_param import Mcp
 
 import litellm
 from litellm.caching.caching import DualCache
+from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.proxy.guardrails.guardrail_registry import InMemoryGuardrailHandler
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.proxy.mcp_server import operations as mcp_operations
 from litellm.proxy.common_utils.user_api_key_cache import object_permission_cache_key
@@ -503,6 +505,139 @@ async def test_execute_tool_calls_logs_failure_via_post_call_failure_hook(monkey
     post_call_failure_hook.assert_awaited_once()
     assert post_call_failure_hook.await_args is not None
     assert post_call_failure_hook.await_args.kwargs.get("route") == "/responses/mcp/call_tool"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("behavior", [None, "tool_result", "raise"])
+@pytest.mark.parametrize("error_kind", ["pii", "guardrail", "http", "string_http", "unattributed_http"])
+@pytest.mark.parametrize("mode", ["pre_mcp_call", "during_mcp_call"])
+async def test_mcp_block_behavior_preserves_failure_logging_and_propagates_only_opted_in_blocks(
+    monkeypatch: pytest.MonkeyPatch,
+    behavior: Literal["tool_result", "raise"] | None,
+    error_kind: str,
+    mode: str,
+) -> None:
+    call_tool: Final = _setup_mcp_call_environment(monkeypatch)
+    failure_hook: Final = _setup_proxy_logging(monkeypatch)
+    callback: Final = CustomGuardrail(guardrail_name="blocked", event_hook=mode, default_on=True)
+    callback.mcp_block_behavior = behavior
+    callback.use_native_lifecycle_hooks = True
+    unrelated: Final = CustomGuardrail(guardrail_name="blocked", event_hook=mode, default_on=True)
+    unrelated.mcp_block_behavior = "tool_result" if behavior == "raise" else "raise"
+    monkeypatch.setattr(litellm, "callbacks", [unrelated, callback])
+    error: Final = (
+        BlockedPiiEntityError(entity_type="EMAIL_ADDRESS", guardrail_name="blocked")
+        if error_kind == "pii"
+        else GuardrailRaisedException(guardrail_name="blocked", message="denied")
+        if error_kind == "guardrail"
+        else HTTPException(status_code=400, detail="denied")
+        if error_kind == "string_http"
+        else HTTPException(
+            status_code=400,
+            detail={"error": "denied", **({"guardrail_name": "blocked"} if error_kind == "http" else {})},
+        )
+    )
+    logger: Final = ProxyLogging(user_api_key_cache=DualCache())
+    settings: Final = types.SimpleNamespace(
+        guardrail_list=[{"guardrail_name": "blocked", "callback": item} for item in (unrelated, callback)],
+        is_set=lambda name: name == "guardrail_list",
+        guardrail=lambda name: {"callback": callback},
+    )
+    monkeypatch.setattr(
+        sys.modules["litellm.proxy.proxy_server"],
+        "llm_router",
+        types.SimpleNamespace(settings=lambda: settings),
+        raising=False,
+    )
+    auth: Final = UserAPIKeyAuth(api_key="test-key")
+
+    async def block(**kwargs: object) -> None:
+        raise error
+
+    callback.async_pre_call_hook = block
+    callback.async_moderation_hook = block
+
+    async def call_with_guardrail(**kwargs: object) -> None:
+        if error_kind == "unattributed_http":
+            raise error
+        data: Final = {"mcp_arguments": {"query": "denied"}}
+        if mode == "pre_mcp_call":
+            await logger._process_guardrail_callback(
+                unrelated, data, auth, "call_mcp_tool", GuardrailEventHooks.pre_mcp_call
+            )
+        else:
+            await logger._run_during_call_guardrail(callback, data, auth, auth, "call_mcp_tool")
+
+    call_tool.side_effect = call_with_guardrail
+    tool_calls: Final = [{"id": "blocked-call", "function": {"name": "search", "arguments": "{}"}}]
+
+    if behavior == "raise" and error_kind != "unattributed_http":
+        with pytest.raises(type(error)) as caught:
+            await LiteLLM_Proxy_MCP_Handler.execute_tool_calls(
+                tool_server_map={"search": "local"}, tool_calls=tool_calls, user_api_key_auth=auth
+            )
+        assert caught.value is error
+    else:
+        results: Final = await LiteLLM_Proxy_MCP_Handler.execute_tool_calls(
+            tool_server_map={"search": "local"}, tool_calls=tool_calls, user_api_key_auth=auth
+        )
+        assert len(results) == 1
+        assert results[0]["tool_call_id"] == "blocked-call"
+        expected_prefix: Final = "Tool call failed" if "http" in error_kind else "Tool call blocked"
+        assert results[0]["result"].startswith(expected_prefix)
+    failure_hook.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("behavior", [None, "tool_result", "raise"])
+async def test_initialized_content_filter_blocks_mcp_according_to_its_config(
+    monkeypatch: pytest.MonkeyPatch, behavior: Literal["tool_result", "raise"] | None
+) -> None:
+    for name in (
+        "callbacks", "input_callback", "success_callback", "failure_callback",
+        "_async_success_callback", "_async_failure_callback",
+    ):
+        monkeypatch.setattr(litellm, name, [])
+    handler: Final = InMemoryGuardrailHandler()
+    handler.initialize_guardrail(
+        guardrail={
+            "guardrail_name": "configured-block",
+            "litellm_params": {
+                "guardrail": "litellm_content_filter",
+                "mode": "pre_mcp_call",
+                "default_on": True,
+                "blocked_words": [{"keyword": "forbiddenmarker", "action": "BLOCK"}],
+                **({"mcp_block_behavior": behavior} if behavior is not None else {}),
+            },
+        }
+    )
+    manager: Final = MCPServerManager()
+    server: Final = MCPServer(server_id="local", name="local", transport=MCPTransport.http, url="http://upstream")
+    manager.registry = {server.server_id: server}
+    manager.tool_name_to_mcp_server_name_mapping = {"local-search": "local"}
+    client: Final = AsyncMock()
+    client.call_tool.return_value = CallToolResult(content=[TextContent(type="text", text="ok")])
+    manager.create_mcp_client = AsyncMock(return_value=client)
+    logger: Final = ProxyLogging(user_api_key_cache=DualCache())
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", logger)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
+    monkeypatch.setattr("litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager", manager)
+    tool_calls: Final = [{"id": "blocked", "function": {"name": "search", "arguments": '{"query":"forbiddenmarker"}'}}]
+    kwargs: Final = {
+        "tool_server_map": {"search": "local"},
+        "tool_calls": tool_calls,
+        "user_api_key_auth": UserAPIKeyAuth(api_key="test-key"),
+        "served_tools": [MCPTool(name="search", inputSchema={"type": "object"})],
+    }
+    if behavior == "raise":
+        with pytest.raises(HTTPException, match="forbiddenmarker"):
+            await LiteLLM_Proxy_MCP_Handler.execute_tool_calls(**kwargs)
+    else:
+        results: Final = await LiteLLM_Proxy_MCP_Handler.execute_tool_calls(**kwargs)
+        assert len(results) == 1
+        assert results[0]["tool_call_id"] == "blocked"
+        assert "Content blocked: keyword 'forbiddenmarker' detected" in results[0]["result"]
+    client.call_tool.assert_not_awaited()
 
 
 @pytest.mark.asyncio

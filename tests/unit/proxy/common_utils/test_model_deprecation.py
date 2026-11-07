@@ -762,7 +762,7 @@ def test_retirement_pages_resume_inside_large_alias_without_losing_configured_su
         model_list=[
             {
                 "model_name": "alias",
-                "litellm_params": {"model": f"openai/paged-model-{index}"},
+                "litellm_params": {"model": "openai/paged-model"},
                 "model_info": {
                     "id": f"paged-{index}",
                     "deprecation_date": "2026-11-20",
@@ -790,8 +790,27 @@ def test_retirement_pages_resume_inside_large_alias_without_losing_configured_su
     expected = collect_model_deprecations(router, today=today).imminent
     assert models == tuple(expected)
     assert len(models) == 1
-    assert models[0].litellm_model == "openai/paged-model-0"
+    assert models[0].litellm_model == "openai/paged-model"
     assert models[0].successor_model == "replacement"
+
+
+def test_retirement_pages_preserve_distinct_models_sharing_an_alias_and_date() -> None:
+    router = Router(
+        model_list=[
+            {
+                "model_name": "shared-alias",
+                "litellm_params": {"model": model},
+                "model_info": {"id": model, "deprecation_date": "2026-11-20"},
+            }
+            for model in ("openai/unused-retired-model", "openai/used-retired-model")
+        ]
+    )
+    page = RouterDeprecationSource(lambda: router).page(date(2026, 11, 5), DeprecationScanCursor())
+    assert page.complete
+    assert tuple(model.litellm_model for model in page.models) == (
+        "openai/unused-retired-model",
+        "openai/used-retired-model",
+    )
 
 
 def test_retirement_source_bounds_pages_and_restarts_identity_after_router_replacement() -> None:

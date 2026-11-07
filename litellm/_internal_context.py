@@ -105,8 +105,15 @@ def current_service_target() -> str | None:
     return _service_target.get()
 
 
-def with_service_target(target: str) -> Callable[[Callable[_P, _R]], Callable[_P, _R]]:
-    """Run every call of the decorated function, coroutine functions included, under ``service_target(target)``."""
+def with_service_target(
+    target: str, *, preserve_existing: bool = False
+) -> Callable[[Callable[_P, _R]], Callable[_P, _R]]:
+    """Run calls under the target, or the inherited target when ``preserve_existing`` is true."""
+
+    def call_target() -> str:
+        if preserve_existing:
+            return current_service_target() or target
+        return target
 
     def decorate(fn: Callable[_P, _R]) -> Callable[_P, _R]:
         if inspect.iscoroutinefunction(fn):
@@ -116,14 +123,14 @@ def with_service_target(target: str) -> Callable[[Callable[_P, _R]], Callable[_P
 
             @wraps(fn)
             async def run_async(*args: _P.args, **kwargs: _P.kwargs) -> object:
-                with service_target(target):
+                with service_target(call_target()):
                     return await awaitable_fn(*args, **kwargs)
 
             return cast("Callable[_P, _R]", run_async)  # cast-ok: same coroutine-returning signature as ``fn``
 
         @wraps(fn)
         def run(*args: _P.args, **kwargs: _P.kwargs) -> _R:
-            with service_target(target):
+            with service_target(call_target()):
                 return fn(*args, **kwargs)
 
         return run

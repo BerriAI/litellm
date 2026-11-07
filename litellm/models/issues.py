@@ -53,7 +53,10 @@ class IssueStore(Protocol):
         status: UsageAlertStatus,
         expected_status: UsageAlertStatus,
         actor: str | None = None,
+        authorized_scopes: tuple[IssueCohort, ...] | None = None,
     ) -> Issue | None: ...
+
+    async def status_scopes(self, issue_id: str) -> tuple[IssueCohort, ...]: ...
 
     async def upsert_issue(
         self,

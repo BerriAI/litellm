@@ -1,7 +1,8 @@
 from datetime import date, datetime
-from typing import Literal, Self, TypeAlias
+from typing import Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from typing_extensions import Self
 
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     BoundedDailyActivityResponse,

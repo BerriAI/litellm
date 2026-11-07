@@ -86,6 +86,29 @@ def test_scoped_rules_use_real_management_auth_and_preserve_read_only_roles(gate
         assert gateway.request("GET", path, key=owner_key).status_code == 404
 
 
+def test_admin_edit_preserves_owner_rule_access(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        owner: Final = scenario.user(user_role="internal_user")
+        owner_key: Final = scenario.key(user_id=owner, key_type="management")
+        config: Final = {
+            "name": "Owner policy",
+            "scope_type": "user",
+            "scope_id": owner,
+            "metric": "spend",
+            "direction": "increase",
+        }
+        created: Final = gateway.request("POST", "/usage/alert-rules", config, key=owner_key)
+        assert created.status_code == 201, created.text
+        path: Final = f"/usage/alert-rules/{created.json()['id']}"
+        try:
+            edited: Final = gateway.request("PUT", path, {**config, "name": "Renamed by admin"})
+            assert edited.status_code == 200, edited.text
+            owner_edit: Final = gateway.request("PUT", path, {**config, "multiplier": 5}, key=owner_key)
+            assert owner_edit.status_code == 200, "Admin edit must preserve the owner's rule access"
+        finally:
+            assert gateway.request("DELETE", path).status_code == 204
+
+
 def test_team_admin_can_manage_team_alerts_but_member_can_only_read(gateway: Gateway) -> None:
     with gateway.scenario() as scenario:
         admin_id: Final = scenario.user(user_role="internal_user")

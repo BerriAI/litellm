@@ -3,9 +3,9 @@ import useTeams from "@/app/(dashboard)/hooks/useTeams";
 import { renderWithProviders } from "../../../tests/test-utils";
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { KeyResponse, Team } from "../key_team_helpers/key_list";
-import { dailyActivityAggregatedCall, keyDeleteCall, keyUpdateCall, teamInfoCall } from "../networking";
+import { dailyActivityAggregatedCall, keyDeleteCall, keyUpdateCall, regenerateKeyCall, teamInfoCall } from "../networking";
 import { EMPTY_DAILY_ACTIVITY_RESPONSE } from "../UsagePage/dailyActivityApi";
 import { QueryClient } from "@tanstack/react-query";
 import KeyInfoView, { needsLifetimeSpendBackfill } from "./key_info_view";
@@ -94,6 +94,7 @@ vi.mock("../networking", () => ({
   keyDeleteCall: vi.fn().mockResolvedValue({}),
   keyUpdateCall: vi.fn().mockResolvedValue({}),
   dailyActivityAggregatedCall: vi.fn(),
+  regenerateKeyCall: vi.fn().mockResolvedValue({ key: "sk-regenerated", token: "regenerated-token" }),
   teamInfoCall: vi.fn(),
   getPolicyInfoWithGuardrails: vi.fn().mockResolvedValue({
     resolved_guardrails: ["guardrail-1", "guardrail-2"],
@@ -279,6 +280,25 @@ describe("KeyInfoView", () => {
     renderWithProviders(<KeyInfoView keyData={MOCK_KEY_DATA} onClose={() => {}} keyId="test-key-id" teams={[]} />);
 
     expect(screen.queryByRole("tab", { name: "Auto-router usage" })).not.toBeInTheDocument();
+  });
+
+  it.each(["detail_tab", "key_detail_tab"])("rejects the hidden auto-router tab from %s", async (tabQueryKey) => {
+    vi.mocked(useAuthorized).mockReturnValue({ ...baseUseAuthorizedMock, userRole: "Internal User" });
+    const onUrlUpdate = vi.fn();
+    renderWithProviders(
+      <KeyInfoView
+        keyData={MOCK_KEY_DATA}
+        onClose={() => {}}
+        keyId="test-key-id"
+        teams={[]}
+        tabQueryKey={tabQueryKey}
+      />,
+      { searchParams: `${tabQueryKey}=auto-router-usage`, onUrlUpdate, resetUrlUpdateQueueOnMount: false },
+    );
+
+    expect(screen.getByRole("tab", { name: "Overview" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.queryByTestId("key-auto-router-usage")).not.toBeInTheDocument();
+    await waitFor(() => expect(onUrlUpdate.mock.lastCall?.[0].searchParams.has(tabQueryKey)).toBe(false));
   });
 
   it("keeps the team tab when changing a nested key tab", async () => {
@@ -1520,6 +1540,88 @@ describe("KeyInfoView", () => {
       });
 
       invalidateSpy.mockRestore();
+    });
+  });
+
+  describe("regenerate on a German-locale browser", () => {
+    const isoLikeLocaleString = vi.mocked(Date.prototype.toLocaleString).getMockImplementation();
+    const numericDateTime: Intl.DateTimeFormatOptions = {
+      year: "numeric",
+      month: "numeric",
+      day: "numeric",
+      hour: "numeric",
+      minute: "numeric",
+      second: "numeric",
+    };
+    const germanDateTime = new Intl.DateTimeFormat("de-DE", numericDateTime);
+
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2026-01-20T12:00:00Z"));
+      vi.mocked(Date.prototype.toLocaleString).mockImplementation(function (this: Date) {
+        return germanDateTime.format(this);
+      });
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+      if (isoLikeLocaleString) {
+        vi.mocked(Date.prototype.toLocaleString).mockImplementation(isoLikeLocaleString);
+      }
+    });
+
+    it("shows the regeneration time as the key's created time", async () => {
+      vi.mocked(useAuthorized).mockReturnValue({
+        ...baseUseAuthorizedMock,
+        userId: "proxy-admin-user",
+        userRole: "proxy_admin",
+      });
+      renderWithProviders(
+        <KeyInfoView
+          keyData={MOCK_KEY_DATA}
+          onClose={() => {}}
+          keyId="test-key-id"
+          onKeyDataUpdate={() => {}}
+          teams={[]}
+        />,
+      );
+
+      await userEvent.click(await screen.findByRole("button", { name: "Regenerate Key" }));
+      await userEvent.click(await screen.findByRole("button", { name: "Regenerate" }));
+      await waitFor(() => expect(regenerateKeyCall).toHaveBeenCalled());
+      await userEvent.keyboard("{Escape}");
+      await userEvent.click(screen.getByRole("tab", { name: "Settings" }));
+
+      const lastRegenerated = within(screen.getByText("Last Regenerated").parentElement!).getByText(/ at /);
+      expect(lastRegenerated).toHaveTextContent("2026");
+      expect(screen.getByText("Created").nextElementSibling).toHaveTextContent(lastRegenerated.textContent!);
+    });
+
+    it("hands the parent the regeneration time as an ISO timestamp", async () => {
+      vi.mocked(useAuthorized).mockReturnValue({
+        ...baseUseAuthorizedMock,
+        userId: "proxy-admin-user",
+        userRole: "proxy_admin",
+      });
+      const onKeyDataUpdate = vi.fn();
+      renderWithProviders(
+        <KeyInfoView
+          keyData={MOCK_KEY_DATA}
+          onClose={() => {}}
+          keyId="test-key-id"
+          onKeyDataUpdate={onKeyDataUpdate}
+          teams={[]}
+        />,
+      );
+
+      await userEvent.click(await screen.findByRole("button", { name: "Regenerate Key" }));
+      await userEvent.click(await screen.findByRole("button", { name: "Regenerate" }));
+      await waitFor(() => expect(regenerateKeyCall).toHaveBeenCalled());
+      await userEvent.keyboard("{Escape}");
+
+      expect(onKeyDataUpdate).toHaveBeenCalledWith(
+        expect.objectContaining({ token: "regenerated-token", created_at: "2026-01-20T12:00:00.000Z" }),
+      );
     });
   });
 });

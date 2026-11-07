@@ -94,6 +94,8 @@ from litellm.litellm_core_utils.routing_common_utils import (
 from litellm.litellm_core_utils.routing_groups import apply_routing_group_priority
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.llms.openai_like.model_info import MODEL_INFO_REFRESH_SECONDS
+from litellm.redis.stores.connection import connect
+from litellm.redis.stores.router_usage import RouterUsage, RouterUsageStore
 from litellm.responses.bridge_check import keep_registered_mode
 from litellm.router_api import RouterRegistry, deployment_id
 from litellm.router_rust.invoke.shaping import ROUTER_CLIENTS_TARGET
@@ -656,6 +658,7 @@ class HostRegistry(HostModelInfo):
         self._core_complexity_routers: dict[str, list[TaggedPreRoutingStrategy[object]]] = {}  # mutable-ok: same
         self._core_adaptive_routers: dict[str, list[TaggedPreRoutingStrategy[object]]] = {}  # mutable-ok: same
         self._core_quality_routers: dict[str, list[TaggedPreRoutingStrategy[object]]] = {}  # mutable-ok: same
+        self._core_switchyard_routers: dict[str, list[TaggedPreRoutingStrategy[object]]] = {}  # mutable-ok: same
         self.strategies: PreRoutingStrategies | None = None
         # The router's optional pre-call checks (deployment budgets, prompt caching pins);
         # RustCore installs its ``OptionalChecks`` (litellm/router_rust/steps/callbacks.py).
@@ -673,6 +676,8 @@ class HostRegistry(HostModelInfo):
         self._zero_cost_cache: dict[str, bool] = {}  # mutable-ok: the auth checks write into it
         # The routing cache usage reads come from; RustCore sets it to the one its Rust core writes.
         self._core_cache: DualCache = DualCache()
+        # The tpm/rpm store usage reads come from; RustCore sets it to the one its Rust core writes.
+        self._core_usage_store: RouterUsage = RouterUsageStore(connect(None).router_usage())
         self._discovered_model_info_cache: InMemoryCache = InMemoryCache(
             max_size_in_memory=1, default_ttl=2 * MODEL_INFO_REFRESH_SECONDS
         )
@@ -1505,6 +1510,14 @@ class HostRegistry(HostModelInfo):
         if self.checks is None:
             return self.__getattr__("_core_prompt_caching_pin_cache")  # pyright: ignore[reportReturnType]  # raises RustCoreUnsupported
         return self.checks.prompt_caching_pin_cache
+
+    def _core_decryptable_reasoning(
+        self, model_group: str, request_input: Sequence[object], targets: Sequence[Deployment]
+    ) -> tuple[object, ...]:
+        """The input ``targets`` can decrypt (``registry().decryptable_reasoning``)."""
+        if self.checks is None:
+            return self.__getattr__("_core_decryptable_reasoning")  # pyright: ignore[reportReturnType]  # raises RustCoreUnsupported
+        return self.checks.decryptable_reasoning(model_group, request_input, targets)
 
     def replay_model_cost_registrations(self) -> None:
         """Re-register every served deployment's cost-map entries (``replay_model_cost_registrations``)."""

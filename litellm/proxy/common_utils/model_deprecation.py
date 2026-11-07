@@ -414,7 +414,11 @@ def _scan_deprecation_model(
     position: Final = positions[cursor.group_position]
     candidate: Final = info(position)
     advanced: Final = cursor.model_copy(update={"group_position": cursor.group_position + 1})
-    if candidate is None or candidate.info.deprecation_date != cursor.model.deprecation_date:
+    if candidate is None or (
+        candidate.info.deprecation_date,
+        candidate.info.litellm_model,
+        candidate.info.litellm_provider,
+    ) != (cursor.model.deprecation_date, cursor.model.litellm_model, cursor.model.litellm_provider):
         return advanced, None
     if position < cursor.deployment:
         return DeprecationScanCursor(deployment=cursor.deployment + 1), None

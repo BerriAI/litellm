@@ -1,15 +1,18 @@
 import csv
 import io
 from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass, fields
 from itertools import chain
 from types import MappingProxyType, SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock
 
+import httpx
 import pytest
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
+from prisma.errors import DataError
 
 from litellm import constants
 from litellm.llms.azure.ptu_capacity import AZURE_PTU_CAPACITY
@@ -421,6 +424,8 @@ def _user_spend_row(user_id: str, rows: Sequence[_Activity]) -> UserSpendRow:
         api_requests=sum(row.api_requests for row in matching),
         successful_requests=sum(row.successful_requests for row in matching),
         failed_requests=sum(row.failed_requests for row in matching),
+        total_response_time_ms=sum(row.total_response_time_ms for row in matching),
+        timed_requests=sum(row.timed_requests for row in matching),
     )
 
 
@@ -445,6 +450,8 @@ def _key_spend_row(api_key: str, rows: Sequence[_Activity]) -> KeySpendRow:
         api_requests=sum(row.api_requests for row in matching),
         successful_requests=sum(row.successful_requests for row in matching),
         failed_requests=sum(row.failed_requests for row in matching),
+        total_response_time_ms=sum(row.total_response_time_ms for row in matching),
+        timed_requests=sum(row.timed_requests for row in matching),
         cache_read_input_tokens=sum(row.cache_read_input_tokens for row in matching),
         cache_creation_input_tokens=sum(row.cache_creation_input_tokens for row in matching),
     )
@@ -520,6 +527,14 @@ class _PrismaTable:
         return next((row for row in self._rows if _matches(row, where)), None)
 
 
+class _FailingPrismaTable:
+    def __init__(self, failure: Exception) -> None:
+        self._failure: Final = failure
+
+    async def find_many(self, **kwargs: object) -> tuple[object, ...]:
+        raise self._failure
+
+
 def _matches(row: object, where: Mapping[str, object]) -> bool:
     return all(
         getattr(row, field_name, None) in value["in"]
@@ -529,7 +544,7 @@ def _matches(row: object, where: Mapping[str, object]) -> bool:
     )
 
 
-def _prisma_client() -> object:
+def _prisma_client(**table_overrides: object) -> object:
     user: Final = LiteLLM_UserTable(
         user_id="user-a",
         user_email="user@example.test",
@@ -552,7 +567,7 @@ def _prisma_client() -> object:
         team_alias="Team B",
         members_with_roles=[Member(user_id="user-b", role="user")],
     )
-    db: Final = SimpleNamespace(
+    default_tables: Final = SimpleNamespace(
         litellm_usertable=_PrismaTable((user, other_user)),
         litellm_teamtable=_PrismaTable((team, other_team)),
         litellm_verificationtoken=_PrismaTable((SimpleNamespace(token="key-alpha", user_id="user-a"),)),
@@ -581,13 +596,12 @@ def _prisma_client() -> object:
             )
         ),
     )
+    db: Final = SimpleNamespace(**{**vars(default_tables), **table_overrides})
     return SimpleNamespace(db=db, writer_db=db)
 
 
-@pytest.fixture
-def daily_activity_client() -> Iterator[tuple[TestClient, _FakeRepository]]:
-    repository: Final = _FakeRepository(_seeded_activity())
-    prisma_client: Final = _prisma_client()
+@contextmanager
+def _daily_activity_test_client(repository: _FakeRepository, prisma_client: object) -> Iterator[TestClient]:
     app: Final = FastAPI()
     app.include_router(router)
 
@@ -607,6 +621,13 @@ def daily_activity_client() -> Iterator[tuple[TestClient, _FakeRepository]]:
     app.dependency_overrides[get_daily_activity_llm_router] = lambda: None
     app.dependency_overrides[user_api_key_auth] = resolve_auth
     with TestClient(app) as client:
+        yield client
+
+
+@pytest.fixture
+def daily_activity_client() -> Iterator[tuple[TestClient, _FakeRepository]]:
+    repository: Final = _FakeRepository(_seeded_activity())
+    with _daily_activity_test_client(repository, _prisma_client()) as client:
         yield client, repository
 
 
@@ -856,6 +877,8 @@ def test_key_page_routes_map_ranked_rows_and_totals(
                     "api_requests": 1,
                     "successful_requests": 1,
                     "failed_requests": 0,
+                    "total_response_time_ms": 100,
+                    "timed_requests": 1,
                     "cache_read_input_tokens": 0,
                     "cache_creation_input_tokens": 1,
                 },
@@ -877,6 +900,8 @@ def test_key_page_routes_map_ranked_rows_and_totals(
                     "api_requests": 2,
                     "successful_requests": 2,
                     "failed_requests": 0,
+                    "total_response_time_ms": 200,
+                    "timed_requests": 2,
                     "cache_read_input_tokens": 0,
                     "cache_creation_input_tokens": 2,
                 },
@@ -991,6 +1016,8 @@ def test_user_page_route_ranks_users_by_spend_and_attaches_metadata(
                 "api_requests": 1,
                 "successful_requests": 1,
                 "failed_requests": 0,
+                "total_response_time_ms": 100,
+                "timed_requests": 1,
             },
             {
                 "user_id": "user-a",
@@ -1003,6 +1030,8 @@ def test_user_page_route_ranks_users_by_spend_and_attaches_metadata(
                 "api_requests": 6,
                 "successful_requests": 6,
                 "failed_requests": 0,
+                "total_response_time_ms": 600,
+                "timed_requests": 6,
             },
         ],
         "total_users": 2,
@@ -1013,6 +1042,178 @@ def test_user_page_route_ranks_users_by_spend_and_attaches_metadata(
     assert user_page_call is not None
     assert user_page_call[1:] == (0, constants.USAGE_USER_PAGE_DEFAULT)
     assert repository.user_metadata.call_args.args[0] == frozenset(("user-a", "user-b"))
+
+
+_LOOKUP_DATABASE_FAILURES: Final = pytest.mark.parametrize(
+    "failure",
+    [
+        DataError({"user_facing_error": {"error_code": "P1001", "message": "Can't reach database server"}}),
+        httpx.ConnectError("the query engine refused the connection"),
+    ],
+    ids=["unreachable-database", "engine-connect-error"],
+)
+_KEY_ROWS_ROUTES: Final = pytest.mark.parametrize(
+    ("suffix", "extra_params"),
+    [
+        ("keys", {}),
+        ("search", {"search": "key"}),
+        ("model_top_keys", {"model_group": "rare-group"}),
+        ("cache_leakage_keys", {}),
+    ],
+    ids=["keys", "search", "model_top_keys", "cache_leakage_keys"],
+)
+
+
+@_LOOKUP_DATABASE_FAILURES
+@_KEY_ROWS_ROUTES
+def test_key_routes_keep_spend_when_the_key_lookup_hits_a_database_failure(
+    daily_activity_client: tuple[TestClient, _FakeRepository],
+    suffix: str,
+    extra_params: Mapping[str, str],
+    failure: Exception,
+) -> None:
+    client, repository = daily_activity_client
+    repository.key_metadata.side_effect = failure
+
+    response: Final = client.get(
+        f"/user/daily/activity/aggregated/{suffix}",
+        params={**_entity_params("user_id", "user-a"), **extra_params},
+    )
+
+    assert response.status_code == 200, response.text
+    rows: Final = response.json()["api_keys"]
+    assert rows
+    assert all(row["metrics"]["spend"] > 0 for row in rows)
+    assert {row["metadata"]["key_alias"] for row in rows} == {None}
+
+
+@_KEY_ROWS_ROUTES
+def test_key_routes_still_report_a_lookup_bug_that_is_not_a_database_failure(
+    daily_activity_client: tuple[TestClient, _FakeRepository],
+    suffix: str,
+    extra_params: Mapping[str, str],
+) -> None:
+    client, repository = daily_activity_client
+    repository.key_metadata.side_effect = AttributeError("not a database failure")
+
+    response: Final = client.get(
+        f"/user/daily/activity/aggregated/{suffix}",
+        params={**_entity_params("user_id", "user-a"), **extra_params},
+    )
+
+    assert response.status_code == 500, response.text
+    assert "not a database failure" in response.text
+
+
+@_LOOKUP_DATABASE_FAILURES
+def test_user_page_route_keeps_spend_when_the_user_lookup_hits_a_database_failure(
+    daily_activity_client: tuple[TestClient, _FakeRepository],
+    failure: Exception,
+) -> None:
+    client, repository = daily_activity_client
+    repository.user_metadata.side_effect = failure
+
+    response: Final = client.get("/user/daily/activity/aggregated/users", params=_DATE_PARAMS)
+
+    assert response.status_code == 200, response.text
+    assert [(user["user_id"], user["spend"], user["user_email"]) for user in response.json()["users"]] == [
+        ("user-b", 100.0, None),
+        ("user-a", 14.5, None),
+    ]
+
+
+def test_user_page_route_still_reports_a_lookup_bug_that_is_not_a_database_failure(
+    daily_activity_client: tuple[TestClient, _FakeRepository],
+) -> None:
+    client, repository = daily_activity_client
+    repository.user_metadata.side_effect = AttributeError("not a database failure")
+
+    response: Final = client.get("/user/daily/activity/aggregated/users", params=_DATE_PARAMS)
+
+    assert response.status_code == 500, response.text
+    assert "not a database failure" in response.text
+
+
+_ENTITY_ALIAS_LOOKUPS: Final = pytest.mark.parametrize(
+    ("prefix", "query_name", "entity_id", "alias_table", "alias"),
+    [
+        ("/team", "team_ids", "team-a", "litellm_teamtable", {"team_alias": "Team A"}),
+        ("/organization", "organization_ids", "org-a", "litellm_organizationtable", {"organization_alias": "Org A"}),
+        ("/customer", "end_user_ids", "customer-a", "litellm_endusertable", {"alias": "Customer A"}),
+        ("/agent", "agent_ids", "agent-a", "litellm_agentstable", {"agent_name": "Agent A"}),
+    ],
+    ids=["team", "organization", "customer", "agent"],
+)
+
+
+def _aggregated_entity_metadata(
+    prefix: str, query_name: str, entity_id: str, prisma_client: object
+) -> tuple[httpx.Response, tuple[Mapping[str, object], ...]]:
+    with _daily_activity_test_client(_FakeRepository(_seeded_activity()), prisma_client) as client:
+        response: Final = client.get(f"{prefix}/daily/activity/aggregated", params=_entity_params(query_name, entity_id))
+    if response.status_code != 200:
+        return response, ()
+    entities: Final = chain.from_iterable(
+        result["breakdown"]["entities"].values() for result in response.json()["results"]
+    )
+    return response, tuple(entity["metadata"] for entity in entities)
+
+
+@_LOOKUP_DATABASE_FAILURES
+@_ENTITY_ALIAS_LOOKUPS
+def test_entity_routes_keep_spend_and_blank_the_alias_when_the_alias_lookup_hits_a_database_failure(
+    prefix: str,
+    query_name: str,
+    entity_id: str,
+    alias_table: str,
+    alias: Mapping[str, object],
+    failure: Exception,
+) -> None:
+    healthy, healthy_metadata = _aggregated_entity_metadata(prefix, query_name, entity_id, _prisma_client())
+    failed, failed_metadata = _aggregated_entity_metadata(
+        prefix, query_name, entity_id, _prisma_client(**{alias_table: _FailingPrismaTable(failure)})
+    )
+
+    assert failed.status_code == 200, failed.text
+    assert failed.json()["metadata"] == healthy.json()["metadata"]
+    assert healthy_metadata and set(map(str, healthy_metadata)) == {str(alias)}
+    assert failed_metadata and set(map(str, failed_metadata)) == {str({})}
+
+
+@_ENTITY_ALIAS_LOOKUPS
+def test_entity_routes_still_report_an_alias_lookup_bug_that_is_not_a_database_failure(
+    prefix: str,
+    query_name: str,
+    entity_id: str,
+    alias_table: str,
+    alias: Mapping[str, object],
+) -> None:
+    failed, _ = _aggregated_entity_metadata(
+        prefix,
+        query_name,
+        entity_id,
+        _prisma_client(**{alias_table: _FailingPrismaTable(AttributeError("not a database failure"))}),
+    )
+
+    assert failed.status_code == 500, failed.text
+    assert "not a database failure" in failed.text
+
+
+@_LOOKUP_DATABASE_FAILURES
+def test_team_route_fails_closed_for_a_team_member_when_the_team_lookup_hits_a_database_failure(
+    failure: Exception,
+) -> None:
+    repository: Final = _FakeRepository(_seeded_activity())
+    prisma_client: Final = _prisma_client(litellm_teamtable=_FailingPrismaTable(failure))
+    with _daily_activity_test_client(repository, prisma_client) as client:
+        response: Final = client.get(
+            "/team/daily/activity/aggregated",
+            params=_entity_params("team_ids", "team-a"),
+            headers={"x-user-role": LitellmUserRoles.INTERNAL_USER.value, "x-user-id": "user-a"},
+        )
+
+    assert response.status_code == 500, response.text
+    repository.aggregated.assert_not_called()
 
 
 def test_user_page_route_forwards_offset_and_limit(
@@ -1191,6 +1392,8 @@ def test_model_top_routes_rank_keys_and_include_metadata(
         api_requests=1,
         successful_requests=1,
         failed_requests=0,
+        total_response_time_ms=100,
+        timed_requests=1,
         cache_read_input_tokens=0,
         cache_creation_input_tokens=1,
     )
@@ -1486,6 +1689,8 @@ def test_user_cache_leakage_route_returns_cache_keys_and_metadata(
         api_requests=1,
         successful_requests=1,
         failed_requests=0,
+        total_response_time_ms=100,
+        timed_requests=1,
         cache_read_input_tokens=20,
         cache_creation_input_tokens=1,
     )

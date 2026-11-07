@@ -1,6 +1,7 @@
 """Once-daily evaluation, polled hourly by one database-elected worker."""
 
 import asyncio
+import re
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
@@ -59,7 +60,8 @@ def _has_activity_page(scope: UsageAlertScope, entity: str) -> bool:
     if not entity.strip():
         return False
     if scope == "key":
-        return entity != "unattributed" and not entity.removeprefix("raw:").startswith("sk-")
+        key: Final = re.sub(r"^(?:raw:)+", "", entity)
+        return key not in ("", "unattributed") and not key.startswith("sk-")
     if scope == "user":
         return entity != "default_user_id"
     if scope == "team":
@@ -224,9 +226,9 @@ class UsageAlertJob:
         )
         if self._performance_projection is None:
             await self._notify(deadline)
-        elif (
-            work := await self._store.pending_projection_work()
-        ) is not None and await self._performance_projection.run_pending(now, work, self._store, deadline):
+        elif (work := await self._store.pending_projection_work()) is None:
+            await self._performance_projection.notify(deadline)
+        elif await self._performance_projection.run_pending(now, work, self._store, deadline):
             await self._store.finish_projection_work(work)
         await self._store.prune()
 

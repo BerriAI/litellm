@@ -8,6 +8,17 @@
     "retry": "Retry",
     "empty": "No activity in this date range."
   },
+  "format": {
+    "number": "{{val, number}}",
+    "compactNumber": "{{val, compact}}",
+    "usd": "{{val, usd}}",
+    "relativeTime": "{{val, relativetime}}",
+    "date": "{{val, date}}",
+    "monthDay": "{{val, monthday}}",
+    "monthDayTime": "{{val, monthdaytime}}",
+    "timestamp": "{{val, timestamp}}",
+    "numericDateTime": "{{val, numericdatetime}}"
+  },
   "agents": {
     "killSwitchConfig": {
       "authTypes": {
@@ -6703,13 +6714,17 @@
         "maxBudget": "Max Budget (USD)",
         "maxBudgetHint": "Maximum amount in USD this tag can spend. When reached, requests with this tag will be blocked",
         "resetBudget": "Reset Budget",
-        "resetBudgetHint": "How often the budget should reset. For example, setting 'daily' will reset the budget every 24 hours"
+        "resetBudgetHint": "How often the budget should reset. For example, setting 'daily' will reset the budget every 24 hours",
+        "tpmLimit": "TPM Limit",
+        "tpmLimitHint": "Maximum tokens per minute across every key and team that sends this tag. Requests over the limit get a 429",
+        "rpmLimit": "RPM Limit",
+        "rpmLimitHint": "Maximum requests per minute across every key and team that sends this tag. Requests over the limit get a 429"
       },
       "budgetSection": "Budget & Rate Limits (Optional)",
-      "rateLimitsNotice": "TPM/RPM limits for tags are not currently supported. If you need this feature, please <issue>create a GitHub issue</issue>.",
       "submit": "Create Tag",
       "validation": {
-        "nameRequired": "Please input a tag name"
+        "nameRequired": "Please input a tag name",
+        "limitNonnegativeInteger": "Enter a whole number of 0 or more"
       }
     },
     "info": {
@@ -6751,15 +6766,19 @@
         "maxBudget": "Max Budget (USD)",
         "maxBudgetDescription": "Maximum amount in USD this tag can spend",
         "resetBudget": "Reset Budget",
-        "resetBudgetDescription": "How often the budget should reset"
+        "resetBudgetDescription": "How often the budget should reset",
+        "tpmLimit": "TPM Limit",
+        "tpmLimitDescription": "Maximum tokens per minute for this tag, shared across all keys and teams",
+        "rpmLimit": "RPM Limit",
+        "rpmLimitDescription": "Maximum requests per minute for this tag, shared across all keys and teams"
       },
       "budgetSection": "Budget & Rate Limits",
-      "rateLimitsNotice": "TPM/RPM limits for tags are not currently supported. If you need this feature, please <issue>create a GitHub issue</issue>.",
       "cancel": "Cancel",
       "save": "Save Changes",
       "validation": {
         "nameRequired": "Please input a tag name",
-        "budgetNonnegative": "Enter a nonnegative budget"
+        "budgetNonnegative": "Enter a nonnegative budget",
+        "limitNonnegativeInteger": "Enter a whole number of 0 or more"
       }
     }
   },
@@ -7218,7 +7237,8 @@
         "rpm": "Requests per Minute:",
         "openaiParams": "Supported OpenAI Parameters",
         "usageExample": "Usage Example",
-        "copyToClipboard": "Copy to clipboard"
+        "copyToClipboard": "Copy to clipboard",
+        "pricingByDeployment": "Pricing by Deployment:"
       },
       "agentDialog": {
         "fallbackTitle": "Agent Details",
@@ -7371,7 +7391,8 @@
         "usageExample": "Usage Example",
         "decisionNote": "Decision models answer on <code>/v1/decisions</code> and <code>/v1/systemone</code>, not <code>/chat/completions</code>.",
         "howToCall": "How to call decision models",
-        "tryPlayground": "Try it in the Playground"
+        "tryPlayground": "Try it in the Playground",
+        "pricingByDeployment": "Pricing by Deployment:"
       },
       "agentDialog": {
         "fallbackTitle": "Agent Details",
@@ -7906,7 +7927,8 @@
         "title": "Wildcard model",
         "description": "Call it as <example/>, with any model name this provider offers"
       },
-      "capabilities": "Capabilities"
+      "capabilities": "Capabilities",
+      "pricingByDeployment": "Pricing by deployment"
     },
     "agentInspector": {
       "copyName": "Copy agent name",
@@ -17421,12 +17443,12 @@
       "menu": {
         "unlimited": "Unlimited"
       },
-      "title": "Choose your classifier",
-      "titleTooltip": "Choose how requests are evaluated and routed to your tiers",
-      "aboutClassifiers": "About classifiers",
+      "title": "Choose your routing strategy",
+      "titleTooltip": "Choose how each request is evaluated and which model it is routed to",
+      "aboutClassifiers": "About routing strategies",
       "families": {
         "heuristics": "Heuristics",
-        "heuristicsDescription": "Classify locally, with no API call",
+        "heuristicsDescription": "Default. Classify locally, with no API call",
         "llmDescription": "Use a judge model to choose a solver",
         "decisionModel": "Decisions Model",
         "decisionModelDescription": "Use a decision model to choose a tier"
@@ -18450,9 +18472,9 @@
       "hardDescription": "Your stronger model",
       "roleModel": "{{label}} model",
       "selectModel": "Select a deployed model",
-      "needTwoModels": "Two deployed models are needed. Add a model or use Advanced configuration.",
+      "needTwoModels": "Two deployed models are needed. Add a model or customize tiers and keywords.",
       "chooseTwoModels": "Choose two models to get started.",
-      "advancedConfiguration": "Advanced configuration"
+      "advancedConfiguration": "Customize tiers and keywords"
     },
     "routerConfigBuilder": {
       "removeUtterance": "Remove {{utterance}}",
@@ -18758,7 +18780,6 @@
   "updateModelCredentialsModal": {
     "apiKeyRequired": "Enter a new API key",
     "updated": "API key updated",
-    "updateFailed": "Failed to update API key",
     "title": "Update API Key",
     "description": "Update this model's API key. Only the new key is sent; the rest of the deployment configuration is left untouched.",
     "apiKeyOnlyWarning": "Only the API key is rotated here. Models that authenticate with an Azure AD token, AWS credentials, or a Vertex service-account JSON aren't supported yet; update those from the model's LiteLLM Params for now.",
@@ -19614,7 +19635,6 @@
       "invalidLitellmParams": "LiteLLM Params must be a valid JSON object",
       "invalidModelInfo": "Invalid JSON in Model Info",
       "updateSuccess": "Model settings updated successfully",
-      "updateFailed": "Failed to update model settings",
       "noComplexityTiers": "No complexity tiers are configured yet, so there is nothing to test.",
       "testingConnection": "Testing connection...",
       "connectionSuccess": "Connection test successful!",
@@ -20309,6 +20329,70 @@
         "cancel": "Cancel",
         "save": "Save Changes"
       }
+    }
+  },
+  "deploymentPricing": {
+    "deploymentCount_one": "This model has {{count}} deployment. Each request is billed at the prices of the deployment that served it.",
+    "deploymentCount_other": "This model has {{count}} deployments. Each request is billed at the prices of the deployment that served it.",
+    "requestAdjustments": "These are list prices. Adjustments made per request, like off-peak discounts, regional or data residency surcharges, and some providers' own pricing rules, aren't included.",
+    "providerPricing": "{{provider}} pricing",
+    "chargeColumn": "Charge",
+    "basePrices": "Base prices",
+    "aboveThreshold": "Above {{threshold}} tokens",
+    "blankCells": "Blank cells aren't priced separately for this deployment.",
+    "tieredPricing": "Prices by request size, per 1M tokens",
+    "tierRange": "{{low}}–{{high}} tokens: {{prices}}",
+    "tierPrice": "{{price}} {{charge}}",
+    "tierPricePerUnit": "{{price}} {{charge}} per {{unit}}",
+    "free": "Free",
+    "rowLabel": "{{charge}} / {{unit}}",
+    "withModality": "{{modality}} {{charge}}",
+    "withCacheDuration": "{{charge}} ({{duration}})",
+    "fallbackCost": "Cost",
+    "tiers": {
+      "standard": "Standard",
+      "flex": "Flex",
+      "balanced": "Balanced",
+      "priority": "Priority",
+      "ultrafast": "Ultrafast",
+      "batches": "Batch"
+    },
+    "charges": {
+      "input": "Input",
+      "cacheRead": "Cache read",
+      "explicitCacheRead": "Explicit cache read",
+      "cacheWrite": "Cache write",
+      "output": "Output"
+    },
+    "chargesInline": {
+      "input": "input",
+      "cacheRead": "cache read",
+      "explicitCacheRead": "explicit cache read",
+      "cacheWrite": "cache write",
+      "output": "output"
+    },
+    "modalities": {
+      "text": "Text",
+      "image": "Image",
+      "audio": "Audio",
+      "video": "Video",
+      "reasoning": "Reasoning"
+    },
+    "modalitiesInline": {
+      "text": "text",
+      "image": "image",
+      "audio": "audio",
+      "video": "video",
+      "reasoning": "reasoning"
+    },
+    "units": {
+      "token": "1M tokens",
+      "second": "second",
+      "image": "image",
+      "pixel": "pixel",
+      "character": "character",
+      "query": "query",
+      "request": "request"
     }
   }
 }

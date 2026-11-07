@@ -132,6 +132,8 @@ async def update_family(
                 **({"enabled": data.enabled} if data.enabled is not None else {}),
                 **updates.get(row.record.direction, {}),
                 "updated_at": timestamp,
+                "evaluation_status": "pending",
+                "last_evaluated_day": None,
             }
         )
         for row in rows

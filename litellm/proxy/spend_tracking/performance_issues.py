@@ -229,7 +229,7 @@ class PerformanceIssueProjector:
         while asyncio.get_running_loop().time() < projection_deadline:
             if (next_position := await self._projection_page(position, work, observed_at)) is None:
                 await self._store.complete_projection(work.day, position.version)
-                await self._notify(deadline)
+                await self.notify(deadline)
                 await self._store.prune()
                 if position.version != work.version:
                     await rules.save_projection_cursor(UsageAlertProjectionCursor(version=work.version, day=work.day))
@@ -238,7 +238,7 @@ class PerformanceIssueProjector:
             position = next_position
             await rules.save_projection_cursor(position)
             await asyncio.sleep(0.01)
-        await self._notify(deadline)
+        await self.notify(deadline)
         return False
 
     async def _projection_page(
@@ -705,7 +705,7 @@ class PerformanceIssueProjector:
         while batch := tuple(islice(bindings, 10)):
             await self._store.queue_deliveries(batch)
 
-    async def _notify(self, stop_at: float | None = None) -> None:
+    async def notify(self, stop_at: float | None = None) -> None:
         deadline: Final = stop_at if stop_at is not None else asyncio.get_running_loop().time() + 60
         while asyncio.get_running_loop().time() + 2 < deadline and (
             pending := await self._store.pending_deliveries(limit=10)
