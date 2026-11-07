@@ -47,7 +47,7 @@ from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
     extract_file_data,
 )
 from litellm.llms.anthropic.common_utils import AnthropicError
-from litellm.llms.base_llm.base_utils import map_developer_role_to_system_role
+from litellm.llms.base_llm.base_utils import map_developer_role_to_system_role_for_batch
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.files.batch_records import responses_batch_body_to_chat_body
 from litellm.llms.base_llm.files.transformation import (
@@ -1073,7 +1073,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         """
         from litellm.types.utils import LlmProviders
 
-        messages: Final = map_developer_role_to_system_role(openai_request_body.get("messages", []))
+        messages: Final = map_developer_role_to_system_role_for_batch(openai_request_body.get("messages", []))
         request_params: Final[Mapping[str, object]] = openai_request_body
         optional_params: Final = {k: v for k, v in request_params.items() if k not in ["model", "messages"]}
 

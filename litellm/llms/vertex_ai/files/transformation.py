@@ -41,7 +41,7 @@ from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
 )
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.anthropic.chat.transformation import ANTHROPIC_TOOL_NAME_REVERSE_MAP_KEY
-from litellm.llms.base_llm.base_utils import map_developer_role_to_system_role
+from litellm.llms.base_llm.base_utils import map_developer_role_to_system_role_for_batch
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.files.batch_records import responses_batch_body_to_chat_body
 from litellm.llms.base_llm.files.transformation import (
@@ -861,7 +861,7 @@ def _openai_batch_jsonl_entry_to_vertex_rows(
         if _is_responses_batch_entry(openai_entry)
         else openai_request_body
     )
-    chat_messages: Final = map_developer_role_to_system_role(chat_request_body.get("messages", []))
+    chat_messages: Final = map_developer_role_to_system_role_for_batch(chat_request_body.get("messages", []))
     if is_anthropic_model:
         return (
             _openai_batch_jsonl_entry_to_vertex_anthropic_row(

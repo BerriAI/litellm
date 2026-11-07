@@ -518,11 +518,11 @@ def type_to_response_format_param(
     }
 
 
-def _developer_message_as_system_message(message: AllMessageValues) -> AllMessageValues:
+def _developer_message_as_system_message(message: AllMessageValues, keep_cache_control: bool) -> AllMessageValues:
     if message["role"] != "developer":
         return message
     verbose_logger.debug("Translating developer role to system role for non-OpenAI providers.")
-    if "cache_control" not in message:
+    if not keep_cache_control or "cache_control" not in message:
         return ChatCompletionSystemMessage(role="system", content=message["content"])
     return ChatCompletionSystemMessage(
         role="system", content=message["content"], cache_control=message["cache_control"]
@@ -535,7 +535,16 @@ def map_developer_role_to_system_role(
     """
     Translate `developer` role to `system` role for non-OpenAI providers.
     """
-    return [_developer_message_as_system_message(message) for message in messages]
+    return [_developer_message_as_system_message(message, keep_cache_control=True) for message in messages]
+
+
+def map_developer_role_to_system_role_for_batch(
+    messages: Sequence[AllMessageValues],
+) -> list[AllMessageValues]:
+    """
+    Translate `developer` role to `system` role in batch records, which drop a developer message's cache mark.
+    """
+    return [_developer_message_as_system_message(message, keep_cache_control=False) for message in messages]
 
 
 SystemMessageContent: TypeAlias = str | list[object]

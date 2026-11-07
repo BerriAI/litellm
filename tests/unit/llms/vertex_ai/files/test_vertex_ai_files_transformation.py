@@ -2096,6 +2096,21 @@ class TestVertexClaudeBatch:
         assert row["request"]["system"] == [{"type": "text", "text": "be brief"}]
         assert [message["role"] for message in row["request"]["messages"]] == ["user"]
 
+    def test_claude_developer_message_becomes_the_anthropic_system_field_without_its_cache_mark(self, config):
+        entry: Final = _claude_chat_entry(
+            "r1",
+            "unused",
+            max_tokens=10,
+            messages=[
+                {"role": "developer", "content": "be brief", "cache_control": {"type": "ephemeral"}},
+                {"role": "user", "content": "Hello!"},
+            ],
+        )
+
+        (row,) = _uploaded_rows(config, CLAUDE_DEPLOYMENT, [entry])
+
+        assert row["request"]["system"] == [{"type": "text", "text": "be brief"}]
+
     def test_claude_row_drops_an_unsupported_param_under_deployment_drop_params(self, config, monkeypatch):
         monkeypatch.setitem(litellm.model_cost, "claude-zeta-9", {"supports_sampling_params": False})
         monkeypatch.setattr(litellm, "drop_params", False)

@@ -1711,6 +1711,24 @@ class TestBedrockBatchNonChatEndpointRecords:
         assert model_input["system"] == [{"type": "text", "text": "be terse"}]
         assert [message["role"] for message in model_input["messages"]] == ["user"]
 
+    def test_anthropic_chat_record_drops_a_developer_cache_mark(self):
+        model_input = self._transform(
+            {
+                "custom_id": "4d",
+                "method": "POST",
+                "url": "/v1/chat/completions",
+                "body": {
+                    "model": self.ANTHROPIC_MODEL,
+                    "messages": [
+                        {"role": "developer", "content": "be terse", "cache_control": {"type": "ephemeral"}},
+                        {"role": "user", "content": "ping"},
+                    ],
+                },
+            }
+        )
+
+        assert model_input["system"] == [{"type": "text", "text": "be terse"}]
+
     def test_responses_record_keeps_metadata(self):
         """`metadata` reaches the bridge, which reads it as its own kwarg."""
         model_input = self._transform(
