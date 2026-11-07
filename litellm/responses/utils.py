@@ -13,7 +13,7 @@ from typing_extensions import TypeIs  # noqa: TID251  # narrows untyped wire pay
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or_none, iter_items
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or_none, decoded_json_object, iter_items
 from litellm.litellm_core_utils.dot_notation_indexing import delete_nested_value, is_nested_path
 from litellm.litellm_core_utils.get_provider_specific_headers import ProviderSpecificHeaderUtils
 from litellm.llms.base_llm.responses.transformation import (
@@ -50,6 +50,7 @@ from litellm.types.utils import (
 _PROVIDER_SPECIFIC_HEADER_ADAPTER: Final[
     TypeAdapter[ProviderSpecificHeader | Sequence[ProviderSpecificHeader] | None]
 ] = TypeAdapter(ProviderSpecificHeader | Sequence[ProviderSpecificHeader] | None)
+_REASONING_FIELDS_ONLY_ITS_ORIGIN_RESOLVES: Final = frozenset({"encrypted_content", "id", "status"})
 
 
 class _UsageExtraFields(ExtraItemsTypedDict, total=False, extra_items=object):
@@ -90,8 +91,9 @@ def _is_object_dict(
 def _prompt_tokens_details_wrapper(details: object) -> PromptTokensDetailsWrapper:
     if _is_object_dict(details):
         input_details: Final = InputTokensDetails.model_validate(details)
+        input_fields: Final = decoded_json_object(input_details.model_dump(exclude={"cache_write_tokens_details"}))
         return PromptTokensDetailsWrapper(
-            **input_details.model_dump(exclude={"cache_write_tokens_details"}),
+            **input_fields,
             cache_creation_token_details=_cache_write_lifetimes(input_details.cache_write_tokens_details),
         )
     return PromptTokensDetailsWrapper(
@@ -678,27 +680,32 @@ class ResponsesAPIRequestUtils:
             return
         items: Final = cast(list[object], request_input)  # cast-ok: untyped client json
         stripped: Final = tuple(
-            ResponsesAPIRequestUtils._without_encrypted_reasoning(item)
-            if should_strip is None or (isinstance(item, Mapping) and should_strip(cast(Mapping[str, object], item)))
+            ResponsesAPIRequestUtils.readable_reasoning(reasoning)
+            if (reasoning := ResponsesAPIRequestUtils._encrypted_reasoning_item(item)) is not None
+            and (should_strip is None or should_strip(reasoning))
             else item
             for item in items
         )
         items[:] = (item for item in stripped if item is not None)
 
     @staticmethod
-    def _without_encrypted_reasoning(item: object) -> object | None:
+    def _encrypted_reasoning_item(item: object) -> Mapping[str, object] | None:
         if not isinstance(item, dict):
-            return item
+            return None
         reasoning: Final = cast(Mapping[str, object], item)  # cast-ok: untyped client json
         if reasoning.get("type") != "reasoning" or not reasoning.get("encrypted_content"):
-            return reasoning
+            return None
+        return reasoning
+
+    @staticmethod
+    def readable_reasoning(reasoning: Mapping[str, object]) -> Mapping[str, object] | None:
         readable: Final = any(
             ResponsesAPIRequestUtils._has_readable_text(reasoning.get(key)) for key in ("summary", "content")
         )
         if not readable:
             return None
         kept: Final[dict[str, object]] = {  # mutable-ok: request item rebuilt without the undecryptable keys
-            key: value for key, value in reasoning.items() if key not in ("encrypted_content", "id")
+            key: value for key, value in reasoning.items() if key not in _REASONING_FIELDS_ONLY_ITS_ORIGIN_RESOLVES
         }
         return kept
 

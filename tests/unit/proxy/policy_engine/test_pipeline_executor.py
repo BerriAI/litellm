@@ -1817,6 +1817,94 @@ async def test_streaming_step_passes_a_tool_only_stream_the_legacy_hook_left_alo
     assert not any("discarded" in record.getMessage() for record in caplog.records)
 
 
+class _EmailMaskingLegacyHook(CustomGuardrail):
+    def __init__(self):
+        super().__init__(guardrail_name="masker", event_hook="post_call", default_on=True)
+
+    async def async_post_call_success_hook(self, data, user_api_key_dict, response):
+        return {
+            **response,
+            "content": [
+                {**block, "text": block["text"].replace("bob@example.com", "[EMAIL]")}
+                if block["type"] == "text"
+                else block
+                for block in response["content"]
+            ],
+        }
+
+
+def _sse_frame(event, data):
+    return f"event: {event}\ndata: {json.dumps(data)}\n\n".encode()
+
+
+def _claude_refusal_sse_stream(text):
+    return [
+        _sse_frame(
+            "message_start",
+            {
+                "type": "message_start",
+                "message": {
+                    "id": "msg_refused",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": "claude-model",
+                    "content": [],
+                    "stop_reason": None,
+                    "stop_sequence": None,
+                    "usage": {"input_tokens": 3, "output_tokens": 1},
+                },
+            },
+        ),
+        _sse_frame(
+            "content_block_start",
+            {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        ),
+        _sse_frame(
+            "content_block_delta",
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": text}},
+        ),
+        _sse_frame("content_block_stop", {"type": "content_block_stop", "index": 0}),
+        _sse_frame(
+            "message_delta",
+            {
+                "type": "message_delta",
+                "delta": {
+                    "stop_reason": "refusal",
+                    "stop_sequence": None,
+                    "stop_details": {"type": "refusal", "category": "cyber", "explanation": "I can't help with that."},
+                },
+                "usage": {"output_tokens": 2},
+            },
+        ),
+        _sse_frame("message_stop", {"type": "message_stop"}),
+    ]
+
+
+def _streamed_texts(chunks):
+    payloads = [json.loads(chunk.decode().split("data: ", 1)[1]) for chunk in chunks]
+    return [
+        payload["delta"]["text"]
+        for payload in payloads
+        if payload["type"] == "content_block_delta" and payload["delta"]["type"] == "text_delta"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_streaming_step_delivers_a_legacy_mask_of_a_streamed_claude_refusal(monkeypatch, caplog):
+    from litellm.llms.anthropic.chat.guardrail_translation.handler import AnthropicMessagesHandler
+
+    chunks = _claude_refusal_sse_stream("Partial answer for bob@example.com")
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        result = await _run_legacy_streaming_step(
+            monkeypatch, _EmailMaskingLegacyHook(), chunks, translation=AnthropicMessagesHandler()
+        )
+
+    assert result.terminal_action == "allow"
+    assert not any("discarded" in record.getMessage() for record in caplog.records)
+    assert _streamed_texts(chunks) == ["Partial answer for [EMAIL]"]
+
+
 class _NoHooksGuardrail(CustomGuardrail):
     pass
 
