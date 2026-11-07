@@ -5088,6 +5088,46 @@ def test_model_id_stays_allowed_where_it_does_not_pick_the_bedrock_model(
     )
 
 
+@pytest.mark.parametrize(
+    "fallback_model, model_id, accepted",
+    [("claude", "us.amazon.nova-micro-v1:0", False), ("sm-2", "my-inference-component", True)],
+    ids=["bedrock fallback rejected", "sagemaker fallback allowed"],
+)
+def test_fallback_target_model_id_is_judged_by_the_fallback_model(
+    fallback_model: str, model_id: str, accepted: bool
+) -> None:
+    router: Final = _router_with(
+        ("sm", "sagemaker_chat/my-endpoint"),
+        ("sm-2", "sagemaker_chat/other-endpoint"),
+        ("claude", "bedrock/us.anthropic.claude-sonnet-4-6"),
+    )
+    request_body: Final = {
+        "model": "sm",
+        "messages": [{"role": "user", "content": "hi"}],
+        "fallbacks": [{"model": fallback_model, "model_id": model_id}],
+    }
+    if accepted:
+        assert (
+            is_request_body_safe(
+                request_body=request_body,
+                general_settings={},
+                llm_router=router,
+                model="sm",
+                route="/v1/chat/completions",
+            )
+            is True
+        )
+        return
+    with pytest.raises(ValueError, match="model_id"):
+        is_request_body_safe(
+            request_body=request_body,
+            general_settings={},
+            llm_router=router,
+            model="sm",
+            route="/v1/chat/completions",
+        )
+
+
 def test_model_id_is_rejected_when_the_model_group_mixes_in_a_bedrock_deployment() -> None:
     router: Final = _router_with(("sm", "sagemaker_chat/my-endpoint"), ("sm", "bedrock/us.anthropic.claude-sonnet-4-6"))
     with pytest.raises(ValueError, match="model_id"):

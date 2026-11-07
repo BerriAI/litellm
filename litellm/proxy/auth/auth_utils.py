@@ -769,15 +769,15 @@ def is_request_body_safe(
             )
     for target in iter_request_fallback_targets(request_body):
         if isinstance(target, dict):
+            target_model = target.get("model")
             _check_banned_params(
                 target,
                 general_settings,
                 llm_router,
-                model,
+                target_model if isinstance(target_model, str) else model,
                 manages_deployments=manages_deployments,
                 calls_an_llm=calls_an_llm,
             )
-            target_model = target.get("model")
             if isinstance(target_model, str):
                 _reject_url_valued_fallback_target(target_model)
         elif isinstance(target, str):
