@@ -151,6 +151,8 @@ class TestMistralReasoningSupport:
             ({"type": "enabled", "budget_tokens": 1024}, "high"),
             ({"type": "enabled", "budget_tokens": 100}, "high"),
             ({"type": "disabled"}, "none"),
+            ({"type": "adaptive"}, "high"),
+            ({"type": "adaptive", "display": "summarized"}, "high"),
         ],
     )
     def test_magistral_sends_thinking_as_a_reasoning_effort_the_model_accepts(

@@ -84,6 +84,8 @@ def _thinking_as_reasoning_effort(thinking: object, *, model: str) -> str | None
     match thinking:
         case {"type": "disabled"}:
             return "none"
+        case {"type": "adaptive"}:
+            return "medium"
         case _:
             return reasoning_effort_from_thinking(thinking, model=model)
 
