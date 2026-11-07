@@ -23,7 +23,7 @@ from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse, ModelResponseStream, Usage
 
-from ..common_utils import EdenAIException, reported_cost, resolve_api_base, resolve_api_key
+from ..common_utils import EdenAIException, endpoint_url, reported_cost, resolve_api_base, resolve_api_key
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -138,7 +138,7 @@ class EdenAIChatConfig(OpenAIGPTConfig):
     def get_models(
         self, api_key: str | None = None, api_base: str | None = None
     ) -> list[str]:  # mutable-ok: inherited contract
-        response: Final = litellm.module_level_client.get(url=f"{self.get_api_base(api_base)}/models")
+        response: Final = litellm.module_level_client.get(url=endpoint_url(api_base, "models"))
         if not response.is_success:
             raise EdenAIException(status_code=response.status_code, message=response.text, headers=response.headers)
         catalog: Final = _EdenAIModelCatalog.model_validate(response.json())

@@ -7,15 +7,15 @@ use std::{
 };
 
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-use litellm_auth_types::SecretValue;
 use litellm_gateway_auth::{
-    KeyError, hash_token,
+    hash_token,
     keys::{KeyHash, KeyLookup, KeyStatus, verify_key},
 };
 use litellm_gateway_management::{
     Error,
     keys::{Keys, Revocation},
 };
+use litellm_secret_value::SecretValue;
 use rstest::{fixture, rstest};
 use support::{MemoryStore, Unavailable};
 
@@ -73,7 +73,7 @@ async fn generated_key_can_be_retrieved_verified_and_revoked(
     );
     assert!(matches!(
         verify_key(lookup.as_ref(), &generated.token, || now).await,
-        Err(KeyError::Invalid)
+        Err(litellm_gateway_auth::Error::InvalidToken)
     ));
     assert_eq!(keys.revoke(hash).await.unwrap(), Revocation::Revoked);
 }
@@ -137,9 +137,7 @@ async fn storage_failures_are_returned_for_all_operations(now: SystemTime) {
     assert!(matches!(keys.get(&hash).await, Err(Error::Storage(_))));
     let error = keys.revoke(&hash).await.unwrap_err();
     assert!(matches!(&error, Error::Storage(_)));
-    assert_eq!(
-        std::error::Error::source(&error).unwrap().to_string(),
-        "backend detail"
-    );
+    let cause = litellm_error::find::<std::io::Error>(&error).expect("storage cause");
+    assert_eq!(cause.to_string(), "backend detail");
     assert!(!error.to_string().contains("backend detail"));
 }

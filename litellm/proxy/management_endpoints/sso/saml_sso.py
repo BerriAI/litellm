@@ -38,13 +38,13 @@ from pydantic import ValidationError
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.dual_cache import DualCache
-from litellm.proxy._experimental.mcp_server.outbound_credentials.sso_assertion_store import (
-    SSOIdentityAssertion,
-    assertion_from_saml_login,
-)
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.proxy.management_endpoints.sso_helper_utils import SSO_SESSIONS_TARGET
 from litellm.proxy.management_endpoints.types import CustomOpenID, get_litellm_user_role
+from litellm.proxy.mcp_server.outbound_credentials.sso_assertion_store import (
+    SSOIdentityAssertion,
+    assertion_from_saml_login,
+)
 from litellm.proxy.utils import get_custom_url
 
 try:
