@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 use std::collections::BTreeSet;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use indexmap::{IndexMap, IndexSet};
 use serde_json::Value;
@@ -113,20 +113,24 @@ impl Base {
     }
 }
 
+static BUNDLED: LazyLock<CostMap> = LazyLock::new(|| {
+    let catalog = Catalog::parse(BUNDLED_REGISTRY)
+        .expect("the bundled registry parses")
+        .value;
+    CostMap {
+        bundled_model_count: catalog.model_count(),
+        base: Arc::new(Base::new(catalog)),
+        overlay: Registrations::default(),
+        provenance: Provenance {
+            revision: git_blob_id(BUNDLED_REGISTRY),
+            etag: None,
+        },
+    }
+});
+
 impl CostMap {
     pub fn bundled() -> Self {
-        let catalog = Catalog::parse(BUNDLED_REGISTRY)
-            .expect("the bundled registry parses")
-            .value;
-        Self {
-            bundled_model_count: catalog.model_count(),
-            base: Arc::new(Base::new(catalog)),
-            overlay: Registrations::default(),
-            provenance: Provenance {
-                revision: git_blob_id(BUNDLED_REGISTRY),
-                etag: None,
-            },
-        }
+        BUNDLED.clone()
     }
 
     /// Installs a fetched document as the base. A document that does not parse, or that has fewer models than
@@ -149,9 +153,8 @@ impl CostMap {
 
     /// Installs the bundled document as the base. It is never size checked
     pub fn accept_bundled(&mut self) -> &Provenance {
-        let bundled = Self::bundled();
-        self.base = bundled.base;
-        self.provenance = bundled.provenance;
+        self.base = Arc::clone(&BUNDLED.base);
+        self.provenance = BUNDLED.provenance.clone();
         &self.provenance
     }
 
