@@ -3070,7 +3070,8 @@ def test_total_timeout_is_read_from_the_header_first_then_the_body(
 
 
 @pytest.mark.parametrize(
-    "value", [None, True, False, 0, -1, "0", "-2", "nan", "inf", "-inf", float("nan"), "ten", "", [10], {"s": 10}]
+    "value",
+    [None, True, False, 0, -1, "0", "-2", "nan", "inf", "-inf", float("nan"), 10**400, "ten", "", [10], {"s": 10}],
 )
 def test_a_total_timeout_that_is_not_a_positive_finite_number_of_seconds_is_invalid(value: object) -> None:
     assert isinstance(total_timeout_from_request(Headers({}), {"total_timeout": value}), InvalidTotalTimeout)

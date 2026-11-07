@@ -3116,7 +3116,7 @@ def _router_answering_hi() -> "litellm.Router":
 @pytest.mark.asyncio
 async def test_a_request_a_hook_made_stream_or_run_in_the_background_is_refused_under_a_body_total_timeout(
     flag: str,
-):
+) -> None:
     from litellm.litellm_core_utils.total_deadline import TotalTimeoutNotApplicable, total_deadline
 
     async with total_deadline(60, from_body=True):
@@ -3130,19 +3130,19 @@ async def test_a_request_a_hook_made_stream_or_run_in_the_background_is_refused_
 
 
 @pytest.mark.asyncio
-async def test_a_request_a_hook_turned_streaming_runs_unbounded_under_a_header_total_timeout():
+async def test_a_request_a_hook_turned_streaming_runs_unbounded_under_a_header_total_timeout() -> None:
     from litellm.litellm_core_utils.total_deadline import current_total_deadline, total_deadline
 
     async with total_deadline(60, from_body=False):
-        llm_call = await route_request(
+        llm_call: Final = await route_request(
             data={"model": "g", "messages": [{"role": "user", "content": "hi"}], "stream": True},
             llm_router=_router_answering_hi(),
             user_model=None,
             route_type="acompletion",
         )
-        stream = await llm_call
-        chunks = [chunk async for chunk in stream]
-        deadline = current_total_deadline()
+        stream: Final = await llm_call
+        chunks: Final = [chunk async for chunk in stream]
+        deadline: Final = current_total_deadline()
 
     assert chunks
     assert deadline is not None and deadline.allows_wait(10**9)

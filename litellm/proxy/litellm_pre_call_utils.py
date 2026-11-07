@@ -1664,7 +1664,7 @@ def _positive_finite_seconds(value: object) -> float | None:
         return None
     try:
         seconds: Final = float(value)
-    except ValueError:
+    except (ValueError, OverflowError):
         return None
     return seconds if math.isfinite(seconds) and seconds > 0 else None
 
@@ -1681,8 +1681,8 @@ def total_timeout_from_request(
     headers: Mapping[str, str], body: Mapping[str, object]
 ) -> TotalTimeout | InvalidTotalTimeout | None:
     """The request's ``total_timeout``: the header wins over the body field."""
-    header: Final = headers.get(TOTAL_TIMEOUT_HEADER)
-    if header is not None:
+    header: Final[object] = headers.get(TOTAL_TIMEOUT_HEADER)
+    if isinstance(header, str):
         return _total_timeout(header, from_body=False)
     if TOTAL_TIMEOUT_FIELD not in body:
         return None

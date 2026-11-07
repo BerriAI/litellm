@@ -13160,7 +13160,7 @@ class TestTotalTimeout:
 
     @pytest.mark.parametrize(
         ("body", "headers"),
-        [({"total_timeout": 0.01}, {}), ({}, {"x-litellm-total-timeout": "0.01"})],
+        [({"total_timeout": 0.2}, {}), ({}, {"x-litellm-total-timeout": "0.2"})],
         ids=["body", "header"],
     )
     async def test_a_request_past_its_total_timeout_is_answered_with_a_408_and_its_call_is_cancelled(
@@ -13197,7 +13197,7 @@ class TestTotalTimeout:
             await asyncio.Event().wait()
 
         with pytest.raises(ProxyException) as raised:
-            await self._process(monkeypatch, answered, body={"total_timeout": 0.01}, moderation=slow_moderation)
+            await self._process(monkeypatch, answered, body={"total_timeout": 0.2}, moderation=slow_moderation)
 
         costed: Final = [call.args[0] for call in logging_objs[0].prepare_response_cost.call_args_list]
         assert raised.value.code == "408"
@@ -13285,7 +13285,7 @@ class TestTotalTimeout:
             return litellm.ModelResponse()
 
         await self._process(
-            monkeypatch, answered, body=body, headers={"x-litellm-total-timeout": "0.01"}, route_type=route_type
+            monkeypatch, answered, body=body, headers={"x-litellm-total-timeout": "0.2"}, route_type=route_type
         )
 
         assert bounded == [False]
@@ -13304,7 +13304,7 @@ class TestTotalTimeout:
 
         with pytest.raises(ProxyException) as raised:
             await self._process(
-                monkeypatch, answered, body={"total_timeout": 0.01}, post_call=slow_guardrail, proxy_logging_obj=hooks
+                monkeypatch, answered, body={"total_timeout": 0.2}, post_call=slow_guardrail, proxy_logging_obj=hooks
             )
 
         assert raised.value.code == "408"

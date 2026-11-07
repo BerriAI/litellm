@@ -3089,7 +3089,7 @@ class ProxyBaseLLMRequestProcessing:
             late_failure_frames=_anthropic_late_failure_frames if answers_as_anthropic else _openai_late_failure_frames,
         )
 
-    def _total_timeout(
+    def total_timeout_for(
         self, request: Request, route_type: ProxyRouteType, is_streaming_request: bool | None
     ) -> TotalTimeout | None:
         """The request's ``total_timeout`` when it bounds this request: a body one on a request it cannot
@@ -3130,7 +3130,7 @@ class ProxyBaseLLMRequestProcessing:
         processing: Coroutine[object, object, _ProcessedT],
     ) -> _ProcessedT:
         try:
-            total_timeout: Final = self._total_timeout(request, route_type, is_streaming_request)
+            total_timeout: Final = self.total_timeout_for(request, route_type, is_streaming_request)
         except ProxyException:
             processing.close()
             raise

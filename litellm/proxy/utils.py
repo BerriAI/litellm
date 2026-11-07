@@ -188,6 +188,7 @@ from litellm.litellm_core_utils.served_output_texts import (
     served_stream_output_texts,
 )
 from litellm.litellm_core_utils.token_counter import offload_token_count, usage_tokenizer_model
+from litellm.litellm_core_utils.total_deadline import TotalTimeoutExpired
 from litellm.llms import load_guardrail_translation_mappings
 from litellm.llms.base_llm.guardrail_translation.utils import stream_item_field, stream_item_items
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
@@ -1737,8 +1738,17 @@ def _client_disconnected(exception: Exception) -> bool:
     return isinstance(exception, HTTPException) and exception.status_code == LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED
 
 
+def _ran_out_of_total_timeout(exception: Exception) -> bool:
+    """The request's ``total_timeout`` ran out while the provider was working on it, like a disconnect."""
+    return any(isinstance(cause, TotalTimeoutExpired) for cause in _exception_chain(exception))
+
+
 def _provider_billed_the_failure(exception: Exception) -> bool:
-    return _timed_out_reading_from_provider(exception) or _client_disconnected(exception)
+    return (
+        _timed_out_reading_from_provider(exception)
+        or _client_disconnected(exception)
+        or _ran_out_of_total_timeout(exception)
+    )
 
 
 def _as_str_mapping(value: object) -> Mapping[str, object]:
