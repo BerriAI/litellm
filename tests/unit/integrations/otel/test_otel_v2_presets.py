@@ -278,3 +278,89 @@ def test_signoz_preset_accepts_the_factory_call_shape(monkeypatch):
 
     cfg = PRESET_BY_CALLBACK["signoz"](allow_missing_credentials=True)
     assert any(e.owner == ExporterOwner.SIGNOZ for e in cfg.exporters)
+
+
+def test_mixpanel_preset_reads_token_and_defaults_to_us(monkeypatch):
+    import base64
+
+    monkeypatch.setenv("MIXPANEL_PROJECT_TOKEN", "mp-token-123")
+    monkeypatch.delenv("MIXPANEL_REGION", raising=False)
+    monkeypatch.delenv("MIXPANEL_ENDPOINT", raising=False)
+    from litellm.integrations.otel.model.config import ExporterOwner
+    from litellm.integrations.otel.plumbing.providers import _otlp_traces_endpoint
+    from litellm.integrations.otel.presets.mixpanel import mixpanel_preset
+
+    cfg = mixpanel_preset()
+    spec = next(e for e in cfg.exporters if e.owner == ExporterOwner.MIXPANEL)
+    expected_basic = base64.b64encode(b"mp-token-123:").decode()
+    assert spec.kind == "otlp_http"
+    assert spec.endpoint == "https://ingestion-us.mixpanel.com/v1/ai/otel/traces"
+    assert _otlp_traces_endpoint(spec.endpoint) == "https://ingestion-us.mixpanel.com/v1/ai/otel/traces"
+    assert spec.headers == f"Authorization=Basic {expected_basic}"
+    assert spec.requires_headers is True
+    assert "genai" in cfg.mapper_names
+    assert "mixpanel" in cfg.mapper_names
+    assert "user.id" not in cfg.baggage_promoted_keys
+
+
+def test_mixpanel_preset_region_and_endpoint_override(monkeypatch):
+    monkeypatch.setenv("MIXPANEL_PROJECT_TOKEN", "mp-token-123")
+    monkeypatch.setenv("MIXPANEL_REGION", "EU")
+    monkeypatch.delenv("MIXPANEL_ENDPOINT", raising=False)
+    from litellm.integrations.otel.model.config import ExporterOwner
+    from litellm.integrations.otel.presets.mixpanel import mixpanel_preset
+
+    eu_cfg = mixpanel_preset()
+    eu_spec = next(e for e in eu_cfg.exporters if e.owner == ExporterOwner.MIXPANEL)
+    assert eu_spec.endpoint == "https://ingestion-eu.mixpanel.com/v1/ai/otel/traces"
+
+    monkeypatch.setenv("MIXPANEL_REGION", "in")
+    in_cfg = mixpanel_preset()
+    in_spec = next(e for e in in_cfg.exporters if e.owner == ExporterOwner.MIXPANEL)
+    assert in_spec.endpoint == "https://ingestion-in.mixpanel.com/v1/ai/otel/traces"
+
+    monkeypatch.setenv("MIXPANEL_ENDPOINT", "http://collector.internal:4318/v1/ai/otel/traces")
+    override_cfg = mixpanel_preset()
+    override_spec = next(e for e in override_cfg.exporters if e.owner == ExporterOwner.MIXPANEL)
+    assert override_spec.endpoint == "http://collector.internal:4318/v1/ai/otel/traces"
+
+
+def test_mixpanel_preset_without_token_is_header_gated(monkeypatch):
+    monkeypatch.delenv("MIXPANEL_PROJECT_TOKEN", raising=False)
+    from litellm.integrations.otel.model.config import ExporterOwner
+    from litellm.integrations.otel.presets.mixpanel import mixpanel_preset
+
+    cfg = mixpanel_preset()
+    spec = next(e for e in cfg.exporters if e.owner == ExporterOwner.MIXPANEL)
+    assert spec.headers is None
+    assert spec.requires_headers is True
+
+
+def test_mixpanel_without_a_token_or_collector_stays_on_v2_and_exports_nowhere(monkeypatch):
+    from litellm.integrations.otel.model.config import is_otel_v2_enabled
+    from litellm.integrations.otel.logger import OpenTelemetryV2
+    from litellm.litellm_core_utils.litellm_logging import _exports_nowhere, _maybe_construct_otel_v2
+
+    monkeypatch.delenv("MIXPANEL_PROJECT_TOKEN", raising=False)
+    monkeypatch.delenv("OTEL_EXPORTER", raising=False)
+    monkeypatch.delenv("OTEL_ENDPOINT", raising=False)
+    monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+    is_otel_v2_enabled.cache_clear()
+    try:
+        logger = _maybe_construct_otel_v2("mixpanel", [])
+    finally:
+        is_otel_v2_enabled.cache_clear()
+    assert isinstance(logger, OpenTelemetryV2)
+    assert logger.callback_name == "mixpanel"
+    assert _exports_nowhere(logger.config)
+
+
+def test_mixpanel_with_a_token_keeps_the_operators_collector_beside_its_own_exporter(monkeypatch):
+    from litellm.integrations.otel.model.config import ExporterOwner, ExporterSpec, OpenTelemetryV2Config
+    from litellm.integrations.otel.presets.mixpanel import mixpanel_preset
+
+    monkeypatch.setenv("MIXPANEL_PROJECT_TOKEN", "mp-token")
+    collector = ExporterSpec(kind="otlp_http", endpoint="http://collector.local")
+    cfg = mixpanel_preset(config_overrides=OpenTelemetryV2Config(exporters=[collector]))
+    assert [spec.owner for spec in cfg.exporters] == [None, ExporterOwner.MIXPANEL]
+    assert "user.id" not in cfg.baggage_promoted_keys

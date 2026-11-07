@@ -481,3 +481,171 @@ class TestNewRelicKeyLoggingValidation:
             )
         finally:
             is_otel_v2_enabled.cache_clear()
+
+
+class TestMixpanelCallbackValidation:
+    def _team_data(self, callback_vars):
+        from litellm.proxy._types import AddTeamCallback
+
+        return AddTeamCallback(callback_name="mixpanel", callback_type="success", callback_vars=callback_vars)
+
+    def _key_metadata(self, callback_vars):
+        return {"logging": [{"callback_name": "mixpanel", "callback_type": "success", "callback_vars": callback_vars}]}
+
+    def test_mixpanel_entry_in_callbacks_configs(self):
+        from litellm.proxy.common_utils.callback_utils import is_sensitive_callback_key
+        from litellm.proxy.management_endpoints.team_callback_endpoints import _redact_callback_secrets
+
+        client = TestClient(app)
+        response = client.get("/callbacks/configs", headers={"Authorization": "Bearer sk-9876"})
+        assert response.status_code == 200
+        mixpanel = next((config for config in response.json() if config.get("id") == "mixpanel"), None)
+        assert mixpanel is not None
+        assert mixpanel["supports_key_team_logging"] is True
+        params = mixpanel["dynamic_params"]
+        assert params["mixpanel_project_token"]["type"] == "password"
+        assert "mixpanel_region" in params
+        assert is_sensitive_callback_key("mixpanel_project_token") is True
+        assert is_sensitive_callback_key("mixpanel_region") is False
+
+        raw_metadata = {
+            "logging": [
+                {
+                    "callback_name": "mixpanel",
+                    "callback_type": "success",
+                    "callback_vars": {"mixpanel_project_token": "mp-secret-tok", "mixpanel_region": "eu"},
+                }
+            ]
+        }
+        redacted = _redact_callback_secrets(raw_metadata)
+        assert redacted["logging"][0]["callback_vars"]["mixpanel_project_token"] == "***REDACTED***"
+
+    @pytest.mark.parametrize(
+        "metadata",
+        [
+            {"logging": [{"callback_name": "mixpanel", "callback_vars": {"mixpanel_project_token": "***REDACTED***"}}]},
+            {"logging": [{"callback_name": "mixpanel", "callback_vars": {"mixpanel_region": "eu"}}]},
+            {"callback_settings": {"callback_vars": {"mixpanel_project_token": "   "}}},
+        ],
+        ids=["masked-logging-entry", "region-without-token", "blank-callback-settings"],
+    )
+    @pytest.mark.asyncio
+    async def test_team_writers_refuse_a_mixpanel_token_they_could_never_send(self, metadata, monkeypatch):
+        from fastapi import Request
+
+        from litellm.integrations.otel.model.config import is_otel_v2_enabled
+        from litellm.proxy._types import NewTeamRequest, ProxyException, UpdateTeamRequest, UserAPIKeyAuth
+        from litellm.proxy.management_endpoints.team_endpoints import new_team, update_team
+
+        monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+        is_otel_v2_enabled.cache_clear()
+        admin = UserAPIKeyAuth(user_role="proxy_admin")
+        request = MagicMock(spec=Request)
+        try:
+            with pytest.raises(ProxyException) as created:
+                await new_team(data=NewTeamRequest(metadata=metadata), http_request=request, user_api_key_dict=admin)
+            with pytest.raises(ProxyException) as updated:
+                await update_team(
+                    data=UpdateTeamRequest(team_id="team", metadata=metadata),
+                    http_request=request,
+                    user_api_key_dict=admin,
+                )
+        finally:
+            monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
+            is_otel_v2_enabled.cache_clear()
+
+        for refusal in (created.value, updated.value):
+            assert str(refusal.code) == "400"
+            assert "mixpanel_project_token must be" in refusal.message
+
+    @pytest.mark.parametrize(
+        "metadata",
+        [
+            None,
+            {},
+            {"logging": "not-a-list"},
+            {"logging": [{"callback_name": "newrelic", "callback_vars": {"newrelic_license_key": ""}}]},
+            {"callback_settings": {"callback_vars": {"langfuse_public_key": "pk"}}},
+        ],
+        ids=["none", "empty", "not-a-list", "another-callback", "another-callback-settings"],
+    )
+    @pytest.mark.parametrize("otel_v2", ["true", "false"])
+    def test_the_team_check_leaves_other_callbacks_alone(self, metadata, otel_v2, monkeypatch):
+        from litellm.integrations.otel.model.config import is_otel_v2_enabled
+        from litellm.proxy.common_utils.callback_config_validation import mixpanel_logging_metadata_error
+
+        monkeypatch.setenv("LITELLM_OTEL_V2", otel_v2)
+        is_otel_v2_enabled.cache_clear()
+        try:
+            assert mixpanel_logging_metadata_error(metadata) is None
+        finally:
+            monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
+            is_otel_v2_enabled.cache_clear()
+
+    def test_the_team_check_accepts_a_real_mixpanel_token(self, monkeypatch):
+        from litellm.integrations.otel.model.config import is_otel_v2_enabled
+        from litellm.proxy.common_utils.callback_config_validation import mixpanel_logging_metadata_error
+
+        real_token = {
+            "logging": [{"callback_name": "mixpanel", "callback_vars": {"mixpanel_project_token": "real"}}],
+            "callback_settings": {"callback_vars": {"mixpanel_project_token": "real"}},
+        }
+        monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+        is_otel_v2_enabled.cache_clear()
+        try:
+            assert mixpanel_logging_metadata_error(real_token) is None
+        finally:
+            monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
+            is_otel_v2_enabled.cache_clear()
+
+    def test_team_and_key_validation(self, monkeypatch):
+        from fastapi import HTTPException
+
+        from litellm.integrations.otel.model.config import is_otel_v2_enabled
+        from litellm.proxy.common_utils.callback_config_validation import callback_config_error
+        from litellm.proxy.management_endpoints.key_management_endpoints import raise_on_invalid_key_logging_config
+        from litellm.proxy.management_endpoints.team_callback_endpoints import _validate_team_callback
+
+        monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
+        is_otel_v2_enabled.cache_clear()
+        try:
+            with pytest.raises(HTTPException) as exc:
+                _validate_team_callback(self._team_data({"mixpanel_project_token": "tok"}))
+            assert "LITELLM_OTEL_V2" in str(exc.value.detail)
+            with pytest.raises(HTTPException) as exc:
+                _validate_team_callback(self._team_data({}))
+            assert "LITELLM_OTEL_V2" in str(exc.value.detail)
+            with pytest.raises(HTTPException) as exc:
+                raise_on_invalid_key_logging_config(self._key_metadata({}))
+            assert "LITELLM_OTEL_V2" in str(exc.value.detail)
+            assert callback_config_error("langfuse", {}) is None
+
+            monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+            is_otel_v2_enabled.cache_clear()
+            _validate_team_callback(self._team_data({}))
+            raise_on_invalid_key_logging_config(self._key_metadata({}))
+            with pytest.raises(HTTPException) as exc:
+                _validate_team_callback(self._team_data({"mixpanel_project_token": "tok", "mixpanel_region": "mars"}))
+            assert "Unknown mixpanel_region" in str(exc.value.detail)
+            with pytest.raises(HTTPException) as exc:
+                raise_on_invalid_key_logging_config(self._key_metadata({"mixpanel_region": "eu"}))
+            assert "mixpanel_project_token must be" in str(exc.value.detail)
+            for unsendable in ("", "   ", "None", " None ", "***REDACTED***", " ***REDACTED*** "):
+                with pytest.raises(HTTPException) as exc:
+                    _validate_team_callback(self._team_data({"mixpanel_project_token": unsendable}))
+                assert "mixpanel_project_token must be" in str(exc.value.detail)
+                with pytest.raises(HTTPException) as exc:
+                    raise_on_invalid_key_logging_config(self._key_metadata({"mixpanel_project_token": unsendable}))
+                assert "mixpanel_project_token must be" in str(exc.value.detail)
+            with pytest.raises(HTTPException) as exc:
+                raise_on_invalid_key_logging_config(
+                    self._key_metadata({"mixpanel_project_token": "tok", "mixpanel_foo": "bar"})
+                )
+            assert "mixpanel_foo" in str(exc.value.detail)
+            _validate_team_callback(self._team_data({"capture_message_content": "span_only"}))
+            _validate_team_callback(self._team_data({"mixpanel_project_token": "tok", "mixpanel_region": "in"}))
+            raise_on_invalid_key_logging_config(
+                self._key_metadata({"mixpanel_project_token": "tok", "mixpanel_region": "EU"})
+            )
+        finally:
+            is_otel_v2_enabled.cache_clear()

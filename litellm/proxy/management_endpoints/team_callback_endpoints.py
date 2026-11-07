@@ -33,6 +33,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.callback_config_validation import (
+    CALLBACK_VARS_REDACTED,
     callback_config_error,
     conflicting_callback_var_error,
     conflicting_span_scope_error,
@@ -65,7 +66,7 @@ from litellm.types.utils import CAPTURE_MESSAGE_CONTENT_VAR, EXCLUDED_SERVICES_V
 router: Final = APIRouter()
 
 
-_CALLBACK_VARS_REDACTED: Final = "***REDACTED***"
+_CALLBACK_VARS_REDACTED: Final = CALLBACK_VARS_REDACTED
 _DECODED_JSON: Final = TypeAdapter(object)
 
 

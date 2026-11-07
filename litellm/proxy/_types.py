@@ -3746,6 +3746,12 @@ class AllCallbacks(LiteLLMPydanticObjectBase):
         ],
     )
 
+    mixpanel: CallbackOnUI = CallbackOnUI(
+        litellm_callback_name="mixpanel",
+        ui_callback_name="Mixpanel",
+        litellm_callback_params=("MIXPANEL_PROJECT_TOKEN", "MIXPANEL_REGION", "MIXPANEL_ENDPOINT"),
+    )
+
     signoz: CallbackOnUI = CallbackOnUI(
         litellm_callback_name="signoz",
         ui_callback_name="SigNoz",

@@ -18,6 +18,7 @@ from litellm.integrations.otel.mappers.genai import GenAIMapper
 from litellm.integrations.otel.mappers.langfuse import LangfuseMapper
 from litellm.integrations.otel.mappers.langtrace import LangtraceMapper
 from litellm.integrations.otel.mappers.legacy import LegacyMapper
+from litellm.integrations.otel.mappers.mixpanel import MixpanelMapper
 from litellm.integrations.otel.mappers.openinference import OpenInferenceMapper
 from litellm.integrations.otel.mappers.utils import tool_attr_budget
 from litellm.integrations.otel.mappers.weave import WeaveMapper
@@ -35,6 +36,7 @@ _PLAIN_MAPPERS: Final[dict[str, Callable[[], AttributeMapper]]] = {
     "langfuse": LangfuseMapper,
     "weave": WeaveMapper,
     "langtrace": LangtraceMapper,
+    "mixpanel": MixpanelMapper,
 }
 
 
@@ -63,6 +65,7 @@ __all__ = [
     "LangfuseMapper",
     "LangtraceMapper",
     "LegacyMapper",
+    "MixpanelMapper",
     "OpenInferenceMapper",
     "WeaveMapper",
     "resolve_mappers",

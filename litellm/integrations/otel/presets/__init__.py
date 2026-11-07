@@ -21,6 +21,11 @@ from litellm.integrations.otel.presets.langfuse import (
 )
 from litellm.integrations.otel.presets.langtrace import langtrace_preset
 from litellm.integrations.otel.presets.levo import levo_preset
+from litellm.integrations.otel.presets.mixpanel import (
+    mixpanel_dynamic_endpoint,
+    mixpanel_dynamic_headers,
+    mixpanel_preset,
+)
 from litellm.integrations.otel.presets.newrelic import (
     newrelic_dynamic_endpoint,
     newrelic_dynamic_headers,
@@ -48,6 +53,7 @@ PRESET_BY_CALLBACK: Final[Mapping[str, Preset]] = MappingProxyType(
         "langfuse_otel": langfuse_preset,
         "langtrace": langtrace_preset,
         "levo": levo_preset,
+        "mixpanel": mixpanel_preset,
         "newrelic": newrelic_preset,
         "signoz": signoz_preset,
         "weave_otel": weave_preset,
@@ -63,6 +69,7 @@ DYNAMIC_HEADERS_BY_CALLBACK: Final[Mapping[str, Callable[[StandardCallbackDynami
         {
             "arize": arize_dynamic_headers,
             "langfuse_otel": langfuse_dynamic_headers,
+            "mixpanel": mixpanel_dynamic_headers,
             "newrelic": newrelic_dynamic_headers,
             "signoz": signoz_dynamic_headers,
             "weave_otel": weave_dynamic_headers,
@@ -77,6 +84,7 @@ DYNAMIC_HEADERS_BY_CALLBACK: Final[Mapping[str, Callable[[StandardCallbackDynami
 DYNAMIC_ENDPOINT_BY_CALLBACK: Final[Mapping[str, Callable[[StandardCallbackDynamicParams], str | None]]] = (
     MappingProxyType(
         {
+            "mixpanel": mixpanel_dynamic_endpoint,
             "newrelic": newrelic_dynamic_endpoint,
             "signoz": signoz_dynamic_endpoint,
         }
@@ -158,6 +166,7 @@ __all__ = [
     "langfuse_preset",
     "langtrace_preset",
     "levo_preset",
+    "mixpanel_preset",
     "newrelic_preset",
     "phoenix_preset",
     "project_routing_headers",

@@ -23,7 +23,8 @@ from opentelemetry.trace.propagation.tracecontext import (
 )
 
 from litellm._internal_context import in_post_response_phase
-from litellm.integrations.otel.model.semconv import HTTP
+from litellm.integrations.otel.model.metadata import usable_user_id
+from litellm.integrations.otel.model.semconv import HTTP, User
 
 if TYPE_CHECKING:
     from litellm.integrations.otel.model.destination import OtelDestination
@@ -471,6 +472,25 @@ def set_request_destinations(destinations: 'tuple["OtelDestination", ...]') -> "
 
 def reset_request_destinations(token: "Token[tuple[OtelDestination, ...]]") -> None:
     _request_destinations.reset(token)
+
+
+_request_user_id: Final[ContextVar[str | None]] = ContextVar("litellm_otel_request_user_id", default=None)
+
+
+def set_request_user_id(user_id: str | None) -> None:
+    """Name the caller, inside the ``auth`` span so that span carries the id too. Each span reads the id as it ends,
+    on the task that ended it, so a request's id never labels another request's span."""
+    _request_user_id.set(user_id)
+
+
+def request_user_id() -> str | None:
+    return _request_user_id.get()
+
+
+def inbound_user_id() -> str | None:
+    """The ``user.id`` in the W3C Baggage around this call, which an unauthenticated caller can write too, so it is
+    read only once the request has passed auth."""
+    return usable_user_id(baggage.get_baggage(User.ID))
 
 
 def request_destinations() -> 'tuple["OtelDestination", ...]':

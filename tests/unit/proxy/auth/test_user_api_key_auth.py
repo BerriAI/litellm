@@ -282,6 +282,39 @@ async def test_aaauser_personal_budgets(key_ownership):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("body", "headers"),
+    [
+        ({"metadata": {"user.id": "named-caller"}}, []),
+        ({"user": "named-caller"}, []),
+        ({}, [(b"x-litellm-customer-id", b"named-caller")]),
+    ],
+    ids=["metadata", "user-field", "customer-header"],
+)
+async def test_auth_names_the_caller_for_the_spans_of_the_request(
+    monkeypatch: pytest.MonkeyPatch, body: dict[str, object], headers: list[tuple[bytes, bytes]]
+) -> None:
+    from fastapi import Request
+
+    from litellm.integrations.otel.model.config import is_otel_v2_enabled
+    from litellm.integrations.otel.plumbing.context import request_user_id
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+    is_otel_v2_enabled.cache_clear()
+    monkeypatch.setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "prisma_client", None)
+    request: Final = Request(scope={"type": "http", "method": "POST", "path": "/chat/completions", "headers": headers})
+    request._url = URL(url="/chat/completions")
+    request._body = json.dumps(body).encode()
+
+    await user_api_key_auth(request=request, api_key="Bearer " + MASTER_KEY)
+    is_otel_v2_enabled.cache_clear()
+
+    assert request_user_id() == "named-caller"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("prohibited_param", ["api_base", "base_url"])
 async def test_user_api_key_auth_fails_with_prohibited_params(prohibited_param):
     """

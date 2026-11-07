@@ -23,7 +23,8 @@ import pytest
 
 pytest.importorskip("opentelemetry")
 
-from opentelemetry import trace  # noqa: E402
+from opentelemetry import baggage, trace  # noqa: E402
+from opentelemetry.context import attach  # noqa: E402
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (  # noqa: E402
     InMemorySpanExporter,
 )
@@ -45,7 +46,7 @@ from litellm.integrations.otel import (  # noqa: E402
     OpenTelemetryV2Config,
 )
 from litellm.integrations.otel.logger import OpenTelemetryV2  # noqa: E402
-from litellm.integrations.otel.model.config import CaptureMessageContent, ExporterSpec  # noqa: E402
+from litellm.integrations.otel.model.config import CaptureMessageContent, ExporterOwner, ExporterSpec  # noqa: E402
 from litellm.integrations.otel.model.destination import OtelDestination  # noqa: E402
 from litellm.integrations.otel.model.spans import (  # noqa: E402
     LITELLM_PROXY_REQUEST_SPAN_NAME,
@@ -154,6 +155,37 @@ def _emit_llm(logger, kwargs=None, *, ambient=None, fail=False):
 # --------------------------------------------------------------------------- #
 #  Time helpers
 # --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    ("call_metadata", "in_baggage", "expected"),
+    [
+        ({"user.id": "named-in-call"}, "in-baggage", "named-in-call"),
+        ({}, "in-baggage", "in-baggage"),
+        ({}, None, None),
+    ],
+    ids=["the-call-wins", "baggage-when-the-call-names-nobody", "neither"],
+)
+def test_an_sdk_call_names_its_user_in_the_call_or_in_the_baggage_around_it(
+    monkeypatch, call_metadata, in_baggage, expected
+):
+    exporter = InMemorySpanExporter()
+    monkeypatch.setitem(providers._EXPORTER_FACTORIES, "sdk_mixpanel", lambda _spec: exporter)
+    cfg = OpenTelemetryV2Config(
+        mapper_names=["genai", "mixpanel"],
+        exporters=[ExporterSpec(kind="sdk_mixpanel", owner=ExporterOwner.MIXPANEL)],
+    )
+    logger = OpenTelemetryV2(config=cfg, tracer_provider=providers.build_tracer_provider(cfg, use_simple_processor=True))
+
+    def emit():
+        if in_baggage is not None:
+            attach(baggage.set_baggage("user.id", in_baggage))
+        _emit_llm(logger, {**_kwargs(), "litellm_params": {"metadata": call_metadata}})
+
+    contextvars.copy_context().run(emit)
+
+    model_calls = [span for span in exporter.get_finished_spans() if "gen_ai.operation.name" in span.attributes]
+    assert [span.attributes.get("user.id") for span in model_calls] == [expected]
 
 
 def test_to_ns_handles_datetime_and_float():

@@ -250,7 +250,13 @@ class _ConnectHandler(_Handler):
         type(self)(wrapped, self.client_address, self.server)
 
 
-_MITM_HOSTS: Final = ("otlp.nr-data.net", "otlp.eu01.nr-data.net")
+_MITM_HOSTS: Final = (
+    "otlp.nr-data.net",
+    "otlp.eu01.nr-data.net",
+    "ingestion-us.mixpanel.com",
+    "ingestion-eu.mixpanel.com",
+    "ingestion-in.mixpanel.com",
+)
 
 
 def _mitm_context(directory: Path) -> ssl.SSLContext:
