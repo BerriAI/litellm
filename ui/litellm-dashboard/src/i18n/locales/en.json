@@ -4740,6 +4740,7 @@
         "result": "Result",
         "customResponse": "Response: {{message}}",
         "compliance": {
+          "errorResult": "error",
           "title": "Compliance dataset",
           "matchedSummary": "{{matched}} / {{total}} matched expected",
           "expected": "expected: {{result}}",
@@ -14519,6 +14520,14 @@
         }
       },
       "bedrock": {
+        "policyChips": {
+          "word": "word",
+          "content": "content",
+          "topic": "topic",
+          "sensitiveInformation": "sensitive-info",
+          "contextualGrounding": "contextual-grounding",
+          "automatedReasoning": "automated-reasoning"
+        },
         "unnamedRegex": "regex",
         "unnamedTopic": "topic",
         "notAvailable": "N/A",

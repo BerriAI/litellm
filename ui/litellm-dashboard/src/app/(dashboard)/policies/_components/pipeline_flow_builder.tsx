@@ -27,7 +27,6 @@ import { COMPLIANCE_FRAMEWORK_LABEL_KEYS, getComplianceDatasetPrompts, getFramew
 import type { CompliancePrompt } from "@/data/compliancePrompts";
 
 const DEFAULT_VERSION_STATUS = "draft";
-const ERROR_TERMINAL_ACTION = "error";
 
 const TEST_SOURCE_QUICK = "quick_chat";
 const TEST_SOURCE_ALL = "__all__";
@@ -1201,7 +1200,9 @@ const PipelineTestPanel: React.FC<PipelineTestPanelProps> = ({ pipeline, accessT
               }}
             >
               {complianceResults.map((entry, i) => {
-                const actual = entry.result?.terminal_action ?? (entry.error ? ERROR_TERMINAL_ACTION : "—");
+                const actual =
+                  entry.result?.terminal_action ??
+                  (entry.error ? t("policies.flowBuilder.testPanel.compliance.errorResult") : "—");
                 const matchStyle = entry.matched
                   ? { bg: "color-mix(in oklab, var(--color-success) 10%, transparent)", color: "var(--color-success)" }
                   : {

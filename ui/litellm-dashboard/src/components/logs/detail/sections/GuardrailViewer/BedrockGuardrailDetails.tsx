@@ -2,15 +2,6 @@ import React, { useState } from "react";
 import { useTranslation } from "react-i18next";
 import i18n from "@/i18n/i18n";
 
-const POLICY_CHIP_LABELS = {
-  word: "word",
-  content: "content",
-  topic: "topic",
-  sensitiveInformation: "sensitive-info",
-  contextualGrounding: "contextual-grounding",
-  automatedReasoning: "automated-reasoning",
-} as const;
-
 export type BedrockGuardrailAction = "NONE" | "GUARDRAIL_INTERVENED";
 
 export interface BedrockGuardrailUsage {
@@ -267,12 +258,15 @@ export const BedrockGuardrailDetails: React.FC<{ response: BedrockGuardrailRespo
           {response.assessments.map((assess, idx) => {
             const policyBadges = (
               <div className="flex flex-wrap gap-1">
-                {assess.wordPolicy && chip(POLICY_CHIP_LABELS.word, "slate")}
-                {assess.contentPolicy && chip(POLICY_CHIP_LABELS.content, "slate")}
-                {assess.topicPolicy && chip(POLICY_CHIP_LABELS.topic, "slate")}
-                {assess.sensitiveInformationPolicy && chip(POLICY_CHIP_LABELS.sensitiveInformation, "slate")}
-                {assess.contextualGroundingPolicy && chip(POLICY_CHIP_LABELS.contextualGrounding, "slate")}
-                {assess.automatedReasoningPolicy && chip(POLICY_CHIP_LABELS.automatedReasoning, "slate")}
+                {assess.wordPolicy && chip(t("logs.detail.bedrock.policyChips.word"), "slate")}
+                {assess.contentPolicy && chip(t("logs.detail.bedrock.policyChips.content"), "slate")}
+                {assess.topicPolicy && chip(t("logs.detail.bedrock.policyChips.topic"), "slate")}
+                {assess.sensitiveInformationPolicy &&
+                  chip(t("logs.detail.bedrock.policyChips.sensitiveInformation"), "slate")}
+                {assess.contextualGroundingPolicy &&
+                  chip(t("logs.detail.bedrock.policyChips.contextualGrounding"), "slate")}
+                {assess.automatedReasoningPolicy &&
+                  chip(t("logs.detail.bedrock.policyChips.automatedReasoning"), "slate")}
               </div>
             );
 
