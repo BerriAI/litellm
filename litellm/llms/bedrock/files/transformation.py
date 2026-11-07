@@ -1067,19 +1067,14 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
 
         # --- All other providers: passthrough (OpenAI-compatible models
         #     like openai.gpt-oss-*, qwen, deepseek, etc.) ---
-        passthrough_params: Final = {k: v for k, v in optional_params.items() if k != "drop_params"}
         return {
             "messages": messages,
-            **(
-                tool_params_without_hosted_mcp(
-                    passthrough_params,
-                    model=model,
-                    route="bedrock",
-                    drop_params=True,
-                    remedy=HOSTED_MCP_BATCH_ROW_REMEDY,
-                )
-                if drop_params
-                else passthrough_params
+            **tool_params_without_hosted_mcp(
+                {k: v for k, v in optional_params.items() if k != "drop_params"},
+                model=model,
+                route="bedrock",
+                drop_params=drop_params,
+                remedy=HOSTED_MCP_BATCH_ROW_REMEDY,
             ),
         }
 

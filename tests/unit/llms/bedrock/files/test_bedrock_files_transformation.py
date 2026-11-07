@@ -4416,7 +4416,11 @@ _WEATHER_TOOL: Final = {
     "type": "function",
     "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {}}},
 }
-_BATCH_MODELS: Final = ("bedrock/us.amazon.nova-pro-v1:0", "bedrock/us.anthropic.claude-sonnet-4-6")
+_BATCH_MODELS: Final = (
+    "bedrock/us.amazon.nova-pro-v1:0",
+    "bedrock/us.anthropic.claude-sonnet-4-6",
+    "bedrock/openai.gpt-oss-120b-1:0",
+)
 
 
 def _uploaded_row(
@@ -4497,39 +4501,11 @@ def test_batch_row_with_a_hosted_mcp_tool_is_refused_with_advice_a_batch_row_can
 _PASSTHROUGH_BATCH_MODEL: Final = "bedrock/openai.gpt-oss-120b-1:0"
 
 
-@pytest.mark.parametrize(
-    ("row_drop_params", "deployment_drop_params"), [(None, True), (True, None)], ids=["deployment", "row"]
-)
-def test_passthrough_batch_row_drops_a_hosted_mcp_tool_and_its_tool_choice_under_drop_params(
-    monkeypatch: pytest.MonkeyPatch, row_drop_params: bool | None, deployment_drop_params: bool | None
-) -> None:
-    monkeypatch.setattr(litellm, "drop_params", False)
-
-    model_input: Final = _uploaded_hosted_mcp_row(_PASSTHROUGH_BATCH_MODEL, row_drop_params, deployment_drop_params)
-
-    assert model_input["tools"] == [_WEATHER_TOOL]
-    assert "deepwiki" not in json.dumps(model_input)
-    assert "drop_params" not in model_input
-
-
-def test_passthrough_batch_row_without_drop_params_keeps_its_tools_and_never_sends_drop_params(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(litellm, "drop_params", False)
-
-    model_input: Final = _uploaded_hosted_mcp_row(_PASSTHROUGH_BATCH_MODEL, False, None)
-
-    assert model_input["tools"] == [_HOSTED_MCP_TOOL, _WEATHER_TOOL]
-    assert "drop_params" not in model_input
-
-
 _RESPONSES_WEATHER_TOOL: Final = {
     "type": "function",
     "name": "get_weather",
     "parameters": {"type": "object", "properties": {}},
 }
-
-
 @pytest.mark.parametrize("server_label", ["deepwiki", "unsent"])
 @pytest.mark.parametrize("model", (*_BATCH_MODELS, _PASSTHROUGH_BATCH_MODEL))
 @pytest.mark.parametrize(
