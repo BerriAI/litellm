@@ -97,7 +97,9 @@ async def test_bedrock_mantle_claude_async_completion_inlines_remote_images_off_
     assert async_only_image_fetch.base64_png in captured["body"]
 
 
-async def test_bedrock_mantle_claude_async_completion_inlines_document_url_sources_off_the_event_loop(async_only_image_fetch):
+async def test_bedrock_mantle_claude_async_completion_inlines_document_url_sources_off_the_event_loop(
+    async_only_image_fetch,
+):
     pdf_url = f"http://docs.example/{uuid.uuid4()}.pdf"
     captured = {}
 
@@ -264,7 +266,9 @@ def _json_tool_message(request: httpx.Request) -> httpx.Response:
 
 
 @pytest.mark.usefixtures("local_model_cost_map")
-@pytest.mark.parametrize("model", ("bedrock_mantle/anthropic.claude-opus-5-5", "bedrock/mantle/anthropic.claude-opus-5-5"))
+@pytest.mark.parametrize(
+    "model", ("bedrock_mantle/anthropic.claude-opus-5-5", "bedrock/mantle/anthropic.claude-opus-5-5")
+)
 def test_mantle_claude_that_cannot_force_a_tool_keeps_json_schema_on_the_json_tool(model: str) -> None:
     respond: Final = MagicMock(wraps=_json_tool_message)
 
@@ -275,9 +279,45 @@ def test_mantle_claude_that_cannot_force_a_tool_keeps_json_schema_on_the_json_to
 
     sent: Final = tuple(json.loads(call.args[0].content) for call in respond.call_args_list)
     assert json.loads(response.choices[0].message.content) == RISK_ANSWER
-    assert [(body.get("output_config", {}).get("format"), [tool["name"] for tool in body["tools"]]) for body in sent] == [
-        (None, ["json_tool_call"])
-    ]
+    assert [
+        (body.get("output_config", {}).get("format"), [tool["name"] for tool in body["tools"]]) for body in sent
+    ] == [(None, ["json_tool_call"])]
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+def test_mantle_uses_native_output_only_for_schemas_within_the_property_limit() -> None:
+    from litellm.llms.bedrock.chat.mantle.transformation import AmazonMantleConfig
+
+    model: Final = "anthropic.claude-haiku-4-5"
+    config: Final = AmazonMantleConfig()
+
+    def transform(size: int) -> dict[str, object]:
+        response_format: Final = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "result",
+                "schema": {
+                    "type": "object",
+                    "properties": {f"field_{index:03d}": {"type": "string"} for index in range(size)},
+                    "required": [f"field_{index:03d}" for index in range(size)],
+                    "additionalProperties": False,
+                },
+            },
+        }
+        optional_params: Final = config.map_openai_params(
+            non_default_params={"response_format": response_format},
+            optional_params={},
+            model=model,
+            drop_params=False,
+        )
+        return optional_params
+
+    requests: Final = tuple(transform(size) for size in (2, 120))
+    assert "output_format" in requests[0]
+    assert "tools" not in requests[0]
+    assert "output_format" not in requests[1]
+    assert requests[1]["tool_choice"] == {"type": "tool", "name": "json_tool_call"}
+    assert requests[1]["tools"][0]["name"] == "json_tool_call"
 
 
 def test_mantle_claude_default_max_tokens_comes_from_the_mantle_row(local_model_cost_map):

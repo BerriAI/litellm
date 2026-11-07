@@ -64,10 +64,15 @@ class AmazonMantleConfig(AmazonAnthropicClaudeConfig):
     ) -> bool:
         return bedrock_takes_native_output(model, "bedrock_mantle", model_info)
 
-    def native_output_format_schema(self, json_schema: Mapping[str, object]) -> Mapping[str, object] | None:
-        if schema_property_count(json_schema) > BEDROCK_NATIVE_OUTPUT_MAX_PROPERTIES:
-            return None
-        return super().native_output_format_schema(json_schema)
+    def uses_native_structured_output_for_schema(
+        self,
+        model: str,
+        json_schema: Mapping[str, object] | None,
+        request_params: Mapping[str, object],
+    ) -> bool:
+        return super().uses_native_structured_output_for_schema(model, json_schema, request_params) and (
+            json_schema is None or schema_property_count(json_schema) <= BEDROCK_NATIVE_OUTPUT_MAX_PROPERTIES
+        )
 
     def _default_max_tokens_models(self, model: str, litellm_params: Mapping[str, object]) -> tuple[str, ...]:
         return (f"bedrock_mantle/{model}", *super()._default_max_tokens_models(model, litellm_params))
