@@ -12,7 +12,7 @@ from typing import Final
 
 from cli_harness.lockdown import isolated_home, locked_down_env
 from cli_harness.rate_limiter import RateBucket, RateLimiter
-from codex.rollout import Compaction, rollout_compactions, rollout_final_messages, rollout_parent_thread
+from codex.rollout import Compaction, Subagent, rollout_compactions, rollout_parent_thread, rollout_subagent
 from codex.run import CodexRun, codex_run
 from e2e_metadata import step
 
@@ -108,12 +108,11 @@ class CodexHarness:
         rollouts: Final = sorted(self.codex_home.glob(f"sessions/**/rollout-*-{thread_id}.jsonl"))
         return tuple(chain.from_iterable(rollout_compactions(rollout.read_text()) for rollout in rollouts))
 
-    def subagent_replies(self, thread_id: str) -> tuple[str, ...]:
+    def subagents(self, thread_id: str) -> tuple[Subagent, ...]:
         rollouts: Final = tuple(
             path.read_text() for path in sorted(self.codex_home.glob("sessions/**/rollout-*.jsonl"))
         )
-        children: Final = (rollout for rollout in rollouts if rollout_parent_thread(rollout) == thread_id)
-        return tuple(chain.from_iterable(rollout_final_messages(child) for child in children))
+        return tuple(rollout_subagent(rollout) for rollout in rollouts if rollout_parent_thread(rollout) == thread_id)
 
     def _run(self, subcommand: tuple[str, ...], args: tuple[str, ...], cwd: Path) -> CodexRun:
         _ = self.limiter.acquire(self.rate_bucket)

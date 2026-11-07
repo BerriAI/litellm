@@ -4,7 +4,8 @@
 they show. Each line is `{"timestamp", "type", "payload"}` (`codex-rs/history/src/rollout_payload.rs`).
 A remote compaction is one whose replacement history carries the provider's `compaction` item, while a local one
 replaces the history with a summary Codex wrote itself. A sub-agent gets a rollout of its own whose `session_meta`
-names the thread that spawned it, and each turn it finishes ends in a `task_complete` event with its last message.
+names the thread that spawned it, and carries `forked_from_id` when it inherited that thread's conversation. Each turn
+it finishes ends in a `task_complete` event with its last message.
 """
 
 from __future__ import annotations
@@ -39,6 +40,7 @@ class _CompactedPayload(_Frozen):
 
 class _SessionMeta(_Frozen):
     parent_thread_id: str | None = None
+    forked_from_id: str | None = None
 
 
 class _Event(_Frozen):
@@ -55,13 +57,22 @@ class Compaction:
     remote: bool
 
 
+@dataclass(frozen=True, slots=True)
+class Subagent:
+    forked: bool
+    replies: tuple[str, ...]
+
+
 def rollout_compactions(rollout: str) -> tuple[Compaction, ...]:
     return tuple(_compaction(line.payload) for line in _lines(rollout) if line.type == _COMPACTED)
 
 
 def rollout_parent_thread(rollout: str) -> str | None:
-    meta: Final = next((line.payload for line in _lines(rollout) if line.type == _SESSION_META), None)
-    return _SessionMeta.model_validate(meta).parent_thread_id if meta is not None else None
+    return _session_meta(rollout).parent_thread_id
+
+
+def rollout_subagent(rollout: str) -> Subagent:
+    return Subagent(forked=_session_meta(rollout).forked_from_id is not None, replies=rollout_final_messages(rollout))
 
 
 def rollout_final_messages(rollout: str) -> tuple[str, ...]:
@@ -70,6 +81,11 @@ def rollout_final_messages(rollout: str) -> tuple[str, ...]:
         _TaskComplete.model_validate(event) for event in events if _Event.model_validate(event).type == "task_complete"
     )
     return tuple(done.last_agent_message for done in completions if done.last_agent_message is not None)
+
+
+def _session_meta(rollout: str) -> _SessionMeta:
+    meta: Final = next((line.payload for line in _lines(rollout) if line.type == _SESSION_META), None)
+    return _SessionMeta.model_validate(meta) if meta is not None else _SessionMeta()
 
 
 def _lines(rollout: str) -> tuple[_Line, ...]:

@@ -25,5 +25,7 @@ class TestCodexSubagent:
         )
         assert run.exit_code == 0, run
         assert run.thread_id is not None, run
-        replies: Final = codex.subagent_replies(run.thread_id)
-        assert any(codeword in reply for reply in replies), (replies, run)
+        subagents: Final = codex.subagents(run.thread_id)
+        assert subagents, run
+        assert not any(subagent.forked for subagent in subagents), (subagents, run)
+        assert any(codeword in reply for subagent in subagents for reply in subagent.replies), (subagents, run)
