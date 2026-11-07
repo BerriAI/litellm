@@ -213,6 +213,13 @@ def decoded_json_object(text: str) -> Mapping[str, JsonValue] | None:
         return None
 
 
+def _json_object_shape(text: str) -> Mapping[str, JsonValue] | None:
+    try:
+        return as_json_object(json.loads(text, parse_int=float))
+    except (ValueError, RecursionError):
+        return None
+
+
 def _names(value: object) -> frozenset[str]:
     try:
         return _NAMES.validate_python(value)
@@ -322,6 +329,11 @@ def response_format_answer_json(value: object) -> str:
     return json.dumps(value) if _LONE_SURROGATE.search(text) else text
 
 
+def response_format_answer_members(encoded_block: str) -> str:
+    block: Final = decoded_json_object(encoded_block)
+    return encoded_block.strip()[1:-1].strip() if block is None else response_format_answer_json(block)[1:-1]
+
+
 def unwrap_response_format_envelope(payload: object, schema: ResponseFormatSchema, tool_name: str) -> object:
     contents: Final = response_format_envelope_contents(payload, schema, tool_name)
     return payload if contents is None else contents
@@ -362,33 +374,41 @@ def _split_answer_fields(
     return dict(zip(field_names, (block[value_key] for block in blocks), strict=True))
 
 
-def _merged_partial_answers(
-    blocks: tuple[Mapping[str, JsonValue], ...], schema: ResponseFormatSchema
-) -> Mapping[str, JsonValue] | None:
-    keys: Final = frozenset(itertools.chain.from_iterable(blocks))
-    if not keys <= schema.declared_names or len(keys) != sum(len(block) for block in blocks):
-        return None
-    return dict(itertools.chain.from_iterable(block.items() for block in blocks))
-
-
-def split_response_format_answer(
-    encoded_blocks: Sequence[str], schema: ResponseFormatSchema
-) -> Mapping[str, JsonValue] | None:
-    decoded: Final = tuple(_json_object_or_encoded_object(encoded) for encoded in encoded_blocks)
+def _named_fields_answer(encoded_blocks: Sequence[str], schema: ResponseFormatSchema) -> str | None:
+    decoded: Final = tuple(decoded_json_object(encoded) for encoded in encoded_blocks)
     blocks: Final = tuple(block for block in decoded if block is not None)
-    if len(blocks) < 2 or len(blocks) != len(decoded):
+    named_fields: Final = _split_answer_fields(blocks, schema) if len(blocks) == len(decoded) else None
+    return None if named_fields is None else response_format_answer_json(named_fields)
+
+
+def _merged_partial_answers(
+    encoded_blocks: Sequence[str], shapes: tuple[Mapping[str, JsonValue], ...], schema: ResponseFormatSchema
+) -> str | None:
+    keys: Final = frozenset(itertools.chain.from_iterable(shapes))
+    if not keys <= schema.declared_names or len(keys) != sum(len(shape) for shape in shapes):
         return None
-    named_fields: Final = _split_answer_fields(blocks, schema)
-    return named_fields if named_fields is not None else _merged_partial_answers(blocks, schema)
+    members: Final = (response_format_answer_members(encoded) for encoded in encoded_blocks)
+    return "{" + ", ".join(member for member in members if member) + "}"
 
 
-def partial_response_format_answer(encoded_block: str, schema: ResponseFormatSchema) -> Mapping[str, JsonValue] | None:
-    block: Final = _json_object_or_encoded_object(encoded_block)
-    return block if block is not None and frozenset(block) <= schema.declared_names else None
+def split_response_format_answer(encoded_blocks: Sequence[str], schema: ResponseFormatSchema) -> str | None:
+    decoded: Final = tuple(_json_object_shape(encoded) for encoded in encoded_blocks)
+    shapes: Final = tuple(shape for shape in decoded if shape is not None)
+    if len(shapes) < 2 or len(shapes) != len(decoded):
+        return None
+    if _split_answer_fields(shapes, schema) is not None:
+        return _named_fields_answer(encoded_blocks, schema)
+    return _merged_partial_answers(encoded_blocks, shapes, schema)
+
+
+def partial_response_format_answer_keys(encoded_block: str, schema: ResponseFormatSchema) -> frozenset[str] | None:
+    shape: Final = _json_object_shape(encoded_block)
+    keys: Final = None if shape is None else frozenset(shape)
+    return keys if keys is not None and keys <= schema.declared_names else None
 
 
 def names_a_response_format_property(encoded_block: str, schema: ResponseFormatSchema) -> bool:
-    block: Final = _json_object_or_encoded_object(encoded_block)
+    block: Final = _json_object_shape(encoded_block)
     if block is None:
         return False
     return any(isinstance(value, str) and value in schema.declared_names for value in block.values())

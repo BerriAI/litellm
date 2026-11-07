@@ -3415,7 +3415,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             )
         )
         if split_answer is not None:
-            return litellm.Message(content=response_format_answer_json(split_answer))
+            return litellm.Message(content=split_answer)
         payload_object: Final = decoded_json_object(json_mode_content_str)
         if payload_object is None:
             return litellm.Message(content=json_mode_content_str)

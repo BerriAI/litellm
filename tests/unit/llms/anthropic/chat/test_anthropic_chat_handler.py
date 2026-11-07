@@ -34,8 +34,14 @@ from tests.unit.llms.anthropic.anthropic_docs_refusal import ANTHROPIC_DOCS_REFU
 
 def _text_delta_stream(text: str) -> bytes:
     events: Final = (
-        ("content_block_start", {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}),
-        ("content_block_delta", {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": text}}),
+        (
+            "content_block_start",
+            {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        ),
+        (
+            "content_block_delta",
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": text}},
+        ),
     )
     return "".join(
         f"event: {name}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n" for name, payload in events
@@ -461,7 +467,9 @@ def test_anthropic_sync_completion_sends_a_link_that_serves_a_pdf_as_a_url_docum
     def serve(client: object, url: str, **kwargs: object) -> httpx.Response:
         if url == pdf_link:
             return _served_pdf_slice(url)
-        return httpx.Response(200, content=b"\x89PNG", headers={"content-type": "image/png"}, request=httpx.Request("GET", url))
+        return httpx.Response(
+            200, content=b"\x89PNG", headers={"content-type": "image/png"}, request=httpx.Request("GET", url)
+        )
 
     monkeypatch.setattr(image_handling, "safe_get", serve)
     client: Final = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_anthropic_reply(captured))))
@@ -3811,6 +3819,19 @@ def test_streamed_json_mode_answer_split_into_one_partial_object_per_field_arriv
 
     assert json.loads("".join(contents)) == answer
     assert contents[3] == blocks[0][:-1]
+
+
+@pytest.mark.parametrize(
+    "blocks",
+    [
+        pytest.param(('{"tier": 1e400}', '{"summary": "x"}'), id="number_past_a_float_first"),
+        pytest.param(
+            ('{"summary": "x"}', '{"tier": ' + _DIGITS_PAST_THE_INT_LIMIT + "}"), id="integer_past_the_digit_limit_last"
+        ),
+    ],
+)
+def test_streamed_json_mode_split_fields_keep_numbers_that_cannot_be_written_back_as_json(blocks: tuple[str, ...]):
+    assert "".join(_streamed_json_tool_blocks(blocks)) == "{" + ", ".join(block[1:-1] for block in blocks) + "}"
 
 
 @pytest.mark.parametrize(
