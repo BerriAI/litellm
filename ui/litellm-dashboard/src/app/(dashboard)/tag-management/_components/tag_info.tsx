@@ -25,6 +25,7 @@ import i18n from "@/i18n/i18n";
 import { useZodForm } from "@/lib/forms/useZodForm";
 import { copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
 import { CheckIcon, ChevronRight, CopyIcon } from "lucide-react";
+import TagKeysSection from "./TagKeysSection";
 
 const isBlank = (value: string | number | null | undefined): value is "" | null | undefined =>
   value == null || value === "";
@@ -398,6 +399,8 @@ const TagInfoView: React.FC<TagInfoViewProps> = ({ tagId, onClose, accessToken, 
               </CardContent>
             </Card>
           )}
+
+          <TagKeysSection tagName={tagDetails.name} />
         </div>
       )}
     </div>
