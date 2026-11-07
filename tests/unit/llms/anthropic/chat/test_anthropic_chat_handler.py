@@ -2829,6 +2829,43 @@ _STREAMED_PERSON_SCHEMA: Final = {
 _STREAMED_PERSON: Final = {"name": "Ada", "age": 36}
 
 
+def _block_events(
+    index: int, block: dict[str, object], deltas: tuple[dict[str, object], ...]
+) -> tuple[dict[str, object], ...]:
+    return (
+        {"type": "content_block_start", "index": index, "content_block": block},
+        *({"type": "content_block_delta", "index": index, "delta": delta} for delta in deltas),
+        {"type": "content_block_stop", "index": index},
+    )
+
+
+def _message_events(*blocks: tuple[dict[str, object], tuple[dict[str, object], ...]]) -> tuple[dict[str, object], ...]:
+    starts_and_deltas: Final = tuple(
+        chain.from_iterable(_block_events(index, block, deltas) for index, (block, deltas) in enumerate(blocks))
+    )
+    return (
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-opus-5",
+                "content": [],
+                "stop_reason": None,
+                "stop_sequence": None,
+                "usage": {"input_tokens": 10, "output_tokens": 1},
+            },
+        },
+        *starts_and_deltas,
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "tool_use", "stop_sequence": None},
+            "usage": {"output_tokens": 40},
+        },
+    )
+
+
 def _json_tool_events(fragments: tuple[str, ...]) -> tuple[dict[str, object], ...]:
     return (
         {
