@@ -10707,8 +10707,8 @@ class ProviderConfigManager:
             # given model is on it; None keeps the chat-completions bridge.
             return litellm.BedrockOpenAIResponsesConfig.for_model(model)
         elif litellm.LlmProviders.BEDROCK_MANTLE == provider:
-            # Both decisions are data-driven from the model's price-map entry, with
-            # no model-name logic. Capability (can it serve Responses?) comes from
+            # Capability and wire path are data-driven from the model's price-map
+            # entry, with no model-name logic. Capability (can it serve Responses?) comes from
             # mantle_supports_responses (supported_endpoints / mode);
             # chat-only models (gpt-oss safeguard, nvidia, ...) return None and keep
             # the chat-completions emulation (responses/main.py "config is None").
@@ -10716,6 +10716,7 @@ class ProviderConfigManager:
             # use_openai_responses_path flag: gpt-5.x and gemma-4-* on
             # /openai/v1/responses, everything else (incl. gpt-oss) on
             # /v1/responses.
+            from litellm.llms.bedrock.common_utils import bedrock_model_encrypts_agent_messages
             from litellm.llms.bedrock_mantle.common_utils import (
                 mantle_base_segment,
                 mantle_supports_responses,
@@ -10724,7 +10725,8 @@ class ProviderConfigManager:
             if not model or not mantle_supports_responses(model, litellm.model_cost):
                 return None
             return litellm.BedrockMantleResponsesAPIConfig(
-                use_openai_path=mantle_base_segment(model, litellm.model_cost) == "openai/v1"
+                use_openai_path=mantle_base_segment(model, litellm.model_cost) == "openai/v1",
+                encrypted_agent_messages=bedrock_model_encrypts_agent_messages(model),
             )
         return None
 
