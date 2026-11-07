@@ -3,6 +3,7 @@ package litellm
 import (
 	"fmt"
 	"log"
+	"strings"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/validation"
@@ -45,6 +46,11 @@ func resourceLiteLLMOrganizationMemberAdd() *schema.Resource {
 						},
 					},
 				},
+			},
+			"member_user_ids": {
+				Type:     schema.TypeMap,
+				Computed: true,
+				Elem:     &schema.Schema{Type: schema.TypeString},
 			},
 		},
 	}
@@ -93,8 +99,52 @@ func resourceLiteLLMOrganizationMemberAddCreate(d *schema.ResourceData, m interf
 }
 
 func resourceLiteLLMOrganizationMemberAddRead(d *schema.ResourceData, m interface{}) error {
-	// The API doesn't provide a way to read specific organization members easily
-	// We'll maintain the state as is
+	client := m.(*Client)
+	orgID := d.Get("organization_id").(string)
+
+	members, found, err := fetchOrganizationMembers(client, orgID)
+	if err != nil {
+		return err
+	}
+	if !found {
+		log.Printf("[WARN] Organization %s not found, removing organization members from state", orgID)
+		d.SetId("")
+		return nil
+	}
+
+	// Keep only the configured members that are still in the organization,
+	// each with the role the proxy reports. Members removed out of band drop
+	// out of state, so the next apply adds them back.
+	resolvedUserIDs := d.Get("member_user_ids").(map[string]interface{})
+	current := make([]interface{}, 0)
+	currentUserIDs := make(map[string]interface{})
+	for _, member := range d.Get("member").(*schema.Set).List() {
+		configured := member.(map[string]interface{})
+		configuredID, _ := configured["user_id"].(string)
+		configuredEmail, _ := configured["user_email"].(string)
+
+		userID, userEmail := orgMemberIdentity(configured, resolvedUserIDs)
+		existing, ok := findOrgMember(members, userID, userEmail)
+		if !ok {
+			log.Printf("[WARN] Organization member (user_id=%q, user_email=%q) not found in organization %s", configuredID, configuredEmail, orgID)
+			continue
+		}
+		current = append(current, map[string]interface{}{
+			"user_id":    configuredID,
+			"user_email": configuredEmail,
+			"role":       existing.Role,
+		})
+		if configuredID == "" {
+			currentUserIDs[strings.ToLower(configuredEmail)] = existing.UserID
+		}
+	}
+
+	if err := d.Set("member", current); err != nil {
+		return fmt.Errorf("error setting member: %w", err)
+	}
+	if err := d.Set("member_user_ids", currentUserIDs); err != nil {
+		return fmt.Errorf("error setting member_user_ids: %w", err)
+	}
 	return nil
 }
 
@@ -105,6 +155,7 @@ func resourceLiteLLMOrganizationMemberAddUpdate(d *schema.ResourceData, m interf
 	o, n := d.GetChange("member")
 	oldMembers := o.(*schema.Set)
 	newMembers := n.(*schema.Set)
+	resolvedUserIDs := d.Get("member_user_ids").(map[string]interface{})
 
 	// Create maps for easier lookup by user identifier
 	oldMemberMap := make(map[string]map[string]interface{})
@@ -131,21 +182,9 @@ func resourceLiteLLMOrganizationMemberAddUpdate(d *schema.ResourceData, m interf
 	// Find members to delete (in old but not in new)
 	for key, oldMember := range oldMemberMap {
 		if _, exists := newMemberMap[key]; !exists {
-			deleteData := map[string]interface{}{
-				"organization_id": orgID,
-			}
-			if userID, ok := oldMember["user_id"].(string); ok && userID != "" {
-				deleteData["user_id"] = userID
-			}
-			if userEmail, ok := oldMember["user_email"].(string); ok && userEmail != "" {
-				deleteData["user_email"] = userEmail
-			}
-
-			log.Printf("[DEBUG] Delete organization member request payload: %+v", deleteData)
-
-			_, err := client.DeleteOrganizationMember(deleteData)
-			if err != nil {
-				return fmt.Errorf("error deleting organization member: %v", err)
+			userID, userEmail := orgMemberIdentity(oldMember, resolvedUserIDs)
+			if err := deleteOrganizationMember(client, orgID, userID, userEmail); err != nil {
+				return err
 			}
 		}
 	}
@@ -159,10 +198,11 @@ func resourceLiteLLMOrganizationMemberAddUpdate(d *schema.ResourceData, m interf
 					"organization_id": orgID,
 					"role":            newMember["role"].(string),
 				}
-				if userID, ok := newMember["user_id"].(string); ok && userID != "" {
+				userID, userEmail := orgMemberIdentity(newMember, resolvedUserIDs)
+				if userID != "" {
 					updateData["user_id"] = userID
 				}
-				if userEmail, ok := newMember["user_email"].(string); ok && userEmail != "" {
+				if userEmail != "" {
 					updateData["user_email"] = userEmail
 				}
 
@@ -235,23 +275,13 @@ func resourceLiteLLMOrganizationMemberAddDelete(d *schema.ResourceData, m interf
 	client := m.(*Client)
 	orgID := d.Get("organization_id").(string)
 	members := d.Get("member").(*schema.Set)
+	resolvedUserIDs := d.Get("member_user_ids").(map[string]interface{})
 
 	// Delete each member
 	for _, member := range members.List() {
-		m := member.(map[string]interface{})
-		deleteData := map[string]interface{}{
-			"organization_id": orgID,
-		}
-		if userID, ok := m["user_id"].(string); ok && userID != "" {
-			deleteData["user_id"] = userID
-		}
-		if userEmail, ok := m["user_email"].(string); ok && userEmail != "" {
-			deleteData["user_email"] = userEmail
-		}
-
-		_, err := client.DeleteOrganizationMember(deleteData)
-		if err != nil {
-			return fmt.Errorf("error deleting organization member: %v", err)
+		userID, userEmail := orgMemberIdentity(member.(map[string]interface{}), resolvedUserIDs)
+		if err := deleteOrganizationMember(client, orgID, userID, userEmail); err != nil {
+			return err
 		}
 	}
 

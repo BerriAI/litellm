@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 )
@@ -60,6 +61,10 @@ func (c *Client) UpdateOrganizationMember(data map[string]interface{}) (map[stri
 
 func (c *Client) DeleteOrganizationMember(data map[string]interface{}) (map[string]interface{}, error) {
 	return c.sendRequest("DELETE", "/organization/member_delete", data)
+}
+
+func (c *Client) GetOrganizationInfo(organizationID string) (map[string]interface{}, error) {
+	return c.sendRequest("GET", fmt.Sprintf("/organization/info?organization_id=%s", url.QueryEscape(organizationID)), nil)
 }
 
 // Key-related methods
