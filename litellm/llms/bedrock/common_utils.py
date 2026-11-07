@@ -1336,13 +1336,27 @@ def bedrock_converse_accepts_redacted_thinking(model: str, base_model: str | Non
     its own. An ARN that hides its model, like an application inference profile, falls back to the
     deployment's ``base_model`` and counts as non-Claude without one.
     """
+    return _is_claude(_converse_target_model(model, base_model))
+
+
+def bedrock_converse_rejects_signed_thinking(model: str, base_model: str | None) -> bool:
+    if base_model is None and "." not in get_bedrock_base_model(model):
+        return False
+    return not _is_claude_behind_any_region_prefix(_converse_target_model(model, base_model))
+
+
+def _converse_target_model(model: str, base_model: str | None) -> str:
     if base_model is None or "." in get_bedrock_base_model(model):
-        return _is_claude(model)
-    return _is_claude(base_model)
+        return model
+    return base_model
 
 
 def _is_claude(model: str) -> bool:
     return get_bedrock_base_model(model).startswith(("anthropic", "claude"))
+
+
+def _is_claude_behind_any_region_prefix(model: str) -> bool:
+    return _is_claude(model) or get_bedrock_base_model(model).partition(".")[2].startswith("anthropic.")
 
 
 def bedrock_converse_supports_parallel_tool_use_config(model: str) -> bool:
