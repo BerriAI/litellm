@@ -70,6 +70,8 @@ pub struct RetryContext {
     pub has_content_policy_fallbacks: bool,
     /// `regular_fallbacks is not None and len(regular_fallbacks) > 0`.
     pub has_regular_fallbacks: bool,
+    /// A healthy deployment of the group has not failed this call yet.
+    pub has_untried_deployment: bool,
 }
 
 /// `should_retry_this_error`, as a predicate: `false` where Python raises the error.
@@ -80,15 +82,13 @@ pub fn should_retry(failure: &AttemptError, ctx: RetryContext) -> bool {
     if failure.is_a("ContentPolicyViolationError") && ctx.has_content_policy_fallbacks {
         return false;
     }
-    if let Some(status) = failure.status
-        && !should_retry_status(status)
-        && !matches!(status, 401 | 403)
-        && !failure.is_a("UnsupportedEndpointError")
+    let non_retryable_status = failure
+        .status
+        .is_some_and(|status| !should_retry_status(status) && !matches!(status, 401 | 403));
+    if (non_retryable_status && !failure.is_a("UnsupportedEndpointError"))
+        || failure.is_a("NotFoundError")
     {
-        return false;
-    }
-    if failure.is_a("NotFoundError") {
-        return false;
+        return ctx.has_untried_deployment;
     }
     if failure.is_a("RateLimitError") && ctx.healthy == 0 && ctx.has_regular_fallbacks {
         return false;
@@ -214,6 +214,27 @@ mod tests {
         assert_eq!(
             should_retry(&AttemptError::new(kind, status), ctx),
             expected
+        );
+    }
+
+    #[rstest]
+    #[case::not_found(FailureKind::NotFound, Some(404))]
+    #[case::bad_request(FailureKind::BadRequest, Some(400))]
+    #[case::unprocessable(FailureKind::Other, Some(422))]
+    fn a_non_retryable_failure_is_retried_only_while_a_deployment_is_untried(
+        #[case] kind: FailureKind,
+        #[case] status: Option<u16>,
+        #[values(true, false)] has_untried_deployment: bool,
+    ) {
+        let ctx = RetryContext {
+            healthy: 2,
+            all: 2,
+            has_untried_deployment,
+            ..RetryContext::default()
+        };
+        assert_eq!(
+            should_retry(&AttemptError::new(kind, status), ctx),
+            has_untried_deployment
         );
     }
 }

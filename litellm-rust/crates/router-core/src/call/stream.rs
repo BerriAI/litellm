@@ -250,7 +250,7 @@ impl Router {
             if !policy_applies
                 && !self
                     .core
-                    .should_retry(&snapshot, &request, &last, healthy, all)
+                    .should_retry(&snapshot, &request, &last, (healthy, all), false)
             {
                 break;
             }

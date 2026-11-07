@@ -50,6 +50,7 @@ pub(crate) fn should_retry(
             has_context_window_fallbacks: context_window,
             has_content_policy_fallbacks: content_policy,
             has_regular_fallbacks: regular,
+            has_untried_deployment: false,
         },
     ))
 }
