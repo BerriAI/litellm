@@ -38,6 +38,7 @@ pytestmark: Final = pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
 _API_KEY: Final = "scripted-provider-key"
 _DEEPSEEK_V4: Final = "azure_ai/DeepSeek-V4-Flash-0731"
 _DEEPSEEK_R1: Final = "azure_ai/DeepSeek-R1-0528"
+_DEEPSEEK_R1_DISTILL: Final = "deepinfra/deepseek-ai/DeepSeek-R1-Distill-Qwen-32B"
 _QWEN3_5: Final = "databricks/databricks-qwen35-122b-a10b"
 _GROK_3: Final = "azure_ai/grok-3"
 _DEEPSEEK_V4_TOOL_PREAMBLE: Final = 222
@@ -189,9 +190,10 @@ def _counted_with_cl100k(delta: int) -> None:
     ("backend", "tokenizer_type", "counted_with"),
     (
         (_DEEPSEEK_V4, "huggingface_tokenizer", _counted_with_deepseek),
-        (_DEEPSEEK_R1, "openai_tokenizer", _counted_with_cl100k),
+        (_DEEPSEEK_R1, "huggingface_tokenizer", _counted_with_deepseek),
+        (_DEEPSEEK_R1_DISTILL, "openai_tokenizer", _counted_with_cl100k),
     ),
-    ids=("deepseek-v4", "deepseek-r1"),
+    ids=("deepseek-v4", "deepseek-r1", "deepseek-r1-distill"),
 )
 def test_utils_token_counter_names_the_tokenizer_that_counted_deepseek_text(
     gateway: Gateway, backend: str, tokenizer_type: str, counted_with: Callable[[int], None]
