@@ -1272,7 +1272,9 @@ class AmazonConverseConfig(BaseConfig):
             )
 
         default_max_tokens: Final = (
-            None if "maxTokens" in optional_params else bedrock_converse_claude_default_max_tokens(base_model)
+            None
+            if "maxTokens" in optional_params
+            else bedrock_converse_claude_default_max_tokens(base_model, model_info)
         )
         if default_max_tokens is not None:
             optional_params["maxTokens"] = default_max_tokens  # rebind-ok: fills the caller's dict by contract

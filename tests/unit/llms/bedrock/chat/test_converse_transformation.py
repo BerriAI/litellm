@@ -12316,13 +12316,26 @@ def test_application_profile_arn_sends_its_base_models_output_cap(
 
 
 @pytest.mark.respx(assert_all_called=True)
-def test_deployment_max_output_tokens_does_not_cut_the_converse_default(
+def test_deployment_max_output_tokens_sets_the_converse_default(
     respx_mock: respx.Router, local_model_cost_map: None
 ) -> None:
     mapped_cap: Final = litellm.model_cost[_SONNET_5_5_BASE_ROW]["max_output_tokens"]
 
     max_tokens: Final = _routed_converse_max_tokens(
-        respx_mock, f"bedrock/{_SONNET_5_5}", {"max_output_tokens": mapped_cap // 64}
+        respx_mock, f"bedrock/{_PROFILE_ARN}", {"base_model": _SONNET_5_5, "max_output_tokens": mapped_cap // 64}
+    )
+
+    assert max_tokens == mapped_cap // 64
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_deployment_max_output_tokens_above_the_mapped_cap_sends_the_mapped_cap(
+    respx_mock: respx.Router, local_model_cost_map: None
+) -> None:
+    mapped_cap: Final = litellm.model_cost[_SONNET_5_5_BASE_ROW]["max_output_tokens"]
+
+    max_tokens: Final = _routed_converse_max_tokens(
+        respx_mock, f"bedrock/{_SONNET_5_5}", {"max_output_tokens": mapped_cap * 2}
     )
 
     assert max_tokens == mapped_cap
@@ -12360,6 +12373,7 @@ def test_unmapped_claude_gets_the_current_claude_output_cap(respx_mock: respx.Ro
     [
         ("bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0", {}),
         ("bedrock/us.anthropic.claude-sonnet-4-6", {}),
+        ("bedrock/us.anthropic.claude-sonnet-4-6", {"max_output_tokens": 32000}),
         ("bedrock/us.anthropic.claude-opus-4-6-v1", {}),
         ("bedrock/us.anthropic.claude-sonnet-4-20250514-v1:0", {}),
         ("bedrock/us.anthropic.claude-opus-4-1-20250805-v1:0", {}),
@@ -12374,6 +12388,7 @@ def test_unmapped_claude_gets_the_current_claude_output_cap(respx_mock: respx.Ro
     ids=[
         "haiku_4_5",
         "sonnet_4_6",
+        "sonnet_4_6_with_deployment_cap",
         "opus_4_6",
         "sonnet_4",
         "opus_4_1",
@@ -12388,7 +12403,7 @@ def test_unmapped_claude_gets_the_current_claude_output_cap(respx_mock: respx.Ro
 )
 @pytest.mark.respx(assert_all_called=True)
 def test_models_bedrock_does_not_cap_at_4096_keep_bedrocks_own_default(
-    model: str, model_info: Mapping[str, str], respx_mock: respx.Router, local_model_cost_map: None
+    model: str, model_info: Mapping[str, str | int], respx_mock: respx.Router, local_model_cost_map: None
 ) -> None:
     max_tokens: Final = _routed_converse_max_tokens(respx_mock, model, model_info)
 

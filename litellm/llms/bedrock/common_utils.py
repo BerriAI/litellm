@@ -343,14 +343,16 @@ def _claude_keeps_bedrocks_converse_default(base_model: str) -> bool:
             return (int(generation[1]), int(generation[2] or 0)) < _FIRST_CLAUDE_CAPPED_AT_4096_ON_CONVERSE
 
 
-def bedrock_converse_claude_default_max_tokens(base_model: str) -> int | None:
+def bedrock_converse_claude_default_max_tokens(base_model: str, model_info: Mapping[str, object] | None) -> int | None:
     if not base_model.startswith("anthropic") or _claude_keeps_bedrocks_converse_default(base_model):
         return None
-    match bedrock_mapped_max_output_tokens(base_model):
-        case int() as mapped_max_tokens:
-            return mapped_max_tokens
-        case None:
-            return DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS
+    mapped_max_tokens: Final = bedrock_mapped_max_output_tokens(base_model)
+    model_max_tokens: Final = DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS if mapped_max_tokens is None else mapped_max_tokens
+    match (model_info or {}).get("max_output_tokens"):
+        case int() as deployment_max_tokens:
+            return min(deployment_max_tokens, model_max_tokens)
+        case _:
+            return model_max_tokens
 
 
 def _bedrock_native_output_opt_in(
