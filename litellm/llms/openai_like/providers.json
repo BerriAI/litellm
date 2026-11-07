@@ -326,6 +326,9 @@
       "supports_function_calling": true,
       "supports_reasoning": true
     },
+    "special_handling": {
+      "require_api_key": true
+    },
     "supported_endpoints": ["/v1/chat/completions", "/v1/responses"]
   }
 }
