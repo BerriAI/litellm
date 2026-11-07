@@ -14,6 +14,7 @@ if TYPE_CHECKING:
     from litellm.router import Router
 
 _FIELDS: Final = TypeAdapter(dict[str, object])
+_JSON_SAFE_INTEGER: Final = 2**53 - 1
 
 
 def _mapping(value: object) -> Mapping[str, object] | None:
@@ -86,6 +87,7 @@ def build_accounting_payload(
                 "metadata": accounting_metadata,
             },
             non_finite_as_null=True,
+            integer_limit=_JSON_SAFE_INTEGER,
         )
     )
 

@@ -23,7 +23,7 @@ from litellm import Router
 from litellm.caching.caching import DualCache
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
 from litellm.router_utils.cooldown_callbacks import router_cooldown_event_callback
-from litellm.types.router import ModelInfo
+from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
 from litellm.types.utils import BudgetConfig, GenericBudgetConfigType
 
 
@@ -243,11 +243,11 @@ async def test_router_cooldown_event_callback():
     """
     # Mock routing context
     mock_ctx = MagicMock()
-    mock_deployment = {
-        "litellm_params": {"model": "gpt-5-mini"},
-        "model_name": "gpt-5-mini",
-        "model_info": ModelInfo(id="test-model-id"),
-    }
+    mock_deployment = Deployment(
+        model_name="gpt-5-mini",
+        litellm_params=LiteLLM_Params(model="gpt-5-mini"),
+        model_info=ModelInfo(id="test-model-id"),
+    )
     mock_ctx.registry.return_value.deployment.return_value = mock_deployment
 
     # Create a real PrometheusLogger instance
@@ -303,11 +303,11 @@ async def test_router_cooldown_event_callback_no_prometheus():
     """
     # Mock routing context
     mock_ctx = MagicMock()
-    mock_deployment = {
-        "litellm_params": {"model": "gpt-5-mini"},
-        "model_name": "gpt-5-mini",
-        "model_info": ModelInfo(id="test-model-id"),
-    }
+    mock_deployment = Deployment(
+        model_name="gpt-5-mini",
+        litellm_params=LiteLLM_Params(model="gpt-5-mini"),
+        model_info=ModelInfo(id="test-model-id"),
+    )
     mock_ctx.registry.return_value.deployment.return_value = mock_deployment
 
     await router_cooldown_event_callback(

@@ -11,6 +11,7 @@ import i18n from "@/i18n/i18n";
 import { displayMode } from "@/lib/decisionModels";
 import type { ModelCustomMetadataValue } from "@/components/AIHub/ModelCustomMetadata";
 import { formatModelModeLabel, ProviderLogo } from "@/components/AIHub/ModelHubProviders";
+import type { DeploymentPricing } from "@/components/molecules/models/deploymentPricing";
 
 export interface ModelGroupInfo {
   model_group: string;
@@ -32,6 +33,7 @@ export interface ModelGroupInfo {
   description?: string;
   custom_tags?: string[] | null;
   custom_metadata?: Record<string, ModelCustomMetadataValue> | null;
+  deployment_pricing?: DeploymentPricing[] | null;
   [key: string]: any;
 }
 

@@ -26,7 +26,7 @@ from litellm.router_strategy.complexity_router.config import (
 
 AUTO_ROUTER_MODEL_PREFIX: Final = "auto_router/"
 
-StrategyRouterKind = Literal["semantic", "complexity", "adaptive", "quality"]
+StrategyRouterKind: TypeAlias = Literal["semantic", "complexity", "adaptive", "quality", "switchyard"]
 
 StrategyRouterDependencyRole: TypeAlias = Literal[
     "tier", "default", "classifier", "embedding", "evaluation", "compactor"
@@ -43,6 +43,7 @@ class StrategyRouterDependency:
 
 STRATEGY_ROUTER_PARAM_FIELDS: Final[frozenset[str]] = frozenset(
     {
+        "switchyard_router_config",
         "auto_router_config",
         "auto_router_config_path",
         "auto_router_default_model",
@@ -57,6 +58,7 @@ STRATEGY_ROUTER_PARAM_FIELDS: Final[frozenset[str]] = frozenset(
 )
 
 _REQUIRED_FIELD_GROUPS: Final[Mapping[StrategyRouterKind, tuple[tuple[str, ...], ...]]] = {
+    "switchyard": (("switchyard_router_config",),),
     "semantic": (
         ("auto_router_config", "auto_router_config_path"),
         ("auto_router_default_model",),
@@ -78,6 +80,8 @@ def classify_strategy_router_model(model: str) -> StrategyRouterKind | None:
     if not model.startswith(AUTO_ROUTER_MODEL_PREFIX):
         return None
     remainder: Final = model[len(AUTO_ROUTER_MODEL_PREFIX) :]
+    if remainder.startswith("switchyard"):
+        return "switchyard"
     if remainder.startswith("complexity_router"):
         return "complexity"
     if remainder.startswith("adaptive_router"):
@@ -137,6 +141,13 @@ def strategy_router_dependencies(
     kind: Final = classify_strategy_router_model(str(litellm_params.get("model", "")))
     if kind is None:
         return ()
+    if kind == "switchyard":
+        models: Final = _mapping(_mapping(litellm_params.get("switchyard_router_config")).get("models"))
+        return (
+            _named(models.get("capable"), "tier")
+            + _named(models.get("efficient"), "tier")
+            + _named(models.get("judge"), "classifier")
+        )
     if kind == "semantic":
         return _named(litellm_params.get("auto_router_default_model"), "default") + _named(
             litellm_params.get("auto_router_embedding_model"), "embedding"

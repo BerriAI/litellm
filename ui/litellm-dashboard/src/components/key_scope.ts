@@ -1,3 +1,5 @@
+import i18n from "@/i18n/i18n";
+
 export interface KeyModelScope {
   hasModelAccess: boolean;
   label: string | null;
@@ -7,8 +9,6 @@ const MANAGEMENT_ROUTES_PRESET = "management_routes";
 const INFO_ROUTES_PRESET = "info_routes";
 const SCIM_ROUTE_PREFIX = "/scim";
 
-const MANAGEMENT_SCOPE: KeyModelScope = { hasModelAccess: false, label: "Management" };
-const READ_ONLY_SCOPE: KeyModelScope = { hasModelAccess: false, label: "Read-only" };
 const SCIM_SCOPE: KeyModelScope = { hasModelAccess: false, label: "SCIM" };
 const FULL_MODEL_ACCESS: KeyModelScope = { hasModelAccess: true, label: null };
 
@@ -22,11 +22,11 @@ export const deriveKeyModelScope = (
   keyType?: string | null,
 ): KeyModelScope => {
   if (keyType === "management") {
-    return MANAGEMENT_SCOPE;
+    return { hasModelAccess: false, label: i18n.t("keyScope.management") };
   }
 
   if (keyType === "read_only") {
-    return READ_ONLY_SCOPE;
+    return { hasModelAccess: false, label: i18n.t("keyScope.readOnly") };
   }
 
   if (!Array.isArray(allowedRoutes) || allowedRoutes.length === 0) {
@@ -38,11 +38,11 @@ export const deriveKeyModelScope = (
   }
 
   if (isOnlyPreset(allowedRoutes, MANAGEMENT_ROUTES_PRESET)) {
-    return MANAGEMENT_SCOPE;
+    return { hasModelAccess: false, label: i18n.t("keyScope.management") };
   }
 
   if (isOnlyPreset(allowedRoutes, INFO_ROUTES_PRESET)) {
-    return READ_ONLY_SCOPE;
+    return { hasModelAccess: false, label: i18n.t("keyScope.readOnly") };
   }
 
   return FULL_MODEL_ACCESS;

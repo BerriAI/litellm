@@ -20,9 +20,9 @@ const LIMIT_OPTIONS = TOP_KEYS_LIMITS.map((limit) => ({ value: String(limit), la
 
 type ViewMode = "table" | "chart";
 const VIEW_OPTIONS = [
-  { value: "table", label: "Table View" },
-  { value: "chart", label: "Chart View" },
-] as const satisfies readonly { value: ViewMode; label: string }[];
+  { value: "table", labelKey: "usage.topKeys.viewOptions.table" },
+  { value: "chart", labelKey: "usage.topKeys.viewOptions.chart" },
+] as const satisfies readonly { value: ViewMode; labelKey: ParseKeys }[];
 
 const BAR_COLOR = "#2b3fd6";
 const QUIET_HEADER = { headerClassName: "font-normal" };
@@ -226,7 +226,7 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = fals
         <Segmented
           label={t("usage.topKeys.viewLabel")}
           value={viewMode}
-          options={VIEW_OPTIONS}
+          options={VIEW_OPTIONS.map(({ value, labelKey }) => ({ value, label: t(labelKey) }))}
           onChange={setViewMode}
         />
       </div>

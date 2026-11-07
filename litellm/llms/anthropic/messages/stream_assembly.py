@@ -4,10 +4,13 @@ from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import Final
 
+from pydantic import TypeAdapter
+
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, map_finish_reason
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, decoded_json_object, map_finish_reason
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import is_str_keyed_dict
 from litellm.llms.anthropic.chat.handler import (
     ModelResponseIterator as AnthropicModelResponseIterator,
 )
@@ -20,6 +23,8 @@ from litellm.types.utils import (
     ModelResponse,
     TextCompletionResponse,
 )
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 def split_sse_chunk_into_events(chunk: str | bytes) -> list[str]:
@@ -98,6 +103,14 @@ _FAST_PATH_DISALLOWED_DELTA_TYPES: Final = frozenset(
 )
 
 
+def _joined_text(parts: Sequence[object]) -> str:
+    strings: Final = [part for part in parts if isinstance(part, str)]
+    if len(strings) == len(parts):
+        return "".join(strings)
+    first_bad: Final = next(position for position, part in enumerate(parts) if not isinstance(part, str))
+    raise TypeError(f"sequence item {first_bad}: expected str instance, {type(parts[first_bad]).__name__} found")
+
+
 def collapse_pure_text_chunks(
     all_chunks: Sequence[str | bytes],
 ) -> list[str] | None:
@@ -120,10 +133,10 @@ def collapse_pure_text_chunks(
             if ev:
                 normalized.append(ev)
 
-    text_block_indexes: Final[set] = set()
+    text_block_indexes: Final[set[object]] = set()
     out: Final[list[str]] = []
-    pending_text: list[str] = []
-    pending_index: int | None = None
+    pending_text: list[object] = []
+    pending_index: object = None
     saw_any_text_delta = False
 
     def flush() -> None:
@@ -132,7 +145,7 @@ def collapse_pure_text_chunks(
             merged: Final = {
                 "type": "content_block_delta",
                 "index": pending_index if pending_index is not None else 0,
-                "delta": {"type": "text_delta", "text": "".join(pending_text)},
+                "delta": {"type": "text_delta", "text": _joined_text(pending_text)},
             }
             out.append("data: " + json.dumps(merged))
             pending_text = []
@@ -158,20 +171,20 @@ def collapse_pure_text_chunks(
         if not json_str.startswith("{"):
             continue
         try:
-            data = json.loads(json_str)
+            data = decoded_json_object(_DECODED_JSON.validate_python(json.loads(json_str)))
         except (json.JSONDecodeError, ValueError):
             return None
 
         etype = data.get("type")
         if etype == "content_block_start":
-            block = data.get("content_block") or {}
+            block = decoded_json_object(data.get("content_block") or {})
             if block.get("type") != "text":
                 return None
             text_block_indexes.add(data.get("index"))
             flush()
             out.append(ev)
         elif etype == "content_block_delta":
-            delta = data.get("delta") or {}
+            delta = decoded_json_object(data.get("delta") or {})
             dtype = delta.get("type")
             if dtype in _FAST_PATH_DISALLOWED_DELTA_TYPES:
                 return None
@@ -291,9 +304,10 @@ def extract_sse_data(event_str: str) -> dict | None:
     if payload is None or not payload.startswith("{"):
         return None
     try:
-        return json.loads(payload)
+        decoded: Final = _DECODED_JSON.validate_python(json.loads(payload))
     except (ValueError, TypeError):
         return None
+    return decoded if is_str_keyed_dict(decoded) else None
 
 
 def build_usage_only_response_from_chunks(
@@ -492,7 +506,7 @@ def _carries_no_data(fields: Sequence[tuple[str, str]]) -> bool:
 
 def _json_mapping(payload: str) -> Mapping[str, object] | None:
     try:
-        value: Final[object] = json.loads(payload)
+        value: Final = _DECODED_JSON.validate_python(json.loads(payload))
     except ValueError:
         return None
     return as_str_mapping(value)
@@ -555,7 +569,7 @@ def is_anthropic_sse_stream(all_chunks: Sequence[object]) -> bool:
 
 def _is_json_no_reader_can_take(payload: str) -> bool:
     try:
-        value: Final[object] = json.loads(payload)
+        value: Final = _DECODED_JSON.validate_python(json.loads(payload))
     except ValueError:
         return False
     if value is None:

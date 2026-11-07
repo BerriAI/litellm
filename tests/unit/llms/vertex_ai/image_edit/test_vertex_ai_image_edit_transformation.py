@@ -2,7 +2,8 @@ import base64
 import json
 import os
 from datetime import datetime
-from io import BytesIO
+from io import BytesIO, StringIO
+from pathlib import Path
 from typing import Dict, Final
 from unittest.mock import MagicMock, patch
 
@@ -511,6 +512,30 @@ class TestVertexAIImagenImageEditTransformation:
             self.config._read_all_bytes(bytearray(b"test_bytearray"))
             == b"test_bytearray"
         )
+
+    @pytest.mark.parametrize(
+        ("image", "expected"),
+        [
+            ([None, b"first image"], b"first image"),
+            ({"data": base64.b64encode(b"from data").decode()}, b"from data"),
+            ({"bytes": None, "content": b"from content"}, b"from content"),
+            ({"path": BytesIO(b"from path")}, b"from path"),
+            (StringIO("from text reader"), b"from text reader"),
+        ],
+    )
+    def test_read_all_bytes_unwraps_lists_dicts_and_readers(self, image: object, expected: bytes) -> None:
+        assert self.config._read_all_bytes(image) == expected
+
+    @pytest.mark.parametrize(
+        ("image", "refusal"),
+        [
+            ({"path": "/etc/passwd"}, "plain string values are not accepted"),
+            ({"path": Path("/etc/passwd")}, "filesystem paths are not accepted"),
+        ],
+    )
+    def test_read_all_bytes_refuses_to_read_a_path_given_inside_a_dict(self, image: object, refusal: str) -> None:
+        with pytest.raises(ValueError, match=refusal):
+            self.config._read_all_bytes(image)
 
 
 _IMAGEN_EDIT_IMAGE_KEY = "bytesBase64Encoded"
