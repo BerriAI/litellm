@@ -2051,3 +2051,24 @@ async def test_a_cancelled_request_sharing_one_logging_object_hands_back_every_r
 
     assert await _io_counters_since(router, first_minute) == (0, 0)
     assert await _proxy_chat(router, "hi") == await _io_counters_since(router, first_minute)
+
+
+@pytest.mark.asyncio
+async def test_a_reservation_refunded_through_a_logged_copy_of_its_metadata_is_refunded_once() -> None:
+    cache: Final = DualCache()
+    check: Final = ModelRateLimitingCheck(cache)
+    request: Final[dict[str, object]] = {"messages": PROXY_MESSAGES, "max_tokens": 100, "litellm_metadata": {}}
+
+    async def cancelled_attempt() -> None:
+        with routed_attempt():
+            set_io_token_rate_limit_request_kwargs(request, metadata_channel="litellm_metadata")
+            await async_io_token_pre_call_check(cache, dict(_HELD_DEPLOYMENT))
+            logged.update({"litellm_params": {"litellm_metadata": dict(request["litellm_metadata"])}})  # pyright: ignore[reportArgumentType]  # the stashed metadata dict
+            await check.async_log_failure_event(request, None, None, None)
+
+    logged: Final[dict[str, object]] = {}
+    await asyncio.create_task(cancelled_attempt())
+
+    await check.async_log_failure_event(logged, None, None, None)
+
+    assert await _counts(cache) == (0, 0)

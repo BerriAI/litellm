@@ -27,12 +27,15 @@ import litellm
 from litellm import token_counter
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_router_logger
+from litellm._uuid import uuid
 from litellm.caching.dual_cache import DualCache
+from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.caching.redis_cache import RedisCache, RedisCircuitBreakerOpenError
 from litellm.constants import NO_MAX_TOKENS_TPM_RESERVATION_FRACTION
 from litellm.litellm_core_utils.core_helpers import coerce_token_limit
 from litellm.litellm_core_utils.internal_call_metadata import (
     IO_TOKEN_ATTEMPT_KEY,
+    IO_TOKEN_RESERVATION_ID_KEY,
     IO_TOKEN_RESERVATION_KEYS,
     ITPM_CACHE_KEY,
     ITPM_RESERVED_KEY,
@@ -56,6 +59,9 @@ else:
     Span = Any
 
 RoutingArgsTTL: Final = 60
+# Reservations already settled, by id: a copy of a stash that outlives the dict it was claimed from (the
+# logging object copies litellm_metadata) is never settled a second time.
+_SETTLED_RESERVATIONS: Final = InMemoryCache(max_size_in_memory=10_000, default_ttl=RoutingArgsTTL * 2)
 
 
 @dataclass(frozen=True, slots=True)
@@ -374,6 +380,7 @@ def _stash_reservation_in_metadata(request: _IoTokenRateLimitRequest | None, res
     if isinstance(metadata, dict):
         metadata.update(reservation)
         metadata[IO_TOKEN_ATTEMPT_KEY] = current_attempt_id()
+        metadata[IO_TOKEN_RESERVATION_ID_KEY] = uuid.uuid4().hex
 
 
 def _key_for_this_minute(reserved_key: str) -> str:
@@ -447,7 +454,13 @@ def _claim_reservation_from_kwargs(kwargs: Mapping[str, object] | None) -> tuple
     if attempt is not None and stashed.get(IO_TOKEN_ATTEMPT_KEY) not in (None, attempt):
         return 0, 0, None, None
     reservation: Final = _extract_reservation(stashed)
+    reservation_id: Final = stashed.get(IO_TOKEN_RESERVATION_ID_KEY)
     _clear_reservation_from_kwargs(kwargs)
+    if not isinstance(reservation_id, str):
+        return reservation
+    if _SETTLED_RESERVATIONS.get_cache(reservation_id) is not None:
+        return 0, 0, None, None
+    _SETTLED_RESERVATIONS.set_cache(reservation_id, True)
     return reservation
 
 
