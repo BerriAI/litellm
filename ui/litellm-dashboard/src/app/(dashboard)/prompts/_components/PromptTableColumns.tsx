@@ -23,6 +23,8 @@ import { userDetailHref } from "@/utils/entityLinks";
 
 import { extractModel, getProviderFromModelHub, ModelGroupInfo } from "./prompt_utils";
 
+const DEFAULT_PROMPT_ENVIRONMENT = "development";
+
 const ENVIRONMENT_TONE: Record<string, StatusTone> = {
   production: "error",
   staging: "warning",
@@ -99,7 +101,7 @@ function PromptRowActions({ prompt, isAdmin, onDeleteClick }: PromptRowActionsPr
                 onDeleteClick?.(
                   prompt.prompt_id,
                   prompt.prompt_id || t("prompts.table.rowActions.unknownPrompt"),
-                  prompt.environment || "development",
+                  prompt.environment || DEFAULT_PROMPT_ENVIRONMENT,
                 )
               }
             >
@@ -142,7 +144,7 @@ export const getPromptTableColumns = ({
         className="max-w-60"
         onClick={
           onPromptClick
-            ? () => onPromptClick(row.original.prompt_id, row.original.environment || "development")
+            ? () => onPromptClick(row.original.prompt_id, row.original.environment || DEFAULT_PROMPT_ENVIRONMENT)
             : undefined
         }
       />
@@ -184,7 +186,7 @@ export const getPromptTableColumns = ({
     size: 130,
     enableSorting: false,
     cell: ({ row }) => {
-      const environment = row.original.environment || "development";
+      const environment = row.original.environment || DEFAULT_PROMPT_ENVIRONMENT;
       return <StatusBadge tone={ENVIRONMENT_TONE[environment] ?? "neutral"} label={environment} />;
     },
   },
