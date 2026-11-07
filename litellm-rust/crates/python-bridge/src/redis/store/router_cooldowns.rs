@@ -1,13 +1,12 @@
 use std::sync::Arc;
 
+use indexmap::IndexMap;
+
 use litellm_redis_store::{
     Send,
     router_cooldowns::{Cooldown, RouterCooldowns},
 };
-use pyo3::{
-    prelude::*,
-    types::{PyDict, PyTuple},
-};
+use pyo3::{prelude::*, types::PyTuple};
 
 use super::{
     NativePending, PyData, PyNumber, duration, kind_error, pending, policy::router_tier_policies,
@@ -173,11 +172,13 @@ impl NativeRouterCooldowns {
         self.0.flush_local_counters().map_err(kind_error)
     }
 
-    fn snapshot<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
-        let snapshot = PyDict::new(py);
-        for (key, cooldown) in self.0.snapshot().map_err(kind_error)? {
-            snapshot.set_item(key, PyData(cooldown))?;
-        }
-        Ok(snapshot)
+    fn snapshot(&self) -> PyResult<IndexMap<String, PyData<Cooldown>>> {
+        Ok(self
+            .0
+            .snapshot()
+            .map_err(kind_error)?
+            .into_iter()
+            .map(|(key, cooldown)| (key, PyData(cooldown)))
+            .collect())
     }
 }

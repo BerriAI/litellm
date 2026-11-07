@@ -11,13 +11,9 @@ use crate::redis::client::NativeRedisClient;
 /// `litellm.redis.stores.router_usage.UsageCounter`.
 #[derive(FromPyObject)]
 struct PyCounter {
-    #[pyo3(attribute)]
     deployment_id: String,
-    #[pyo3(attribute)]
     model: Option<String>,
-    #[pyo3(attribute)]
     minute: String,
-    #[pyo3(attribute)]
     kind: Spelled<Kind>,
 }
 
