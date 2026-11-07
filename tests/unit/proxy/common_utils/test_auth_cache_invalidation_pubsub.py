@@ -19,6 +19,7 @@ from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
     broadcast_evictions,
     evict_and_broadcast,
     publish_auth_cache_invalidation,
+    publish_auth_cache_invalidations,
 )
 from litellm.proxy.common_utils.user_api_key_cache import (
     AUTH_OBJECTS_TARGET,
@@ -322,6 +323,92 @@ async def test_subscriber_deletes_additional_in_memory_cache_entry_on_message() 
         await subscriber.stop()
 
     assert spend_counter_in_memory_cache.get_cache("spend:team_member:u-1:t-1") is None
+
+
+@pytest.mark.asyncio
+async def test_publish_many_sends_one_message_per_five_hundred_keys() -> None:
+    client = _RecordingRedisClient()
+    keys = tuple(f"spend:key:{index}" for index in range(1001))
+    with patch(
+        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.coordination_redis_cache",
+        return_value=_FakeRedisCache(client=client),
+    ):
+        await publish_auth_cache_invalidations(cache_keys=keys, new_value=0.0, ttl=5)
+        await asyncio.gather(*pubsub_module._pending_publishes)
+
+    assert [channel for channel, _ in client.published] == [AUTH_CACHE_INVALIDATION_CHANNEL] * 3
+    assert [json.loads(message) for _, message in client.published] == [
+        {"cache_keys": list(keys[:500]), "new_value": 0.0, "ttl": 5},
+        {"cache_keys": list(keys[500:1000]), "new_value": 0.0, "ttl": 5},
+        {"cache_key": keys[1000], "new_value": 0.0, "ttl": 5},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_subscriber_sets_every_key_of_a_multi_key_message_in_the_counter_cache_only() -> None:
+    """A global reset broadcasts thousands of counters; written into every additional cache they would evict
+    the BYOK credentials cached next to them."""
+    cache = UserApiKeyCache()
+    spend_counter_in_memory_cache = InMemoryCache()
+    spend_counter_in_memory_cache.set_cache("spend:key:a", 999.0)
+    spend_counter_in_memory_cache.set_cache("spend_db_floor:spend:key:a", 999.0)
+    byok_cache = InMemoryCache()
+    byok_cache.set_cache("byok:cred-1", {"api_key": "sk-cred"})
+    message = {
+        "type": "message",
+        "data": json.dumps({"cache_keys": ["spend:key:a", "spend:key:b"], "new_value": 0.0, "ttl": 60}).encode(),
+    }
+
+    pubsub = _QueuePubSub(initial_messages=[message])
+    subscriber = AuthCacheInvalidationSubscriber(
+        redis_cache=_FakeRedisCache(client=_ScriptedPubSubRedisClient(pubsubs=[pubsub])),
+        user_api_key_cache=cache,
+        additional_in_memory_caches=(spend_counter_in_memory_cache, byok_cache),
+        counter_cache=spend_counter_in_memory_cache,
+    )
+    subscriber.start()
+    try:
+        for _ in range(200):
+            if spend_counter_in_memory_cache.get_cache("spend:key:b") == 0.0:
+                break
+            await asyncio.sleep(0.01)
+    finally:
+        await subscriber.stop()
+
+    assert spend_counter_in_memory_cache.get_cache("spend:key:a") == 0.0
+    assert spend_counter_in_memory_cache.get_cache("spend:key:b") == 0.0
+    assert spend_counter_in_memory_cache.get_cache("spend_db_floor:spend:key:a") == 999.0
+    assert byok_cache.get_cache("byok:cred-1") == {"api_key": "sk-cred"}
+    assert byok_cache.get_cache("spend:key:a") is None
+
+
+@pytest.mark.asyncio
+async def test_subscriber_writes_every_key_of_a_multi_key_message_to_the_native_spend_counter_copies() -> None:
+    """A global reset sends thousands of counters in one message, and each counter's native copy has to take the new
+    value or that worker keeps answering with the old spend when Redis cannot."""
+    store = SpendCounterStore(connect(None).spend_counters())
+    store.set_local("spend:key:a", 999.0)
+    store.set_local("spend:key:b", 999.0)
+    pubsub = _QueuePubSub(
+        initial_messages=[
+            {
+                "type": "message",
+                "data": json.dumps({"cache_keys": ["spend:key:a", "spend:key:b"], "new_value": 0.0, "ttl": 60}),
+            }
+        ]
+    )
+    subscriber = AuthCacheInvalidationSubscriber(
+        redis_cache=_FakeRedisCache(client=_ScriptedPubSubRedisClient(pubsubs=[pubsub])),
+        user_api_key_cache=UserApiKeyCache(),
+        spend_counters=store,
+    )
+    subscriber.start()
+    try:
+        assert await asyncio.wait_for(pubsub.drained.wait(), timeout=5)
+    finally:
+        await subscriber.stop()
+
+    assert store.snapshot() == {"spend:key:a": 0.0, "spend:key:b": 0.0}
 
 
 @pytest.mark.asyncio

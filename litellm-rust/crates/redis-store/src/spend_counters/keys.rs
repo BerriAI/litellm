@@ -1,3 +1,5 @@
+use litellm_redis_client::Namespace;
+
 /// One budget's spend counter. `parse` and `key` round-trip `main`'s `spend:*` keys exactly.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum SpendCounter {
@@ -48,6 +50,12 @@ impl SpendCounter {
         }
     }
 
+    /// `RedisCache.reset_fence_key`: hash-tagged with the namespaced key, so a cluster keeps the
+    /// fence and the counter on one slot.
+    pub(super) fn reset_fence_key(&self, namespace: &Namespace) -> String {
+        format!("{{{}}}:reset_fence", namespace.apply(&self.key()))
+    }
+
     pub fn parse(key: &str) -> Result<Self, NotASpendCounter> {
         let invalid = || NotASpendCounter(key.to_owned());
         let rest = key.strip_prefix("spend:").ok_or_else(invalid)?;
@@ -81,5 +89,29 @@ impl SpendCounter {
             "shadow_eval" => Self::ShadowEval(id.to_owned()),
             _ => return Err(invalid()),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use litellm_redis_client::Namespace;
+    use rstest::rstest;
+
+    use super::SpendCounter;
+
+    /// Mirrored by `tests/unit/redis/stores/test_spend_counters.py`, against `RedisCache.reset_fence_key`.
+    #[rstest]
+    #[case::no_namespace(Namespace::default(), "{spend:team:t}:reset_fence")]
+    #[case::namespaced(Namespace::new("litellm"), "{litellm:spend:team:t}:reset_fence")]
+    fn the_reset_fence_is_tagged_with_the_namespaced_counter(
+        #[case] namespace: Namespace,
+        #[case] fence: &str,
+    ) {
+        let counter = SpendCounter::Team {
+            team_id: "t".to_owned(),
+            window: None,
+        };
+
+        assert_eq!(counter.reset_fence_key(&namespace), fence);
     }
 }

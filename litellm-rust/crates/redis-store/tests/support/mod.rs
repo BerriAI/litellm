@@ -35,6 +35,10 @@ pub fn connect(deployment: &RedisDeployment) -> RedisClient {
     connect_with(deployment, None, None)
 }
 
+pub fn connect_namespaced(deployment: &RedisDeployment, namespace: &str) -> RedisClient {
+    build(deployment, Namespace::new(namespace), None, None)
+}
+
 /// `client` with `RedisCache`'s default TTL when `litellm.default_redis_ttl` is unset.
 pub fn remote(client: RedisClient) -> Remote {
     Remote {
@@ -102,6 +106,15 @@ fn connect_with(
     breaker: Option<litellm_circuit_breaker::Breaker>,
     events: Option<Arc<dyn RedisEvents>>,
 ) -> RedisClient {
+    build(deployment, Namespace::default(), breaker, events)
+}
+
+fn build(
+    deployment: &RedisDeployment,
+    namespace: Namespace,
+    breaker: Option<litellm_circuit_breaker::Breaker>,
+    events: Option<Arc<dyn RedisEvents>>,
+) -> RedisClient {
     let endpoint = match deployment {
         RedisDeployment::Standalone(server) => Target::Url(RedisUrl {
             url: litellm_secret_value::SecretValue::new(server.url().to_owned()),
@@ -124,7 +137,7 @@ fn connect_with(
     RedisClient::new(RedisConfig {
         target: endpoint,
         credentials: Credentials::NONE,
-        namespace: Namespace::default(),
+        namespace,
         timeouts: Timeouts::new(Duration::from_millis(500), None),
         breaker,
         events,
