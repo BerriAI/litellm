@@ -436,10 +436,7 @@ def get_model_group_from_litellm_kwargs(kwargs: dict) -> str | None:
 def get_model_group_from_request_data(data: dict) -> str | None:
     _metadata: Final = data.get("metadata", None) or {}
     _model_group: Final = _metadata.get("model_group", None)
-    if _model_group is not None:
-        return _model_group
-
-    return None
+    return _model_group if isinstance(_model_group, str) else None
 
 
 def get_remaining_tokens_and_requests_from_request_data(data: dict) -> dict[str, str]:
@@ -722,7 +719,7 @@ def strip_callback_config(metadata: dict[str, object] | None) -> dict[str, objec
     return {k: v for k, v in metadata.items() if k not in _CALLBACK_CONFIG_SLOTS}
 
 
-def encrypt_callback_vars(metadata: object) -> Any:
+def encrypt_callback_vars(metadata: object) -> object:
     """Return a deep copy of metadata with callback_vars values encrypted at rest.
 
     Idempotent: a value that already decrypts cleanly is left unchanged so

@@ -112,6 +112,28 @@ def test_responses_us_api_base_sets_data_residency():
     assert logging_obj.litellm_params.get("data_residency") == "us"
 
 
+def test_responses_fedramp_api_base_sets_data_residency():
+    mock_client = _make_mock_http_client(_make_responses_api_response_body())
+    captured, init_spy = _capture_logging_obj()
+
+    with (
+        patch(
+            "litellm.llms.custom_httpx.llm_http_handler.get_httpx_client",
+            return_value=mock_client,
+        ),
+        patch.object(litellm.Logging, "__init__", init_spy),
+    ):
+        litellm.responses(
+            model="gpt-4.1",
+            input="hi",
+            api_base="https://gov.api.openai.com/v1",
+            api_key="test-key",
+        )
+
+    logging_obj = captured["logging_obj"]
+    assert logging_obj.litellm_params.get("data_residency") == "fedramp"
+
+
 def test_responses_global_api_base_leaves_data_residency_none():
     mock_client = _make_mock_http_client(_make_responses_api_response_body())
     captured, init_spy = _capture_logging_obj()

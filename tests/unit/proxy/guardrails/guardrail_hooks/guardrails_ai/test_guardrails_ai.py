@@ -1,3 +1,4 @@
+import json
 from unittest.mock import AsyncMock, patch
 
 import httpx
@@ -227,3 +228,57 @@ async def test_guardrails_ai_process_input():
 
         # Should keep original content when no output fields are present
         assert result["messages"][0]["content"] == "Original message"
+
+
+class _RecordingGuardrailsClient:
+    def __init__(self, status_code: int, body: dict[str, object]) -> None:
+        self.status_code = status_code
+        self.body = body
+        self.posts: list[dict[str, object]] = []
+
+    async def post(self, **kwargs: object) -> httpx.Response:
+        self.posts.append(kwargs)
+        return httpx.Response(self.status_code, json=self.body)
+
+
+def _guardrails_ai() -> GuardrailsAI:
+    return GuardrailsAI(guardrail_name="test_guard", api_base="http://guardrails.test", guard_name="gibberish_guard")
+
+
+@pytest.mark.asyncio
+async def test_guardrails_ai_api_request_returns_the_passing_verdict(monkeypatch: pytest.MonkeyPatch) -> None:
+    verdict = {"callId": "call-1", "rawLlmOutput": "hello", "validatedOutput": "hello", "validationPassed": True}
+    client = _RecordingGuardrailsClient(200, verdict)
+    monkeypatch.setattr(litellm, "module_level_aclient", client)
+
+    result = await _guardrails_ai().make_guardrails_ai_api_request(llm_output="hello", request_data={})
+
+    assert result == verdict
+    assert client.posts[0]["url"] == "http://guardrails.test/guards/gibberish_guard/validate"
+    assert json.loads(client.posts[0]["data"]) == {"llmOutput": "hello"}
+
+
+@pytest.mark.asyncio
+async def test_guardrails_ai_api_request_blocks_a_failed_validation(monkeypatch: pytest.MonkeyPatch) -> None:
+    verdict = {"callId": "call-2", "rawLlmOutput": "asdfgh", "validationPassed": False}
+    monkeypatch.setattr(litellm, "module_level_aclient", _RecordingGuardrailsClient(200, verdict))
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _guardrails_ai().make_guardrails_ai_api_request(llm_output="asdfgh", request_data={})
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == {"error": "Violated guardrail policy", "guardrails_ai_response": verdict}
+
+
+@pytest.mark.asyncio
+async def test_guardrails_ai_pre_call_request_returns_the_first_output_text(monkeypatch: pytest.MonkeyPatch) -> None:
+    body = {"outputs": [{"name": "text", "shape": [1], "datatype": "BYTES", "data": ["cleaned text"]}]}
+    client = _RecordingGuardrailsClient(200, body)
+    monkeypatch.setattr(litellm, "module_level_aclient", client)
+
+    result = await _guardrails_ai().make_guardrails_ai_api_request_pre_call_request(
+        text_input="raw text", request_data={}
+    )
+
+    assert result == "cleaned text"
+    assert json.loads(client.posts[0]["data"])["inputs"][0]["data"] == ["raw text"]
