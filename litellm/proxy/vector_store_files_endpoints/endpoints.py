@@ -10,6 +10,7 @@ from fastapi.responses import ORJSONResponse
 
 import litellm
 from litellm.llms.base_llm.managed_resources.utils import (
+    extract_model_id_from_unified_id,
     extract_provider_resource_id_from_unified_id,
     extract_target_model_names_from_unified_id,
     is_base64_encoded_unified_id,
@@ -146,6 +147,12 @@ async def _store_holds_file(
     return True
 
 
+def _store_routes_to(vector_store_id: object, deployment_id: str) -> bool:
+    if not isinstance(vector_store_id, str) or not is_base64_encoded_unified_id(vector_store_id):
+        return True
+    return extract_model_id_from_unified_id(vector_store_id) == deployment_id
+
+
 async def _caller_team_copy_of_managed_file(
     provider: LlmProviders | None,
     file_id: str,
@@ -165,6 +172,8 @@ async def _caller_team_copy_of_managed_file(
         file_id, team_deployment, managed_files_obj, user_api_key_dict.parent_otel_span
     )
     if team_deployment is None or provider_file_id is None:
+        return None
+    if attaching and not _store_routes_to(vector_store_id, team_deployment.deployment_id):
         return None
     if (
         provider_file_id != upload_copy
