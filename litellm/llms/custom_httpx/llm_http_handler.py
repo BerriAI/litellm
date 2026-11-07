@@ -31,7 +31,7 @@ from h2.events import ConnectionTerminated
 from httpx import USE_CLIENT_DEFAULT
 from httpx._types import FileContent
 from openai.types.file_deleted import FileDeleted
-from pydantic import TypeAdapter
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly
 
 import litellm
@@ -431,21 +431,35 @@ def _send_with_goaway_retry(send: Callable[[], httpx.Response]) -> httpx.Respons
 _CONTEXT_LIMIT_OVERFLOW: Final = re.compile(r"exceed context limit: (\d+) \+ \d+ > (\d+)")
 
 
-def _max_tokens_that_fit(error: BadRequestError) -> int | None:
+class _ThinkingBudget(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    budget_tokens: int = 0
+
+
+def _thinking_budget_tokens(thinking: object) -> int:
+    try:
+        return _ThinkingBudget.model_validate(thinking).budget_tokens
+    except ValidationError:
+        return 0
+
+
+def _max_tokens_that_fit(error: BadRequestError, thinking_budget_tokens: int) -> int | None:
     overflow: Final = _CONTEXT_LIMIT_OVERFLOW.search(str(error))
     if overflow is None:
         return None
     room: Final = int(overflow.group(2)) - int(overflow.group(1))
-    return room if room > 0 else None
+    return room if room > max(thinking_budget_tokens, 0) else None
 
 
 async def _acreate_within_context_window(
     create: Callable[[Mapping[str, int]], Awaitable[_ResponseT]],
+    thinking_budget_tokens: int,
 ) -> _ResponseT:
     try:
         return await create({})
     except BadRequestError as error:
-        fitting_max_tokens: Final = _max_tokens_that_fit(error)
+        fitting_max_tokens: Final = _max_tokens_that_fit(error, thinking_budget_tokens)
         if fitting_max_tokens is None:
             raise
         verbose_logger.warning(
@@ -6221,8 +6235,9 @@ class BaseLLMHTTPHandler:
                 }
             )
 
+        follow_up_params: Final = _OPTIONAL_PARAMS.validate_python({**optional_params, **kwargs_for_followup})
         response: AnthropicMessagesResponse | AsyncIterator[object] = await _acreate_within_context_window(
-            send_follow_up
+            send_follow_up, _thinking_budget_tokens(follow_up_params.get("thinking"))
         )
 
         if callback is not None:
