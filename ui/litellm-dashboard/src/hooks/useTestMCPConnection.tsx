@@ -28,6 +28,7 @@ interface UseTestMCPConnectionProps {
   oauthAccessToken?: string | null;
   formValues: Record<string, any>;
   enabled?: boolean; // Optional flag to enable/disable auto-fetching
+  requiresAuthValue?: boolean;
 }
 
 interface UseTestMCPConnectionReturn {
@@ -47,6 +48,7 @@ export const useTestMCPConnection = ({
   oauthAccessToken,
   formValues,
   enabled = true,
+  requiresAuthValue = false,
 }: UseTestMCPConnectionProps): UseTestMCPConnectionReturn => {
   const { t } = useTranslation();
   const [tools, setTools] = useState<any[]>([]);
@@ -62,6 +64,8 @@ export const useTestMCPConnection = ({
   const requiresOAuthToken = (formValues.auth_type === AUTH_TYPE.OAUTH2 && !isM2MOAuth) || isBrowserHeldTokenMode;
   const isOpenAPITransport = formValues.transport === TRANSPORT.OPENAPI;
   const hasEndpoint = isOpenAPITransport ? !!formValues.spec_path : !!formValues.url;
+  const authValue = formValues.credentials?.auth_value;
+  const hasRequiredAuthValue = !requiresAuthValue || (typeof authValue === "string" && authValue.trim().length > 0);
 
   // For OpenAPI: tools are derived from the spec itself — no auth needed to load them.
   // For other transports: auth_type is required, and OAuth interactive flows need a token.
@@ -69,6 +73,7 @@ export const useTestMCPConnection = ({
     ? !!(hasEndpoint && accessToken)
     : !!(
         hasEndpoint &&
+        hasRequiredAuthValue &&
         formValues.transport &&
         formValues.auth_type &&
         accessToken &&
@@ -79,6 +84,9 @@ export const useTestMCPConnection = ({
   const credentialsKey = JSON.stringify(formValues.credentials ?? {});
 
   const fetchTools = async () => {
+    if (!hasRequiredAuthValue) {
+      return;
+    }
     if (!accessToken || (!formValues.url && !formValues.spec_path)) {
       return;
     }
