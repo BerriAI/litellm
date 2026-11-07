@@ -25,7 +25,7 @@ The following arguments are supported:
 * `name` - (Required, Forces new resource) Unique name of the tag. Also used as the resource ID
 * `description` - (Optional) Description of the tag
 * `models` - (Optional) List of model IDs this tag applies to
-* `budget_id` - (Optional) Existing budget ID to associate with this tag. If omitted and budget fields are set, the proxy creates a budget
+* `budget_id` - (Optional) Existing budget ID to associate with this tag. If omitted and budget fields are set, the proxy creates a budget and its ID is stored here
 * `max_budget` - (Optional) Max budget in USD for this tag
 * `soft_budget` - (Optional) Soft budget in USD for this tag
 * `max_parallel_requests` - (Optional) Max concurrent requests allowed for this tag

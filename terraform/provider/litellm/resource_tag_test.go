@@ -1,6 +1,7 @@
 package litellm
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -8,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/terraform"
 )
 
 func tagInfoBody(name string) string {
@@ -137,6 +139,98 @@ func TestResourceLiteLLMTagRead(t *testing.T) {
 	}
 	if !reflect.DeepEqual(d.Get("models"), []interface{}{"model-1", "model-2"}) {
 		t.Errorf("expected models in state, got %v", d.Get("models"))
+	}
+}
+
+const tagInfoWithModelMaxBudget = `{"prod": {
+	"name": "prod",
+	"litellm_budget_table": {
+		"budget_id": "bud-created-by-proxy",
+		"model_max_budget": {"gpt-4": {"max_budget": 25.0, "budget_duration": "1d"}}
+	}
+}}`
+
+// readTagFromProxy returns the state a Read leaves behind for a tag configured with config.
+func readTagFromProxy(t *testing.T, config map[string]interface{}) *schema.ResourceData {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(tagInfoWithModelMaxBudget))
+	}))
+	defer srv.Close()
+
+	d := schema.TestResourceDataRaw(t, resourceLiteLLMTag().Schema, config)
+	d.SetId("prod")
+	if err := resourceLiteLLMTagRead(d, NewClient(srv.URL, "test-key", true)); err != nil {
+		t.Fatalf("read failed: %v", err)
+	}
+	return d
+}
+
+func planAttributes(t *testing.T, prior *schema.ResourceData, config map[string]interface{}) map[string]*terraform.ResourceAttrDiff {
+	t.Helper()
+	diff, err := resourceLiteLLMTag().Diff(context.Background(), prior.State(), terraform.NewResourceConfigRaw(config), nil)
+	if err != nil {
+		t.Fatalf("diff failed: %v", err)
+	}
+	if diff == nil {
+		return nil
+	}
+	return diff.Attributes
+}
+
+func TestResourceLiteLLMTagRead_PicksUpModelMaxBudgetChangedOnTheProxy(t *testing.T) {
+	d := readTagFromProxy(t, map[string]interface{}{
+		"name":             "prod",
+		"model_max_budget": `{"gpt-4": {"max_budget": 10, "budget_duration": "1d"}}`,
+	})
+
+	if !budgetSuppressEquivalentJSON("", d.Get("model_max_budget").(string), `{"gpt-4": {"max_budget": 25, "budget_duration": "1d"}}`, nil) {
+		t.Errorf("expected the proxy's per-model budget in state, got %s", d.Get("model_max_budget"))
+	}
+}
+
+func TestResourceLiteLLMTag_ModelMaxBudgetClearedOnTheProxyPlansItBack(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"prod": {"name": "prod", "litellm_budget_table": {"budget_id": "bud-1", "model_max_budget": null}}}`))
+	}))
+	defer srv.Close()
+	config := map[string]interface{}{
+		"name":             "prod",
+		"model_max_budget": `{"gpt-4": {"max_budget": 10, "budget_duration": "1d"}}`,
+	}
+	prior := schema.TestResourceDataRaw(t, resourceLiteLLMTag().Schema, config)
+	prior.SetId("prod")
+	if err := resourceLiteLLMTagRead(prior, NewClient(srv.URL, "test-key", true)); err != nil {
+		t.Fatalf("read failed: %v", err)
+	}
+
+	attrs := planAttributes(t, prior, config)
+	if attrs["model_max_budget"] == nil || attrs["model_max_budget"].Old != "" {
+		t.Errorf("expected the plan to set model_max_budget again after it was cleared on the proxy, got %+v", attrs["model_max_budget"])
+	}
+}
+
+func TestResourceLiteLLMTag_PlanAfterInlineBudgetCreateKeepsTheProxyBudgetID(t *testing.T) {
+	config := map[string]interface{}{
+		"name":             "prod",
+		"model_max_budget": `{"gpt-4": {"max_budget": 25, "budget_duration": "1d"}}`,
+	}
+	prior := readTagFromProxy(t, config)
+
+	if attrs := planAttributes(t, prior, config); attrs["budget_id"] != nil {
+		t.Errorf("expected no budget_id change when the config leaves it unset, got %+v", attrs["budget_id"])
+	}
+}
+
+func TestResourceLiteLLMTag_EquivalentModelMaxBudgetJSONPlansNoChange(t *testing.T) {
+	prior := readTagFromProxy(t, map[string]interface{}{"name": "prod"})
+
+	attrs := planAttributes(t, prior, map[string]interface{}{
+		"name":             "prod",
+		"model_max_budget": `{"gpt-4": {"max_budget": 25.0, "budget_duration": "1d"}}`,
+	})
+	if attrs["model_max_budget"] != nil {
+		t.Errorf("expected key order and number formatting to plan no change, got %+v", attrs["model_max_budget"])
 	}
 }
 
