@@ -64,59 +64,21 @@ resource "google_secret_manager_secret_version" "ui_password" {
   secret_data = var.ui_password
 }
 
-# Billing-metrics mTLS material — only created when metering is enabled
-# (billing_metrics_endpoint non-empty) and the operator supplied the PEM.
-# The runtime SA gets accessor permission via iam.tf, and gateway + backend
-# pick the env vars up through billing_metrics_env_secrets in cloudrun.tf.
-resource "google_secret_manager_secret" "billing_metrics_client_cert" {
-  count = local.billing_metrics_client_cert_enabled ? 1 : 0
+resource "google_secret_manager_secret" "billing_metrics_client_secret" {
+  count = local.billing_metrics_client_secret_enabled ? 1 : 0
 
-  secret_id = "${local.name}-billing-metrics-client-cert"
+  secret_id = "${local.name}-billing-metrics-client-secret"
   labels    = local.labels
   replication {
     auto {}
   }
 }
 
-resource "google_secret_manager_secret_version" "billing_metrics_client_cert" {
-  count = local.billing_metrics_client_cert_enabled ? 1 : 0
+resource "google_secret_manager_secret_version" "billing_metrics_client_secret" {
+  count = local.billing_metrics_client_secret_enabled ? 1 : 0
 
-  secret      = google_secret_manager_secret.billing_metrics_client_cert[0].id
-  secret_data = var.billing_metrics_client_cert_pem
-}
-
-resource "google_secret_manager_secret" "billing_metrics_client_key" {
-  count = local.billing_metrics_client_key_enabled ? 1 : 0
-
-  secret_id = "${local.name}-billing-metrics-client-key"
-  labels    = local.labels
-  replication {
-    auto {}
-  }
-}
-
-resource "google_secret_manager_secret_version" "billing_metrics_client_key" {
-  count = local.billing_metrics_client_key_enabled ? 1 : 0
-
-  secret      = google_secret_manager_secret.billing_metrics_client_key[0].id
-  secret_data = var.billing_metrics_client_key_pem
-}
-
-resource "google_secret_manager_secret" "billing_metrics_ca_cert" {
-  count = local.billing_metrics_ca_cert_enabled ? 1 : 0
-
-  secret_id = "${local.name}-billing-metrics-ca-cert"
-  labels    = local.labels
-  replication {
-    auto {}
-  }
-}
-
-resource "google_secret_manager_secret_version" "billing_metrics_ca_cert" {
-  count = local.billing_metrics_ca_cert_enabled ? 1 : 0
-
-  secret      = google_secret_manager_secret.billing_metrics_ca_cert[0].id
-  secret_data = var.billing_metrics_ca_cert_pem
+  secret      = google_secret_manager_secret.billing_metrics_client_secret[0].id
+  secret_data = var.billing_metrics_client_secret
 }
 
 resource "google_secret_manager_secret" "metrics_run_monitoring" {

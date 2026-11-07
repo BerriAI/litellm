@@ -29,6 +29,8 @@ from litellm.types.guardrails import GuardrailEventHooks
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
+
 from litellm.proxy.utils import get_custom_url, join_paths
 
 
@@ -425,8 +427,7 @@ def test_enrich_http_exception_with_guardrail_context_dict_detail():
     assert exc.detail["guardrail_mode"] == "post_call"
 
 
-def test_enrich_http_exception_string_detail_noop():
-    """L2: string-detail HTTPException is not mutated (can't add fields to a str)."""
+def test_enrich_http_exception_string_detail_preserves_body_and_identifies_guardrail():
     from litellm.proxy.guardrails.exception_utils import enrich_http_exception_with_guardrail_context
 
     class StubCallback:
@@ -436,6 +437,7 @@ def test_enrich_http_exception_string_detail_noop():
     exc = HTTPException(status_code=400, detail="Content blocked")
     enrich_http_exception_with_guardrail_context(exc, StubCallback())
     assert exc.detail == "Content blocked"
+    assert getattr(exc, "guardrail_name") == "x"
 
 
 def test_enrich_http_exception_setdefault_does_not_overwrite():
@@ -815,6 +817,165 @@ class TestPostCallFailureHookLiftsCallTypeAndStartTime:
         assert payload["call_type"] == "call_mcp_tool"
         assert payload["model"] == "MCP: deepwiki-ask_question"
         assert payload["endTime"] - payload["startTime"] >= real_datetime.timedelta(seconds=2)
+
+    @pytest.mark.asyncio
+    async def test_failed_speech_spend_row_records_the_endpoint_call_type_over_the_body(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        from types import SimpleNamespace
+
+        from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
+        from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+
+        rejected: Final = litellm.BadRequestError(
+            message="Voice name nonexistent is not supported", model="gemini-tts", llm_provider="gemini"
+        )
+        request_data: Final = {
+            "model": "gemini-tts",
+            "input": "Hello there",
+            "voice": "nonexistent",
+            "call_type": "acompletion",
+        }
+        proxy_logging_obj: Final = ProxyLogging(user_api_key_cache=DualCache())
+        proxy_logging_obj.alert_types = []
+        spend_writer: Final = SimpleNamespace(update_database=AsyncMock())
+        monkeypatch.setattr(litellm, "callbacks", [ProxyDBLogger(spend_writer=lambda: spend_writer)])
+        try:
+            with patch.object(proxy_logging_obj, "update_request_status", new=AsyncMock()):
+                await proxy_logging_obj.post_call_failure_hook(
+                    request_data=request_data,
+                    original_exception=rejected,
+                    user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", request_route="/v1/audio/speech"),
+                    dispatched_call_type="aspeech",
+                )
+        finally:
+            ProxyLogging._callback_capabilities_cache.clear()
+
+        db_call: Final = spend_writer.update_database.call_args.kwargs
+        payload: Final = get_logging_payload(
+            kwargs=db_call["kwargs"],
+            response_obj=db_call["completion_response"],
+            start_time=db_call["start_time"],
+            end_time=db_call["end_time"],
+        )
+        assert payload["call_type"] == "aspeech"
+
+    @pytest.mark.asyncio
+    async def test_failed_mcp_list_tools_row_inside_a_responses_request_keeps_list_mcp_tools(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        from types import SimpleNamespace
+
+        from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
+        from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+
+        request_data: Final = {
+            "model": "MCP: list_tools",
+            "call_type": "list_mcp_tools",
+            "input": [{"role": "system", "content": "list_tools"}],
+        }
+        proxy_logging_obj: Final = ProxyLogging(user_api_key_cache=DualCache())
+        proxy_logging_obj.alert_types = []
+        spend_writer: Final = SimpleNamespace(update_database=AsyncMock())
+        monkeypatch.setattr(litellm, "callbacks", [ProxyDBLogger(spend_writer=lambda: spend_writer)])
+        try:
+            with patch.object(proxy_logging_obj, "update_request_status", new=AsyncMock()):
+                await proxy_logging_obj.post_call_failure_hook(
+                    request_data=request_data,
+                    original_exception=RuntimeError("MCP server unreachable"),
+                    user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", request_route="/v1/responses"),
+                    route="/mcp/list_tools",
+                )
+        finally:
+            ProxyLogging._callback_capabilities_cache.clear()
+
+        db_call: Final = spend_writer.update_database.call_args.kwargs
+        payload: Final = get_logging_payload(
+            kwargs=db_call["kwargs"],
+            response_obj=db_call["completion_response"],
+            start_time=db_call["start_time"],
+            end_time=db_call["end_time"],
+        )
+        assert payload["call_type"] == "list_mcp_tools"
+
+    @pytest.mark.asyncio
+    async def test_failure_without_an_endpoint_call_type_does_not_guess_one_from_a_multi_method_path(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        from types import SimpleNamespace
+
+        from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
+        from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+
+        proxy_logging_obj: Final = ProxyLogging(user_api_key_cache=DualCache())
+        proxy_logging_obj.alert_types = []
+        spend_writer: Final = SimpleNamespace(update_database=AsyncMock())
+        monkeypatch.setattr(litellm, "callbacks", [ProxyDBLogger(spend_writer=lambda: spend_writer)])
+        try:
+            with patch.object(proxy_logging_obj, "update_request_status", new=AsyncMock()):
+                await proxy_logging_obj.post_call_failure_hook(
+                    request_data={},
+                    original_exception=RuntimeError("vector store lookup failed"),
+                    user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", request_route="/v1/vector_stores"),
+                )
+        finally:
+            ProxyLogging._callback_capabilities_cache.clear()
+
+        db_call: Final = spend_writer.update_database.call_args.kwargs
+        payload: Final = get_logging_payload(
+            kwargs=db_call["kwargs"],
+            response_obj=db_call["completion_response"],
+            start_time=db_call["start_time"],
+            end_time=db_call["end_time"],
+        )
+        assert payload["call_type"] == ""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("request_data", "route", "endpoint_call_type"),
+        [
+            ({"model": "gemini-tts", "input": "Hello there", "voice": "Kore"}, "/v1/audio/speech", "aspeech"),
+            ({"model": "omni-moderation", "input": ["one", "two"]}, "/v1/moderations", "amoderation"),
+            ({"model": "gpt-transcribe"}, "/v1/audio/transcriptions", "atranscription"),
+        ],
+    )
+    async def test_request_rejected_by_the_proxy_records_the_endpoint_call_type(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        request_data: dict[str, object],
+        route: str,
+        endpoint_call_type: str,
+    ):
+        from types import SimpleNamespace
+
+        from fastapi import HTTPException
+
+        from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
+        from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+
+        proxy_logging_obj: Final = ProxyLogging(user_api_key_cache=DualCache())
+        proxy_logging_obj.alert_types = []
+        spend_writer: Final = SimpleNamespace(update_database=AsyncMock())
+        monkeypatch.setattr(litellm, "callbacks", [ProxyDBLogger(spend_writer=lambda: spend_writer)])
+        try:
+            with patch.object(proxy_logging_obj, "update_request_status", new=AsyncMock()):
+                await proxy_logging_obj.post_call_failure_hook(
+                    request_data=dict(request_data),
+                    original_exception=HTTPException(status_code=429, detail="Rate limit exceeded"),
+                    user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", request_route=route),
+                    dispatched_call_type=endpoint_call_type,
+                )
+        finally:
+            ProxyLogging._callback_capabilities_cache.clear()
+
+        db_call: Final = spend_writer.update_database.call_args.kwargs
+        payload: Final = get_logging_payload(
+            kwargs=db_call["kwargs"],
+            response_obj=db_call["completion_response"],
+            start_time=db_call["start_time"],
+            end_time=db_call["end_time"],
+        )
+        assert payload["call_type"] == endpoint_call_type
 
 
 class TestPostCallFailureHookEstimatesDispatchedInputTokens:
@@ -1446,7 +1607,7 @@ def test_create_model_info_response_includes_max_tokens_from_lookup():
 
 
 def test_create_model_info_response_does_not_call_router_group_info():
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_model_listing_info.return_value = None
 
     response = create_model_info_response(
@@ -1461,7 +1622,7 @@ def test_create_model_info_response_does_not_call_router_group_info():
 
 
 def test_create_model_info_response_uses_deployment_limits_when_not_in_cost_map():
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_model_listing_info.return_value = DeploymentModelListingInfo(
         cost_map_keys=("my-custom-deployment",), max_input_tokens=32000, max_output_tokens=8000
     )
@@ -1520,7 +1681,7 @@ def test_create_model_info_response_uses_deployment_mode_for_auto_router():
 
 
 def test_create_model_info_response_deployment_limits_override_cost_map():
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_model_listing_info.return_value = DeploymentModelListingInfo(
         cost_map_keys=("gpt-4o",), max_input_tokens=200000, max_output_tokens=None
     )
@@ -1544,7 +1705,7 @@ def test_create_model_info_response_reports_widest_window_in_a_mixed_group():
     }
 
     for keys in (("small-model", "large-model"), ("large-model", "small-model")):
-        router = MagicMock()
+        router = route_entry_points_to_stubs(MagicMock())
         router.get_model_listing_info.return_value = DeploymentModelListingInfo(
             cost_map_keys=keys, max_input_tokens=None, max_output_tokens=None
         )
@@ -1568,7 +1729,7 @@ def test_create_model_info_response_resolves_alias_once_per_listing():
         seen.append(model)
         return _fake_model_info(max_input_tokens=128000)
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     router.get_model_listing_info.return_value = DeploymentModelListingInfo(
         cost_map_keys=("model-a", "model-b"), max_input_tokens=None, max_output_tokens=None
     )
@@ -1841,6 +2002,26 @@ class TestPostCallFailureHookLLMExceptionAlerting:
     async def test_http_exception_429_does_not_alert(self):
         alerting_handler = await self._alerted(HTTPException(status_code=429, detail="rate limited"))
         assert alerting_handler.called is False
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("status_code, should_alert", ((400, False), (422, False), (429, False), (500, True)))
+    async def test_budget_exceeded_alerts_only_for_server_status(
+        self, status_code: int, should_alert: bool, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(litellm, "budget_exceeded_status_code", status_code)
+        exc: Final = litellm.BudgetExceededError(current_cost=1.0, max_budget=0.5)
+        assert (await self._alerted(exc)).called is should_alert
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "exc",
+        (
+            litellm.AuthenticationError(message="invalid provider key", model="test-model", llm_provider="openai"),
+            litellm.RateLimitError(message="provider quota exceeded", model="test-model", llm_provider="openai"),
+        ),
+    )
+    async def test_provider_client_status_still_alerts(self, exc: Exception) -> None:
+        assert (await self._alerted(exc)).called is True
 
 
 class TestPostCallFailureHookProxyExceptionLogging:
@@ -3554,6 +3735,8 @@ def test_an_earlier_timed_out_responses_attempt_counts_its_input_from_the_newest
     assert sent == earlier_attempt_prompt_tokens([COMPACTION_INSTRUCTIONS, COMPACTION_ITEM, TURN_AFTER_COMPACTION])
 
 
+
+
 @pytest.mark.parametrize(
     "current_attempt_api_call_start_time",
     [None, 1700000001.0],
@@ -3593,6 +3776,56 @@ def test_a_retry_failure_bills_input_only_for_dispatched_attempts(
     assert usage.completion_tokens == prior_usage.completion_tokens
     assert usage.total_tokens == prior_usage.total_tokens + expected_retry_tokens
     assert lifted["response_cost"] == 0.25
+
+
+@pytest.mark.asyncio
+async def test_an_agentic_follow_up_failure_row_bills_each_served_first_call_without_an_estimate() -> None:
+    import litellm
+    from litellm.litellm_core_utils.chat_completion_agentic_loop import bill_first_round_on_failure
+    from litellm.proxy.utils import _failure_fields_to_lift
+    from litellm.types.utils import ModelResponse, Usage
+
+    logging_obj: Final = Logging(
+        model=FAILURE_USAGE_MODEL,
+        messages=ONE_USER_MESSAGE,
+        stream=False,
+        call_type="acompletion",
+        start_time=real_datetime.datetime.now(),
+        litellm_call_id="call-agentic-follow-up",
+        function_id="fn-agentic-follow-up",
+    )
+    logging_obj.update_environment_variables(
+        model=FAILURE_USAGE_MODEL, user="", optional_params={}, litellm_params={"custom_llm_provider": "openai"}
+    )
+
+    async def failing_follow_up() -> ModelResponse:
+        raise litellm.RateLimitError(message="rate limited", llm_provider="openai", model=FAILURE_USAGE_MODEL)
+
+    async def serve_first_call_then_fail_its_follow_up(usage: Usage) -> float:
+        logging_obj.pre_call(input=ONE_USER_MESSAGE, api_key="sk-test")
+        with pytest.raises(litellm.RateLimitError):
+            await bill_first_round_on_failure(
+                failing_follow_up(),
+                logging_obj=logging_obj,
+                response=ModelResponse(model=FAILURE_USAGE_MODEL, usage=usage),
+                stream=False,
+            )
+        return logging_obj.model_call_details["response_cost"]
+
+    primary_cost: Final = await serve_first_call_then_fail_its_follow_up(
+        Usage(prompt_tokens=559, completion_tokens=113, total_tokens=672)
+    )
+    logging_obj.carry_failed_attempt_usage()
+    backup_cost: Final = await serve_first_call_then_fail_its_follow_up(
+        Usage(prompt_tokens=31, completion_tokens=5, total_tokens=36)
+    )
+
+    lifted: Final = _failure_fields_to_lift({"litellm_logging_obj": logging_obj})
+
+    usage: Final = lifted["combined_usage_object"]
+    assert (usage.prompt_tokens, usage.completion_tokens) == (559 + 31, 113 + 5)
+    assert primary_cost > 0 and backup_cost > 0
+    assert lifted["response_cost"] == pytest.approx(primary_cost + backup_cost)
 
 
 @pytest.mark.parametrize(
@@ -4107,3 +4340,32 @@ def test_handle_exception_on_proxy_logs_bug_report_only_for_unmapped_500(caplog)
     assert provider_result.code == internal_result.code == "500"
     assert ISSUE_URL_BASE in caplog.text
     assert ISSUE_URL_BASE not in internal_result.message
+
+
+def test_is_client_error_exception_budget_exceeded_is_client_error() -> None:
+    from litellm.exceptions import BudgetExceededError
+    from litellm.proxy.utils import _is_client_error_exception
+
+    exc: Final = BudgetExceededError(current_cost=100.56, max_budget=100.0)
+    assert _is_client_error_exception(exc) is True
+
+
+def test_is_client_error_exception_budget_exceeded_5xx_is_not_client_error() -> None:
+    from litellm.exceptions import BudgetExceededError
+    from litellm.proxy.utils import _is_client_error_exception
+
+    exc: Final = BudgetExceededError(current_cost=100.56, max_budget=100.0)
+    exc.status_code = 500
+    assert _is_client_error_exception(exc) is False
+
+
+def test_is_client_error_exception_existing_behaviour_unchanged() -> None:
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.utils import _is_client_error_exception
+
+    assert _is_client_error_exception(HTTPException(status_code=400, detail="x")) is True
+    assert _is_client_error_exception(HTTPException(status_code=500, detail="x")) is False
+    assert _is_client_error_exception(
+        ProxyException(message="x", type="x", param=None, code="429")
+    ) is True
+    assert _is_client_error_exception(ValueError("x")) is False

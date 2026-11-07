@@ -10,6 +10,7 @@ from typing_extensions import assert_never
 
 from litellm import constants
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import UNKNOWN_MODEL_SPEND_LOG_MODEL
 from litellm.repositories.chunked_in import find_many_in
 from litellm.repositories.daily_activity_sql import (
     ExportCursor,
@@ -344,7 +345,13 @@ class DailyActivityRepository:
             "date": {"gte": adjusted_start, "lte": adjusted_end},
             **({scope.entity_id_field: {"in": list(scope.entity_ids)}} if scope.entity_ids is not None else {}),
             **exclusion_filter,
-            **({"model": scope.model} if scope.model else {}),
+            **(
+                {"AND": [{"OR": [{"model": None}, {"model": ""}, {"model": scope.model}]}]}
+                if scope.model == UNKNOWN_MODEL_SPEND_LOG_MODEL
+                else {"model": scope.model}
+                if scope.model
+                else {}
+            ),
             **({"api_key": {"in": list(scope.api_keys)}} if scope.api_keys is not None else {}),
         }
         count, rows = await asyncio.gather(
