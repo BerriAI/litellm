@@ -23,6 +23,9 @@ import subprocess
 import time
 import uuid
 from collections.abc import Iterator
+from pathlib import PurePosixPath
+from typing import Final
+from urllib.parse import quote
 
 import pytest
 
@@ -130,3 +133,48 @@ def test_ui_serves_as_arbitrary_uid_read_only(ui_container: tuple[str, str]) -> 
             f"GET {path} returned {page.stdout.strip()!r} as uid {ARBITRARY_UID}.\n"
             f"{_container_logs(container)}"
         )
+
+
+@pytest.mark.parametrize("route", ("", "teams", "mcp/oauth/callback"))
+def test_ui_navigation_payloads_match_static_export(ui_container: tuple[str, str], route: str) -> None:
+    network, container = ui_container
+    export_root: Final = PurePosixPath("/usr/share/nginx/html")
+    payload_files: Final = _docker(
+        "exec", container, "find", str(export_root / route), "-maxdepth", "1", "-type", "f", "-name", "*.txt"
+    ).stdout.splitlines()
+    assert payload_files, f"no navigation payloads exported for {route!r}"
+
+    for payload_file in payload_files:
+        relative_path: Final = PurePosixPath(payload_file).relative_to(export_root)
+        canonical_path: Final = f"/ui/{relative_path}"
+        request_paths: Final = (
+            (canonical_path, f"/ui/{route}.txt" if route else "/ui.txt")
+            if relative_path.name == "index.txt"
+            else (canonical_path,)
+        )
+        expected_payload: Final = _docker("exec", container, "cat", payload_file).stdout
+        for request_path in request_paths:
+            response: Final = _docker(
+                "run",
+                "--rm",
+                "--network",
+                network,
+                CURL_IMAGE,
+                "--silent",
+                "--show-error",
+                "--max-time",
+                "10",
+                "--write-out",
+                "\n%{http_code}\n%{content_type}",
+                f"http://{container}:{UI_PORT}{quote(request_path)}?_rsc=navigation",
+            )
+            body, status, content_type = response.stdout.rsplit("\n", 2)
+            assert status == "200", f"GET {request_path} returned {status}: {body}"
+            assert content_type.startswith("text/plain"), f"GET {request_path} returned {content_type}"
+            assert body == expected_payload, f"GET {request_path} did not serve its exported navigation payload"
+
+
+def test_ui_missing_navigation_payload_returns_404(ui_container: tuple[str, str]) -> None:
+    network, container = ui_container
+    response: Final = _probe(network, container, f"/ui/teams/{uuid.uuid4().hex}.txt?_rsc=navigation")
+    assert response.stdout.strip() == "404", response.stdout
