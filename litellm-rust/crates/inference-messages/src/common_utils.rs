@@ -69,8 +69,6 @@ pub(crate) fn messages_provider(provider: LlmProviders, model: &str) -> Option<M
     Some(MessagesProvider { provider, config })
 }
 
-// Python's httpx refuses a non-string header value only when it builds the request to send, after
-// the logger has the resolved call, and the handler reports that as a provider 500.
 pub(super) fn sendable_headers(
     extra_headers: Map<String, Value>,
 ) -> (Vec<(String, String)>, Option<Error>) {
