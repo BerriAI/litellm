@@ -65,6 +65,22 @@ class TestCustomStreamWrapperMaxDuration:
             with pytest.raises(litellm.Timeout):
                 wrapper.__next__()
 
+    def test_sync_next_timeout_dispatches_failure_handler_and_closes(self):
+        """The sync Timeout must flow through the failure pipeline (parity with __anext__)."""
+        wrapper = _make_custom_stream_wrapper()
+        wrapper.logging_obj.failure_handler = MagicMock()
+        wrapper._stream_created_time = time.time() - 20
+        with patch("litellm.constants.LITELLM_MAX_STREAMING_DURATION_SECONDS", 10.0):
+            with pytest.raises(litellm.Timeout):
+                wrapper.__next__()
+        assert wrapper._closed is True
+
+        # failure_handler is dispatched on a thread; give it a moment
+        deadline = time.time() + 2.0
+        while time.time() < deadline and wrapper.logging_obj.failure_handler.call_count == 0:
+            time.sleep(0.01)
+        wrapper.logging_obj.failure_handler.assert_called_once()
+
     @pytest.mark.asyncio
     async def test_should_raise_on_async_anext_when_exceeded(self):
         """__anext__ checks the limit before iterating and schedules failure logging."""
