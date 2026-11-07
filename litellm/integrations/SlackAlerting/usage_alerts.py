@@ -13,7 +13,7 @@ from pydantic import TypeAdapter
 
 from litellm.types.integrations.slack_alerting import AlertType
 from litellm.types.proxy.issues import IssuePendingDelivery
-from litellm.types.proxy.usage_alerts import UsageAlert, UsageAlertChannel, UsageAlertRule
+from litellm.types.proxy.usage_alerts import UsageAlert, UsageAlertChannel
 
 if TYPE_CHECKING:
     from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
@@ -59,16 +59,6 @@ class UsageAlertDelivery:
 
     def __init__(self, slack: "SlackAlerting") -> None:
         self._slack = slack
-
-    async def send(self, alert: UsageAlert, rule: UsageAlertRule, channel: UsageAlertChannel) -> bool:
-        url: Final = activity_url(alert, os.getenv("PROXY_BASE_URL"))
-        return await self._send(
-            channel,
-            rule.email_recipients,
-            incident_message(alert, None),
-            f"LiteLLM performance alert: {alert.rule_name}",
-            (("View activity", url),),
-        )
 
     async def send_issue(self, pending: IssuePendingDelivery) -> bool:
         path: Final = "/alerts?" + urlencode({"issue": pending.issue.id})

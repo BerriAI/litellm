@@ -417,7 +417,9 @@ async def test_late_custom_key_rule_only_overrides_that_keys_default_signal(db: 
         )
         job: Final = UsageAlertJob.from_prisma(prisma, SlackAlerting(alerting=[], alert_types=[]))
         # A rule can change after the daily observations, before Issue projection.
-        await UsageAlertJob(job._store, job._metrics, job._health, job._delivery)._run(_NOW)
+        await job._store.ensure_default_rules(job._defaults)
+        await job._store.ensure_projection_work(_DAY)
+        await job._evaluate(_DAY, asyncio.get_running_loop().time() + 60)
         issues: Final = IssuesRepository.from_prisma(prisma)
         original: Final = await issues.active_signals(_DAY, scope_type="key", metric="spend")
         assert len(original) == 2

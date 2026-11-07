@@ -1002,17 +1002,3 @@ class UsageAlertsRepository:
                 for rule_id, group in groupby(rows, lambda row: row.rule_id)
             }
         )
-
-    async def defer_notification(self, incident_id: str, error: str) -> None:
-        await self.database.query_raw(
-            """UPDATE "LiteLLM_UsageAlertIncident" SET updated_at=CURRENT_TIMESTAMP,
-            record=record || jsonb_build_object(
-                'notification_error',$2::text,
-                'notification_attempts',COALESCE((record->>'notification_attempts')::int,0)+1,
-                'last_notification_attempt',CURRENT_TIMESTAMP,
-                'next_notification_attempt',CURRENT_TIMESTAMP + make_interval(secs =>
-                    LEAST(86400,3600*power(2,LEAST(5,COALESCE((record->>'notification_attempts')::int,0)))::int))
-            ) WHERE id=$1 RETURNING id""",
-            incident_id,
-            error,
-        )

@@ -9,7 +9,6 @@ from itertools import chain, groupby, takewhile
 from typing import (
     TYPE_CHECKING,
     Final,
-    Protocol,
     cast,  # noqa: TID251  # generated Prisma delegate supplies the repository protocol
 )
 from uuid import uuid4
@@ -32,10 +31,7 @@ from litellm.repositories.usage_alerts import UsageAlertsRepository
 from litellm.types.integrations.slack_alerting import AlertType
 from litellm.types.proxy.usage_alert_defaults import USAGE_ALERT_SCOPES, default_usage_rules
 from litellm.types.proxy.usage_alerts import (
-    UsageAlert,
-    UsageAlertChannel,
     UsageAlertEvaluationStatus,
-    UsageAlertNotification,
     UsageAlertObservation,
     UsageAlertProgress,
     UsageAlertRule,
@@ -115,27 +111,21 @@ def _observations(
     return _Observations(evaluated, tuple(changed))
 
 
-class IncidentDelivery(Protocol):
-    async def send(self, alert: UsageAlert, rule: UsageAlertRule, channel: UsageAlertChannel) -> bool: ...
-
-
 class UsageAlertJob:
     def __init__(
         self,
         store: UsageAlertsRepository,
         metrics: UsageAlertMetricsRepository,
         health: UsageAlertHealthRepository,
-        delivery: IncidentDelivery,
         defaults: tuple[UsageAlertRuleInput, ...] | None = None,
         *,
         deprecation_projection: Callable[[datetime], Awaitable[None]] | None = None,
-        performance_projection: PerformanceIssueProjector | None = None,
+        performance_projection: PerformanceIssueProjector,
         work_budget_seconds: float = 60,
     ) -> None:
         self._store = store
         self._metrics = metrics
         self._health = health
-        self._delivery = delivery
         self._defaults = default_usage_rules() if defaults is None else defaults
         self._defaults_registered = False
         self._deprecation_projection = deprecation_projection
@@ -160,7 +150,6 @@ class UsageAlertJob:
             UsageAlertsRepository(database),
             metrics,
             UsageAlertHealthRepository(database),
-            delivery,
             default_usage_rules(
                 ("slack",)
                 if "slack" in configured_destinations(slack) and AlertType.usage_alerts in slack.alert_types
@@ -224,9 +213,7 @@ class UsageAlertJob:
         await self._evaluate(
             target, asyncio.get_running_loop().time() + max(0, deadline - asyncio.get_running_loop().time()) * 0.65
         )
-        if self._performance_projection is None:
-            await self._notify(deadline)
-        elif (work := await self._store.pending_projection_work()) is None:
+        if (work := await self._store.pending_projection_work()) is None:
             await self._performance_projection.notify(deadline)
         elif await self._performance_projection.run_pending(now, work, self._store, deadline):
             await self._store.finish_projection_work(work)
@@ -431,42 +418,3 @@ class UsageAlertJob:
         if observations.changed:
             await self._store.record_observations(rule, observations.changed)
         return observations.evaluated
-
-    async def _deliver_channel(
-        self, alert: UsageAlert, rule: UsageAlertRule, channel: UsageAlertChannel, deadline: float
-    ) -> str | None:
-        try:
-            delivered: Final = await asyncio.wait_for(
-                self._delivery.send(alert, rule, channel),
-                timeout=min(30, max(0, deadline - asyncio.get_running_loop().time() - 1)),
-            )
-            if not delivered:
-                return "transport_not_configured"
-            await self._store.mark_notified(alert.id, channel)
-        except Exception:  # noqa: BLE001  # retry only failed channels; persisted acknowledgements survive restarts
-            verbose_proxy_logger.warning("Usage alert delivery failed for incident %s via %s", alert.id, channel)
-            return "delivery_failed"
-        return None
-
-    async def _notify(self, deadline: float) -> None:
-        while asyncio.get_running_loop().time() + 2 < deadline and (
-            page := await self._store.pending_notifications(limit=10)
-        ):
-            for pending in page:
-                if asyncio.get_running_loop().time() + 2 >= deadline:
-                    return
-                await self._notify_incident(pending, deadline)
-
-    async def _notify_incident(self, pending: UsageAlertNotification, deadline: float) -> None:
-        current: Final = await self._store.get_rule(pending.rule.id)
-        if current is None or not current.enabled or current.updated_at != pending.rule.updated_at:
-            return
-        failures: Final = tuple(
-            [
-                await self._deliver_channel(pending.incident, pending.rule, channel, deadline)
-                for channel in pending.pending_channels
-            ]
-        )
-        if any(failures):
-            error: Final = "delivery_failed" if "delivery_failed" in failures else "transport_not_configured"
-            await self._store.defer_notification(pending.incident.id, error)

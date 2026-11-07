@@ -10,13 +10,17 @@ from typing import Final
 import pytest
 
 from litellm.proxy.spend_tracking.daily_usage_alerts import DailyComparison, compare_daily_usage
+from litellm.proxy.spend_tracking.performance_issues import PerformanceIssueProjector
 from litellm.proxy.spend_tracking.usage_alert_job import UsageAlertJob, completed_day
 from litellm.repositories.analytics_budget import AnalyticsTransaction, BoundedAnalyticsDatabase
+from litellm.repositories.issues import IssuesRepository
+from litellm.repositories.provider_latency import ProviderLatencyRepository
 from litellm.repositories.usage_alert_health import UsageAlertHealthRepository
 from litellm.repositories.usage_alert_metrics import DailyAlertMetrics, UsageAlertMetricsRepository
 from litellm.repositories.usage_alerts import UsageAlertsRepository
 from litellm.types.proxy.usage_alert_defaults import default_usage_rule_id, default_usage_rules
-from litellm.types.proxy.usage_alerts import UsageAlert, UsageAlertChannel, UsageAlertRule, UsageAlertRuleInput
+from litellm.types.proxy.issues import IssuePendingDelivery
+from litellm.types.proxy.usage_alerts import UsageAlertRule, UsageAlertRuleInput
 
 _DAY: Final = date(2026, 10, 20)
 
@@ -89,7 +93,7 @@ class _BudgetDatabase:
 
 
 class _UnexpectedDelivery:
-    async def send(self, alert: UsageAlert, rule: UsageAlertRule, channel: UsageAlertChannel) -> bool:
+    async def send_issue(self, pending: IssuePendingDelivery) -> bool:
         raise AssertionError("stalled evaluation must not deliver alerts")
 
 
@@ -108,8 +112,13 @@ def test_job_budget_includes_query_cancellation_and_lease_cleanup() -> None:
             UsageAlertsRepository(database),
             UsageAlertMetricsRepository(database),
             UsageAlertHealthRepository(database),
-            _UnexpectedDelivery(),
             defaults=(),
+            performance_projection=PerformanceIssueProjector(
+                IssuesRepository(database),
+                UsageAlertMetricsRepository(database),
+                ProviderLatencyRepository(database),
+                _UnexpectedDelivery(),
+            ),
             deprecation_projection=projection,
             work_budget_seconds=60,
         )
