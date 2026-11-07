@@ -110,7 +110,6 @@ from litellm.proxy.common_request_processing import (
     open_sse_before_first_byte,
     resolve_litellm_call_id,
 )
-from litellm.proxy.common_utils.callback_utils import strip_callback_config
 from litellm.proxy.common_utils.custom_openapi_spec import inline_request_body
 from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
     _read_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -305,8 +304,7 @@ def get_passthrough_router_request_metadata(
     metadata: Final = _METADATA_ADAPTER.validate_python(request_data["litellm_metadata"])
     return {
         **metadata,
-        "user_api_key_metadata": metadata.get("user_api_key_auth_metadata"),
-        "user_api_key_team_metadata": strip_callback_config(user_api_key_dict.team_metadata),
+        **LiteLLMProxyRequestSetup.get_tenant_logging_metadata(user_api_key_dict),
     }
 
 

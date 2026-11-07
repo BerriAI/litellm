@@ -1,4 +1,5 @@
 import { useId } from "react";
+import { useTranslation } from "react-i18next";
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
 import { Switch } from "@/components/ui/switch";
 
@@ -8,15 +9,18 @@ interface StorePromptsToggleProps {
   disabled?: boolean;
 }
 
+function disablesPromptStorage(value: unknown): boolean {
+  return value === false || (typeof value === "string" && value.trim().toLowerCase() === "false");
+}
+
 export function StorePromptsToggle({ value, onChange, disabled }: StorePromptsToggleProps) {
   const id = useId();
+  const { t } = useTranslation();
   return (
     <Field>
-      <FieldLabel htmlFor={id}>Store prompts in spend logs</FieldLabel>
-      <Switch id={id} checked={value !== false} onCheckedChange={onChange} disabled={disabled} />
-      <FieldDescription>
-        Turn off to exclude prompts and responses from spend logs. Global and team restrictions still apply.
-      </FieldDescription>
+      <FieldLabel htmlFor={id}>{t("storePromptsToggle.label")}</FieldLabel>
+      <Switch id={id} checked={!disablesPromptStorage(value)} onCheckedChange={onChange} disabled={disabled} />
+      <FieldDescription>{t("storePromptsToggle.description")}</FieldDescription>
     </Field>
   );
 }

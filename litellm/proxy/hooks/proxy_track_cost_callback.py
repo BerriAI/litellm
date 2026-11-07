@@ -489,6 +489,7 @@ class _ProxyDBLogger(CustomLogger):
             LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(user_api_key_dict=user_api_key_dict)
         )
         _metadata["user_api_key"] = LiteLLMProxyRequestSetup.get_logged_api_key(user_api_key_dict)
+        _metadata.update(LiteLLMProxyRequestSetup.get_tenant_logging_metadata(user_api_key_dict))
         _metadata["status"] = "failure"
         _error_information = StandardLoggingPayloadSetup.get_error_information(
             original_exception=original_exception,

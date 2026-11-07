@@ -19,6 +19,11 @@ describe("StorePromptsMetadataToggle", () => {
     expect(JSON.parse(onChange.mock.calls[0][0])).toEqual({ store_prompts_in_spend_logs: true });
   });
 
+  it("shows a saved string false restriction as off", () => {
+    render(<StorePromptsMetadataToggle value={'{"store_prompts_in_spend_logs":"False"}'} onChange={vi.fn()} />);
+    expect(screen.getByRole("switch", { name: "Store prompts in spend logs" })).not.toBeChecked();
+  });
+
   it("does not overwrite invalid metadata", () => {
     const onChange = vi.fn();
     render(<StorePromptsMetadataToggle value="{" onChange={onChange} />);

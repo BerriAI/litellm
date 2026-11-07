@@ -4258,7 +4258,12 @@ class ProxyLogging:
             )
             request_data["litellm_logging_obj"] = litellm_logging_obj  # rebind-ok: lifted then popped by the caller
             request_data.update({REJECTED_BEFORE_REQUEST_SETUP_KEY: REJECTED_BEFORE_REQUEST_SETUP})
-            normalized_metadata_slot(request_data, "metadata").update(user_api_key_logged_metadata)
+            normalized_metadata_slot(request_data, "metadata").update(
+                {
+                    **user_api_key_logged_metadata,
+                    **LiteLLMProxyRequestSetup.get_tenant_logging_metadata(user_api_key_dict),
+                }
+            )
 
         if litellm_logging_obj is not None:
             ## UPDATE LOGGING INPUT
