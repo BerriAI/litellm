@@ -39,7 +39,6 @@ class FalAIRecraftV3Config(FalAIBaseConfig):
         Get supported OpenAI parameters for Recraft v3.
         """
         return [
-            "n",
             "response_format",
             "size",
         ]
@@ -57,7 +56,6 @@ class FalAIRecraftV3Config(FalAIBaseConfig):
         Mappings:
         - size -> image_size (can be preset or custom width/height)
         - response_format -> ignored (Recraft returns URLs)
-        - n -> ignored (Recraft doesn't support multiple images)
         """
         supported_params: Final = self.get_supported_openai_params(model)
 
@@ -76,9 +74,6 @@ class FalAIRecraftV3Config(FalAIBaseConfig):
                     # Transform specific parameters
                     if k == "response_format":
                         # Recraft always returns URLs, so we can ignore this
-                        continue
-                    elif k == "n":
-                        # Recraft doesn't support multiple images, ignore
                         continue
                     elif k == "size":
                         # Map OpenAI size format to Recraft image_size
