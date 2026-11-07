@@ -201,7 +201,6 @@ from litellm.types.llms.openai import (
     ChatCompletionToolParamFunctionChunk,
     ChatCompletionToolReferenceObject,
     ChatCompletionUserMessage,
-    OpenAIWebSearchOptions,
     ToolMessageContentPart,
 )
 from litellm.types.utils import Choices, ModelResponse, StreamingChoices, Usage
@@ -229,7 +228,6 @@ class ChatRouteInputs:
     reasoning_effort: str | Mapping[str, object] | None = None
     api_base: str | None = None
     thinking: Mapping[str, object] | None = None
-    web_search: bool = False
 
 
 _NO_ROUTE_INPUTS: Final = ChatRouteInputs()
@@ -274,7 +272,6 @@ def _keeps_encrypted_reasoning_for_responses(
         tools=route.tools,
         reasoning_effort=route.reasoning_effort,
         api_base=route.api_base,
-        web_search_options=OpenAIWebSearchOptions() if route.web_search else None,
     )
 
 
@@ -1352,7 +1349,6 @@ class LiteLLMAnthropicMessagesAdapter:
                 reasoning_effort=new_kwargs.get("reasoning_effort"),
                 api_base=api_base,
                 thinking=anthropic_message_request.get("thinking"),
-                web_search="web_search_options" in new_kwargs,
             ),
         )
         ## ADD SYSTEM MESSAGE TO MESSAGES

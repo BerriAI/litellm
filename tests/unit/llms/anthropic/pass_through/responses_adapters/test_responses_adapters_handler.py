@@ -2,10 +2,11 @@ import datetime
 import json
 import os
 import sys
-from collections.abc import Mapping
-from typing import Final
+from collections.abc import AsyncIterator, Mapping
+from typing import Final, cast
 from unittest.mock import AsyncMock, patch
 
+import httpx
 import pytest
 import respx
 
@@ -15,6 +16,7 @@ import litellm
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     TOOL_RESULT_IMAGE_BOUNDARY,
     TOOL_RESULT_IMAGE_PLACEHOLDER,
+    encrypted_reasoning_signature,
 )
 from litellm.llms.anthropic.pass_through.responses_adapters.handler import (
     LiteLLMMessagesToResponsesAPIHandler,
@@ -684,3 +686,138 @@ def test_drop_params_drops_the_mcp_toolset_tools_of_dropped_mcp_servers(monkeypa
     )
 
     assert [tool["name"] for tool in responses_kwargs["tools"]] == ["get_weather"]
+
+TEXT_RESPONSE: Final = {
+    "id": "resp_replayed",
+    "object": "response",
+    "created_at": 1,
+    "status": "completed",
+    "model": "gpt-5.6-luna",
+    "output": [
+        {
+            "type": "message",
+            "id": "msg_1",
+            "role": "assistant",
+            "status": "completed",
+            "content": [{"type": "output_text", "text": "done", "annotations": []}],
+        }
+    ],
+    "parallel_tool_calls": True,
+    "tool_choice": "auto",
+    "tools": [],
+    "usage": {"input_tokens": 3, "output_tokens": 4, "total_tokens": 7},
+}
+
+REJECTED_REPLAYED_REASONING: Final = {
+    "error": {
+        "message": "The encrypted content gAAA_foreign could not be verified.",
+        "type": "invalid_request_error",
+        "param": None,
+        "code": "invalid_encrypted_content",
+    }
+}
+UNVERIFIED_ORGANIZATION: Final = {
+    "error": {"message": "The organization could not be verified.", "type": "invalid_request_error"}
+}
+
+
+def _history(*, replayed_reasoning: bool) -> list[dict[str, object]]:
+    reasoning: Final = (
+        ({"type": "redacted_thinking", "data": encrypted_reasoning_signature("gAAA_foreign")},)
+        if replayed_reasoning
+        else ()
+    )
+    return [
+        {"role": "user", "content": "List the logs."},
+        {"role": "assistant", "content": [*reasoning, {"type": "tool_use", "id": "call_1", "name": "Bash", "input": {}}]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "call_1", "content": "app.log"}]},
+    ]
+
+
+def _replayed_reasoning_counts(upstream: respx.Route) -> list[int]:
+    return [
+        sum(item.get("type") == "reasoning" for item in json.loads(call.request.content)["input"])
+        for call in upstream.calls
+    ]
+
+
+def _upstream(respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, first: httpx.Response, stream: bool):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-replay-test")
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    served: Final = (
+        httpx.Response(200, headers={"Content-Type": "text/event-stream"}, content=RESPONSES_SSE_BODY)
+        if stream
+        else httpx.Response(200, json=TEXT_RESPONSE)
+    )
+    return respx_mock.post("https://api.openai.com/v1/responses").mock(side_effect=[first, served])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True])
+async def test_openai_turn_is_sent_again_once_without_replayed_reasoning_the_backend_cannot_decrypt(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, stream: bool
+) -> None:
+    upstream: Final = _upstream(respx_mock, monkeypatch, httpx.Response(400, json=REJECTED_REPLAYED_REASONING), stream)
+
+    response: Final = await LiteLLMMessagesToResponsesAPIHandler.async_anthropic_messages_handler(
+        max_tokens=64,
+        messages=_history(replayed_reasoning=True),
+        model="openai/gpt-5.6-luna",
+        tools=[dict(BASH_TOOL)],
+        stream=stream,
+        custom_llm_provider="openai",
+    )
+    events: Final = (
+        [json.loads(chunk.decode().split("data: ", 1)[1]) async for chunk in cast(AsyncIterator[bytes], response)]
+        if stream
+        else [cast(Mapping[str, object], response)]
+    )
+
+    assert _replayed_reasoning_counts(upstream) == [1, 0]
+    assert events[-1]["type"] in ("message", "message_stop")
+
+
+def test_sync_openai_turn_is_sent_again_once_without_replayed_reasoning_the_backend_cannot_decrypt(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    upstream: Final = _upstream(respx_mock, monkeypatch, httpx.Response(400, json=REJECTED_REPLAYED_REASONING), False)
+
+    response: Final = LiteLLMMessagesToResponsesAPIHandler.anthropic_messages_handler(
+        max_tokens=64,
+        messages=_history(replayed_reasoning=True),
+        model="openai/gpt-5.6-luna",
+        tools=[dict(BASH_TOOL)],
+        custom_llm_provider="openai",
+    )
+
+    assert _replayed_reasoning_counts(upstream) == [1, 0]
+    assert cast(Mapping[str, object], response)["content"] == [{"type": "text", "text": "done"}]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "replayed_reasoning, rejection",
+    [
+        pytest.param(False, REJECTED_REPLAYED_REASONING, id="no_replayed_reasoning"),
+        pytest.param(True, UNVERIFIED_ORGANIZATION, id="unrelated_rejection"),
+    ],
+)
+async def test_openai_turn_is_not_sent_again_for_other_rejections(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    replayed_reasoning: bool,
+    rejection: Mapping[str, object],
+) -> None:
+    upstream: Final = _upstream(respx_mock, monkeypatch, httpx.Response(400, json=rejection), False)
+
+    with pytest.raises(litellm.BadRequestError):
+        await LiteLLMMessagesToResponsesAPIHandler.async_anthropic_messages_handler(
+            max_tokens=64,
+            messages=_history(replayed_reasoning=replayed_reasoning),
+            model="openai/gpt-5.6-luna",
+            tools=[dict(BASH_TOOL)],
+            custom_llm_provider="openai",
+        )
+
+    assert upstream.call_count == 1
