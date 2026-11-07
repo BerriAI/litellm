@@ -1,11 +1,13 @@
 import json
-from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
-from itertools import chain
+from collections import defaultdict, deque
+from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Mapping, Sequence
+from enum import Enum
+from itertools import chain, count, groupby
 from types import MappingProxyType
 from typing import Any, Final, TypeAlias, TypeVar, cast
 
 from pydantic import JsonValue, TypeAdapter, ValidationError
-from typing_extensions import ReadOnly, Required, TypedDict
+from typing_extensions import NamedTuple, NotRequired, ReadOnly, Required, TypedDict
 
 from litellm import verbose_logger
 from litellm.exceptions import BadRequestError
@@ -49,11 +51,13 @@ _JsonDictList: TypeAlias = list[_JsonDict]
 
 
 class _ToolCallAccumulator(TypedDict):
+    id: NotRequired[ReadOnly[str | None]]
     name: ReadOnly[str]
     arguments: ReadOnly[str]
 
 
 class _GenAIFunctionCall(TypedDict):
+    id: NotRequired[ReadOnly[str]]
     name: ReadOnly[str]
     args: ReadOnly[Mapping[str, object]]
 
@@ -64,12 +68,19 @@ class _GenAIPart(TypedDict, total=False):
 
 
 class _GenAIFunctionResponse(TypedDict, total=False):
+    id: ReadOnly[str | None]
     name: ReadOnly[str]
     response: ReadOnly[object]
     parts: ReadOnly[object]
 
 
+class _ContentEntry(NamedTuple):
+    message: AllMessageValues
+    response: _GenAIFunctionResponse | None
+
+
 class _GenAIRequestFunctionCall(TypedDict, total=False):
+    id: ReadOnly[str | None]
     name: ReadOnly[str]
     args: ReadOnly[object]
 
@@ -208,13 +219,30 @@ def _genai_message_parts(parts: object) -> tuple[_GenAIMessagePart, ...]:
     return tuple(converted for part in items if (converted := _genai_message_part(part)) is not None)
 
 
-def _genai_tool_response(part: object) -> ChatCompletionToolMessage | None:
+def _default_tool_call_id(name: str | None) -> str:
+    return f"call_{name or 'unknown'}"
+
+
+def _genai_function_call_part(call_id: str | None, name: str, args: Mapping[str, object]) -> _GenAIPart:
+    # Gemini clients echo functionCall.id back as functionResponse.id so the next turn can pair each
+    # result with its call; dropping the provider's ID here would force pairing by function name.
+    function_call: Final[_GenAIFunctionCall] = (
+        {"id": call_id, "name": name, "args": args} if call_id else {"name": name, "args": args}
+    )
+    return {"functionCall": function_call}
+
+
+def _genai_function_response(part: object) -> _GenAIFunctionResponse | None:
     fields: Final = _validated(_CONFIG_FIELDS, part)
     if fields is None:
         return None
-    response: Final = _validated(_GENAI_FUNCTION_RESPONSE, fields.get("functionResponse")) or _validated(
+    return _validated(_GENAI_FUNCTION_RESPONSE, fields.get("functionResponse")) or _validated(
         _GENAI_FUNCTION_RESPONSE, fields.get("function_response")
     )
+
+
+def _genai_tool_response(part: object) -> ChatCompletionToolMessage | None:
+    response: Final = _genai_function_response(part)
     if response is None:
         return None
     result: Final = json.dumps(response.get("response", {}))
@@ -226,7 +254,7 @@ def _genai_tool_response(part: object) -> ChatCompletionToolMessage | None:
     media: Final = tuple(converted for fields in media_fields if (converted := _genai_media_part(fields)) is not None)
     return ChatCompletionToolMessage(
         role="tool",
-        tool_call_id=f"call_{response.get('name', 'unknown')}",
+        tool_call_id=response.get("id") or _default_tool_call_id(response.get("name")),
         content=[ChatCompletionTextObject(type="text", text=result), *media] if media else result,
     )
 
@@ -241,12 +269,121 @@ def _genai_tool_call(part: object) -> ChatCompletionAssistantToolCall | None:
     if call is None:
         return None
     return ChatCompletionAssistantToolCall(
-        id=f"call_{call.get('name', 'unknown')}",
+        id=call.get("id"),
         type="function",
         function=ChatCompletionToolCallFunctionChunk(
             name=call.get("name", ""), arguments=json.dumps(call.get("args", {}))
         ),
     )
+
+
+def _genai_content_entries(content: object) -> Iterator[_ContentEntry]:
+    # A converted tool message can no longer tell an explicit functionResponse.id from the call_<name>
+    # fallback, so the raw part is carried alongside it. _genai_content_messages emits tool messages in
+    # part order, which makes pairing by position safe.
+    fields: Final = _validated(_CONFIG_FIELDS, content)
+    parts: Final = _genai_content_parts(fields.get("parts") if fields is not None else None)
+    responses: Final = iter(resp for part in parts if (resp := _genai_function_response(part)) is not None)
+    return (
+        _ContentEntry(message, next(responses, None) if message["role"] == "tool" else None)
+        for message in _genai_content_messages(content)
+    )
+
+
+class _PendingQueueKind(Enum):
+    EXPLICIT = "explicit"
+    OMITTED = "omitted"
+    DEFAULT = "default"
+
+
+class _PendingToolCalls:
+    # Each call is queued under its own ID (or as ID-less) and under its function name, so a response
+    # resolves in O(1) without scanning every unanswered call. Matching through one queue leaves a stale
+    # entry in the other; _unmatched lets _pop skip those lazily instead of removing them eagerly.
+    def __init__(self) -> None:
+        self._unmatched: Final = set[str]()
+        self._queues: Final = defaultdict[tuple[_PendingQueueKind, str], deque[str]](deque)
+
+    def clear(self) -> None:
+        self._unmatched.clear()
+        self._queues.clear()
+
+    def add(self, call_id: str, explicit_id: str | None, default_id: str) -> None:
+        self._unmatched.add(call_id)
+        self._queues[_PendingQueueKind.DEFAULT, default_id].append(call_id)
+        bucket: Final = _PendingQueueKind.EXPLICIT if explicit_id is not None else _PendingQueueKind.OMITTED
+        self._queues[bucket, explicit_id if explicit_id is not None else default_id].append(call_id)
+
+    def _claim(self, call_id: str) -> str | None:
+        if call_id not in self._unmatched:
+            return None
+        self._unmatched.remove(call_id)
+        return call_id
+
+    def _pop(self, kind: _PendingQueueKind, key: str) -> str | None:
+        queue: Final = self._queues.get((kind, key))
+        while queue:
+            if (claimed := self._claim(queue.popleft())) is not None:
+                return claimed
+        return None
+
+    def resolve(self, response: _GenAIFunctionResponse) -> str:
+        explicit_id: Final = response.get("id") or None
+        default_id: Final = _default_tool_call_id(response.get("name"))
+        if explicit_id is not None:
+            # A client ID can coincide with a suffix generated for another call, so the client's own call wins.
+            return self._pop(_PendingQueueKind.EXPLICIT, explicit_id) or self._claim(explicit_id) or explicit_id
+        # ID-less calls go first so that calls with an ID stay available to the responses echoing it.
+        return (
+            self._pop(_PendingQueueKind.OMITTED, default_id)
+            or self._pop(_PendingQueueKind.DEFAULT, default_id)
+            or default_id
+        )
+
+
+def _reconcile_tool_call_ids(contents: Iterable[object]) -> Iterator[AllMessageValues]:
+    # Providers such as Anthropic and OpenAI reject a request whose tool call IDs repeat, but Gemini
+    # clients may omit functionCall.id / functionResponse.id or reuse the same ID in later turns.
+    used_ids: Final = set[str]()
+    # used_ids only grows, so resuming each base ID's suffix counter never skips a free suffix and keeps
+    # repeated tool calls from rescanning every earlier suffix.
+    suffix_counters: Final = defaultdict[str, Iterator[int]](lambda: count(2))
+    pending: Final = _PendingToolCalls()
+
+    def next_unique_id(base_id: str) -> str:
+        candidates: Final = (f"{base_id}_{n}" for n in suffix_counters[base_id]) if base_id in used_ids else (base_id,)
+        unique_id: Final = next(candidate for candidate in candidates if candidate not in used_ids)
+        used_ids.add(unique_id)
+        return unique_id
+
+    def register_call(call: ChatCompletionAssistantToolCall) -> ChatCompletionAssistantToolCall:
+        default_id: Final = _default_tool_call_id(call["function"].get("name"))
+        explicit_id: Final = call["id"] or None
+        call_id: Final = next_unique_id(explicit_id or default_id)
+        pending.add(call_id=call_id, explicit_id=explicit_id, default_id=default_id)
+        return ChatCompletionAssistantToolCall(id=call_id, type=call["type"], function=call["function"])
+
+    entries: Final = chain.from_iterable(_genai_content_entries(content) for content in contents)
+    # Consecutive model contents form one turn (e.g. streamed parallel calls recorded chunk by chunk),
+    # so unanswered calls are dropped only when a new run of assistant messages starts.
+    for role, run in groupby(entries, key=lambda entry: entry.message["role"]):
+        if role == "assistant":
+            pending.clear()
+        for message, response in run:
+            if message["role"] == "assistant" and (tool_calls := message.get("tool_calls")):
+                yield ChatCompletionAssistantMessage(
+                    role="assistant",
+                    content=message.get("content"),
+                    tool_calls=[register_call(call) for call in tool_calls],
+                )
+            elif message["role"] == "tool" and response is not None:
+                yield ChatCompletionToolMessage(
+                    role="tool",
+                    tool_call_id=pending.resolve(response),
+                    content=message["content"],
+                )
+            else:
+                yield message
 
 
 def _genai_content_messages(content: object) -> tuple[AllMessageValues, ...]:
@@ -366,13 +503,13 @@ class GoogleGenAIStreamWrapper(AdapterCompletionStreamWrapper):
                             parsed_args: Mapping[str, object] = self._parse_accumulated_args(
                                 tool_call_data["arguments"] or "{}"
                             )
-                            function_call_part: _GenAIPart = {
-                                "functionCall": {
-                                    "name": tool_call_data["name"] or "undefined_tool_name",
-                                    "args": parsed_args,
-                                }
-                            }
-                            parts.append(function_call_part)
+                            parts.append(
+                                _genai_function_call_part(
+                                    tool_call_data.get("id"),
+                                    tool_call_data["name"] or "undefined_tool_name",
+                                    parsed_args,
+                                )
+                            )
                         except json.JSONDecodeError:
                             # This can happen if the stream is abruptly cut off mid-argument string.
                             verbose_logger.warning(
@@ -638,7 +775,7 @@ class GoogleGenAIAdapter:
             if system_parts and "text" in system_parts[0]
             else ()
         )
-        return [*system_messages, *chain.from_iterable(_genai_content_messages(content) for content in contents)]
+        return [*system_messages, *_reconcile_tool_call_ids(contents)]
 
     def translate_completion_to_generate_content(
         self,
@@ -799,13 +936,13 @@ class GoogleGenAIAdapter:
                     except json.JSONDecodeError:
                         args = {}
 
-                    function_call_part: _GenAIPart = {
-                        "functionCall": {
-                            "name": function.name or "undefined_tool_name",
-                            "args": args,
-                        }
-                    }
-                    parts.append(function_call_part)
+                    parts.append(
+                        _genai_function_call_part(
+                            getattr(tool_call, "id", None),
+                            function.name or "undefined_tool_name",
+                            args,
+                        )
+                    )
 
         return parts if parts else [{"text": ""}]
 
@@ -837,9 +974,12 @@ class GoogleGenAIAdapter:
             if tool_call_index is None:
                 continue  # Index is essential for tracking streaming tool calls
 
+            # Providers usually send the ID only on the first delta of each tool call
+            tool_call_id: str | None = getattr(tool_call, "id", None)
             # Initialize accumulator for this index if it's new
             if tool_call_index not in wrapper.accumulated_tool_calls:
                 wrapper.accumulated_tool_calls[tool_call_index] = {
+                    "id": tool_call_id,
                     "name": "",
                     "arguments": "",
                 }
@@ -856,6 +996,7 @@ class GoogleGenAIAdapter:
 
             previous_data: _ToolCallAccumulator = wrapper.accumulated_tool_calls[tool_call_index]
             wrapper.accumulated_tool_calls[tool_call_index] = _ToolCallAccumulator(
+                id=tool_call_id or previous_data.get("id"),
                 name=function_name or previous_data["name"],
                 arguments=previous_data["arguments"] + (args_chunk or ""),
             )
@@ -874,8 +1015,13 @@ class GoogleGenAIAdapter:
                 # The part will be created by a later chunk that brings the name.
                 if accumulated_name:
                     # If successful, create the part and clean up
-                    function_call_part: _GenAIPart = {"functionCall": {"name": accumulated_name, "args": parsed_args}}
-                    parts.append(function_call_part)
+                    parts.append(
+                        _genai_function_call_part(
+                            accumulated_data.get("id"),
+                            accumulated_name,
+                            parsed_args,
+                        )
+                    )
 
                     # Remove the completed tool call from the accumulator
                     del wrapper.accumulated_tool_calls[tool_call_index]
