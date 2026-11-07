@@ -429,17 +429,18 @@ class TestUseResponsesApiBridgeFlag:
                 {"type": "function_call_output", "call_id": "call_a", "output": "contents of a"},
             ],
             use_chat_completions_api=True,
-            cache_control_injection_points=[{"location": "message", "index": -1}],
+            cache_control_injection_points=[{"location": "tool_config"}, {"location": "message", "index": -1}],
             api_key="fake-provider-api-key",
             num_retries=0,
         )
 
-        sent_messages: Final = json.loads(upstream.calls[0].request.read())["messages"]
+        sent_body: Final = json.loads(upstream.calls[0].request.read())
         assert [
             message.get("tool_call_id") or message["role"]
-            for message in sent_messages
+            for message in sent_body["messages"]
             if "cache_control" in json.dumps(message)
         ] == ["call_a"]
+        assert "cache_control_injection_points" not in sent_body
 
     def test_bridge_keeps_deployment_credentials_while_dropping_unknown_params(self, respx_mock: respx.MockRouter):
         upstream: Final = respx_mock.post(

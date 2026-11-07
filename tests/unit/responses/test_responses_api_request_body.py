@@ -17,6 +17,7 @@ import pytest
 import respx
 
 import litellm
+from litellm.integrations.anthropic_cache_control_hook import MAX_CACHE_CONTROL_BLOCKS
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
 
@@ -1015,11 +1016,11 @@ async def test_the_ordinal_point_listed_first_takes_the_last_breakpoint_slot(ind
         tools=[
             {
                 "type": "function",
-                "name": name,
+                "name": f"t{i}",
                 "parameters": {"type": "object", "properties": {}},
                 "cache_control": {"type": "ephemeral"},
             }
-            for name in ("t0", "t1", "t2")
+            for i in range(MAX_CACHE_CONTROL_BLOCKS - 1)
         ],
     )
 

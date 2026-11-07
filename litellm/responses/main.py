@@ -66,7 +66,6 @@ from litellm.types.responses.streaming_websocket import ResponsesWebSocketReques
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import all_litellm_params
 from litellm.utils import (
-    LITELLM_ONLY_PARAMS,
     ProviderConfigManager,
     client,
 )
@@ -443,6 +442,15 @@ def _bridges_to_chat_completions(
 _RESPONSES_ONLY_REQUEST_FIELDS_NEVER_BRIDGED: Final = frozenset({"client_metadata"})
 
 
+def _message_cache_control_points(kwargs: Mapping[str, object]) -> Mapping[str, object]:
+    points: Final = tuple(
+        point
+        for point in configured_injection_points(kwargs.get("cache_control_injection_points"))
+        if point.get("location") == "message"
+    )
+    return {"cache_control_injection_points": points} if points else {}
+
+
 def _bridge_kwargs(
     kwargs: Mapping[str, object],
     responses_api_provider_config: BaseResponsesAPIConfig | None,
@@ -458,11 +466,15 @@ def _bridge_kwargs(
             *DEFAULT_CHAT_COMPLETION_PARAM_VALUES,
             *all_litellm_params,
             *GenericLiteLLMParams.model_fields,
-            *LITELLM_ONLY_PARAMS,
             *(allowed_openai_params or ()),
         )
     ).difference(_RESPONSES_ONLY_REQUEST_FIELDS_NEVER_BRIDGED)
-    return MappingProxyType({key: value for key, value in kwargs.items() if key in forwarded_keys})
+    return MappingProxyType(
+        {
+            **{key: value for key, value in kwargs.items() if key in forwarded_keys},
+            **_message_cache_control_points(kwargs),
+        }
+    )
 
 
 _ResponsesCompatibilityFailure: TypeAlias = Literal["encrypted_task_unsupported"]
