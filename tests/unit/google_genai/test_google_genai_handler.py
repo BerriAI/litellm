@@ -638,7 +638,7 @@ async def test_generate_content_adapter_success_is_logged_once_on_the_request(
     entrypoint: str,
     stream: bool,
 ):
-    logged = _LoggedEvents()
+    logged: Final = _LoggedEvents()
     monkeypatch.setattr(litellm, "callbacks", [logged])
     per_request_calls: list[tuple[str, str]] = []
 
@@ -647,7 +647,7 @@ async def test_generate_content_adapter_success_is_logged_once_on_the_request(
 
     with respx.mock() as upstream:
         upstream.post("http://upstream.test/v1/chat/completions").mock(return_value=_upstream_reply(stream))
-        response = await getattr(_adapter_router(), entrypoint)(
+        response: Final = await getattr(_adapter_router(), entrypoint)(
             model="grok-group",
             contents=[{"role": "user", "parts": [{"text": "Hello"}]}],
             litellm_call_id=_ADAPTER_CALL_ID,
@@ -668,7 +668,7 @@ async def test_generate_content_adapter_success_is_logged_once_on_the_request(
 def test_sync_generate_content_adapter_success_is_logged_once_on_the_request(
     _httpx_transport: None, _litellm_errors: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
 ):
-    logged = _LoggedEvents()
+    logged: Final = _LoggedEvents()
     monkeypatch.setattr(litellm, "callbacks", [logged])
     per_request_calls: list[tuple[str, str]] = []
 
@@ -695,7 +695,7 @@ def test_sync_generate_content_adapter_success_is_logged_once_on_the_request(
 async def test_generate_content_adapter_runs_sync_callbacks_once_on_async_requests(
     _httpx_transport: None, _litellm_errors: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
 ):
-    logged = _SyncSuccessEvents()
+    logged: Final = _SyncSuccessEvents()
     monkeypatch.setattr(litellm, "callbacks", [logged])
 
     with respx.mock() as upstream:
@@ -774,12 +774,12 @@ async def test_async_generate_content_adapter_cache_hit_reaches_callbacks_as_a_c
 async def test_generate_content_adapter_logs_the_whole_conversation(
     _httpx_transport: None, monkeypatch: pytest.MonkeyPatch, entrypoint: str, stream: bool
 ):
-    logged = _LoggedEvents()
+    logged: Final = _LoggedEvents()
     monkeypatch.setattr(litellm, "callbacks", [logged])
 
     with respx.mock() as upstream:
         upstream.post("http://upstream.test/v1/chat/completions").mock(return_value=_upstream_reply(stream))
-        response = await getattr(_adapter_router(), entrypoint)(
+        response: Final = await getattr(_adapter_router(), entrypoint)(
             model="grok-group",
             contents=[
                 {"role": "user", "parts": [{"text": "Say hi."}]},
@@ -806,7 +806,7 @@ async def test_generate_content_adapter_logs_the_whole_conversation(
 async def test_generate_content_adapter_keeps_the_request_no_log_and_session_id(
     _httpx_transport: None, monkeypatch: pytest.MonkeyPatch
 ):
-    logged = _LoggedEvents()
+    logged: Final = _LoggedEvents()
     monkeypatch.setattr(litellm, "callbacks", [logged])
 
     with respx.mock() as upstream:
@@ -834,7 +834,7 @@ async def test_generate_content_adapter_keeps_the_request_no_log_and_session_id(
 async def test_generate_content_adapter_failure_is_logged_once(
     _httpx_transport: None, monkeypatch: pytest.MonkeyPatch, entrypoint: str
 ):
-    logged = _LoggedEvents()
+    logged: Final = _LoggedEvents()
     monkeypatch.setattr(litellm, "callbacks", [logged])
 
     with respx.mock() as upstream:
@@ -853,7 +853,7 @@ async def test_generate_content_adapter_failure_is_logged_once(
 
 
 def test_sync_generate_content_adapter_failure_is_logged_once(_httpx_transport: None, monkeypatch: pytest.MonkeyPatch):
-    logged = _LoggedEvents()
+    logged: Final = _LoggedEvents()
     monkeypatch.setattr(litellm, "callbacks", [logged])
 
     with respx.mock() as upstream:
