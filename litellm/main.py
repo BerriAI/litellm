@@ -175,6 +175,7 @@ from litellm.types.utils import (
     ProviderRoutingHints,
     RawRequestTypedDict,
     StreamingChoices,
+    UnreportedUsage,
     is_decisions_model_mode,
 )
 from litellm.types.workload_identity import ANTHROPIC_WIF_KWARGS_KEYS, OPENAI_WIF_KWARGS_KEYS
@@ -5841,7 +5842,7 @@ def completion(
                 model
             ]  # update the model to the actual value if an alias has been passed in
         model_response: Final = ModelResponse()
-        setattr(model_response, "usage", litellm.Usage())
+        setattr(model_response, "usage", UnreportedUsage(prompt_tokens=0, completion_tokens=0, total_tokens=0))
         if (
             kwargs.get("azure", False) is True
         ):  # don't remove flag check, to remain backwards compatible for repos like Codium
