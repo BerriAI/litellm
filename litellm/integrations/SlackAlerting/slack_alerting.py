@@ -2,6 +2,7 @@
 #    Class for sending Slack Alerts #
 import asyncio
 import datetime
+import html
 import os
 import random
 import time
@@ -1317,11 +1318,13 @@ Model Info:
                 )
 
             if webhook_event.event == "key_created":
+                # Custom keys can contain markup. Escape at render time; the event keeps the raw key.
+                displayed_key: Final[str] = html.escape(key_token, quote=True) if isinstance(key_token, str) else ""
                 email_html_content = KEY_CREATED_EMAIL_TEMPLATE.format(
                     email_logo_url=email_logo_url,
                     recipient_email=recipient_email,
                     key_budget=key_budget,
-                    key_token=key_token,
+                    key_token=displayed_key,
                     base_url=base_url,
                     email_support_contact=email_support_contact,
                 )
