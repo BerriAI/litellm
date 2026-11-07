@@ -301,7 +301,11 @@ def get_passthrough_router_request_metadata(
     )
     if request is not None:
         LiteLLMProxyRequestSetup.apply_authenticated_baggage_tags(request, request_data)
-    return _METADATA_ADAPTER.validate_python(request_data["litellm_metadata"])
+    metadata: Final = _METADATA_ADAPTER.validate_python(request_data["litellm_metadata"])
+    return {
+        **metadata,
+        **LiteLLMProxyRequestSetup.get_tenant_logging_metadata(user_api_key_dict),
+    }
 
 
 async def llm_passthrough_factory_proxy_route(
