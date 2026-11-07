@@ -13,11 +13,17 @@ import litellm
 from litellm.caching.dual_cache import DualCache
 from litellm.exceptions import GuardrailRaisedException
 from litellm.integrations.custom_guardrail import CustomGuardrail
-from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.guardrails.guardrail_endpoints import get_guardrail_ui_settings, get_provider_specific_params
+from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy.guardrails.guardrail_endpoints import (
+    CreateGuardrailRequest,
+    create_guardrail,
+    get_guardrail_ui_settings,
+    get_provider_specific_params,
+)
 from litellm.proxy.guardrails.guardrail_hooks.collieai import CollieAiGuardrail, initialize_guardrail
 from litellm.proxy.guardrails.guardrail_hooks.collieai.collieai import (
     MISSING_PACKAGE_MESSAGE,
+    CollieAiSetupError,
     PACKAGE_MODULE,
     has_readiness_guard,
     load_base,
@@ -38,8 +44,6 @@ CHAT_REQUEST: Final = {"model": "gpt-5.4-mini", "messages": [{"role": "user", "c
 
 
 class _RecordingGuardrail(CustomGuardrail):
-    """Stand-in with the ``collieai_guardrail.guardrail.CollieAIGuardrail`` constructor: it keeps what it was given"""
-
     def __init__(
         self,
         *,
@@ -84,7 +88,7 @@ def _isolate_callbacks(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "callbacks", [])
 
 
-def test_hands_the_entry_and_the_package_settings_to_the_package() -> None:
+def test_hands_the_entry_and_every_setting_to_the_package() -> None:
     callback: Final = _init(
         _params(
             api_base="https://collieai.internal.example/v1/integrations/litellm",
@@ -112,6 +116,7 @@ def test_hands_the_entry_and_the_package_settings_to_the_package() -> None:
         "forward_conversation_id": True,
         "summary_interval_s": 30,
         "synthetic_interval_s": 0,
+        "workspace_id": "not-a-collieai-setting",
     }
     assert litellm.callbacks == [callback]
 
@@ -223,9 +228,38 @@ def test_without_the_package_building_the_guardrail_names_what_to_install() -> N
 
 @pytest.mark.skipif(PACKAGE_INSTALLED, reason="exercises the missing-package fallback")
 def test_missing_package_fails_at_config_load_with_install_hint() -> None:
-    with pytest.raises(ImportError, match="pip install"):
+    with pytest.raises(CollieAiSetupError, match="pip install") as raised:
         InMemoryGuardrailHandler().initialize_guardrail(_guardrail(_params()))
 
+    assert not isinstance(raised.value, (ValueError, TypeError))
+    assert litellm.callbacks == []
+
+
+@pytest.mark.asyncio
+async def test_creating_a_guardrail_the_package_refuses_answers_400_and_removes_the_row(mocker) -> None:
+    from unittest.mock import AsyncMock
+
+    litellm_params: Final = {
+        "guardrail": "collieai",
+        "mode": ["pre_call", "post_call"],
+        "default_on": True,
+        "api_key": "sk-not-a-collieai-key",
+    }
+    row: Final = {"guardrail_name": "collieai-refused", "litellm_params": litellm_params, "guardrail_info": {}}
+    registry: Final = mocker.Mock(add_guardrail_to_db=AsyncMock(return_value={**row, "guardrail_id": "refused"}))
+    mocker.patch("litellm.proxy.guardrails.guardrail_endpoints.GUARDRAIL_REGISTRY", registry)
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mocker.Mock())
+    mocker.patch("litellm.proxy.guardrails.guardrail_registry.IN_MEMORY_GUARDRAIL_HANDLER", InMemoryGuardrailHandler())
+    delete_row: Final = mocker.patch("litellm.proxy.guardrails.guardrail_endpoints._delete_guardrail_row", AsyncMock())
+
+    with pytest.raises(HTTPException) as refused:
+        await create_guardrail(
+            CreateGuardrailRequest(guardrail=row),
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    assert refused.value.status_code == 400
+    delete_row.assert_awaited_once()
     assert litellm.callbacks == []
 
 

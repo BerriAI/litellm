@@ -21,6 +21,10 @@ MISSING_PACKAGE_MESSAGE: Final = (
 )
 
 
+class CollieAiSetupError(Exception):
+    pass
+
+
 def has_readiness_guard(package: object) -> bool:
     return getattr(package, "require_guardrail", None) is not None
 
@@ -65,6 +69,7 @@ __all__ = (
     "MISSING_PACKAGE_MESSAGE",
     "PACKAGE_MODULE",
     "CollieAiGuardrail",
+    "CollieAiSetupError",
     "has_readiness_guard",
     "load_base",
     "missing_package",

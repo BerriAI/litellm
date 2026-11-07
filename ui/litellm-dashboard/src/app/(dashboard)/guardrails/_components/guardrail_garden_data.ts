@@ -581,7 +581,7 @@ export const PARTNER_GUARDRAIL_CARDS: GuardrailCardInfo[] = [
     id: "collieai",
     name: "CollieAi",
     description:
-      "CollieAi checks prompts and model responses against your CollieAi policy before and after the model call and records each finding in LiteLLM's guardrail log. It observes by default. Block mode, set in the proxy config file, refuses the calls the policy blocks.",
+      "CollieAi checks the text of non-streaming chat completions against your CollieAi policy before and after the model call and records each finding in LiteLLM's guardrail log. It does not check streamed or tool calls. It observes by default. Block mode, set in the proxy config file, refuses the calls the policy blocks.",
     category: "partner",
     logo: guardrailLogoMap["CollieAi"],
     tags: ["Security", "Prompt Injection", "PII", "Policy", "Monitoring"],

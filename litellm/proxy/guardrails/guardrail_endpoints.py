@@ -24,6 +24,7 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.callback_utils import CALLBACK_VAR_ENCRYPTED_PREFIX
 from litellm.proxy.common_utils.path_utils import is_within, safe_join
 from litellm.proxy.guardrails.content_filter_data import CATEGORIES_DIR, DATA_ROOTS, category_dirs, find_category_file
+from litellm.proxy.guardrails.guardrail_hooks.collieai.collieai import CollieAiSetupError
 from litellm.proxy.guardrails.guardrail_hooks.custom_code.bounded_execution import (
     ExecutionTimeoutError,
     await_with_timeout,
@@ -455,7 +456,7 @@ async def create_guardrail(
             verbose_proxy_logger.info(
                 "Immediate sync: Successfully initialized guardrail '%s' (ID: %s)", guardrail_name, guardrail_id
             )
-        except (ValueError, TypeError, CustomCodeCompilationError) as init_error:
+        except (ValueError, TypeError, CustomCodeCompilationError, CollieAiSetupError) as init_error:
             # Configuration error — roll back the DB write so the guardrail isn't orphaned
             if prisma_client is not None:
                 try:
