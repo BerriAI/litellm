@@ -225,22 +225,6 @@ class _EchoedResponsesRequestParams(TypedDict, total=False):
 _ECHOED_PARAMS_ADAPTER: Final = TypeAdapter(_EchoedResponsesRequestParams)
 
 
-def _mcp_server_label(tool: object) -> str | None:
-    match tool:
-        case {"type": "mcp", "server_label": str(server_label)}:
-            return server_label
-        case _:
-            return None
-
-
-def _function_choice_for_a_sent_mcp_server(tool_choice: object, tools: Sequence[object]) -> object:
-    match tool_choice:
-        case {"type": "mcp", "server_label": str(server_label)} if server_label in map(_mcp_server_label, tools):
-            return {"type": "function", "name": server_label}
-        case _:
-            return tool_choice
-
-
 def _is_echoable(name: str, value: object) -> bool:
     try:
         _ = _ECHOED_PARAMS_ADAPTER.validate_python({name: value})
@@ -304,6 +288,16 @@ _CACHED_CONTENT_ADAPTER: Final = TypeAdapter(ChatCompletionCachedContent)
 _DICT_ITEMS_LIST_ADAPTER: Final = TypeAdapter(list[dict[object, object]])
 _TEXT_ADAPTER: Final = TypeAdapter(str)
 _RESPONSES_API_TOOL_CHOICE_ADAPTER: Final = TypeAdapter(ToolChoice)
+
+
+def _tool_choice_without_mcp_when_dropping_params(
+    tool_choice: ToolChoice | None, drop_params: object
+) -> ToolChoice | None:
+    match tool_choice:
+        case {"type": "mcp"} if drops_unsupported_params(drop_params):
+            return None
+        case _:
+            return tool_choice
 
 
 def _validate_responses_media(adapter: TypeAdapter[_MediaT], value: object) -> _MediaT:
@@ -1330,7 +1324,7 @@ class LiteLLMCompletionResponsesConfig:
             ),
             "model": model,
             "tool_choice": LiteLLMCompletionResponsesConfig._transform_tool_choice(
-                _function_choice_for_a_sent_mcp_server(responses_api_request.get("tool_choice"), tools)
+                _tool_choice_without_mcp_when_dropping_params(responses_api_request.get("tool_choice"), drop_params)
             ),
             "tools": tools,
             "top_p": responses_api_request.get("top_p"),
