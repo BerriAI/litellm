@@ -110,6 +110,7 @@ BACKEND_PATH_PREFIXES: tuple[str, ...] = (
     "/v1/rust_control_plane/",
     # Alerting / email / IP allowlist
     "/alerting/",
+    "/issues/",
     "/email/",
     "/add/allowed_ip",
     "/delete/allowed_ip",
@@ -153,6 +154,7 @@ BACKEND_EXACT_PATHS: frozenset[str] = frozenset(
     {
         "/",
         "/routes",
+        "/issues",
         "/lens",
         "/openapi.json",
         "/docs",
