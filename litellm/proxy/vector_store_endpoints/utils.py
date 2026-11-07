@@ -9,6 +9,7 @@ from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping
 from litellm.proxy._types import (
     LiteLLM_ObjectPermissionTable,
     LitellmUserRoles,
@@ -18,6 +19,7 @@ from litellm.proxy.mcp_server.ui_session_utils import (
     is_ui_session_credential,
     resolve_ui_session_team_ids,
 )
+from litellm.proxy.openai_files_endpoints.common_utils import managed_file_ids_for_provider_file_ids
 from litellm.types.utils import LlmProviders
 from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
 from litellm.utils import ProviderConfigManager
@@ -559,3 +561,35 @@ def is_allowed_to_call_vector_store_files_endpoint(
         )
 
     return has_permission
+
+
+def _search_hit_file_id(hit: object) -> str | None:
+    fields: Final = as_str_mapping(hit)
+    file_id: Final = None if fields is None else fields.get("file_id")
+    return file_id if isinstance(file_id, str) else None
+
+
+def _with_managed_search_file_id(hit: object, id_map: Mapping[str, str]) -> object:
+    fields: Final = as_str_mapping(hit)
+    file_id: Final = _search_hit_file_id(hit)
+    if fields is None or file_id is None or file_id not in id_map:
+        return hit
+    return {**fields, "file_id": id_map[file_id]}
+
+
+async def with_managed_search_file_ids(
+    search_page: Mapping[str, object],
+    managed_files_obj: object | None,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> Mapping[str, object]:
+    hits: Final = as_object_list(search_page.get("data"))
+    if hits is None:
+        return search_page
+    id_map: Final = await managed_file_ids_for_provider_file_ids(
+        tuple(file_id for hit in hits if (file_id := _search_hit_file_id(hit)) is not None),
+        managed_files_obj,
+        user_api_key_dict,
+    )
+    if not id_map:
+        return search_page
+    return {**search_page, "data": [_with_managed_search_file_id(hit, id_map) for hit in hits]}
