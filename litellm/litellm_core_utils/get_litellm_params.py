@@ -32,6 +32,7 @@ AWS_CREDENTIAL_KWARGS_KEYS: Final = frozenset(
 )
 
 PROVIDER_AFFINITY_HEADER_KWARG_KEY: Final = "provider_affinity_header"
+AGENTIC_LOOP_TOOL_CHOICE_KEY: Final = "_agentic_loop_tool_choice"
 OAUTH_TOKEN_EXCHANGE_KWARGS_KEYS: Final = frozenset(
     {
         "token_exchange_endpoint",

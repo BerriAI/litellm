@@ -1496,7 +1496,21 @@ _ALLOWED_ONLY_ANOTHER_TOOL: Final = {
 }
 
 
+_DEMO_MCP_SERVER: Final = MCPServer(
+    server_id="demo",
+    name="demo",
+    server_name="demo",
+    transport="http",
+    url="https://demo.example/mcp",
+    auth_type="none",
+)
+
+
 def _served_by_a_recording_mcp_server(monkeypatch: pytest.MonkeyPatch, call_tool: AsyncMock) -> None:
+    monkeypatch.setattr(
+        "litellm.proxy.mcp_server.server._get_tools_from_mcp_servers",
+        AsyncMock(return_value=AggregateToolListing(tools=[_MCP_ECHO_TOOL], outcomes={})),
+    )
     monkeypatch.setitem(
         sys.modules, "litellm.proxy.proxy_server", SimpleNamespace(proxy_logging_obj=None, prisma_client=None)
     )
@@ -1508,6 +1522,8 @@ def _served_by_a_recording_mcp_server(monkeypatch: pytest.MonkeyPatch, call_tool
             call_tool=call_tool,
             get_mcp_server_from_tool_name=MagicMock(return_value=None),
             get_mcp_server_by_name=MagicMock(return_value=None),
+            get_allowed_mcp_servers=AsyncMock(return_value=[_DEMO_MCP_SERVER.server_id]),
+            get_mcp_servers_from_ids=MagicMock(return_value=[_DEMO_MCP_SERVER]),
         ),
     )
 
@@ -1521,21 +1537,16 @@ async def test_an_mcp_tool_the_choice_excludes_never_runs_when_the_model_ignored
     call_tool: Final = AsyncMock()
     _served_by_a_recording_mcp_server(monkeypatch, call_tool)
 
-    with patch.object(
-        LiteLLM_Proxy_MCP_Handler,
-        "process_mcp_tools_without_openai_transform",
-        AsyncMock(return_value=([_MCP_ECHO_TOOL], {"echo": "demo"})),
-    ):
-        response: Final = await litellm.acompletion(
-            model="openai/gpt-5.6",
-            messages=[{"role": "user", "content": "Call echo with PING"}],
-            tools=[{"type": "mcp", "server_url": "litellm_proxy/mcp/demo", "require_approval": "never"}],
-            tool_choice=_ALLOWED_ONLY_ANOTHER_TOOL,
-            api_key="sk-mcp-chat-rounds",
-            api_base="https://mcp-chat-rounds.example.com/v1",
-            stream=stream,
-        )
-        chunks: Final = await _read_all(response) if stream else ()
+    response: Final = await litellm.acompletion(
+        model="openai/gpt-5.6",
+        messages=[{"role": "user", "content": "Call echo with PING"}],
+        tools=[{"type": "mcp", "server_url": "litellm_proxy/mcp/demo", "require_approval": "never"}],
+        tool_choice=_ALLOWED_ONLY_ANOTHER_TOOL,
+        api_key="sk-mcp-chat-rounds",
+        api_base="https://mcp-chat-rounds.example.com/v1",
+        stream=stream,
+    )
+    chunks: Final = await _read_all(response) if stream else ()
 
     handed_back: Final = (
         tuple(call.function.name for chunk in chunks for call in chunk.choices[0].delta.tool_calls or ())
@@ -1561,52 +1572,8 @@ def _anthropic_call_to_echo() -> Response:
     )
 
 
-async def _call_echo_on_anthropic_under_drop_params(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, rounds: Sequence[Response], tool_choice: object
-) -> tuple[ModelResponse, respx.Route]:
-    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
-    litellm.in_memory_llm_clients_cache.flush_cache()
-    route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(side_effect=list(rounds))
-    with patch.object(
-        LiteLLM_Proxy_MCP_Handler,
-        "process_mcp_tools_without_openai_transform",
-        AsyncMock(return_value=([_MCP_ECHO_TOOL], {"echo": "demo"})),
-    ):
-        response: Final = await litellm.acompletion(
-            model="anthropic/claude-haiku-4-5",
-            messages=[{"role": "user", "content": "Call echo with PING"}],
-            tools=[{"type": "mcp", "server_url": "litellm_proxy/mcp/demo", "require_approval": "never"}],
-            tool_choice=tool_choice,
-            drop_params=True,
-            api_key="sk-ant-fake",
-        )
-    return response, route
-
-
-@pytest.mark.asyncio
-async def test_a_dropped_choice_hands_back_an_mcp_call_it_excludes(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
-):
-    call_tool: Final = AsyncMock()
-    _served_by_a_recording_mcp_server(monkeypatch, call_tool)
-
-    response, route = await _call_echo_on_anthropic_under_drop_params(
-        respx_mock, monkeypatch, (_anthropic_call_to_echo(),), _ALLOWED_ONLY_ANOTHER_TOOL
-    )
-
-    call_tool.assert_not_awaited()
-    assert "tool_choice" not in json.loads(route.calls[0].request.content)
-    assert [call.function.name for call in response.choices[0].message.tool_calls] == ["echo"]
-
-
-@pytest.mark.asyncio
-async def test_a_dropped_choice_still_runs_an_mcp_call_it_lists(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
-):
-    call_tool: Final = AsyncMock(return_value=CallToolResult(content=[TextContent(type="text", text="PING")]))
-    _served_by_a_recording_mcp_server(monkeypatch, call_tool)
-    answer: Final = Response(
+def _anthropic_answer() -> Response:
+    return Response(
         200,
         json={
             "id": "msg_answer",
@@ -1619,8 +1586,67 @@ async def test_a_dropped_choice_still_runs_an_mcp_call_it_lists(
         },
     )
 
+
+_WHOLE_DEMO_SERVER: Final = {"type": "allowed_tools", "mode": "auto", "tools": [{"type": "mcp", "server_label": "demo"}]}
+_WHOLE_OTHER_SERVER: Final = {"type": "allowed_tools", "mode": "auto", "tools": [{"type": "mcp", "server_label": "other"}]}
+
+
+async def _call_echo_on_anthropic_under_drop_params(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    rounds: Sequence[Response],
+    tool_choice: object,
+    server_url: str = "litellm_proxy/mcp/demo",
+) -> tuple[ModelResponse, respx.Route]:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(side_effect=list(rounds))
+    response: Final = await litellm.acompletion(
+        model="anthropic/claude-haiku-4-5",
+        messages=[{"role": "user", "content": "Call echo with PING"}],
+        tools=[{"type": "mcp", "server_label": "demo", "server_url": server_url, "require_approval": "never"}],
+        tool_choice=tool_choice,
+        drop_params=True,
+        api_key="sk-ant-fake",
+    )
+    return response, route
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool_choice", [_ALLOWED_ONLY_ANOTHER_TOOL, _WHOLE_OTHER_SERVER])
+async def test_a_dropped_choice_hands_back_an_mcp_call_it_excludes(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, tool_choice: object
+):
+    call_tool: Final = AsyncMock()
+    _served_by_a_recording_mcp_server(monkeypatch, call_tool)
+
+    response, route = await _call_echo_on_anthropic_under_drop_params(
+        respx_mock, monkeypatch, (_anthropic_call_to_echo(),), tool_choice
+    )
+
+    call_tool.assert_not_awaited()
+    assert "tool_choice" not in json.loads(route.calls[0].request.content)
+    assert [call.function.name for call in response.choices[0].message.tool_calls] == ["echo"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("tool_choice", "server_url"),
+    [
+        (_FLAT_ALLOWED_ECHO, "litellm_proxy/mcp/demo"),
+        (_WHOLE_DEMO_SERVER, "litellm_proxy/mcp/demo"),
+        (_WHOLE_DEMO_SERVER, "litellm_proxy"),
+    ],
+)
+async def test_a_dropped_choice_still_runs_an_mcp_call_it_lists(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, tool_choice: object, server_url: str
+):
+    call_tool: Final = AsyncMock(return_value=CallToolResult(content=[TextContent(type="text", text="PING")]))
+    _served_by_a_recording_mcp_server(monkeypatch, call_tool)
+
     response, _route = await _call_echo_on_anthropic_under_drop_params(
-        respx_mock, monkeypatch, (_anthropic_call_to_echo(), answer), _FLAT_ALLOWED_ECHO
+        respx_mock, monkeypatch, (_anthropic_call_to_echo(), _anthropic_answer()), tool_choice, server_url
     )
 
     assert call_tool.await_count == 1

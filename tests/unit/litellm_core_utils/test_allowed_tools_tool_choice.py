@@ -26,7 +26,14 @@ _CHOICES_WITH_A_NAME_THAT_IS_NOT_A_STRING: Final = (
     {"type": "allowed_tools", "mode": "auto", "tools": [{"type": "mcp", "name": ""}]},
     {"type": "allowed_tools", "allowed_tools": {"mode": "auto", "tools": [{"type": "mcp", "name": ["get_time"]}]}},
     {"type": "allowed_tools", "allowed_tools": {"mode": "auto", "tools": [{"type": "mcp", "name": 7}]}},
+    {
+        "type": "allowed_tools",
+        "allowed_tools": {"mode": "auto", "tools": [{"type": "function", "function": {"name": ["get_time"]}}]},
+    },
+    {"type": "allowed_tools", "mode": "auto", "tools": [{"type": "function", "function": {"name": 7}}]},
 )
+
+_WHOLE_DOCS_SERVER: Final = {"type": "allowed_tools", "mode": "auto", "tools": [{"type": "mcp", "server_label": "docs"}]}
 
 _CHAT_LAYOUT: Final[dict[str, object]] = {
     "type": "allowed_tools",
@@ -273,3 +280,39 @@ def test_a_name_that_is_not_a_string_lists_no_tool(tool_choice: object):
 @pytest.mark.parametrize("tool_choice", [_FLAT_CHOICE, _CHAT_LAYOUT, "required", None])
 def test_a_valid_choice_or_any_other_choice_is_not_called_malformed(tool_choice: object):
     assert refuse_a_malformed_allowed_tools_tool_choice(tool_choice, "the-model") is None
+
+
+@pytest.mark.parametrize(
+    "tool_choice",
+    [
+        {"type": "allowed_tools", "mode": "auto", "tools": [{"type": "mcp", "server_label": "docs", "name": None}]},
+        {
+            "type": "allowed_tools",
+            "allowed_tools": {"mode": "auto", "tools": [{"type": "mcp", "server_label": "docs", "name": None}]},
+        },
+    ],
+)
+def test_an_mcp_entry_with_a_null_name_is_a_valid_choice(tool_choice: object):
+    assert parse_allowed_tools_tool_choice(tool_choice) is not None
+    assert refuse_a_malformed_allowed_tools_tool_choice(tool_choice, "the-model") is None
+
+
+def test_an_mcp_entry_without_a_name_allows_every_call_its_server_serves():
+    assert tool_calls_the_choice_excludes(_WHOLE_DOCS_SERVER, ("search",), {"search": frozenset({"docs"})}) == ()
+
+
+@pytest.mark.parametrize(
+    ("tool_choice", "server_labels"),
+    [
+        (_WHOLE_DOCS_SERVER, frozenset({"other"})),
+        (_WHOLE_DOCS_SERVER, frozenset()),
+        (
+            {"type": "allowed_tools", "mode": "auto", "tools": [{"type": "mcp", "server_label": "docs", "name": "read"}]},
+            frozenset({"docs"}),
+        ),
+    ],
+)
+def test_an_mcp_entry_allows_no_call_outside_its_server_or_its_name(
+    tool_choice: object, server_labels: frozenset[str]
+):
+    assert tool_calls_the_choice_excludes(tool_choice, ("search",), {"search": server_labels}) == ("search",)

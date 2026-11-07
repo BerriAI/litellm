@@ -435,6 +435,8 @@ async def acompletion_with_mcp(
                     self.tool_calls = LiteLLM_Proxy_MCP_Handler.tool_calls_to_run(
                         LiteLLM_Proxy_MCP_Handler.extract_tool_calls_from_chat_response(response=complete_response),
                         kwargs.get("tool_choice"),
+                        self.tool_server_map,
+                        mcp_tools_with_litellm_proxy,
                     )
 
                     if self.tool_calls:
@@ -606,6 +608,8 @@ async def acompletion_with_mcp(
     tool_calls: Final = LiteLLM_Proxy_MCP_Handler.tool_calls_to_run(
         LiteLLM_Proxy_MCP_Handler.extract_tool_calls_from_chat_response(response=initial_response),
         kwargs.get("tool_choice"),
+        tool_server_map,
+        mcp_tools_with_litellm_proxy,
     )
 
     if not tool_calls:

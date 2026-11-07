@@ -663,7 +663,6 @@ async def test_arun_tool_loop_two_rounds(respx_mock: respx.MockRouter, monkeypat
     assert messages == messages_snapshot
 
 
-ANTHROPIC_MESSAGES_URL: Final = "https://api.anthropic.com/v1/messages"
 TOOL_SEARCH_CALL: Final = {
     "type": "server_tool_use",
     "id": "srvtoolu_01Search",

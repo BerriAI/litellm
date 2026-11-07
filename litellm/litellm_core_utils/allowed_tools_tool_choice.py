@@ -1,4 +1,5 @@
 from collections.abc import Iterable, Mapping
+from types import MappingProxyType
 from typing import Final, Literal
 
 from openai.types.chat.chat_completion_allowed_tool_choice_param import ChatCompletionAllowedToolChoiceParam
@@ -92,8 +93,21 @@ def _has_name(selector: Mapping[str, object]) -> bool:
     return isinstance(name, str) and name != ""
 
 
-def _names_on_other_tool_types_are_strings(tools: Iterable[Mapping[str, object]]) -> bool:
-    return all(tool.get("type") in ("function", "custom") or "name" not in tool or _has_name(tool) for tool in tools)
+def _names_a_tool_or_nothing(tool: Mapping[str, object]) -> bool:
+    tool_type: Final = tool.get("type")
+    if not isinstance(tool_type, str) or tool_type not in ("function", "custom"):
+        return tool.get("name") is None or _has_name(tool)
+    match tool.get(tool_type):
+        case {"name": str()}:
+            return True
+        case {"name": object()}:
+            return False
+        case _:
+            return True
+
+
+def _names_are_strings(tools: Iterable[Mapping[str, object]]) -> bool:
+    return all(map(_names_a_tool_or_nothing, tools))
 
 
 def _chat_allowed_tool(tool: Mapping[str, object]) -> Mapping[str, object] | None:
@@ -124,9 +138,9 @@ def parse_allowed_tools_tool_choice(tool_choice: object) -> ChatAllowedToolsTool
         return None
     match parsed:
         case ChatAllowedToolsToolChoice():
-            return parsed if _names_on_other_tool_types_are_strings(parsed.allowed_tools.tools) else None
+            return parsed if _names_are_strings(parsed.allowed_tools.tools) else None
         case ResponsesAllowedToolsToolChoice():
-            return _chat_layout(parsed) if _names_on_other_tool_types_are_strings(parsed.tools) else None
+            return _chat_layout(parsed) if _names_are_strings(parsed.tools) else None
 
 
 def azure_api_version_takes_tool_choice(api_version: str) -> bool:
@@ -177,11 +191,31 @@ def refuse_a_malformed_allowed_tools_tool_choice(tool_choice: object, model: str
         )
 
 
-def tool_calls_the_choice_excludes(tool_choice: object, tool_names: Iterable[str]) -> tuple[str, ...]:
+def _whole_server_label(tool: Mapping[str, object]) -> str | None:
+    label: Final = tool.get("server_label")
+    return label if tool.get("type") == "mcp" and tool.get("name") is None and isinstance(label, str) else None
+
+
+def _whole_server_labels(tool_choice: object) -> frozenset[str]:
+    parsed: Final = parse_allowed_tools_tool_choice(tool_choice)
+    labels: Final = () if parsed is None else tuple(map(_whole_server_label, parsed.allowed_tools.tools))
+    return frozenset(label for label in labels if label is not None)
+
+
+def tool_calls_the_choice_excludes(
+    tool_choice: object,
+    tool_names: Iterable[str],
+    server_labels_by_tool: Mapping[str, frozenset[str]] = MappingProxyType({}),
+) -> tuple[str, ...]:
     if not is_allowed_tools_tool_choice(tool_choice):
         return ()
     allowed: Final = _allowed_tool_names(tool_choice)
-    return tuple(name for name in tool_names if name not in allowed)
+    whole_servers: Final = _whole_server_labels(tool_choice)
+    return tuple(
+        name
+        for name in tool_names
+        if name not in allowed and whole_servers.isdisjoint(server_labels_by_tool.get(name, frozenset()))
+    )
 
 
 def refuse_tool_calls_the_choice_excludes(tool_choice: object, tool_names: Iterable[str], model: str) -> None:

@@ -34,6 +34,7 @@ from litellm.integrations.code_interpreter_interception.handler import (
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.chat_completion_agentic_loop import (
     maybe_run_chat_completion_agentic_loop,
+    run_chat_completion_agentic_hooks,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
@@ -61,6 +62,7 @@ _INTERNAL_CONTROL_FIELDS = (
     "_code_interpreter_interception_active",
     "_code_interpreter_interception_sandbox_key",
     "_code_interpreter_interception_converted_stream",
+    "_agentic_loop_tool_choice",
     "litellm_metadata",
 )
 
@@ -119,6 +121,27 @@ def _tool_call_model_response() -> ModelResponse:
                                 arguments='{"code": "print(6*7)"}',
                             ),
                         )
+                    ],
+                ),
+            )
+        ]
+    )
+
+
+def _custom_tool_call_model_response() -> ModelResponse:
+    return ModelResponse(
+        choices=[
+            Choices(
+                finish_reason="tool_calls",
+                message=Message(
+                    role="assistant",
+                    content=None,
+                    tool_calls=[
+                        {
+                            "id": "call_abc",
+                            "type": "custom",
+                            "custom": {"name": "litellm_code_execution", "input": "print(6*7)"},
+                        }
                     ],
                 ),
             )

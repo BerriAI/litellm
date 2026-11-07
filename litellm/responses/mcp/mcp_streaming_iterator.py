@@ -749,6 +749,8 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                 LiteLLM_Proxy_MCP_Handler.tool_calls_to_run(
                     LiteLLM_Proxy_MCP_Handler.extract_tool_calls_from_response(self.collected_response),
                     self.original_request_params.get("tool_choice"),
+                    self.tool_server_map,
+                    self.mcp_tools_with_litellm_proxy,
                 )
                 if self.collected_response is not None
                 else ()

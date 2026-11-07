@@ -71,6 +71,7 @@ from litellm.exceptions import LiteLLMUnknownProvider
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.allowed_tools_tool_choice import (
     drops_unsupported_allowed_tools_tool_choice,
+    is_allowed_tools_tool_choice,
 )
 from litellm.litellm_core_utils.asyncify import asyncify, run_async_function
 from litellm.litellm_core_utils.audio_utils.utils import (
@@ -83,6 +84,7 @@ from litellm.litellm_core_utils.chat_completion_agentic_loop import (
 from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.get_litellm_params import (
+    AGENTIC_LOOP_TOOL_CHOICE_KEY,
     AWS_CREDENTIAL_KWARGS_KEYS,
     OAUTH_TOKEN_EXCHANGE_KWARGS_KEYS,
     OPTIONAL_KWARGS_KEYS,
@@ -5353,6 +5355,9 @@ def completion(
     messages = validate_and_fix_openai_messages(messages=messages)
     tools = validate_and_fix_openai_tools(tools=tools)
     # validate tool_choice
+    requested_tool_choice: Final = cast(  # cast-ok: widening an untyped dict to object is always sound
+        object, tool_choice
+    )
     drops_unsupported: Final = drops_unsupported_params(
         cast("Mapping[str, object]", kwargs).get("drop_params")  # cast-ok: kwargs is the untyped request dict
     )
@@ -5886,7 +5891,18 @@ def completion(
                 if key in kwargs
             },
         )
-        litellm_params: Final = with_control_options(requested_litellm_params, control_options)
+        litellm_params: Final = with_control_options(
+            {
+                **requested_litellm_params,
+                **(
+                    {AGENTIC_LOOP_TOOL_CHOICE_KEY: requested_tool_choice}
+                    if AGENTIC_LOOP_TOOL_CHOICE_KEY not in kwargs
+                    and is_allowed_tools_tool_choice(requested_tool_choice)
+                    else {}
+                ),
+            },
+            control_options,
+        )
         if litellm_params.get("provider_affinity_header") is not None:
             try:
                 headers = add_provider_affinity_header(

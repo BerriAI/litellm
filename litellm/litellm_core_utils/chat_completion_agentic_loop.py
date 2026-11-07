@@ -15,6 +15,11 @@ from litellm.litellm_core_utils.agentic_loop_settings import (
     DEFAULT_MAX_AGENTIC_LOOPS,
     validated_max_agentic_loops,
 )
+from litellm.litellm_core_utils.allowed_tools_tool_choice import (
+    is_allowed_tools_tool_choice,
+    refuse_tool_calls_the_choice_excludes,
+)
+from litellm.litellm_core_utils.get_litellm_params import AGENTIC_LOOP_TOOL_CHOICE_KEY
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
 from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
 from litellm.types.integrations.custom_logger import (
@@ -26,7 +31,11 @@ from litellm.types.integrations.custom_logger import (
     is_interception_internal_key,
     stashed_stream_options,
 )
-from litellm.types.utils import ModelResponse
+from litellm.types.utils import (
+    ChatCompletionMessageCustomToolCall,
+    ChatCompletionMessageToolCall,
+    ModelResponse,
+)
 from litellm.utils import CustomStreamWrapper
 
 _FOLLOWUP_INTERNAL_PARAMS: Final = frozenset(
@@ -130,6 +139,32 @@ def _converted_stream_replay(
         logging_obj=logging_obj,
         stream_options=_stashed_stream_options(kwargs),
     )
+
+
+def _tool_call_name(call: ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall) -> str:
+    match call:
+        case ChatCompletionMessageCustomToolCall():
+            return call.custom.name
+        case ChatCompletionMessageToolCall():
+            return call.function.name or ""
+
+
+def _called_tool_names(response: ModelResponse) -> tuple[str, ...]:
+    calls: Final = chain.from_iterable(choice.message.tool_calls or () for choice in response.choices)
+    return tuple(map(_tool_call_name, calls))
+
+
+def _refuse_a_call_the_choice_excludes(response: ModelResponse, kwargs: Mapping[str, object], model: str) -> None:
+    refuse_tool_calls_the_choice_excludes(kwargs.get(AGENTIC_LOOP_TOOL_CHOICE_KEY), _called_tool_names(response), model)
+
+
+def _with_caller_tool_choice(
+    kwargs: Mapping[str, object], optional_params: Mapping[str, object]
+) -> Mapping[str, object]:
+    tool_choice: Final = optional_params.get("tool_choice")
+    if AGENTIC_LOOP_TOOL_CHOICE_KEY in kwargs or not is_allowed_tools_tool_choice(tool_choice):
+        return kwargs
+    return {**kwargs, AGENTIC_LOOP_TOOL_CHOICE_KEY: tool_choice}
 
 
 def _with_agentic_loop_metadata(kwargs_for_followup: Mapping[str, object]) -> Mapping[str, object]:
@@ -261,7 +296,8 @@ async def maybe_run_chat_completion_agentic_loop(
     import litellm
 
     callbacks: Final = litellm.callbacks + (getattr(logging_obj, "dynamic_success_callbacks", None) or [])
-    depth, max_loops, fingerprints = _agentic_loop_settings(kwargs)
+    request_kwargs: Final = _with_caller_tool_choice(kwargs, optional_params)
+    depth, max_loops, fingerprints = _agentic_loop_settings(request_kwargs)
     tools: Final = optional_params.get("tools", [])
 
     for callback in callbacks:
@@ -272,7 +308,7 @@ async def maybe_run_chat_completion_agentic_loop(
             continue
 
         hook_kwargs = {
-            **kwargs,
+            **request_kwargs,
             "_agentic_loop_api_surface": CHAT_COMPLETION_AGENTIC_SURFACE,
             "custom_llm_provider": custom_llm_provider,
         }
@@ -296,6 +332,7 @@ async def maybe_run_chat_completion_agentic_loop(
         if not should_run:
             continue
 
+        _refuse_a_call_the_choice_excludes(response, request_kwargs, model)
         fingerprint = _check_agentic_loop_safety(
             tool_calls=tool_calls,
             fingerprints=fingerprints,
@@ -342,7 +379,7 @@ async def maybe_run_chat_completion_agentic_loop(
                 callback=callback,
                 model=model,
                 optional_params=optional_params,
-                kwargs=kwargs,
+                kwargs=dict(request_kwargs),
                 logging_obj=logging_obj,
                 custom_llm_provider=custom_llm_provider,
                 depth=depth,
@@ -358,7 +395,7 @@ async def maybe_run_chat_completion_agentic_loop(
 
     return _converted_stream_replay(
         response,
-        kwargs=kwargs,
+        kwargs=request_kwargs,
         depth=depth,
         model=model,
         custom_llm_provider=custom_llm_provider,

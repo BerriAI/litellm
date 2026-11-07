@@ -2,6 +2,7 @@ import re
 import traceback
 from collections.abc import Awaitable, Callable, Collection, Iterable, Mapping, Sequence
 from datetime import datetime
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypeAlias, TypedDict, overload
 
 from openai.types.chat import ChatCompletionToolParam
@@ -87,6 +88,36 @@ def _proxy_path_mcp_name(tool: ToolParam) -> str | None:
     server_url: Final = _mcp_server_url(tool)
     match: Final = None if server_url is None else _PROXY_MCP_PATH_RE.match(server_url)
     return None if match is None else match.group(1)
+
+
+def _server_url_of(tool: object) -> str | None:
+    match tool:
+        case {"type": "mcp", "server_url": str() as server_url} if isinstance(tool, dict):
+            return server_url
+        case _:
+            return None
+
+
+def _names_whole_gateway(tool: object) -> bool:
+    server_url: Final = _server_url_of(tool) or ""
+    return server_url.startswith(LITELLM_PROXY_MCP_SERVER_URL) and not server_url.startswith(
+        LITELLM_PROXY_MCP_SERVER_URL_PREFIX
+    )
+
+
+def _server_label_serving(tool: object, server_name: str) -> str | None:
+    match tool:
+        case {"type": "mcp", "server_label": str() as label} if (
+            _names_whole_gateway(tool) or _server_url_of(tool) == f"{LITELLM_PROXY_MCP_SERVER_URL_PREFIX}{server_name}"
+        ):
+            return label
+        case _:
+            return None
+
+
+def server_labels_serving(mcp_tools: Iterable[object], server_name: str | None) -> frozenset[str]:
+    labels: Final = () if server_name is None else tuple(_server_label_serving(tool, server_name) for tool in mcp_tools)
+    return frozenset(label for label in labels if label is not None)
 
 
 def _registered_mcp_servers() -> Collection[MCPServer]:
@@ -589,11 +620,20 @@ class LiteLLM_Proxy_MCP_Handler:
     _should_auto_execute_tools = should_auto_execute_tools
 
     @staticmethod
-    def tool_calls_to_run(tool_calls: Sequence[object], tool_choice: object) -> Sequence[object]:
+    def tool_calls_to_run(
+        tool_calls: Sequence[object],
+        tool_choice: object,
+        tool_server_map: Mapping[str, str],
+        mcp_tools: Iterable[object],
+    ) -> Sequence[object]:
         names: Final = tuple(
             LiteLLM_Proxy_MCP_Handler.extract_tool_call_details(tool_call)[0] or "" for tool_call in tool_calls
         )
-        return () if tool_calls_the_choice_excludes(tool_choice, names) else tool_calls
+        references: Final = tuple(mcp_tools)
+        labels_by_tool: Final = MappingProxyType(
+            {name: server_labels_serving(references, tool_server_map.get(name)) for name in names}
+        )
+        return () if tool_calls_the_choice_excludes(tool_choice, names, labels_by_tool) else tool_calls
 
     @staticmethod
     def extract_tool_calls_from_response(response: ResponsesAPIResponse) -> list[object]:
