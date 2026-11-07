@@ -132,6 +132,32 @@ def test_deleted_member_entry_skips_only_its_group():
     assert connection.closed
 
 
+def test_member_shared_by_groups_is_looked_up_once_per_snapshot():
+    connection = Connection(
+        [group("project-a", member=[ALICE, BOB]), group("project-b", member=[ALICE])],
+        {ALICE: [user("alice@example.org")], BOB: [user("bob@example.org")]},
+    )
+    assert read_directory(SETTINGS, connection) == (
+        DirectoryGroup("project-a", "project-a", ("alice@example.org", "bob@example.org")),
+        DirectoryGroup("project-b", "project-b", ("alice@example.org",)),
+    )
+    assert [search[0] for search in connection.searches] == [ALICE, BOB]
+
+
+def test_deleted_member_shared_by_groups_skips_each_group_after_one_lookup():
+    connection = Connection(
+        [group("project-a", member=[BOB]), group("project-b", member=[ALICE, BOB]), group("project-c", member=[ALICE])],
+        {ALICE: [user("alice@example.org")]},
+        raising={BOB: (32, LDAPNoSuchObjectResult(result=32, description="noSuchObject"))},
+    )
+    assert read_directory(SETTINGS, connection) == (
+        DirectoryError("LDAP member entry does not exist", "cn=project-a,ou=groups,dc=example,dc=org"),
+        DirectoryError("LDAP member entry does not exist", "cn=project-b,ou=groups,dc=example,dc=org"),
+        DirectoryGroup("project-c", "project-c", ("alice@example.org",)),
+    )
+    assert [search[0] for search in connection.searches] == [BOB, ALICE]
+
+
 def test_unreadable_member_entry_still_aborts_snapshot():
     connection = Connection(
         [group("project-a", member=[ALICE, BOB]), group("project-b", member=[ALICE])],

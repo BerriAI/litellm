@@ -219,7 +219,11 @@ def _resolve_member(
 
 
 def _read_group(
-    connection: LDAPConnection, settings: LDAPSyncSettings, entry: _Entry, stop: Event
+    connection: LDAPConnection,
+    settings: LDAPSyncSettings,
+    entry: _Entry,
+    stop: Event,
+    members: dict[str, str | DirectoryError],
 ) -> DirectoryGroup | DirectoryError:
     _check_cancelled(stop)
     team_id: Final = _one(entry, settings.group_id_attribute)
@@ -228,9 +232,10 @@ def _read_group(
         return DirectoryError("LDAP group ID or name is missing or multivalued", entry.dn)
     if any(";range=" in key.lower() for key in entry.attributes):
         return DirectoryError("LDAP ranged membership responses are not supported", entry.dn)
-    identities: Final = tuple(
-        _resolve_member(connection, settings, value, stop) for value in _values(entry, settings.member_attribute)
-    )
+    for value in _values(entry, settings.member_attribute):
+        if value not in members:
+            members[value] = _resolve_member(connection, settings, value, stop)
+    identities: Final = tuple(members[value] for value in _values(entry, settings.member_attribute))
     error: Final = next((identity for identity in identities if isinstance(identity, DirectoryError)), None)
     if error is not None:
         return DirectoryError(error.reason, entry.dn)
@@ -274,7 +279,9 @@ def read_directory(
             )
             if len(group_ids) != len(frozenset(group_ids)):
                 return DirectoryError("LDAP group IDs are not unique within the selected groups")
-            groups: Final = tuple(_read_group(client, settings, entry, cancellation) for entry in entries)
+            # Users often belong to many groups; resolve each member value once per snapshot.
+            members: Final[dict[str, str | DirectoryError]] = {}  # mutable-ok: per-snapshot member lookup cache
+            groups: Final = tuple(_read_group(client, settings, entry, cancellation, members) for entry in entries)
             _check_cancelled(cancellation)
             return groups
         finally:
