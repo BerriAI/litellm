@@ -14,6 +14,10 @@ from litellm.types.utils import (
 
 class CredentialAccessor:
     @staticmethod
+    def is_unset(value: object) -> bool:
+        return value is None or (isinstance(value, str) and not value.strip())
+
+    @staticmethod
     def find_credential(credential_name: str) -> CredentialItem | None:
         return next(
             (credential for credential in litellm.credential_list if credential.credential_name == credential_name),
