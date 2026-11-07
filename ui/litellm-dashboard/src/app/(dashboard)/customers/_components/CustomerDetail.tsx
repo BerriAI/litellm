@@ -43,6 +43,9 @@ export default function CustomerDetail({ customerId, onBack }: { customerId: str
   const label = c?.alias || customerId;
   const status = c ? customerStatus(c, spend) : "active";
   const max = c?.litellm_budget_table?.max_budget ?? null;
+  const tpmLimit = c?.litellm_budget_table?.tpm_limit ?? null;
+  const rpmLimit = c?.litellm_budget_table?.rpm_limit ?? null;
+  const limitsText = [tpmLimit !== null ? `${tpmLimit.toLocaleString()} TPM` : null, rpmLimit !== null ? `${rpmLimit.toLocaleString()} RPM` : null].filter(Boolean).join(" / ");
   const refresh = () => { keysQuery.refetch(); trafficQuery.refetch(); };
   const removeKey = async (k: PortalKey) => {
     if (!accessToken) return;
@@ -67,6 +70,7 @@ export default function CustomerDetail({ customerId, onBack }: { customerId: str
           <p className="text-sm text-muted-foreground">
             Spend this month <span className="font-medium text-foreground">{formatUSD(spend)}</span>
             {max !== null && max !== undefined ? <> of <span className="font-medium text-foreground">{formatUSD(max)}</span> budget</> : ", no budget"}
+            {limitsText && <> &middot; {limitsText}</>}
           </p>
         </div>
         <div className="flex gap-2">

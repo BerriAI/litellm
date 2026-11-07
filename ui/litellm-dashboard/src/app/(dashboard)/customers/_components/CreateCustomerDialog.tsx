@@ -12,6 +12,8 @@ export default function CreateCustomerDialog({ open, onOpenChange, onCreated }: 
   const [userId, setUserId] = useState("");
   const [alias, setAlias] = useState("");
   const [budget, setBudget] = useState("");
+  const [tpm, setTpm] = useState("");
+  const [rpm, setRpm] = useState("");
   const create = $api.useMutation("post", "/customer/new", {
     onSuccess: () => {
       toast.success(`Created ${alias || userId}`);
@@ -30,6 +32,8 @@ export default function CreateCustomerDialog({ open, onOpenChange, onCreated }: 
         blocked: false,
         max_budget: budget ? Number(budget) : null,
         budget_duration: budget ? "1mo" : null,
+        tpm_limit: tpm ? Number(tpm) : null,
+        rpm_limit: rpm ? Number(rpm) : null,
       },
     });
   };
@@ -52,10 +56,23 @@ export default function CreateCustomerDialog({ open, onOpenChange, onCreated }: 
               <Input id="cp-alias" value={alias} onChange={(e) => setAlias(e.target.value)} placeholder="Acme Corp" />
             </div>
           </div>
-          <div className="space-y-1.5 sm:w-1/2">
-            <Label htmlFor="cp-budget">Max Budget (USD, resets monthly)</Label>
-            <Input id="cp-budget" inputMode="decimal" value={budget} onChange={(e) => setBudget(e.target.value.replace(/[^0-9.]/g, ""))} placeholder="Leave empty for no budget" />
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="cp-budget">Max Budget (USD, resets monthly)</Label>
+              <Input id="cp-budget" inputMode="decimal" value={budget} onChange={(e) => setBudget(e.target.value.replace(/[^0-9.]/g, ""))} placeholder="Leave empty for no budget" />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label htmlFor="cp-tpm">TPM limit</Label>
+                <Input id="cp-tpm" inputMode="numeric" value={tpm} onChange={(e) => setTpm(e.target.value.replace(/[^0-9]/g, ""))} placeholder="No limit" />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="cp-rpm">RPM limit</Label>
+                <Input id="cp-rpm" inputMode="numeric" value={rpm} onChange={(e) => setRpm(e.target.value.replace(/[^0-9]/g, ""))} placeholder="No limit" />
+              </div>
+            </div>
           </div>
+          <p className="text-xs text-muted-foreground">TPM/RPM apply to this customer across every key it uses; the proxy returns 429 above them.</p>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
             <Button type="submit" disabled={!userId.trim() || create.isPending}>Create Customer</Button>
