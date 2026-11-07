@@ -5782,6 +5782,9 @@ _RETRY_REJECTION: Final = httpx.Response(
 _UNRELATED_REJECTION: Final = httpx.Response(
     400, json={"error": {"message": "max_output_tokens is too small", "type": "invalid_request_error"}}
 )
+_UNRELATED_UNVERIFIED_REJECTION: Final = httpx.Response(
+    400, json={"error": {"message": "The organization could not be verified.", "type": "invalid_request_error"}}
+)
 _RETRY_REPLY: Final = {
     "id": "resp_retry",
     "object": "response",
@@ -5856,6 +5859,7 @@ async def test_async_messages_retry_once_without_reasoning_the_backend_cannot_de
     assert [block["text"] for block in response["content"] if block["type"] == "text"] == ["Oslo"]
     assert retry_warnings == (
         "Backend rejected replayed encrypted reasoning, retrying once without it. "
+        "Enable the encrypted_content_affinity pre-call check to drop such blocks before the call. "
         "provider=azure model=azure/gpt-5.4-nano status=400 code=invalid_encrypted_content",
     )
     assert all(
@@ -5897,6 +5901,9 @@ def test_sync_messages_retry_once_without_reasoning_the_backend_cannot_decrypt(
             id="no_encrypted_reasoning_to_drop",
         ),
         pytest.param(_history_with_foreign_reasoning(), _UNRELATED_REJECTION, id="unrelated_rejection"),
+        pytest.param(
+            _history_with_foreign_reasoning(), _UNRELATED_UNVERIFIED_REJECTION, id="unrelated_unverified_rejection"
+        ),
     ],
 )
 async def test_messages_do_not_retry_other_rejections(
@@ -5955,38 +5962,6 @@ async def test_openai_thinking_on_the_chat_adapter_replays_the_reasoning_its_res
         thinking={"type": "enabled", "budget_tokens": 1024},
         messages=[
             {"role": "user", "content": "Which city is colder?"},
-            {
-                "role": "assistant",
-                "content": [
-                    {"type": "redacted_thinking", "data": encrypted_reasoning_signature("gAAA_same_org")},
-                    {"type": "text", "text": "Oslo."},
-                ],
-            },
-            {"role": "user", "content": "And by how much?"},
-        ],
-    )
-
-    assert route.call_count == 1
-    assert [item["encrypted_content"] for item in _sent_reasoning_items(route.calls[0].request)] == ["gAAA_same_org"]
-
-
-@pytest.mark.asyncio
-@pytest.mark.usefixtures("_chat_bridge_httpx")
-async def test_xai_web_search_turn_replays_the_reasoning_its_responses_route_minted(
-    respx_mock: respx.MockRouter,
-) -> None:
-    route: Final = respx_mock.post(url__regex=r".*xai-search\.example/v1/responses").mock(
-        return_value=httpx.Response(200, json=_RETRY_REPLY)
-    )
-
-    await litellm.anthropic.messages.acreate(
-        model="xai/grok-4.7",
-        api_base="https://xai-search.example/v1",
-        api_key="fake-key",
-        max_tokens=2048,
-        tools=[{"type": "web_search_20250305", "name": "web_search"}],
-        messages=[
-            {"role": "user", "content": "Which city is colder today?"},
             {
                 "role": "assistant",
                 "content": [

@@ -1,3 +1,4 @@
+import re
 from collections.abc import AsyncIterator, Callable, Coroutine, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from functools import partial
@@ -78,6 +79,7 @@ class _CompletionKwargs(TypedDict, total=False, extra_items=object):
 
 
 _ANTHROPIC_MESSAGES: Final = TypeAdapter(list[dict[str, object]])
+_UNVERIFIED_ENCRYPTED_CONTENT: Final = re.compile(r"encrypted content \S+ could not be verified", re.IGNORECASE)
 _PrepareReplay: TypeAlias = "Callable[[_AnthropicMessages], _CompletionKwargs]"
 
 
@@ -125,24 +127,49 @@ def _sends_encrypted_reasoning(completion_kwargs: _CompletionKwargs) -> bool:
     return any(_message_carries_encrypted_reasoning(message) for message in messages)
 
 
+def _rejects_encrypted_reasoning(error: litellm.BadRequestError) -> bool:
+    error_message: Final = str(error)
+    return (
+        "invalid_encrypted_content" in error_message or _UNVERIFIED_ENCRYPTED_CONTENT.search(error_message) is not None
+    )
+
+
+def messages_without_rejected_reasoning(
+    messages: Sequence[Mapping[str, object]],
+    error: litellm.BadRequestError,
+    *,
+    sent_encrypted_reasoning: bool,
+    provider: str,
+    model: str,
+) -> "_AnthropicMessages | None":
+    if not sent_encrypted_reasoning or not _rejects_encrypted_reasoning(error):
+        return None
+    verbose_logger.warning(
+        "Backend rejected replayed encrypted reasoning, retrying once without it. "
+        "Enable the encrypted_content_affinity pre-call check to drop such blocks before the call. "
+        "provider=%s model=%s status=%s code=%s",
+        provider,
+        model,
+        error.status_code,
+        _logged_rejection_code(error),
+    )
+    return _ANTHROPIC_MESSAGES.validate_python(
+        strip_encrypted_reasoning_blocks_from_anthropic_messages([dict(message) for message in messages])
+    )
+
+
 def _messages_without_rejected_reasoning(
     messages: _AnthropicMessages,
     error: litellm.BadRequestError,
     completion_kwargs: _CompletionKwargs,
 ) -> "_AnthropicMessages | None":
-    error_message: Final = str(error)
-    rejected: Final = "invalid_encrypted_content" in error_message or "could not be verified" in error_message
-    if not rejected or not _sends_encrypted_reasoning(completion_kwargs):
-        return None
-    verbose_logger.warning(
-        "Backend rejected replayed encrypted reasoning, retrying once without it. "
-        "provider=%s model=%s status=%s code=%s",
-        _completion_text(completion_kwargs, "custom_llm_provider"),
-        _completion_text(completion_kwargs, "model"),
-        error.status_code,
-        _logged_rejection_code(error),
+    return messages_without_rejected_reasoning(
+        messages,
+        error,
+        sent_encrypted_reasoning=_sends_encrypted_reasoning(completion_kwargs),
+        provider=_completion_text(completion_kwargs, "custom_llm_provider"),
+        model=_completion_text(completion_kwargs, "model"),
     )
-    return _ANTHROPIC_MESSAGES.validate_python(strip_encrypted_reasoning_blocks_from_anthropic_messages(messages))
 
 
 async def _acompletion_without_rejected_reasoning(
