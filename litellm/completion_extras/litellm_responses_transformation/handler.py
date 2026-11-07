@@ -13,9 +13,7 @@ from typing import (
 
 from typing_extensions import ReadOnly, TypedDict
 
-from litellm.litellm_core_utils.core_helpers import attribute_or_none
 from litellm.types.llms.openai import ResponsesAPIResponse
-from litellm.types.utils import CallTypes
 
 if TYPE_CHECKING:
     from litellm import CustomStreamWrapper, LiteLLMLoggingObj, ModelResponse
@@ -36,10 +34,6 @@ class ResponsesToCompletionBridgeHandlerInputKwargs(TypedDict):
 def _restore_routing_prefix(model: str, custom_llm_provider: str) -> str:
     """`responses()` runs `get_llm_provider()` itself, so hand back the prefixed model `completion()` started from."""
     return f"{custom_llm_provider}/{model}"
-
-
-def _serves_anthropic_messages(logging_obj: "LiteLLMLoggingObj") -> bool:
-    return attribute_or_none(logging_obj, "call_type") == CallTypes.anthropic_messages.value
 
 
 class ResponsesToCompletionBridgeHandler:
@@ -188,7 +182,9 @@ class ResponsesToCompletionBridgeHandler:
         model_response: Final = validated_kwargs["model_response"]
         logging_obj: Final = validated_kwargs["logging_obj"]
         custom_llm_provider: Final = validated_kwargs["custom_llm_provider"]
-        serves_anthropic_messages: Final = _serves_anthropic_messages(logging_obj)
+        from .transformation import serves_anthropic_messages
+
+        streams_reasoning_signatures: Final = serves_anthropic_messages(logging_obj)
         if kwargs.get("stream") is True and "stream" not in optional_params:
             optional_params = {**optional_params, "stream": True}
         logging_obj.record_bridged_chat_request(optional_params, litellm_params)
@@ -269,7 +265,7 @@ class ResponsesToCompletionBridgeHandler:
                     cast("Mapping[str, object]", optional_params)  # cast-ok: optional_params is an untyped dict
                 ),
                 replays_openai_history=custom_llm_provider == "openai",
-                streams_reasoning_signatures=serves_anthropic_messages,
+                streams_reasoning_signatures=streams_reasoning_signatures,
             )
             streamwrapper: Final = CustomStreamWrapper(
                 completion_stream=completion_stream,
@@ -292,7 +288,9 @@ class ResponsesToCompletionBridgeHandler:
         model_response: Final = validated_kwargs["model_response"]
         logging_obj: Final = validated_kwargs["logging_obj"]
         custom_llm_provider: Final = validated_kwargs["custom_llm_provider"]
-        serves_anthropic_messages: Final = _serves_anthropic_messages(logging_obj)
+        from .transformation import serves_anthropic_messages
+
+        streams_reasoning_signatures: Final = serves_anthropic_messages(logging_obj)
         if kwargs.get("stream") is True and "stream" not in optional_params:
             optional_params = {**optional_params, "stream": True}
         logging_obj.record_bridged_chat_request(optional_params, litellm_params)
@@ -376,7 +374,7 @@ class ResponsesToCompletionBridgeHandler:
                     cast("Mapping[str, object]", optional_params)  # cast-ok: optional_params is an untyped dict
                 ),
                 replays_openai_history=custom_llm_provider == "openai",
-                streams_reasoning_signatures=serves_anthropic_messages,
+                streams_reasoning_signatures=streams_reasoning_signatures,
             )
             streamwrapper: Final = CustomStreamWrapper(
                 completion_stream=completion_stream,

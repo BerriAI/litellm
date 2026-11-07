@@ -303,6 +303,7 @@ def chat_completion_ends_in_responses_api(
     *,
     tools: Sequence[Mapping[str, object]] | None = None,
     reasoning_effort: str | Mapping[str, object] | None = None,
+    reasoning_summary: object | None = None,
     api_base: str | None = None,
 ) -> bool:
     """Whether chat completion for this model is served by a Responses API.
@@ -324,6 +325,7 @@ def chat_completion_ends_in_responses_api(
         custom_llm_provider=provider,
         tools=tools,
         reasoning_effort=reasoning_effort,
+        reasoning_summary=reasoning_summary,
         api_base=api_base,
         deployment_model_info=deployment_model_info,
     )

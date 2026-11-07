@@ -39,7 +39,12 @@ from litellm.litellm_core_utils.allowed_tools_tool_choice import (
     parse_chat_allowed_tools_tool_choice,
     responses_allowed_tools_tool_choice,
 )
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params, iter_items
+from litellm.litellm_core_utils.core_helpers import (
+    as_str_mapping,
+    attribute_or_none,
+    drops_unsupported_params,
+    iter_items,
+)
 from litellm.litellm_core_utils.hidden_params import get_hidden_params, get_or_create_hidden_params
 from litellm.litellm_core_utils.prompt_templates.prompt_cache_breakpoint_utils import (
     prompt_cache_breakpoint_with_readable_mode,
@@ -80,7 +85,7 @@ from litellm.types.llms.openai import (
     ResponsesAPIResponse,
     ResponsesAPIStreamEvents,
 )
-from litellm.types.utils import Delta, GenericStreamingChunk, ModelResponseStream, StreamingChoices
+from litellm.types.utils import CallTypes, Delta, GenericStreamingChunk, ModelResponseStream, StreamingChoices
 
 if TYPE_CHECKING:
     from openai.types.responses import ResponseInputImageParam, ResponseOutputItem
@@ -263,6 +268,10 @@ class _BuiltReasoningItem(TypedDict):
     id: str
     encrypted_content: str | None
     summary: Sequence[_ReasoningSummaryText]
+
+
+def serves_anthropic_messages(logging_obj: object) -> bool:
+    return attribute_or_none(logging_obj, "call_type") == CallTypes.anthropic_messages.value
 
 
 def _get_reasoning_items(
@@ -1352,6 +1361,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         structured_output: bool = False,
         replay_openai_history: bool = False,
         completed: bool = False,
+        keeps_every_reasoning_item: bool = False,
     ) -> list["Choices"]:
         """
         Convert Responses API output items to chat completion choices.
@@ -1363,6 +1373,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 first message item becomes content
             replay_openai_history: Record the output's item sequence for the next turn
             completed: The response finished, so its item sequence is whole
+            keeps_every_reasoning_item: Keep each reasoning item before an answer, not only the last
 
         Returns:
             List of Choices objects
@@ -1395,7 +1406,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         for item in output_items:
             if isinstance(item, ResponseReasoningItem):
                 pending_reasoning_items = (
-                    *(pending_reasoning_items if replay_openai_history else ()),
+                    *(pending_reasoning_items if replay_openai_history or keeps_every_reasoning_item else ()),
                     _build_reasoning_item(
                         item_id=item.id,
                         encrypted_content=getattr(item, "encrypted_content", None),
@@ -1645,6 +1656,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             )
             == "openai",
             completed=raw_response.status == "completed",
+            keeps_every_reasoning_item=serves_anthropic_messages(logging_obj),
         )
 
         response_is_incomplete: Final = raw_response.status == "incomplete" or (

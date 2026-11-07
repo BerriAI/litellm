@@ -17,6 +17,7 @@ from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping, drops_unsupported_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
+from litellm.litellm_core_utils.model_param_helper import peek_reasoning_summary_aliases
 from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
     is_encrypted_reasoning_block,
     thinking_blocks_with_encrypted_reasoning,
@@ -786,6 +787,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             custom_llm_provider=target_provider,
             api_base=api_base if isinstance(api_base, str) else None,
             deployment_model_info=as_str_mapping(provider_kwargs.get("model_info")),
+            reasoning_summary=peek_reasoning_summary_aliases(provider_kwargs),
             drop_params=drop_params,
         )
 
