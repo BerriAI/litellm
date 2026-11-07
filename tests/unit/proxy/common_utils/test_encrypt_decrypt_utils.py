@@ -272,9 +272,13 @@ def test_bearer_token_uses_only_header_safe_characters(length: int):
     assert decrypt_bearer_token(token, prefix="kind_a_") == "x" * length
 
 
-@pytest.mark.skipif(
+_needs_shared_openssl: Final = pytest.mark.skipif(
     not hasattr(_hashlib, "__file__"), reason="this Python links OpenSSL statically, out of ctypes reach"
 )
+
+
+@_needs_shared_openssl
+@pytest.mark.usefixtures("fips_openssl")
 @pytest.mark.parametrize("salt_key", ["sk-" + bytes(range(32)).hex(), bytes(range(32)).hex().upper()])
 def test_derive_key_from_salt_key_is_sp800_108_counter_mode_hmac_sha256(
     monkeypatch: pytest.MonkeyPatch, salt_key: str
@@ -284,3 +288,11 @@ def test_derive_key_from_salt_key_is_sp800_108_counter_mode_hmac_sha256(
     monkeypatch.setenv("LITELLM_SALT_KEY", salt_key)
     fixed_input: Final = (1).to_bytes(4, "big") + label + b"\x00" + context + (256).to_bytes(4, "big")
     assert derive_key_from_salt_key(label, context) == hmac.digest(bytes(range(32)), fixed_input, "sha256").hex()
+
+
+@_needs_shared_openssl
+@pytest.mark.skipif(_hashlib.get_fips_mode() == 1, reason="this OpenSSL runs a FIPS provider")
+def test_derive_key_from_salt_key_refuses_an_openssl_without_a_fips_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-" + bytes(range(32)).hex())
+    with pytest.raises(ValueError, match="OpenSSL could not run KBKDF"):
+        derive_key_from_salt_key(b"litellm-test:label:", b"sk-test-master-key")

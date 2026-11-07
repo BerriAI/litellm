@@ -50,6 +50,7 @@ _OSSL_PARAM_UTF8_STRING: Final = 4
 _OSSL_PARAM_OCTET_STRING: Final = 5
 _OSSL_PARAM_UNMODIFIED: Final = ctypes.c_size_t(-1).value
 _DERIVED_KEY_BYTES: Final = 32
+_KBKDF_PROPERTIES: Final = b"fips=yes"
 
 
 class _OsslParam(ctypes.Structure):
@@ -87,7 +88,7 @@ def _kbkdf_hmac_sha256(key: bytes, label: bytes, context: bytes) -> bytes:
         _param(b"info", _OSSL_PARAM_OCTET_STRING, context),
     )
     derived: Final = ctypes.create_string_buffer(_DERIVED_KEY_BYTES)
-    kdf: Final = kdf_fetch(None, b"KBKDF", None)
+    kdf: Final = kdf_fetch(None, b"KBKDF", _KBKDF_PROPERTIES)
     ctx: Final = ctx_new(kdf)
     try:
         if not ctx or derive(ctx, derived, _DERIVED_KEY_BYTES, params) != 1:
@@ -100,8 +101,8 @@ def _kbkdf_hmac_sha256(key: bytes, label: bytes, context: bytes) -> bytes:
 
 def derive_key_from_salt_key(label: bytes, context: bytes) -> str:
     """Hex of 32 bytes derived from LITELLM_SALT_KEY under label and context by SP 800-108r1 KBKDF in counter mode
-    with HMAC-SHA256, run by EVP_KDF in the OpenSSL that hashlib uses. Raises ValueError when LITELLM_SALT_KEY is not
-    at least 32 bytes of hex, optionally prefixed with sk-."""
+    with HMAC-SHA256, run by EVP_KDF from the FIPS provider of the OpenSSL that hashlib uses. Raises ValueError when
+    LITELLM_SALT_KEY is not at least 32 bytes of hex, optionally prefixed with sk-, or when no FIPS provider runs it."""
     salt_key: Final = _SALT_KEY_HEX.fullmatch(os.getenv(SALT_KEY_ENV_VAR, ""))
     if salt_key is None:
         raise ValueError(
