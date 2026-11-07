@@ -3834,6 +3834,72 @@ async def test_child_tier_identity_preserves_trace_and_body_session_precedence(
     assert COMPLEXITY_ROUTER_CHILD_SESSION_ID_METADATA_KEY not in metadata.get("requester_metadata", {})
 
 
+_CLAUDE_CODE_SESSION: Final = "11111111-2222-3333-4444-555555555555"
+_CLAUDE_CODE_AGENT: Final = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "headers,child_id",
+    [
+        # Claude Code subagent: parent's session id plus its own agent id -> its own tier-pin identity.
+        (
+            {"x-claude-code-session-id": _CLAUDE_CODE_SESSION, "x-claude-code-agent-id": _CLAUDE_CODE_AGENT},
+            f"{_CLAUDE_CODE_SESSION}:{_CLAUDE_CODE_AGENT}",
+        ),
+        # The parent agent has no agent id and keeps the session-keyed pin.
+        ({"x-claude-code-session-id": _CLAUDE_CODE_SESSION}, None),
+        # An agent id without a session id, or a malformed id, never produces a child identity.
+        ({"x-claude-code-agent-id": _CLAUDE_CODE_AGENT}, None),
+        ({"x-claude-code-session-id": _CLAUDE_CODE_SESSION, "x-claude-code-agent-id": "bad:agent"}, None),
+        ({"x-claude-code-session-id": "short", "x-claude-code-agent-id": _CLAUDE_CODE_AGENT}, None),
+    ],
+)
+async def test_claude_code_subagent_gets_its_own_tier_pin_identity(
+    headers: dict[str, str], child_id: str | None
+) -> None:
+    request: Final = _make_request_mock("/v1/messages", headers)
+    updated: Final = await add_litellm_data_to_request(
+        data={"model": "test-router", "messages": []},
+        request=request,
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=MagicMock(),
+        general_settings={},
+    )
+    metadata: Final = updated[get_metadata_variable_name(request)]
+    if child_id is None:
+        assert COMPLEXITY_ROUTER_CHILD_SESSION_ID_METADATA_KEY not in metadata
+    else:
+        assert metadata[COMPLEXITY_ROUTER_CHILD_SESSION_ID_METADATA_KEY] == child_id
+    # The parent session id stays the trace/session id for tracing and router binding.
+    expected_session: Final = headers.get("x-claude-code-session-id")
+    if expected_session == _CLAUDE_CODE_SESSION:
+        assert metadata["session_id"] == metadata["trace_id"] == _CLAUDE_CODE_SESSION
+
+
+@pytest.mark.asyncio
+async def test_parent_session_header_wins_over_claude_code_agent_headers() -> None:
+    request: Final = _make_request_mock(
+        "/v1/messages",
+        {
+            "x-parent-session-id": "parent-01",
+            "x-session-id": "child-01",
+            "x-claude-code-session-id": _CLAUDE_CODE_SESSION,
+            "x-claude-code-agent-id": _CLAUDE_CODE_AGENT,
+        },
+    )
+    updated: Final = await add_litellm_data_to_request(
+        data={"model": "test-router", "messages": []},
+        request=request,
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=MagicMock(),
+        general_settings={},
+    )
+    metadata: Final = updated[get_metadata_variable_name(request)]
+    # The existing x-parent-session-id path is untouched: no composite (session:agent) identity.
+    assert metadata[COMPLEXITY_ROUTER_CHILD_SESSION_ID_METADATA_KEY] == _CLAUDE_CODE_SESSION
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("surface,parent_id", [("chat/completions", None), ("responses", None), ("messages", "bad")])
 async def test_non_child_requests_cannot_forge_a_child_tier_identity(surface: str, parent_id: str | None) -> None:
