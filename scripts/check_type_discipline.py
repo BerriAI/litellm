@@ -461,7 +461,7 @@ def iter_guard_violations(path: Path, tree: ast.AST) -> Iterator[Violation]:
 # --------------------------------------------------------------------------- #
 
 CONSTANT_DECLARATIONS = frozenset(("Final", "TypeAlias"))
-TYPE_VARIABLE_FACTORIES = frozenset(("TypeVar", "ParamSpec", "TypeVarTuple"))
+TYPE_VARIABLE_FACTORIES = frozenset(("TypeVar", "ParamSpec", "TypeVarTuple", "TypeAliasType"))
 CONFIG_SURFACE_PARTS = ("litellm", "__init__.py")
 SELF_PARAMS = frozenset(("self", "cls"))
 NESTED_SCOPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)
@@ -697,8 +697,8 @@ def iter_final_type_variable_violations(path: Path, tree: ast.AST) -> Iterator[V
                     path,
                     line,
                     "LIT010",
-                    f"`{name}` is a type variable declared Final: mypy then reads it as a plain "
-                    f"variable and every signature using it as Any, so remove the Final",
+                    f"`{name}` is a type variable or type alias declared Final: mypy then reads it as a plain "
+                    f"variable instead of a type, so remove the Final",
                 )
             case _:
                 pass
