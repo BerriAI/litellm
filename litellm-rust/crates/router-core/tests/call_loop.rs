@@ -17,7 +17,7 @@ use litellm_router_core::{
 };
 use parking_lot::Mutex;
 use rstest::{fixture, rstest};
-use serde_json::json;
+use serde_json::{Value, json};
 
 #[derive(Default)]
 struct ScriptedHost {
@@ -1754,4 +1754,110 @@ async fn a_listed_pass_through_pick_names_the_group_an_alias_resolves_to(config:
         refused,
         Error::NoPassThroughDeployments { model } if model == "primary"
     ));
+}
+
+struct StoppedClock(u64);
+
+impl litellm_router_core::health::Clock for StoppedClock {
+    fn now(&self) -> std::time::SystemTime {
+        std::time::UNIX_EPOCH + Duration::from_secs(self.0)
+    }
+}
+
+fn utc_hour(hour: u64) -> u64 {
+    1_767_225_600 + hour * 3_600
+}
+
+#[rstest]
+#[case::inside_the_window(utc_hour(10), vec!["open"])]
+#[case::outside_the_window(utc_hour(20), vec!["open", "reserved"])]
+#[tokio::test]
+async fn access_windows_follow_the_routers_clock(#[case] now: u64, #[case] expected: Vec<&str>) {
+    let config: RouterConfig = serde_json::from_value(json!({
+        "model_list": [
+            {"model_name": "chat", "litellm_params": {"model": "openai/a"}, "model_info": {"id": "open"}},
+            {"model_name": "chat", "litellm_params": {"model": "openai/b"}, "model_info": {
+                "id": "reserved",
+                "access_windows": [{"start": "09:00", "end": "17:00", "timezone": "UTC", "team_ids": ["batch"]}],
+            }},
+        ]
+    }))
+    .unwrap();
+    let router = Router::builder(
+        config,
+        RouterDynamicConfig::default(),
+        Arc::new(ScriptedHost::default()),
+    )
+    .randomness(Arc::new(SeededRandomness::new(7)))
+    .clock(Arc::new(StoppedClock(now)))
+    .build()
+    .unwrap();
+    let mut picked = std::collections::BTreeSet::new();
+    for _ in 0..40 {
+        let deployment = router
+            .select(&Op::from("acompletion"), &request_for("chat"))
+            .await
+            .unwrap();
+        picked.insert(deployment.id.clone());
+    }
+    assert_eq!(picked.into_iter().collect::<Vec<_>>(), expected);
+}
+
+fn request_for(model: &str) -> RouterRequest {
+    RouterRequest {
+        model: model.to_owned(),
+        ..RouterRequest::default()
+    }
+}
+
+#[rstest]
+#[tokio::test]
+async fn every_event_of_a_retried_and_fallen_back_call_serializes_tagged_by_its_name(
+    config: RouterConfig,
+) {
+    let host = Arc::new(ScriptedHost::failing(
+        "primary",
+        vec![failure(FailureKind::RateLimit, 429); 3],
+    ));
+    let router = router(
+        config,
+        json!({"num_retries": 1, "fallbacks": [{"primary": ["backup"]}]}),
+        host.clone(),
+    );
+    router
+        .call(Op::from("acompletion"), request())
+        .await
+        .unwrap();
+    let tags: Value = host
+        .events
+        .lock()
+        .iter()
+        .map(|event| serde_json::to_value(event).unwrap()["event"].clone())
+        .collect();
+    assert_eq!(
+        tags,
+        json!([
+            "RetriesOpened",
+            "PickStarted",
+            "Selected",
+            "AttemptFailed",
+            "CooldownSet",
+            "RetryBudget",
+            "RetryLogged",
+            "Retry",
+            "PickStarted",
+            "Selected",
+            "AttemptFailed",
+            "CooldownSet",
+            "RetryLogged",
+            "FallingBack",
+            "RetryLogged",
+            "Fallback",
+            "RetriesOpened",
+            "PickStarted",
+            "Selected",
+            "Succeeded",
+            "FallbackDone",
+        ])
+    );
 }

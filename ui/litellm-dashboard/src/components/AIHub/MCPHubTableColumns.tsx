@@ -158,7 +158,7 @@ export const getMCPHubTableColumns = ({ onServerClick }: MCPHubTableColumnsDeps)
       <StatusBadge
         tone={STATUS_TONES[row.original.status] || "neutral"}
         label={row.original.status || i18n.t("aiHub.mcpHubColumns.statusUnknown")}
-        tooltip={row.original.status === "reachable" ? MCP_REACHABLE_DESCRIPTION : undefined}
+        tooltip={row.original.status === "reachable" ? i18n.t(MCP_REACHABLE_DESCRIPTION) : undefined}
       />
     ),
   },

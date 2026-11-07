@@ -173,7 +173,7 @@ export default function ModelInsightsView({ accessToken }: { accessToken: string
               <TabsList>
                 {(["requests", "spend", "tokens"] as const).map((value) => (
                   <TabsTrigger key={value} value={value} className="capitalize">
-                    {value}
+                    {t(METRIC_LABELS[value])}
                   </TabsTrigger>
                 ))}
               </TabsList>

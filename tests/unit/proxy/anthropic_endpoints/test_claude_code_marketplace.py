@@ -74,6 +74,7 @@ def _make_mock_prisma():
         record.description = data.get("description")
         record.manifest_json = data.get("manifest_json", "{}")
         record.enabled = data.get("enabled", True)
+        record.created_by = data.get("created_by")
         record.created_at = data.get("created_at")
         record.updated_at = data.get("updated_at")
         store[data["name"]] = record
@@ -221,7 +222,7 @@ async def test_metadata_edits_preserve_uploaded_source_and_reject_a_changed_http
     await table.create(data={"name": _UPLOAD_NAME, "manifest_json": json.dumps({"source": _UPLOAD_SOURCE})})
     request: Final = UpdatePluginRequest(source=_UPLOAD_SOURCE, description="Updated description", version="1.0.0")
     response: Final = await update_plugin(uploads=_uploads(), plugin_name=_UPLOAD_NAME, request=request, user_api_key_dict=_USER)
-    expected: Final = {"name": _UPLOAD_NAME, "source": _UPLOAD_SOURCE, "description": "Updated description", "version": "1.0.0"}
+    expected: Final = {"name": _UPLOAD_NAME, "source": _UPLOAD_SOURCE, "description": "Updated description", "version": "1.0.0", "_litellm_published_by": _USER.user_id}
     assert response.plugin.description == "Updated description"
     assert await _read_stored_manifest(_UPLOAD_NAME) == expected
     with pytest.raises(HTTPException) as error:
@@ -354,7 +355,7 @@ async def _register_public_and_private_plugins() -> None:
 
 
 async def _listed_names(user: UserAPIKeyAuth) -> set[str]:
-    response = await list_plugins(user_api_key_dict=user)
+    response = await list_plugins(uploads=_uploads(), user_api_key_dict=user)
     return {plugin.name for plugin in response.plugins}
 
 
@@ -474,7 +475,7 @@ async def test_update_plugin_propagates_installation_preference_to_get_and_list(
     )
 
     plugin = await get_plugin(plugin_name=name, user_api_key_dict=_USER)
-    listed_plugin = (await list_plugins(user_api_key_dict=_USER)).plugins[0]
+    listed_plugin = (await list_plugins(uploads=_uploads(), user_api_key_dict=_USER)).plugins[0]
 
     assert response.plugin.installation_preference == "auto_install"
     assert plugin["installation_preference"] == "auto_install"
@@ -514,7 +515,7 @@ async def test_stored_unknown_installation_preference_is_not_served(stored_value
     )
 
     marketplace = json.loads((await get_marketplace(request=MagicMock())).body)
-    listed_plugin = (await list_plugins(user_api_key_dict=_USER)).plugins[0]
+    listed_plugin = (await list_plugins(uploads=_uploads(), user_api_key_dict=_USER)).plugins[0]
     plugin = await get_plugin(plugin_name=name, user_api_key_dict=_USER)
 
     assert marketplace["plugins"] == [{"name": name, "source": _ARCHIVE_SOURCE}]
@@ -1288,7 +1289,7 @@ async def test_skill_upload_creates_metadata_and_bytes_atomically_and_rejects_du
         "url": f"http://test/claude-code/plugins/{_UPLOAD_NAME}/archive/{digest}.zip",
         "sha256": digest,
     }
-    assert json.loads(stored["manifest_json"]) == {**metadata, "source": source}
+    assert json.loads(stored["manifest_json"]) == {**metadata, "source": source, "_litellm_published_by": stored["created_by"]}
     assert stored == {
         "name": _UPLOAD_NAME, "description": "My notes", "version": "2.0.0",
         "manifest_json": stored["manifest_json"], "created_by": litellm.proxy.proxy_server.litellm_proxy_admin_name,
