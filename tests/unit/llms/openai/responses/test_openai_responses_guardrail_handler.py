@@ -4242,8 +4242,8 @@ _REPLAYED_CLAUDE_SEARCH_INPUT: Final = (
         "status": "completed",
         "tools": [{"type": "function", "name": "get_weather", "parameters": {"type": "object"}, "defer_loading": True}],
     },
-    {"type": "function_call", "call_id": "toolu_01Weather", "name": "get_weather", "arguments": '{"city": "Paris"}'},
-    {"type": "function_call_output", "call_id": "toolu_01Weather", "output": "14C"},
+    {"type": "function_call", "call_id": "toolu_01GuardrailWeather", "name": "get_weather", "arguments": '{"city": "Paris"}'},
+    {"type": "function_call_output", "call_id": "toolu_01GuardrailWeather", "output": "14C"},
     {"role": "user", "content": "Thanks"},
 )
 
