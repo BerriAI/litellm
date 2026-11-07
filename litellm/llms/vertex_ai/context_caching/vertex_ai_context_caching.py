@@ -22,6 +22,7 @@ from litellm.utils import get_prompt_cache_min_tokens, is_prompt_caching_valid_p
 from ..common_utils import VertexAIError, get_vertex_base_url
 from ..vertex_llm_base import VertexBase, publisher_model_location
 from .known_cached_contents import KnownCachedContents, known_cached_contents
+from .storage_cost import context_cache_storage_token_hours
 from .transformation import (
     cached_messages_end_on_supported_turn,
     separate_cached_messages,
@@ -544,6 +545,9 @@ class ContextCachingEndpoints(VertexBase):
 
         raw_response_cached: Final = _CreatedCachedContentRoot.model_validate(response.json()).root
         _record_cache_creation_tokens(logging_obj, raw_response_cached)
+        logging_obj.record_context_cache_storage(
+            context_cache_storage_token_hours(raw_response_cached, cached_content_request_body.get("ttl"))
+        )
         self._known_caches.remember(
             KnownCachedContents.scope(
                 url, custom_llm_provider, headers, vertex_project=target.project, vertex_location=target.location
@@ -696,6 +700,9 @@ class ContextCachingEndpoints(VertexBase):
 
             raw_response_cached: Final = _CreatedCachedContentRoot.model_validate(response.json()).root
             _record_cache_creation_tokens(logging_obj, raw_response_cached)
+            logging_obj.record_context_cache_storage(
+                context_cache_storage_token_hours(raw_response_cached, cached_content_request_body.get("ttl"))
+            )
             self._known_caches.remember(
                 scope, generated_cache_key, raw_response_cached.get("name"), raw_response_cached.get("expireTime")
             )
