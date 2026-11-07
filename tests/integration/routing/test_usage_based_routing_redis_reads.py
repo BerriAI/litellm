@@ -209,7 +209,12 @@ def test_proxy_usage_routing_reads_cooldown_tpm_then_rpm_from_redis(
             with owned_proxy(
                 bootstrap,
                 tmp_path,
-                {"REDIS_HOST": cache.host, "REDIS_PORT": str(cache.port), "STORE_MODEL_IN_DB": "False"},
+                {
+                    "REDIS_HOST": cache.host,
+                    "REDIS_PORT": str(cache.port),
+                    "STORE_MODEL_IN_DB": "False",
+                    "DEFAULT_COOLDOWN_REDIS_READ_INTERVAL_SECONDS": "0",
+                },
                 config=config_path,
             ) as candidate:
                 eventually(
@@ -256,10 +261,13 @@ def test_proxy_usage_routing_reads_cooldown_tpm_then_rpm_from_redis(
                 observed_bodies: Final = tuple(_request_object(request.body) for request in received)
                 expected_bodies: Final = tuple(_expected_wire_body(endpoint, marker) for marker in markers[:2])
                 assert observed_bodies == expected_bodies, observed_bodies
-                expected_mget: Final = (
+                expected_cooldown_mget: Final = (
                     "MGET",
                     f"deployment:{deployment_ids[0]}:cooldown",
                     f"deployment:{deployment_ids[1]}:cooldown",
+                )
+                expected_usage_mget: Final = (
+                    "MGET",
                     f"{deployment_ids[0]}:openai/{OPENAI_MODEL}:tpm:{minute}",
                     f"{deployment_ids[1]}:openai/{OPENAI_MODEL}:tpm:{minute}",
                     *(
@@ -268,6 +276,7 @@ def test_proxy_usage_routing_reads_cooldown_tpm_then_rpm_from_redis(
                     ),
                 )
                 mgets: Final = _drain_mgets(commands)
-                assert any(arguments == expected_mget for _, arguments in mgets), mgets
+                assert any(arguments == expected_cooldown_mget for _, arguments in mgets), mgets
+                assert any(arguments == expected_usage_mget for _, arguments in mgets), mgets
                 raw_mgets: Final = tuple(line for line, _ in mgets)
                 print(f"proxy {endpoint} MGETs: {raw_mgets}")
