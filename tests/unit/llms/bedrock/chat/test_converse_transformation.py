@@ -13,6 +13,7 @@ import pytest
 import respx
 
 import litellm
+import litellm.llms.bedrock.common_utils as bedrock_common_utils
 from litellm._logging import verbose_logger
 from litellm import ModelResponse, Router, completion
 from litellm.constants import RESPONSE_FORMAT_UNFORCED_TOOL_DESCRIPTION
@@ -29,11 +30,11 @@ from litellm.llms.anthropic.chat.transformation import (
 )
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
-from litellm.llms.bedrock.common_utils import BEDROCK_NATIVE_OUTPUT_MAX_PROPERTIES
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.llms.bedrock import ContentBlock, ConverseTokenUsageBlock, RequestObject
 from litellm.types.llms.openai import AllMessageValues
 from tests.unit.conftest import NativeStructuredOutputKey
+from tests.unit.llms.bedrock.passthrough.guardrail_translation.test_handler import _build_event_stream_frame
 
 
 def test_transform_usage():
@@ -5141,40 +5142,6 @@ def test_unforced_json_tool_keeps_the_schema_description_on_a_non_claude_model(s
     assert [tool["toolSpec"]["description"] for tool in request["toolConfig"]["tools"]] == ["The capital of a country"]
 
 
-@pytest.mark.parametrize(
-    ("model", "native_key", "thinking_params", "native"),
-    [
-        ("us.anthropic.claude-haiku-5-5", "legacy", {}, True),
-        ("us.anthropic.claude-haiku-5-5", "bedrock", {}, True),
-        ("us.anthropic.claude-opus-4-8", "bedrock", {}, False),
-        ("us.anthropic.claude-opus-4-8", "bedrock", {"thinking": ADAPTIVE_THINKING}, True),
-        ("us.anthropic.claude-haiku-5-5", "bedrock", {"thinking": {"type": "enabled", "budget_tokens": 1024}}, True),
-        ("us.anthropic.claude-opus-4-8", "bedrock", {"reasoning_effort": "low"}, True),
-        ("us.anthropic.claude-haiku-5-5", "bedrock", {"reasoning_effort": "none"}, False),
-        ("us.anthropic.claude-haiku-5-5", "bedrock", {"thinking": {"type": "disabled"}}, False),
-    ],
-    ids=[
-        "legacy-key",
-        "bedrock-key-thinking-by-default",
-        "bedrock-key-thinking-off-by-default",
-        "bedrock-key-adaptive",
-        "bedrock-key-enabled",
-        "bedrock-key-effort",
-        "bedrock-key-effort-none",
-        "bedrock-key-thinking-disabled",
-    ],
-)
-def test_bedrock_native_output_key_applies_only_when_the_model_will_think(
-    set_native_structured_output, model, native_key, thinking_params, native
-):
-    set_native_structured_output(model, native_key)
-
-    _, request = _converse_request_for_json_schema(model, False, thinking_params)
-
-    assert ("outputConfig" in request) is native
-    assert ("toolConfig" in request) is not native
-
-
 _FORCED_JSON_TOOL_CHOICE: Final = {"tool": {"name": "json_tool_call"}}
 
 
@@ -5182,22 +5149,22 @@ _FORCED_JSON_TOOL_CHOICE: Final = {"tool": {"name": "json_tool_call"}}
     ("forced_tool_use", "map_flag", "model_info", "thinking_params", "native", "tool_choice"),
     [
         (False, None, None, None, True, None),
-        (False, None, None, {"thinking": {"type": "adaptive"}}, False, None),
+        (False, None, None, {"thinking": {"type": "adaptive"}}, True, None),
         (False, True, None, {"thinking": {"type": "adaptive"}}, True, None),
         (False, False, None, None, False, None),
         (False, None, {"supports_bedrock_native_structured_output": False}, None, False, None),
-        (True, True, None, {"thinking": {"type": "disabled"}}, False, _FORCED_JSON_TOOL_CHOICE),
+        (True, True, None, {"thinking": {"type": "disabled"}}, True, None),
     ],
     ids=[
         "cannot-force-tool",
         "cannot-force-tool-thinking",
-        "cannot-force-tool-thinking-key-true",
+        "cannot-force-tool-map-default",
         "cannot-force-tool-key-false",
         "cannot-force-tool-deployment-opt-out",
-        "can-force-tool",
+        "native-map-default",
     ],
 )
-def test_a_model_that_cannot_force_the_json_tool_gets_native_output_without_thinking_unless_opted_out(
+def test_native_output_decision_ignores_thinking_and_honors_explicit_opt_out(
     set_native_structured_output: Callable[[str, NativeStructuredOutputKey], None],
     monkeypatch: pytest.MonkeyPatch,
     forced_tool_use: bool,
@@ -5209,9 +5176,11 @@ def test_a_model_that_cannot_force_the_json_tool_gets_native_output_without_thin
 ) -> None:
     model: Final = "us.anthropic.claude-haiku-5-5"
     monkeypatch.setitem(litellm.model_cost[model], "supports_forced_tool_use", forced_tool_use)
-    set_native_structured_output(model, "bedrock" if map_flag else None)
-    if map_flag is None:
-        monkeypatch.delitem(litellm.model_cost[model], "supports_bedrock_native_structured_output")
+    if map_flag is None and model_info is None:
+        monkeypatch.delitem(litellm.model_cost[model], "supports_bedrock_native_structured_output_by_default")
+        monkeypatch.setitem(litellm.model_cost[model], "supports_native_structured_output", False)
+    else:
+        set_native_structured_output(model, "bedrock" if map_flag else None)
 
     _, request = _converse_request_for_json_schema(model, False, thinking_params, model_info=model_info)
 
@@ -5340,12 +5309,28 @@ def _converse_capital_answer(request: httpx.Request) -> httpx.Response:
     )
 
 
+def _converse_stream_capital_answer(request: httpx.Request) -> httpx.Response:
+    text: Final = '{"city":"Paris","country":"France"}'
+    events: Final = (
+        ("messageStart", {"role": "assistant"}),
+        ("contentBlockDelta", {"contentBlockIndex": 0, "delta": {"text": text}}),
+        ("contentBlockStop", {"contentBlockIndex": 0}),
+        ("messageStop", {"stopReason": "end_turn"}),
+        ("metadata", {"usage": {"inputTokens": 1, "outputTokens": 12, "totalTokens": 13}, "metrics": {"latencyMs": 1}}),
+    )
+    content: Final = b"".join(_build_event_stream_frame(event_type, payload) for event_type, payload in events)
+    return httpx.Response(
+        200,
+        content=content,
+        headers={"content-type": "application/vnd.amazon.eventstream"},
+        request=request,
+    )
+
+
 @pytest.mark.usefixtures("local_model_cost_map")
 @pytest.mark.parametrize("model", ["global.anthropic.claude-sonnet-5-5"])
-def test_streamed_json_schema_on_a_model_that_cannot_force_a_tool_still_calls_converse_without_streaming(
-    model: str,
-) -> None:
-    respond: Final = MagicMock(wraps=_converse_capital_answer)
+def test_streamed_json_schema_on_a_by_default_model_streams_natively(model: str) -> None:
+    respond: Final = MagicMock(wraps=_converse_stream_capital_answer)
 
     stream: Final = litellm.completion(
         model=f"bedrock/{model}",
@@ -5361,8 +5346,10 @@ def test_streamed_json_schema_on_a_model_that_cannot_force_a_tool_still_calls_co
     assert isinstance(stream, CustomStreamWrapper)
     streamed: Final = "".join(chunk.choices[0].delta.content or "" for chunk in stream)
     sent: Final = respond.call_args.args[0]
-    assert sent.url.path.endswith("/converse")
-    assert "textFormat" in json.loads(sent.content)["outputConfig"]
+    body: Final = json.loads(sent.content)
+    assert sent.url.path.endswith("/converse-stream")
+    assert "textFormat" in body["outputConfig"]
+    assert "toolConfig" not in body
     assert json.loads(streamed) == {"city": "Paris", "country": "France"}
 
 
@@ -5427,7 +5414,7 @@ def _sends_native_output(body: Mapping[str, object], route: str) -> bool:
 
 
 @pytest.mark.parametrize("route", ["converse", "invoke"])
-def test_a_deployment_native_output_opt_in_stays_on_that_deployment(set_native_structured_output, route):
+def test_deprecated_deployment_native_output_flag_stays_on_that_deployment(set_native_structured_output, route):
     set_native_structured_output("us.anthropic.claude-opus-4-8", None)
     litellm_params: Final = {
         "model": f"bedrock/{route}/us.anthropic.claude-opus-4-8",
@@ -5653,26 +5640,14 @@ def test_schema_past_a_native_output_size_limit_keeps_the_tool_path(
     assert past_limit["toolConfig"]["tools"][0]["toolSpec"]["name"] == "json_tool_call"
 
 
-@pytest.mark.parametrize(
-    ("native_key", "native_past_limit"),
-    [("legacy", True), ("default", True), ("bedrock", False)],
-    ids=["legacy-key", "default-key", "bedrock-key"],
-)
-def test_field_count_limit_sends_the_json_tool_only_on_the_bedrock_native_key(
-    set_native_structured_output, native_key, native_past_limit
-):
+def test_by_default_native_output_has_no_converse_property_cap(set_native_structured_output):
     model: Final = "us.anthropic.claude-opus-4-8"
-    set_native_structured_output(model, native_key)
+    set_native_structured_output(model, "default")
 
-    at_limit: Final = _converse_request_for_schema(
-        model, _flat_schema({"type": "string"}, BEDROCK_NATIVE_OUTPUT_MAX_PROPERTIES, True)
-    )
-    past_limit: Final = _converse_request_for_schema(
-        model, _flat_schema({"type": "string"}, BEDROCK_NATIVE_OUTPUT_MAX_PROPERTIES + 1, True)
-    )
+    request: Final = _converse_request_for_schema(model, _flat_schema({"type": "string"}, 120, True))
 
-    assert "outputConfig" in at_limit
-    assert ("outputConfig" in past_limit) is native_past_limit
+    assert "outputConfig" in request
+    assert "toolConfig" not in request
 
 
 NUMERIC_FORMAT_SCHEMA: Final = {
@@ -5735,7 +5710,9 @@ def test_defs_that_double_at_every_level_reach_native_output_without_being_expan
 
 
 @pytest.mark.parametrize(
-    ("native_key", "forwarded"), [("legacy", True), ("bedrock", False)], ids=["legacy-key", "bedrock-key"]
+    ("native_key", "forwarded"),
+    [("legacy", True), ("bedrock", True), (None, False)],
+    ids=["legacy-key", "by-default-key", "no-native-key"],
 )
 def test_recursive_output_config_format_follows_the_profile_native_key(
     set_native_structured_output, native_key, forwarded
@@ -11672,69 +11649,56 @@ def _converse_params(
     )
 
 
-_OUTPUT_CONFIG_FORMAT: Final = {
-    "output_config": {"format": {"type": "json_schema", "schema": CAPITAL_RESPONSE_FORMAT["json_schema"]["schema"]}}
-}
+@pytest.mark.usefixtures("local_model_cost_map")
+def test_bare_sonnet_55_without_thinking_uses_native_output() -> None:
+    _, request = _converse_request_for_json_schema("anthropic.claude-sonnet-5-5", False)
+
+    assert request["outputConfig"]["textFormat"]["type"] == "json_schema"
+    assert "toolConfig" not in request
 
 
-@pytest.mark.parametrize(
-    "request_params",
-    [
-        {"response_format": CAPITAL_RESPONSE_FORMAT, "thinking": ADAPTIVE_THINKING},
-        {"response_format": CAPITAL_RESPONSE_FORMAT, "reasoning_effort": "low"},
-        {"response_format": CAPITAL_RESPONSE_FORMAT, "thinking": {"type": "enabled", "budget_tokens": 2048}},
-        _OUTPUT_CONFIG_FORMAT,
-    ],
-    ids=["adaptive", "reasoning_effort", "budget", "output_config_format"],
-)
-@pytest.mark.parametrize("model", ["us.anthropic.claude-opus-4-8", "global.anthropic.claude-sonnet-5"])
-def test_uses_opt_in_native_output_when_the_opt_in_drove_native_output(
-    set_native_structured_output, model, request_params
-):
-    set_native_structured_output(model, "bedrock")
-    optional_params: Final = _converse_params(model, None, request_params)
+@pytest.mark.usefixtures("local_model_cost_map")
+def test_opus_47_uses_native_output() -> None:
+    _, request = _converse_request_for_json_schema("us.anthropic.claude-opus-4-7", False)
 
-    assert AmazonConverseConfig().uses_opt_in_native_output(model, optional_params, {"model_info": {"id": "d1"}})
+    assert request["outputConfig"]["textFormat"]["type"] == "json_schema"
+    assert "toolConfig" not in request
 
 
-@pytest.mark.parametrize(
-    ("model", "model_info", "request_params"),
-    [
-        ("us.anthropic.claude-opus-4-8", None, {"response_format": CAPITAL_RESPONSE_FORMAT}),
-        (
-            "us.anthropic.claude-opus-4-8",
-            {"supports_bedrock_native_structured_output": False},
-            {"response_format": CAPITAL_RESPONSE_FORMAT, "thinking": ADAPTIVE_THINKING},
-        ),
-        (
-            "us.anthropic.claude-sonnet-4-6",
-            {"supports_bedrock_native_structured_output": True},
-            {"response_format": CAPITAL_RESPONSE_FORMAT, "thinking": ADAPTIVE_THINKING},
-        ),
-    ],
-    ids=["no_thinking", "deployment_opt_out", "native_model"],
-)
-def test_uses_opt_in_native_output_is_false_when_native_output_did_not_come_from_the_opt_in(
-    local_model_cost_map, model, model_info, request_params
-):
-    optional_params: Final = _converse_params(model, model_info, request_params)
+@pytest.mark.usefixtures("local_model_cost_map")
+def test_govcloud_fable_51_keeps_the_json_tool() -> None:
+    _, request = _converse_request_for_json_schema("us-gov.anthropic.claude-fable-5-1", False)
 
-    assert not AmazonConverseConfig().uses_opt_in_native_output(model, optional_params, {"model_info": model_info})
+    assert "outputConfig" not in request
+    assert [tool["toolSpec"]["name"] for tool in request["toolConfig"]["tools"]] == ["json_tool_call"]
 
 
-def test_uses_opt_in_native_output_reads_the_base_model_of_an_application_inference_profile(
-    set_native_structured_output,
-):
-    set_native_structured_output("us.anthropic.claude-opus-4-8", "bedrock")
-    profile: Final = "arn:aws:bedrock:us-east-1:000000000000:application-inference-profile/profile-id"
-    litellm_params: Final = {"base_model": "bedrock/us.anthropic.claude-opus-4-8"}
-    optional_params: Final = _converse_params(
-        "us.anthropic.claude-opus-4-8",
-        None,
-        {"response_format": CAPITAL_RESPONSE_FORMAT, "thinking": ADAPTIVE_THINKING},
-    )
+@pytest.mark.usefixtures("local_model_cost_map")
+def test_deployment_native_output_opt_outs_keep_the_json_tool() -> None:
+    model: Final = "us.anthropic.claude-sonnet-5-5"
+    for model_info in (
+        {"supports_native_structured_output": False},
+        {"supports_bedrock_native_structured_output": False},
+    ):
+        _, request = _converse_request_for_json_schema(model, False, model_info=model_info)
+        assert "outputConfig" not in request
+        assert [tool["toolSpec"]["name"] for tool in request["toolConfig"]["tools"]] == ["json_tool_call"]
 
-    assert AmazonConverseConfig().uses_opt_in_native_output(profile, optional_params, litellm_params)
+
+@pytest.mark.usefixtures("local_model_cost_map")
+def test_deprecated_native_output_opt_out_logs_once_across_requests() -> None:
+    model_info: Final = {"supports_bedrock_native_structured_output": False}
+    bedrock_common_utils._warn_deprecated_bedrock_native_output_model_info.cache_clear()
+    with patch.object(bedrock_common_utils.verbose_logger, "warning") as warning:
+        requests: Final = tuple(
+            _converse_request_for_json_schema("us.anthropic.claude-sonnet-5-5", False, model_info=model_info)[1]
+            for _ in range(2)
+        )
+    bedrock_common_utils._warn_deprecated_bedrock_native_output_model_info.cache_clear()
+
+    assert all("outputConfig" not in request for request in requests)
+    assert warning.call_count == 1
+    assert "supports_native_structured_output" in warning.call_args.args[0]
 
 
 _CALLER_OUTPUT_CONFIG_WITH_A_SCHEMA_OBJECT: Final = {

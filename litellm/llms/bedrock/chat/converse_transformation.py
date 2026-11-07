@@ -72,17 +72,14 @@ from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.base_llm.chat.transformation import REQUEST_PARAMS, BaseConfig, BaseLLMException
 from litellm.llms.bedrock.chat.tool_result_images import place_tool_result_images
 from litellm.llms.bedrock.common_utils import (
-    bedrock_chat_opts_into_native_structured_output,
     bedrock_chat_uses_native_structured_output,
     bedrock_cleaned_output_schema,
     bedrock_model_is_unknown,
     bedrock_model_supports_regex_lookaround,
     bedrock_native_output_format,
-    bedrock_native_output_is_opt_in,
     bedrock_native_output_retry_requested,
     bedrock_supports_tool_search,
     deployment_model_info,
-    requests_output_config_format,
 )
 from litellm.llms.bedrock.request_metadata import (
     bedrock_request_metadata_headers,
@@ -954,23 +951,11 @@ class AmazonConverseConfig(BaseConfig):
     def _supports_native_structured_outputs(
         model: str,
         custom_llm_provider: str | None,
-        will_think: bool,
-        thinking_requested: bool,
         model_info: Mapping[str, object] | None,
     ) -> bool:
-        """Check if the Bedrock model takes native structured outputs (outputConfig.textFormat) for this request.
-
-        ``supports_native_structured_output`` or ``supports_bedrock_native_structured_output_by_default`` in
-        ``litellm.model_cost`` turns it on for every request, and
-        ``supports_bedrock_native_structured_output`` (the deployment's ``model_info`` first) also when Claude
-        will think, which the json tool path would drop. When the request does not ask for thinking, a model
-        that cannot force the json tool gets it unless that key is false.
-        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/structured-output.html
-        """
+        """Check if the Bedrock model takes native structured outputs."""
         return bedrock_chat_uses_native_structured_output(
             model,
-            will_think=will_think,
-            thinking_requested=thinking_requested,
             custom_llm_provider=custom_llm_provider or "bedrock_converse",
             model_info=model_info,
         )
@@ -1015,14 +1000,9 @@ class AmazonConverseConfig(BaseConfig):
         self,
         model: str,
         json_schema: Mapping[str, object],
-        *,
-        will_think: bool,
-        thinking_requested: bool,
         model_info: Mapping[str, object] | None,
     ) -> Mapping[str, object] | None:
-        if not self._supports_native_structured_outputs(
-            model, self.custom_llm_provider, will_think, thinking_requested, model_info
-        ):
+        if not self._supports_native_structured_outputs(model, self.custom_llm_provider, model_info):
             return None
         if BedrockModelInfo.get_base_model(model).startswith("anthropic"):
             return bedrock_cleaned_output_schema(model, json_schema, self.custom_llm_provider or "bedrock_converse")
@@ -1349,13 +1329,10 @@ class AmazonConverseConfig(BaseConfig):
             return optional_params
 
         request_params: Final = REQUEST_PARAMS.validate_python(non_default_params)
-        thinking_requested: Final = self.is_thinking_requested(request_params)
         native_schema: Final = (
             self._native_output_schema(
                 model,
                 json_schema,
-                will_think=AnthropicModelInfo.will_think(model, "bedrock", request_params),
-                thinking_requested=thinking_requested,
                 model_info=model_info,
             )
             if json_schema is not None
@@ -1403,10 +1380,8 @@ class AmazonConverseConfig(BaseConfig):
         # returns {} instead of the requested JSON. The model already
         # returns JSON when the prompt asks for it.
 
-        # A request that goes native without asking for thinking keeps the json tool's faked stream, so it still
-        # needs only bedrock:InvokeModel, unless the model takes native output on every request.
-        streams_natively: Final = native_schema is not None and bedrock_chat_opts_into_native_structured_output(
-            model, thinking_requested, self.custom_llm_provider or "bedrock_converse", model_info
+        streams_natively: Final = native_schema is not None and bedrock_chat_uses_native_structured_output(
+            model, self.custom_llm_provider or "bedrock_converse", model_info
         )
         if json_schema is not None and not streams_natively and non_default_params.get("stream", False) is True:
             optional_params["fake_stream"] = True
@@ -1416,18 +1391,6 @@ class AmazonConverseConfig(BaseConfig):
     @staticmethod
     def sends_native_text_format(optional_params: Mapping[str, object]) -> bool:
         return _has_native_text_format(optional_params.get("outputConfig"))
-
-    def uses_opt_in_native_output(
-        self, model: str, optional_params: Mapping[str, object], litellm_params: Mapping[str, object]
-    ) -> bool:
-        native_output_requested: Final = (
-            optional_params.get("json_mode") is True and self.sends_native_text_format(optional_params)
-        ) or requests_output_config_format(optional_params)
-        return native_output_requested and bedrock_native_output_is_opt_in(
-            bedrock_capability_model(model, litellm_params.get("base_model")),
-            self.custom_llm_provider or "bedrock_converse",
-            deployment_model_info(litellm_params),
-        )
 
     def uses_native_output(
         self, model: str, optional_params: Mapping[str, object], litellm_params: Mapping[str, object]
