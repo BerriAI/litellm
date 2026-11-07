@@ -2041,6 +2041,10 @@ class MCPServerManager:
         self._resource_discovery_cache = _DiscoveryCache[ListResourcesResult](
             discovery_ttl, discovery_clock, TypeAdapter(ListResourcesResult)
         )
+        # Resource URI -> ids of the servers that advertised it. Populated by
+        # _create_prefixed_resources so resources/read can route a URI to its
+        # owner instead of rejecting every multi-server session.
+        self._resource_uri_to_server_ids: dict[str, set[str]] = {}
         self._template_discovery_cache = _DiscoveryCache[ListResourceTemplatesResult](
             discovery_ttl, discovery_clock, TypeAdapter(ListResourceTemplatesResult)
         )
@@ -4672,6 +4676,10 @@ class MCPServerManager:
         self._prompt_discovery_cache.invalidate(server_id)
         self._resource_discovery_cache.invalidate(server_id)
         self._template_discovery_cache.invalidate(server_id)
+        for uri, owner_ids in tuple(self._resource_uri_to_server_ids.items()):
+            owner_ids.discard(server_id)
+            if not owner_ids:
+                del self._resource_uri_to_server_ids[uri]
 
     def invalidate_server_definition_caches(self, server_id: str) -> None:
         from litellm.proxy.mcp_server.discoverable_endpoints import (  # noqa: PLC0415  # lazy: discoverable_endpoints lazily imports this module's manager singleton
@@ -5914,6 +5922,7 @@ class MCPServerManager:
         prefix: Final = get_server_prefix(server)
 
         for resource in resources:
+            self._resource_uri_to_server_ids.setdefault(str(resource.uri), set()).add(server.server_id)
             name_to_use = add_server_prefix_to_name(resource.name, prefix) if add_prefix else resource.name
             resource.name = name_to_use
             prefixed_resources.append(resource)
@@ -7291,6 +7300,21 @@ class MCPServerManager:
                 original_name = strip_known_server_prefix(tool.name, server)
                 self.tool_name_to_mcp_server_name_mapping[original_name] = server.name
                 self.tool_name_to_mcp_server_name_mapping[tool.name] = server.name
+
+    def get_mcp_server_from_resource_uri(self, uri: str, servers: Sequence[MCPServer]) -> MCPServer | None:
+        """Return the one allowed server that advertised ``uri``.
+
+        ``_create_prefixed_resources`` records the owner of every resource it
+        lists. A URI advertised by more than one allowed server, or by none,
+        resolves to ``None`` so callers fail closed instead of guessing.
+        """
+        owner_ids: Final = self._resource_uri_to_server_ids.get(uri)
+        if not owner_ids:
+            return None
+        matches: Final = [server for server in servers if server.server_id in owner_ids]
+        if len(matches) != 1:
+            return None
+        return matches[0]
 
     def get_mcp_server_from_tool_name(self, tool_name: str) -> MCPServer | None:
         """
