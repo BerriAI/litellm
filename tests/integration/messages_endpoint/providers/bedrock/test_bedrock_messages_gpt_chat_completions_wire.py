@@ -4,7 +4,15 @@ from collections.abc import Mapping
 from typing import Final
 
 import anthropic
-from integration._support.bedrock_runtime_peer import NATIVE_CHAT, answer, body_of, marker_of, respond, target_of
+from integration._support.bedrock_runtime_peer import (
+    NATIVE_CHAT,
+    NATIVE_RESPONSES,
+    answer,
+    body_of,
+    marker_of,
+    respond,
+    target_of,
+)
 from integration._support.client import Gateway, Scenario, eventually
 from integration._support.database import read_rows
 from integration._support.wire import Request, Wire, wire_server
@@ -14,6 +22,7 @@ BEDROCK_MODEL: Final = "us.openai.gpt-5.6-sol"
 TOKEN: Final = "synthetic-bedrock-bearer"
 NO_CACHE: Final[Mapping[str, JsonValue]] = {"cache": {"no-cache": True}}
 ANTHROPIC_VERSION: Final[Mapping[str, str]] = {"anthropic-version": "2023-06-01"}
+TOOL_SCHEMA: Final[dict[str, object]] = {"type": "object", "properties": {"id": {"type": "string"}}, "required": ["id"]}
 
 
 def _question(marker: str) -> str:
@@ -38,6 +47,41 @@ def _native_body(wire: Wire, marker: str) -> Mapping[str, JsonValue]:
     assert [(request.method, target_of(request)) for request in received] == [("POST", NATIVE_CHAT)]
     assert received[0].headers["authorization"] == f"Bearer {TOKEN}", received[0].headers
     return body_of(received[0])
+
+
+def _bridged_body(wire: Wire, marker: str) -> Mapping[str, JsonValue]:
+    received: Final = _carrying(wire, marker)
+    assert [(request.method, target_of(request)) for request in received] == [("POST", NATIVE_RESPONSES)]
+    assert received[0].headers["authorization"] == f"Bearer {TOKEN}", received[0].headers
+    body: Final = body_of(received[0])
+    assert (body["model"], body["reasoning"], body["max_output_tokens"]) == (
+        BEDROCK_MODEL,
+        {"effort": "medium"},
+        4096,
+    ), body
+    assert (body["store"], body["include"]) == (False, ["reasoning.encrypted_content"]), body
+    assert [(tool["type"], tool["name"], tool["parameters"]) for tool in _tools_of(body)] == [
+        ("function", "lookup_invoice", TOOL_SCHEMA)
+    ], body
+    return body
+
+
+def _tools_of(body: Mapping[str, JsonValue]) -> list[dict[str, JsonValue]]:
+    tools: Final = body["tools"]
+    assert isinstance(tools, list), body
+    return [tool for tool in tools if isinstance(tool, dict)]
+
+
+def _bridged_spend_row(model: str) -> dict[str, JsonValue]:
+    rows: Final = eventually(
+        lambda: read_rows(
+            'SELECT status, prompt_tokens, completion_tokens FROM "LiteLLM_SpendLogs" WHERE model_group=%s',
+            (model,),
+        ),
+        lambda found: len(found) == 1,
+        seconds=70,
+    )
+    return rows[0]
 
 
 def _native_request(marker: str, max_tokens: int, effort: str) -> Mapping[str, JsonValue]:
@@ -120,6 +164,50 @@ def test_anthropic_sdk_stream_with_thinking_budget_is_served_by_native_chat_comp
             if event.type == "content_block_delta" and event.delta.type == "text_delta"
         ) == answer(marker)
         assert _spend_rows(identity, 1) == [_success_row(identity, model, cache_hit="False")]
+
+
+def test_anthropic_sdk_tools_with_thinking_are_bridged_to_native_responses(gateway: Gateway) -> None:
+    marker: Final = uuid.uuid4().hex
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(scenario, wire)
+        client: Final = anthropic.Anthropic(base_url=str(gateway.client.base_url), api_key=gateway.key, max_retries=0)
+        message: Final = client.messages.create(
+            model=model,
+            max_tokens=4096,
+            thinking={"type": "enabled", "budget_tokens": 2048},
+            tools=[{"name": "lookup_invoice", "description": "Look up an invoice", "input_schema": TOOL_SCHEMA}],
+            messages=[{"role": "user", "content": _question(marker)}],
+            extra_body=NO_CACHE,
+        )
+        assert "stream" not in _bridged_body(wire, marker)
+        assert [(block.type, getattr(block, "text", None)) for block in message.content] == [("text", answer(marker))]
+        assert (message.usage.input_tokens, message.usage.output_tokens) == (30, 5), message
+        assert _bridged_spend_row(model) == {"status": "success", "prompt_tokens": 30, "completion_tokens": 5}
+
+
+def test_anthropic_sdk_stream_with_tools_and_thinking_is_bridged_to_native_responses(gateway: Gateway) -> None:
+    marker: Final = uuid.uuid4().hex
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(scenario, wire)
+        client: Final = anthropic.Anthropic(base_url=str(gateway.client.base_url), api_key=gateway.key, max_retries=0)
+        stream: Final = client.messages.create(
+            model=model,
+            max_tokens=4096,
+            thinking={"type": "enabled", "budget_tokens": 2048},
+            tools=[{"name": "lookup_invoice", "description": "Look up an invoice", "input_schema": TOOL_SCHEMA}],
+            messages=[{"role": "user", "content": _question(marker)}],
+            extra_body=NO_CACHE,
+            stream=True,
+        )
+        events: Final = list(stream)
+        assert _bridged_body(wire, marker)["stream"] is True
+        assert events[0].type == "message_start" and events[-1].type == "message_stop", events
+        assert "".join(
+            event.delta.text
+            for event in events
+            if event.type == "content_block_delta" and event.delta.type == "text_delta"
+        ) == answer(marker)
+        assert _bridged_spend_row(model) == {"status": "success", "prompt_tokens": 30, "completion_tokens": 5}
 
 
 def test_raw_thinking_summary_reaches_native_chat_completions_as_the_plain_effort(gateway: Gateway) -> None:
