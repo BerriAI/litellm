@@ -239,6 +239,9 @@ lint-gate: $(LINT_DEP_INSTALL) $(LINT_DEP_BASE)
 check-circular-imports: $(LINT_DEP_INSTALL)
 	cd litellm && $(UV_RUN) python ../tests/documentation_tests/test_circular_imports.py && cd ..
 
+lint-code-quality: $(LINT_DEP_INSTALL)
+	$(UV_RUN) python scripts/code_quality_checks.py
+
 check-import-safety: $(LINT_DEP_INSTALL)
 	@$(UV_RUN) python -c "from litellm import *; print('[from litellm import *] OK! no issues!');" || (echo '🚨 import failed, this means you introduced unprotected imports! 🚨'; exit 1)
 
@@ -246,7 +249,7 @@ check-import-safety: $(LINT_DEP_INSTALL)
 # green CI lint: it installs the same env (proxy-dev + generated Prisma client) and then
 # runs the diff-scoped ruff format check, whole-tree ruff check, the strict-rule /
 # type-discipline / basedpyright gates as a delta vs the base, then the circular-import
-# and import-safety checks. Steps that compare against the base resolve it the same way CI
+# and import-safety checks, plus the tests/code_coverage_tests scripts of its code-quality job. Steps that compare against the base resolve it the same way CI
 # does (merge-base with origin's current default branch). Setup (env sync, Prisma client,
 # base fetch) runs once up front; the checks themselves are independent, so a sub-make
 # fans them out with -j and the fast ones finish under basedpyright's shadow.
@@ -257,7 +260,7 @@ lint-inner: lint-install
 	@base_ref=$$($(RESOLVE_BASE)) && \
 	$(MAKE) BASE_REF="$$base_ref" -j $(LINT_JOBS) $(LINT_OUTPUT_SYNC) LINT_DEP_INSTALL= LINT_E2E_DEP_INSTALL= LINT_DEP_BASE= lint-checks
 
-lint-checks: lint-format-check-changed lint-ruff lint-gate lint-type-discipline lint-test-quality lint-openapi-docs lint-basedpyright lint-e2e-basedpyright check-circular-imports check-import-safety
+lint-checks: lint-format-check-changed lint-ruff lint-gate lint-type-discipline lint-test-quality lint-openapi-docs lint-basedpyright lint-e2e-basedpyright check-circular-imports check-import-safety lint-code-quality
 
 # Faster linting for local development (only checks changed code)
 lint-dev: lint-format-changed check-circular-imports check-import-safety
