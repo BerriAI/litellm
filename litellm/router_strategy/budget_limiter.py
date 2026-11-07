@@ -51,6 +51,7 @@ from litellm.router_strategy.tag_based_routing import get_tags_from_request_kwar
 from litellm.router_utils.cooldown_callbacks import (
     get_prometheus_logger_from_callbacks,
 )
+from litellm.router_utils.router_callbacks.track_deployment_metrics import get_attributed_spend
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import LiteLLM_Params, RouterErrors
 from litellm.types.utils import BudgetConfig, GenericBudgetConfigType, StandardLoggingPayload
@@ -588,33 +589,16 @@ class RouterBudgetLimiting(CustomLogger):
 
         job: Final = job_to_charge_once(callback_fields, polled_response, response_cost)
 
-        budget_config: Final = (
-            self._get_budget_config_for_provider(custom_llm_provider) if custom_llm_provider is not None else None
+        # A request answered by two deployments (a cascade's cheap leg, then its strong leg) charged the earlier
+        # leg to its own deployment and provider as it went; the row's deployment and provider get the rest.
+        litellm_params: Final = _CALLBACK_FIELDS.validate_python(callback_fields.get("litellm_params") or {})
+        attributed: Final = get_attributed_spend(litellm_params, callback_fields.get("litellm_call_id")) or 0.0
+        await self.attribute_spend(
+            model_id=model_id,
+            custom_llm_provider=custom_llm_provider,  # pyright: ignore[reportUnknownArgumentType]  # StandardLoggingPayload.get is untyped upstream
+            response_cost=max(0.0, response_cost - attributed),
+            job=job,
         )
-        if custom_llm_provider is not None and budget_config is not None:
-            # increment spend for provider
-            spend_key: Final = f"provider_spend:{custom_llm_provider}:{budget_config.budget_duration}"
-            start_time_key: Final = f"provider_budget_start_time:{custom_llm_provider}"
-            await self._increment_spend_for_key(
-                budget_config=budget_config,
-                spend_key=spend_key,
-                start_time_key=start_time_key,
-                response_cost=response_cost,
-                job=job,
-            )
-
-        deployment_budget_config: Final = self._get_budget_config_for_deployment(model_id)
-        if deployment_budget_config:
-            # increment spend for specific deployment id
-            deployment_spend_key: Final = f"deployment_spend:{model_id}:{deployment_budget_config.budget_duration}"
-            deployment_start_time_key: Final = f"deployment_budget_start_time:{model_id}"
-            await self._increment_spend_for_key(
-                budget_config=deployment_budget_config,
-                spend_key=deployment_spend_key,
-                start_time_key=deployment_start_time_key,
-                response_cost=response_cost,
-                job=job,
-            )
 
         request_tags: Final = get_tags_from_request_kwargs(
             callback_fields,
@@ -633,6 +617,46 @@ class RouterBudgetLimiting(CustomLogger):
                         response_cost=response_cost,
                         job=job,
                     )
+
+    async def attribute_spend(
+        self,
+        *,
+        model_id: str | None,
+        custom_llm_provider: str | None,
+        response_cost: float,
+        job: ChargeOnceJob | None = None,
+    ) -> None:
+        """Charge `response_cost` to a deployment's budget and to its provider's. The success callback does this for
+        the deployment that answered the request; the Router does it ahead of the callback for a leg another
+        deployment answered (a cascade's cheap leg), stamping the amount as attributed so the callback charges the
+        row's deployment only the remainder."""
+        budget_config: Final = (
+            self._get_budget_config_for_provider(custom_llm_provider) if custom_llm_provider is not None else None
+        )
+        if custom_llm_provider is not None and budget_config is not None:
+            # increment spend for provider
+            spend_key: Final = f"provider_spend:{custom_llm_provider}:{budget_config.budget_duration}"
+            start_time_key: Final = f"provider_budget_start_time:{custom_llm_provider}"
+            await self._increment_spend_for_key(
+                budget_config=budget_config,
+                spend_key=spend_key,
+                start_time_key=start_time_key,
+                response_cost=response_cost,
+                job=job,
+            )
+
+        deployment_budget_config: Final = self._get_budget_config_for_deployment(model_id or "")
+        if deployment_budget_config and model_id:
+            # increment spend for specific deployment id
+            deployment_spend_key: Final = f"deployment_spend:{model_id}:{deployment_budget_config.budget_duration}"
+            deployment_start_time_key: Final = f"deployment_budget_start_time:{model_id}"
+            await self._increment_spend_for_key(
+                budget_config=deployment_budget_config,
+                spend_key=deployment_spend_key,
+                start_time_key=deployment_start_time_key,
+                response_cost=response_cost,
+                job=job,
+            )
 
     async def _increment_spend_for_key(
         self,

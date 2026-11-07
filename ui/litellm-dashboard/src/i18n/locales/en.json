@@ -18821,7 +18821,8 @@
         "heuristic": "Heuristic",
         "semantic": "Semantic",
         "adaptive": "Adaptive",
-        "quality": "Quality"
+        "quality": "Quality",
+        "cascade": "Cascade"
       }
     },
     "autoRoutersPanel": {

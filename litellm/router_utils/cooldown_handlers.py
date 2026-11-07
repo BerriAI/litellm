@@ -55,6 +55,7 @@ else:
 
 _ADVISOR_ORCHESTRATION_FAILURE_ATTR: Final = "_litellm_advisor_orchestration_failure"
 _DEPLOYMENT_SELECTION_FAILURE_ATTR: Final = "_litellm_deployment_selection_failure"
+_CASCADE_ESCALATION_FAILURE_ATTR: Final = "_litellm_cascade_escalation_failure"
 _CREDENTIAL_VALUES_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 
 
@@ -81,9 +82,23 @@ def mark_deployment_selection_failure(exception: BaseException) -> None:
     setattr(exception, _DEPLOYMENT_SELECTION_FAILURE_ATTR, True)
 
 
+def mark_cascade_escalation_failure(exception: BaseException) -> None:
+    """Tag an exception raised by a cascade router's escalation (strong) call.
+
+    That call went through its own routing, retries and cooldown, so its failure is already
+    attributed to the strong deployment that raised it. It is re-raised from the cheap
+    deployment's call frame, and must not also cool down the cheap deployment, which answered:
+    router-core records nothing for an attempt whose failure the cascade already logged, and the
+    failure callbacks read this marker through ``is_failure_outside_selected_deployment``.
+    """
+    setattr(exception, _CASCADE_ESCALATION_FAILURE_ATTR, True)
+
+
 def is_failure_outside_selected_deployment(exception: BaseException | None) -> bool:
-    return is_advisor_orchestration_failure(exception) or bool(
-        getattr(exception, _DEPLOYMENT_SELECTION_FAILURE_ATTR, False)
+    return (
+        is_advisor_orchestration_failure(exception)
+        or bool(getattr(exception, _DEPLOYMENT_SELECTION_FAILURE_ATTR, False))
+        or bool(getattr(exception, _CASCADE_ESCALATION_FAILURE_ATTR, False))
     )
 
 

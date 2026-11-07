@@ -2924,6 +2924,12 @@ class Logging(LiteLLMLoggingBaseClass):
         self._async_success_scheduled = True
         return True
 
+    def release_async_success_log(self) -> None:
+        """Give the claimed async success log back when its result is discarded before it fires: the request
+        failed after that result was parked (a cascade's cheap leg, then a failed escalation), so the attempt
+        that answers next, a fallback, must be able to claim the one log."""
+        self._async_success_scheduled = False
+
     def mark_logging_complete(
         self,
         event_type: Literal["async_success", "sync_success", "async_failure", "sync_failure"],
