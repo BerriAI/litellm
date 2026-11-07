@@ -261,6 +261,105 @@ async def test_key_spend_issue_consolidates_traffic_and_uses_fresh_days(db: Mana
 
 
 @pytest.mark.asyncio(loop_scope="session")
+async def test_due_issue_delivery_retries_after_daily_projection_is_complete(db: ManagementDatabase) -> None:
+    async with _isolated(db) as prisma:
+        await _seed(prisma)
+        rules = UsageAlertsRepository.from_prisma(prisma)
+        rule = await rules.save_rule(
+            UsageAlertRuleInput(
+                name="Key spend notification",
+                scope_type="key",
+                scope_id=_KEY_A,
+                metric="spend",
+                direction="increase",
+                notification_channels=("slack",),
+            ),
+            "qa-admin",
+        )
+        assert rule is not None
+        job = UsageAlertJob.from_prisma(prisma, SlackAlerting(alerting=[], alert_types=[]))
+        await job._run(_NOW)
+        assert await rules.pending_projection_work() is None
+        before = await prisma.writer_db.query_raw(
+            "SELECT id,(record->>'attempts')::int AS attempts,record->>'last_error' AS error "
+            'FROM "LiteLLM_IssueDelivery" WHERE NOT sent'
+        )
+        assert len(before) == 1
+        assert (before[0]["attempts"], before[0]["error"]) == (1, "transport_not_configured")
+        await prisma.writer_db.query_raw(
+            "UPDATE \"LiteLLM_IssueDelivery\" SET next_attempt=CURRENT_TIMESTAMP-interval '1 second' "
+            "WHERE id=$1 RETURNING id",
+            before[0]["id"],
+        )
+        await job._run(_NOW + timedelta(hours=1))
+        after = await prisma.writer_db.query_raw(
+            "SELECT (record->>'attempts')::int AS attempts FROM \"LiteLLM_IssueDelivery\" WHERE id=$1",
+            before[0]["id"],
+        )
+        assert after == [{"attempts": 2}], "due delivery was not retried after projection completed"
+        assert await rules.pending_projection_work() is None
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_key_evaluation_rejects_normalized_sentinels_and_secret_shaped_ids(db: ManagementDatabase) -> None:
+    keys = (
+        "unattributed",
+        "raw:unattributed",
+        "sk-synthetic-only",
+        "raw:sk-synthetic-only",
+        "raw:raw:sk-synthetic-only",
+        _KEY_A,
+    )
+    async with _isolated(db) as prisma:
+        await prisma.writer_db.query_raw(
+            """INSERT INTO "LiteLLM_DailyUserSpend" (id,user_id,date,api_key,model,spend,api_requests,updated_at)
+            SELECT 'key-identity-'||n||'-'||d,'owner',($1::date-d)::text,key,'example-model',
+                CASE WHEN d=0 THEN 100 ELSE 1 END,1000,CURRENT_TIMESTAMP
+            FROM unnest($2::text[]) WITH ORDINALITY AS keys(key,n) CROSS JOIN generate_series(0,7) d RETURNING id""",
+            _DAY.isoformat(),
+            keys,
+        )
+        await _coverage(prisma, _DAY)
+        job = UsageAlertJob.from_prisma(prisma, SlackAlerting(alerting=[], alert_types=[]))
+        await job._run(_NOW)
+        alerts = await UsageAlertsRepository.from_prisma(prisma).list_alerts(scope_type="key")
+        assert alerts.total == 1, "normalized invalid keys created incidents"
+        assert alerts.data[0].scope_id == _KEY_A
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_retirement_detects_used_model_after_unused_model_in_the_same_alias(db: ManagementDatabase) -> None:
+    from litellm import Router
+    from litellm.proxy.common_utils.model_deprecation import RouterDeprecationSource
+    from litellm.proxy.spend_tracking.deprecation_issues import DeprecationIssueProjector
+
+    models = ("openai/unused-retirement-example", "openai/used-retirement-example")
+    async with _isolated(db) as prisma:
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "shared-retirement-alias",
+                    "litellm_params": {"model": model},
+                    "model_info": {"id": model, "deprecation_date": "2026-11-20"},
+                }
+                for model in models
+            ]
+        )
+        await prisma.writer_db.query_raw(
+            """INSERT INTO "LiteLLM_DailyUserSpend" (id,user_id,date,api_key,model,api_requests,updated_at)
+            VALUES('used-retirement','owner',$1,$2,$3,7,CURRENT_TIMESTAMP) RETURNING id""",
+            _DAY.isoformat(),
+            _KEY_A,
+            models[1],
+        )
+        await DeprecationIssueProjector.from_prisma(prisma, RouterDeprecationSource(lambda: router)).run(_NOW)
+        issues = await IssuesRepository.from_prisma(prisma).list_issues(kind="model_deprecation")
+        assert issues.total == 1, "retired model with actual usage was lost"
+        assert issues.data[0].cohort.scope_id == models[1]
+        assert issues.data[0].impact.requests == 7
+
+
+@pytest.mark.asyncio(loop_scope="session")
 async def test_single_key_reliability_collapses_matching_scopes_without_traffic_growth(db: ManagementDatabase) -> None:
     async with _isolated(db) as prisma:
         await _seed(prisma, reliability=True)
