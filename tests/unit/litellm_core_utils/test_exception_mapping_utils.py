@@ -577,6 +577,45 @@ def test_openai_compatible_429_still_maps_to_rate_limit():
 
 
 @pytest.mark.parametrize(
+    ("message", "extra_kwargs", "expected_error", "expected_status"),
+    [
+        (
+            "The engine is currently busy and cannot accept new requests. Please try again later.",
+            {"metadata": {"treat_busy_as_rate_limit": True}},
+            litellm.RateLimitError,
+            429,
+        ),
+        (
+            "The engine is currently busy and cannot accept new requests. Please try again later.",
+            {},
+            litellm.ServiceUnavailableError,
+            503,
+        ),
+        (
+            "Upstream service is temporarily unavailable.",
+            {"metadata": {"treat_busy_as_rate_limit": True}},
+            litellm.ServiceUnavailableError,
+            503,
+        ),
+    ],
+)
+def test_openai_busy_503_maps_to_rate_limit_only_when_opted_in(
+    monkeypatch, message, extra_kwargs, expected_error, expected_status
+):
+    monkeypatch.setattr(litellm, "treat_busy_as_rate_limit", False)
+    original_exception = OpenAIError(status_code=503, message=message, headers={})
+    with pytest.raises(expected_error) as excinfo:
+        exception_type(
+            model="openai/busy-model",
+            original_exception=original_exception,
+            custom_llm_provider="openai",
+            completion_kwargs={},
+            extra_kwargs=extra_kwargs,
+        )
+    assert excinfo.value.status_code == expected_status
+
+
+@pytest.mark.parametrize(
     "error_message",
     [
         "AnthropicException - prompt is too long: 250000 tokens > 200000 maximum",
