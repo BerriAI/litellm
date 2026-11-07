@@ -247,8 +247,8 @@ class OllamaConfig(BaseConfig):
                 optional_params["top_p"] = value
             elif param == "frequency_penalty":
                 optional_params["frequency_penalty"] = value
-            elif param == "stop":
-                optional_params["stop"] = value
+            elif param == "stop" and value != "":
+                optional_params["stop"] = [value] if isinstance(value, str) else value
             elif param == "reasoning_effort" and value is not None:
                 optional_params["think"] = ollama_think(model, OPAQUE_VALUE.validate_python(value))
             elif param == "response_format" and isinstance(value, dict):
