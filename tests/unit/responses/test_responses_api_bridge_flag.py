@@ -387,6 +387,43 @@ class TestUseResponsesApiBridgeFlag:
         assert request_body["messages"] == [{"role": "user", "content": "Hello"}]
         assert response.output[0].content[0].text == "Answer"
 
+    def test_bridge_marks_the_last_tool_result_for_an_end_relative_cache_point(self, respx_mock: respx.MockRouter):
+        upstream: Final = respx_mock.post("https://openrouter.ai/api/v1/chat/completions").mock(
+            return_value=httpx.Response(
+                status_code=200,
+                json={
+                    "id": "gen-123",
+                    "object": "chat.completion",
+                    "created": 1677652288,
+                    "model": "anthropic/claude-sonnet-5.5",
+                    "choices": [
+                        {"index": 0, "message": {"role": "assistant", "content": "Answer"}, "finish_reason": "stop"}
+                    ],
+                    "usage": {"prompt_tokens": 9, "completion_tokens": 1, "total_tokens": 10},
+                },
+            )
+        )
+
+        litellm.responses(
+            model="openrouter/anthropic/claude-sonnet-5.5",
+            input=[
+                {"role": "user", "content": [{"type": "input_text", "text": "Read a.txt."}]},
+                {"type": "function_call", "call_id": "call_a", "name": "read_file", "arguments": '{"path": "a.txt"}'},
+                {"type": "function_call_output", "call_id": "call_a", "output": "contents of a"},
+            ],
+            use_chat_completions_api=True,
+            cache_control_injection_points=[{"location": "message", "index": -1}],
+            api_key="fake-provider-api-key",
+            num_retries=0,
+        )
+
+        sent_messages: Final = json.loads(upstream.calls[0].request.read())["messages"]
+        assert [
+            message.get("tool_call_id") or message["role"]
+            for message in sent_messages
+            if "cache_control" in json.dumps(message)
+        ] == ["call_a"]
+
     def test_bridge_keeps_deployment_credentials_while_dropping_unknown_params(self, respx_mock: respx.MockRouter):
         upstream: Final = respx_mock.post(
             "https://example-resource.openai.azure.com/openai/deployments/my-deployment/chat/completions",

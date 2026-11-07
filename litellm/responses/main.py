@@ -100,6 +100,7 @@ from litellm.types.utils import (
     all_litellm_params,
 )
 from litellm.utils import (
+    LITELLM_ONLY_PARAMS,
     ProviderConfigManager,
     client,
 )
@@ -643,6 +644,7 @@ def _chat_completion_request_fields(allowed_openai_params: Sequence[str] | None)
             *DEFAULT_CHAT_COMPLETION_PARAM_VALUES,
             *all_litellm_params,
             *GenericLiteLLMParams.model_fields,
+            *LITELLM_ONLY_PARAMS,
             *(allowed_openai_params or ()),
         )
     ).difference(_RESPONSES_ONLY_REQUEST_FIELDS_NEVER_BRIDGED)
