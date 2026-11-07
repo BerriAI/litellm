@@ -3965,6 +3965,19 @@ class TestGetOptionalParamsOutputConfigGate:
         )
         assert self._output_config_anywhere(result), result
 
+    def test_drop_params_keeps_output_config_for_a_deployment_that_declares_reasoning_effort_levels(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(litellm, "drop_params", False)
+        result: Final = litellm.get_optional_params(
+            model="my-kimi",
+            custom_llm_provider="hosted_vllm",
+            output_config=dict(self.OUTPUT_CONFIG),
+            model_info={"id": "kimi-vllm-1", "reasoning_effort_levels": ["low", "medium", "high"]},
+            drop_params=True,
+        )
+        assert self._output_config_anywhere(result), result
+
     def test_allowed_openai_params_overrides_the_drop(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(litellm, "drop_params", False)
         result: Final = litellm.get_optional_params(

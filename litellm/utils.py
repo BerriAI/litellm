@@ -6149,8 +6149,10 @@ def get_optional_params(
             drop_params=True,
             custom_llm_provider=custom_llm_provider or None,
         )
-        if "output_config" in passed_params and not (
-            isinstance(provider_config, litellm.AnthropicConfig) or "output_config" in supported_params
+        if (
+            "output_config" in passed_params
+            and not _declared_reasoning_efforts(model_info)
+            and not (isinstance(provider_config, litellm.AnthropicConfig) or "output_config" in supported_params)
         ):
             litellm.verbose_logger.warning(_DROP_UNREAD_OUTPUT_CONFIG_WARNING, model, custom_llm_provider)
             passed_params.pop("output_config")
