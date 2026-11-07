@@ -73,6 +73,14 @@ class SearchFailed:
 SearchOutcome: TypeAlias = SearchSucceeded | SearchFailed
 
 
+@dataclass(frozen=True, slots=True)
+class WebSearchDomainFilter:
+    """``allowed_domains`` / ``blocked_domains`` from the client's Anthropic ``web_search`` tool."""
+
+    allowed: tuple[str, ...]
+    blocked: tuple[str, ...]
+
+
 class WebSearchInterceptionConfig(TypedDict, total=False):
     """
     Configuration parameters for WebSearchInterceptionLogger.
