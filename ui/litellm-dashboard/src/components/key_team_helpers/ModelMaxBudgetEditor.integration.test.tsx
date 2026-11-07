@@ -2,6 +2,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { fireEvent, renderWithProviders, screen } from "../../../tests/test-utils";
 import { MODEL_MAX_BUDGET_PREMIUM_HINT, ModelMaxBudgetEditor, type ModelMaxBudget } from "./ModelMaxBudgetEditor";
+import i18n from "@/i18n/i18n";
 
 const STORED: ModelMaxBudget = { "gpt-4o": { budget_limit: 5, time_period: "30d" } };
 
@@ -37,14 +38,14 @@ describe("ModelMaxBudgetEditor without an enterprise license", () => {
   it("says why the controls are locked instead of failing silently", () => {
     renderEditor(false);
 
-    expect(screen.getByText(MODEL_MAX_BUDGET_PREMIUM_HINT)).toBeInTheDocument();
+    expect(screen.getByText(i18n.t(MODEL_MAX_BUDGET_PREMIUM_HINT))).toBeInTheDocument();
   });
 
   it("locks the empty state too, so no row can be started", () => {
     renderEditor(false, {});
 
     expect(addButton()).toBeDisabled();
-    expect(screen.getByText(MODEL_MAX_BUDGET_PREMIUM_HINT)).toBeInTheDocument();
+    expect(screen.getByText(i18n.t(MODEL_MAX_BUDGET_PREMIUM_HINT))).toBeInTheDocument();
   });
 });
 
@@ -59,7 +60,7 @@ describe("ModelMaxBudgetEditor with an enterprise license", () => {
   it("does not tell a licensed operator to upgrade", () => {
     renderEditor(true);
 
-    expect(screen.queryByText(MODEL_MAX_BUDGET_PREMIUM_HINT)).not.toBeInTheDocument();
+    expect(screen.queryByText(i18n.t(MODEL_MAX_BUDGET_PREMIUM_HINT))).not.toBeInTheDocument();
   });
 
   it("leaves the empty state usable", () => {

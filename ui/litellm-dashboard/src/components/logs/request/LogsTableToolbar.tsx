@@ -52,7 +52,7 @@ export function LogsTimeRangePicker({ value, onValueChange }: LogsTimeRangePicke
   );
   const displayLabel = value.isCustomDate
     ? getTimeRangeDisplay(true, value.startTime, value.endTime, t)
-    : selectedOption?.label;
+    : selectedOption && t(selectedOption.labelKey);
 
   return (
     <>
@@ -69,7 +69,7 @@ export function LogsTimeRangePicker({ value, onValueChange }: LogsTimeRangePicke
           <div className="space-y-1">
             {QUICK_SELECT_OPTIONS.map((option) => (
               <Button
-                key={option.label}
+                key={option.labelKey}
                 variant="ghost"
                 className="w-full justify-start font-normal"
                 onClick={() => {
@@ -77,7 +77,7 @@ export function LogsTimeRangePicker({ value, onValueChange }: LogsTimeRangePicke
                   setOpen(false);
                 }}
               >
-                {option.label}
+                {t(option.labelKey)}
               </Button>
             ))}
             <div className="my-2 border-t" />
