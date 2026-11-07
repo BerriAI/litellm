@@ -20,6 +20,7 @@ from pydantic import TypeAdapter
 
 import litellm
 from litellm import verbose_logger
+from litellm.constants import REDACTED_BY_LITELLM
 from litellm.router_utils.batch_utils import InMemoryFile
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -2660,6 +2661,15 @@ def merge_consecutive_system_messages(
 
 
 _DECODED_JSON: Final = TypeAdapter(object)
+_ARGUMENT_PREVIEW_CHARS: Final = 200
+
+
+def _logged_arguments(arguments: str) -> str:
+    if litellm.turn_off_message_logging:
+        return REDACTED_BY_LITELLM
+    if len(arguments) <= _ARGUMENT_PREVIEW_CHARS:
+        return arguments
+    return f"{arguments[:_ARGUMENT_PREVIEW_CHARS]}..."
 
 
 def _attempt_json_repair(s: str) -> object | None:
@@ -2757,10 +2767,11 @@ def parse_tool_call_arguments(
         repaired: Final = _attempt_json_repair(arguments)
         if repaired is not None:
             verbose_logger.warning(
-                "Repaired truncated tool call arguments for tool '%s' (%s). Original length: %d chars",
+                "Repaired truncated tool call arguments for tool '%s' (%s). Original (%d chars): %s",
                 tool_name or "<unknown>",
                 context or "unknown context",
                 len(arguments),
+                _logged_arguments(arguments),
             )
             return repaired
 

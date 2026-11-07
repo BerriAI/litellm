@@ -10,6 +10,8 @@ from typing import Final, cast
 
 import pytest
 
+import litellm
+from litellm.constants import REDACTED_BY_LITELLM
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     ENCRYPTED_REASONING_SIGNATURE_PREFIX,
     TOOL_RESULT_IMAGE_BOUNDARY,
@@ -2442,12 +2444,29 @@ def test_schema_size_counts_every_written_object_once(schema, properties, branch
     assert schema_grammar_branch_count(schema) == branches
 
 
-def test_parse_tool_call_arguments_repair_warning_leaves_out_argument_content(
+def test_parse_tool_call_arguments_repair_warning_previews_the_first_200_characters(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
+    arguments: Final = '{"patient": "Jane Doe", "note": "' + "x" * 300 + '"'
     with caplog.at_level(logging.WARNING, logger="LiteLLM"):
-        result: Final = parse_tool_call_arguments('{"patient": "Jane Doe"', tool_name="lookup", context="test")
+        result: Final = parse_tool_call_arguments(arguments, tool_name="lookup", context="test")
+
+    assert result == {"patient": "Jane Doe", "note": "x" * 300}
+    assert (
+        f"Repaired truncated tool call arguments for tool 'lookup' (test). Original ({len(arguments)} chars): "
+        f"{arguments[:200]}..." in caplog.text
+    )
+    assert arguments not in caplog.text
+
+
+def test_parse_tool_call_arguments_repair_warning_redacts_arguments_when_message_logging_is_off(
+    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "turn_off_message_logging", True)
+    arguments: Final = '{"patient": "Jane Doe"'
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        result: Final = parse_tool_call_arguments(arguments, tool_name="lookup", context="test")
 
     assert result == {"patient": "Jane Doe"}
-    assert "Repaired truncated tool call arguments for tool 'lookup'" in caplog.text
+    assert f"Original ({len(arguments)} chars): {REDACTED_BY_LITELLM}" in caplog.text
     assert "Jane Doe" not in caplog.text
