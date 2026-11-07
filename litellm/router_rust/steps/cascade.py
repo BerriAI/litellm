@@ -333,7 +333,7 @@ async def _strong_call(
             await _cascade_mod.fail_request_logging(logging_obj, exc, owns_deferral=pending.owns_deferral)
             raise
         _cascade_mod.restore_request_state(kwargs, logging_obj, state)  # the cheap call is what gets served
-        strong_error: Final = f"{type(exc).__name__}: {str(exc)[:200]}"
+        strong_error: Final = type(exc).__name__  # the class only: a provider's message can echo the prompt
         verbose_router_logger.warning(
             "cascade %s: strong %s failed, serving the cheap answer: %s",
             strategy.model_name,

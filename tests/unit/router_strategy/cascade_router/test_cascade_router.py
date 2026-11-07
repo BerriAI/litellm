@@ -531,12 +531,70 @@ async def test_strong_call_failure_propagates_and_is_not_the_cheap_deployments_f
     assert is_failure_outside_selected_deployment(excinfo.value)
 
 
+async def test_a_failed_escalation_is_not_retried_as_a_whole_cascade(monkeypatch):
+    """The strong leg goes through its own routing and retries; when it still fails under `on_strong_error: raise`,
+    the Router's retry loop does not run the cheap call and the verifier again (the request's retries are spent),
+    and the request's fallbacks take over as they do for any failed attempt."""
+    import litellm as litellm_mod
+
+    calls: dict[str, int] = {}
+    original = litellm_mod.acompletion
+
+    async def capture(**kwargs):
+        name = kwargs["metadata"].get("deployment_model_name")
+        calls[name] = calls.get(name, 0) + 1
+        return await original(**kwargs)
+
+    monkeypatch.setattr(litellm_mod, "acompletion", capture)
+    router = Router(
+        model_list=[
+            {
+                "model_name": "cheap",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "x", "mock_response": "tiny"},
+            },
+            {
+                "model_name": "judge",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "x", "mock_response": "NO"},
+            },
+            {
+                "model_name": "strong",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "x", "mock_response": Exception("strong busy")},
+            },
+            {
+                "model_name": "fb",
+                "litellm_params": {"model": "openai/gpt-4.1", "api_key": "x", "mock_response": "Paris."},
+            },
+            {
+                "model_name": "cascade",
+                "litellm_params": {
+                    "model": "auto_router/cascade_router",
+                    "cascade_router_config": {
+                        "cheap_model": "cheap",
+                        "strong_model": "strong",
+                        "min_chars": 2,
+                        "verifier_model": "judge",
+                        "verifier_kind": "chat",
+                    },
+                },
+            },
+        ],
+        num_retries=2,
+        retry_after=0,
+        allowed_fails=100,
+        fallbacks=[{"cascade": ["fb"]}],
+    )
+    response = await router.acompletion(model="cascade", messages=MESSAGES, num_retries=2)
+    assert response.choices[0].message.content == "Paris."
+    assert calls == {"cheap": 1, "judge": 1, "strong": 3, "fb": 1}  # the strong leg's own retries, nothing else twice
+
+
 async def test_on_strong_error_cheap_serves_the_judged_answer_and_says_so():
     router = _strong_down_router(on_strong_error="cheap")
     response = await router.acompletion(model="support-cascade", messages=MESSAGES)
     record = response._hidden_params["cascade"]
     assert response.choices[0].message.content == "Paris."
-    assert record["path"] == "cheap" and record["reason"] == "strong_error" and "strong down" in record["strong_error"]
+    assert record["path"] == "cheap" and record["reason"] == "strong_error"
+    assert record["strong_error"] == "InternalServerError"  # the error's class; its message could echo the prompt
     assert record["routing_decision"]["cause"] == "cascade_strong_error"
     assert record["routing_decision"]["escalation_reason"] == "short"  # the check that asked for the strong model
     assert record["routing_decision"]["escalated"] is False
@@ -1085,6 +1143,72 @@ async def test_a_region_restricted_request_never_reaches_an_out_of_region_verifi
     record = response._hidden_params["cascade"]
     assert record["path"] == "cheap" and record["verifier_error"] is not None
     assert seen == []
+
+
+async def test_a_pre_call_guardrail_that_ran_on_the_request_still_scans_the_verifier_prompt(monkeypatch):
+    """The proxy marks a pre-call guardrail as already run on the request, so the deployment hook does not run it a
+    second time on the same messages. The verifier's prompt is new (the request and the cheap answer): its call
+    carries none of that marker, and the guardrail scans it."""
+    from litellm.integrations.custom_guardrail import CustomGuardrail
+
+    class _Scan(CustomGuardrail):
+        def __init__(self):
+            super().__init__(guardrail_name="scan", event_hook="pre_call", default_on=False)
+            self.scanned = []
+
+        async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+            self.scanned.append(str(data["messages"]))
+            return data
+
+    guardrail = _Scan()
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+    router = _priced_router(verifier_model="judge", verifier_kind="chat", min_chars=2)
+    metadata = {}
+    guardrail.mark_pre_call_hook_ran({"metadata": metadata})  # as the proxy records its pre-call run on the request
+    response = await router.acompletion(model="cascade", messages=MESSAGES, guardrails=["scan"], metadata=metadata)
+    assert response._hidden_params["cascade"]["path"] == "cheap"
+    assert len(guardrail.scanned) == 1 and "tiny" in guardrail.scanned[0]  # the verifier's prompt, scanned once
+
+
+async def test_the_verifier_call_carries_the_requests_tags_not_the_cheap_deployments(monkeypatch):
+    """Tag routing and tag spend on the verifier's own call see the tags the request sent, not the cheap deployment's
+    tags the Router merged into the request's metadata when it served the cheap leg."""
+    seen = _verifier_calls(monkeypatch)
+    router = _priced_router(
+        verifier_model="judge", verifier_kind="chat", min_chars=2, cheap_params={"tags": ["cheap-tier"]}
+    )
+    await router.acompletion(model="cascade", messages=MESSAGES, metadata={"tags": ["team-x"]})
+    (call,) = seen
+    assert call["metadata"]["tags"] == ["team-x"]
+
+
+async def test_a_verifier_errors_text_stays_out_of_the_decision_and_the_log(monkeypatch):
+    """A provider error can echo the prompt or the answer: the decision records the error's class only (as the
+    auto-router records its classifier's) and the warning names the class, so a message-logging opt-out holds."""
+    from litellm.router_strategy.cascade_router import cascade_router as cascade_module
+
+    logged = []
+    monkeypatch.setattr(cascade_module.verbose_router_logger, "warning", lambda msg, *args: logged.append(msg % args))
+    echoed = f"rejected input: {MESSAGES[-1]['content']} tiny"
+    router = _priced_router(
+        verifier_model="judge-down",
+        verifier_kind="chat",
+        min_chars=2,
+        on_verifier_error="accept",
+        extra_deployments=[
+            {
+                "model_name": "judge-down",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "x", "mock_response": Exception(echoed)},
+                "model_info": {"id": "judge-down"},
+            }
+        ],
+    )
+    response = await router.acompletion(model="cascade", messages=MESSAGES)
+    record = response._hidden_params["cascade"]
+    assert record["path"] == "cheap" and record["verifier_error"]
+    assert "capital" not in record["verifier_error"] and "tiny" not in record["verifier_error"]
+    assert record["routing_decision"]["classifier_error_type"] == record["verifier_error"]
+    assert logged and all("capital" not in line and "tiny" not in line for line in logged)
 
 
 async def test_a_no_log_request_logs_no_verifier_row_either(monkeypatch):
@@ -1757,7 +1881,7 @@ async def test_a_nested_cascade_that_registration_could_not_see_is_refused_at_re
     else:
         response = await router.acompletion(model="outer", messages=MESSAGES)
         record = response._hidden_params["cascade"]
-        assert record["path"] == "cheap" and "cascades do not nest" in record["strong_error"]
+        assert record["path"] == "cheap" and record["strong_error"] == "ValueError"  # the refusal's class
 
 
 async def test_a_cascade_used_as_a_rag_generation_model_is_served_under_a_bare_internal_sub_call():

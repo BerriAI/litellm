@@ -23,11 +23,11 @@ import datetime
 import re
 import time
 import traceback
-from collections.abc import Callable, Generator, Mapping, Sequence
+from collections.abc import Callable, Generator, Iterable, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Final  # noqa: TID251  # request kwargs forwarded to acompletion are untyped
+from typing import TYPE_CHECKING, Any, Final, cast  # noqa: TID251  # untyped request kwargs; a tag-list cast
 
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
@@ -37,12 +37,13 @@ from litellm.constants import (
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
     KUBERNETES_POD_ROUTING_KEY,
     ROUTER_BUDGET_ATTRIBUTED_SPEND_CALL_DETAIL_KEY,
+    ROUTING_REQUEST_TAGS_METADATA_KEY,
 )
 from litellm.litellm_core_utils.internal_call_metadata import (
     IO_TOKEN_RESERVATION_KEYS,
     effective_turn_off_message_logging,
-    forwarded_internal_call_metadata,
     parent_session_kwargs,
+    sanitized_forwardable_call_metadata,
 )
 from litellm.router_strategy.cascade_router.config import CascadeRouterConfig
 from litellm.types.router import PreRoutingHookResponse
@@ -233,6 +234,27 @@ def inner_call_cost(response: object, call_type: str | None = None) -> float | N
     except Exception:  # noqa: BLE001 - unpriced deployments are legal; the record then shows no cost
         return None
     return float(priced)
+
+
+def _tag_names(value: object) -> tuple[str, ...]:
+    """The string tags of a metadata tag list; nothing for anything else."""
+    if not isinstance(value, (list, tuple)):
+        return ()
+    items: Final = cast("Iterable[object]", value)  # cast-ok: a metadata tag list
+    return tuple(tag for tag in items if isinstance(tag, str))
+
+
+def request_tags_of(parent_metadata: Mapping[str, object] | None) -> Mapping[str, object]:
+    """The tags the request sent, for a sub-call's tag routing and spend row: the stamp the first deployment pick
+    took of them, since the metadata's `tags` carry the serving deployment's tags merged in by then."""
+    if not parent_metadata:
+        return {}
+    names: Final = (
+        _tag_names(parent_metadata[ROUTING_REQUEST_TAGS_METADATA_KEY])
+        if ROUTING_REQUEST_TAGS_METADATA_KEY in parent_metadata
+        else _tag_names(parent_metadata.get("tags"))
+    )
+    return {"tags": list(names)} if names else {}
 
 
 def request_policy_kwargs(
@@ -699,7 +721,7 @@ class CascadeVerdict:
     reason: str | None  # None = keep the cheap answer
     cause: RoutingDecisionCause
     calls: tuple[Mapping[str, object], ...] = ()  # role/model/cost/tokens per inner call
-    verifier_error: str | None = None  # why the verifier could not be used, when that is the story
+    verifier_error: str | None = None  # the class of the error that made the verifier unusable
 
     @property
     def escalate(self) -> bool:
@@ -851,14 +873,18 @@ class CascadeRouter:
         try:
             passed, call = await self._ask_verifier(last_user_text(messages), _text_of(response), request_kwargs)
         except Exception as exc:  # noqa: BLE001 - the verifier is advisory; the config says what its failure means
+            # The decision and the log name the error's class only: a provider's message can echo the prompt or the
+            # answer, which a message-logging opt-out keeps out of logs. `VerifierUnusable` carries fixed text.
+            error_type: Final = type(exc).__name__
             verbose_router_logger.warning(
-                "cascade %s: verifier %s unusable: %s", self.model_name, cfg.verifier_model, exc
+                "cascade %s: verifier %s unusable: %s",
+                self.model_name,
+                cfg.verifier_model,
+                exc if isinstance(exc, VerifierUnusable) else error_type,
             )
             if cfg.on_verifier_error == "accept":
-                return CascadeVerdict(reason=None, cause="cascade_pass", verifier_error=str(exc)[:200])
-            return CascadeVerdict(
-                reason="verifier_error", cause="cascade_verifier_error", verifier_error=str(exc)[:200]
-            )
+                return CascadeVerdict(reason=None, cause="cascade_pass", verifier_error=error_type)
+            return CascadeVerdict(reason="verifier_error", cause="cascade_verifier_error", verifier_error=error_type)
         if passed:
             return CascadeVerdict(reason=None, cause="cascade_pass", calls=(call,))
         return CascadeVerdict(reason="verifier_no", cause="cascade_verifier_escalation", calls=(call,))
@@ -874,12 +900,14 @@ class CascadeRouter:
             raise VerifierUnusable(f"cascade {self.model_name}: no verifier_model configured")
         router: Final = self._router()
         parent: Final = request_kwargs or {}
-        # The cheap deployment's itpm/otpm reservation stays with the request, whose legs settle it against the
-        # cheap usage; a copy on the verifier's call would be refunded at its deployment pick as a stale attempt's,
-        # and the settlement of the original would then take that refund a second time.
-        forwarded: Final = forwarded_internal_call_metadata(parent_metadata_of(parent), CASCADE_VERIFIER_CALL_ORIGIN)
+        parent_metadata: Final = parent_metadata_of(parent)
+        # The verifier's prompt is new (the request and the cheap answer) and goes out after the cheap deployment
+        # pick, so its call carries what a detached sub-call gets: the caller's identity, for attribution and
+        # budgets, and the request's own tags. None of the request's per-call state (deployment stamps, rate-limit
+        # reservation, executed-guardrail markers, routing decision) describes this call.
         metadata: Final = {
-            **{key: value for key, value in forwarded.items() if key not in IO_TOKEN_RESERVATION_KEYS},
+            **sanitized_forwardable_call_metadata(parent_metadata or {}, CASCADE_VERIFIER_CALL_ORIGIN),
+            **request_tags_of(parent_metadata),
             INTERNAL_CALL_ORIGIN_METADATA_KEY: CASCADE_VERIFIER_CALL_ORIGIN,  # stamped also when the request has none
             "cascade_router": self.model_name,
         }
