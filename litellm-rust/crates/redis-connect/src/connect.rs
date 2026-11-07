@@ -30,9 +30,6 @@ pub fn connect(
     host: HostServices,
     breaker: Option<BreakerConfig>,
 ) -> Result<RedisClient, Error> {
-    if rustls::crypto::CryptoProvider::get_default().is_none() {
-        let _ = rustls::crypto::ring::default_provider().install_default();
-    }
     tracing::info!(target = ?resolved.target, namespace = ?resolved.namespace, "redis client configured");
     let credentials = credentials(resolved.auth, &host)?;
     let events = host.events;
