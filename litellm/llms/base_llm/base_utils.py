@@ -3,9 +3,12 @@ Utility functions for base LLM classes.
 """
 
 import copy
+import functools
 import itertools
 import json
 import math
+import re
+import secrets
 from abc import ABC, abstractmethod
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
@@ -236,29 +239,16 @@ def decoded_answer_object(text: str) -> Mapping[str, AnswerValue] | None:
         return None
 
 
-def _source_json_text(value: AnswerValue, *, ensure_ascii: bool) -> str:
-    match value:
-        case SourceNumber(text=text):
-            return text
-        case str():
-            return json.dumps(value, ensure_ascii=ensure_ascii)
-        case Mapping():
-            members: Final = (
-                f"{json.dumps(key, ensure_ascii=ensure_ascii)}: {_source_json_text(item, ensure_ascii=ensure_ascii)}"
-                for key, item in value.items()
-            )
-            return "{" + ", ".join(members) + "}"
-        case Sequence():
-            return "[" + ", ".join(_source_json_text(item, ensure_ascii=ensure_ascii) for item in value) + "]"
-        case _:
-            return json.dumps(value)
+def _marked_source_number(marker: str, number: SourceNumber) -> str:
+    return marker + number.text
 
 
 def answer_json_text(value: AnswerValue, *, ensure_ascii: bool) -> str:
-    try:
-        return json.dumps(value, ensure_ascii=ensure_ascii)
-    except TypeError:
-        return _source_json_text(value, ensure_ascii=ensure_ascii)
+    marker: Final = secrets.token_hex(16)
+    encoded: Final = json.dumps(
+        value, ensure_ascii=ensure_ascii, default=functools.partial(_marked_source_number, marker)
+    )
+    return re.sub(f'"{marker}([^"]*)"', r"\1", encoded)
 
 
 def _names(value: object) -> frozenset[str]:
