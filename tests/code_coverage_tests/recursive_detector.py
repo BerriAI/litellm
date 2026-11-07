@@ -51,6 +51,7 @@ IGNORE_FUNCTIONS = [
     "_convert_to_json_serializable_dict",  # max depth set (default 20) and circular reference protection to prevent infinite recursion.
     "dict",  # max depth set. _LiteLLMParamsDictView.dict() calls builtin dict(), not itself.
     "_read_image_bytes",  # max depth set.
+    "_holds_no_text",  # max depth set.
     "get_masked_values",  # max depth set (default 20) to prevent infinite recursion while masking nested sensitive config dicts.
     "_redact_sensitive_litellm_params",  # max depth set (default 10).
     "_redact_secret_values_in_obj",  # max depth set (default 10, _REDACT_SECRET_MAX_DEPTH); fails closed by returning "REDACTED" at the cap.
