@@ -66,18 +66,14 @@ export function issueComparisonText(issue: Issue): string {
 
 export function issueImpactText(issue: Issue): string {
   const impact = issue.impact ?? {};
-  const values = [
-    impact.keys === null || impact.keys === undefined
-      ? ""
-      : `${impact.keys.toLocaleString()} ${impact.keys === 1 ? "key" : "keys"}`,
-    impact.teams === null || impact.teams === undefined
-      ? ""
-      : `${impact.teams.toLocaleString()} ${impact.teams === 1 ? "team" : "teams"}`,
-    impact.models === null || impact.models === undefined
-      ? ""
-      : `${impact.models.toLocaleString()} ${impact.models === 1 ? "model" : "models"}`,
-  ];
-  return values.filter(Boolean).join(" · ");
+  return (["keys", "teams", "models"] as const)
+    .map((field) => {
+      const count = impact[field];
+      if (count === null || count === undefined) return "";
+      return `${count.toLocaleString()} ${count === 1 ? field.slice(0, -1) : field}`;
+    })
+    .filter(Boolean)
+    .join(" · ");
 }
 
 const DATE_OPTIONS: Intl.DateTimeFormatOptions = { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" };

@@ -41,15 +41,16 @@ export default function UsageRuleForm({
   const [resource, setResource] = useState(() => initialResource(initial));
   const [direction, setDirection] = useState(initial.direction);
   const [name, setName] = useState<string | null>(rule?.name ?? null);
-  const [minimum, setMinimum] = useState(initial.min_value ?? METRIC_MINIMUMS[initial.metric]);
-  const [minimumChanged, setMinimumChanged] = useState(false);
-  const [requests, setRequests] = useState(initial.min_requests ?? METRIC_REQUEST_MINIMUMS[initial.metric]);
-  const [requestsChanged, setRequestsChanged] = useState(false);
+  const [minimum, setMinimum] = useState<number | null>(() =>
+    rule ? initial.min_value ?? METRIC_MINIMUMS[initial.metric] : null,
+  );
+  const [requests, setRequests] = useState<number | null>(() =>
+    rule ? initial.min_requests ?? METRIC_REQUEST_MINIMUMS[initial.metric] : null,
+  );
   const [email, setEmail] = useState(initial.notification_channels?.includes("email") === true);
   const [baselineDays, setBaselineDays] = useState(initial.baseline_days ?? 7);
   const [historyDays, setHistoryDays] = useState(initial.min_history_days ?? 3);
-  const changeBaselineDays = (value: string) => {
-    const days = Number(value);
+  const changeBaselineDays = (days: number) => {
     setBaselineDays(days);
     if (days >= 1) setHistoryDays(Math.min(historyDays, days));
   };
@@ -61,11 +62,6 @@ export default function UsageRuleForm({
   const changeScope = (next: RuleInput["scope_type"]) => {
     setScope(next);
     setResource({ id: null, label: allResourcesLabel(next) });
-  };
-  const changeMetric = (next: RuleInput["metric"]) => {
-    if (!rule && !minimumChanged) setMinimum(METRIC_MINIMUMS[next]);
-    if (!rule && !requestsChanged) setRequests(METRIC_REQUEST_MINIMUMS[next]);
-    setMetric(next);
   };
   return (
     <form
@@ -115,7 +111,7 @@ export default function UsageRuleForm({
             className={SELECT_CLASS}
             value={metric}
             disabled={builtIn}
-            onChange={(event) => changeMetric(event.target.value as RuleInput["metric"])}
+            onChange={(event) => setMetric(event.target.value as RuleInput["metric"])}
           >
             {Object.entries(METRIC_LABELS).map(([value, label]) => (
               <option key={value} value={value}>
@@ -200,63 +196,54 @@ export default function UsageRuleForm({
               onChange={(event) => setName(event.target.value)}
             />
           </div>
-          <div className="space-y-1">
-            <Label htmlFor="rule-baseline">Baseline days</Label>
-            <Input
-              id="rule-baseline"
-              name="baseline_days"
-              type="number"
-              required
-              min={1}
-              max={30}
-              value={baselineDays}
-              onChange={(event) => changeBaselineDays(event.target.value)}
-            />
-          </div>
-          <div className="space-y-1">
-            <Label htmlFor="rule-history">Minimum history days</Label>
-            <Input
-              id="rule-history"
-              name="min_history_days"
-              type="number"
-              required
-              min={1}
-              max={baselineDays}
-              value={historyDays}
-              onChange={(event) => setHistoryDays(Number(event.target.value))}
-            />
-          </div>
-          <div className="space-y-1">
-            <Label htmlFor="rule-requests">Minimum requests</Label>
-            <Input
-              id="rule-requests"
-              name="min_requests"
-              type="number"
-              required
-              min={0}
-              value={requests}
-              onChange={(event) => {
-                setRequests(Number(event.target.value));
-                setRequestsChanged(true);
-              }}
-            />
-          </div>
-          <div className="space-y-1">
-            <Label htmlFor="rule-minimum">Minimum change ({METRIC_UNITS[metric]})</Label>
-            <Input
-              id="rule-minimum"
-              name="min_value"
-              type="number"
-              required
-              min={0}
-              step="any"
-              value={minimum}
-              onChange={(event) => {
-                setMinimumChanged(true);
-                setMinimum(Number(event.target.value));
-              }}
-            />
-          </div>
+          {[
+            {
+              id: "baseline",
+              name: "baseline_days",
+              label: "Baseline days",
+              min: 1,
+              max: 30,
+              value: baselineDays,
+              setValue: changeBaselineDays,
+            },
+            {
+              id: "history",
+              name: "min_history_days",
+              label: "Minimum history days",
+              min: 1,
+              max: baselineDays,
+              value: historyDays,
+              setValue: setHistoryDays,
+            },
+            {
+              id: "requests",
+              name: "min_requests",
+              label: "Minimum requests",
+              min: 0,
+              value: requests ?? METRIC_REQUEST_MINIMUMS[metric],
+              setValue: setRequests,
+            },
+            {
+              id: "minimum",
+              name: "min_value",
+              label: `Minimum change (${METRIC_UNITS[metric]})`,
+              min: 0,
+              step: "any",
+              value: minimum ?? METRIC_MINIMUMS[metric],
+              setValue: setMinimum,
+            },
+          ].map(({ id, label, setValue, ...input }) => (
+            <div key={id} className="space-y-1">
+              <Label htmlFor={`rule-${id}`}>{label}</Label>
+              <Input
+                id={`rule-${id}`}
+                type="number"
+                required
+                {...input}
+                onChange={(event) => setValue(Number(event.target.value))}
+              />
+            </div>
+          ))}
           <p className="col-span-2 text-xs leading-relaxed text-muted-foreground">
             The baseline uses recorded days in this window. Minimum changes and request counts reduce alerts from small
             samples.

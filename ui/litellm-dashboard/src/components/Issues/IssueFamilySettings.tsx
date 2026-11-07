@@ -118,56 +118,26 @@ function FamilyEditor({
           <details className="space-y-3">
             <summary className="cursor-pointer text-sm text-muted-foreground">Advanced</summary>
             <div className="grid gap-3 sm:grid-cols-2">
-              <div className="space-y-1">
-                <Label htmlFor={`${policy.direction}-min_value`}>Minimum change ({FLOOR_UNITS[family.family]})</Label>
-                <Input
-                  id={`${policy.direction}-min_value`}
-                  name={`${policy.direction}-min_value`}
-                  type="number"
-                  min="0"
-                  step="any"
-                  defaultValue={policy.min_value ?? ""}
-                  placeholder="Varies by scope"
-                />
-              </div>
-              <div className="space-y-1">
-                <Label htmlFor={`${policy.direction}-min_requests`}>Minimum requests</Label>
-                <Input
-                  id={`${policy.direction}-min_requests`}
-                  name={`${policy.direction}-min_requests`}
-                  type="number"
-                  min="0"
-                  step="1"
-                  defaultValue={policy.min_requests ?? ""}
-                  placeholder="Varies by scope"
-                />
-              </div>
-              <div className="space-y-1">
-                <Label htmlFor={`${policy.direction}-baseline_days`}>Baseline window (days)</Label>
-                <Input
-                  id={`${policy.direction}-baseline_days`}
-                  name={`${policy.direction}-baseline_days`}
-                  type="number"
-                  min="1"
-                  max="30"
-                  step="1"
-                  defaultValue={policy.baseline_days ?? ""}
-                  placeholder="Varies by scope"
-                />
-              </div>
-              <div className="space-y-1">
-                <Label htmlFor={`${policy.direction}-min_history_days`}>Required history (days)</Label>
-                <Input
-                  id={`${policy.direction}-min_history_days`}
-                  name={`${policy.direction}-min_history_days`}
-                  type="number"
-                  min="1"
-                  max="30"
-                  step="1"
-                  defaultValue={policy.min_history_days ?? ""}
-                  placeholder="Varies by scope"
-                />
-              </div>
+              {(
+                [
+                  { name: "min_value", label: `Minimum change (${FLOOR_UNITS[family.family]})`, min: 0, step: "any" },
+                  { name: "min_requests", label: "Minimum requests", min: 0, step: "1" },
+                  { name: "baseline_days", label: "Baseline window (days)", min: 1, max: 30, step: "1" },
+                  { name: "min_history_days", label: "Required history (days)", min: 1, max: 30, step: "1" },
+                ] as const
+              ).map(({ name, label, ...constraints }) => (
+                <div key={name} className="space-y-1">
+                  <Label htmlFor={`${policy.direction}-${name}`}>{label}</Label>
+                  <Input
+                    id={`${policy.direction}-${name}`}
+                    name={`${policy.direction}-${name}`}
+                    type="number"
+                    {...constraints}
+                    defaultValue={policy[name] ?? ""}
+                    placeholder="Varies by scope"
+                  />
+                </div>
+              ))}
             </div>
           </details>
         </fieldset>
