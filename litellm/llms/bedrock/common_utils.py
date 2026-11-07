@@ -330,28 +330,26 @@ def bedrock_mapped_max_output_tokens(model: str) -> int | None:
             return None
 
 
-_CLAUDE_MODELS_REJECTING_CONTEXT_OVERFLOW: Final = (
-    "anthropic.claude-v1",
-    "anthropic.claude-v2",
-    "anthropic.claude-instant",
-    "anthropic.claude-3",
-    "anthropic.claude-sonnet-4-20250514",
-    "anthropic.claude-opus-4-20250514",
-    "anthropic.claude-opus-4-1-20250805",
-)
+_CLAUDE_GENERATION: Final = re.compile(r"claude-(?:[a-z]+-)?(\d+)(?:-(\d{1,2}))?(?!\d)")
+_LEGACY_CLAUDE_NAMES: Final = ("claude-v", "claude-instant")
+_FIRST_CLAUDE_CAPPED_AT_4096_ON_CONVERSE: Final = (4, 7)
 
 
-def bedrock_converse_claude_default_max_tokens(base_model: str, model_info: Mapping[str, object] | None) -> int | None:
-    if not base_model.startswith("anthropic") or base_model.startswith(_CLAUDE_MODELS_REJECTING_CONTEXT_OVERFLOW):
+def _claude_keeps_bedrocks_converse_default(base_model: str) -> bool:
+    match _CLAUDE_GENERATION.search(base_model):
+        case None:
+            return any(name in base_model for name in _LEGACY_CLAUDE_NAMES)
+        case generation:
+            return (int(generation[1]), int(generation[2] or 0)) < _FIRST_CLAUDE_CAPPED_AT_4096_ON_CONVERSE
+
+
+def bedrock_converse_claude_default_max_tokens(base_model: str) -> int | None:
+    if not base_model.startswith("anthropic") or _claude_keeps_bedrocks_converse_default(base_model):
         return None
-    match ((model_info or {}).get("max_output_tokens"), bedrock_mapped_max_output_tokens(base_model)):
-        case (int() as deployment_max_tokens, int() as mapped_max_tokens):
-            return min(deployment_max_tokens, mapped_max_tokens)
-        case (int() as deployment_max_tokens, None):
-            return deployment_max_tokens
-        case (_, int() as mapped_max_tokens):
+    match bedrock_mapped_max_output_tokens(base_model):
+        case int() as mapped_max_tokens:
             return mapped_max_tokens
-        case _:
+        case None:
             return DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS
 
 

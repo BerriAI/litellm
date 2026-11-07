@@ -12316,26 +12316,13 @@ def test_application_profile_arn_sends_its_base_models_output_cap(
 
 
 @pytest.mark.respx(assert_all_called=True)
-def test_deployment_max_output_tokens_below_the_mapped_cap_is_the_default(
+def test_deployment_max_output_tokens_does_not_cut_the_converse_default(
     respx_mock: respx.Router, local_model_cost_map: None
 ) -> None:
-    deployment_cap: Final = litellm.model_cost[_SONNET_5_5_BASE_ROW]["max_output_tokens"] // 4
+    mapped_cap: Final = litellm.model_cost[_SONNET_5_5_BASE_ROW]["max_output_tokens"]
 
     max_tokens: Final = _routed_converse_max_tokens(
-        respx_mock, f"bedrock/{_SONNET_5_5}", {"max_output_tokens": deployment_cap}
-    )
-
-    assert max_tokens == deployment_cap
-
-
-@pytest.mark.respx(assert_all_called=True)
-def test_deployment_max_output_tokens_above_the_mapped_cap_sends_the_mapped_cap(
-    respx_mock: respx.Router, local_model_cost_map: None
-) -> None:
-    mapped_cap: Final = litellm.model_cost["anthropic.claude-haiku-4-5-20251001-v1:0"]["max_output_tokens"]
-
-    max_tokens: Final = _routed_converse_max_tokens(
-        respx_mock, "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0", {"max_output_tokens": mapped_cap * 2}
+        respx_mock, f"bedrock/{_SONNET_5_5}", {"max_output_tokens": mapped_cap // 64}
     )
 
     assert max_tokens == mapped_cap
@@ -12343,25 +12330,20 @@ def test_deployment_max_output_tokens_above_the_mapped_cap_sends_the_mapped_cap(
 
 @pytest.mark.respx(assert_all_called=True)
 def test_caller_max_tokens_wins_over_the_default_cap(respx_mock: respx.Router, local_model_cost_map: None) -> None:
-    max_tokens: Final = _routed_converse_max_tokens(
-        respx_mock, f"bedrock/{_SONNET_5_5}", {"max_output_tokens": 32000}, max_tokens=111
-    )
+    max_tokens: Final = _routed_converse_max_tokens(respx_mock, f"bedrock/{_SONNET_5_5}", {}, max_tokens=111)
 
     assert max_tokens == 111
 
 
 @pytest.mark.respx(assert_all_called=True)
-def test_thinking_budget_without_max_tokens_keeps_its_budget_based_cap(
+def test_adaptive_thinking_without_max_tokens_gets_the_mapped_output_cap(
     respx_mock: respx.Router, local_model_cost_map: None
 ) -> None:
     max_tokens: Final = _routed_converse_max_tokens(
-        respx_mock,
-        "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
-        {},
-        thinking={"type": "enabled", "budget_tokens": 2048},
+        respx_mock, f"bedrock/{_SONNET_5_5}", {}, thinking={"type": "enabled", "budget_tokens": 2048}
     )
 
-    assert max_tokens == 2048 + litellm.constants.DEFAULT_MAX_TOKENS
+    assert max_tokens == litellm.model_cost[_SONNET_5_5_BASE_ROW]["max_output_tokens"]
 
 
 @pytest.mark.respx(assert_all_called=True)
@@ -12374,19 +12356,56 @@ def test_unmapped_claude_gets_the_current_claude_output_cap(respx_mock: respx.Ro
 
 
 @pytest.mark.parametrize(
-    "model",
+    ("model", "model_info"),
     [
-        "bedrock/us.anthropic.claude-sonnet-4-20250514-v1:0",
-        "bedrock/us.anthropic.claude-opus-4-1-20250805-v1:0",
-        "bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
-        "bedrock/us.meta.llama4-maverick-17b-instruct-v1:0",
+        ("bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0", {}),
+        ("bedrock/us.anthropic.claude-sonnet-4-6", {}),
+        ("bedrock/us.anthropic.claude-opus-4-6-v1", {}),
+        ("bedrock/us.anthropic.claude-sonnet-4-20250514-v1:0", {}),
+        ("bedrock/us.anthropic.claude-opus-4-1-20250805-v1:0", {}),
+        ("bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0", {}),
+        ("bedrock/converse/anthropic.claude-v2:1", {}),
+        (f"bedrock/{_PROFILE_ARN}", {"base_model": "anthropic/claude-haiku-4-5-20251001"}),
+        (f"bedrock/{_PROFILE_ARN}", {"base_model": "anthropic.claude-haiku-4-5"}),
+        (f"bedrock/{_PROFILE_ARN}", {"base_model": "anthropic.claude-opus-4-1"}),
+        (f"bedrock/{_PROFILE_ARN}", {"base_model": "anthropic.claude-sonnet-4"}),
+        ("bedrock/us.meta.llama4-maverick-17b-instruct-v1:0", {}),
     ],
-    ids=["sonnet_4", "opus_4_1", "sonnet_3_7", "non_claude"],
+    ids=[
+        "haiku_4_5",
+        "sonnet_4_6",
+        "opus_4_6",
+        "sonnet_4",
+        "opus_4_1",
+        "sonnet_3_7",
+        "claude_v2",
+        "profile_haiku_4_5_provider_form",
+        "profile_haiku_4_5_undated",
+        "profile_opus_4_1_undated",
+        "profile_sonnet_4_undated",
+        "non_claude",
+    ],
 )
 @pytest.mark.respx(assert_all_called=True)
-def test_claude_rejecting_context_overflow_and_other_models_keep_bedrocks_own_default(
-    model: str, respx_mock: respx.Router, local_model_cost_map: None
+def test_models_bedrock_does_not_cap_at_4096_keep_bedrocks_own_default(
+    model: str, model_info: Mapping[str, str], respx_mock: respx.Router, local_model_cost_map: None
 ) -> None:
-    max_tokens: Final = _routed_converse_max_tokens(respx_mock, model, {})
+    max_tokens: Final = _routed_converse_max_tokens(respx_mock, model, model_info)
 
     assert max_tokens is None
+
+
+@pytest.mark.parametrize(
+    "model",
+    ["bedrock/us.anthropic.claude-opus-4-7", "bedrock/us.anthropic.claude-haiku-5-5"],
+    ids=["opus_4_7", "haiku_5_5"],
+)
+@pytest.mark.respx(assert_all_called=True)
+def test_claude_capped_at_4096_by_bedrock_gets_its_mapped_output_cap(
+    model: str, respx_mock: respx.Router, local_model_cost_map: None
+) -> None:
+    base_row: Final = model.removeprefix("bedrock/us.")
+
+    max_tokens: Final = _routed_converse_max_tokens(respx_mock, model, {})
+
+    assert max_tokens == litellm.model_cost[base_row]["max_output_tokens"]
