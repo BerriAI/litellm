@@ -28,7 +28,7 @@ from litellm.types.utils import (
 )
 
 if TYPE_CHECKING:
-    from fastapi import HTTPException
+    from fastapi import FastAPI, HTTPException
     from opentelemetry.trace import Span as _Span
 
     from litellm.caching.caching import DualCache
@@ -99,6 +99,21 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         """
         self.message_logging = message_logging
         self.turn_off_message_logging = turn_off_message_logging
+
+    def setup_proxy(self, app: "FastAPI") -> None:
+        """Initialize routes or app state once per proxy worker lifespan.
+
+        Runs after startup callback initialization. Exceptions abort startup.
+        The ASGI middleware stack is already built: do not add middleware here.
+        Hooks must tolerate another lifespan entry on the same application.
+        """
+
+    async def async_close(self) -> None:
+        """Release callback resources after the proxy has drained request logging.
+
+        Implementations should be idempotent and close loop-bound resources on
+        their owning loop. SDK-only users remain responsible for calling this.
+        """
 
     @staticmethod
     def get_callback_env_vars(callback_name: str | None = None) -> list[str]:
