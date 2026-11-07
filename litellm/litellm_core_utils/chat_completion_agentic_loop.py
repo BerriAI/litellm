@@ -161,7 +161,9 @@ _TOOL_CALL_ITEM_TYPES: Final = frozenset({"function_call", "custom_tool_call", "
 
 def called_tool_names(response: object) -> frozenset[str]:
     items: Final = (*parts_of(message_field(response, "output")), *parts_of(message_field(response, "content")))
-    names: Final = (message_field(item, "name") for item in items if message_field(item, "type") in _TOOL_CALL_ITEM_TYPES)
+    names: Final = (
+        message_field(item, "name") for item in items if message_field(item, "type") in _TOOL_CALL_ITEM_TYPES
+    )
     return frozenset(name for name in names if isinstance(name, str))
 
 
