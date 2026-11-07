@@ -1,26 +1,32 @@
-use std::io;
-
 use thiserror::Error;
 
 #[derive(Debug, Error)]
 #[error(transparent)]
 pub struct Error(Box<Repr>);
 
+type Cause = Box<dyn std::error::Error + Send + Sync>;
+
 #[derive(Debug, Error)]
 enum Repr {
     #[error(transparent)]
     Http(#[from] litellm_http::Error),
-    #[error("could not read the catalog")]
-    Read(#[source] io::Error),
     #[error("invalid catalog URL")]
     InvalidUrl(#[source] url::ParseError),
     #[error("unsupported catalog URL scheme {scheme}")]
     UnsupportedScheme { scheme: String },
+    #[error("invalid S3 URL")]
+    S3Uri(#[source] litellm_s3::Error),
+    #[error("S3 GetObject failed")]
+    S3(#[source] Cause),
 }
 
 impl Error {
     pub fn unsupported_scheme(scheme: String) -> Self {
         Self(Box::new(Repr::UnsupportedScheme { scheme }))
+    }
+
+    pub fn s3(cause: impl Into<Cause>) -> Self {
+        Self(Box::new(Repr::S3(cause.into())))
     }
 }
 
@@ -30,9 +36,9 @@ impl From<litellm_http::Error> for Error {
     }
 }
 
-impl From<io::Error> for Error {
-    fn from(cause: io::Error) -> Self {
-        Self(Box::new(Repr::Read(cause)))
+impl From<litellm_s3::Error> for Error {
+    fn from(cause: litellm_s3::Error) -> Self {
+        Self(Box::new(Repr::S3Uri(cause)))
     }
 }
 
@@ -44,29 +50,16 @@ impl From<url::ParseError> for Error {
 
 #[cfg(test)]
 mod tests {
+    use std::io;
+
     use litellm_error::{Report, find};
     use rstest::rstest;
 
     use super::*;
-    use crate::{DoneReason, Reply, Step};
 
     #[rstest]
-    fn exhausted_transport_keeps_its_typed_cause() {
-        let reply = Reply::Transport {
-            error: io::Error::from(io::ErrorKind::ConnectionReset).into(),
-        };
-        let Reply::Transport { error } = reply else {
-            panic!("transport failure")
-        };
-        let step = Step::Done {
-            reason: DoneReason::Exhausted(error),
-        };
-        let Step::Done {
-            reason: DoneReason::Exhausted(error),
-        } = step
-        else {
-            panic!("exhausted attempts")
-        };
+    fn an_s3_failure_keeps_its_typed_cause_once() {
+        let error = Error::s3(io::Error::from(io::ErrorKind::ConnectionReset));
         let cause = find::<io::Error>(&error).expect("typed I/O cause");
         assert_eq!(cause.kind(), io::ErrorKind::ConnectionReset);
         assert_eq!(
