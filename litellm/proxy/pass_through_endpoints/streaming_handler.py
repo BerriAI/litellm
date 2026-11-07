@@ -19,6 +19,7 @@ from litellm.proxy.common_utils.sse_keepalive import split_complete_sse_frames
 from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
 from litellm.types.utils import StandardPassThroughResponseObject, Usage
 
+from .bounded_chunk_buffer import BoundedChunkBuffer
 from .llm_provider_handlers.anthropic_passthrough_logging_handler import (
     AnthropicPassthroughLoggingHandler,
 )
@@ -49,7 +50,7 @@ class RouteStreamingLogging(Protocol):
         request_body: dict,
         endpoint_type: EndpointType,
         start_time: datetime,
-        raw_bytes: list[bytes],
+        raw_bytes: Sequence[bytes],
         end_time: datetime,
     ) -> Coroutine[None, None, None]: ...
 
@@ -170,10 +171,11 @@ class PassThroughStreamingHandler:
         resolved_route_streaming_logging: Final[RouteStreamingLogging] = (
             route_streaming_logging or PassThroughStreamingHandler.route_streaming_logging_to_handler
         )
-        raw_bytes: Final[list[bytes]] = []
+        raw_bytes: Final = BoundedChunkBuffer(litellm.pass_through_max_logged_stream_bytes)
         resolved_request_body: Final[dict[str, object]] = request_body or {}
 
         def _build_logging_coroutine() -> Coroutine[None, None, None]:
+            PassThroughStreamingHandler._warn_if_truncated(raw_bytes, url_route)
             return resolved_route_streaming_logging(
                 litellm_logging_obj=litellm_logging_obj,
                 passthrough_success_handler_obj=passthrough_success_handler_obj,
@@ -295,6 +297,7 @@ class PassThroughStreamingHandler:
                     if stream_ended
                     else PassThroughStreamingHandler._error_frame_closed_at(endpoint_type, raw_bytes)
                 )
+                PassThroughStreamingHandler._warn_if_truncated(raw_bytes, url_route)
                 try:
                     await PassThroughStreamingHandler._schedule_stream_end_logging(
                         litellm_logging_obj=litellm_logging_obj,
@@ -308,6 +311,17 @@ class PassThroughStreamingHandler:
                     verbose_proxy_logger.error("Error scheduling chunk_processor logging: %s", e)
                 else:
                     bind_budget_reservation_to_callbacks(litellm_logging_obj.litellm_params)
+
+    @staticmethod
+    def _warn_if_truncated(raw_bytes: BoundedChunkBuffer, url_route: str) -> None:
+        if raw_bytes.truncated:
+            verbose_proxy_logger.warning(
+                "Pass-through stream for %s was %s bytes; only the first and last %s bytes are kept for logging "
+                "(litellm.pass_through_max_logged_stream_bytes)",
+                url_route,
+                raw_bytes.total_bytes,
+                raw_bytes.retained_bytes,
+            )
 
     @staticmethod
     def _error_frame_closed_at(endpoint_type: EndpointType, raw_bytes: Sequence[bytes]) -> tuple[str, str, int] | None:
