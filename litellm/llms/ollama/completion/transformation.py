@@ -462,6 +462,10 @@ class OllamaConfig(BaseConfig):
             "stream": stream,
         }
 
+        if "keep_alive" in optional_params:
+            if optional_params["keep_alive"] is not None:
+                data["keep_alive"] = optional_params["keep_alive"]
+            del optional_params["keep_alive"]  # rebind-ok: remove the promoted field from outgoing generation options
         if format is not None:
             data["format"] = format
         if images is not None:

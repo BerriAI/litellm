@@ -1100,3 +1100,28 @@ def test_reasoning_effort_ollama_honors_does_not_warn(
 
     assert result["think"] == think
     assert _reasoning_effort_warnings(caplog) == ()
+
+
+@pytest.mark.parametrize("keep_alive", (0, "0", "5m", -1))
+def test_generate_request_sends_keep_alive_outside_generation_options(keep_alive: int | str) -> None:
+    request: Final = OllamaConfig().transform_request(
+        model="test-model",
+        messages=[{"role": "user", "content": "hello"}],
+        optional_params={"keep_alive": keep_alive, "temperature": 0.25},
+        litellm_params={"text_completion": True},
+        headers={},
+    )
+    assert request["keep_alive"] == keep_alive
+    assert request["options"] == {"temperature": 0.25}
+
+
+def test_generate_request_omits_an_unset_keep_alive() -> None:
+    request: Final = OllamaConfig().transform_request(
+        model="test-model",
+        messages=[{"role": "user", "content": "hello"}],
+        optional_params={"keep_alive": None, "temperature": 0.25},
+        litellm_params={"text_completion": True},
+        headers={},
+    )
+    assert "keep_alive" not in request
+    assert request["options"] == {"temperature": 0.25}
