@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import uuid
 from hashlib import sha256
 from pathlib import Path
@@ -7,9 +8,10 @@ from typing import Final
 
 import httpx
 import pytest
-from integration._support.client import Gateway, eventually, object_value
+import yaml
+from integration._support.client import JSON_OBJECT, Gateway, eventually, object_value, string_value
 from integration._support.database import read_rows
-from integration._support.process import owned_proxy
+from integration._support.process import OwnedState, owned_proxy
 from integration._support.wire import Reply, Request, Wire, wire_server
 from openai.types.chat import ChatCompletionChunk
 from pydantic import BaseModel, JsonValue, TypeAdapter
@@ -199,6 +201,73 @@ def test_an_exhausted_key_is_refused_inference_but_can_still_read_its_own_info(g
         own: Final = object_value(info.json()["info"])
         assert float(str(own["spend"])) == pytest.approx(0.06)
         assert own["max_budget"] == 0.06
+
+
+def test_soft_budget_alert_reads_spend_from_another_proxy(gateway: Gateway, tmp_path: Path) -> None:
+    base: Final = JSON_OBJECT.validate_python(yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text()))
+    config: Final = {
+        **base,
+        "general_settings": {
+            **object_value(base["general_settings"]),
+            "alerting": ["slack"],
+            "alert_types": ["budget_alerts"],
+        },
+    }
+    path: Final = tmp_path / "soft-budget-alerting.yaml"
+    path.write_text(yaml.safe_dump(config))
+    email: Final = "budget-owner@example.test"
+    alias: Final = f"soft-budget-{uuid.uuid4().hex}"
+    with gateway.scenario() as scenario, wire_server(lambda _: Reply(body=b"ok", content_type="text/plain")) as alerts:
+        model: Final = scenario.model(input_cost_per_token=0.001, output_cost_per_token=0.002)
+        user_id: Final = scenario.user(user_email=email)
+        key: Final = scenario.key(user_id=user_id, models=[model], key_alias=alias, soft_budget=0.1)
+        digest: Final = sha256(key.encode()).hexdigest()
+        overrides: Final = {
+            "SLACK_WEBHOOK_URL": f"{alerts.url}/alerts",
+            "PROXY_BASE_URL": "http://proxy.integration.test",
+        }
+        with owned_proxy(gateway, tmp_path, overrides, config=path, state=OwnedState.SHARED_WITH_WORKER) as candidate:
+            first: Final = candidate.request(
+                "POST",
+                "/v1/chat/completions",
+                {"model": model, "messages": [{"role": "user", "content": "warm the alerting proxy"}]},
+                key=key,
+            )
+            assert first.status_code == 200, first.text
+            assert float(first.headers["x-litellm-response-cost"]) == pytest.approx(20 * 0.001 + 20 * 0.002)
+            eventually(lambda: _spend(gateway, digest), lambda spend: spend == pytest.approx(0.06), seconds=70)
+            second: Final = gateway.request(
+                "POST",
+                "/v1/chat/completions",
+                {"model": model, "messages": [{"role": "user", "content": "cross the budget on the other proxy"}]},
+                key=key,
+            )
+            assert second.status_code == 200, second.text
+            eventually(lambda: _spend(gateway, digest), lambda spend: spend == pytest.approx(0.12), seconds=70)
+            assert alerts.received.qsize() == 0
+            third: Final = candidate.request(
+                "POST",
+                "/v1/chat/completions",
+                {"model": model, "messages": [{"role": "user", "content": "check the shared spend"}]},
+                key=key,
+            )
+            assert third.status_code == 200, third.text
+            eventually(alerts.received.qsize, lambda count: count >= 1, seconds=40)
+            requests: Final = alerts.drain()
+            assert len(requests) == 1, requests
+            assert (requests[0].method, requests[0].target) == ("POST", "/alerts")
+            payload: Final = JSON_OBJECT.validate_json(requests[0].body)
+            message: Final = string_value(payload["text"])
+            normalized: Final = re.sub(r"Timestamp: `\d{2}:\d{2}:\d{2}`", "Timestamp: `<clock>`", message)
+            assert {**payload, "text": normalized} == {
+                "text": (
+                    "Alert type: `budget_alerts`\nLevel: `High`\nTimestamp: `<clock>`\n\n"
+                    "Message: Soft Budget Crossed: Total Soft Budget:`0.1`\n\n"
+                    f"*spend:* `0.12`\n*soft_budget:* `0.1`\n*user_id:* `{user_id}`\n"
+                    f"*user_email:* `{email}`\n*key_alias:* `{alias}`\n*event_group:* `key`\n"
+                    "\n\nProxy URL: `http://proxy.integration.test`"
+                )
+            }
 
 
 def _bounded_chat(gateway: Gateway, model: str, key: str, content: str | None = None) -> httpx.Response:

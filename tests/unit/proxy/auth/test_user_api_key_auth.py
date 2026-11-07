@@ -642,80 +642,102 @@ async def test_auth_with_form_data_and_model():
     assert response.models == ["gpt-4"], "Model from virtual key should be preserved"
 
 
+@pytest.mark.parametrize("cached_spend", [0.0, 15.0])
 @pytest.mark.asyncio
-async def test_soft_budget_alert():
-    """
-    Test that when a token's spend exceeds soft_budget, it triggers a budget alert but allows the request
-    """
+async def test_soft_budget_alert(monkeypatch: pytest.MonkeyPatch, cached_spend: float) -> None:
     import asyncio
     import time
 
+    import httpx
     from fastapi import Request
-    from starlette.datastructures import URL
 
+    from litellm.caching.dual_cache import DualCache
+    from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+    from litellm.proxy import proxy_server
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-    from litellm.proxy.proxy_server import hash_token, user_api_key_cache
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.utils import PrismaClient, ProxyLogging
 
-    # Setup
-    user_key = "sk-98765"
-    soft_budget = 10
-    current_spend = 15  # Spend exceeds soft budget
-
-    # Create a valid token with soft budget
-    valid_token = UserAPIKeyAuth(
-        token=hash_token(user_key),
-        soft_budget=soft_budget,
-        spend=current_spend,
-        last_refreshed_at=time.time(),
+    monkeypatch.setattr(time, "time", lambda: 1_700_000_000.0)
+    monkeypatch.setenv("WEBHOOK_URL", "https://alerts.example.test/budget")
+    user_key: Final = "sk-soft-budget-auth"
+    token_hash: Final = proxy_server.hash_token(user_key)
+    key_cache: Final = UserApiKeyCache()
+    counter: Final = DualCache()
+    key_cache.set_cache(
+        key=token_hash,
+        value=UserAPIKeyAuth(
+            token=token_hash,
+            soft_budget=10.0,
+            spend=cached_spend,
+            last_refreshed_at=1_700_000_000.0,
+        ),
     )
+    counter.in_memory_cache.set_cache(key=f"spend:key:{token_hash}", value=15.0)
+    received: Final[list[httpx.Request]] = []
 
-    # Store in cache
-    user_api_key_cache.set_cache(key=hash_token(user_key), value=valid_token)
+    def receive_alert(request: httpx.Request) -> httpx.Response:
+        received.append(request)
+        return httpx.Response(200, text="ok")
 
-    # Mock proxy server settings
-    setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
-    setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
-    setattr(litellm.proxy.proxy_server, "prisma_client", AsyncMock())
+    async def receive_body() -> Message:
+        return {"type": "http.request", "body": b"{}", "more_body": False}
 
-    # Create request
-    request = Request(scope={"type": "http", "method": "POST", "path": "/chat/completions", "headers": []})
-    request._url = URL(url="/chat/completions")
-
-    # Track if budget_alerts was called
-    alert_called = False
-    original_budget_alerts = litellm.proxy.proxy_server.proxy_logging_obj.budget_alerts
-
-    async def mock_budget_alerts(*args, **kwargs):
-        nonlocal alert_called
-        if kwargs.get("type") == "soft_budget":
-            alert_called = True
-        return await original_budget_alerts(*args, **kwargs)
-
-    # Patch the budget_alerts method
-    setattr(
-        litellm.proxy.proxy_server.proxy_logging_obj,
-        "budget_alerts",
-        mock_budget_alerts,
+    handler: Final = AsyncHTTPHandler(transport=httpx.MockTransport(receive_alert))
+    proxy_logging: Final = ProxyLogging(key_cache)
+    proxy_logging.alerting = ["webhook"]
+    proxy_logging.slack_alerting_instance = SlackAlerting(alerting=["webhook"], async_http_handler=handler)
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", key_cache)
+    monkeypatch.setattr(proxy_server, "spend_counter_cache", counter)
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", proxy_logging)
+    monkeypatch.setattr(proxy_server, "master_key", MASTER_KEY)
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setattr(
+        proxy_server,
+        "prisma_client",
+        PrismaClient(database_url="postgresql://unused", proxy_logging_obj=proxy_logging),
     )
-
+    request: Final = Request(
+        scope={"type": "http", "method": "POST", "path": "/chat/completions", "headers": []},
+        receive=receive_body,
+    )
+    tasks_before: Final = asyncio.all_tasks()
+    proxy_logging.slack_alerting_instance.update_values(alerting=["webhook"])
+    background_tasks: Final = asyncio.all_tasks()
     try:
-        # Call user_api_key_auth
-        response = await user_api_key_auth(request=request, api_key="Bearer " + user_key)
-
-        # Assert the request was allowed (no exception raised)
-        assert response is not None
-        # Assert the alert was triggered
-        await asyncio.sleep(3)
-        assert alert_called == True, "Soft budget alert should have been triggered"
-
+        response: Final = await user_api_key_auth(request=request, api_key="Bearer " + user_key)
+        await asyncio.gather(*(asyncio.all_tasks() - background_tasks))
+        assert (response.token, response.spend, response.soft_budget) == (token_hash, cached_spend, 10.0)
+        assert [json.loads(alert.content) for alert in received] == [
+            {
+                "spend": 15.0,
+                "max_budget": None,
+                "soft_budget": 10.0,
+                "token": token_hash,
+                "customer_id": None,
+                "user_id": None,
+                "team_id": None,
+                "team_alias": None,
+                "organization_id": None,
+                "user_email": None,
+                "key_alias": None,
+                "projected_exceeded_date": None,
+                "projected_spend": None,
+                "event_group": "key",
+                "alert_emails": None,
+                "max_budget_alert_emails": None,
+                "event": "soft_budget_crossed",
+                "event_message": "Soft Budget Crossed: Total Soft Budget:`10.0`",
+            }
+        ]
     finally:
-        # Restore original budget_alerts
-        setattr(
-            litellm.proxy.proxy_server.proxy_logging_obj,
-            "budget_alerts",
-            original_budget_alerts,
-        )
+        pending: Final = asyncio.all_tasks() - tasks_before
+        for task in pending:
+            task.cancel()
+        await asyncio.gather(*pending, return_exceptions=True)
+        await handler.close()
 
 
 def test_is_allowed_route():
