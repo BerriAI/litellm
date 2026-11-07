@@ -408,7 +408,7 @@ class RequestBodyDecompressionMiddleware:
                 "Retry later, or send this body uncompressed",
                 503,
                 error_type="overloaded_error",
-                headers={"retry-after": "1"},
+                headers={"retry-after": "1", "retry-after-seconds": "1"},
             )(scope, receive, send)
             return
         try:

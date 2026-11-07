@@ -319,7 +319,7 @@ def _overloaded_response(state: AdmissionControlState, scope: Scope) -> JSONResp
     message: Final = f"Worker at capacity: {stats.admitted} in-flight, {stats.queued} queued requests. Retry later."
     return JSONResponse(
         status_code=503,
-        headers={"retry-after": "1"},
+        headers={"retry-after": "1", "retry-after-seconds": "1"},
         content=route_error_content(
             scope,
             "overloaded_error",

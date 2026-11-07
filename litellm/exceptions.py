@@ -790,6 +790,7 @@ class ServiceUnavailableError(openai.APIStatusError):
         litellm_debug_info: str | None = None,
         max_retries: int | None = None,
         num_retries: int | None = None,
+        headers: dict[str, str] | None = None,
     ):
         self.status_code = 503
         self.message = f"litellm.ServiceUnavailableError: {message}"
@@ -798,6 +799,7 @@ class ServiceUnavailableError(openai.APIStatusError):
         self.litellm_debug_info = litellm_debug_info
         self.max_retries = max_retries
         self.num_retries = num_retries
+        self.headers: dict[str, str] | None = {k: str(v) for k, v in headers.items()} if headers else None
         self.response = error_response_without_credentials(self.status_code, response, _NO_UPSTREAM_REQUEST_URL)
         super().__init__(
             self.message, response=self.response, body=None
