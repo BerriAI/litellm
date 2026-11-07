@@ -1556,7 +1556,9 @@ def test_non_magistral_reasoning_effort_is_sent_without_warning(caplog: pytest.L
     assert _warnings_naming(caplog, "reasoning_effort") == ()
 
 
-@pytest.mark.parametrize("reasoning_effort", [5, {"effort": 5}, {"effort": 5, "summary": "auto"}])
+@pytest.mark.parametrize(
+    "reasoning_effort", [5, {"effort": 5}, {"effort": 5, "summary": "auto"}, "HIGH", "auto", "", {"effort": "HIGH"}]
+)
 def test_mistral_warns_once_when_drop_params_drops_a_level_it_cannot_send(
     caplog: pytest.LogCaptureFixture, reasoning_effort: object
 ) -> None:
@@ -1575,7 +1577,10 @@ def test_mistral_warns_once_when_drop_params_drops_a_level_it_cannot_send(
     assert "(drop_params=True)" in warnings[0]
 
 
-@pytest.mark.parametrize("reasoning_effort", [{"summary": "auto"}, {"effort": "high", "summary": "auto"}])
+@pytest.mark.parametrize(
+    "reasoning_effort",
+    [{"summary": "auto"}, {"effort": "high", "summary": "auto"}, {"effort": "default", "summary": "auto"}],
+)
 def test_mistral_stays_quiet_under_drop_params_when_no_level_is_lost(
     caplog: pytest.LogCaptureFixture, reasoning_effort: object
 ) -> None:
@@ -1587,6 +1592,44 @@ def test_mistral_stays_quiet_under_drop_params_when_no_level_is_lost(
             drop_params=True,
         )
 
+    assert _warnings_naming(caplog, "reasoning_effort") == ()
+
+
+@pytest.mark.parametrize("reasoning_effort", ["HIGH", "auto", "", {"effort": "HIGH"}])
+def test_magistral_rejects_a_reasoning_effort_that_is_not_a_level(
+    local_model_cost_map: None, reasoning_effort: object
+) -> None:
+    import litellm
+
+    with pytest.raises(litellm.UnsupportedParamsError, match=r"\['reasoning_effort'\]"):
+        litellm.get_optional_params(
+            model="magistral-small-latest",
+            custom_llm_provider="mistral",
+            reasoning_effort=reasoning_effort,
+        )
+
+
+@pytest.mark.parametrize("drop_params", [False, True])
+@pytest.mark.parametrize("reasoning_effort", ["default", {"effort": "default"}])
+@pytest.mark.parametrize("model", ["magistral-small-latest", "mistral-medium-latest"])
+def test_default_reasoning_effort_leaves_the_level_to_mistral(
+    local_model_cost_map: None,
+    caplog: pytest.LogCaptureFixture,
+    model: str,
+    reasoning_effort: object,
+    drop_params: bool,
+) -> None:
+    import litellm
+
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        optional_params: Final = litellm.get_optional_params(
+            model=model,
+            custom_llm_provider="mistral",
+            reasoning_effort=reasoning_effort,
+            drop_params=drop_params,
+        )
+
+    assert "reasoning_effort" not in optional_params
     assert _warnings_naming(caplog, "reasoning_effort") == ()
 
 

@@ -27,6 +27,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     strip_none_values_from_message,
 )
 from litellm.litellm_core_utils.reasoning_effort_capability import (
+    REASONING_EFFORT_ADVERTISEMENT_ORDER,
     declared_reasoning_efforts_for_model,
     nearest_declared_reasoning_effort,
 )
@@ -92,6 +93,8 @@ _MISTRAL_REQUEST_ROUTING: Final = TypeAdapter(MistralRequestRouting)
 _MISTRAL_CACHE_KEY_PARAMS: Final = TypeAdapter(MistralCacheKeyParams)
 _MISTRAL_REASONING_EFFORT_PARAMS: Final = TypeAdapter(MistralReasoningEffortParams)
 _MISTRAL_FILE_PART: Final = TypeAdapter(MistralFilePart)
+_REASONING_LEVELS: Final = frozenset(REASONING_EFFORT_ADVERTISEMENT_ORDER)
+_PROVIDER_DEFAULT_EFFORT: Final = "default"
 _NON_LEVEL_EFFORT_REASON: Final = (
     "the Mistral API takes it only as a level such as 'high', so Mistral applies its default effort."
 )
@@ -294,13 +297,16 @@ class MistralConfig(OpenAIGPTConfig):
     ) -> str | None:
         requested_effort: Final = requested.get("reasoning_effort")
         level, summary = _reasoning_level_and_summary(requested_effort)
+        leaves_level_to_mistral: Final = level == _PROVIDER_DEFAULT_EFFORT
         sendable: Final = (
-            _accepted_reasoning_effort(model, level, self.custom_llm_provider) if isinstance(level, str) else None
+            _accepted_reasoning_effort(model, level, self.custom_llm_provider)
+            if isinstance(level, str) and level in _REASONING_LEVELS
+            else None
         )
-        if sendable is not None and summary is None:
+        if summary is None and (sendable is not None or leaves_level_to_mistral):
             return sendable
         if drop_params or litellm.drop_params is True:
-            if sendable is None and level is not None:
+            if sendable is None and level is not None and not leaves_level_to_mistral:
                 warn_dropped_reasoning(
                     "reasoning_effort", requested_effort, model, _NON_LEVEL_EFFORT_REASON, drop_params_gated=True
                 )
