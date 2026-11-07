@@ -1,4 +1,5 @@
 from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from typing import Final, cast
 
@@ -160,22 +161,27 @@ def pick_cheapest_chat_models_from_llm_provider(custom_llm_provider: str, n=1):
 
 
 @dataclass(frozen=True, slots=True)
-class RankedChatModel:
+class RankedModel:
     model: str
     route_rank: int
     cost: float
     is_past_deprecation_date: bool
 
 
-def rank_chat_models_from_llm_provider(custom_llm_provider: str) -> tuple[RankedChatModel, ...]:
+_CHAT_MODES: Final = frozenset({"chat"})
+
+
+def rank_chat_models_from_llm_provider(custom_llm_provider: str) -> tuple[RankedModel, ...]:
+    return rank_models_from_llm_provider(custom_llm_provider, _CHAT_MODES)
+
+
+def rank_models_from_llm_provider(custom_llm_provider: str, modes: AbstractSet[str]) -> tuple[RankedModel, ...]:
     from litellm.utils import bundled_provider_models
 
     known_models: Final = bundled_provider_models(custom_llm_provider)
     ranked_models: Final = (
-        RankedChatModel(
-            model=model, route_rank=route_rank, cost=cost, is_past_deprecation_date=is_past_deprecation_date
-        )
-        for model, cost, is_past_deprecation_date in _chat_row_costs(known_models, custom_llm_provider)
+        RankedModel(model=model, route_rank=route_rank, cost=cost, is_past_deprecation_date=is_past_deprecation_date)
+        for model, cost, is_past_deprecation_date in _row_costs(known_models, custom_llm_provider, modes)
         if (route_rank := _route_rank(model, custom_llm_provider)) is not None
     )
     return tuple(sorted(ranked_models, key=lambda ranked_model: (ranked_model.route_rank, ranked_model.cost)))
@@ -196,13 +202,15 @@ def _is_past_deprecation_date(cost_map_key: str) -> bool:
     )
 
 
-def _chat_row_costs(models: Iterable[str], custom_llm_provider: str) -> Iterator[tuple[str, float, bool]]:
+def _row_costs(
+    models: Iterable[str], custom_llm_provider: str, modes: AbstractSet[str]
+) -> Iterator[tuple[str, float, bool]]:
     for model in models:
         try:
             model_info = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
         except Exception:
             continue
-        if model_info.get("mode") != "chat":
+        if model_info.get("mode") not in modes:
             continue
         yield (
             model,

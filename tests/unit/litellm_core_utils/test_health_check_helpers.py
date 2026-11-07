@@ -4,6 +4,7 @@ import json
 import socket
 import struct
 import zlib
+from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -1781,6 +1782,7 @@ async def test_partial_wildcard_health_check_on_a_provider_without_cost_map_chat
     )
 
     assert "model_info.health_check_model" in response["error"], response["error"]
+    assert "model_info.mode" in response["error"], response["error"]
     assert respx_mock.calls.call_count == 0
 
 
@@ -1987,3 +1989,175 @@ async def test_wildcard_health_check_with_pinned_provider_calls_a_model_without_
     assert "error" not in result, result
     assert json.loads(together_route.calls.last.request.content)["model"] == "fake-together-chat"
     assert not other_hosts.called
+
+
+def _register_catalog(monkeypatch: pytest.MonkeyPatch, provider: str, rows: Mapping[str, tuple[str, float]]) -> None:
+    for model, (mode, cost) in rows.items():
+        monkeypatch.setitem(
+            litellm.model_cost,
+            model,
+            {"litellm_provider": provider, "mode": mode, "input_cost_per_token": cost, "output_cost_per_token": cost},
+        )
+    monkeypatch.setitem(litellm.models_by_provider, provider, tuple(rows))
+
+
+_VOYAGE_EMBEDDINGS_URL: Final = "https://api.voyageai.com/v1/embeddings"
+_OPENAI_EMBEDDINGS_URL: Final = "https://api.openai.com/v1/embeddings"
+
+
+def _embedding(request: httpx.Request) -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={
+            "object": "list",
+            "data": [{"object": "embedding", "embedding": [0.1, 0.2], "index": 0}],
+            "model": json.loads(request.content)["model"],
+            "usage": {"prompt_tokens": 2, "total_tokens": 2},
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_embedding_mode_wildcard_health_check_probes_the_cheapest_served_embedding_model(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    _register_catalog(
+        monkeypatch,
+        "voyage",
+        {
+            "voyage/voyage-fixture-pricey": ("embedding", 3e-9),
+            "voyage/voyage-fixture-rerank": ("rerank", 1e-10),
+            "voyage/voyage-fixture-lite": ("embedding", 1e-9),
+        },
+    )
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    upstream: Final = respx_mock.post(_VOYAGE_EMBEDDINGS_URL).mock(side_effect=_embedding)
+
+    response: Final = await ahealth_check(
+        {"model": "voyage/voyage-fixture-*", "api_key": "fake-key"}, mode="embedding", input=["health check"]
+    )
+
+    assert [json.loads(call.request.content)["model"] for call in upstream.calls] == ["voyage-fixture-lite"]
+    assert json.loads(upstream.calls.last.request.content)["input"] == ["health check"]
+    assert "error" not in response, response
+
+
+@pytest.fixture
+def openai_embedding_catalog(monkeypatch: pytest.MonkeyPatch) -> None:
+    _register_catalog(
+        monkeypatch,
+        "openai",
+        {
+            "openai/gpt-fixture-nano": ("chat", 1e-10),
+            "openai/text-embedding-fixture-large": ("embedding", 2e-9),
+            "openai/text-embedding-fixture-small": ("embedding", 1e-9),
+        },
+    )
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+
+def _embedding_without_the_small_model(request: httpx.Request) -> httpx.Response:
+    if json.loads(request.content)["model"] == "text-embedding-fixture-small":
+        return httpx.Response(404, json={"error": {"message": "fixture model not found", "type": "invalid_request_error"}})
+    return _embedding(request)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("openai_embedding_catalog")
+async def test_embedding_mode_wildcard_health_check_falls_back_to_the_next_served_embedding_model(
+    respx_mock: respx.MockRouter,
+) -> None:
+    upstream: Final = respx_mock.post(_OPENAI_EMBEDDINGS_URL).mock(side_effect=_embedding_without_the_small_model)
+
+    response: Final = await ahealth_check(
+        {"model": "openai/text-embedding-fixture-*", "api_key": "fake-key"}, mode="embedding"
+    )
+
+    assert [json.loads(call.request.content)["model"] for call in upstream.calls] == [
+        "text-embedding-fixture-small",
+        "text-embedding-fixture-large",
+    ]
+    assert "error" not in response, response
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("openai_embedding_catalog")
+async def test_embedding_mode_wildcard_health_check_that_fails_on_every_served_model_never_probes_chat(
+    respx_mock: respx.MockRouter,
+) -> None:
+    embeddings_route: Final = respx_mock.post(_OPENAI_EMBEDDINGS_URL).respond(
+        401, json={"error": {"message": "fixture bad key", "type": "invalid_request_error", "code": "invalid_api_key"}}
+    )
+    chat_route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").respond(
+        json=dict(CHAT_COMPLETION_BODY)
+    )
+
+    response: Final = await ahealth_check(
+        {"model": "openai/text-embedding-fixture-*", "api_key": "fake-key"}, mode="embedding"
+    )
+
+    assert [json.loads(call.request.content)["model"] for call in embeddings_route.calls] == [
+        "text-embedding-fixture-small",
+        "text-embedding-fixture-large",
+    ]
+    assert chat_route.call_count == 0
+    assert "fixture bad key" in response["error"], response["error"]
+
+
+@pytest.mark.asyncio
+async def test_rerank_mode_wildcard_health_check_probes_a_served_rerank_model_on_the_rerank_api(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    _register_catalog(
+        monkeypatch,
+        "cohere",
+        {
+            "rerank-fixture-pro": ("rerank", 2e-9),
+            "rerank-fixture-fast": ("rerank", 1e-9),
+            "embed-fixture": ("embedding", 1e-10),
+        },
+    )
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    upstream: Final = respx_mock.post("https://api.cohere.com/v2/rerank").respond(
+        json={
+            "id": "rerank-health",
+            "results": [{"index": 0, "relevance_score": 0.7}],
+            "meta": {"billed_units": {"search_units": 1}},
+        }
+    )
+
+    response: Final = await ahealth_check(
+        {"model": "cohere/rerank-fixture-*", "api_key": "fake-key"}, mode="rerank", prompt="health check"
+    )
+
+    assert [json.loads(call.request.content)["model"] for call in upstream.calls] == ["rerank-fixture-fast"]
+    assert json.loads(upstream.calls.last.request.content)["query"] == "health check"
+    assert "error" not in response, response
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("wildcard_catalog")
+async def test_embedding_mode_wildcard_health_check_without_a_served_embedding_model_keeps_the_chat_probe(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    upstream: Final = respx_mock.post(f"{_DATABRICKS_FIXTURE_API_BASE}/chat/completions").respond(
+        json=dict(CHAT_COMPLETION_BODY)
+    )
+
+    response: Final = await ahealth_check(
+        {
+            "model": "databricks/databricks-claude-*",
+            "api_key": "fake-key",
+            "api_base": _DATABRICKS_FIXTURE_API_BASE,
+            "messages": [{"role": "user", "content": "What is 1 + 1?"}],
+        },
+        mode="embedding",
+    )
+
+    assert [json.loads(call.request.content)["model"] for call in upstream.calls] == ["databricks-claude-fixture-a"]
+    assert response == {}

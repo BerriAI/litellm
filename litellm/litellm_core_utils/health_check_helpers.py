@@ -5,17 +5,22 @@ Helper functions for health check calls.
 import base64
 import itertools
 import re
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal
 
+from pydantic import TypeAdapter
+
+from litellm.litellm_core_utils.health_check_utils import create_health_check_response
+from litellm.litellm_core_utils.hidden_params import get_hidden_params
 from litellm.llms.base_llm.ocr.transformation import DocumentType
 from litellm.rust_bridge import runtime
 from litellm.rust_bridge.ocr.entrypoints import NATIVE_OCR_HEALTH_CHECK_DOCUMENT
-from litellm.types.utils import LIST_BATCHES_SUPPORTED_PROVIDERS
+from litellm.types.utils import DECISIONS_MODEL_MODES, LIST_BATCHES_SUPPORTED_PROVIDERS, is_decisions_model_mode
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.litellm_core_utils.llm_request_utils import RankedModel
     from litellm.types.utils import ImageResponse
 
 
@@ -34,6 +39,7 @@ BEDROCK_ANY_MODEL_ROUTES: Final = frozenset({"converse", "invoke"})
 EXTRACTION_HEALTH_CHECK_FIELDS: Final[Mapping[str, Mapping[str, str]]] = MappingProxyType(
     {"reachable": MappingProxyType({"type": "text", "instructions": "Any word from the text"})}
 )
+_RESPONSE_HEADERS: Final = TypeAdapter(Mapping[str, object])
 
 
 def native_health_check_mode(
@@ -64,6 +70,15 @@ def default_health_check_mode(requested_model: str, model: str, custom_llm_provi
         or _cost_map_mode(model)
         or "chat"
     )
+
+
+def health_check_handler_mode(mode: str) -> str:
+    return "decisions" if is_decisions_model_mode(mode) else mode
+
+
+def health_check_response(response: object) -> Mapping[str, object]:
+    hidden_params: Final = get_hidden_params(response) or {}
+    return create_health_check_response(_RESPONSE_HEADERS.validate_python(hidden_params.get("headers") or {}))
 
 
 def get_image_file_for_health_check() -> bytes:
@@ -117,8 +132,9 @@ def _is_route_segment(custom_llm_provider: str, segment: str, model_after_segmen
     return base_model is not None and not base_model.startswith(f"{segment}/")
 
 
-def wildcard_health_check_models(wildcard: str, custom_llm_provider: str) -> tuple[str, ...]:
-    from litellm.litellm_core_utils.llm_request_utils import rank_chat_models_from_llm_provider
+def _wildcard_served_models(
+    wildcard: str, custom_llm_provider: str, ranked_models: Sequence["RankedModel"]
+) -> tuple[str, ...]:
     from litellm.litellm_core_utils.pattern_match_deployments import PatternMatchRouter
 
     provider_prefix: Final = f"{custom_llm_provider}/"
@@ -133,22 +149,51 @@ def wildcard_health_check_models(wildcard: str, custom_llm_provider: str) -> tup
     )
     route_prefix: Final = "".join(f"{segments[segment_index]}/" for segment_index in route_segments)
     model_regex: Final = re.compile(PatternMatchRouter().pattern_to_regex("/".join(segments[len(route_segments) :])))
-    ranked_model_ids: Final = tuple(
-        (ranked_model.model.removeprefix(provider_prefix), ranked_model)
-        for ranked_model in rank_chat_models_from_llm_provider(custom_llm_provider)
+    ranked_model_ids: Final = (
+        (ranked_model.model.removeprefix(provider_prefix), ranked_model) for ranked_model in ranked_models
     )
     served_model_ids: Final = sorted(
         (ranked for ranked in ranked_model_ids if model_regex.fullmatch(ranked[0])),
         key=lambda ranked: (ranked[1].is_past_deprecation_date, ranked[1].route_rank, ranked[1].cost, ranked[0]),
     )
-    served_probes: Final = itertools.islice(
-        dict.fromkeys(f"{provider_prefix}{route_prefix}{model_id}" for model_id, _ in served_model_ids),
-        WILDCARD_HEALTH_CHECK_SERVED_MODEL_COUNT,
+    return tuple(
+        itertools.islice(
+            dict.fromkeys(f"{provider_prefix}{route_prefix}{model_id}" for model_id, _ in served_model_ids),
+            WILDCARD_HEALTH_CHECK_SERVED_MODEL_COUNT,
+        )
     )
+
+
+def wildcard_health_check_models(wildcard: str, custom_llm_provider: str) -> tuple[str, ...]:
+    from litellm.litellm_core_utils.llm_request_utils import rank_chat_models_from_llm_provider
+
+    provider_prefix: Final = f"{custom_llm_provider}/"
+    ranked_models: Final = rank_chat_models_from_llm_provider(custom_llm_provider)
     provider_probes: Final = (
-        f"{provider_prefix}{model_id}" for model_id, _ in ranked_model_ids[:WILDCARD_HEALTH_CHECK_PROVIDER_MODEL_COUNT]
+        f"{provider_prefix}{ranked_model.model.removeprefix(provider_prefix)}"
+        for ranked_model in ranked_models[:WILDCARD_HEALTH_CHECK_PROVIDER_MODEL_COUNT]
     )
-    return tuple(dict.fromkeys((*served_probes, *provider_probes)))
+    return tuple(
+        dict.fromkeys((*_wildcard_served_models(wildcard, custom_llm_provider, ranked_models), *provider_probes))
+    )
+
+
+def _wildcard_served_models_of_mode(wildcard: str, custom_llm_provider: str, handler_mode: str) -> tuple[str, ...]:
+    from litellm.litellm_core_utils.llm_request_utils import rank_models_from_llm_provider
+
+    cost_map_modes: Final = DECISIONS_MODEL_MODES if handler_mode == "decisions" else frozenset({handler_mode})
+    return _wildcard_served_models(
+        wildcard, custom_llm_provider, rank_models_from_llm_provider(custom_llm_provider, cost_map_modes)
+    )
+
+
+async def _first_answer(probes: Sequence[Callable[[], Awaitable[object]]]) -> object:
+    try:
+        return await probes[0]()
+    except Exception:
+        if len(probes) == 1:
+            raise
+    return await _first_answer(probes[1:])
 
 
 class HealthCheckHelpers:
@@ -158,14 +203,40 @@ class HealthCheckHelpers:
         custom_llm_provider: str,
         model_params: dict,
         litellm_logging_obj: "Logging",
-    ) -> dict:
+        mode: str | None = None,
+        prompt: str | None = None,
+        input: Sequence[str] | None = None,
+    ) -> Mapping[str, object]:
         from litellm import acompletion
+
+        handler_mode: Final = health_check_handler_mode(mode or "chat")
+        served_models: Final = (
+            () if handler_mode == "chat" else _wildcard_served_models_of_mode(model, custom_llm_provider, handler_mode)
+        )
+        provider_prefix: Final = f"{custom_llm_provider}/"
+        mode_probes: Final = tuple(
+            handler
+            for served_model in served_models
+            if (
+                handler := HealthCheckHelpers.get_mode_handlers(
+                    model=served_model.removeprefix(provider_prefix),
+                    custom_llm_provider=custom_llm_provider,
+                    model_params={**model_params, "model": served_model},
+                    prompt=prompt,
+                    input=None if input is None else list(input),
+                ).get(handler_mode)
+            )
+            is not None
+        )
+        if mode_probes:
+            return health_check_response(await _first_answer(mode_probes))
 
         probe_models: Final = wildcard_health_check_models(wildcard=model, custom_llm_provider=custom_llm_provider)
         if len(probe_models) == 0:
             raise Exception(
                 f"Unable to health check wildcard model {model} for provider {custom_llm_provider}: the cost map has "
-                "no chat model for this provider. Set model_info.health_check_model to a model this wildcard serves"
+                "no chat model for this provider. Set model_info.health_check_model to a model this wildcard serves, "
+                "or model_info.mode to the mode it serves, such as embedding or rerank"
             )
         model_params["model"] = probe_models[0]
         model_params["litellm_logging_obj"] = litellm_logging_obj
@@ -259,30 +330,10 @@ class HealthCheckHelpers:
     def get_mode_handlers(
         model: str,
         custom_llm_provider: str,
-        model_params: dict,
+        model_params: dict[str, object],
         prompt: str | None = None,
-        input: list | None = None,
-    ) -> dict[
-        Literal[
-            "chat",
-            "completion",
-            "embedding",
-            "audio_speech",
-            "audio_transcription",
-            "image_generation",
-            "image_edit",
-            "video_generation",
-            "rerank",
-            "realtime",
-            "batch",
-            "responses",
-            "anthropic_messages",
-            "ocr",
-            "decisions",
-            "extraction",
-        ],
-        Callable,
-    ]:
+        input: list[str] | None = None,
+    ) -> Mapping[str, Callable[[], Awaitable[object]]]:
         """
         Returns a dictionary of mode handlers for health check calls.
 
@@ -305,6 +356,7 @@ class HealthCheckHelpers:
         from litellm.litellm_core_utils.health_check_utils import (
             DECISIONS_CALL_PARAMS,
             EXTRACTION_CALL_PARAMS,
+            OPTIONAL_STR,
             _filter_model_params,
         )
         from litellm.realtime_api.main import realtime_health_check
@@ -355,9 +407,9 @@ class HealthCheckHelpers:
             "realtime": lambda: realtime_health_check(
                 model=model,
                 custom_llm_provider=custom_llm_provider,
-                api_base=model_params.get("api_base", None),
-                api_key=model_params.get("api_key", None),
-                api_version=model_params.get("api_version", None),
+                api_base=OPTIONAL_STR.validate_python(model_params.get("api_base")),
+                api_key=OPTIONAL_STR.validate_python(model_params.get("api_key")),
+                api_version=OPTIONAL_STR.validate_python(model_params.get("api_version")),
                 model_params=model_params,
             ),
             "batch": lambda: HealthCheckHelpers._batch_health_check(

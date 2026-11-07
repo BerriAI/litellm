@@ -12,7 +12,7 @@ import respx
 
 import litellm
 from litellm.litellm_core_utils.health_check_helpers import HealthCheckHelpers
-from litellm.litellm_core_utils.llm_request_utils import RankedChatModel
+from litellm.litellm_core_utils.llm_request_utils import RankedModel
 from litellm.proxy import health_check as hc_module
 from litellm.proxy.health_check import (
     _is_strategy_router_deployment,
@@ -89,7 +89,7 @@ async def test_ahealth_check_wildcard_models_respects_max_tokens():
         patch(
             "litellm.litellm_core_utils.llm_request_utils.rank_chat_models_from_llm_provider",
             return_value=(
-                RankedChatModel(model="gpt-4o-mini", route_rank=0, cost=0.0, is_past_deprecation_date=False),
+                RankedModel(model="gpt-4o-mini", route_rank=0, cost=0.0, is_past_deprecation_date=False),
             ),
         ),
         patch("litellm.acompletion", new_callable=AsyncMock),
@@ -705,6 +705,42 @@ async def test_a_health_probe_of_a_custom_priced_chat_pin_leaves_plain_calls_on_
 
     assert "error" not in result, result
     assert (chat_route.call_count, responses_route.call_count) == (1, 1)
+
+
+@pytest.mark.asyncio
+async def test_run_model_health_check_probes_an_embedding_mode_wildcard_on_the_embeddings_api_without_max_tokens(
+    monkeypatch,
+):
+    for model, cost in (("voyage/voyage-fixture-large", 2e-9), ("voyage/voyage-fixture-lite", 1e-9)):
+        monkeypatch.setitem(
+            litellm.model_cost, model, {"litellm_provider": "voyage", "mode": "embedding", "input_cost_per_token": cost}
+        )
+    monkeypatch.setitem(
+        litellm.models_by_provider, "voyage", ("voyage/voyage-fixture-large", "voyage/voyage-fixture-lite")
+    )
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        embeddings_route: Final = respx_mock.post("https://api.voyageai.com/v1/embeddings").respond(
+            json={
+                "object": "list",
+                "data": [{"object": "embedding", "embedding": [0.1, 0.2], "index": 0}],
+                "model": "voyage-fixture-lite",
+                "usage": {"total_tokens": 2},
+            }
+        )
+        result: Final = await hc_module._run_model_health_check(
+            {
+                "litellm_params": {"model": "voyage/voyage-fixture-*", "api_key": "test-key"},
+                "model_info": {"mode": "embedding"},
+            }
+        )
+
+    assert "error" not in result, result
+    sent: Final = json.loads(embeddings_route.calls.last.request.content)
+    assert sent["model"] == "voyage-fixture-lite"
+    assert "max_tokens" not in sent
 
 
 def test_autodetected_embedding_skips_reasoning_effort():
