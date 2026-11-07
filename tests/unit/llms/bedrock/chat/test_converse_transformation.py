@@ -37,6 +37,35 @@ from litellm.types.llms.openai import AllMessageValues
 from tests.unit.conftest import NativeStructuredOutputKey
 
 
+@pytest.mark.parametrize("modify_params", [False, True])
+def test_between_tools_survives_tool_results_without_thinking_blocks(
+    monkeypatch: pytest.MonkeyPatch, modify_params: bool
+) -> None:
+    monkeypatch.setattr(litellm, "modify_params", modify_params)
+    config: Final = AmazonConverseConfig()
+    optional_params: Final = config.map_openai_params(
+        {"reasoning_effort": "none"}, {}, "us.anthropic.claude-sonnet-5-5", False
+    )
+    result: Final = config._transform_request(
+        model="us.anthropic.claude-sonnet-5-5",
+        messages=[
+            {"role": "user", "content": "Get the weather"},
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {"id": "call_weather", "type": "function", "function": {"name": "weather", "arguments": "{}"}}
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_weather", "content": "Sunny"},
+        ],
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+    assert result["additionalModelRequestFields"]["thinking"] == {"type": "between_tools"}
+    assert "output_config" not in result["additionalModelRequestFields"]
+
+
 def test_transform_usage():
     usage = ConverseTokenUsageBlock(
         **{
