@@ -597,6 +597,39 @@ class TestOllamaConfig:
         assert result.choices[0]["message"].content == ""
         assert result.choices[0]["finish_reason"] == "stop"
 
+    @pytest.mark.parametrize(
+        ("response_text", "request_data", "done_reason", "expected_finish_reason"),
+        [
+            ("one two three", None, "length", "length"),
+            ('{"answer": "one two', {"format": "json"}, "length", "length"),
+            ('{"answer": 42}', {"format": "json"}, "length", "length"),
+            ("", {"format": "json"}, "length", "length"),
+            ('{"name": "get_weather", "arguments": {}}', {"format": "json"}, "length", "tool_calls"),
+            ("one two three", None, None, "stop"),
+        ],
+        ids=[
+            "text",
+            "json_mode_cut_off",
+            "json_mode_valid_json",
+            "json_mode_empty",
+            "json_mode_function_call",
+            "null_done_reason",
+        ],
+    )
+    def test_transform_response_finish_reason_follows_done_reason(
+        self,
+        response_text: str,
+        request_data: dict[str, object] | None,
+        done_reason: str | None,
+        expected_finish_reason: str,
+    ):
+        result = self._transform(
+            {"response": response_text, "done": True, "done_reason": done_reason, "eval_count": 3},
+            request_data=request_data,
+        )
+
+        assert result.choices[0]["finish_reason"] == expected_finish_reason
+
 
 class TestOllamaTextCompletionResponseIterator:
     def test_every_chunk_of_one_stream_carries_the_same_response_id(self):
@@ -766,6 +799,33 @@ class TestOllamaTextCompletionResponseIterator:
 
         assert (first.choices[0].delta.content, second.choices[0].delta.content) == ("Here is code: ", '{"a": 1}')
         assert (done["text"], done["finish_reason"], done.get("tool_use")) == ("", "stop", None)
+
+    @pytest.mark.parametrize(
+        ("response_chunks", "done_reason", "expected_text", "expected_finish_reason"),
+        [
+            (("one ", "two "), "length", "", "length"),
+            (('{"answer": ', '"one two'), "length", '{"answer": "one two', "length"),
+            (('{"name": "get_weather", ', '"arguments": {}}'), "length", "", "tool_calls"),
+            (("one ", "two "), None, "", "stop"),
+        ],
+        ids=["text", "held_json_cut_off", "held_function_call", "null_done_reason"],
+    )
+    def test_chunk_parser_finish_reason_follows_done_reason(
+        self,
+        response_chunks: tuple[str, ...],
+        done_reason: str | None,
+        expected_text: str,
+        expected_finish_reason: str,
+    ):
+        iterator: Final = OllamaTextCompletionResponseIterator(
+            streaming_response=iter([]), sync_stream=True, json_mode=False
+        )
+
+        for text in response_chunks:
+            iterator.chunk_parser({"response": text, "done": False})
+        done: Final = iterator.chunk_parser({"response": "", "done": True, "done_reason": done_reason})
+
+        assert (done["text"], done["finish_reason"]) == (expected_text, expected_finish_reason)
 
     def test_chunk_parser_releases_held_code_fence_that_is_not_json(self):
         iterator: Final = OllamaTextCompletionResponseIterator(
