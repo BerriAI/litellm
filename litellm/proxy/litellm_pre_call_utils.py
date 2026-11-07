@@ -124,6 +124,8 @@ _BEDROCK_SESSION_ID_METADATA_KEYS: Final = ("sessionId", "threadId", "conversati
 # Session-id values must be non-empty strings of alphanumerics, hyphens, or underscores
 # (covers UUIDs and most common session-id formats).
 _SESSION_ID_VALUE_RE: Final = re.compile(r"^[a-zA-Z0-9_\-]{8,}$")
+# Harnesses whose subagents reuse the parent's session header and add an agent id header.
+_SUBAGENT_ID_HEADERS: Final = MappingProxyType({"x-claude-code-agent-id": "x-claude-code-session-id"})
 
 _SHA256_HEX_RE: Final = re.compile(r"^[0-9a-f]{64}$")
 
@@ -223,12 +225,28 @@ def _caller_session_beside_trace_header(
     return get_chain_id_from_headers(session_headers) or _caller_body_session_id(data, metadata_variable_name)
 
 
+def _subagent_tier_session_metadata(normalized_headers: Mapping[str, str]) -> Mapping[str, str]:
+    harness_ids: Final = (
+        (normalized_headers.get(session_header, ""), normalized_headers.get(agent_header, ""))
+        for agent_header, session_header in _SUBAGENT_ID_HEADERS.items()
+    )
+    child_session: Final = next(
+        (
+            f"{session_id}:{agent_id}"
+            for session_id, agent_id in harness_ids
+            if _SESSION_ID_VALUE_RE.fullmatch(session_id) and _SESSION_ID_VALUE_RE.fullmatch(agent_id)
+        ),
+        None,
+    )
+    return {COMPLEXITY_ROUTER_CHILD_SESSION_ID_METADATA_KEY: child_session} if child_session else {}
+
+
 def _child_tier_session_metadata(
     normalized_headers: Mapping[str, str], data: Mapping[str, object], metadata_variable_name: str
 ) -> Mapping[str, str | None]:
     parent: Final = normalized_headers.get("x-parent-session-id")
     if not parent or not _SESSION_ID_VALUE_RE.fullmatch(parent):
-        return {}
+        return _subagent_tier_session_metadata(normalized_headers)
     own_headers: Final = {
         key: value
         for key, value in normalized_headers.items()
