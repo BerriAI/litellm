@@ -48,12 +48,17 @@ def responses_batch_body_to_chat_body(
         ResponsesAPIOptionalRequestParams,
         _frozen_mapping((key, value) for key, value in openai_request_body.items() if key in _responses_request_keys()),
     )
-    return LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # transformer declares a bare dict return
-        model=model if isinstance(model, str) else "",
-        input=chat_input,
-        responses_api_request=responses_request,
-        custom_llm_provider=custom_llm_provider,
-        drop_params=drop_params,
-        caller_input=caller_input,
-        metadata=openai_request_body.get("metadata"),
+    row_drop_params: Final = openai_request_body.get("drop_params")
+    chat_body: Final = cast(  # cast-ok: the transformer declares a bare dict return
+        dict[str, object],
+        LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(  # pyright: ignore[reportUnknownMemberType]  # transformer declares a bare dict return
+            model=model if isinstance(model, str) else "",
+            input=chat_input,
+            responses_api_request=responses_request,
+            custom_llm_provider=custom_llm_provider,
+            drop_params=row_drop_params if drop_params is None else drop_params,
+            caller_input=caller_input,
+            metadata=openai_request_body.get("metadata"),
+        ),
     )
+    return chat_body if row_drop_params is None else {**chat_body, "drop_params": row_drop_params}

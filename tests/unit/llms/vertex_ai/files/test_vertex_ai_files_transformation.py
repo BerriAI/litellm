@@ -2476,3 +2476,31 @@ def test_batch_row_with_a_hosted_mcp_tool_is_refused_with_advice_a_batch_row_can
     assert "`deepwiki`" in exc_info.value.message
     assert HOSTED_MCP_BATCH_ROW_REMEDY in exc_info.value.message
     assert "litellm_proxy/mcp" not in exc_info.value.message
+
+
+@pytest.mark.parametrize("model", ["gemini-2.5-flash", "claude-sonnet-4-6"])
+def test_batch_responses_row_drops_a_hosted_mcp_tool_under_its_own_drop_params(
+    config: VertexAIFilesConfig, monkeypatch: pytest.MonkeyPatch, model: str
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    entry: Final = {
+        "custom_id": "r1",
+        "method": "POST",
+        "url": "/v1/responses",
+        "body": {
+            "model": model,
+            "input": "hi",
+            "max_output_tokens": 10,
+            "drop_params": True,
+            "tools": [
+                {"type": "mcp", "server_label": "deepwiki", "server_url": "https://mcp.deepwiki.com/mcp"},
+                {"type": "function", "name": "get_weather", "parameters": {"type": "object", "properties": {}}},
+            ],
+        },
+    }
+
+    (row,) = _uploaded_rows(config, {"gcs_bucket_name": "my-bucket", "model": f"vertex_ai/{model}"}, [entry])
+
+    assert "get_weather" in json.dumps(row)
+    assert "deepwiki" not in json.dumps(row)
+    assert "drop_params" not in json.dumps(row)
