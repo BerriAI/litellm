@@ -286,10 +286,10 @@ def test_mantle_claude_that_cannot_force_a_tool_keeps_json_schema_on_the_json_to
 
 @pytest.mark.usefixtures("local_model_cost_map")
 def test_mantle_uses_native_output_only_for_schemas_within_the_property_limit() -> None:
-    from litellm.llms.bedrock.chat.mantle.transformation import AmazonMantleConfig
+    from litellm.llms.bedrock_mantle.chat.claude_transformation import BedrockMantleClaudeChatConfig
 
     model: Final = "anthropic.claude-haiku-4-5"
-    config: Final = AmazonMantleConfig()
+    config: Final = BedrockMantleClaudeChatConfig()
 
     def transform(size: int) -> dict[str, object]:
         response_format: Final = {
@@ -310,11 +310,18 @@ def test_mantle_uses_native_output_only_for_schemas_within_the_property_limit() 
             model=model,
             drop_params=False,
         )
-        return optional_params
+        return config.transform_request(
+            model=model,
+            messages=[{"role": "user", "content": "Return a JSON object."}],
+            optional_params=optional_params,
+            litellm_params={},
+            headers={},
+        )
 
     requests: Final = tuple(transform(size) for size in (2, 120))
     assert "output_format" in requests[0]
     assert "tools" not in requests[0]
+    assert "field_000" not in json.dumps(requests[0]["messages"])
     assert "output_format" not in requests[1]
     assert requests[1]["tool_choice"] == {"type": "tool", "name": "json_tool_call"}
     assert requests[1]["tools"][0]["name"] == "json_tool_call"

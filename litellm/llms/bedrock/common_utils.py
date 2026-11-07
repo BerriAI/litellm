@@ -561,16 +561,16 @@ def apply_bedrock_invoke_structured_output(
     model: str,
     request_body: dict[str, object],  # mutable-ok: edited in place like siblings
     model_info: Mapping[str, object] | None = None,
+    custom_llm_provider: str = "bedrock",
 ) -> None:
     """
-    Route Anthropic structured-output params to what the Bedrock model supports.
+    Route Anthropic structured-output params to the provider's native format.
 
     Consumes the legacy top-level ``output_format`` and the newer
     ``output_config.format``, keeping the pre-existing precedence of the legacy
-    field when a request carries both. Models flagged
-    ``supports_native_structured_output`` in the model map get the schema
-    forwarded as ``output_config.format``, which Bedrock relays to the model for
-    enforced structured output. For every other model the schema is inlined into
+    field when a request carries both. Native Mantle models keep ``output_format``
+    in the Anthropic Messages body. Other native Bedrock models receive
+    ``output_config.format``. For every other model the schema is inlined into
     the last user message as best-effort text, with a warning because nothing
     enforces it.
     """
@@ -584,9 +584,13 @@ def apply_bedrock_invoke_structured_output(
     native_format: Final = bedrock_native_output_format(
         model,
         schema_format,
+        custom_llm_provider=custom_llm_provider,
         model_info=model_info,
     )
     if native_format is not None:
+        if custom_llm_provider == "bedrock_mantle":
+            request_body["output_format"] = native_format  # rebind-ok: mutate the caller's request body
+            return
         existing_output_config: Final = request_body.get("output_config")
         if isinstance(existing_output_config, dict):
             existing_output_config["format"] = native_format

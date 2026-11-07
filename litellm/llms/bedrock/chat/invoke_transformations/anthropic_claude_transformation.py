@@ -360,6 +360,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
             model=model,
             request_body=anthropic_request,
             model_info=model_info,
+            custom_llm_provider=self.custom_llm_provider or "bedrock",
         )
         strip_unsupported_bedrock_invoke_output_config_keys(
             model=model,
