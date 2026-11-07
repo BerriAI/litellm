@@ -16,7 +16,7 @@ mod test_support;
 
 pub use daily_spend::{DailyEndUserRow, DailyTeamRow, DailyUserRow};
 pub use end_user::{EndUser, RateLimits, find_end_user};
-pub use error::Error;
+pub use error::{Error, ErrorKind};
 pub use failure::DbFailure;
 pub use spend::{
     DailySpend, DailyTable, EntitySpend, SpendLog, SpendLogRow, TeamMemberSpend,
