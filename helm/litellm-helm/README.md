@@ -115,6 +115,8 @@ type: Opaque
 
 The proxy's `/metrics/` endpoint requires authentication by default when proxy authentication is configured. This option is for `metricsServer.enabled: false`, the default. The separate metrics server does not use virtual-key authentication
 
+Authenticated scraping requires an encrypted service mesh between Prometheus and the LiteLLM pods. This ServiceMonitor scrapes the pod endpoint directly over HTTP and sends the reusable LiteLLM key with every request. Enroll both workloads in the mesh and enforce mutual TLS with no plaintext fallback on the scrape path before enabling `authSecret`. Ingress TLS does not protect this pod-to-pod connection. Without mesh encryption, network observers can capture and reuse the key, so leave `authSecret.enabled` disabled
+
 As a proxy administrator, create a dedicated internal user and a key restricted to the metrics routes. Set `LITELLM_URL` to your proxy URL and `LITELLM_MASTER_KEY` to its administrator credential, then run:
 
 ```bash
