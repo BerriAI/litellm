@@ -610,6 +610,127 @@ def estimate_image_tokens(
     return max(_image_policy_tokens(family, dimensions, detail) for family in families)
 
 
+_MEDIA_FILE_CHARS_PER_TOKEN: Final = 4
+_EmbeddingInputT: Final = TypeVar("_EmbeddingInputT")
+
+
+def _max_input_tokens(model: str) -> int | None:
+    try:
+        limit: Final = litellm.get_model_info(model).get("max_input_tokens")
+    except Exception:  # noqa: BLE001  # get_model_info raises a bare Exception for an unmapped model
+        return None
+    return limit if isinstance(limit, int) and limit > 0 else None
+
+
+def _media_file_tokens(data: str, models: Sequence[str]) -> int:
+    text_estimate: Final = len(data) // _MEDIA_FILE_CHARS_PER_TOKEN
+    ceilings: Final = tuple(map(_max_input_tokens, models))
+    known_ceilings: Final = tuple(ceiling for ceiling in ceilings if ceiling is not None)
+    if not known_ceilings or len(known_ceilings) != len(ceilings):
+        return text_estimate
+    return min(text_estimate, max(known_ceilings))
+
+
+def _block_str_field(block: Mapping[str, object], container: str, field: str) -> str | None:
+    inner: Final = as_str_mapping(block.get(container))
+    value: Final = inner.get(field) if inner is not None else None
+    return value if isinstance(value, str) else None
+
+
+def estimate_media_block_tokens(block: Mapping[str, object], models: Sequence[str], fallback_model: str | None) -> int:
+    from litellm.litellm_core_utils.audio_utils.utils import estimate_audio_tokens
+
+    match block.get("type"):
+        case "input_audio":
+            return estimate_audio_tokens(
+                _block_str_field(block, "input_audio", "data"), models, fallback_model=fallback_model
+            )
+        case "file":
+            return _media_file_tokens(_block_str_field(block, "file", "file_data") or "", models)
+        case _:
+            detail: Final = _block_str_field(block, "image_url", "detail")
+            return estimate_image_tokens(
+                models,
+                _block_str_field(block, "image_url", "url") or "",
+                "auto" if detail is None else detail,
+                fallback_model=fallback_model,
+            )
+
+
+_PER_ITEM_DATA_URI_EMBEDDING_PROVIDERS: Final = frozenset({"vertex_ai", "gemini", "azure_ai"})
+
+_DataUriMediaScope: TypeAlias = Literal["per_item", "whole_batch"]
+
+
+def _is_pdf_block(block: Mapping[str, object]) -> bool:
+    return (_block_str_field(block, "file", "file_data") or "").startswith("data:application/pdf")
+
+
+def _bedrock_data_uri_media_scope(
+    resolved_model: str, media: Sequence[Mapping[str, object]]
+) -> _DataUriMediaScope | None:
+    from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+    from litellm.llms.bedrock.common_utils import BedrockModelInfo
+    from litellm.utils import supports_embedding_image_input
+
+    base_model: Final = BedrockModelInfo.get_base_model(resolved_model.removeprefix("async_invoke/"))
+    if not supports_embedding_image_input(f"bedrock/{base_model}"):
+        return None
+    match BaseAWSLLM.get_bedrock_embedding_provider(base_model):
+        case "cohere":
+            return "whole_batch"
+        case "twelvelabs":
+            return None
+        case "nova" if any(map(_is_pdf_block, media)):
+            return None
+        case _:
+            return "per_item"
+
+
+def _data_uri_media_scope(model: str, media: Sequence[Mapping[str, object]]) -> _DataUriMediaScope | None:
+    from litellm.utils import supports_embedding_image_input
+
+    try:
+        resolved_model, provider, _, _ = litellm.get_llm_provider(model=model)
+    except litellm.exceptions.BadRequestError:
+        return None
+    if provider == "bedrock":
+        return _bedrock_data_uri_media_scope(resolved_model, media)
+    if not supports_embedding_image_input(model):
+        return None
+    if provider == "cohere":
+        return "whole_batch"
+    return "per_item" if provider in _PER_ITEM_DATA_URI_EMBEDDING_PROVIDERS else None
+
+
+def split_embedding_input_tokens(
+    value: _EmbeddingInputT, media_models: Callable[[], Sequence[str]], fallback_model: str | None = None
+) -> tuple[_EmbeddingInputT, int]:
+    from litellm.litellm_core_utils.prompt_templates.tpm_media_utils import (
+        embedding_input_is_all_media,
+        split_embedding_media_for_tpm,
+    )
+
+    text, media = split_embedding_media_for_tpm(value)
+    if not media:
+        return value, 0
+    models: Final = tuple(media_models())
+    scopes: Final = frozenset(_data_uri_media_scope(model, media) for model in models)
+    if not models or None in scopes or ("whole_batch" in scopes and not embedding_input_is_all_media(value)):
+        return value, 0
+    media_tokens: Final = sum(estimate_media_block_tokens(block, models, fallback_model) for block in media)
+    return cast(_EmbeddingInputT, text), media_tokens  # cast-ok: the projection keeps the input's container shape
+
+
+def embedding_aware_token_count(
+    messages: Sequence[Mapping[str, str]] | None,
+    text: str | list[str] | None,  # mutable-ok: litellm.token_counter only takes text as list[str]
+    media_models: Callable[[], Sequence[str]],
+) -> int:
+    embedding_text, media_tokens = split_embedding_input_tokens(text, media_models)
+    return litellm.token_counter(messages=messages, text=embedding_text) + media_tokens
+
+
 TokenCounterFunction = Callable[[str], int]
 """
 Type for a function that counts tokens in a string.

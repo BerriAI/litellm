@@ -234,7 +234,7 @@ export const formatGuardrailMode = (raw: unknown): string => {
   const { tags, default: fallback } = raw as { tags?: Record<string, unknown>; default?: unknown };
   const tagged: string[] = tags && typeof tags === "object" ? Object.values(tags).flatMap(toModeArray) : [];
   const modes: string[] = Array.from(new Set([...toModeArray(fallback), ...tagged]));
-  return modes.length > 0 ? `${modes.join(", ")} (tag-based)` : "";
+  return modes.length > 0 ? i18n.t("guardrails.modeDisplay.tagBased", { modes: modes.join(", ") }) : "";
 };
 
 // Resolves the supported modes for the selected provider, falling back to the global list

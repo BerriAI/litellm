@@ -127,7 +127,6 @@ class _ManagedFileRetrieve(Protocol):
         self,
         *,
         file_id: str,
-        _litellm_internal_model_credentials: Mapping[str, object] | None = None,
         **kwargs: Unpack[FileRetrieveCallOptions],
     ) -> OpenAIFileObject: ...
 
@@ -400,7 +399,7 @@ class _RouterFileCallKwargs(TypedDict, total=False):
 
 _MODEL_FILE_ID_MAPPING: Final = TypeAdapter(dict[str, str])
 _FILE_UPLOAD_ONLY_FIELDS: Final = frozenset({"file", "purpose", "expires_after", "extra_body"})
-_FILE_DELETE_RESERVED_FIELDS: Final = frozenset({"model", "file_id", "_litellm_internal_model_credentials"})
+_FILE_DELETE_RESERVED_FIELDS: Final = frozenset({"model", "file_id"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -459,15 +458,7 @@ async def _delete_provider_file(
     provider_file_id: str,
     request_data: Mapping[str, object],
 ) -> None:
-    credentials: Final = llm_router.registry().credentials(model_id, form="with_provider")
-    delete_data: Final = {
-        **{k: v for k, v in request_data.items() if k not in _FILE_DELETE_RESERVED_FIELDS},
-        **(
-            {"_litellm_internal_model_credentials": MappingProxyType(dict(credentials))}
-            if credentials is not None
-            else {}
-        ),
-    }
+    delete_data: Final = {k: v for k, v in request_data.items() if k not in _FILE_DELETE_RESERVED_FIELDS}
     await llm_router.afile_delete(
         model=model_id,
         file_id=provider_file_id,
@@ -1160,7 +1151,6 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         *,
         provider_file_id: str,
         call_options: Mapping[str, object],
-        internal_model_credentials: Mapping[str, object] | None = None,
     ) -> OpenAIFileObject:
         """Retrieve provider file details with transient retries and SDK retries disabled."""
         retrieve_file: Final = cast(_ManagedFileRetrieve, litellm.afile_retrieve)
@@ -1172,14 +1162,8 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             if attempt > 0:
                 await self._sleep(_PROVIDER_FILE_RETRIEVE_RETRY_DELAYS_SECONDS[attempt - 1])
             try:
-                if internal_model_credentials is None:
-                    return await retrieve_file(
-                        file_id=provider_file_id,
-                        **retrieve_options,
-                    )
                 return await retrieve_file(
                     file_id=provider_file_id,
-                    _litellm_internal_model_credentials=MappingProxyType(dict(internal_model_credentials)),
                     **retrieve_options,
                 )
             except Exception as error:
@@ -1221,7 +1205,6 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                     self._afile_retrieve_with_retries(
                         provider_file_id=provider_file_id,
                         call_options=router_credentials,
-                        internal_model_credentials=router_credentials,
                     ),
                     timeout=BATCH_OUTPUT_FILE_LOOKUP_TIMEOUT_SECONDS,
                 )
@@ -2866,15 +2849,6 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             exception_dict = {}
             for model_id, provider_file_id in specific_model_file_id_mapping.items():
                 try:
-                    # Cloud-storage providers (e.g. Bedrock S3) validate file ids
-                    # against the deployment's configured bucket, which they only
-                    # trust from this immutable server-side snapshot, never from
-                    # request params.
-                    credentials = llm_router.registry().credentials(model_id, form="with_provider")
-                    if credentials is not None:
-                        data["_litellm_internal_model_credentials"] = cast(Dict, MappingProxyType(dict(credentials)))
-                    else:
-                        data.pop("_litellm_internal_model_credentials", None)
                     return cast(
                         HttpxBinaryResponseContent,
                         await llm_router.afile_content(

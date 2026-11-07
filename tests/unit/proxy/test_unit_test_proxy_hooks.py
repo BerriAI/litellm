@@ -11,7 +11,7 @@ import litellm
 @pytest.mark.asyncio
 async def test_disable_spend_logs():
     """
-    Test that the spend logs are not written to the database when disable_spend_logs is True
+    With disable_spend_logs the request is queued only for its charge, flagged so no SpendLogs row is written
     """
     # Mock the necessary components
 
@@ -41,5 +41,4 @@ async def test_disable_spend_logs():
             org_id="org_id",
             kwargs={},
         )
-        # Verify no spend logs were added
-        assert len(mock_prisma_client.spend_log_transactions) == 0
+        assert [row["accounting_log_disabled"] for row in mock_prisma_client.spend_log_transactions] == [True]

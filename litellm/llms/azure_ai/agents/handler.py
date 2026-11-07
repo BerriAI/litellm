@@ -308,7 +308,7 @@ class AzureAIAgentsHandler:
         logging_obj: LiteLLMLoggingObj,
         optional_params: dict,
         litellm_params: dict,
-        timeout: float,
+        timeout: float | str | httpx.Timeout | None,
         client: HTTPHandler | None = None,
         headers: dict | None = None,
     ) -> ModelResponse:
@@ -432,7 +432,7 @@ class AzureAIAgentsHandler:
         logging_obj: LiteLLMLoggingObj,
         optional_params: dict,
         litellm_params: dict,
-        timeout: float,
+        timeout: float | str | httpx.Timeout | None,
         client: AsyncHTTPHandler | None = None,
         headers: dict | None = None,
     ) -> ModelResponse:
@@ -559,7 +559,7 @@ class AzureAIAgentsHandler:
         logging_obj: LiteLLMLoggingObj,
         optional_params: dict,
         litellm_params: dict,
-        timeout: float,
+        timeout: float | str | httpx.Timeout | None,
         headers: dict | None = None,
     ) -> AsyncIterator[ModelResponseStream]:
         """Execute async streaming completion using Azure Agent Service with native SSE."""
