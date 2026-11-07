@@ -165,6 +165,7 @@ _LateResponseT = TypeVar("_LateResponseT", bound=Response)
 _LlmCallT = TypeVar("_LlmCallT")
 _ResponseT: Final = TypeVar("_ResponseT")
 _ChunkT: Final = TypeVar("_ChunkT")
+_ProcessedT = TypeVar("_ProcessedT")
 
 KNOWN_PROXY_ROUTES: Final = frozenset(
     route for member in LiteLLMRoutes for route in member.value if route.startswith("/")
@@ -279,6 +280,12 @@ if TYPE_CHECKING:
     ProxyConfig = _ProxyConfig
 else:
     ProxyConfig = Any
+from litellm.litellm_core_utils.total_deadline import (
+    TotalTimeoutExpired,
+    TotalTimeoutNotApplicable,
+    current_total_deadline,
+    total_deadline,
+)
 from litellm.proxy.anthropic_endpoints.answered_status import with_answered_status
 from litellm.proxy.anthropic_endpoints.streaming_model_restamp import (
     AnthropicStreamModelRestamper,
@@ -286,12 +293,16 @@ from litellm.proxy.anthropic_endpoints.streaming_model_restamp import (
 from litellm.proxy.litellm_pre_call_utils import (
     ROUTER_SCHEDULED_ROUTE_TYPES,
     SCHEDULER_PRIORITY_HEADER,
+    TOTAL_TIMEOUT_FIELD,
+    InvalidTotalTimeout,
     LiteLLMProxyRequestSetup,
+    TotalTimeout,
     add_litellm_data_to_request,
     get_metadata_variable_name,
     refresh_proxy_server_request_body_snapshot,
     reject_url_valued_destination,
     sanitize_for_log,
+    total_timeout_from_request,
 )
 from litellm.proxy.policy_engine.response_retrieval import attach_post_call_pipelines_to_retrieval
 from litellm.types.litellm_params import STREAM_USAGE_INJECTED_FIELD
@@ -572,6 +583,27 @@ async def _dispatch_disconnect_billing_event(logging_obj: LiteLLMLoggingObj, par
         verbose_proxy_logger.debug("Failed to dispatch disconnect billing event: %s", e)
         return False
     return True
+
+
+_TOTAL_TIMEOUT_ROUTE_TYPES: Final = frozenset({"acompletion", "aresponses", "anthropic_messages"})
+
+
+def _total_timeout_expired() -> bool:
+    deadline: Final = current_total_deadline()
+    return deadline is not None and deadline.expired()
+
+
+async def _cost_a_call_answered_past_its_total_timeout(
+    llm_call: "asyncio.Task[object]", logging_obj: LiteLLMLoggingObj
+) -> None:
+    """The provider answered but the request ran out of time after it (a slower moderation check): the
+    failure it is logged as still carries what the provider charged."""
+    if not llm_call.done() or llm_call.cancelled() or llm_call.exception() is not None:
+        return
+    response: Final = llm_call.result()
+    prepare_response_cost(logging_obj, response, datetime.now(timezone.utc))
+    with anyio.CancelScope(shield=True):
+        await finalize_proxy_response_cost(logging_obj, response)
 
 
 async def _cancel_pending_gather_tasks(tasks: Sequence["asyncio.Task[object]"]) -> None:
@@ -3026,31 +3058,93 @@ class ProxyBaseLLMRequestProcessing:
             )
 
         return await open_sse_before_first_byte(
-            self._process_llm_request(
+            self._within_total_timeout(
                 request=request,
-                fastapi_response=fastapi_response,
-                user_api_key_dict=user_api_key_dict,
                 route_type=route_type,
-                proxy_logging_obj=proxy_logging_obj,
-                general_settings=general_settings,
-                proxy_config=proxy_config,
-                select_data_generator=select_data_generator,
-                llm_router=llm_router,
-                model=model,
-                user_model=user_model,
-                user_temperature=user_temperature,
-                user_request_timeout=user_request_timeout,
-                user_max_tokens=user_max_tokens,
-                user_api_base=user_api_base,
-                version=version,
                 is_streaming_request=is_streaming_request,
-                contents=contents,
-                skip_pre_call_logic=skip_pre_call_logic,
+                processing=self._process_llm_request(
+                    request=request,
+                    fastapi_response=fastapi_response,
+                    user_api_key_dict=user_api_key_dict,
+                    route_type=route_type,
+                    proxy_logging_obj=proxy_logging_obj,
+                    general_settings=general_settings,
+                    proxy_config=proxy_config,
+                    select_data_generator=select_data_generator,
+                    llm_router=llm_router,
+                    model=model,
+                    user_model=user_model,
+                    user_temperature=user_temperature,
+                    user_request_timeout=user_request_timeout,
+                    user_max_tokens=user_max_tokens,
+                    user_api_base=user_api_base,
+                    version=version,
+                    is_streaming_request=is_streaming_request,
+                    contents=contents,
+                    skip_pre_call_logic=skip_pre_call_logic,
+                ),
             ),
             ping_interval_seconds=ttft_keepalive_interval(self.data, llm_router),
             on_late_failure=_audit_late_failure,
             late_failure_frames=_anthropic_late_failure_frames if answers_as_anthropic else _openai_late_failure_frames,
         )
+
+    def _total_timeout(
+        self, request: Request, route_type: ProxyRouteType, is_streaming_request: bool | None
+    ) -> TotalTimeout | None:
+        """The request's ``total_timeout`` when it bounds this request: a body one on a request it cannot
+        bound is refused, a header one is ignored."""
+        body: Final = _REQUEST_FIELDS.validate_python(self.data)
+        parsed: Final = total_timeout_from_request(request.headers, body)
+        self.data.pop(TOTAL_TIMEOUT_FIELD, None)  # pyright: ignore[reportUnknownMemberType]  # self.data is the untyped request dict
+        if parsed is None:
+            return None
+        if isinstance(parsed, InvalidTotalTimeout):
+            raise ProxyException(
+                message=parsed.message, type="invalid_request_error", param=TOTAL_TIMEOUT_FIELD, code=400
+            )
+        bounded: Final = (
+            route_type in _TOTAL_TIMEOUT_ROUTE_TYPES
+            and is_streaming_request is not True
+            and body.get("stream") is not True
+            and body.get("background") is not True
+        )
+        if bounded:
+            return parsed
+        if parsed.from_body:
+            raise ProxyException(
+                message=f"{TOTAL_TIMEOUT_FIELD} applies only to non-streaming, non-background "
+                "/v1/chat/completions, /v1/messages and /v1/responses requests",
+                type="invalid_request_error",
+                param=TOTAL_TIMEOUT_FIELD,
+                code=400,
+            )
+        verbose_proxy_logger.debug("x-litellm-total-timeout ignored for this %s request", route_type)
+        return None
+
+    async def _within_total_timeout(
+        self,
+        request: Request,
+        route_type: ProxyRouteType,
+        is_streaming_request: bool | None,
+        processing: Coroutine[object, object, _ProcessedT],
+    ) -> _ProcessedT:
+        try:
+            total_timeout: Final = self._total_timeout(request, route_type, is_streaming_request)
+        except ProxyException:
+            processing.close()
+            raise
+        if total_timeout is None:
+            return await processing
+        try:
+            async with total_deadline(total_timeout.seconds, from_body=total_timeout.from_body):
+                return await processing
+        except TotalTimeoutExpired as expired:
+            raise ProxyException(message=str(expired), type="timeout", param=TOTAL_TIMEOUT_FIELD, code=408) from expired
+        except TotalTimeoutNotApplicable as refused:
+            raise ProxyException(
+                message=str(refused), type="invalid_request_error", param=TOTAL_TIMEOUT_FIELD, code=400
+            ) from refused
 
     async def _process_llm_request(
         self,
@@ -3153,6 +3247,10 @@ class ProxyBaseLLMRequestProcessing:
                 responses = await _await_llm_call_cancelling_on_disconnect(request, llm_responses)
             else:
                 responses = await llm_responses
+        except asyncio.CancelledError:
+            if _total_timeout_expired():
+                await _cost_a_call_answered_past_its_total_timeout(llm_call_task, logging_obj)
+            raise
         finally:
             await _cancel_pending_gather_tasks(tasks)
 
@@ -3421,7 +3519,7 @@ class ProxyBaseLLMRequestProcessing:
                             _guardrail_entries_for_headers(get_or_create_metadata_bucket(self.data)[1], logging_obj)
                         ),
                     )
-                    if isinstance(exc, asyncio.CancelledError):
+                    if isinstance(exc, asyncio.CancelledError) and not _total_timeout_expired():
                         await proxy_logging_obj.post_call_failure_hook(
                             user_api_key_dict=user_api_key_dict,
                             original_exception=HTTPException(status_code=499, detail=_CLIENT_DISCONNECT_DETAIL),

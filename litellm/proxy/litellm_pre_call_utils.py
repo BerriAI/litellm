@@ -2,6 +2,7 @@ import asyncio
 import copy
 import itertools
 import json
+import math
 import re
 import time
 from collections import OrderedDict
@@ -1641,6 +1642,51 @@ def redact_credential_headers(headers: Mapping[str, str]) -> Mapping[str, str]:
         header: (_REDACTED_HEADER_VALUE if _is_credential_header(header) else value)
         for header, value in headers.items()
     }
+
+
+TOTAL_TIMEOUT_HEADER: Final = "x-litellm-total-timeout"
+TOTAL_TIMEOUT_FIELD: Final = "total_timeout"
+
+
+@dataclass(frozen=True, slots=True)
+class TotalTimeout:
+    seconds: float
+    from_body: bool
+
+
+@dataclass(frozen=True, slots=True)
+class InvalidTotalTimeout:
+    message: str
+
+
+def _positive_finite_seconds(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, int | float | str):
+        return None
+    try:
+        seconds: Final = float(value)
+    except ValueError:
+        return None
+    return seconds if math.isfinite(seconds) and seconds > 0 else None
+
+
+def _total_timeout(value: object, *, from_body: bool) -> TotalTimeout | InvalidTotalTimeout:
+    seconds: Final = _positive_finite_seconds(value)
+    if seconds is None:
+        name: Final = TOTAL_TIMEOUT_FIELD if from_body else TOTAL_TIMEOUT_HEADER
+        return InvalidTotalTimeout(f"{name} must be a positive, finite number of seconds, got {value!r}")
+    return TotalTimeout(seconds, from_body)
+
+
+def total_timeout_from_request(
+    headers: Mapping[str, str], body: Mapping[str, object]
+) -> TotalTimeout | InvalidTotalTimeout | None:
+    """The request's ``total_timeout``: the header wins over the body field."""
+    header: Final = headers.get(TOTAL_TIMEOUT_HEADER)
+    if header is not None:
+        return _total_timeout(header, from_body=False)
+    if TOTAL_TIMEOUT_FIELD not in body:
+        return None
+    return _total_timeout(body[TOTAL_TIMEOUT_FIELD], from_body=True)
 
 
 class LiteLLMProxyRequestSetup:
