@@ -11,6 +11,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import ANTHROPIC_BATCHES_ROUTE
 from litellm.litellm_core_utils.core_helpers import (
+    json_contains,
     native_messages_reported_cost,
     override_stamped_response_cost,
     response_cost_in_hidden_params,
@@ -58,6 +59,7 @@ else:
     EndpointType = Any
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 def _event_payload(event: str) -> Mapping[str, object] | None:
@@ -609,10 +611,10 @@ class AnthropicPassthroughLoggingHandler:
         from litellm.types.utils import Choices, SpecialEnums
 
         try:
-            _json_response: Final = httpx_response.json()
+            _json_response: Final = _DECODED_JSON.validate_python(httpx_response.json())
 
             # Only handle successful batch job creation (POST requests with 201 status)
-            if httpx_response.status_code == 200 and "id" in _json_response:
+            if httpx_response.status_code == 200 and json_contains(_json_response, "id"):
                 # Transform Anthropic response to LiteLLM batch format
                 anthropic_batches_config: Final = AnthropicBatchesConfig()
                 litellm_batch_response: Final = anthropic_batches_config.transform_retrieve_batch_response(
@@ -626,7 +628,7 @@ class AnthropicPassthroughLoggingHandler:
                 litellm_batch_response.status = "validating"
 
                 # Extract batch ID from the response
-                batch_id: Final = _json_response.get("id", "")
+                batch_id: Final = litellm_batch_response.id
 
                 # Get model from request body (batch response doesn't include model)
                 request_body = request_body or {}

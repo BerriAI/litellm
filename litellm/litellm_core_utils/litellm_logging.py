@@ -96,6 +96,7 @@ from litellm.litellm_core_utils.core_helpers import (
     decoded_json_object,
     finite_cost,
     get_provider_response_headers_from_hidden_params,
+    has_attributes,
     is_expected_client_error,
     native_messages_reported_cost,
     provider_reported_usage_cost,
@@ -702,6 +703,10 @@ class _HiddenParamsCopier(Protocol):
 
 class _MetadataDefaults(Protocol):
     setdefault: Callable[[str, Mapping[str, object]], object]
+
+
+class _MetadataSlot(Protocol):
+    __setitem__: Callable[[str, object], None]
 
 
 def _callback_control_params(litellm_params: object) -> dict[str, object]:
@@ -3115,9 +3120,13 @@ class Logging(LiteLLMLoggingBaseClass):
         if metadata_hidden_params.get("response_cost") is None and response_cost is not None:
             metadata_hidden_params["response_cost"] = response_cost
 
-        litellm_params: Final = self.model_call_details["litellm_params"]
-        metadata: Final = litellm_params.get("metadata") or {}
+        litellm_params: Final = require_attributes(
+            self._model_call_details_view["litellm_params"], _HiddenParamsSlot, "get"
+        )
+        metadata: Final = litellm_params.get("metadata") or dict[str, object]()
         litellm_params["metadata"] = metadata
+        if not has_attributes(metadata, _MetadataSlot, "__setitem__"):
+            raise TypeError(f"'{type(metadata).__name__}' object does not support item assignment")
         metadata["hidden_params"] = metadata_hidden_params
 
     def _process_hidden_params_and_response_cost(
@@ -7175,7 +7184,7 @@ class StandardLoggingPayloadSetup:
 
     @staticmethod
     def get_usage_as_dict(
-        response_obj: dict[str, Any] | None,
+        response_obj: Mapping[str, object] | None,
         combined_usage_object: Usage | None = None,
     ) -> dict[str, Any]:
         """
@@ -7199,19 +7208,23 @@ class StandardLoggingPayloadSetup:
             reported: Final = response_obj.get("usage_info")
             if isinstance(reported, BaseModel):
                 return reported.model_dump(exclude_none=True)
+            reported_fields: Final = as_str_mapping(reported)
             return (
-                {key: value for key, value in reported.items() if value is not None}
-                if isinstance(reported, dict)
+                {key: value for key, value in reported_fields.items() if value is not None}
+                if isinstance(reported_fields, dict)
                 else dict(get_rerank_usage(_RESPONSE_MAPPING.validate_python(response_obj)) or _empty)
             )
         if isinstance(_raw, ResponseAPIUsage):
             return ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(_raw).model_dump()
-        if isinstance(_raw, dict):
-            if ResponseAPILoggingUtils.is_response_api_usage(_raw):
-                return ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(_raw).model_dump()
-            if InteractionsUsageObjectTransformation.is_interactions_usage_object(_raw):
-                return InteractionsUsageObjectTransformation.transform_interactions_usage_object(_raw).model_dump()
-            return _raw
+        raw_fields: Final = as_str_mapping(_raw)
+        if isinstance(raw_fields, dict):
+            if ResponseAPILoggingUtils.is_response_api_usage(raw_fields):
+                return ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(raw_fields).model_dump()
+            if InteractionsUsageObjectTransformation.is_interactions_usage_object(raw_fields):
+                return InteractionsUsageObjectTransformation.transform_interactions_usage_object(
+                    raw_fields
+                ).model_dump()
+            return raw_fields
         if isinstance(_raw, Usage):
             return _raw.model_dump()
         return _empty

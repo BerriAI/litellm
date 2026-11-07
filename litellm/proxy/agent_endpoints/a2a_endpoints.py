@@ -23,7 +23,7 @@ from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, keyword_arguments
 from litellm.litellm_core_utils.url_utils import SSRFError, validate_url
 from litellm.llms.a2a.common_utils import resolve_a2a_hop_auth_header
 from litellm.llms.azure.common_utils import caused_by_entra_rejection
@@ -145,19 +145,20 @@ def _to_jsonrpc_object(chunk: object) -> object:
     return chunk
 
 
-def _build_message_send_params(params: dict[str, Any]) -> "MessageSendParams":
+def _build_message_send_params(params: object) -> "MessageSendParams":
     """Build MessageSendParams from wire (0.3) or A2A 1.0 JSON-RPC params."""
     from a2a.compat.v0_3.types import MessageSendParams
 
+    fields: Final = dict(**keyword_arguments(params, MessageSendParams))
     try:
-        return MessageSendParams(**params)
+        return MessageSendParams.model_validate(fields)
     except ValidationError:
         from a2a.compat.v0_3.conversions import pb2_v10, to_compat_send_message_request
         from google.protobuf.json_format import ParseDict, ParseError
 
         pb: Final = pb2_v10.SendMessageRequest()
         try:
-            ParseDict(params, pb, ignore_unknown_fields=True)
+            ParseDict(fields, pb, ignore_unknown_fields=True)
         except ParseError as e:
             raise ValueError(f"Invalid message/send params: {e}") from e
         return to_compat_send_message_request(pb, "").params
@@ -1027,7 +1028,7 @@ async def invoke_agent_a2a(
             from a2a.compat.v0_3.types import SendMessageRequest
 
             try:
-                message_send_params: Final = _build_message_send_params(params)
+                message_send_params: Final = _build_message_send_params(_DECODED_JSON.validate_python(params))
             except (ValidationError, ValueError) as e:
                 return _jsonrpc_error(request_id, -32602, f"Invalid params: {e}")
 

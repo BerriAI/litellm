@@ -55,6 +55,12 @@ def _json_len(value: object) -> int:
     raise TypeError(f"object of type '{type(value).__name__}' has no len()")
 
 
+def _generated_text(value: object) -> str:
+    if isinstance(value, str):
+        return value
+    raise AttributeError(f"'{type(value).__name__}' object has no attribute 'strip'", name="strip", obj=value)
+
+
 def _add_logprob(total: float, logprob: object) -> float:
     if isinstance(logprob, (int, float)):
         return total + logprob
@@ -425,7 +431,9 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
                 )
 
             if _json_len(_DECODED_JSON.validate_python(completion_response[0]["generated_text"])) > 0:
-                model_response.choices[0].message.content = output_parser(completion_response[0]["generated_text"])
+                model_response.choices[0].message.content = output_parser(
+                    _generated_text(_DECODED_JSON.validate_python(completion_response[0]["generated_text"]))
+                )
             ## GETTING LOGPROBS + FINISH REASON
             if "details" in completion_response[0] and "tokens" in completion_response[0]["details"]:
                 model_response.choices[0].finish_reason = completion_response[0]["details"]["finish_reason"]
@@ -438,21 +446,25 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
             if "best_of" in optional_params and optional_params["best_of"] > 1:
                 if "details" in completion_response[0] and "best_of_sequences" in completion_response[0]["details"]:
                     choices_list: Final = []
-                    for idx, item in enumerate(completion_response[0]["details"]["best_of_sequences"]):
+                    for idx, item in enumerate(
+                        iter_items(
+                            _DECODED_JSON.validate_python(completion_response[0]["details"]["best_of_sequences"])
+                        )
+                    ):
                         sum_logprob = 0
-                        for token in iter_items(_DECODED_JSON.validate_python(item["tokens"])):
+                        for token in iter_items(subscript(item, "tokens")):
                             logprob = subscript(token, "logprob")
                             if logprob is not None:
                                 sum_logprob = _add_logprob(sum_logprob, logprob)
-                        if _json_len(_DECODED_JSON.validate_python(item["generated_text"])) > 0:
+                        if _json_len(subscript(item, "generated_text")) > 0:
                             message_obj = Message(
-                                content=output_parser(item["generated_text"]),
+                                content=output_parser(_generated_text(subscript(item, "generated_text"))),
                                 logprobs=sum_logprob,
                             )
                         else:
                             message_obj = Message(content=None)
                         choice_obj = Choices(
-                            finish_reason=item["finish_reason"],
+                            finish_reason=subscript(item, "finish_reason"),
                             index=idx + 1,
                             message=message_obj,
                         )
@@ -465,7 +477,9 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
                 isinstance(completion_response, list)
                 and _json_len(_DECODED_JSON.validate_python(completion_response[0]["generated_text"])) > 0
             ):
-                model_response.choices[0].message.content = output_parser(completion_response[0]["generated_text"])
+                model_response.choices[0].message.content = output_parser(
+                    _generated_text(_DECODED_JSON.validate_python(completion_response[0]["generated_text"]))
+                )
         ## CALCULATING USAGE
         prompt_tokens = 0
         try:

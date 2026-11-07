@@ -13,7 +13,7 @@ the JSON, then run `npm run gen:api` in ui/litellm-dashboard and commit schema.d
 import json
 import re
 import sys
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
@@ -43,7 +43,7 @@ def _stabilize_multi_method_route_ids(routes) -> None:
     """FastAPI derives route IDs from a set of methods; make snapshots stable."""
 
     for route in routes:
-        methods = sorted(getattr(route, "methods", None) or [])
+        methods: Sequence[str] = sorted(getattr(route, "methods", None) or [])
         if len(methods) <= 1 or not getattr(route, "path_format", None):
             continue
 

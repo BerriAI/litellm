@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 from pydantic import ConfigDict, TypeAdapter
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm.constants import REPLICATE_MODEL_NAME_WITH_ID_LENGTH
@@ -31,6 +32,10 @@ else:
 
 _TEXTS: Final = TypeAdapter(Iterable[str], config=ConfigDict(strict=True, hide_input_in_errors=True))
 _JSON_DICT: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
+
+
+class _ReplicatePrediction(TypedDict):
+    urls: ReadOnly[NotRequired[Mapping[str, str]]]
 
 
 class ReplicateConfig(BaseConfig):
@@ -292,7 +297,7 @@ class ReplicateConfig(BaseConfig):
         "urls":{"cancel":"https://api.replicate.com/v1/predictions/gqsmqmp1pdrj00cknr08dgmvb4/cancel","get":"https://api.replicate.com/v1/predictions/gqsmqmp1pdrj00cknr08dgmvb4","stream":"https://stream-b.svc.rno2.c.replicate.net/v1/streams/eot4gbydowuin4snhncydwxt57dfwgsc3w3snycx5nid7oef7jga"}
         }
         """
-        response_json: Final = response.json()
+        response_json: Final[_ReplicatePrediction] = response.json()
         prediction_url: Final = response_json.get("urls", {}).get("get")
         if prediction_url is None:
             raise ReplicateError(

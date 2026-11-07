@@ -3,12 +3,12 @@ import hashlib
 import json
 from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeAlias, TypeVar, cast
 
 from pydantic import JsonValue, TypeAdapter
 
 import litellm
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, normalize_drop_params
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, normalize_drop_params, require_attributes
 from litellm.litellm_core_utils.hidden_params import get_hidden_params
 from litellm.llms.anthropic.messages.convertible_blocks import tool_result_text_part
 from litellm.llms.anthropic.messages.utils import (
@@ -250,6 +250,11 @@ if TYPE_CHECKING:
     from litellm.types.llms.anthropic import ContentBlockContentBlockDict
 
 ToolResultContent: TypeAlias = str | list[ToolMessageContentPart]
+
+
+class _CarriesUsage(Protocol):
+    @property
+    def usage(self) -> Usage: ...
 
 
 def target_supports_mid_conversation_system(model: str | None, custom_llm_provider: str | None) -> bool:
@@ -1738,7 +1743,7 @@ class LiteLLMAnthropicMessagesAdapter:
             else translated_finish_reason
         )
         # extract usage
-        usage: Final[Usage] = getattr(response, "usage")
+        usage: Final = require_attributes(response, _CarriesUsage, "usage").usage
         message_usage: Final = self.translate_openai_usage_to_anthropic_usage(usage)
         polyfill_iterations: Final = polyfill_result.iterations_usage if polyfill_result is not None else None
         anthropic_usage: Final[AnthropicUsage] = (

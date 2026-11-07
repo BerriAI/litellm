@@ -30,9 +30,11 @@ from litellm.litellm_core_utils.core_helpers import (
     attribute_or_none,
     chunk_usage,
     decoded_json_object,
+    json_contains,
     provider_reported_usage_cost,
     require_attributes,
     stamp_litellm_bill_on_usage,
+    subscript,
     without,
 )
 from litellm.litellm_core_utils.hidden_params import (
@@ -288,12 +290,8 @@ class _PredibaseStreamData(TypedDict):
     error: str | None
 
 
-class _NlpCloudStreamData(TypedDict):
-    generated_text: str
-
-
-class _AlephAlphaStreamData(TypedDict):
-    completions: Sequence[Mapping[str, str]]
+class _Replaceable(Protocol):
+    def replace(self, old: str, new: str, /) -> object: ...
 
 
 class _DeltaDumpDict(TypedDict):
@@ -833,11 +831,11 @@ class CustomStreamWrapper:
             if self.model and "dolphin" in self.model:
                 chunk = self.process_chunk(chunk=chunk)
             else:
-                data_json: Final[_NlpCloudStreamData] = json.loads(chunk)
-                chunk = data_json["generated_text"]
+                data_json: Final = _DECODED_JSON.validate_python(json.loads(chunk))
+                chunk = subscript(data_json, "generated_text")
             text = chunk
-            if "[DONE]" in text:
-                text = text.replace("[DONE]", "")
+            if json_contains(text, "[DONE]"):
+                text = require_attributes(text, _Replaceable, "replace").replace("[DONE]", "")
                 is_finished = True
                 finish_reason = "stop"
             return {
@@ -850,9 +848,9 @@ class CustomStreamWrapper:
 
     def handle_aleph_alpha_chunk(self, chunk):
         chunk = chunk.decode("utf-8")
-        data_json: Final[_AlephAlphaStreamData] = json.loads(chunk)
+        data_json: Final = _DECODED_JSON.validate_python(json.loads(chunk))
         try:
-            text: Final = data_json["completions"][0]["completion"]
+            text: Final = subscript(subscript(subscript(data_json, "completions"), 0), "completion")
             is_finished: Final = True
             finish_reason: Final = "stop"
             return {
@@ -1110,7 +1108,8 @@ class CustomStreamWrapper:
         provider_specific_fields: Final = getattr(original_chunk, "provider_specific_fields", None)
         if provider_specific_fields is not None:
             model_response.provider_specific_fields = provider_specific_fields
-            _apply_provider_fields(model_response, provider_specific_fields)
+            if model_response.provider_specific_fields is not None:
+                _apply_provider_fields(model_response, model_response.provider_specific_fields)
         return model_response
 
     def is_chunk_non_empty(

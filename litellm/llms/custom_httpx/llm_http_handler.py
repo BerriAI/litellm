@@ -623,6 +623,7 @@ _OPTIONAL_PARAMS: Final = TypeAdapter(Mapping[str, object])
 _JSON_OBJECT: Final = TypeAdapter(dict[str, object])
 _JSON_OBJECTS: Final = TypeAdapter(list[dict[str, object]])
 _DECODED_JSON: Final = TypeAdapter(object)
+_AGENTIC_HOOK_RESULT: Final = TypeAdapter(object)
 
 
 def _decoded_body_headers(response: httpx.Response) -> httpx.Headers:
@@ -6481,21 +6482,23 @@ class BaseLLMHTTPHandler:
                 callback.__class__.async_build_agentic_loop_plan is not CustomLogger.async_build_agentic_loop_plan
             )
             if not build_plan_overridden:
-                agentic_result: object = await bill_first_round_on_failure(
-                    callback.async_run_agentic_loop(
-                        tools=tool_calls,
-                        model=model,
-                        messages=messages,
-                        response=response,
-                        anthropic_messages_provider_config=anthropic_messages_provider_config,
-                        anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
+                agentic_result: object = _AGENTIC_HOOK_RESULT.validate_python(
+                    await bill_first_round_on_failure(
+                        callback.async_run_agentic_loop(
+                            tools=tool_calls,
+                            model=model,
+                            messages=messages,
+                            response=response,
+                            anthropic_messages_provider_config=anthropic_messages_provider_config,
+                            anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
+                            logging_obj=logging_obj,
+                            stream=stream,
+                            kwargs=kwargs_with_provider,
+                        ),
                         logging_obj=logging_obj,
+                        response=response,
                         stream=stream,
-                        kwargs=kwargs_with_provider,
-                    ),
-                    logging_obj=logging_obj,
-                    response=response,
-                    stream=stream,
+                    )
                 )
                 return self._maybe_wrap_in_fake_stream(agentic_result, logging_obj, api_surface)
 
@@ -6526,10 +6529,12 @@ class BaseLLMHTTPHandler:
                     plan.stop_reason,
                 )
                 return self._maybe_wrap_in_fake_stream(
-                    await callback.async_post_agentic_loop_response_hook(
-                        response=self._finalize_refused_agentic_response(response=response, tool_calls=tool_calls),
-                        plan=plan,
-                        kwargs=kwargs_with_provider,
+                    _AGENTIC_HOOK_RESULT.validate_python(
+                        await callback.async_post_agentic_loop_response_hook(
+                            response=self._finalize_refused_agentic_response(response=response, tool_calls=tool_calls),
+                            plan=plan,
+                            kwargs=kwargs_with_provider,
+                        )
                     ),
                     logging_obj,
                     api_surface,
