@@ -38868,6 +38868,10 @@ export interface components {
             dcr_issuer?: string | null;
             /** Dcr Server Url */
             dcr_server_url?: string | null;
+            /** Headers */
+            headers?: {
+                [key: string]: string;
+            } | null;
             /** Id Jag Resource */
             id_jag_resource?: string | null;
             /** Id Jag Resource Client Id */

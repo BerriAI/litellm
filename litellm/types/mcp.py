@@ -172,6 +172,11 @@ class MCPCredentials(TypedDict, total=False):
     Authentication value
     """
 
+    headers: ReadOnly[Mapping[str, str] | None]
+    """
+    Named secret headers sent upstream. Values are encrypted at rest.
+    """
+
     client_id: str | None
     """
     OAuth 2.0 client identifier used when auth_type is oauth2
