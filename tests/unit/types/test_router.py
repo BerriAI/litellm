@@ -1,11 +1,12 @@
 import logging
-from typing import Final
+from typing import Final, Literal
 
 import httpx
 import pytest
 from openai import Timeout as SDKTimeout
 from pydantic import ValidationError
 
+from litellm.router_strategy.simple_shuffle import simple_shuffle
 from litellm.types.router import (
     SPECIAL_MODEL_INFO_PARAMS,
     CredentialLiteLLMParams,
@@ -35,6 +36,41 @@ def test_sdk_timeout_is_normalized_for_provider_clients() -> None:
     params: Final = GenericLiteLLMParams(timeout=timeout)
     assert isinstance(params.timeout, httpx.Timeout)
     assert params.timeout.as_dict() == timeout.as_dict()
+
+
+@pytest.mark.parametrize(
+    "parameter, preferred, zero",
+    [
+        ("weight", "1.5", "0"),
+        ("weight", "100", 0),
+        ("weight", 100, "0"),
+        ("weight", 1.5, 0),
+        ("rpm", "100", "0"),
+        ("tpm", "100", "0"),
+    ],
+)
+def test_numeric_string_routing_params_select_the_nonzero_deployment(
+    parameter: Literal["weight", "rpm", "tpm"], preferred: str | float, zero: str | int
+) -> None:
+    deployments: Final = tuple(
+        {"litellm_params": GenericLiteLLMParams(**{parameter: value}).model_dump(exclude_none=True)}
+        for value in (preferred, zero)
+    )
+
+    assert simple_shuffle(lambda _: None, deployments, "weighted-model", None) is deployments[0]
+
+
+def test_none_weight_keeps_rate_based_routing() -> None:
+    deployments: Final = tuple(
+        {"litellm_params": GenericLiteLLMParams(weight=None, rpm=rpm).model_dump(exclude_none=True)} for rpm in (100, 0)
+    )
+
+    assert simple_shuffle(lambda _: None, deployments, "weighted-model", None) is deployments[0]
+
+
+def test_invalid_deployment_weight_is_rejected_before_routing() -> None:
+    with pytest.raises(ValidationError, match="weight"):
+        GenericLiteLLMParams(weight="heavy")
 
 
 def test_model_info_declares_mirrored_pricing_fields():
