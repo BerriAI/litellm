@@ -1,0 +1,38 @@
+name: "Report pytest outcomes"
+description: >-
+  Append non-gating pytest outcomes and metrics to the job summary, and optionally
+  retain the raw report for later comparison.
+
+inputs:
+  report:
+    description: "Path to the pytest report JSON"
+    required: true
+  title:
+    description: "Heading shown in the job summary"
+    required: true
+  artifact-name:
+    description: "Optional artifact name for retaining the raw report"
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Render pytest report
+      if: always()
+      continue-on-error: true
+      shell: bash
+      env:
+        REPORT: ${{ inputs.report }}
+        TITLE: ${{ inputs.title }}
+      run: python3 "$GITHUB_ACTION_PATH/../../scripts/render_pytest_report.py" --title "$TITLE" "$REPORT" >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Upload pytest report
+      if: ${{ always() && inputs.artifact-name != '' }}
+      continue-on-error: true
+      uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
+      with:
+        name: ${{ inputs.artifact-name }}
+        path: ${{ inputs.report }}
+        retention-days: 7
+        if-no-files-found: ignore
