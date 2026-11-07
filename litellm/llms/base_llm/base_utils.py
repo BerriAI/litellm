@@ -229,7 +229,9 @@ def _is_decoded_json_object(
 
 def decoded_answer_object(text: str) -> Mapping[str, AnswerValue] | None:
     try:
-        decoded: Final[object] = json.loads(text, parse_float=_source_float, parse_int=_source_int)
+        decoded: Final = _DECODED_JSON.validate_python(
+            json.loads(text, parse_float=_source_float, parse_int=_source_int)
+        )
     except (json.JSONDecodeError, RecursionError):
         return None
     return decoded if _is_decoded_json_object(decoded) else None

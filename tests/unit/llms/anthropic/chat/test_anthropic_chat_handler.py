@@ -2958,6 +2958,9 @@ _DIGITS_PAST_THE_INT_LIMIT: Final = "1" * (sys.get_int_max_str_digits() + 1)
         (('{"n": 1e5}',), '{"n": 1e5}'),
         (('{"values": false}',), "false"),
         (('{"values": null}',), '{"values": null}'),
+        (("[1, 2]",), "[1, 2]"),
+        (('"x"',), '"x"'),
+        (("5",), "5"),
         pytest.param(
             ('{"values": ' + "[" * 300 + "]" * 300 + "}",),
             "[" * 300 + "]" * 300,
