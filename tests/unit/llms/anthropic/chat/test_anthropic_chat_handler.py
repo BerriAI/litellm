@@ -1,4 +1,5 @@
 import json
+import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from itertools import chain
@@ -2934,6 +2935,9 @@ def test_streamed_json_mode_without_schema_preserves_argument_fragments(fragment
     assert _schemaless_streamed_json_mode_contents(fragments) == "".join(fragments)
 
 
+_DIGITS_PAST_THE_INT_LIMIT: Final = "1" * (sys.get_int_max_str_digits() + 1)
+
+
 @pytest.mark.parametrize(
     ("fragments", "expected"),
     [
@@ -2941,7 +2945,19 @@ def test_streamed_json_mode_without_schema_preserves_argument_fragments(fragment
         ((" ", '{"values": [3, 5]}', " "), " [3, 5] "),
         (('{"count": 1e400}',), '{"count": 1e400}'),
         (('{"values": [1e400]}',), '{"values": [1e400]}'),
-        pytest.param(('{"n": ' + "1" * 5000 + "}",), '{"n": ' + "1" * 5000 + "}", id="int-over-digit-limit"),
+        pytest.param(
+            ('{"n": ' + _DIGITS_PAST_THE_INT_LIMIT + "}",),
+            '{"n": ' + _DIGITS_PAST_THE_INT_LIMIT + "}",
+            id="int-over-digit-limit",
+        ),
+        (('{"n": 1e5}',), '{"n": 1e5}'),
+        (('{"values": false}',), "false"),
+        (('{"values": null}',), '{"values": null}'),
+        pytest.param(
+            ('{"values": ' + "[" * 100000 + "]" * 100000 + "}",),
+            '{"values": ' + "[" * 100000 + "]" * 100000 + "}",
+            id="nesting-over-recursion-limit",
+        ),
     ],
 )
 def test_streamed_json_mode_without_schema_unwraps_values_only_from_a_one_piece_input(
@@ -3169,6 +3185,23 @@ def test_streamed_json_mode_held_answer_without_an_envelope_keeps_the_model_text
 
     assert "".join(contents) == answer
     assert contents[:-2] == ("",) * (len(contents) - 2)
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        pytest.param('{"name":"json_tool_call","parameters":{"tier":1e400,"summary":"x"}}', id="number_past_a_float"),
+        pytest.param(
+            '{"name":"json_tool_call","parameters":{"tier":' + _DIGITS_PAST_THE_INT_LIMIT + ',"summary":"x"}}',
+            id="integer_past_the_digit_limit",
+        ),
+        pytest.param('{"values":[1e400]}', id="values_number_past_a_float"),
+    ],
+)
+def test_streamed_json_mode_held_answer_that_cannot_be_written_back_as_json_keeps_the_model_text(answer: str):
+    contents = _streamed_json_mode_contents((answer[:9], answer[9:30], answer[30:]))
+
+    assert "".join(contents) == answer
 
 
 def test_envelope_verdict_holds_a_prefix_that_stays_undecided_past_the_limit():

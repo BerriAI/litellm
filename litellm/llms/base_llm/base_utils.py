@@ -5,6 +5,7 @@ Utility functions for base LLM classes.
 import copy
 import itertools
 import json
+import math
 from abc import ABC, abstractmethod
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
@@ -193,6 +194,21 @@ def as_json_object(value: object) -> Mapping[str, JsonValue] | None:
         return None
 
 
+def _finite_float(literal: str) -> float:
+    number: Final = float(literal)
+    if math.isinf(number):
+        raise ValueError(f"{literal} overflows a float")
+    return number
+
+
+def decoded_json_object(text: str) -> Mapping[str, JsonValue] | None:
+    try:
+        decoded: Final = _DECODED_JSON.validate_python(json.loads(text, parse_float=_finite_float))
+    except (ValueError, RecursionError):
+        return None
+    return as_json_object(decoded)
+
+
 def _names(value: object) -> frozenset[str]:
     try:
         return _NAMES.validate_python(value)
@@ -233,12 +249,7 @@ class _EnvelopeLayer:
 
 
 def _json_object_or_encoded_object(value: JsonValue) -> Mapping[str, JsonValue] | None:
-    if not isinstance(value, str):
-        return as_json_object(value)
-    try:
-        return as_json_object(_DECODED_JSON.validate_python(json.loads(value)))
-    except (json.JSONDecodeError, RecursionError):
-        return None
+    return decoded_json_object(value) if isinstance(value, str) else as_json_object(value)
 
 
 def _label_keys(payload_object: Mapping[str, JsonValue], schema: ResponseFormatSchema) -> frozenset[str]:

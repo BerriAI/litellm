@@ -11,7 +11,6 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Union, cast
 
 import httpx
-from pydantic import TypeAdapter
 
 import litellm
 import litellm.litellm_core_utils
@@ -26,7 +25,7 @@ from litellm.litellm_core_utils.json_fragment_accumulator import JSONFragmentAcc
 from litellm.llms.base_llm.base_utils import (
     RESPONSE_FORMAT_ENVELOPE_NAME_KEYS,
     ResponseFormatSchema,
-    as_json_object,
+    decoded_json_object,
     names_a_response_format_property,
     partial_response_format_answer,
     response_format_envelope_contents,
@@ -81,9 +80,6 @@ _THINKING_BLOCK_TYPES: Final = frozenset({"thinking", "redacted_thinking"})
 
 def _loads_stream_chunk(payload: str) -> dict[str, object]:
     return json.loads(payload)
-
-
-_DECODED_JSON: Final = TypeAdapter(object)
 
 
 _EnvelopeVerdict = Literal["undecided", "pass_through", "hold"]
@@ -168,26 +164,18 @@ def _prefix_verdict(buffered_json: str, schema: ResponseFormatSchema, tool_name:
 
 
 def _unwrapped_values_answer(arguments: str) -> str:
-    try:
-        payload: Final = _DECODED_JSON.validate_python(json.loads(arguments))
-    except (ValueError, RecursionError):
-        return arguments
-    payload_object: Final = as_json_object(payload)
+    payload_object: Final = decoded_json_object(arguments)
     values: Final = None if payload_object is None else payload_object.get("values")
-    if values is None:
-        return arguments
-    try:
-        return json.dumps(values, allow_nan=False)
-    except ValueError:
-        return arguments
+    return arguments if values is None else json.dumps(values)
 
 
 def _held_answer(held: str, schema: ResponseFormatSchema) -> str:
-    try:
-        payload: Final = _DECODED_JSON.validate_python(json.loads(held))
-    except (json.JSONDecodeError, RecursionError):
-        return held
-    contents: Final = response_format_envelope_contents(payload, schema, RESPONSE_FORMAT_TOOL_NAME)
+    payload_object: Final = decoded_json_object(held)
+    contents: Final = (
+        None
+        if payload_object is None
+        else response_format_envelope_contents(payload_object, schema, RESPONSE_FORMAT_TOOL_NAME)
+    )
     return held if contents is None else json.dumps(contents)
 
 

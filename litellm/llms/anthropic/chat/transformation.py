@@ -51,7 +51,7 @@ from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import 
 from litellm.litellm_core_utils.tool_fields import tool_params_without_hosted_mcp
 from litellm.llms.base_llm.base_utils import (
     ResponseFormatSchema,
-    as_json_object,
+    decoded_json_object,
     response_format_schema,
     split_response_format_answer,
     type_to_response_format_param,
@@ -3177,22 +3177,19 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         )
         if split_answer is not None:
             return litellm.Message(content=json.dumps(split_answer))
-        try:
-            payload: Final = _DECODED_JSON.validate_python(json.loads(json_mode_content_str))
-        except (json.JSONDecodeError, RecursionError):
-            # json decode error does occur, return the original tool response str
+        payload_object: Final = decoded_json_object(json_mode_content_str)
+        if payload_object is None:
             return litellm.Message(content=json_mode_content_str)
         if response_format_schema is not None:
             return litellm.Message(
                 content=json.dumps(
-                    unwrap_response_format_envelope(payload, response_format_schema, RESPONSE_FORMAT_TOOL_NAME)
+                    unwrap_response_format_envelope(payload_object, response_format_schema, RESPONSE_FORMAT_TOOL_NAME)
                 )
             )
         # a lot of the times the `values` key is not present in the tool response
         # relevant issue: https://github.com/BerriAI/litellm/issues/6741
-        payload_object: Final = as_json_object(payload)
-        values: Final = None if payload_object is None else payload_object.get("values")
-        return litellm.Message(content=json.dumps(payload if values is None else values))
+        values: Final = payload_object.get("values")
+        return litellm.Message(content=json.dumps(payload_object if values is None else values))
 
     @classmethod
     def convert_tool_response_to_message(
