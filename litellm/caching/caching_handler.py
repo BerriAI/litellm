@@ -1470,6 +1470,7 @@ class LLMCachingHandler:
             "proxy_server_request": kwargs.get("proxy_server_request", None),
             "stream_response": kwargs.get("stream_response", {}),
             "custom_llm_provider": custom_llm_provider,
+            **({"litellm_metadata": kwargs["litellm_metadata"]} if kwargs.get("litellm_metadata") is not None else {}),
         }
 
         if litellm.cache is not None:

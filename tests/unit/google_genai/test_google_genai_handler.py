@@ -4,6 +4,7 @@ Test to verify the Google GenAI generate_content handler functionality
 """
 
 import asyncio
+import datetime
 import json
 import logging
 import threading
@@ -424,6 +425,16 @@ class _SuccessPayloads(CustomLogger):
         self.model_groups.append(kwargs["standard_logging_object"]["model_group"])
 
 
+class _SuccessRows(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.rows: list[tuple[object, str, str]] = []
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        payload: Final = kwargs["standard_logging_object"]
+        self.rows.append((payload["cache_hit"], payload["model_group"], payload["model"]))
+
+
 @pytest.fixture
 def _httpx_transport(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
@@ -767,6 +778,48 @@ async def test_async_generate_content_adapter_cache_hit_reaches_callbacks_as_a_c
     assert route.call_count == len(prompts)
     assert [hit is True for hit in logged.cache_hits] == [False, True] * len(prompts)
     assert _litellm_error_messages(_litellm_errors) == []
+
+
+@pytest.mark.asyncio
+async def test_generate_content_adapter_cache_hit_on_a_proxy_logging_object_logs_the_routed_model(
+    _httpx_transport: None, monkeypatch: pytest.MonkeyPatch
+):
+    from litellm.litellm_core_utils.rules import Rules
+    from litellm.utils import function_setup
+
+    logged: Final = _SuccessRows()
+    monkeypatch.setattr(litellm, "callbacks", [logged])
+    monkeypatch.setattr(litellm, "cache", litellm.Cache(type="local"))
+    router: Final = _adapter_router()
+    contents: Final = [{"role": "user", "parts": [{"text": "Hello"}]}]
+
+    async def call(call_id: str, logged_count: int) -> None:
+        logging_obj, _ = function_setup(
+            "agenerate_content",
+            Rules(),
+            datetime.datetime.now(),
+            model="grok-group",
+            contents=contents,
+            litellm_call_id=call_id,
+        )
+        await router.agenerate_content(
+            model="grok-group",
+            contents=contents,
+            caching=True,
+            litellm_call_id=call_id,
+            litellm_logging_obj=logging_obj,
+        )
+        await await_until(lambda: len(logged.rows) == logged_count, message="the call's success callback ran")
+
+    with respx.mock() as upstream:
+        upstream.post("http://upstream.test/v1/chat/completions").mock(return_value=_upstream_reply(stream=False))
+        await call("miss", 1)
+        await call("hit", 2)
+
+    miss, hit = logged.rows
+    assert (miss[0] is True, hit[0] is True) == (False, True)
+    assert miss[1] == "grok-group"
+    assert hit[1:] == miss[1:]
 
 
 @pytest.mark.parametrize(("entrypoint", "stream"), [("agenerate_content", False), ("agenerate_content_stream", True)])
