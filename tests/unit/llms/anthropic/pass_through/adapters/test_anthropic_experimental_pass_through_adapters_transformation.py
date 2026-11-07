@@ -5584,6 +5584,51 @@ def test_sync_messages_retry_once_without_reasoning_the_backend_cannot_decrypt(
     assert [block["text"] for block in response["content"] if block["type"] == "text"] == ["Oslo"]
 
 
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_chat_bridge_httpx")
+async def test_async_messages_with_num_retries_send_the_rejected_reasoning_only_once(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post(url__regex=_RETRY_URL).mock(
+        side_effect=[_RETRY_REJECTION, httpx.Response(200, json=_RETRY_REPLY)]
+    )
+
+    await litellm.anthropic.messages.acreate(
+        model="azure/gpt-5.4-nano",
+        api_base=_RETRY_API_BASE,
+        api_key="fake-key",
+        api_version="2025-04-01-preview",
+        max_tokens=64,
+        tools=_RETRY_TOOLS,
+        messages=_history_with_foreign_reasoning(),
+        num_retries=2,
+    )
+
+    assert [len(_sent_reasoning_items(call.request)) for call in route.calls] == [1, 0]
+
+
+@pytest.mark.usefixtures("_chat_bridge_httpx")
+def test_sync_messages_with_num_retries_send_the_rejected_reasoning_only_once(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post(url__regex=_RETRY_URL).mock(
+        side_effect=[_RETRY_REJECTION, httpx.Response(200, json=_RETRY_REPLY)]
+    )
+
+    litellm.anthropic.messages.create(
+        model="azure/gpt-5.4-nano",
+        api_base=_RETRY_API_BASE,
+        api_key="fake-key",
+        api_version="2025-04-01-preview",
+        max_tokens=64,
+        tools=_RETRY_TOOLS,
+        messages=_history_with_foreign_reasoning(),
+        num_retries=2,
+    )
+
+    assert [len(_sent_reasoning_items(call.request)) for call in route.calls] == [1, 0]
+
+
 class _FailureLog(CustomLogger):
     def __init__(self) -> None:
         super().__init__()

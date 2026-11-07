@@ -118,7 +118,8 @@ def current_service_caller() -> str | None:
 @contextmanager
 def resent_on(rejection: Callable[[Exception], bool]) -> Generator[None]:
     """An attempt its caller sends again when it fails with ``rejection``. That failure is not the request's
-    outcome, so nothing logs it and its budget reservation and rate-limit slot stay with the attempt sent again."""
+    outcome, so it is neither logged as the request's failure nor retried, and its budget reservation and rate-limit
+    slot stay with the attempt sent again."""
     token: Final = _resent_on.set(rejection)
     try:
         yield
