@@ -114,6 +114,7 @@ from litellm.proxy.common_request_processing import (
     open_sse_before_first_byte,
     resolve_litellm_call_id,
 )
+from litellm.proxy.common_utils.callback_utils import strip_callback_config
 from litellm.proxy.common_utils.error_body_call_id import JSON_OBJECT, error_body_call_id, with_call_id
 from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
     _read_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -730,6 +731,8 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         _metadata["litellm_parent_otel_span"] = user_api_key_dict.parent_otel_span
         _metadata["user_api_key_budget_reservation"] = user_api_key_dict.budget_reservation
         _metadata[MODEL_ACCESS_GROUP_METADATA_KEY] = user_api_key_dict.matched_model_access_groups
+        _metadata["user_api_key_metadata"] = _metadata["user_api_key_auth_metadata"]
+        _metadata["user_api_key_team_metadata"] = strip_callback_config(user_api_key_dict.team_metadata)
         # The per-model budget counters are keyed off these. get_sanitized_user_information_from_key
         # returns StandardLoggingUserAPIKeyMetadata, which carries no budget field, so without this
         # the post-call increment finds nothing and every passthrough request goes untracked and

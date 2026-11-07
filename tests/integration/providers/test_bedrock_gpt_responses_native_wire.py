@@ -176,3 +176,28 @@ async def test_mid_stream_upstream_error_without_an_event_type_reaches_the_clien
         assert isinstance(failed, ResponseFailedEvent), failed
         assert failed.response.error is not None and UPSTREAM_OUTAGE in failed.response.error.message, failed
         _native_request(wire)
+
+
+def test_codex_agent_message_with_encrypted_content_reaches_the_native_responses_route_intact(
+    gateway: Gateway,
+) -> None:
+    marker: Final = uuid.uuid4().hex
+    agent_message: Final[JsonValue] = {
+        "type": "agent_message",
+        "author": "/root/reviewer",
+        "recipient": "/root",
+        "content": [
+            {"type": "input_text", "text": "Worker message:\n"},
+            {"type": "encrypted_content", "encrypted_content": f"gAAAAABsynthetic-agent-ciphertext-{marker}=="},
+        ],
+    }
+    user_turn: Final[JsonValue] = {"type": "message", "role": "user", "content": _prompt(marker)}
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(scenario, wire)
+        response: Final = gateway.request(
+            "POST",
+            "/v1/responses",
+            {"model": model, "input": [agent_message, user_turn], "cache": {"no-cache": True}},
+        )
+        assert response.status_code == 200, response.text
+        assert _body(_native_request(wire))["input"] == [agent_message, user_turn]

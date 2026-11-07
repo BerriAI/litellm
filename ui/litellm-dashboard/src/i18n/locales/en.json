@@ -1,4 +1,15 @@
 {
+  "format": {
+    "number": "{{val, number}}",
+    "compactNumber": "{{val, compact}}",
+    "usd": "{{val, usd}}",
+    "relativeTime": "{{val, relativetime}}",
+    "date": "{{val, date}}",
+    "monthDay": "{{val, monthday}}",
+    "monthDayTime": "{{val, monthdaytime}}",
+    "timestamp": "{{val, timestamp}}",
+    "numericDateTime": "{{val, numericdatetime}}"
+  },
   "agents": {
     "killSwitchConfig": {
       "authTypes": {
@@ -3069,6 +3080,10 @@
     "placeholder": "Search or select a team",
     "empty": "No teams found",
     "loading": "Loading teams…"
+  },
+  "storePromptsToggle": {
+    "label": "Store prompts in spend logs",
+    "description": "Turn off to exclude prompts and responses from spend logs. Global and team restrictions still apply."
   },
   "accessGroupSelector": {
     "placeholder": "Select access groups",

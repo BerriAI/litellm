@@ -238,8 +238,8 @@ def test_the_native_breaker_counts_in_the_redis_breaker_state_gauge() -> None:
     store: Final = NativeRouterCooldowns(
         NativeRedisClient.connect(
             RedisStoreSettings(
-                redis_kwargs={"host": "127.0.0.1", "port": 1},
-                namespace=f"breaker-gauge-test-{uuid.uuid4()}",
+                redis_kwargs={"host": f"breaker-gauge-{uuid.uuid4()}.invalid", "port": 1},
+                namespace=None,
                 default_ttl=60,
                 breaker=RedisBreakerSettings(failure_threshold=1, recovery_timeout=60.0, timeout_min_duration=5.0),
             )
