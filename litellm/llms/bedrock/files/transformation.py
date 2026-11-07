@@ -67,8 +67,10 @@ from litellm.utils import get_llm_provider, get_optional_params
 from ..base_aws_llm import BaseAWSLLM
 from ..common_utils import (
     BedrockError,
+    deployment_model_info,
     merge_bedrock_aws_request_params,
     resolve_s3_encryption_key_id,
+    without_bedrock_native_output_opt_in,
 )
 
 S3_SIGNED_REQUEST_HEADERS_PARAM: Final = "_s3_signed_request_headers"
@@ -958,7 +960,11 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         model), so `input`, `instructions`, `max_output_tokens` and the tool
         params translate identically in batch and real time.
         """
-        return responses_batch_body_to_chat_body(openai_request_body)
+        chat_body: Final = responses_batch_body_to_chat_body(openai_request_body)
+        drop_params: Final = openai_request_body.get("drop_params")
+        if drop_params is None:
+            return chat_body
+        return _frozen_mapping(chain(chat_body.items(), (("drop_params", drop_params),)))
 
     @staticmethod
     def _transform_batch_body_to_chat_body(
@@ -1005,10 +1011,12 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             )
 
             config: Final = AmazonAnthropicClaudeConfig()
+            litellm_params: Final = without_bedrock_native_output_opt_in({})
             mapped_params = get_optional_params(
                 model=_invoke_route_model(model),
                 custom_llm_provider="bedrock",
                 messages=messages,
+                model_info=deployment_model_info(litellm_params),
                 **MappingProxyType(
                     {
                         k: v
@@ -1023,7 +1031,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
                 optional_params={
                     k: v for k, v in mapped_params.items() if k not in _MAPPED_PARAMS_THE_REQUEST_HANDLER_STRIPS
                 },
-                litellm_params={},
+                litellm_params=dict(litellm_params),
                 headers={},
             )
 
@@ -1043,7 +1051,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
                 non_default_params=optional_params,
                 optional_params={},
                 model=model,
-                drop_params=False,
+                drop_params=optional_params.get("drop_params") is True,
             )
             return converse_config.transform_request(
                 model=model,
@@ -1057,7 +1065,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         #     like openai.gpt-oss-*, qwen, deepseek, etc.) ---
         return {
             "messages": messages,
-            **optional_params,
+            **{k: v for k, v in optional_params.items() if k != "drop_params"},
         }
 
     def _resolve_batch_record_model_and_provider(

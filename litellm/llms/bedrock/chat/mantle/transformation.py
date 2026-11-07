@@ -37,6 +37,14 @@ class AmazonMantleConfig(AmazonAnthropicClaudeConfig):
     Usage: model="bedrock/mantle/anthropic.claude-mythos-preview"
     """
 
+    def uses_native_structured_output_for_schema(
+        self,
+        model: str,
+        json_schema: Mapping[str, object] | None,
+        request_params: Mapping[str, object],
+    ) -> bool:
+        return super().uses_native_structured_output_for_schema(model, json_schema, {})
+
     def get_complete_url(
         self,
         api_base: str | None,

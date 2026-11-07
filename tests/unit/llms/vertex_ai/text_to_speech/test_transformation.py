@@ -48,6 +48,73 @@ class TestVertexAITextToSpeechConfig:
 
         assert url == custom_url
 
+    @pytest.mark.parametrize(
+        ("vertex_location", "expected_host"),
+        [
+            ("eu", "eu-texttospeech.googleapis.com"),
+            ("europe-west4", "eu-texttospeech.googleapis.com"),
+            ("europe-west1", "eu-texttospeech.googleapis.com"),
+            ("europe-west3", "eu-texttospeech.googleapis.com"),
+            ("europe-west8", "eu-texttospeech.googleapis.com"),
+            ("europe-west9", "eu-texttospeech.googleapis.com"),
+            ("europe-west12", "eu-texttospeech.googleapis.com"),
+            ("europe-west10", "eu-texttospeech.googleapis.com"),
+            ("europe-central2", "eu-texttospeech.googleapis.com"),
+            ("europe-north1", "eu-texttospeech.googleapis.com"),
+            ("europe-north2", "eu-texttospeech.googleapis.com"),
+            ("europe-southwest1", "eu-texttospeech.googleapis.com"),
+            ("us", "us-texttospeech.googleapis.com"),
+            ("us-central1", "us-texttospeech.googleapis.com"),
+            ("us-east1", "us-texttospeech.googleapis.com"),
+            ("us-east4", "us-texttospeech.googleapis.com"),
+            ("us-east5", "us-texttospeech.googleapis.com"),
+            ("us-south1", "us-texttospeech.googleapis.com"),
+            ("us-west1", "us-texttospeech.googleapis.com"),
+            ("us-west2", "us-texttospeech.googleapis.com"),
+            ("us-west3", "us-texttospeech.googleapis.com"),
+            ("us-west4", "us-texttospeech.googleapis.com"),
+            ("us-west5", "us-texttospeech.googleapis.com"),
+        ],
+    )
+    def test_get_complete_url_uses_regional_endpoint_for_vertex_location(
+        self, vertex_location: str, expected_host: str
+    ) -> None:
+        config: Final = VertexAITextToSpeechConfig()
+
+        url: Final = config.get_complete_url(
+            model="vertex_ai/chirp",
+            api_base=None,
+            litellm_params={"vertex_location": vertex_location},
+        )
+
+        assert url == f"https://{expected_host}/v1/text:synthesize"
+
+    @pytest.mark.parametrize(
+        "vertex_location", ["global", "europe-west2", "asia-northeast1", "northamerica-northeast1", None]
+    )
+    def test_get_complete_url_keeps_global_endpoint_without_a_regional_match(self, vertex_location: str | None) -> None:
+        config: Final = VertexAITextToSpeechConfig()
+
+        url: Final = config.get_complete_url(
+            model="vertex_ai/chirp",
+            api_base=None,
+            litellm_params={"vertex_location": vertex_location},
+        )
+
+        assert url == "https://texttospeech.googleapis.com/v1/text:synthesize"
+
+    def test_get_complete_url_api_base_wins_over_vertex_location(self) -> None:
+        config: Final = VertexAITextToSpeechConfig()
+
+        custom_url: Final = "https://custom-tts-endpoint.example.com/v1/synthesize"
+        url: Final = config.get_complete_url(
+            model="vertex_ai/chirp",
+            api_base=custom_url,
+            litellm_params={"vertex_location": "eu"},
+        )
+
+        assert url == custom_url
+
     @patch.object(VertexAITextToSpeechConfig, "_ensure_access_token")
     @patch.object(VertexAITextToSpeechConfig, "_get_token_and_url")
     def test_transform_text_to_speech_request_body(self, mock_get_token, mock_ensure_token):
@@ -616,8 +683,7 @@ def test_litellm_speech_vertex_ai_chirp(mock_get_token, mock_ensure_token, mock_
     mock_post.assert_called_once()
     call_kwargs = mock_post.call_args.kwargs
 
-    # Verify the URL is the Google Cloud TTS API
-    assert call_kwargs["url"] == "https://texttospeech.googleapis.com/v1/text:synthesize"
+    assert call_kwargs["url"] == "https://us-texttospeech.googleapis.com/v1/text:synthesize"
 
     # Verify request body structure
     assert "json" in call_kwargs
@@ -762,6 +828,109 @@ async def test_aspeech_vertex_ai_sends_ssml_input(
         "voice": _UK_VOICE,
         "audioConfig": _UK_AUDIO_CONFIG,
     }
+
+
+@pytest.mark.asyncio
+async def test_aspeech_vertex_ai_chirp_keeps_the_global_host_when_only_vertexai_location_is_set(
+    respx_mock: respx.MockRouter, google_token_endpoint: responses.RequestsMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("VERTEXAI_LOCATION", "europe-west4")
+    route: Final = respx_mock.post(_SYNTHESIZE_URL).mock(
+        return_value=httpx.Response(200, json={"audioContent": base64.b64encode(b"global-audio").decode()})
+    )
+
+    response: Final = await litellm.aspeech(
+        model="vertex_ai/chirp",
+        input="Bonjour",
+        voice="fr-FR-Chirp3-HD-Aoede",
+        vertex_credentials=_AUTHORIZED_USER,
+    )
+
+    assert route.call_count == 1
+    assert response.content == b"global-audio"
+
+
+@pytest.mark.asyncio
+async def test_aspeech_vertex_ai_chirp_keeps_the_global_host_with_other_location_defaults(
+    respx_mock: respx.MockRouter, google_token_endpoint: responses.RequestsMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("VERTEX_LOCATION", "europe-west4")
+    monkeypatch.setattr(litellm, "vertex_location", "us-central1")
+    route: Final = respx_mock.post(_SYNTHESIZE_URL).mock(
+        return_value=httpx.Response(200, json={"audioContent": base64.b64encode(b"global-audio").decode()})
+    )
+
+    response: Final = await litellm.aspeech(
+        model="vertex_ai/chirp",
+        input="Bonjour",
+        voice="fr-FR-Chirp3-HD-Aoede",
+        vertex_credentials=_AUTHORIZED_USER,
+    )
+
+    assert route.call_count == 1
+    assert response.content == b"global-audio"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("location_param", "location", "expected_host"),
+    [
+        ("vertex_location", "eu", "eu-texttospeech.googleapis.com"),
+        ("vertex_location", "us-central1", "us-texttospeech.googleapis.com"),
+        ("vertex_ai_location", "europe-west4", "eu-texttospeech.googleapis.com"),
+    ],
+)
+async def test_aspeech_vertex_ai_chirp_calls_the_regional_host_for_an_explicit_location(
+    respx_mock: respx.MockRouter,
+    google_token_endpoint: responses.RequestsMock,
+    location_param: str,
+    location: str,
+    expected_host: str,
+) -> None:
+    route: Final = respx_mock.post(f"https://{expected_host}/v1/text:synthesize").mock(
+        return_value=httpx.Response(200, json={"audioContent": base64.b64encode(b"regional-audio").decode()})
+    )
+
+    response: Final = await litellm.aspeech(
+        model="vertex_ai/chirp",
+        input="Bonjour",
+        voice="fr-FR-Chirp3-HD-Aoede",
+        vertex_credentials=_AUTHORIZED_USER,
+        **{location_param: location},
+    )
+
+    assert route.call_count == 1
+    assert response.content == b"regional-audio"
+
+
+@pytest.mark.asyncio
+async def test_aspeech_vertex_ai_lyria_predict_still_uses_vertexai_location(
+    respx_mock: respx.MockRouter, google_token_endpoint: responses.RequestsMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("VERTEXAI_LOCATION", "us-east5")
+    route: Final = respx_mock.post(
+        "https://us-east5-aiplatform.googleapis.com/v1/projects/test-project/locations/us-east5"
+        "/publishers/google/models/lyria-002:predict"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "predictions": [
+                    {"audioContent": base64.b64encode(b"lyria-audio").decode(), "mimeType": "audio/wav"},
+                ]
+            },
+        )
+    )
+
+    response: Final = await litellm.aspeech(
+        model="vertex_ai/lyria-002",
+        input="calm piano",
+        voice="unused",
+        vertex_credentials=_AUTHORIZED_USER,
+    )
+
+    assert route.call_count == 1
+    assert response.content == b"lyria-audio"
 
 
 _WAV_AUDIO_B64: Final = "UklGRiQAAABXQVZFZm10IA=="

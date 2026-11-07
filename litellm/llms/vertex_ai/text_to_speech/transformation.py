@@ -49,6 +49,43 @@ _LyriaVoice: TypeAlias = str | dict | None
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 _JSON_ARRAY: Final = TypeAdapter(tuple[object, ...], config=ConfigDict(hide_input_in_errors=True))
 _STR: Final = TypeAdapter(str, config=ConfigDict(hide_input_in_errors=True))
+_CLOUD_TTS_LOCATIONS: Final = MappingProxyType(
+    {
+        **dict.fromkeys(
+            (
+                "us",
+                "us-central1",
+                "us-east1",
+                "us-east4",
+                "us-east5",
+                "us-south1",
+                "us-west1",
+                "us-west2",
+                "us-west3",
+                "us-west4",
+                "us-west5",
+            ),
+            "us",
+        ),
+        **dict.fromkeys(
+            (
+                "eu",
+                "europe-central2",
+                "europe-north1",
+                "europe-north2",
+                "europe-southwest1",
+                "europe-west1",
+                "europe-west3",
+                "europe-west4",
+                "europe-west8",
+                "europe-west9",
+                "europe-west10",
+                "europe-west12",
+            ),
+            "eu",
+        ),
+    }
+)
 
 
 class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
@@ -173,7 +210,7 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
         # Resolve Vertex AI credentials using VertexBase helpers
         vertex_credentials: Final = self.safe_get_vertex_ai_credentials(litellm_params_dict)
         vertex_project: Final = self.safe_get_vertex_ai_project(litellm_params_dict)
-        vertex_location: Final = self.safe_get_vertex_ai_location(litellm_params_dict)
+        vertex_location: Final = self.explicit_vertex_ai_location(litellm_params_dict)
 
         # Convert voice to string if it's a dict (extract name)
         # Actual voice mapping happens in map_openai_params
@@ -314,7 +351,11 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
         if api_base:
             return api_base
 
-        return self.TTS_API_URL
+        location: Final = _JSON_OBJECT.validate_python(litellm_params).get("vertex_location")
+        cloud_tts_location: Final = _CLOUD_TTS_LOCATIONS.get(location) if isinstance(location, str) else None
+        if cloud_tts_location is None:
+            return self.TTS_API_URL
+        return f"https://{cloud_tts_location}-texttospeech.googleapis.com/v1/text:synthesize"
 
     def _validate_vertex_input(
         self,

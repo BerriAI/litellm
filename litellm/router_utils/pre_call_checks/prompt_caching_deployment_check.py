@@ -138,6 +138,9 @@ class PromptCachingDeploymentCheck(CustomLogger):
 
         return healthy_deployments
 
+    def exempt_from_message_redaction(self) -> bool:
+        return True
+
     async def async_log_success_event(
         self,
         kwargs: _PromptCachingSuccessEventKwargs,

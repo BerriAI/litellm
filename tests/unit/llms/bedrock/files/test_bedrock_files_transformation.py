@@ -23,7 +23,7 @@ from botocore.credentials import Credentials
 import litellm
 from litellm.constants import DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET
 from litellm.llms.bedrock.common_utils import BedrockError
-from litellm.llms.bedrock.files.transformation import BedrockJsonlFilesTransformation
+from litellm.llms.bedrock.files.transformation import BedrockFilesConfig, BedrockJsonlFilesTransformation
 from tests.unit.proxy.conftest import httpx_transport
 
 
@@ -101,6 +101,49 @@ class TestBedrockFilesTransformation:
         model_input: Final = json.dumps(result[0]["modelInput"])
         assert "_litellm_undeclared_sentinel" not in model_input, model_input
         assert result[0]["modelInput"]["max_tokens"] == 10
+
+    @staticmethod
+    def _nova_row(
+        url: str = "/v1/chat/completions", model: str = "us.amazon.nova-pro-v1:0", **body_params: object
+    ) -> dict[str, object]:
+        prompt: Final = {"input": "hi"} if url == "/v1/responses" else {"messages": [{"role": "user", "content": "hi"}]}
+        return {
+            "custom_id": "nova-tier-1",
+            "method": "POST",
+            "url": url,
+            "body": {"model": model, **prompt, **body_params},
+        }
+
+    def test_nova_row_with_null_service_tier_sends_no_tier(self):
+        result: Final = BedrockFilesConfig().transform_openai_jsonl_content_to_bedrock_jsonl_content(
+            [self._nova_row(service_tier=None)]
+        )
+
+        assert "serviceTier" not in result[0]["modelInput"]
+
+    @pytest.mark.parametrize("url", ["/v1/chat/completions", "/v1/responses"])
+    def test_nova_row_with_unmapped_service_tier_fails_the_row_like_real_time(self, url: str):
+        with pytest.raises(litellm.UnsupportedParamsError, match="ultrafast"):
+            BedrockFilesConfig().transform_openai_jsonl_content_to_bedrock_jsonl_content(
+                [self._nova_row(url, service_tier="ultrafast")]
+            )
+
+    @pytest.mark.parametrize("url", ["/v1/chat/completions", "/v1/responses"])
+    def test_nova_row_level_drop_params_drops_the_unmapped_service_tier(self, url: str):
+        result: Final = BedrockFilesConfig().transform_openai_jsonl_content_to_bedrock_jsonl_content(
+            [self._nova_row(url, service_tier="ultrafast", drop_params=True)]
+        )
+
+        assert "serviceTier" not in result[0]["modelInput"]
+        assert "drop_params" not in json.dumps(result[0]["modelInput"])
+
+    @pytest.mark.parametrize("url", ["/v1/chat/completions", "/v1/responses"])
+    def test_passthrough_row_keeps_row_level_drop_params_out_of_the_model_input(self, url: str):
+        result: Final = BedrockFilesConfig().transform_openai_jsonl_content_to_bedrock_jsonl_content(
+            [self._nova_row(url, "openai.gpt-oss-120b-1:0", drop_params=True)]
+        )
+
+        assert "drop_params" not in result[0]["modelInput"]
 
     def test_nova_text_only_uses_converse_format(self):
         """
@@ -2030,6 +2073,31 @@ class TestBedrockBatchAnthropicRowParams:
         assert "json_mode" not in model_input
         assert "response_format" not in model_input
         assert ("output_config" in model_input) == (response_format["type"] == "json_schema")
+
+    @pytest.mark.parametrize(
+        ("model", "native_output"),
+        [("bedrock/us.anthropic.claude-opus-4-8", False), (MODEL, True)],
+        ids=["opt_in_native_output_model", "native_output_model"],
+    )
+    def test_thinking_json_schema_rows_use_native_output_only_on_models_that_always_take_it(
+        self, local_model_cost_map, model, native_output
+    ):
+        model_input: Final = self._transform(
+            "/v1/chat/completions",
+            {
+                "messages": [{"role": "user", "content": "Weather in Paris?"}],
+                "thinking": {"type": "adaptive"},
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {"name": "weather", "schema": self.PARAMETERS},
+                },
+            },
+            model=model,
+        )
+        tool_names: Final = frozenset(tool["name"] for tool in model_input.get("tools", []))
+
+        assert ("format" in model_input.get("output_config", {})) is native_output
+        assert (tool_names == {"json_tool_call"}) is not native_output
 
     def test_provider_native_params_still_pass_through(self):
         model_input = self._transform(
