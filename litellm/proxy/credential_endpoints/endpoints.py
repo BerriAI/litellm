@@ -324,7 +324,7 @@ async def create_credential(
     Stores credential in DB.
     Reloads credentials in memory.
     """
-    from litellm.proxy.proxy_server import MODEL_RECONCILE_LOCK, prisma_client
+    from litellm.proxy.proxy_server import DB_RECONCILE_LOCK, prisma_client
 
     try:
         if prisma_client is None:
@@ -365,7 +365,7 @@ async def create_credential(
         credentials_dict_jsonified: Final = cast(  # cast-ok: deep-copies a model_dump, so keys are str
             "dict[str, object]", jsonify_object(credentials_dict)
         )
-        async with MODEL_RECONCILE_LOCK:
+        async with DB_RECONCILE_LOCK:
             try:
                 await CredentialsRepository(prisma_client).create(
                     data={
@@ -866,7 +866,7 @@ async def delete_credential(
     """
     [BETA] endpoint. This might change unexpectedly.
     """
-    from litellm.proxy.proxy_server import MODEL_RECONCILE_LOCK, prisma_client
+    from litellm.proxy.proxy_server import DB_RECONCILE_LOCK, prisma_client
 
     try:
         if prisma_client is None:
@@ -877,7 +877,7 @@ async def delete_credential(
         _reject_non_admin_wif_fields(
             await named_credential_wif_fields(credential_name, prisma_client), user_api_key_dict
         )
-        async with MODEL_RECONCILE_LOCK:
+        async with DB_RECONCILE_LOCK:
             deleted: Final = await CredentialsRepository(prisma_client).delete_by_name(credential_name)
             if deleted is None:
                 raise _not_found_unless_config_defined(
@@ -987,7 +987,7 @@ async def update_credential(
     """
     [BETA] endpoint. This might change unexpectedly.
     """
-    from litellm.proxy.proxy_server import MODEL_RECONCILE_LOCK, prisma_client
+    from litellm.proxy.proxy_server import DB_RECONCILE_LOCK, prisma_client
 
     try:
         if credential.credential_name and credential.credential_name != credential_name:
@@ -1011,7 +1011,7 @@ async def update_credential(
                 detail={"error": CommonProxyErrors.db_not_connected_error.value},
             )
         credentials_repository: Final = CredentialsRepository(WriterPinnedClient(prisma_client.db))
-        async with MODEL_RECONCILE_LOCK:
+        async with DB_RECONCILE_LOCK:
             db_credential: Final = await credentials_repository.find_by_name(credential_name)
             if db_credential is None:
                 raise _not_found_unless_config_defined(credential_name, "Credential not found in DB.")

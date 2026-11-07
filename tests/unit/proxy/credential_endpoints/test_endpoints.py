@@ -3364,20 +3364,20 @@ class TestCredentialWritesHoldTheReconcileLock:
     """A config reload snapshots the credential table, awaits the config rows, then prunes and
     upserts ``litellm.credential_list`` from that snapshot. A credential write that lands inside
     that gap is undone in memory until the next reload, so each write has to queue behind
-    MODEL_RECONCILE_LOCK, the lock the reload already holds."""
+    DB_RECONCILE_LOCK, the lock the reload already holds."""
 
     @staticmethod
     async def _assert_write_waits_for_the_lock(
         monkeypatch: pytest.MonkeyPatch, call_endpoint: Callable[[], Awaitable[dict[str, object]]], write: str
     ) -> dict[str, object]:
         lock: Final = asyncio.Lock()
-        monkeypatch.setattr("litellm.proxy.proxy_server.MODEL_RECONCILE_LOCK", lock)
+        monkeypatch.setattr("litellm.proxy.proxy_server.DB_RECONCILE_LOCK", lock)
         async with lock:
             task: Final = asyncio.create_task(call_endpoint())
             for _ in range(50):
                 await asyncio.sleep(0)
             assert not task.done(), (
-                f"{write} did not wait for MODEL_RECONCILE_LOCK, so an in-flight config reload can undo it in memory"
+                f"{write} did not wait for DB_RECONCILE_LOCK, so an in-flight config reload can undo it in memory"
             )
         return await asyncio.wait_for(task, timeout=5)
 
