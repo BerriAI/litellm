@@ -32,6 +32,12 @@ variable "create_runtime" {
   default     = true
 }
 
+variable "create_read_replica" {
+  description = "Create the Cloud SQL read replica. False = writer only."
+  type        = bool
+  default     = true
+}
+
 variable "network_id" {
   description = "Existing VPC network resource ID. Empty creates a VPC."
   type        = string

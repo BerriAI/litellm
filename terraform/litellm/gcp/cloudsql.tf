@@ -1,4 +1,4 @@
-# Cloud SQL for PostgreSQL — one primary + one read replica.
+# Cloud SQL for PostgreSQL — one primary + an optional read replica.
 #
 # Note on auth: LiteLLM's IAM-auth helper (rds_iam_token.py) mints AWS RDS
 # tokens via boto3 and doesn't speak GCP IAM. Cloud SQL IAM auth from Cloud
@@ -64,6 +64,7 @@ resource "google_sql_database_instance" "writer" {
 }
 
 resource "google_sql_database_instance" "reader" {
+  count                = var.create_read_replica ? 1 : 0
   name                 = "${local.name}-reader"
   region               = var.region
   database_version     = var.db_version
