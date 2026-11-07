@@ -141,6 +141,15 @@ async def _caller_team_copy_of_managed_file(
     return _ManagedFileCopy(team_deployment.deployment_id, provider_file_id)
 
 
+def _store_carries_credentials(store: LiteLLM_ManagedVectorStore | None) -> bool:
+    return store is not None and (
+        carries_explicit_credentials(store.get("litellm_params") or MappingProxyType({}))
+        or carries_explicit_credentials(
+            MappingProxyType({"litellm_credential_name": store.get("litellm_credential_name")})
+        )
+    )
+
+
 async def _update_request_data_with_managed_file_id(
     data: dict,
     file_id: str,
@@ -148,6 +157,7 @@ async def _update_request_data_with_managed_file_id(
     user_api_key_dict: UserAPIKeyAuth,
     managed_files_obj: object | None,
     llm_router: Optional["Router"] = None,
+    managed_vector_store: LiteLLM_ManagedVectorStore | None = None,
 ) -> tuple[dict, str | None]:
     """
     Update request data with model routing information from managed file ID.
@@ -224,7 +234,7 @@ async def _update_request_data_with_managed_file_id(
             )
             team_copy: Final = (
                 None
-                if carries_explicit_credentials(data)
+                if carries_explicit_credentials(data) or _store_carries_credentials(managed_vector_store)
                 else await _caller_team_copy_of_managed_file(
                     await _resolve_provider(data=data, request=request),
                     file_id,
@@ -630,6 +640,7 @@ async def vector_store_file_create(
             user_api_key_dict=user_api_key_dict,
             managed_files_obj=proxy_logging_obj.get_proxy_hook("managed_files"),
             llm_router=llm_router,
+            managed_vector_store=managed_vector_store,
         )
 
     # Then handle managed vector store IDs
@@ -844,6 +855,7 @@ async def vector_store_file_retrieve(
         user_api_key_dict=user_api_key_dict,
         managed_files_obj=proxy_logging_obj.get_proxy_hook("managed_files"),
         llm_router=llm_router,
+        managed_vector_store=managed_vector_store,
     )
 
     # Then handle managed vector store IDs
@@ -951,6 +963,7 @@ async def vector_store_file_content(
         user_api_key_dict=user_api_key_dict,
         managed_files_obj=proxy_logging_obj.get_proxy_hook("managed_files"),
         llm_router=llm_router,
+        managed_vector_store=managed_vector_store,
     )
 
     # Then handle managed vector store IDs
@@ -1061,6 +1074,7 @@ async def vector_store_file_update(
         user_api_key_dict=user_api_key_dict,
         managed_files_obj=proxy_logging_obj.get_proxy_hook("managed_files"),
         llm_router=llm_router,
+        managed_vector_store=managed_vector_store,
     )
 
     # Then handle managed vector store IDs
@@ -1168,6 +1182,7 @@ async def vector_store_file_delete(
         user_api_key_dict=user_api_key_dict,
         managed_files_obj=proxy_logging_obj.get_proxy_hook("managed_files"),
         llm_router=llm_router,
+        managed_vector_store=managed_vector_store,
     )
 
     # Then handle managed vector store IDs

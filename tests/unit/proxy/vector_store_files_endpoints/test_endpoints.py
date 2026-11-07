@@ -25,11 +25,13 @@ import litellm
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.vector_store_files_endpoints.endpoints import (
+    _update_request_data_with_litellm_managed_vector_store_registry,
     _update_request_data_with_managed_file_id,
     _with_managed_file_list_ids,
     _with_provider_file_id_cursors,
 )
-from litellm.types.utils import SpecialEnums
+from litellm.types.utils import CredentialItem, SpecialEnums
+from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
 from litellm.types.vector_store_files import (
     VectorStoreFileListResponse,
     VectorStoreFileObject,
@@ -437,3 +439,74 @@ async def test_managed_file_id_with_a_copy_on_the_callers_team_deployment_reache
         )
 
     assert upstream.calls.last.request.headers["Authorization"] == expected_authorization
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "registered_store",
+    [
+        LiteLLM_ManagedVectorStore(
+            vector_store_id="vs-test", custom_llm_provider="openai", litellm_params={"api_key": "store-openai-key"}
+        ),
+        LiteLLM_ManagedVectorStore(
+            vector_store_id="vs-test", custom_llm_provider="openai", litellm_credential_name="store-openai"
+        ),
+    ],
+)
+async def test_managed_file_id_on_a_store_with_its_own_credentials_keeps_the_upload_copy(
+    monkeypatch: pytest.MonkeyPatch, registered_store: LiteLLM_ManagedVectorStore
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="store-openai", credential_values={"api_key": "store-openai-key"}, credential_info={}
+            )
+        ],
+    )
+    caller: Final = UserAPIKeyAuth(api_key="sk-test", user_id="caller-user", team_id="team-b")
+    router: Final = _proxy_and_team_b_openai_router()
+    managed_file_id: Final = (
+        base64.urlsafe_b64encode(
+            SpecialEnums.LITELLM_MANAGED_FILE_COMPLETE_STR.value.format(
+                "text/plain", "two-copy-unified-id", "openai/*", "file-proxy-copy", "proxy-openai"
+            ).encode()
+        )
+        .decode()
+        .rstrip("=")
+    )
+
+    data, _ = await _update_request_data_with_managed_file_id(
+        data={"vector_store_id": "vs-test", "file_id": managed_file_id},
+        file_id=managed_file_id,
+        request=MagicMock(headers={}, query_params={}),
+        user_api_key_dict=caller,
+        managed_files_obj=ManagedFileCopiesStub(
+            copies={"proxy-openai": "file-proxy-copy", "team-b-openai": "file-team-copy"}
+        ),
+        llm_router=router,
+        managed_vector_store=registered_store,
+    )
+    with respx.mock(assert_all_called=True) as respx_mock:
+        upstream: Final = respx_mock.get(f"{_PROXY_OPENAI_BASE}/vector_stores/vs-test/files/file-proxy-copy").mock(
+            return_value=httpx.Response(200, json=dict(_vector_store_file_row("file-proxy-copy")))
+        )
+        await (
+            await route_request(
+                _update_request_data_with_litellm_managed_vector_store_registry(
+                    data=data,
+                    vector_store_id="vs-test",
+                    llm_router=router,
+                    managed_vector_store=registered_store,
+                    should_lookup_registry=False,
+                ),
+                router,
+                None,
+                "avector_store_file_retrieve",
+                user_api_key_dict=caller,
+            )
+        )
+
+    assert upstream.call_count == 1
