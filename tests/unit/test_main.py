@@ -7739,7 +7739,7 @@ async def test_bedrock_converse_parses_scripted_response(
     assert route.calls[0].request.headers["authorization"] == "Bearer test-bedrock-token"
     assert json.loads(route.calls[0].request.content) == {
         "messages": [{"role": "user", "content": [{"text": "hello"}]}],
-        "inferenceConfig": {},
+        "inferenceConfig": {"maxTokens": litellm.model_cost["anthropic.claude-sonnet-5-5"]["max_output_tokens"]},
         "additionalModelResponseFieldPaths": ["/usage/output_tokens_details"],
     }
     assert response.choices[0].message.content == "Hello from Bedrock."
