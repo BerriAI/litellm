@@ -1922,7 +1922,7 @@
     },
     "gmi": {
       "display_name": "GMI Cloud (`gmi`)",
-      "url": "https://docs.litellm.ai/docs/providers/gmi_cloud",
+      "url": "https://docs.litellm.ai/docs/providers/gmi",
       "endpoints": {
         "chat_completions": true,
         "responses": true,
