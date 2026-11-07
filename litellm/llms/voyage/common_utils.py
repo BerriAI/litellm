@@ -21,6 +21,11 @@ def get_voyage_api_key(api_key: str | None = None) -> str | None:
     )
 
 
+def get_voyage_api_base(api_base: str | None = None, api_key: str | None = None) -> str:
+    """Resolve the Voyage embeddings host: explicit base, ``VOYAGE_API_BASE``, then key issuer."""
+    return api_base or get_secret_str("VOYAGE_API_BASE") or get_default_base_url(api_key)
+
+
 def get_default_base_url(api_key: str | None = None) -> str:
     """
     Pick the host that issued the key: MongoDB-issued keys (``al-`` prefix) are only

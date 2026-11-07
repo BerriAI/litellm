@@ -8,7 +8,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
-from litellm.llms.voyage.common_utils import get_default_base_url, get_voyage_api_key
+from litellm.llms.voyage.common_utils import get_voyage_api_base, get_voyage_api_key
 from litellm.types.llms.openai import AllEmbeddingInputValues, AllMessageValues
 from litellm.types.utils import EmbeddingResponse, Usage
 
@@ -51,7 +51,7 @@ class VoyageEmbeddingConfig(BaseEmbeddingConfig):
         litellm_params: dict,
         stream: bool | None = None,
     ) -> str:
-        return ensure_api_route(api_base or get_default_base_url(api_key), "embeddings")
+        return ensure_api_route(get_voyage_api_base(api_base, api_key), "embeddings")
 
     def get_supported_openai_params(self, model: str) -> list:
         return [
