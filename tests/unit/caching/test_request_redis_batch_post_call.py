@@ -9,12 +9,10 @@ import asyncio
 import datetime
 import hashlib
 import json
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from typing import Final
 
 import pytest
-
-from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
 
 import litellm
 from litellm.caching.caching import Cache
@@ -36,10 +34,12 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
 from litellm.proxy.spend_tracking.spend_counter_batch import PendingSpendIncrement
 from litellm.proxy.utils import InternalUsageCache
 from litellm.redis.stores.rate_limits import CounterIncrement, RateLimitScope
-from litellm.router_strategy.lowest_tpm_rpm_v2 import LowestTPMLoggingHandler_v2
+from litellm.router_utils.deployment_usage_counter import DeploymentUsageCounter
 from litellm.types.caching import RedisPipelineIncrementOperation
+from litellm.types.router import RouterCacheEnum
 from litellm.types.utils import ModelResponse
 from tests.unit.redis.stores.fake_rate_limits import FakeRateLimits
+from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
 
 from .test_redis_batch import FakeClient, FakeNatives, FakeRedisCache, fake_send
 
@@ -132,22 +132,15 @@ def _response_cache(redis_cache: FakeRedisCache) -> Cache:
     return cache
 
 
-def _tpm_router(redis_cache: FakeRedisCache) -> tuple[LowestTPMLoggingHandler_v2, DualCache]:
+def _tpm_counter(redis_cache: FakeRedisCache) -> tuple[DeploymentUsageCounter, DualCache]:
     router_cache = DualCache()
     router_cache.attach_redis_cache(redis_cache)
-    return LowestTPMLoggingHandler_v2(router_cache=router_cache, routing_args={"ttl": 60}), router_cache
+    return DeploymentUsageCounter(router_cache), router_cache
 
 
-def _tpm_kwargs() -> Mapping[str, object]:
-    return {
-        "standard_logging_object": {
-            "model_group": "gpt",
-            "model_id": "dep-a",
-            "hidden_params": {"litellm_model_name": "openai/gpt-4o-mini"},
-            "total_tokens": 42,
-        },
-        "litellm_params": {"metadata": {}},
-    }
+def _router_tpm_op(total_tokens: int) -> RedisPipelineIncrementOperation:
+    key = RouterCacheEnum.TPM.value.format(id="dep-a", model="openai/gpt-4o-mini", current_minute="00-00")
+    return RedisPipelineIncrementOperation(key=key, increment_value=total_tokens, ttl=60)
 
 
 @pytest.mark.asyncio
@@ -157,10 +150,10 @@ async def test_post_call_owners_wait_for_the_callbacks_and_the_limiter_declares_
     calls: list[tuple[str, list[str], list[object]]] = []  # mutable-ok: filled by the fake scripts
     fakes = FakeRateLimits(token_increment_script=_scripts(calls, [10.0]), parallel_release_script=_scripts(calls, [0]))
     limiter = _limiter(fakes)
-    tpm, router_cache = _tpm_router(redis_cache)
+    counter, router_cache = _tpm_counter(redis_cache)
 
     with request_redis_batch_scope():
-        await tpm.async_log_success_event(_tpm_kwargs(), None, None, None)
+        await counter.charge_tokens((_router_tpm_op(42),), counted=True)
         await limiter.async_increment_tokens_with_ttl_preservation(_token_ops(_K1))
         await limiter._release_stashed_parallel_slot(_slot_stash("slot-1", _K1), None, in_logging_callback=True)
         assert client.pipelines == []  # nothing goes out while the callbacks are still declaring
@@ -437,7 +430,9 @@ async def test_spend_counter_increments_ride_the_native_post_call_batch(monkeypa
 async def test_native_post_call_ops_go_out_with_the_post_call_flush_not_the_request_boundary():
     natives = FakeNatives()
 
-    with request_redis_batch_scope(post_call_deadline=60, native_factory=natives, native_send_factory=fake_send) as request:  # pyright: ignore[reportArgumentType]  # test double
+    with request_redis_batch_scope(
+        post_call_deadline=60, native_factory=natives, native_send_factory=fake_send
+    ) as request:  # pyright: ignore[reportArgumentType]  # test double
         request.native_post_call()
         await request.flush_all()
         at_the_boundary = list(natives.built[0].events)
@@ -452,7 +447,9 @@ async def test_native_post_call_ops_go_out_with_the_post_call_flush_not_the_requ
 async def test_native_post_call_ops_still_waiting_on_their_callbacks_are_drained_at_shutdown():
     natives = FakeNatives()
 
-    with request_redis_batch_scope(post_call_deadline=60, native_factory=natives, native_send_factory=fake_send) as request:  # pyright: ignore[reportArgumentType]  # test double
+    with request_redis_batch_scope(
+        post_call_deadline=60, native_factory=natives, native_send_factory=fake_send
+    ) as request:  # pyright: ignore[reportArgumentType]  # test double
         request.native_post_call()
         await request.flush_all()
     await drain_post_call_redis_batches()

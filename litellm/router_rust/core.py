@@ -130,6 +130,7 @@ from litellm.router_rust.steps.prerouting import PreRouter, PreRoutingStrategies
 from litellm.router_rust.steps.selection import (
     SELECTOR_ATTRIBUTES,
     StrategySelectors,
+    charge_for_checks,
     group_documents,
     group_settings,
     member_map,
@@ -138,7 +139,9 @@ from litellm.router_rust.steps.selection import (
     pick_async,
     pick_sync,
     picked_id,
+    pre_call_checks_with,
     routing_pre_call_checks,
+    routing_pre_call_checks_sync,
 )
 from litellm.router_rust.surface.alerting import initialize_alerting
 from litellm.router_rust.surface.fallbacks import (
@@ -211,6 +214,7 @@ from litellm.router_rust.surface.settings import (
 )
 from litellm.router_strategy.least_busy import CALL_IDENTITY, call_id_of, owning_picks, pick_reserves, picks_reserve
 from litellm.router_utils.cooldown_handlers import get_cooldown_deployment_info, mark_deployment_selection_failure
+from litellm.router_utils.deployment_usage_counter import DeploymentUsageCounter, note_served_from_cache
 from litellm.router_utils.endpoint_eligibility import endpoint_for_call, selected_endpoint
 from litellm.router_utils.kubernetes_pod_discovery import (
     KubernetesPodDiscovery,
@@ -1319,6 +1323,9 @@ class _EndpointPort:
 
     def routing_callbacks(self) -> Iterable[object]:
         return self._core._checks.routing_callbacks()  # pyright: ignore[reportPrivateUsage]  # see the class docstring
+
+    def usage_counter(self) -> DeploymentUsageCounter:
+        return self._core._checks.usage_counter  # pyright: ignore[reportPrivateUsage]  # see the class docstring
 
     def resolve_alias(self, model: str) -> str | None:
         return self._core._hosted._core_get_model_from_alias(model)  # pyright: ignore[reportPrivateUsage]  # see the class docstring
@@ -3375,7 +3382,7 @@ class RustCore(
             selector = self._override_selector(step, request)
             if selector is not None:
                 for record in self._records_of(step.get("candidates")):
-                    await selector.async_pre_call_check(dict(record), None)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]  # every selector is a CustomLogger
+                    await routing_pre_call_checks((selector,), record, self._checks.usage_counter)
             return step["candidates"]
         if step.get("stage") == "provider_request":
             return _provider_request(step)
@@ -3409,7 +3416,7 @@ class RustCore(
             )
         )
         if picked is not None and selector is not None and self._selectors.is_override(strategy, selector):
-            await selector.async_pre_call_check(dict(as_str_mapping(picked) or {}), None)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]  # every selector is a CustomLogger
+            await routing_pre_call_checks((selector,), as_str_mapping(picked) or {}, self._checks.usage_counter)
         if picked is not None and timed:
             self.service_logged("<routing_strategy>.async_get_available_deployments", start_time, clock(), request)
         return _pick_answer(step, candidates, picked)
@@ -3436,7 +3443,7 @@ class RustCore(
             selector = self._override_selector(step, request)
             if selector is not None:
                 for record in self._records_of(step.get("candidates")):
-                    selector.pre_call_check(dict(record))  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]  # every selector is a CustomLogger
+                    routing_pre_call_checks_sync((selector,), record, self._checks.usage_counter)
             return step["candidates"]
         if step.get("stage") == "provider_request":
             return _provider_request(step)
@@ -3458,7 +3465,7 @@ class RustCore(
             reserve=pick_reserves(default=False) and bool(request),
         )
         if picked is not None and self._selectors.is_override(strategy, selector):
-            selector.pre_call_check(dict(as_str_mapping(picked) or {}))  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]  # see above
+            routing_pre_call_checks_sync((selector,), as_str_mapping(picked) or {}, self._checks.usage_counter)
         return _pick_answer(step, candidates, picked)
 
     # -- cache steps -----------------------------------------------------------------------------
@@ -3498,6 +3505,15 @@ class RustCore(
             return
         if not counted:
             raise _not_usage(keys)
+        from litellm.types.caching import RedisPipelineIncrementOperation
+
+        await self._checks.usage_counter.charge_tokens(
+            tuple(
+                RedisPipelineIncrementOperation(key=str(key), increment_value=_amount(amount), ttl=None)
+                for key, amount in zip(keys, amounts)
+            ),
+            self._checks.counts_deployment_usage(),
+        )
 
     async def _answer_cache(self, step: Mapping[str, object]) -> object:
         with service_target(_cache_target(str(step.get("key")))):
@@ -5031,6 +5047,9 @@ class _Driver:
             for _ in range(self._fallback_depth):
                 verbose_router_logger.info("Successful fallback b/w models.")
         tokens: Final = total_tokens(response)
+        note_served_from_cache(
+            (as_str_mapping(getattr(response, "_hidden_params", None)) or {}).get("cache_hit") is True
+        )
         # A wrapped stream reports its success or failure when it ends; the attempt counts the
         # request and the tokens read so far, which the end's report leaves out.
         # A realtime attempt counts its session's success itself (`attempt`), when it ended cleanly.
@@ -5052,7 +5071,7 @@ class _Driver:
         if deferred and response is None:
             return False
         model: Final = call.kwargs.get("model")
-        return self._core.deployment_tracks_usage(
+        return self._core._checks.counts_deployment_usage() or self._core.deployment_tracks_usage(  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core
             (as_str_mapping(call.kwargs.get("model_info")) or {}).get("id"),
             model if isinstance(model, str) else call.group,
         )
@@ -5173,14 +5192,27 @@ class _Driver:
                 return {**self._failed(step, deployment, call, refused), "recorded": True}
             # The deployment's max_parallel_requests slot; an open chat stream takes it along.
             port = self._core._port  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core  # rebind-ok: the same port on every attempt
-            with enter_deployment_slot(port, self._plan, deployment, call.kwargs) as slot:
-                # A search tool is no deployment: nothing to check; Python's `_arerank` and
-                # `amoderation` run no routing pre-call checks either.
-                if self._plan.kind not in _NO_ROUTING_PRE_CALL_CHECKS:
+            # A search tool is no deployment: nothing to check; Python's `_arerank` and
+            # `amoderation` run no routing pre-call checks either.
+            checked: Final = self._plan.kind not in _NO_ROUTING_PRE_CALL_CHECKS
+            checks: Final = self._core._checks  # pyright: ignore[reportPrivateUsage]  # see above
+            picked_deployment: Final = as_str_mapping(step.get("deployment")) or {}
+            charge: Final = (
+                await charge_for_checks(checks.routing_callbacks(), picked_deployment, checks.usage_counter)
+                if checked
+                else None
+            )
+            try:
+                slot_taken: Final = enter_deployment_slot(port, self._plan, deployment, call.kwargs)
+            except Exception:  # noqa: BLE001  # a full deployment's 429 raises as before, with the request handed back
+                if charge is not None:
+                    await checks.usage_counter.refund_request(charge)
+                raise
+            with slot_taken as slot:
+                if checked:
                     try:
-                        await routing_pre_call_checks(
-                            self._core._checks.routing_callbacks(),  # pyright: ignore[reportPrivateUsage]  # see above
-                            as_str_mapping(step.get("deployment")) or {},
+                        await pre_call_checks_with(
+                            checks.routing_callbacks(), picked_deployment, checks.usage_counter, charge
                         )
                     except Exception as refused:  # noqa: BLE001  # handed to the Rust call loop as the attempt's failure
                         # Only `_acompletion` hands the check its logging object.

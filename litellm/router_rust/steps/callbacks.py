@@ -32,6 +32,7 @@ from litellm.litellm_core_utils.routing_common_utils import get_request_team_id
 from litellm.router_strategy.base_routing_strategy import BaseRoutingStrategy
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
 from litellm.router_strategy.least_busy import LeastBusyLoggingHandler
+from litellm.router_utils.deployment_usage_counter import DeploymentUsageCounter, reads_deployment_usage
 from litellm.router_utils.global_callback_holders import (
     live_check_owners,
     routers_holding_global_callbacks,
@@ -118,6 +119,7 @@ class OptionalChecks:
         self._cache: Final = cache
         self._hosted: Final = hosted
         self._ctx: Final = ctx
+        self.usage_counter: Final = DeploymentUsageCounter(cache)
         self.optional_callbacks: list[object] | None = None  # mutable-ok: the router's live list, as Python keeps it
         self.router_budget_logger: RouterBudgetLimiting | None = None
         self.provider_budget_config: object = arguments.get("provider_budget_config")
@@ -218,6 +220,10 @@ class OptionalChecks:
             is_priority_group=self._is_priority_group,
             session_affinity_repin_on_failover=self.session_affinity_repin_on_failover,  # pyright: ignore[reportArgumentType]  # same
         )
+
+    def counts_deployment_usage(self) -> bool:
+        """Whether a registered routing callback reads the per-deployment usage counters."""
+        return reads_deployment_usage(self.routing_callbacks())
 
     def _own(self, callback: CustomLogger) -> None:
         if self.optional_callbacks is None:

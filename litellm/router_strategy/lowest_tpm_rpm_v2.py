@@ -6,7 +6,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from functools import partial
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, ClassVar, Final
 
 import httpx
 
@@ -16,10 +16,10 @@ from litellm._logging import verbose_logger, verbose_router_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.batch_utils import is_batch_retrieve_call_type
-from litellm.litellm_core_utils.core_helpers import get_parent_otel_span_from_kwargs
 from litellm.litellm_core_utils.deployment_pricing import deployment_backend_models
 from litellm.litellm_core_utils.token_counter import embedding_aware_token_count
 from litellm.redis.stores.router_usage import ROUTER_USAGE_TARGET
+from litellm.router_utils.deployment_usage_counter import charged_rpm
 from litellm.types.router import RouterErrors
 from litellm.types.utils import LiteLLMPydanticObjectBase, StandardLoggingPayload
 from litellm.utils import get_utc_datetime, print_verbose
@@ -87,6 +87,8 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
     Increments tpm/rpm limit using redis.incr
     """
 
+    reads_deployment_usage: ClassVar[bool] = True
+
     test_flag: bool = False
     logged_success: int = 0
     logged_failure: int = 0
@@ -134,7 +136,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
             if deployment_rpm is None:
                 deployment_rpm = float("inf")
 
-            if local_result is not None and local_result >= deployment_rpm:
+            if local_result is not None and local_result > deployment_rpm:
                 raise litellm.RateLimitError(
                     message=f"Deployment over defined rpm limit={deployment_rpm}. current usage={local_result}",
                     llm_provider="",
@@ -155,9 +157,10 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
                     ),
                 )
             else:
-                # if local result below limit, check redis ## prevent unnecessary redis checks
-
-                result: Final = self.router_cache.increment_cache(key=rpm_key, value=1, ttl=self.routing_args.ttl)
+                admitted: Final = charged_rpm(rpm_key)
+                result: Final[int | None] = (
+                    admitted if admitted is not None else self.router_cache.get_cache(key=rpm_key)
+                )
                 if result is not None and result > deployment_rpm:
                     raise litellm.RateLimitError(
                         message=f"Deployment over defined rpm limit={deployment_rpm}. current usage={result}",
@@ -214,7 +217,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
                 deployment_rpm = deployment.get("model_info", {}).get("rpm")
             if deployment_rpm is None:
                 deployment_rpm = float("inf")
-            if local_result is not None and local_result >= deployment_rpm:
+            if local_result is not None and local_result > deployment_rpm:
                 raise litellm.RateLimitError(
                     message=f"Deployment over defined rpm limit={deployment_rpm}. current usage={local_result}",
                     llm_provider="",
@@ -231,8 +234,10 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
                     num_retries=deployment.get("num_retries"),
                 )
             else:
-                # if local result below limit, check redis ## prevent unnecessary redis checks
-                result = await self._increment_value_in_current_window(key=rpm_key, value=1, ttl=self.routing_args.ttl)
+                admitted: Final = charged_rpm(rpm_key)
+                result: Final[int | None] = (
+                    admitted if admitted is not None else await self.router_cache.async_get_cache(key=rpm_key)
+                )
                 if result is not None and result > deployment_rpm:
                     raise litellm.RateLimitError(
                         message=f"Deployment over defined rpm limit={deployment_rpm}. current usage={result}",
@@ -260,9 +265,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
         if is_batch_retrieve_call_type(kwargs.get("call_type")):
             return
         try:
-            """
-            Update TPM/RPM usage on success
-            """
+            """The router's DeploymentUsageCounter records the tokens; the success is only noted here."""
             standard_logging_object: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object")
             if standard_logging_object is None:
                 raise ValueError("standard_logging_object not passed in.")
@@ -274,22 +277,6 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
             elif isinstance(id, int):
                 id = str(id)
 
-            total_tokens: Final = standard_logging_object.get("total_tokens")
-
-            # ------------
-            # Setup values
-            # ------------
-            dt: Final = get_utc_datetime()
-            current_minute: Final = dt.strftime("%H-%M")  # use the same timezone regardless of system clock
-
-            tpm_key: Final = f"{id}:{model}:tpm:{current_minute}"
-            # ------------
-            # Update usage
-            # ------------
-            # update cache
-
-            ## TPM
-            self.router_cache.increment_cache(key=tpm_key, value=total_tokens, ttl=self.routing_args.ttl)
             ### TESTING ###
             if self.test_flag:
                 self.logged_success += 1
@@ -310,32 +297,11 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
             if standard_logging_object is None:
                 raise ValueError("standard_logging_object not passed in.")
             model_group: Final = standard_logging_object.get("model_group")
-            model: Final = standard_logging_object["hidden_params"]["litellm_model_name"]
             id = standard_logging_object.get("model_id")
             if model_group is None or id is None:
                 return
             elif isinstance(id, int):
                 id = str(id)
-            total_tokens: Final = standard_logging_object.get("total_tokens")
-            # ------------
-            # Setup values
-            # ------------
-            dt: Final = get_utc_datetime()
-            current_minute: Final = dt.strftime("%H-%M")  # use the same timezone regardless of system clock
-
-            tpm_key: Final = f"{id}:{model}:tpm:{current_minute}"
-            # ------------
-            # Update usage
-            # ------------
-            # update cache
-            parent_otel_span: Final = get_parent_otel_span_from_kwargs(kwargs)
-            ## TPM
-            await self.router_cache.async_increment_cache_post_call(
-                key=tpm_key,
-                value=total_tokens,
-                ttl=self.routing_args.ttl,
-                parent_otel_span=parent_otel_span,
-            )
 
             ### TESTING ###
             if self.test_flag:
@@ -388,7 +354,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
             if item_tpm + input_tokens > _deployment_tpm or (
                 (rpm_dict is not None and item in rpm_dict)
                 and rpm_dict[item] is not None
-                and (rpm_dict[item] + 1 >= _deployment_rpm)
+                and (rpm_dict[item] + 1 > _deployment_rpm)
             ):
                 continue
             elif item_tpm == lowest_tpm:

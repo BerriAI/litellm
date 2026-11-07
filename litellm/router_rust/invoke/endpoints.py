@@ -52,6 +52,7 @@ from litellm.router_strategy.complexity_router.context_compaction import (
     initialize_compaction_state,
     surface_for_call,
 )
+from litellm.router_utils.deployment_usage_counter import DeploymentUsageCounter
 from litellm.router_utils.endpoint_eligibility import endpoint_for_call, endpoint_selection
 
 if TYPE_CHECKING:
@@ -114,6 +115,8 @@ class EndpointCore(Protocol):
     ) -> object: ...
 
     def routing_callbacks(self) -> Iterable[object]: ...
+
+    def usage_counter(self) -> DeploymentUsageCounter: ...
 
     def resolve_alias(self, model: str) -> str | None: ...
 
@@ -2452,16 +2455,14 @@ class RustEndpoints:
     def sync_pre_call_checks(self, plan: Plan, deployment: Mapping[str, object], request: Mapping[str, object]) -> None:
         """`routing_strategy_pre_call_checks` on the sync path: the process callbacks' pre-call checks.
         Sync completion runs them for a group but not for a deployment id."""
-        from litellm.integrations.custom_logger import CustomLogger
+        from litellm.router_rust.steps.selection import routing_pre_call_checks_sync
 
         if plan.kind == "chat":
             model: Final = str(request.get("model"))
             names: Final = {as_dict(r).get("model_name") for r in self._core.handle.deployments()}
             if model not in names and self._core.handle.deployment(model) is not None:
                 return
-        for callback in tuple(self._core.routing_callbacks()):
-            if isinstance(callback, CustomLogger):
-                callback.pre_call_check(dict(deployment))  # pyright: ignore[reportUnknownMemberType]  # litellm's untyped helpers and request values
+        routing_pre_call_checks_sync(self._core.routing_callbacks(), deployment, self._core.usage_counter())
 
 
 _SINGLE_ATTEMPT: Final[Mapping[str, object]] = MappingProxyType({"num_retries": 0, "disable_fallbacks": True})

@@ -800,9 +800,9 @@ class TestModelRateLimitingCheckIOTokens:
 
         # The first deployment's ITPM counter is not driven negative...
         assert await dual_cache.async_get_cache(key=itpm_key) == 0
-        # ...and the non-IO deployment's TPM usage is tracked normally.
+        # ...and the minute's TPM is the router's usage write to count, not the check's.
         tpm_key = f"non-io-second:openai/gpt-4o-mini:tpm:{minute}"
-        assert await dual_cache.async_get_cache(key=tpm_key) == 12
+        assert await dual_cache.async_get_cache(key=tpm_key) is None
 
     @pytest.mark.asyncio
     async def test_stale_reservation_refunded_before_retry_overwrites_it(self):
@@ -1236,8 +1236,8 @@ class TestModelRateLimitingCheckIOTokens:
 
         # ITPM reconciled down from the 5-token reservation to actual usage (3).
         assert await dual_cache.async_get_cache(key=itpm_key) == 3
-        # TPM tracking must still run so the tpm/rpm pre-call path can enforce it.
-        assert await dual_cache.async_get_cache(key=tpm_key) == 7
+        # The minute's TPM is the router's usage write to count, not the check's.
+        assert await dual_cache.async_get_cache(key=tpm_key) is None
 
     def test_io_success_still_tracks_tpm_for_mixed_deployment_sync(self):
         from litellm.utils import get_utc_datetime
@@ -1267,7 +1267,7 @@ class TestModelRateLimitingCheckIOTokens:
         check.log_success_event(kwargs, response, None, None)
 
         assert dual_cache.get_cache(key=itpm_key) == 3
-        assert dual_cache.get_cache(key=tpm_key) == 7
+        assert dual_cache.get_cache(key=tpm_key) is None
 
     @pytest.mark.asyncio
     async def test_failure_refunds_itpm_reservation(self):
