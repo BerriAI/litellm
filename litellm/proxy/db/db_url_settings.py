@@ -300,6 +300,19 @@ def connection_params_from_url(url: str) -> Mapping[str, str | int | float]:
     )
 
 
+def schema_from_database_url(url: str) -> str | None:
+    """The Postgres schema Prisma resolves queries against for ``url``.
+
+    A pre-existing ``DATABASE_URL`` an operator pins directly (rather than one
+    assembled from discrete ``DATABASE_*`` vars) carries its ``?schema=`` as
+    part of the URL itself, never mirrored into ``DATABASE_SCHEMA``. Anything
+    that needs the schema Prisma is actually querying must read it from here
+    too, not assume ``DATABASE_SCHEMA`` is set.
+    """
+    pairs: Final = urllib.parse.parse_qsl(urllib.parse.urlsplit(url).query)
+    return next((value for key, value in pairs if key == "schema"), None)
+
+
 # A re-minted token URL replaces a URL to the same database, so unlike the
 # reader allowlist it may also carry ``options``: that is where the server-side
 # timeouts (statement, lock, idle-in-transaction) live, and a refresh that
