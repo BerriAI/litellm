@@ -12,11 +12,11 @@ import secrets
 from abc import ABC, abstractmethod
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Final, TypeAlias
+from typing import Any, Final, TypeAlias
 
 from openai.lib import _parsing, _pydantic  # pyright: ignore[reportPrivateUsage]  # SDK parser internals
-from pydantic import BaseModel, InstanceOf, JsonValue, TypeAdapter, ValidationError
-from typing_extensions import TypeAliasType
+from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
+from typing_extensions import TypeIs  # noqa: TID251  # json.loads with the number hooks yields only answer values
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
@@ -201,22 +201,11 @@ class SourceNumber:
 
 
 _JsonScalar: TypeAlias = str | bool | int | float | None
-if TYPE_CHECKING:
-    AnswerValue: TypeAlias = (
-        InstanceOf[SourceNumber] | _JsonScalar | Sequence["AnswerValue"] | Mapping[str, "AnswerValue"]
-    )
-else:
-    AnswerValue = TypeAliasType(
-        "AnswerValue", InstanceOf[SourceNumber] | _JsonScalar | Sequence["AnswerValue"] | Mapping[str, "AnswerValue"]
-    )
-_ANSWER_OBJECT: Final = TypeAdapter(Mapping[str, AnswerValue])
+AnswerValue: TypeAlias = SourceNumber | _JsonScalar | Sequence["AnswerValue"] | Mapping[str, "AnswerValue"]
 
 
-def as_answer_object(value: object) -> Mapping[str, AnswerValue] | None:
-    try:
-        return _ANSWER_OBJECT.validate_python(value)
-    except ValidationError:
-        return None
+def as_answer_object(value: AnswerValue) -> Mapping[str, AnswerValue] | None:
+    return value if isinstance(value, Mapping) else None
 
 
 def _source_float(text: str) -> float | SourceNumber:
@@ -232,11 +221,18 @@ def _source_int(text: str) -> int | SourceNumber:
         return SourceNumber(text)
 
 
+def _is_decoded_json_object(
+    decoded: object,
+) -> TypeIs[Mapping[str, AnswerValue]]:  # guard-ok: json.loads with the source-number hooks yields only answer values
+    return isinstance(decoded, dict)
+
+
 def decoded_answer_object(text: str) -> Mapping[str, AnswerValue] | None:
     try:
-        return _ANSWER_OBJECT.validate_python(json.loads(text, parse_float=_source_float, parse_int=_source_int))
-    except (ValidationError, json.JSONDecodeError, RecursionError):
+        decoded: Final[object] = json.loads(text, parse_float=_source_float, parse_int=_source_int)
+    except (json.JSONDecodeError, RecursionError):
         return None
+    return decoded if _is_decoded_json_object(decoded) else None
 
 
 def _marked_source_number(marker: str, number: SourceNumber) -> str:

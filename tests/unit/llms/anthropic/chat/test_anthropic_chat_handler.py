@@ -2959,6 +2959,11 @@ _DIGITS_PAST_THE_INT_LIMIT: Final = "1" * (sys.get_int_max_str_digits() + 1)
         (('{"values": false}',), "false"),
         (('{"values": null}',), '{"values": null}'),
         pytest.param(
+            ('{"values": ' + "[" * 300 + "]" * 300 + "}",),
+            "[" * 300 + "]" * 300,
+            id="values-nested-300-levels",
+        ),
+        pytest.param(
             ('{"values": ' + "[" * 100000 + "]" * 100000 + "}",),
             '{"values": ' + "[" * 100000 + "]" * 100000 + "}",
             id="nesting-over-recursion-limit",
