@@ -102,7 +102,7 @@
       "name": "openai_api_key",
       "display_name": "OpenAI API Key",
       "pattern": "sk-(?:(?:proj|svcacct|admin|None)-[A-Za-z0-9_\\-]{20,200}T3BlbkFJ(?:(?!sk-(?:proj|svcacct|admin|None)-)[A-Za-z0-9_\\-]){20,200}|[A-Za-z0-9]{20}T3BlbkFJ[A-Za-z0-9]{20}(?![A-Za-z0-9_]))",
-      "streaming_holdback_chars": 200,
+      "streaming_holdback_chars": 419,
       "category": "Credential Patterns",
       "description": "Detects OpenAI API keys (sk-proj-..., sk-svcacct-..., sk-admin-..., sk-None-... and legacy sk-... keys, all carrying the T3BlbkFJ marker)"
     },

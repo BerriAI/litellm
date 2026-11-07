@@ -296,6 +296,40 @@ class TestContentFilterGuardrail:
         assert guardrailed_inputs.get("texts") == ["config [GENERIC_API_KEY_REDACTED]"]
 
     @pytest.mark.asyncio
+    async def test_apply_guardrail_masks_a_contextual_match_an_earlier_mask_moved_next_to_its_keyword(self):
+        guardrail: Final = ContentFilterGuardrail(
+            guardrail_name="test-contextual-after-mask",
+            patterns=[
+                ContentFilterPattern(pattern_type="prebuilt", pattern_name="email", action=ContentFilterAction.MASK),
+                ContentFilterPattern(pattern_type="prebuilt", pattern_name="au_tfn", action=ContentFilterAction.MASK),
+            ],
+        )
+        guardrailed_inputs: Final = await guardrail.apply_guardrail(
+            inputs={"texts": ["TFN jane.doe@example.com 123456782"]},
+            request_data={},
+            input_type="request",
+        )
+        assert guardrailed_inputs.get("texts") == ["TFN [EMAIL_REDACTED] [AU_TFN_REDACTED]"]
+
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_counts_only_the_unnamed_regex_that_matched(self):
+        guardrail: Final = ContentFilterGuardrail(
+            guardrail_name="test-unnamed-regex-count",
+            patterns=[
+                ContentFilterPattern(pattern_type="regex", pattern=r"Key\d+", action=ContentFilterAction.MASK),
+                ContentFilterPattern(pattern_type="regex", pattern=r"Token\d+", action=ContentFilterAction.MASK),
+            ],
+        )
+        request_data: Final = {"metadata": {}}
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["use Key1 here"]},
+            request_data=request_data,
+            input_type="request",
+        )
+        entry: Final = request_data["metadata"]["standard_logging_guardrail_information"][0]
+        assert entry["masked_entity_count"] == {"custom_regex": 1}
+
+    @pytest.mark.asyncio
     async def test_apply_guardrail_blocked_word_mask(self):
         """
         Test apply_guardrail with blocked word MASK action
@@ -1130,6 +1164,7 @@ class TestContentFilterGuardrail:
         ("pattern_name", "key"),
         [
             ("openai_api_key", "sk-proj-" + "a" * 74 + "T3BlbkFJ" + "b" * 74),
+            ("openai_api_key", "sk-svcacct-" + "a" * 200 + "T3BlbkFJ" + "b" * 200),
             ("anthropic_api_key", "sk-ant-api03-" + "a" * 93 + "AA"),
             ("gemini_api_key", "AQ." + "a" * 55),
         ],
