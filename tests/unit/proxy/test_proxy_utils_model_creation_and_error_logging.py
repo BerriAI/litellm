@@ -427,8 +427,7 @@ def test_enrich_http_exception_with_guardrail_context_dict_detail():
     assert exc.detail["guardrail_mode"] == "post_call"
 
 
-def test_enrich_http_exception_string_detail_noop():
-    """L2: string-detail HTTPException is not mutated (can't add fields to a str)."""
+def test_enrich_http_exception_string_detail_preserves_body_and_identifies_guardrail():
     from litellm.proxy.guardrails.exception_utils import enrich_http_exception_with_guardrail_context
 
     class StubCallback:
@@ -438,6 +437,7 @@ def test_enrich_http_exception_string_detail_noop():
     exc = HTTPException(status_code=400, detail="Content blocked")
     enrich_http_exception_with_guardrail_context(exc, StubCallback())
     assert exc.detail == "Content blocked"
+    assert getattr(exc, "guardrail_name") == "x"
 
 
 def test_enrich_http_exception_setdefault_does_not_overwrite():

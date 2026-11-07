@@ -9,7 +9,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Check, ChevronDown, ChevronsUpDown, MessageSquare, PanelsTopLeft } from "lucide-react";
+import { Check, ChevronDown, ChevronsUpDown } from "lucide-react";
 import { useSidebar } from "@/components/shared/Sidebar";
 import { usePluginMode } from "@/contexts/PluginModeContext";
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
@@ -65,7 +65,6 @@ export default function ViewSwitcher({ className, contentClassName }: ViewSwitch
   const isChatRoute = isWorkspaceRoute(normalizedPathname, CHAT);
   const isMoyaiRoute = isWorkspaceRoute(normalizedPathname, MOYAI);
   const isStandaloneRoute = isChatRoute || isMoyaiRoute;
-  const WorkspaceIcon = isChatRoute ? MessageSquare : PanelsTopLeft;
 
   const gatewayLabel = term(t("shell.viewSwitcher.aiGateway"));
   const activeLabel = activeWorkspaceLabel(
@@ -150,16 +149,13 @@ export default function ViewSwitcher({ className, contentClassName }: ViewSwitch
               "max-w-[220px] gap-1.5 px-3 dark:bg-transparent",
               className,
               collapsed &&
-                "mx-auto flex size-9 justify-center gap-0.5 border-sidebar-border p-0 text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
+                "mx-auto flex size-9 justify-center gap-0 border-sidebar-border p-0 text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
             )}
           />
         }
       >
         {collapsed ? (
-          <>
-            <WorkspaceIcon className="size-[18px]" />
-            <ChevronDown className="size-2.5 text-muted-foreground" />
-          </>
+          <ChevronDown className="size-4 text-muted-foreground" />
         ) : (
           <>
             <span data-slot="workspace-label" className="truncate">

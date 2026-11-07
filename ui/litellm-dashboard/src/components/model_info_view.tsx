@@ -12,7 +12,7 @@ import { SimpleTooltip } from "@/components/ui/tooltip";
 import { UserReference } from "@/components/shared/UserReference";
 import { applyPtuModelInfo } from "../utils/ptuModelInfo";
 import { usePtuCostAttributionEnabled } from "@/app/(dashboard)/hooks/uiSettings/usePtuCostAttributionEnabled";
-import { ArrowLeft, CheckIcon, CopyIcon, Info } from "lucide-react";
+import { ArrowLeft, CheckIcon, Clock, CopyIcon, Info } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { copyToClipboard as utilCopyToClipboard } from "../utils/dataUtils";
@@ -47,7 +47,7 @@ import {
   tagListCall,
   testConnectionRequest,
 } from "./networking";
-import { Logo } from "@/components/molecules/logo/Logo";
+import { ProviderLogo } from "@/components/molecules/models/ProviderLogo";
 import { ModelPricingSummary } from "@/components/molecules/models/ModelPricingSummary";
 import UpdateModelCredentialsModal from "./update_model_credentials_modal";
 import ModelInfoEditForm, { type ModelEditSubmitValues, type TouchedPricingField } from "./ModelInfoEditForm";
@@ -405,7 +405,7 @@ export default function ModelInfoView({
       setIsEditing(false);
     } catch (error) {
       console.error("Error updating model:", error);
-      toast.fromError(t("modelInfoView.toasts.updateFailed"));
+      toast.fromError(error);
     } finally {
       setIsSaving(false);
     }
@@ -635,7 +635,13 @@ export default function ModelInfoView({
               <Card className="block p-6">
                 <p className="text-sm">{t("modelInfoView.overview.provider")}</p>
                 <div className="mt-2 flex items-center space-x-2">
-                  {modelData.provider && <Logo provider={modelData.provider} className="w-4 h-4" />}
+                  {modelData.provider && (
+                    <ProviderLogo
+                      provider={modelData.provider}
+                      logoUrl={modelData.model_info.logo_url}
+                      className="w-4 h-4"
+                    />
+                  )}
                   <h3 className="text-lg font-medium">{modelData.provider || t("modelInfoView.notSet")}</h3>
                 </div>
               </Card>
@@ -661,14 +667,7 @@ export default function ModelInfoView({
             {/* Audit info shown as a subtle banner below the overview */}
             <div className="mb-6 text-sm text-muted-foreground flex items-center gap-x-6">
               <div className="flex items-center gap-x-2">
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth="2"
-                    d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
-                  />
-                </svg>
+                <Clock className="w-4 h-4" aria-hidden="true" />
                 {t("modelInfoView.audit.createdAt")}{" "}
                 {modelData.model_info.created_at
                   ? new Date(modelData.model_info.created_at).toLocaleDateString("en-US", {

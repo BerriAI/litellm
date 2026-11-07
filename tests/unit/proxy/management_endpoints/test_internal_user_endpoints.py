@@ -5483,3 +5483,16 @@ async def test_user_update_reports_a_bad_budget_duration_as_a_request_error_not_
     assert (exc_info.value.code, exc_info.value.type) == ("400", "invalid_request_error")
     assert "Invalid budget_duration" in exc_info.value.message
     assert "Authentication Error" not in exc_info.value.message
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fips_mode")
+async def test_fips_user_update_hashes_off_the_event_loop(pbkdf2_on_event_loop: list[bool]) -> None:
+    from litellm.proxy.management_endpoints.internal_user_endpoints import _hash_password_in_dict
+
+    data: Final = {"password": "Str0ng!Passw0rd"}
+
+    await _hash_password_in_dict(data, {"password_policy_check_breached_passwords": False})
+
+    assert pbkdf2_on_event_loop == [False]
+    assert data["password"].startswith("pbkdf2:")

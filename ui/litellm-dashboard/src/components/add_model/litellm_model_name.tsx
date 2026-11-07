@@ -23,6 +23,7 @@ const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
   const form = useFormContext<MountedFormValues>();
   const modelValue = useWatch({ control: form.control, name: "model" });
   const selectedModels = Array.isArray(modelValue) ? modelValue : [modelValue];
+  const isLiteLLMGateway = selectedProvider === "LITELLM_PROXY" || selectedProvider === Providers.LITELLM_PROXY;
 
   const handleModelChange = (value: string | string[]) => {
     // Ensure value is always treated as an array
@@ -142,7 +143,8 @@ const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
                 }
               }}
             />
-          ) : providerModels.length > 0 && !(typeof control.value === "string" && control.value !== "") ? (
+          ) : (providerModels.length > 0 || isLiteLLMGateway) &&
+            !(typeof control.value === "string" && control.value !== "") ? (
             <MultiSelect
               id={control.id}
               placeholder={t("addModel.litellmModelName.selectModels")}
@@ -159,7 +161,9 @@ const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
                 },
                 {
                   label: t("addModel.litellmModelName.wildcardOption", {
-                    provider: selectedProvider ?? t("addModel.litellmModelName.providerFallback"),
+                    provider: isLiteLLMGateway
+                      ? Providers.LITELLM_PROXY
+                      : selectedProvider ?? t("addModel.litellmModelName.providerFallback"),
                   }),
                   value: "all-wildcard",
                 },
