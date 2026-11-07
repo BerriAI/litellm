@@ -6,7 +6,6 @@ from contextlib import contextmanager
 from typing import Final
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-
 from tests.integration._support.async_server import LoopbackServer, close_writer
 from tests.integration._support.ports import allocate_port
 
@@ -74,15 +73,36 @@ class DatabaseRelay:
 
 
 class HeldStatementRelay:
-    def __init__(self, upstream_host: str, upstream_port: int, trigger: bytes) -> None:
+    """Holds the first client statement carrying ``trigger`` until ``release``. With ``after``, only a
+    trigger statement that follows a statement carrying ``after`` is held, so a test can pin the hold to
+    one point of a longer sequence. Starts armed unless ``armed`` is false, then ``arm`` starts it."""
+
+    def __init__(
+        self,
+        upstream_host: str,
+        upstream_port: int,
+        trigger: bytes,
+        *,
+        after: bytes | None = None,
+        armed: bool = True,
+    ) -> None:
         self.port: Final = allocate_port()
         self._upstream_host: Final = upstream_host
         self._upstream_port: Final = upstream_port
         self._trigger: Final = trigger
+        self._after: Final = after
+        self._marker_length: Final = max(len(trigger), len(after or b""))
         self._server: Final = LoopbackServer(self.port, self._serve)
         self._loop: Final = self._server.loop
         self._released: Final = asyncio.Event()
+        self._armed: Final = threading.Event()
+        if armed:
+            self._armed.set()
+        self._after_seen: Final = threading.Event()
         self.held: Final = threading.Event()
+
+    def arm(self) -> None:
+        self._armed.set()
 
     def release(self) -> None:
         if not self._loop.is_closed():
@@ -96,7 +116,13 @@ class HeldStatementRelay:
         self._server.stop()
 
     def _holds(self, window: bytes) -> bool:
-        return not self.held.is_set() and self._trigger in window
+        if not self._armed.is_set() or self.held.is_set():
+            return False
+        if self._after is not None and not self._after_seen.is_set():
+            if self._after in window:
+                self._after_seen.set()
+            return False
+        return self._trigger in window
 
     async def _serve(self, client_reader: asyncio.StreamReader, client_writer: asyncio.StreamWriter) -> None:
         server_reader, server_writer = await asyncio.open_connection(self._upstream_host, self._upstream_port)
@@ -109,7 +135,7 @@ class HeldStatementRelay:
                     if inspect and self._holds(window):
                         self.held.set()
                         await self._released.wait()
-                    tail = window[-(len(self._trigger) - 1) :]
+                    tail = window[-(self._marker_length - 1) :]
                     writer.write(chunk)
                     await writer.drain()
             except (ConnectionError, asyncio.IncompleteReadError):
@@ -295,10 +321,12 @@ def database_relay(database_url: str, trigger: bytes) -> Generator[tuple[Databas
 
 
 @contextmanager
-def held_statement_relay(database_url: str, trigger: bytes) -> Generator[tuple[HeldStatementRelay, str]]:
+def held_statement_relay(
+    database_url: str, trigger: bytes, *, after: bytes | None = None, armed: bool = True
+) -> Generator[tuple[HeldStatementRelay, str]]:
     parts: Final = urlsplit(database_url)
     assert parts.hostname is not None and parts.port is not None, database_url
-    relay: Final = HeldStatementRelay(parts.hostname, parts.port, trigger)
+    relay: Final = HeldStatementRelay(parts.hostname, parts.port, trigger, after=after, armed=armed)
     try:
         relay.start()
         yield relay, _relayed_url(database_url, relay.port)
