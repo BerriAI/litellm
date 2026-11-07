@@ -1291,9 +1291,13 @@ class WebSearchInterceptionLogger(CustomLogger):
 
         tools_param: Final = optional_params.get("tools")
         optional_params_clean: Final = {
-            k: v
-            for k, v in optional_params.items()
-            if k not in {"tools", "tool_choice", "stream", "model_alias_map", "stream_response", "custom_prompt_dict"}
+            **{
+                k: v
+                for k, v in optional_params.items()
+                if k
+                not in {"tools", "tool_choice", "stream", "model_alias_map", "stream_response", "custom_prompt_dict"}
+            },
+            **_kept_allowed_tools_tool_choice(_OPTIONAL_PARAMS.validate_python(optional_params)),
         }
 
         kwargs_for_followup: Final = {

@@ -365,6 +365,37 @@ async def test_responses_followup_keeps_the_caller_model_across_the_chat_complet
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("perplexity_search")
+@pytest.mark.parametrize(
+    ("tool_choice", "followup_tool_choice"),
+    [
+        (
+            {"type": "allowed_tools", "mode": "required", "tools": [{"type": "function", "name": "litellm_web_search"}]},
+            {"type": "allowed_tools", "mode": "auto", "tools": [{"type": "function", "name": "litellm_web_search"}]},
+        ),
+        ({"type": "function", "name": "litellm_web_search"}, None),
+        ("required", None),
+    ],
+)
+async def test_responses_followup_keeps_only_an_allowed_tools_choice_without_forcing_another_call(
+    tool_choice: object, followup_tool_choice: object
+) -> None:
+    plan: Final = await WebSearchInterceptionLogger().async_build_responses_agentic_loop_plan(
+        tools={**_WEB_SEARCH_FUNCTION_CALL, "provider": "azure"},
+        model="gpt-5.4-mini",
+        messages=[{"role": "user", "content": "What's the latest AI news?"}],
+        response=_responses_output_with_web_search(),
+        optional_params={"tools": [{"type": "function", "name": "litellm_web_search"}], "tool_choice": tool_choice},
+        logging_obj=None,
+        stream=False,
+        kwargs={"custom_llm_provider": "azure", "_agentic_loop_api_surface": RESPONSES_AGENTIC_SURFACE},
+    )
+
+    assert plan.request_patch is not None
+    assert plan.request_patch.optional_params.get("tool_choice") == followup_tool_choice
+
+
+@pytest.mark.asyncio
 async def test_deployment_hook_converts_native_responses_web_search_tool():
     """async_pre_call_deployment_hook converts a native Responses web_search tool
     into the flat litellm_web_search function tool (Responses shape, not the
