@@ -11,6 +11,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Check, ChevronDown, ChevronsUpDown } from "lucide-react";
 import { useSidebar } from "@/components/shared/Sidebar";
+import BetaBadge from "@/components/BetaBadge";
 import { usePluginMode } from "@/contexts/PluginModeContext";
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import { uiHref } from "@/utils/uiHref";
@@ -121,7 +122,7 @@ export default function ViewSwitcher({ className, contentClassName }: ViewSwitch
     label: (
       <div className="flex w-full items-center justify-between gap-6 py-0.5">
         <span className="flex flex-col">
-          <span className="font-medium">Customer Portal</span>{" "}
+          <span className="font-medium">Customer Portal <BetaBadge /></span>{" "}
           <span className="text-xs leading-snug text-muted-foreground">End customers, limits and chargebacks</span>
         </span>
         {!isStandaloneRoute && mode === CUSTOMER_PORTAL && <Check className="size-4 text-info" />}
@@ -184,6 +185,7 @@ export default function ViewSwitcher({ className, contentClassName }: ViewSwitch
           <>
             <span data-slot="workspace-label" className="truncate">
               {activeLabel}
+              {!isStandaloneRoute && mode === CUSTOMER_PORTAL && <> <BetaBadge /></>}
             </span>
             <ChevronsUpDown data-slot="workspace-chevron" className="size-3.5 flex-none text-muted-foreground" />
           </>
