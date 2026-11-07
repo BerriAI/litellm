@@ -2,6 +2,7 @@ import copy
 import itertools
 import json
 import logging
+import sys
 from collections.abc import Iterator, Mapping
 from itertools import chain
 from typing import Final, cast
@@ -8568,6 +8569,45 @@ def test_convert_tool_response_to_message_keeps_arguments_too_deep_to_decode(arg
             )
         ],
         response_format_schema=_schema(_RISK_SCHEMA),
+    )
+
+    assert message is not None
+    assert message.content == arguments
+
+
+_DIGITS_PAST_THE_INT_LIMIT: Final = "1" * (sys.get_int_max_str_digits() + 1)
+
+
+@pytest.mark.parametrize(
+    "arguments, schema",
+    [
+        pytest.param('{"values": [1e400]}', None, id="values_number_past_a_float"),
+        pytest.param('{"values": [' + _DIGITS_PAST_THE_INT_LIMIT + "]}", None, id="values_integer_past_the_digit_limit"),
+        pytest.param(
+            '{"name": "json_tool_call", "parameters": {"tier": 1e400, "summary": "x"}}',
+            _RISK_SCHEMA,
+            id="envelope_number_past_a_float",
+        ),
+        pytest.param(
+            '{"tier": ' + _DIGITS_PAST_THE_INT_LIMIT + ', "summary": "x"}',
+            _RISK_SCHEMA,
+            id="answer_integer_past_the_digit_limit",
+        ),
+    ],
+)
+def test_convert_tool_response_to_message_keeps_arguments_it_cannot_write_back_as_json(
+    arguments: str, schema: dict[str, object] | None
+):
+    message = AnthropicConfig.convert_tool_response_to_message(
+        tool_calls=[
+            ChatCompletionToolCallChunk(
+                id="toolu_1",
+                type="function",
+                function=ChatCompletionToolCallFunctionChunk(name=RESPONSE_FORMAT_TOOL_NAME, arguments=arguments),
+                index=0,
+            )
+        ],
+        response_format_schema=None if schema is None else _schema(schema),
     )
 
     assert message is not None
