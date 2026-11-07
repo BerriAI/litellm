@@ -1228,6 +1228,40 @@ def test_sync_openai_turn_is_sent_again_once_without_replayed_reasoning_the_back
     assert cast(Mapping[str, object], response)["content"] == [{"type": "text", "text": "done"}]
 
 
+
+@pytest.mark.asyncio
+async def test_openai_turn_with_num_retries_sends_the_rejected_reasoning_only_once(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    upstream: Final = _upstream(respx_mock, monkeypatch, httpx.Response(400, json=REJECTED_REPLAYED_REASONING), False)
+
+    await litellm.anthropic.messages.acreate(
+        max_tokens=64,
+        messages=_history(replayed_reasoning=True),
+        model="openai/gpt-5.6-luna",
+        tools=[dict(BASH_TOOL)],
+        num_retries=2,
+    )
+
+    assert _replayed_reasoning_counts(upstream) == [1, 0]
+
+
+def test_sync_openai_turn_with_num_retries_sends_the_rejected_reasoning_only_once(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    upstream: Final = _upstream(respx_mock, monkeypatch, httpx.Response(400, json=REJECTED_REPLAYED_REASONING), False)
+
+    litellm.anthropic.messages.create(
+        max_tokens=64,
+        messages=_history(replayed_reasoning=True),
+        model="openai/gpt-5.6-luna",
+        tools=[dict(BASH_TOOL)],
+        num_retries=2,
+    )
+
+    assert _replayed_reasoning_counts(upstream) == [1, 0]
+
+
 class _FailureLog(CustomLogger):
     def __init__(self) -> None:
         super().__init__()

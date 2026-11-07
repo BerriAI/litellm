@@ -2308,7 +2308,10 @@ def client(original_function):
 
                 is_completion_litellm_router_call: Final = _is_litellm_router_call(kwargs, is_async=False)
                 if (
-                    num_retries and not is_completion_litellm_router_call and not is_agentic_followup_failure(e)
+                    num_retries
+                    and not is_completion_litellm_router_call
+                    and not is_agentic_followup_failure(e)
+                    and not is_resent_failure(e)
                 ):  # only enter this if call is not from litellm router/proxy. router has it's own logic for retrying
                     if (
                         isinstance(e, openai.APIError)
@@ -2342,7 +2345,10 @@ def client(original_function):
 
                 is_responses_litellm_router_call: Final = _is_litellm_router_call(kwargs, is_async=False)
                 if (
-                    num_retries and not is_responses_litellm_router_call and not is_agentic_followup_failure(e)
+                    num_retries
+                    and not is_responses_litellm_router_call
+                    and not is_agentic_followup_failure(e)
+                    and not is_resent_failure(e)
                 ):  # only enter this if call is not from litellm router/proxy. router has it's own logic for retrying
                     if (
                         isinstance(e, openai.APIError)
@@ -2645,6 +2651,7 @@ def client(original_function):
                     and not is_acompletion_litellm_router_call
                     and not isinstance(e, ImportError)
                     and not is_agentic_followup_failure(e)
+                    and not is_resent_failure(e)
                 ):  # only enter this if call is not from litellm router/proxy. router has it's own logic for retrying
                     try:
                         litellm.num_retries = None  # set retries to None to prevent infinite loops
@@ -2679,6 +2686,7 @@ def client(original_function):
                     and not is_aresponses_litellm_router_call
                     and not isinstance(e, ImportError)
                     and not is_agentic_followup_failure(e)
+                    and not is_resent_failure(e)
                 ):  # only enter this if call is not from litellm router/proxy. router has it's own logic for retrying
                     try:
                         litellm.num_retries = None  # set retries to None to prevent infinite loops
