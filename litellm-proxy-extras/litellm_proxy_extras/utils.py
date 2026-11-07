@@ -1,4 +1,5 @@
 import glob
+import importlib
 import os
 import random
 import re
@@ -1495,9 +1496,19 @@ class ProxyExtrasDBManager:
         """Build the indexes in `REQUEST_LOG_INDEXES` on the writer, in the schema the
         migrations target. Idempotent and never raises; False when an index is still
         missing or invalid, so the migration job reports it and gets rerun instead of
-        leaving the table unindexed until the next deploy."""
+        leaving the table unindexed until the next deploy. True when psycopg cannot be
+        imported: a rerun cannot change that, so the skip is logged and the job goes on."""
         database_url: Final = os.environ.get("DATABASE_URL")
         if not database_url:
+            return True
+        try:
+            importlib.import_module("psycopg")
+        except ImportError as exc:
+            logger.warning(
+                "psycopg could not be imported (%s); skipping the request-log index build until a run where it loads. "
+                "The litellm[extra_proxy] extra provides psycopg, and PSYCOPG_IMPL=python also needs a system libpq.",
+                exc,
+            )
             return True
         direct_url: Final = ProxyExtrasDBManager._strip_prisma_query_params(
             os.environ.get("DIRECT_URL") or database_url
