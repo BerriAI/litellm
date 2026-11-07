@@ -46,6 +46,13 @@ class A2AProviderConfigManager:
 
             return BedrockAgentCoreA2AConfig()
 
+        if custom_llm_provider == "vertex_ai" and model and model.startswith("agent_engine/"):
+            from litellm.a2a_protocol.providers.vertex_agent_engine.config import (
+                VertexAgentEngineA2AConfig,
+            )
+
+            return VertexAgentEngineA2AConfig()
+
         if custom_llm_provider == "langflow":
             from litellm.a2a_protocol.providers.langflow.config import LangFlowA2AConfig
 
