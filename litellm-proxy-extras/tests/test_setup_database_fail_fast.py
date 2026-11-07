@@ -71,6 +71,14 @@ def test_strip_prisma_query_params_passthrough_no_query():
     assert ProxyExtrasDBManager._strip_prisma_query_params(url) == url
 
 
+def test_strip_prisma_query_params_preserves_host_socket():
+    """Unix-socket DATABASE_URLs using host parameter (e.g. Cloud SQL) must be preserved."""
+    url = "postgresql://user:pass@localhost/litellm?host=/cloudsql/project:region:instance&connection_limit=10"
+    stripped = ProxyExtrasDBManager._strip_prisma_query_params(url)
+    assert "host=%2Fcloudsql%2Fproject%3Aregion%3Ainstance" in stripped
+    assert "connection_limit" not in stripped
+
+
 def test_migration_timestamp_extracts_leading_digits():
     assert _migration_timestamp("20260101000000_add_foo") == 20260101000000
     assert _migration_timestamp("20250326162113_baseline") == 20250326162113
