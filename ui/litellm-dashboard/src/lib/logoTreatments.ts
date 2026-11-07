@@ -36,6 +36,7 @@ const TREATMENT_BY_ASSET: Readonly<Record<string, LogoTreatment>> = {
   "aiml_api.svg": "plate",
   "akto.svg": "plate",
   "aws.svg": "plate",
+  "collieai.svg": "plate",
   "deepkeep.svg": "plate",
   "fireworks.svg": "plate",
   "llm_guard.png": "plate",

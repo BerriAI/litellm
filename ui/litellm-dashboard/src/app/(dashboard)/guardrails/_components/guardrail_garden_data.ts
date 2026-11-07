@@ -717,6 +717,16 @@ export const PARTNER_GUARDRAIL_CARDS: GuardrailCardInfo[] = [
     tags: ["Security", "Prompt Injection", "PII", "Secrets", "Redaction"],
     providerKey: "Airia",
   },
+  {
+    id: "collieai",
+    name: "CollieAi",
+    description:
+      "CollieAi checks chat completion text against your CollieAi policy before and after the model call and records each finding in LiteLLM's guardrail log. It observes by default. Block mode refuses the calls the policy blocks and every call it cannot check.",
+    category: "partner",
+    logo: guardrailLogoMap["CollieAi"],
+    tags: ["Security", "Prompt Injection", "PII", "Policy", "Monitoring"],
+    providerKey: "Collieai",
+  },
 ];
 
 export const ALL_CARDS = [...LITELLM_CONTENT_FILTER_CARDS, ...DECISION_MODEL_CARDS, ...PARTNER_GUARDRAIL_CARDS];
