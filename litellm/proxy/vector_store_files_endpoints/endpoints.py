@@ -10,6 +10,7 @@ from fastapi.responses import ORJSONResponse
 from pydantic import TypeAdapter
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.llms.base_llm.managed_resources.utils import (
     extract_target_model_names_from_unified_id,
     is_base64_encoded_unified_id,
@@ -40,6 +41,8 @@ from litellm.proxy.vector_store_endpoints.utils import (
     assert_user_can_access_vector_store_id,
     is_allowed_to_call_vector_store_files_endpoint,
 )
+from litellm.router_rust.invoke.endpoints import PINNED_DEPLOYMENT_KEY
+from litellm.types.router import Deployment
 from litellm.types.utils import LlmProviders
 from litellm.types.vector_store_files import (
     VectorStoreFileListResponse,
@@ -195,6 +198,17 @@ def _store_carries_credentials(store: LiteLLM_ManagedVectorStore | None) -> bool
     )
 
 
+def _public_model_name_reaching(llm_router: "Router", deployment: Deployment, team_id: str | None) -> str | None:
+    public_model_name: Final = deployment.model_info.team_public_model_name or deployment.model_name
+    reachable_ids: Final = frozenset(
+        (as_str_mapping(row.get("model_info")) or {}).get("id")
+        for row in llm_router.registry().deployments(
+            public_model_name, source="for_request", request={"metadata": {"user_api_key_team_id": team_id}}
+        )
+    )
+    return public_model_name if deployment.model_info.id in reachable_ids else None
+
+
 async def _update_request_data_with_managed_file_id(
     data: dict,
     file_id: str,
@@ -314,8 +328,27 @@ async def _update_request_data_with_managed_file_id(
                 )
             )
             routing_deployment_id: Final = team_copy.deployment_id if team_copy is not None else upload_deployment_id
-            routing_model: Final = team_copy.deployment_id if team_copy is not None else upload_routing_model
+            routing_deployment: Final = (
+                llm_router.registry().credentials(routing_deployment_id, form="deployment")
+                if llm_router and routing_deployment_id
+                else None
+            )
             provider_file_id: Final = team_copy.provider_file_id if team_copy is not None else llm_output_file_id
+            if llm_router and routing_deployment is not None:
+                verbose_logger.info(
+                    "Routing vector store file operation to deployment: %s, file_id: %s -> %s",
+                    routing_deployment_id,
+                    file_id,
+                    provider_file_id,
+                )
+                return {
+                    **{key: value for key, value in data.items() if key != "custom_llm_provider"},
+                    "model": _public_model_name_reaching(llm_router, routing_deployment, user_api_key_dict.team_id)
+                    or routing_deployment_id,
+                    "file_id": provider_file_id,
+                    PINNED_DEPLOYMENT_KEY: routing_deployment_id,
+                }, file_id
+            routing_model: Final = team_copy.deployment_id if team_copy is not None else upload_routing_model
             if routing_model:
                 data["model"] = routing_model
 
@@ -325,11 +358,7 @@ async def _update_request_data_with_managed_file_id(
                     if credentials:
                         prepare_data_with_credentials(
                             data=data,
-                            credentials=(
-                                credentials
-                                if routing_deployment_id is None
-                                else {**credentials, "model": routing_deployment_id}
-                            ),
+                            credentials=credentials,
                             file_id=provider_file_id,
                         )
                         verbose_logger.info(

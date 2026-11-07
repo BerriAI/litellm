@@ -9,6 +9,7 @@ A raw or forged managed-looking file id has no ownership row, so without the gua
 is attached to a vector store or read back under shared provider credentials.
 """
 
+import asyncio
 import base64
 import json
 from collections.abc import Mapping, Sequence
@@ -24,6 +25,7 @@ import respx
 from fastapi import HTTPException
 
 import litellm
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.vector_store_files_endpoints.endpoints import (
@@ -393,6 +395,100 @@ async def test_managed_file_id_reaches_its_upload_deployment_only_for_that_team(
         )
 
     assert upstream.calls.last.request.headers["Authorization"] == expected_authorization
+
+
+class _SuccessRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.logged: Final = asyncio.Event()
+        self.standard_logging_objects: Final[list[object]] = []
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        self.standard_logging_objects.append(kwargs.get("standard_logging_object"))
+        self.logged.set()
+
+
+def _gpt_4o_mini_deployment(
+    deployment_id: str, api_base: str, order: int, team_id: str | None = None
+) -> Mapping[str, object]:
+    return {
+        "model_name": "gpt-4o-mini" if team_id is None else f"model_name_{team_id}_{deployment_id}",
+        "litellm_params": {
+            "model": "openai/gpt-4o-mini",
+            "api_key": f"{deployment_id}-key",
+            "api_base": api_base,
+            "order": order,
+        },
+        "model_info": {"id": deployment_id}
+        if team_id is None
+        else {"id": deployment_id, "team_id": team_id, "team_public_model_name": "gpt-4o-mini", "db_model": True},
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("caller_team_id", "upload_deployment_id", "upload_base"),
+    [
+        (None, "upload-openai", "https://upload-openai.example/v1"),
+        ("team-b", "team-b-upload", "https://team-b-upload.example/v1"),
+    ],
+)
+async def test_managed_file_id_on_its_upload_deployment_logs_that_deployment_under_its_public_model_name(
+    monkeypatch: pytest.MonkeyPatch, caller_team_id: str | None, upload_deployment_id: str, upload_base: str
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    recorder: Final = _SuccessRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    caller: Final = UserAPIKeyAuth(api_key="sk-test", user_id="caller-user", team_id=caller_team_id)
+    router: Final = litellm.Router(
+        model_list=[
+            dict(_gpt_4o_mini_deployment("sibling-openai", "https://sibling-openai.example/v1", order=1)),
+            dict(_gpt_4o_mini_deployment("upload-openai", "https://upload-openai.example/v1", order=2)),
+            dict(_gpt_4o_mini_deployment("team-b-sibling", "https://team-b-sibling.example/v1", 1, "team-b")),
+            dict(_gpt_4o_mini_deployment("team-b-upload", "https://team-b-upload.example/v1", 2, "team-b")),
+        ]
+    )
+    managed_file_id: Final = (
+        base64.urlsafe_b64encode(
+            SpecialEnums.LITELLM_MANAGED_FILE_COMPLETE_STR.value.format(
+                "text/plain", "ingested-unified-id", "gpt-4o-mini", RAW_FILE_ID, upload_deployment_id
+            ).encode()
+        )
+        .decode()
+        .rstrip("=")
+    )
+
+    data, _ = await _update_request_data_with_managed_file_id(
+        data={"vector_store_id": "vs-test", "file_id": managed_file_id},
+        file_id=managed_file_id,
+        request=MagicMock(headers={}, query_params={}),
+        user_api_key_dict=caller,
+        managed_files_obj=ManagedResourceAccessCheckerStub(file_access="allow"),
+        llm_router=router,
+    )
+    with respx.mock(assert_all_called=False) as respx_mock:
+        upstream: Final = respx_mock.get(f"{upload_base}/vector_stores/vs-test/files/{RAW_FILE_ID}").mock(
+            return_value=httpx.Response(200, json=dict(_vector_store_file_row(RAW_FILE_ID)))
+        )
+        sibling: Final = respx_mock.route().mock(
+            return_value=httpx.Response(200, json=dict(_vector_store_file_row(RAW_FILE_ID)))
+        )
+        await (
+            await route_request(
+                {**data, "custom_llm_provider": "openai", "metadata": {"user_api_key_team_id": caller.team_id}},
+                router,
+                None,
+                "avector_store_file_retrieve",
+                user_api_key_dict=caller,
+            )
+        )
+        await asyncio.wait_for(recorder.logged.wait(), timeout=10)
+
+    assert (upstream.call_count, sibling.call_count) == (1, 0)
+    assert upstream.calls.last.request.headers["Authorization"] == f"Bearer {upload_deployment_id}-key"
+    logged: Final = recorder.standard_logging_objects[-1]
+    assert isinstance(logged, dict), logged
+    assert (logged["model_group"], logged["model_id"]) == ("gpt-4o-mini", upload_deployment_id)
 
 
 @pytest.mark.asyncio
