@@ -3319,6 +3319,19 @@ def test_streamed_json_mode_answer_split_into_one_partial_object_per_field_arriv
     assert contents[3] == blocks[0][:-1]
 
 
+@pytest.mark.parametrize(
+    "blocks",
+    [
+        pytest.param(('{"tier": 1e400}', '{"summary": "x"}'), id="number_past_a_float_first"),
+        pytest.param(
+            ('{"summary": "x"}', '{"tier": ' + _DIGITS_PAST_THE_INT_LIMIT + "}"), id="integer_past_the_digit_limit_last"
+        ),
+    ],
+)
+def test_streamed_json_mode_split_fields_keep_numbers_that_cannot_be_written_back_as_json(blocks: tuple[str, ...]):
+    assert "".join(_streamed_json_tool_blocks(blocks)) == "{" + ", ".join(block[1:-1] for block in blocks) + "}"
+
+
 def test_streamed_json_mode_empty_object_then_field_blocks_arrives_as_one_object():
     blocks = ("{}", *(json.dumps({name: value}) for name, value in _STREAMED_RISK_OBJECT.items()))
 

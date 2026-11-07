@@ -7916,7 +7916,9 @@ _DIGITS_PAST_THE_INT_LIMIT: Final = "1" * (sys.get_int_max_str_digits() + 1)
     "arguments, schema",
     [
         pytest.param('{"values": [1e400]}', None, id="values_number_past_a_float"),
-        pytest.param('{"values": [' + _DIGITS_PAST_THE_INT_LIMIT + "]}", None, id="values_integer_past_the_digit_limit"),
+        pytest.param(
+            '{"values": [' + _DIGITS_PAST_THE_INT_LIMIT + "]}", None, id="values_integer_past_the_digit_limit"
+        ),
         pytest.param(
             '{"name": "json_tool_call", "parameters": {"tier": 1e400, "summary": "x"}}',
             _RISK_SCHEMA,
@@ -7946,6 +7948,33 @@ def test_convert_tool_response_to_message_keeps_arguments_it_cannot_write_back_a
 
     assert message is not None
     assert message.content == arguments
+
+
+@pytest.mark.parametrize(
+    "blocks",
+    [
+        pytest.param(('{"tier": 1e400}', '{"summary": "x"}'), id="number_past_a_float_first"),
+        pytest.param(
+            ('{"summary": "x"}', '{"tier": ' + _DIGITS_PAST_THE_INT_LIMIT + "}"), id="integer_past_the_digit_limit_last"
+        ),
+    ],
+)
+def test_convert_tool_response_to_message_joins_split_fields_it_cannot_write_back_as_json(blocks: tuple[str, ...]):
+    message = AnthropicConfig.convert_tool_response_to_message(
+        tool_calls=[
+            ChatCompletionToolCallChunk(
+                id=f"toolu_{index}",
+                type="function",
+                function=ChatCompletionToolCallFunctionChunk(name=RESPONSE_FORMAT_TOOL_NAME, arguments=block),
+                index=index,
+            )
+            for index, block in enumerate(blocks)
+        ],
+        response_format_schema=_schema(_RISK_SCHEMA),
+    )
+
+    assert message is not None
+    assert message.content == "{" + ", ".join(block[1:-1] for block in blocks) + "}"
 
 
 @pytest.mark.parametrize(
@@ -8211,6 +8240,12 @@ def test_vertex_claude_json_answer_split_into_one_tool_block_per_field_returns_o
             id="one_partial_object_per_field",
         ),
         pytest.param(
+            _CONTACT_SCHEMA,
+            ({}, {"name": "unknown"}, {"email": "unknown"}),
+            {"name": "unknown", "email": "unknown"},
+            id="empty_object_then_one_partial_object_per_field",
+        ),
+        pytest.param(
             _OPTIONAL_CONTACT_SCHEMA,
             ({"name": "Ada", "email": "ada@example.com"}, {"phone": "555-0100"}),
             {"name": "Ada", "email": "ada@example.com", "phone": "555-0100"},
@@ -8228,7 +8263,7 @@ def test_json_tool_blocks_that_each_name_one_schema_property_become_one_object(
     )
 
     assert replacement is not None
-    assert json.loads(replacement.content) == expected_content
+    assert replacement.content == json.dumps(expected_content)
     assert remaining_tool_calls == []
     assert extra_content is None
 

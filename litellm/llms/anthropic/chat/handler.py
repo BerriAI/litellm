@@ -27,7 +27,8 @@ from litellm.llms.base_llm.base_utils import (
     ResponseFormatSchema,
     decoded_json_object,
     names_a_response_format_property,
-    partial_response_format_answer,
+    partial_response_format_answer_keys,
+    response_format_answer_members,
     response_format_envelope_contents,
     split_response_format_answer,
 )
@@ -182,7 +183,7 @@ def _held_answer(held: str, schema: ResponseFormatSchema) -> str:
 def _split_answer_text(blocks: tuple[str, ...], schema: ResponseFormatSchema) -> str:
     answer: Final = split_response_format_answer(blocks, schema)
     if answer is not None:
-        return json.dumps(answer)
+        return answer
     return "".join(_held_answer(block, schema) for block in blocks)
 
 
@@ -1287,12 +1288,12 @@ class ModelResponseIterator:
 
     def _join_streamed_answer(self, held: str, schema: ResponseFormatSchema) -> str | None:
         streamed: Final = self._streamed_answer_keys
-        fields: Final = partial_response_format_answer(held, schema)
-        if streamed is None or fields is None or not streamed.isdisjoint(fields):
+        keys: Final = partial_response_format_answer_keys(held, schema)
+        if streamed is None or keys is None or not streamed.isdisjoint(keys):
             return None
-        self._streamed_answer_keys = streamed | frozenset(fields)
+        self._streamed_answer_keys = streamed | keys
         separator: Final = ", " if streamed else ""
-        return f"{separator}{json.dumps(fields)[1:-1]}" if fields else ""
+        return f"{separator}{response_format_answer_members(held)}" if keys else ""
 
     def _flush_response_format_buffer(self) -> str:
         schema: Final = self.response_format_schema
@@ -1303,9 +1304,9 @@ class ModelResponseIterator:
         self._response_format_buffer = io.StringIO()
         self._response_format_verdict = "undecided"
         if verdict == "pass_through":
-            answer: Final = partial_response_format_answer(held, schema)
-            close: Final = "" if answer is not None else self._release_answer_close()
-            self._streamed_answer_keys = None if answer is None else frozenset(answer)
+            keys: Final = partial_response_format_answer_keys(held, schema)
+            close: Final = "" if keys is not None else self._release_answer_close()
+            self._streamed_answer_keys = keys
             return close
         joined: Final = self._join_streamed_answer(held, schema)
         if joined is not None:
