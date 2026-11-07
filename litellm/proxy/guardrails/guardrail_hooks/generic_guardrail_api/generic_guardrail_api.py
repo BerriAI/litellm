@@ -522,9 +522,6 @@ class GenericGuardrailAPI(CustomGuardrail):
                 await handler.close()
         return await self._post_check(payload, headers, retries_left - 1, fresh=True)
 
-    def supports_image_inputs(self, input_type: Literal["request", "response"] = "request") -> bool:
-        return True
-
     @log_guardrail_information
     async def apply_guardrail(
         self,

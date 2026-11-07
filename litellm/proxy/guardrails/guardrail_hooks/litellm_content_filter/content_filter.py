@@ -1981,9 +1981,6 @@ class ContentFilterGuardrail(CustomGuardrail):
         finally:
             _logging_only_scan_guardrail.reset(token)
 
-    def supports_image_inputs(self, input_type: Literal["request", "response"] = "request") -> bool:
-        return bool(self.image_model and self.llm_router)
-
     async def apply_guardrail(
         self,
         inputs: "GenericGuardrailAPIInputs",

@@ -2851,38 +2851,52 @@ async def test_apply_guardrail_bedrock_response_image_uses_output_source_and_str
 
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_promptguard_image_only_contacts_provider_and_rejects_text_only_guardrail(
+async def test_apply_guardrail_bedrock_image_plus_messages_scans_message_text_and_rejects_unsupported_guardrail(
     mocker: MockerFixture,
 ) -> None:
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
     from litellm.proxy.guardrails.guardrail_endpoints import router
-    from litellm.proxy.guardrails.guardrail_hooks.promptguard.promptguard import PromptGuardGuardrail
+    from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import BedrockGuardrail
     from litellm.proxy.proxy_server import openai_exception_handler
 
+    image_allow_response: Final = {
+        "action": "NONE",
+        "assessments": [{"contentPolicy": {"filters": [{"type": "VIOLENCE", "confidence": "NONE", "action": "NONE"}]}}],
+        "usage": {"imageUnits": 1},
+    }
+    text_block_response: Final = {
+        "action": "GUARDRAIL_INTERVENED",
+        "outputs": [{"text": "Message text blocked by Bedrock"}],
+        "assessments": [{"topicPolicy": {"topics": [{"name": "prohibited", "type": "DENY", "action": "BLOCKED"}]}}],
+        "usage": {"topicPolicyUnits": 1},
+    }
     captured_requests: Final[list[httpx.Request]] = []  # mutable-ok: test capture sink for MockTransport
 
-    def _promptguard_transport(request: httpx.Request) -> httpx.Response:
+    def _bedrock_transport(request: httpx.Request) -> httpx.Response:
         captured_requests.append(request)
-        return httpx.Response(
-            200,
-            json={"decision": "block", "threat_type": "unsafe_image", "confidence": 0.99, "event_id": "evt-1"},
-        )
+        payload: Final = json.loads(request.content)
+        is_image_scan: Final = any("image" in item for item in payload.get("content", []))
+        return httpx.Response(200, json=image_allow_response if is_image_scan else text_block_response)
 
-    promptguard: Final = PromptGuardGuardrail(
-        guardrail_name="promptguard-img",
-        api_key="pg-test-key",
-        api_base="https://api.promptguard.test",
-        async_handler=AsyncHTTPHandler(transport=httpx.MockTransport(_promptguard_transport)),
+    bedrock_guardrail: Final = BedrockGuardrail(
+        guardrail_name="bedrock-image-and-messages",
+        guardrailIdentifier="gr-img-1",
+        guardrailVersion="1",
+        aws_region_name="us-east-1",
+        aws_access_key_id="AKIAIOSFODNN7EXAMPLE",
+        aws_secret_access_key="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+        experimental_use_latest_role_message_only=True,
+        async_handler=AsyncHTTPHandler(transport=httpx.MockTransport(_bedrock_transport)),
     )
 
     mock_registry: Final = mocker.Mock()
-    mock_registry.get_initialized_guardrail_callback.return_value = promptguard
+    mock_registry.get_initialized_guardrail_callback.return_value = bedrock_guardrail
     mocker.patch("litellm.proxy.guardrails.guardrail_endpoints.GUARDRAIL_REGISTRY", mock_registry)
 
     mock_processor: Final = mocker.Mock()
     mock_processor.common_processing_pre_call_logic = AsyncMock(
-        return_value=({"guardrail_name": "promptguard-img", "metadata": {}}, None)
+        return_value=({"guardrail_name": "bedrock-image-and-messages", "metadata": {}}, None)
     )
     mocker.patch(
         "litellm.proxy.common_request_processing.ProxyBaseLLMRequestProcessing",
@@ -2902,18 +2916,25 @@ async def test_apply_guardrail_promptguard_image_only_contacts_provider_and_reje
     app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth()
 
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://guardrails.test") as client:
-        pg_response: Final = await client.post(
+        blocked_response: Final = await client.post(
             "/guardrails/apply_guardrail",
-            json={"guardrail_name": "promptguard-img", "images": [_TINY_PNG_DATA_URI]},
+            json={
+                "guardrail_name": "bedrock-image-and-messages",
+                "images": [_TINY_PNG_DATA_URI],
+                "messages": [{"role": "user", "content": "prohibited text in message"}],
+            },
         )
 
-    assert pg_response.status_code == 400
-    assert "Blocked by PromptGuard: unsafe_image" in pg_response.text
-    assert len(captured_requests) == 1
+    assert blocked_response.status_code == 400
+    assert "Message text blocked by Bedrock" in blocked_response.text
+    assert len(captured_requests) == 2
     assert json.loads(captured_requests[0].content) == {
-        "messages": [],
-        "direction": "input",
-        "images": [_TINY_PNG_DATA_URI],
+        "source": "INPUT",
+        "content": [{"image": {"format": "png", "source": {"bytes": _TINY_PNG_B64}}}],
+    }
+    assert json.loads(captured_requests[1].content) == {
+        "source": "INPUT",
+        "content": [{"text": {"text": "prohibited text in message"}}],
     }
 
     text_only_guardrail: Final = _NativeFindingGuardrail(({"is_grounded": True},))

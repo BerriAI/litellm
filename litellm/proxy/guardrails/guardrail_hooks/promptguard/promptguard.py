@@ -19,7 +19,6 @@ from litellm.integrations.custom_guardrail import (
     log_guardrail_information,
 )
 from litellm.llms.custom_httpx.http_handler import (
-    AsyncHTTPHandler,
     get_async_httpx_client,
     httpxSpecialProvider,
 )
@@ -69,7 +68,6 @@ class PromptGuardGuardrail(CustomGuardrail):
         api_key: str | None = None,
         api_base: str | None = None,
         block_on_error: bool | None = None,
-        async_handler: AsyncHTTPHandler | None = None,
         **kwargs: Unpack[_CustomGuardrailOptions],
     ) -> None:
         self.api_key = api_key or os.environ.get(
@@ -95,7 +93,7 @@ class PromptGuardGuardrail(CustomGuardrail):
         else:
             self.block_on_error = block_on_error
 
-        self.async_handler = async_handler or get_async_httpx_client(
+        self.async_handler = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.GuardrailCallback,
         )
 
@@ -124,9 +122,6 @@ class PromptGuardGuardrail(CustomGuardrail):
     def supports_structured_messages(self) -> bool:
         return False
 
-    def supports_image_inputs(self, input_type: Literal["request", "response"] = "request") -> bool:
-        return True
-
     @log_guardrail_information
     async def apply_guardrail(
         self,
@@ -140,13 +135,12 @@ class PromptGuardGuardrail(CustomGuardrail):
         structured_messages: Final = inputs.get("structured_messages", [])
         model: Final = inputs.get("model")
 
-        if not structured_messages and not texts and not images:
+        if structured_messages:
+            messages = list(structured_messages)
+        elif texts:
+            messages = [{"role": "user", "content": text} for text in texts]
+        else:
             return inputs
-        messages: Final = (
-            list(structured_messages)
-            if structured_messages
-            else [{"role": "user", "content": text} for text in texts]
-        )
 
         direction: Final = "input" if input_type == "request" else "output"
 

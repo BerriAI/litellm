@@ -335,10 +335,6 @@ class OvalixGuardrail(CustomGuardrail):
                 return reason
         return None
 
-    def supports_image_inputs(self, input_type: Literal["request", "response"] = "request") -> bool:
-        prompt_checkpoint: Final = self._post_checkpoint_id if input_type == "response" else self._pre_checkpoint_id
-        return bool(self._file_checkpoint_id or prompt_checkpoint)
-
     @log_guardrail_information
     async def apply_guardrail(
         self,
@@ -362,13 +358,10 @@ class OvalixGuardrail(CustomGuardrail):
             return inputs
 
         structured_messages: Final = inputs.get("structured_messages") or ()
-        message_file_parts: Final = (
-            ()
+        file_parts: Final = (
+            extract_file_parts_from_images(inputs.get("images"), size_limit=_DEFAULT_FILE_SIZE_LIMIT)
             if is_response
             else extract_file_parts_from_messages(structured_messages, size_limit=_DEFAULT_FILE_SIZE_LIMIT)
-        )
-        file_parts: Final = message_file_parts or extract_file_parts_from_images(
-            inputs.get("images"), size_limit=_DEFAULT_FILE_SIZE_LIMIT
         )
         file_block: Final = await self._check_files_for_block(file_parts, file_checkpoint, actor, session_id)
         if file_block is not None:

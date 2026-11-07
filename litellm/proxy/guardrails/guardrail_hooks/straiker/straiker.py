@@ -1295,9 +1295,6 @@ class StraikerGuardrail(CustomGuardrail):
                 return message
         return None
 
-    def supports_image_inputs(self, input_type: Literal["request", "response"] = "request") -> bool:
-        return self.api_version != "v3" or input_type == "request"
-
     @log_guardrail_information
     async def apply_guardrail(
         self,

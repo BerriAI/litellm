@@ -402,17 +402,12 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
 
         return result
 
-    def supports_image_inputs(self, input_type: Literal["request", "response"] = "request") -> bool:
-        return input_type == "request"
-
     def _build_guard_input_for_request(self, inputs: GenericGuardrailAPIInputs) -> _GuardInputWithIndices | None:
         guard_input: Final = _GuardInput(messages=[], tools=[])
         structured_messages: Final = inputs.get("structured_messages")
         texts: Final = inputs.get("texts", [])
         tools: Final = inputs.get("tools")
 
-        images: Final = inputs.get("images")
-        indices: Final[tuple[int, ...]]
         if structured_messages:
             filtered: Final = _messages_since_last_assistant(structured_messages)
             for message in filtered.messages:
@@ -424,14 +419,6 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
         elif texts:
             guard_input.messages = [_Message(role="user", content=text) for text in texts]
             indices = tuple(range(len(texts)))
-        elif images:
-            guard_input.messages = [
-                _Message(
-                    role="user",
-                    content=[_ImageUrlContentPart(image_url=_ImageUrl(url=url)) for url in images],
-                )
-            ]
-            indices = ()
         else:
             verbose_proxy_logger.warning("CrowdStrike AIDR Guardrail: No messages or texts provided for input request")
             return None

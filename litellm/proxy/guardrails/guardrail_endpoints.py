@@ -6,7 +6,7 @@ import asyncio
 import inspect
 import json
 import os
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from datetime import datetime, timezone
 from types import MappingProxyType, UnionType
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeVar, Union, cast, get_args, get_origin
@@ -2410,6 +2410,30 @@ def _extract_guardrail_entries(request_data: Mapping[str, object]) -> Sequence[o
     return (entries,) if isinstance(entries, Mapping) else ()
 
 
+def _extract_content_texts(content: object) -> tuple[str, ...]:
+    if isinstance(content, str):
+        return (content,) if content else ()
+    if isinstance(content, Sequence) and not isinstance(content, (str, bytes)):
+        return tuple(
+            text
+            for item in content
+            if isinstance(item, Mapping) and isinstance(text := item.get("text"), str) and text
+        )
+    return ()
+
+
+def _iter_message_texts(messages: Sequence[Mapping[str, object]]) -> Iterator[str]:
+    for msg in messages:
+        if isinstance(msg, Mapping):
+            yield from _extract_content_texts(msg.get("content"))
+
+
+def _extract_message_texts(messages: Sequence[Mapping[str, object]] | None) -> tuple[str, ...]:
+    if not messages:
+        return ()
+    return tuple(_iter_message_texts(messages))
+
+
 async def _run_endpoint_guardrail(
     active_guardrail: CustomGuardrail,
     request: ApplyGuardrailRequest,
@@ -2421,7 +2445,10 @@ async def _run_endpoint_guardrail(
             status_code=422,
             detail="At least one of 'text', 'messages', or 'images' must be provided.",
         )
-    if request.images and not active_guardrail.supports_image_inputs(input_type):
+    is_attachment_scanner: Final = isinstance(active_guardrail, RequestAttachmentScanner) and hasattr(
+        type(active_guardrail), "async_scan_request_attachments"
+    )
+    if request.images and not is_attachment_scanner:
         raise HTTPException(
             status_code=422,
             detail=(
@@ -2429,12 +2456,9 @@ async def _run_endpoint_guardrail(
                 f"for input_type='{input_type}'."
             ),
         )
+    message_texts: Final = _extract_message_texts(request.messages)
     scan_messages: Final = _attachment_scan_messages(request)
-    if (
-        scan_messages
-        and isinstance(active_guardrail, RequestAttachmentScanner)
-        and hasattr(type(active_guardrail), "async_scan_request_attachments")
-    ):
+    if scan_messages and is_attachment_scanner:
         scan_event_type: Final = (
             GuardrailEventHooks.post_call if input_type == "response" else GuardrailEventHooks.pre_call
         )
@@ -2468,13 +2492,23 @@ async def _run_endpoint_guardrail(
                 status_code=422,
                 detail=f"Guardrail '{request.guardrail_name}' did not scan the provided images.",
             )
-        if not request.text and scanned_entries:
+        if not request.text and not message_texts and scanned_entries:
             return {"texts": [], "images": list(request.images)} if request.images else {"texts": []}
 
+    texts_to_scan: Final[list[str]] = (
+        [request.text]
+        if request.text or ("text" in request.model_fields_set and not message_texts and not request.images)
+        else list(message_texts)
+    )
+    if not texts_to_scan and "text" not in request.model_fields_set:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Guardrail '{request.guardrail_name}' requires scannable text.",
+        )
     inputs: Final[GenericGuardrailAPIInputs] = (
-        {"texts": [request.text] if request.text else [], "images": list(request.images)}
+        {"texts": texts_to_scan, "images": list(request.images)}
         if request.images is not None
-        else {"texts": [request.text]}
+        else {"texts": texts_to_scan}
     )
     return await active_guardrail.apply_guardrail(
         inputs=inputs,
