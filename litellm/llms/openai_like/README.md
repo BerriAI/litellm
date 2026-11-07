@@ -62,7 +62,10 @@ That's it! The provider will be automatically loaded and available.
     
     // Optional: Special handling flags
     "special_handling": {
-      "convert_content_list_to_string": true
+      "convert_content_list_to_string": true,
+      // Refuse the request when neither api_key nor api_key_env is set,
+      // instead of falling back to OpenAI credentials
+      "require_api_key": true
     },
 
     // Optional: Capabilities every model of this provider has, used when a
