@@ -94,6 +94,19 @@ def _fold_message_cache_control(
     return base
 
 
+def _relocate_tool_message_images(
+    message: Mapping[str, object],
+) -> tuple[Mapping[str, object], list[Mapping[str, object]]] | None:
+    content: Final = message.get("content")
+    blocks: Final = content if isinstance(content, list) else [content]
+    images: Final = [block for block in blocks if isinstance(block, dict) and block.get("type") == "image_url"]
+    if not images:
+        return None
+    texts: Final = [str(block["text"]) for block in blocks if isinstance(block, dict) and block.get("type") == "text"]
+    text: Final = "\n".join(texts) if texts else "Image moved to the following user message"
+    return {**message, "content": text}, images
+
+
 def _message_role_mapping(role: str) -> type[ChatMessage]:
     return {
         "user": SAPUserMessage,
@@ -106,6 +119,12 @@ def _messages_to_sap_template(messages: list[AllMessageValues]) -> list:
     template: Final = []
     for message in messages:
         folded_message = _fold_message_cache_control(message_with_file_parts_as_image_urls(message))
+        relocated = _relocate_tool_message_images(folded_message) if folded_message.get("role") == "tool" else None
+        if relocated is not None:
+            tool_message, image_blocks = relocated
+            template.append(validate_dict(tool_message, SAPToolChatMessage))
+            template.append(validate_dict({"role": "user", "content": image_blocks}, SAPUserMessage))
+            continue
         message_role_class = _message_role_mapping(str(folded_message["role"]))
         validated_message = validate_dict(folded_message, message_role_class)
         template.append(validated_message)
