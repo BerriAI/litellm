@@ -246,13 +246,13 @@ async def test_deferred_sync_success_callbacks_wait_for_release(server: Recordin
     logger._defer_async_logging = True
     response: Final = await call_aocr(server, litellm_logging_obj=logger)
     await drain_logging()
-    assert not logger._sync_success_scheduled
+    assert not await asyncio.to_thread(finished.wait, 0.2)
+    assert observations == []
     ProxyBaseLLMRequestProcessing._flush_deferred_async_logging(logger, blocked)
     ProxyBaseLLMRequestProcessing._flush_deferred_async_logging(logger, blocked)
-    assert logger._sync_success_scheduled is not blocked
-    if not blocked:
-        assert await asyncio.to_thread(finished.wait, 5)
-        assert observations == [response]
+    await drain_logging()
+    assert await asyncio.to_thread(finished.wait, 0.5 if blocked else 5) is not blocked
+    assert observations == ([] if blocked else [response])
 
 
 def test_sync_success_uses_executor_and_copied_caller_context(server: RecordingServer) -> None:

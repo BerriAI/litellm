@@ -1,17 +1,16 @@
 import asyncio
+import json
 from collections.abc import AsyncIterator, Iterator
 from typing import Final
 
 import pytest
 
 import litellm
-from litellm.rust_bridge.catalog import Route, RouteRule
-from litellm.rust_bridge.configuration import Rollout
 from tests.test_litellm_rust.messages.data import MESSAGES_EVENTS, MESSAGES_RESPONSE, call
 from tests.test_litellm_rust.support.callback_recorder import RecordingLogger, drain_logging
 from tests.test_litellm_rust.support.isolation import rebound
 from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec, relaxed
-from tests.test_litellm_rust.support.routing import assert_served_natively, routed
+from tests.test_litellm_rust.support.routing import assert_served_natively
 
 pytestmark = pytest.mark.requires_rust_extension
 
@@ -110,9 +109,22 @@ async def _streamed_pre_call_input(server: RecordingServer) -> object:
 
 @pytest.mark.asyncio
 async def test_stream_logs_the_request_body_as_input_like_python(server: RecordingServer) -> None:
-    native: Final = await _streamed_pre_call_input(server)
-    assert_served_natively(server)
-    with routed(RouteRule(Route.MESSAGES, Rollout.PYTHON_ONLY)):
-        python: Final = await _streamed_pre_call_input(server)
+    logged: Final = await _streamed_pre_call_input(server)
 
-    assert native == python
+    assert_served_natively(server)
+    assert logged == [
+        {
+            "role": "user",
+            "content": json.dumps(
+                {
+                    "messages": [{"role": "user", "content": "Hello"}],
+                    "max_tokens": 64,
+                    "model": "claude-sonnet-5",
+                    "metadata": {"user_id": "user-1"},
+                    "stop_sequences": ["END"],
+                    "stream": True,
+                    "system": "Be brief",
+                }
+            ),
+        }
+    ]

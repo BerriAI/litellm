@@ -621,12 +621,11 @@ impl LegacyLogging {
             ResultSource::Cache { key } => Some(key.clone()),
         };
         if self.cache_key.is_some() {
-            // Python stamps `cache_hit` only on a cache hit; a provider result leaves it unset.
             details.set_item("cache_hit", true)?;
+        } else {
+            details.call_method1("pop", ("cache_hit", py.None()))?;
         }
         details.set_item("cache_key", self.cache_key.as_deref())?;
-        // The refresh above reset the details Python's handler took from its request body; a cache
-        // hit never reaches that handler, so it keeps the caller's.
         if let (LoggingOperation::Messages, ResultSource::Provider, Some(request)) =
             (self.operation, &facts.source, &self.request)
         {
@@ -1216,10 +1215,10 @@ logger._provider_reported_cost = None
             };
             let previous = litellm_host::interceptors::ExecutionFacts {
                 provider: facts.provider.clone(),
-                cost: litellm_host::interceptors::Cost::Reported {
-                    amount: serde_json::Number::from_f64(9.0).unwrap(),
+                cost: litellm_host::interceptors::Cost::CacheHit,
+                source: litellm_host::interceptors::ResultSource::Cache {
+                    key: "earlier-hit".into(),
                 },
-                source: litellm_host::interceptors::ResultSource::Provider,
             };
             logging.result_ready(py, &previous).unwrap();
             local(&locals, "logger")

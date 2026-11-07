@@ -11,6 +11,7 @@ import contextvars
 import datetime
 import inspect
 import json
+import sys
 import traceback
 import uuid
 import weakref
@@ -451,6 +452,10 @@ def stream_opened(logger: Logging, head: Mapping[str, object]) -> None:
     )
 
 
+def _cancelling(task: asyncio.Task[object]) -> bool:
+    return task.cancelling() > 0 if sys.version_info >= (3, 11) else True
+
+
 def _proxy_request(logger: LoggingSurface) -> object:
     return logger.litellm_params.get("proxy_server_request")
 
@@ -500,7 +505,7 @@ def stream_success(
         executor.submit(contextvars.copy_context().run, asyncio.run, coroutine)
         return
     cancelled: Final = asyncio.current_task()
-    if stream_teardown and cancelled is not None and cancelled.cancelling() and _proxy_request(logger):
+    if stream_teardown and cancelled is not None and _cancelling(cancelled) and _proxy_request(logger):
         # the proxy's disconnect cleanup runs later in this task and stamps the 499 error_information this row carries
         cancelled.add_done_callback(lambda _: enqueue_logging(coroutine))
         return

@@ -216,8 +216,6 @@ impl Error {
         matches!(&*self.0, Repr::ReadTimeout { body: true, .. })
     }
 
-    // A connection that ended or was reset mid-body is a cut; any other failure stays a network
-    // error.
     pub fn body_read(error: reqwest::Error, received: u64, expected: Option<u64>) -> Self {
         let mut source: Option<&(dyn std::error::Error + 'static)> = Some(&error);
         let kind = std::iter::from_fn(|| {
