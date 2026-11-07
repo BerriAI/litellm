@@ -13,6 +13,7 @@ use litellm_llms_types::{
 use litellm_router_types::LitellmParams;
 use serde_json::Value;
 
+use crate::anthropic::common_utils::CustomToolField;
 use crate::{
     Error, ErrorDetail,
     anthropic::messages::{
@@ -141,9 +142,14 @@ impl BaseMessagesConfig for BedrockClaudePlatformMessagesConfig {
         request: MessagesRequest,
         context: &MessagesTransformContext,
     ) -> Result<MessagesRequest, Error> {
+        let request_model = request.model.clone();
         let body = serde_json::to_value(request).map_err(invalid_request)?;
         let filtered = serde_json::from_value(filter_body(body, false)).map_err(invalid_request)?;
-        transform_messages_request(filtered, context)
+        transform_messages_request(
+            filtered,
+            context,
+            CustomToolField::rewrite("bedrock", &request_model, context.drop_params),
+        )
     }
 
     fn secret_names(&self) -> &'static [&'static str] {

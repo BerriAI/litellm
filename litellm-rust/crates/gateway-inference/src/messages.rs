@@ -80,6 +80,7 @@ fn project(
         })
         .collect();
     Ok(MessagesCall {
+        mock_response: None,
         body: messages_body(body)?,
         api_key: deployment.api_key.clone(),
         api_base: deployment.api_base.clone(),

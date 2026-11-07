@@ -89,6 +89,10 @@ impl MessagesRoute {
                 <&'static str>::from(provider.provider),
             );
             let model = provider.model.to_owned();
+            if let Some(mock) = &call.mock_response {
+                return handler::mock_response(mock)
+                    .map(|response| MessagesCallResponse::Complete(Box::new(response)));
+            }
             let secrets = self.secrets.resolve(config.config().secret_names()).await?;
             handler::execute(self, config, model, call, secrets, &context)
                 .boxed()

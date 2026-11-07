@@ -499,6 +499,14 @@ impl LegacyLogging {
     ) -> PyResult<HookStep<Self, Py<PyAny>>> {
         self.end = Some(datetime(py, timing.end_time)?);
         self.response = Some(response);
+        if self.answers_stream_request_completely(py)? {
+            let logger = self.logger()?.object(py);
+            logger.setattr("stream", true)?;
+            logger
+                .getattr("model_call_details")?
+                .set_item("stream", true)?;
+            return self.finalize(py);
+        }
         if self.runs_deployment_hooks() {
             return Ok(HookStep::Await(
                 DeploymentHooks::after_success(
@@ -593,9 +601,28 @@ impl LegacyLogging {
         self.response = Some(response.clone_ref(py));
         match &self.stream {
             Some(stream) => self.stream_success(py, stream)?,
+            None if self.answers_stream_request_completely(py)? => {}
             None => self.dispatch_success(py)?,
         }
         Ok(HookStep::Ready(()))
+    }
+
+    /// Python's `@client` returns a complete Messages result to a `stream=True` call (a
+    /// `mock_response`) as it would a stream, so neither the success deployment hook nor
+    /// success logging runs for it (`_is_streaming_request`).
+    fn answers_stream_request_completely(&self, py: Python<'_>) -> PyResult<bool> {
+        if self.operation != LoggingOperation::Messages || self.stream.is_some() {
+            return Ok(false);
+        }
+        let kwargs = self.call.kwargs().bind(py);
+        let mocked = kwargs.get_item("mock_response")?.is_some_and(|mock| {
+            mock.cast::<pyo3::types::PyString>()
+                .is_ok_and(|text| text.len().is_ok_and(|len| len > 0))
+        });
+        Ok(mocked
+            && kwargs
+                .get_item("stream")?
+                .is_some_and(|stream| stream.is(pyo3::types::PyBool::new(py, true).to_owned())))
     }
 
     pub(crate) fn failed(

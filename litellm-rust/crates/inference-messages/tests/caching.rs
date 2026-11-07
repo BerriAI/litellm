@@ -204,7 +204,7 @@ async fn messages_cache_identity_follows_resolved_configuration_and_request_call
             .revision
             .store(usize::from(call >= 2), Ordering::SeqCst);
         let cache = ScopedCache::new(cache.clone(), CacheScope::Shared);
-        support::messages_route(secrets.clone()).with_cache(cache).execute(MessagesCall {
+        support::messages_route(secrets.clone()).with_cache(cache).execute(MessagesCall { mock_response: None,
             body: serde_json::from_value(json!({"model":"anthropic/cache-test-model","messages":[{"role":"user","content":"hello"}],"max_tokens":32})).unwrap(),
             api_key:None,api_base:None,custom_llm_provider:None,litellm_params:Default::default(),extra_headers:None,provider_specific_header:None,timeout:None,shaping:Default::default(),
         }, &hooks, None).await.unwrap();
@@ -262,7 +262,7 @@ async fn provider_reported_cost_is_delivered_once_and_never_charged_for_a_cache_
     let route = support::messages_route(litellm_inference_testing::no_secrets())
         .with_cache(ScopedCache::new(cache, CacheScope::Shared));
     let request = || {
-        MessagesCall {
+        MessagesCall { mock_response: None,
         body: serde_json::from_value(json!({"model": "native-test", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 16})).unwrap(),
         api_key: Some("eden-key".into()), api_base: Some(upstream.uri()), custom_llm_provider: Some("edenai".into()),
         litellm_params: Default::default(), extra_headers: None, provider_specific_header: None,

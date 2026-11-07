@@ -74,6 +74,7 @@ fn message_response() -> ResponseTemplate {
 #[fixture]
 fn call() -> MessagesCall {
     MessagesCall {
+        mock_response: None,
         body: body(json!({
             "model": MODEL,
             "max_tokens": 16,

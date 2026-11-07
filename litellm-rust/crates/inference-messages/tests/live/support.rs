@@ -97,6 +97,7 @@ pub(super) fn call(provider: &str, payload: Value) -> MessagesCall {
     ))
     .expect("live payload must be a valid Messages request");
     MessagesCall {
+        mock_response: None,
         body,
         api_key: None,
         api_base: None,

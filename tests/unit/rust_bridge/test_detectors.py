@@ -31,8 +31,6 @@ MAPPED_FILE: Final = {
 }
 MAPPED_FILE_INPUT: Final = [{"role": "user", "content": [{"type": "input_file", "file_id": "litellm-file"}]}]
 CACHED_TEXT: Final = {"type": "input_text", "text": "hi", "cache_control": {"type": "ephemeral"}}
-THINKING_TURN: Final = {"role": "assistant", "content": [{"type": "thinking", "thinking": "x", "signature": "s"}]}
-REDACTED: Final = {"type": "redacted_thinking", "data": "x"}
 STRICT_TOOL: Final = {"name": "b", "input_schema": {"type": "object"}, "strict": True}
 TOOL_SEARCH_TYPE: Final = sorted(ANTHROPIC_TOOL_SEARCH_TOOL_TYPES)[0]
 
@@ -194,21 +192,6 @@ def _wrap_nested_level(value: object, depth: int) -> object:
         (detectors.cache_control_injection, {"enable_prompt_caching": True}, True),
         (detectors.cache_control_injection, {"cache_control_injection_points": [{"location": "message"}]}, True),
         (detectors.cache_control_injection, {"cache_control_injection_points": []}, False),
-        (messages_detectors.thinking_signature_retry, {"messages": [THINKING_TURN]}, True),
-        (
-            messages_detectors.thinking_signature_retry,
-            {"messages": [{"role": "assistant", "content": [REDACTED]}]},
-            True,
-        ),
-        (messages_detectors.thinking_signature_retry, {"messages": [{"role": "assistant", "content": "done"}]}, False),
-        (
-            messages_detectors.thinking_signature_retry,
-            {"messages": [{"role": "user", "content": [{"type": "text"}]}]},
-            False,
-        ),
-        (messages_detectors.tool_custom_field, {"tools": [{"name": "a"}, {"name": "b", "custom": {}}]}, True),
-        (messages_detectors.tool_custom_field, {"tools": [{"name": "a", "defer_loading": True}]}, False),
-        (messages_detectors.tool_custom_field, {}, False),
         (messages_detectors.strict_tools_retry, {"drop_params": True, "tools": [{"name": "a"}, STRICT_TOOL]}, True),
         (
             messages_detectors.strict_tools_retry,
@@ -321,8 +304,6 @@ def test_input_rewrite_preserves_caller_input(input_value: object, expected: boo
         (detectors.modify_params, "modify_params", True, {}),
         (detectors.retries_fallbacks, "num_retries", 3, {}),
         (detectors.cache_control_injection, "enable_anthropic_prompt_caching", True, {}),
-        (messages_detectors.stream_cost_injection, "include_cost_in_streaming_usage", True, {"stream": True}),
-        (messages_detectors.stream_cost_injection, "include_cost_in_streaming_usage", "true", {"stream": True}),
         (chat_detectors.chat_retries_fallbacks, "model_fallbacks", [{"gpt-5": ["gpt-5-mini"]}], {}),
         (chat_detectors.chat_retries_fallbacks, "num_retries", 3, {}),
         (chat_detectors.model_alias_map, "model_alias_map", {"gpt-5": "openai/gpt-5"}, {}),
@@ -343,11 +324,6 @@ def test_global_settings_are_detected(
     assert not detector(call(**kwargs))
     monkeypatch.setattr(litellm, setting, value)
     assert detector(call(**kwargs))
-
-
-def test_stream_cost_injection_needs_a_stream(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(litellm, "include_cost_in_streaming_usage", True)
-    assert not messages_detectors.stream_cost_injection(call())
 
 
 def test_foundry_beta_row_reads_the_api_base_the_anthropic_handler_reads(monkeypatch: pytest.MonkeyPatch) -> None:

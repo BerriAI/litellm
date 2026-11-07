@@ -26,6 +26,10 @@ pub enum Error {
     Host(#[source] MachineFault),
     #[error("post-call hook failed")]
     PostCallHook(#[source] Arc<Error>),
+    /// The caller's `mock_response` names an error to raise instead of calling the provider,
+    /// and the host raises the error its own mock names.
+    #[error("mock_response raised {0}")]
+    Mocked(String),
 }
 
 impl From<MachineFault> for Error {
@@ -55,7 +59,11 @@ impl Error {
             Self::Llm(error) => error.is_request(),
             Self::Auth(error) => error.is_request(),
             Self::Http(error) => error.is_request(),
-            Self::Declined(_) | Self::Secret(_) | Self::Host(_) | Self::PostCallHook(_) => false,
+            Self::Declined(_)
+            | Self::Secret(_)
+            | Self::Host(_)
+            | Self::PostCallHook(_)
+            | Self::Mocked(_) => false,
         }
     }
 
@@ -70,7 +78,8 @@ impl Error {
             | Self::Headers(_)
             | Self::Secret(_)
             | Self::Host(_)
-            | Self::PostCallHook(_) => false,
+            | Self::PostCallHook(_)
+            | Self::Mocked(_) => false,
         }
     }
 
@@ -85,7 +94,8 @@ impl Error {
             | Self::Http(_)
             | Self::Secret(_)
             | Self::Host(_)
-            | Self::PostCallHook(_) => false,
+            | Self::PostCallHook(_)
+            | Self::Mocked(_) => false,
         }
     }
 
@@ -100,7 +110,8 @@ impl Error {
             | Self::Http(_)
             | Self::Secret(_)
             | Self::Host(_)
-            | Self::PostCallHook(_) => None,
+            | Self::PostCallHook(_)
+            | Self::Mocked(_) => None,
         }
     }
 
@@ -127,7 +138,16 @@ impl Error {
             | Self::Declined(_)
             | Self::Auth(_)
             | Self::Headers(_)
-            | Self::Secret(_) => false,
+            | Self::Secret(_)
+            | Self::Mocked(_) => false,
+        }
+    }
+
+    /// The `mock_response` text that asked for this error.
+    pub fn mocked(&self) -> Option<&str> {
+        match self {
+            Self::Mocked(mock) => Some(mock),
+            _ => None,
         }
     }
 
@@ -142,7 +162,8 @@ impl Error {
             | Self::Http(_)
             | Self::Secret(_)
             | Self::Host(_)
-            | Self::PostCallHook(_) => None,
+            | Self::PostCallHook(_)
+            | Self::Mocked(_) => None,
         }
     }
 
@@ -185,7 +206,8 @@ impl Error {
             | Self::Headers(_)
             | Self::Secret(_)
             | Self::Host(_)
-            | Self::PostCallHook(_) => None,
+            | Self::PostCallHook(_)
+            | Self::Mocked(_) => None,
         }
     }
 }

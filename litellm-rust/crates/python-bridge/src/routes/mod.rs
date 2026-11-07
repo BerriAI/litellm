@@ -94,6 +94,15 @@ impl RequestView {
         present(arguments, self.request(py)?, name)
     }
 
+    /// The keywords the call would send, the hook-rewritten ones over the base.
+    pub(crate) fn effective_request<'py>(
+        &self,
+        py: Python<'py>,
+        arguments: &Bound<'py, PyDict>,
+    ) -> PyResult<Bound<'py, PyDict>> {
+        effective_py_args(self.request(py)?, arguments)
+    }
+
     /// The body params `module.body_params` keeps from the keywords the call would send, so
     /// each route's Python host decides which params reach the provider.
     pub(crate) fn body_params(
@@ -102,7 +111,7 @@ impl RequestView {
         arguments: &Bound<'_, PyDict>,
         module: &str,
     ) -> PyResult<Map<String, Value>> {
-        let request = effective_py_args(self.request(py)?, arguments)?;
+        let request = self.effective_request(py, arguments)?;
         from_py(
             &py.import(module)?
                 .getattr("body_params")?

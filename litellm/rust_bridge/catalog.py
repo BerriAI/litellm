@@ -94,12 +94,6 @@ class Feature(str, Enum):
     """No static key, so Python mints a workload identity federation token."""
     CACHE_CONTROL_INJECTION = "cache_control_injection"
     """Prompt caching injection that Python applies to messages and system."""
-    STREAM_COST_INJECTION = "stream_cost_injection"
-    """litellm.include_cost_in_streaming_usage, where Python adds cost to streamed usage."""
-    THINKING_SIGNATURE_RETRY = "thinking_signature_retry"
-    """Replayed thinking blocks, which Python strips and retries once if Anthropic rejects their signature."""
-    TOOL_CUSTOM_FIELD = "tool_custom_field"
-    """Tools carrying a non-spec custom object, which Python drops or hoists for the provider."""
     STRICT_TOOLS_RETRY = "strict_tools_retry"
     """Strict tools under drop_params, which Python sends again without strict if Claude rejects their limits."""
     CLIENT_HEADERS = "client_headers"
@@ -172,7 +166,7 @@ CHAT_PYTHON_FEATURES: Final = COMMON_PYTHON_FEATURES | {
     Feature.MODEL_ALIAS_MAP,
 }
 
-MESSAGES_PYTHON_FEATURES: Final = COMMON_PYTHON_FEATURES | {
+MESSAGES_PYTHON_FEATURES: Final = (COMMON_PYTHON_FEATURES - {Feature.MOCK_RESPONSE}) | {
     Feature.PROVIDER_AFFINITY,
     Feature.FOUNDRY_BETA_ROW,
     Feature.SAFEGUARDS_CLASSIFIER,
@@ -182,10 +176,6 @@ MESSAGES_PYTHON_FEATURES: Final = COMMON_PYTHON_FEATURES | {
     Feature.RESPONSE_CACHE,
     Feature.MODIFY_PARAMS,
     Feature.WORKLOAD_IDENTITY,
-    Feature.CACHE_CONTROL_INJECTION,
-    Feature.STREAM_COST_INJECTION,
-    Feature.THINKING_SIGNATURE_RETRY,
-    Feature.TOOL_CUSTOM_FIELD,
     Feature.STRICT_TOOLS_RETRY,
 }
 

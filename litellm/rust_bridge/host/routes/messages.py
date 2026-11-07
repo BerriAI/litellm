@@ -22,6 +22,7 @@ from litellm.llms.anthropic.messages.native.handler import (
 from litellm.llms.anthropic.messages.native.handler import (
     _with_deployment_output_effort as _deployment_output_effort,  # pyright: ignore[reportPrivateUsage]  # the handler's own effort rounding
 )
+from litellm.llms.anthropic.messages.native.utils import prepare_native_messages
 from litellm.llms.anthropic.messages.utils import is_reasoning_auto_summary_enabled
 from litellm.rust_bridge import failures
 from litellm.rust_bridge.host import callbacks_legacy_python
@@ -65,6 +66,7 @@ class MessagesSettings:
     reasoning_auto_summary: bool
     additional_drop_params: Sequence[str]
     request_timeout: float | None
+    include_cost_in_streaming_usage: bool
 
 
 def response(value: Mapping[str, object]) -> AnthropicMessagesResponse:
@@ -110,12 +112,99 @@ def _with_deployment_effort(params: Mapping[str, object], request: Mapping[str, 
     )
 
 
+_PREPARE: TypeAlias = Callable[..., tuple[object, object]]
+# `anthropic_messages`'s named params, which its `**kwargs` never carry.
+_NAMED_PARAMS: Final = frozenset(
+    {
+        "max_tokens",
+        "messages",
+        "model",
+        "metadata",
+        "stop_sequences",
+        "stream",
+        "system",
+        "temperature",
+        "thinking",
+        "tool_choice",
+        "tools",
+        "top_k",
+        "top_p",
+        "api_key",
+        "api_base",
+        "client",
+        "custom_llm_provider",
+    }
+)
+
+
+def injected_prompt(request: Mapping[str, object]) -> Mapping[str, object] | None:
+    """The messages, system and tools Python's handler sends once it injects the configured or
+    default prompt-cache breakpoints, or None when it injects none. Stamps the call's metadata
+    bucket with the injection as the handler does."""
+    from litellm.integrations.anthropic_cache_control_hook import (
+        AnthropicCacheControlHook,
+        configured_injection_points,
+    )
+    from litellm.llms.anthropic.common_utils import tools_marked_for_a_tool_config_point
+
+    if not (
+        litellm.enable_anthropic_prompt_caching is True
+        or request.get("enable_prompt_caching") is True
+        or configured_injection_points(request.get("cache_control_injection_points"))
+    ):
+        return None
+    # A shallow copy, so the metadata bucket the stamp writes is the call's own.
+    kwargs: Final = {name: value for name, value in request.items() if name not in _NAMED_PARAMS}
+    tools: Final = request.get("tools")
+    # The handler hands the caller's own objects to the injection, which edits them in place.
+    messages, system = cast(_PREPARE, prepare_native_messages)(  # cast-ok: the caller's unvalidated prompt
+        request.get("messages"),
+        request.get("system"),
+        kwargs,
+        model=str(request["model"]),
+        custom_llm_provider=optional_str(request.get("custom_llm_provider")),
+        tools=tools,
+        api_base=optional_str(request.get("api_base")),
+    )
+    marked: Final = tools_marked_for_a_tool_config_point(tools, kwargs.pop("cache_control_injection_points", None))
+    if marked is not None:
+        AnthropicCacheControlHook.record_gateway_injection(kwargs, 1)
+    return {
+        "messages": messages,
+        "system": system,
+        "tools": list(marked) if marked is not None else tools,
+    }
+
+
 def stream_hidden_params(headers: Sequence[tuple[str, str]]) -> Mapping[str, object]:
     from litellm.llms.anthropic.messages.native.streaming_iterator import (
         anthropic_messages_stream_hidden_params,
     )
 
     return anthropic_messages_stream_hidden_params(httpx.Headers(list(headers)))
+
+
+def stream_cost_model(request: Mapping[str, object]) -> str | None:
+    """The model Python's pass-through stream prices each streamed usage event with, or None when
+    it adds no cost (`PassThroughStreamingHandler.chunk_processor`)."""
+    if not litellm.include_cost_in_streaming_usage:
+        return None
+    logging_obj: Final = request.get("litellm_logging_obj")
+    if not isinstance(logging_obj, LiteLLMLoggingObj):
+        return None
+    model: Final = logging_obj.model_call_details.get("model")
+    return model if isinstance(model, str) and model else None
+
+
+def stream_chunk_with_cost(chunk: bytes, model: str, request: Mapping[str, object]) -> object:
+    """The whole SSE frames of one streamed chunk with the call's cost added to the first usage
+    event, as Python's pass-through stream relays them."""
+    from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+
+    logging_obj: Final = request.get("litellm_logging_obj")
+    return ProxyBaseLLMRequestProcessing.process_chunk_with_cost_injection(
+        chunk, model, logging_obj if isinstance(logging_obj, LiteLLMLoggingObj) else None
+    )
 
 
 _UPSTREAM_ARGS: Final = TypeAdapter(tuple[int, str])
@@ -226,8 +315,31 @@ def _log_resolved_call(request: Mapping[str, object], request_provider: str) -> 
     )
 
 
+def _mocked_error(mock: str, request: Mapping[str, object], request_provider: str) -> Exception:
+    """The error Python's `mock_response` raises for the `mock_response` text that names it."""
+    from litellm.llms.anthropic.messages.native import utils as native_utils
+
+    raise_mocked: Final = cast(  # cast-ok: the mock's untyped kwargs
+        Callable[..., object],
+        native_utils.mock_response,  # pyright: ignore[reportUnknownMemberType]  # untyped **kwargs
+    )
+    try:
+        raise_mocked(
+            model=str(request["model"]).removeprefix(f"{request_provider}/"),
+            messages=[],
+            max_tokens=0,
+            mock_response=mock,
+        )
+    except Exception as raised:  # noqa: BLE001  # the mock raises the error it names
+        return raised
+    return RuntimeError(f"mock_response={mock!r} names no error")
+
+
 def map_failure(error: Exception, request: Mapping[str, object], request_provider: str) -> Exception:
     """Raises what Python's Messages handler raises for the same failure."""
+    mocked: Final = getattr(error, "messages_mock_error", None)
+    if isinstance(mocked, str):
+        return _mocked_error(mocked, request, request_provider)
     if getattr(error, "messages_timeout", None) == "Body":
         # Python reads a stream's body outside its HTTP client's error mapping, so the transport's
         # own timeout reaches the caller unmapped.
@@ -278,5 +390,6 @@ def settings(kwargs: Mapping[str, object]) -> dict[str, object]:
             reasoning_auto_summary=is_reasoning_auto_summary_enabled(),
             additional_drop_params=_additional_drop_params(kwargs),
             request_timeout=get_configured_request_timeout(),
+            include_cost_in_streaming_usage=bool(litellm.include_cost_in_streaming_usage),
         )
     )

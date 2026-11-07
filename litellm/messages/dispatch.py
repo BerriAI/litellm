@@ -122,16 +122,12 @@ def messages_target(model: str, custom_llm_provider: str | None, model_info: obj
 
 _FEATURES: Final[detectors.Detectors] = MappingProxyType(
     {
-        **detectors.COMMON,
+        **{feature: detector for feature, detector in detectors.COMMON.items() if feature is not Feature.MOCK_RESPONSE},
         Feature.PROVIDER_AFFINITY: route_detectors.provider_affinity,
         Feature.SAFEGUARDS_CLASSIFIER: route_detectors.safeguards_classifier,
         Feature.RESPONSE_CACHE: detectors.response_cache,
         Feature.MODIFY_PARAMS: detectors.modify_params,
         Feature.WORKLOAD_IDENTITY: route_detectors.anthropic_workload_identity,
-        Feature.CACHE_CONTROL_INJECTION: detectors.cache_control_injection,
-        Feature.STREAM_COST_INJECTION: route_detectors.stream_cost_injection,
-        Feature.THINKING_SIGNATURE_RETRY: route_detectors.thinking_signature_retry,
-        Feature.TOOL_CUSTOM_FIELD: route_detectors.tool_custom_field,
     }
 )
 

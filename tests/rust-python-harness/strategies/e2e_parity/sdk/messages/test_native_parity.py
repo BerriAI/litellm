@@ -270,6 +270,25 @@ THINKING_STREAM: Final = _events(
     *_message_end("end_turn", 12),
 )
 
+CACHED_USAGE_STREAM: Final = _events(
+    _message_start("msg_01ParityCachedStream"),
+    *_text_block(0, "Paris"),
+    (
+        "message_delta",
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+            "usage": {
+                "input_tokens": 14,
+                "output_tokens": 4,
+                "cache_creation_input_tokens": 2048,
+                "cache_read_input_tokens": 1024,
+            },
+        },
+    ),
+    ("message_stop", {"type": "message_stop"}),
+)
+
 ERROR_MID_STREAM: Final = _events(
     _message_start("msg_01ParityOverloaded"),
     *_text_block(0, "Pa"),
@@ -281,6 +300,14 @@ SLOW_STREAM: Final = _events(
     *_text_block(0, "a", "b", "c", "d", "e", "f"),
     *_message_end("end_turn", 6),
 )
+
+
+CACHE_TURNS: Final[tuple[JsonValue, ...]] = (
+    {"role": "user", "content": "What is the capital of France?"},
+    {"role": "assistant", "content": [{"type": "text", "text": "Paris"}]},
+    {"role": "user", "content": [{"type": "text", "text": "And of Spain?"}]},
+)
+COST_IN_STREAM: Final[Mapping[str, object]] = MappingProxyType({"include_cost_in_streaming_usage": True})
 
 
 def _upstream_error(kind: str, message: str) -> Mapping[str, JsonValue]:
@@ -342,48 +369,11 @@ S15_COMPLETE_DEADLINE: Final = (
     "S15: by design, native bounds a complete response by one overall deadline where Python bounds each read, "
     "so a body trickling in slower than the timeout succeeds in Python and times out natively"
 )
-F_MOCK: Final = "F: mock_response is Python-only (detector mock_response)"
-F_THINKING_RETRY: Final = (
-    "F: retry without thinking after a rejected signature is Python-only (detector thinking_signature_retry)"
-)
-F_CACHE_INJECTION: Final = "F: prompt cache_control injection is Python-only (detector cache_control_injection)"
-F_TOOL_CUSTOM: Final = "F: hoisting a tool's custom field is Python-only (detector tool_custom_field)"
-F_STREAM_COST: Final = "F: cost injection into streamed usage is Python-only (detector stream_cost_injection)"
 
 KNOWN_GAPS: Final[Mapping[str, Mapping[str, str | None]]] = MappingProxyType(
     {
         "response_private_keys": _gaps(outcome=S6_PRIVATE_KEYS),
         "missing_max_tokens": _gaps(dispatch=A10_NO_MAX_TOKENS),
-        "mock_response": _gaps(
-            logged_response_headers=F_MOCK,
-            request=F_MOCK,
-            outcome=F_MOCK,
-            hidden_params=F_MOCK,
-            logged=F_MOCK,
-            logged_metadata=F_MOCK,
-            logged_api_key=F_MOCK,
-            logged_call=F_MOCK,
-        ),
-        "mock_response_rate_limit": _gaps(
-            logged_response_headers=F_MOCK,
-            request=F_MOCK,
-            outcome=F_MOCK,
-            logged=F_MOCK,
-            logged_api_key=F_MOCK,
-            logged_call=F_MOCK,
-        ),
-        "thinking_signature_rejected_then_retried": _gaps(
-            request=F_THINKING_RETRY,
-            outcome=F_THINKING_RETRY,
-            hidden_params=F_THINKING_RETRY,
-            logged=F_THINKING_RETRY,
-            logged_metadata=F_THINKING_RETRY,
-            logged_response_headers=F_THINKING_RETRY,
-        ),
-        "cache_control_injection_points": _gaps(request=F_CACHE_INJECTION),
-        "tool_custom_field": _gaps(request=F_TOOL_CUSTOM),
-        "stream_cost_injection": _gaps(outcome=F_STREAM_COST),
-        "enable_prompt_caching": _gaps(request=F_CACHE_INJECTION),
     }
 )
 
@@ -491,6 +481,7 @@ REQUEST_CASES: Final = (
         _kw(temperature=0.5, additional_drop_params=["temperature"]),
         model=OPUS_ADAPTIVE,
     ),
+    Case("additional_drop_params_drops_stream", _kw(stream=True, additional_drop_params=["stream"])),
     Case(
         "additional_drop_params_nested_path",
         _kw(
@@ -732,6 +723,42 @@ SYNC_CASES: Final = (
 FALLBACK_CASES: Final = (
     Case("mock_response", _kw(mock_response="Hi from the mock"), upstream=()),
     Case("mock_response_rate_limit", _kw(mock_response="litellm.RateLimitError"), upstream=()),
+    Case("mock_response_internal_server_error", _kw(mock_response="litellm.InternalServerError"), upstream=()),
+    Case(
+        "mock_response_context_window_exceeded",
+        _kw(mock_response="litellm.ContextWindowExceededError"),
+        upstream=(),
+    ),
+    Case("mock_response_unknown_error_name_is_text", _kw(mock_response="litellm.BadRequestError"), upstream=()),
+    Case("mock_response_stream", _kw(mock_response="Hi from the mock", stream=True), upstream=()),
+    Case("mock_response_stream_rate_limit", _kw(mock_response="litellm.RateLimitError", stream=True), upstream=()),
+    Case("mock_response_sync", _kw(mock_response="Hi from the mock"), upstream=(), sync=True),
+    Case("mock_response_sync_rate_limit", _kw(mock_response="litellm.RateLimitError"), upstream=(), sync=True),
+    Case("mock_response_sync_stream", _kw(mock_response="Hi from the mock", stream=True), upstream=(), sync=True),
+    Case("mock_response_empty_string_calls_the_provider", _kw(mock_response="")),
+    Case("mock_response_not_a_string_calls_the_provider", _kw(mock_response={"content": "hi"})),
+    Case("mock_response_bare_model", _kw(mock_response="Hi from the mock"), model="claude-sonnet-4-5", upstream=()),
+    Case(
+        "mock_response_explicit_provider_rate_limit",
+        _kw(mock_response="litellm.RateLimitError", custom_llm_provider="anthropic"),
+        model="claude-sonnet-4-5",
+        upstream=(),
+    ),
+    Case(
+        "mock_response_with_metadata",
+        _kw(
+            mock_response="Hi from the mock",
+            metadata={"user_id": "user-123"},
+            litellm_metadata={"user_api_key": "hashed-key"},
+            model_info={"id": "deployment-1"},
+        ),
+        upstream=(),
+    ),
+    Case(
+        "mock_response_without_api_key",
+        _kw(mock_response="Hi from the mock", api_key=None),
+        upstream=(),
+    ),
     Case(
         "thinking_replay",
         _kw(messages=list(THINKING_REPLAY), thinking={"type": "enabled", "budget_tokens": 2048}, max_tokens=4096),
@@ -745,10 +772,158 @@ FALLBACK_CASES: Final = (
         ),
     ),
     Case(
+        "thinking_rejected_twice_raises",
+        _kw(messages=list(THINKING_REPLAY), thinking={"type": "enabled", "budget_tokens": 2048}, max_tokens=4096),
+        upstream=(
+            _failure(400, "invalid_request_error", "messages.1.content.0: Invalid `signature` in `thinking` block"),
+            _failure(400, "invalid_request_error", "messages.1.content.0: Invalid `signature` in `thinking` block"),
+        ),
+    ),
+    Case(
+        "thinking_empty_block_rejected_then_retried",
+        _kw(messages=list(THINKING_REPLAY), thinking={"type": "enabled", "budget_tokens": 2048}, max_tokens=4096),
+        upstream=(
+            _failure(
+                400, "invalid_request_error", "messages.1.content.0.thinking: each thinking block must contain thinking"
+            ),
+            _ok(),
+        ),
+    ),
+    Case(
+        "thinking_signature_not_a_string_retried",
+        _kw(messages=list(THINKING_REPLAY), thinking={"type": "enabled", "budget_tokens": 2048}, max_tokens=4096),
+        upstream=(
+            _failure(
+                400,
+                "invalid_request_error",
+                "messages.1.content.0.thinking.signature.str: Input should be a valid string",
+            ),
+            _ok(),
+        ),
+    ),
+    Case(
+        "thinking_only_turn_dropped_on_retry",
+        _kw(
+            messages=[
+                {"role": "user", "content": "What is the capital of France?"},
+                {"role": "assistant", "content": [{"type": "redacted_thinking", "data": "EmwKAhgBEgy"}]},
+                {"role": "user", "content": "And Germany?"},
+            ],
+            thinking={"type": "enabled", "budget_tokens": 2048},
+            max_tokens=4096,
+        ),
+        upstream=(
+            _failure(400, "invalid_request_error", "messages.1.content.0: Invalid `signature` in `thinking` block"),
+            _ok(),
+        ),
+    ),
+    Case(
+        "thinking_rejected_then_retried_stream",
+        _kw(
+            stream=True,
+            messages=list(THINKING_REPLAY),
+            thinking={"type": "enabled", "budget_tokens": 2048},
+            max_tokens=4096,
+        ),
+        upstream=(
+            _failure(400, "invalid_request_error", "messages.1.content.0: Invalid `signature` in `thinking` block"),
+            _stream(TEXT_STREAM),
+        ),
+    ),
+    Case(
+        "thinking_rejected_then_retry_fails_differently",
+        _kw(messages=list(THINKING_REPLAY), thinking={"type": "enabled", "budget_tokens": 2048}, max_tokens=4096),
+        upstream=(
+            _failure(400, "invalid_request_error", "messages.1.content.0: Invalid `signature` in `thinking` block"),
+            _failure(429, "rate_limit_error", "slow down"),
+        ),
+    ),
+    Case(
+        "thinking_binding_mismatch_pinned_is_not_retried",
+        _kw(
+            messages=list(THINKING_REPLAY),
+            thinking={"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": "error"}},
+            max_tokens=4096,
+        ),
+        model=OPUS_ADAPTIVE,
+        upstream=(
+            _failure(
+                400,
+                "invalid_request_error",
+                "messages.1.content.0: Invalid `signature` in `thinking` block. "
+                "The block is bound to a different conversation.",
+            ),
+            _ok(),
+        ),
+    ),
+    Case(
+        "thinking_binding_mismatch_unpinned_is_retried",
+        _kw(messages=list(THINKING_REPLAY), thinking={"type": "adaptive"}, max_tokens=4096),
+        model=OPUS_ADAPTIVE,
+        upstream=(
+            _failure(
+                400,
+                "invalid_request_error",
+                "messages.1.content.0: Invalid `signature` in `thinking` block. "
+                "The block is bound to a different conversation.",
+            ),
+            _ok(),
+        ),
+    ),
+    Case(
+        "thinking_rejection_without_replayed_thinking",
+        _kw(thinking={"type": "enabled", "budget_tokens": 2048}, max_tokens=4096),
+        upstream=(
+            _failure(400, "invalid_request_error", "messages.1.content.0: Invalid `signature` in `thinking` block"),
+            _ok(),
+        ),
+    ),
+    Case(
         "cache_control_injection_points",
         _kw(system="Answer in one word.", cache_control_injection_points=[{"location": "message", "role": "system"}]),
     ),
     Case("tool_custom_field", _kw(tools=[{**WEATHER_TOOL, "custom": {"defer_loading": True}}])),
+    Case(
+        "tool_custom_field_keeps_unhoisted_keys",
+        _kw(tools=[{**WEATHER_TOOL, "custom": {"defer_loading": False, "eager_input_streaming": True}}]),
+    ),
+    Case(
+        "tool_custom_field_dropped_with_drop_params",
+        _kw(tools=[{**WEATHER_TOOL, "custom": {"defer_loading": True, "note": "x"}}], drop_params=True),
+    ),
+    Case(
+        "tool_custom_field_without_defer_loading_dropped",
+        _kw(tools=[{**WEATHER_TOOL, "custom": {"note": "x"}}], drop_params=True),
+    ),
+    Case(
+        "tool_custom_field_under_global_drop_params",
+        _kw(tools=[{**WEATHER_TOOL, "custom": {"defer_loading": True, "note": "x"}}]),
+        settings=MappingProxyType({"drop_params": True}),
+    ),
+    Case(
+        "tool_custom_field_top_level_defer_loading_wins",
+        _kw(tools=[{**WEATHER_TOOL, "defer_loading": False, "custom": {"defer_loading": True}}]),
+    ),
+    Case("tool_custom_field_not_an_object", _kw(tools=[{**WEATHER_TOOL, "custom": "opaque"}])),
+    Case(
+        "tool_custom_field_non_bool_defer_loading",
+        _kw(tools=[{**WEATHER_TOOL, "custom": {"defer_loading": "yes"}}]),
+    ),
+    Case(
+        "tool_custom_field_on_several_tools",
+        _kw(
+            tools=[
+                {**WEATHER_TOOL, "custom": {"defer_loading": True}},
+                {**WEATHER_TOOL, "name": "get_time", "custom": {"defer_loading": False, "x": 1}},
+                {"type": "web_search_20250305", "name": "web_search", "custom": {"defer_loading": True}},
+            ]
+        ),
+    ),
+    Case(
+        "tool_custom_field_stream",
+        _kw(stream=True, tools=[{**WEATHER_TOOL, "custom": {"defer_loading": True}}]),
+        upstream=(_stream(TEXT_STREAM),),
+    ),
     Case(
         "strict_tools_rejected_then_retried",
         _kw(tools=[{**WEATHER_TOOL, "strict": True}], drop_params=True),
@@ -762,9 +937,173 @@ FALLBACK_CASES: Final = (
         "stream_cost_injection",
         _kw(stream=True),
         upstream=(_stream(TEXT_STREAM),),
-        settings=MappingProxyType({"include_cost_in_streaming_usage": True}),
+        settings=COST_IN_STREAM,
+    ),
+    Case(
+        "stream_cost_injection_tool_use",
+        _kw(stream=True, tools=[dict(WEATHER_TOOL)]),
+        upstream=(_stream(TOOL_STREAM),),
+        settings=COST_IN_STREAM,
+    ),
+    Case(
+        "stream_cost_injection_thinking",
+        _kw(stream=True, thinking={"type": "enabled", "budget_tokens": 2048}, max_tokens=4096),
+        upstream=(_stream(THINKING_STREAM),),
+        settings=COST_IN_STREAM,
+    ),
+    Case(
+        "stream_cost_injection_cache_usage",
+        _kw(stream=True),
+        upstream=(_stream(CACHED_USAGE_STREAM),),
+        settings=COST_IN_STREAM,
+    ),
+    Case(
+        "stream_cost_injection_custom_pricing",
+        _kw(stream=True, input_cost_per_token=0.001, output_cost_per_token=0.002),
+        upstream=(_stream(TEXT_STREAM),),
+        settings=COST_IN_STREAM,
+    ),
+    Case(
+        "stream_cost_injection_error_mid_stream",
+        _kw(stream=True),
+        upstream=(_stream(ERROR_MID_STREAM),),
+        settings=COST_IN_STREAM,
+    ),
+    Case(
+        "stream_cost_injection_upstream_429",
+        _kw(stream=True),
+        upstream=(_failure(429, "rate_limit_error", "slow down", **{"retry-after": "3"}),),
+        settings=COST_IN_STREAM,
+    ),
+    Case(
+        "stream_cost_injection_truthy_string_setting",
+        _kw(stream=True),
+        upstream=(_stream(TEXT_STREAM),),
+        settings=MappingProxyType({"include_cost_in_streaming_usage": "true"}),
+    ),
+    Case("stream_cost_injection_not_streamed", settings=COST_IN_STREAM),
+    Case(
+        "stream_cost_injection_sync_stream",
+        _kw(stream=True),
+        upstream=(_stream(TEXT_STREAM),),
+        settings=COST_IN_STREAM,
+        sync=True,
     ),
     Case("enable_prompt_caching", _kw(system="Answer in one word.", enable_prompt_caching=True)),
+    Case(
+        "cache_injection_several_points",
+        _kw(
+            system="Answer in one word.",
+            messages=list(CACHE_TURNS),
+            cache_control_injection_points=[
+                {"location": "message", "role": "system"},
+                {"location": "message", "role": "user"},
+                {"location": "message", "index": 1},
+            ],
+        ),
+    ),
+    Case(
+        "cache_injection_negative_index",
+        _kw(messages=list(CACHE_TURNS), cache_control_injection_points=[{"location": "message", "index": -1}]),
+    ),
+    Case(
+        "cache_injection_out_of_range_index",
+        _kw(messages=list(CACHE_TURNS), cache_control_injection_points=[{"location": "message", "index": -9}]),
+    ),
+    Case(
+        "cache_injection_with_ttl",
+        _kw(
+            system=[{"type": "text", "text": "Answer in one word."}],
+            cache_control_injection_points=[
+                {"location": "message", "role": "system", "control": {"type": "ephemeral", "ttl": "1h"}}
+            ],
+        ),
+    ),
+    Case(
+        "cache_injection_beside_client_marks",
+        _kw(
+            system=[{"type": "text", "text": "Answer in one word.", "cache_control": {"type": "ephemeral"}}],
+            messages=list(CACHE_TURNS),
+            cache_control_injection_points=[{"location": "message", "index": -1}],
+        ),
+    ),
+    Case(
+        "cache_injection_tool_config",
+        _kw(tools=[dict(WEATHER_TOOL)], cache_control_injection_points=[{"location": "tool_config"}]),
+    ),
+    Case(
+        "cache_injection_tool_config_and_message",
+        _kw(
+            tools=[dict(WEATHER_TOOL)],
+            cache_control_injection_points=[{"location": "tool_config"}, {"location": "message", "role": "user"}],
+        ),
+    ),
+    Case(
+        "cache_injection_tool_config_without_tools",
+        _kw(cache_control_injection_points=[{"location": "tool_config"}]),
+    ),
+    Case(
+        "cache_injection_stamps_metadata",
+        _kw(
+            system="Answer in one word.",
+            cache_control_injection_points=[{"location": "message", "role": "system"}],
+            litellm_metadata={"user_api_key": "hashed-key"},
+            model_info={"id": "deployment-1"},
+        ),
+    ),
+    Case(
+        "cache_injection_invalid_points",
+        _kw(cache_control_injection_points=[{"location": "nowhere"}]),
+    ),
+    Case(
+        "cache_injection_stream",
+        _kw(
+            stream=True,
+            system="Answer in one word.",
+            cache_control_injection_points=[{"location": "message", "role": "system"}],
+        ),
+        upstream=(_stream(TEXT_STREAM),),
+    ),
+    Case(
+        "cache_injection_sync_with_mock",
+        _kw(
+            mock_response="Hi",
+            system="Answer in one word.",
+            cache_control_injection_points=[{"location": "message", "role": "system"}],
+            litellm_metadata={"user_api_key": "hashed-key"},
+            model_info={"id": "deployment-1"},
+        ),
+        sync=True,
+    ),
+    Case(
+        "enable_prompt_caching_multi_turn",
+        _kw(system="Answer in one word.", messages=list(CACHE_TURNS), enable_prompt_caching=True),
+    ),
+    Case("enable_prompt_caching_false", _kw(system="Answer in one word.", enable_prompt_caching=False)),
+    Case(
+        "enable_prompt_caching_stands_down_on_client_marks",
+        _kw(
+            system=[{"type": "text", "text": "Answer in one word.", "cache_control": {"type": "ephemeral"}}],
+            enable_prompt_caching=True,
+        ),
+    ),
+    Case(
+        "global_prompt_caching",
+        _kw(system="Answer in one word.", messages=list(CACHE_TURNS)),
+        settings=MappingProxyType({"enable_anthropic_prompt_caching": True}),
+    ),
+    Case(
+        "global_prompt_caching_stream",
+        _kw(stream=True, system="Answer in one word."),
+        upstream=(_stream(TEXT_STREAM),),
+        settings=MappingProxyType({"enable_anthropic_prompt_caching": True}),
+    ),
+    Case(
+        "global_prompt_caching_sync",
+        _kw(system="Answer in one word."),
+        settings=MappingProxyType({"enable_anthropic_prompt_caching": True}),
+        sync=True,
+    ),
     Case("request_timeout_kwarg", _kw(request_timeout=30)),
     Case("stream_timeout_kwarg", _kw(stream=True, stream_timeout=30), upstream=(_stream(TEXT_STREAM),)),
 )

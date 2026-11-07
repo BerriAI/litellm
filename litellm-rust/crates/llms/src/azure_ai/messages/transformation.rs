@@ -6,6 +6,7 @@ use litellm_llms_types::{
 use litellm_router_types::LitellmParams;
 use litellm_secret_value::SecretValue;
 
+use crate::anthropic::common_utils::CustomToolField;
 use crate::{
     Error,
     anthropic::{
@@ -60,6 +61,8 @@ impl BaseMessagesConfig for AzureAnthropicMessagesConfig {
         request: MessagesRequest,
         context: &MessagesTransformContext,
     ) -> Result<MessagesRequest, Error> {
+        let custom_tools =
+            CustomToolField::rewrite("azure_ai", &request.model, context.drop_params);
         transform_messages_request(
             strip_cache_control_scope(normalize_system_role_messages(
                 request,
@@ -69,6 +72,7 @@ impl BaseMessagesConfig for AzureAnthropicMessagesConfig {
                     .supports_mid_conversation_system,
             )),
             &context.keeping_display_updates(),
+            custom_tools,
         )
     }
 

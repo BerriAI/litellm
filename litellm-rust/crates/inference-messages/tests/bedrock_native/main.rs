@@ -16,7 +16,7 @@ const MODEL: &str = "claude-test";
 
 #[fixture]
 fn call() -> MessagesCall {
-    MessagesCall {
+    MessagesCall { mock_response: None,
         body: serde_json::from_value(json!({"model": MODEL, "max_tokens": 16, "messages": [{"role": "user", "content": "hi"}]})).unwrap(),
         api_key: None,
         api_base: None,

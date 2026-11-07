@@ -14,6 +14,7 @@ use litellm_llms_types::{
 use litellm_router_types::LitellmParams;
 use serde_json::Value;
 
+use crate::anthropic::common_utils::CustomToolField;
 use crate::{
     Error,
     anthropic::{
@@ -123,7 +124,7 @@ impl BaseMessagesConfig for BedrockMantleAnthropicMessagesConfig {
         request: MessagesRequest,
         context: &MessagesTransformContext,
     ) -> Result<MessagesRequest, Error> {
-        transform_messages_request(request, context)
+        transform_messages_request(request, context, CustomToolField::Forward)
     }
 
     fn shape_request(

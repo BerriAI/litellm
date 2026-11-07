@@ -72,6 +72,8 @@ fn project_litellm_params<'py>(
 pub(super) struct MessagesPythonHost {
     view: RequestView,
     cache: PythonCache,
+    /// The model Python prices streamed usage with while it injects cost into a stream.
+    stream_cost_model: Option<Py<PyAny>>,
 }
 
 impl MessagesPythonHost {
@@ -79,6 +81,7 @@ impl MessagesPythonHost {
         Self {
             view,
             cache: PythonCache::new(asynchronous),
+            stream_cost_model: None,
         }
     }
 
@@ -92,8 +95,27 @@ impl MessagesPythonHost {
             argument(name)?.map(|value| value.extract()).transpose()
         };
         let model = string("model")?.ok_or(ArgumentError::Required("model"))?;
-        let messages = argument("messages")?.ok_or(ArgumentError::Required("messages"))?;
-        let fields = self.view.body_params(py, arguments, ROUTE_HOST_MODULE)?;
+        let mut messages = argument("messages")?.ok_or(ArgumentError::Required("messages"))?;
+        let mut fields = self.view.body_params(py, arguments, ROUTE_HOST_MODULE)?;
+        // Python's handler injects prompt-cache breakpoints with its own hook; the host runs
+        // that same hook so both callers share one injection.
+        let injected = py
+            .import(ROUTE_HOST_MODULE)?
+            .getattr("injected_prompt")?
+            .call1((self.view.effective_request(py, arguments)?,))?;
+        if !injected.is_none() {
+            let injected = injected.cast_into::<PyDict>()?;
+            if let Some(value) = injected.get_item("messages")? {
+                messages = value;
+            }
+            for name in ["system", "tools"] {
+                if let Some(value) = injected.get_item(name)?
+                    && !value.is_none()
+                {
+                    fields.insert(name.to_string(), from_py(&value)?);
+                }
+            }
+        }
         let body = [
             ("model".to_string(), Value::String(model.clone())),
             ("messages".to_string(), from_py(&messages)?),
@@ -120,9 +142,15 @@ impl MessagesPythonHost {
         let shaping = self.shaping(py, &model, custom_llm_provider.as_deref(), arguments)?;
         let extra_headers = self.merged_headers(py, arguments)?;
         let provider_specific_header = self.provider_specific_header(py, arguments)?;
+        // Python's handler answers a non-empty string `mock_response` itself and sends any
+        // other value on to the provider.
+        let mock_response = argument("mock_response")?
+            .and_then(|value| value.extract::<String>().ok())
+            .filter(|mock| !mock.is_empty());
         let litellm_params = project_litellm_params(argument, |name| module_global(py, name))?;
         Ok(messages_body(body).and_then(|body| {
             Ok(MessagesCall {
+                mock_response,
                 body,
                 api_key,
                 api_base,
@@ -249,14 +277,29 @@ impl PythonBinding for MessagesPythonHost {
         py: Python<'_>,
         head: MessagesStreamHead,
     ) -> PyResult<Py<PyAny>> {
-        py.import(ROUTE_HOST_MODULE)?
+        let module = py.import(ROUTE_HOST_MODULE)?;
+        let model = module
+            .getattr("stream_cost_model")?
+            .call1((self.view.request(py)?,))?;
+        self.stream_cost_model = (!model.is_none()).then(|| model.unbind());
+        module
             .getattr("stream_hidden_params")?
             .call1((to_py(py, &head.headers)?,))
             .map(Bound::unbind)
     }
 
+    /// The chunk as the caller receives it, with the call's cost added to its streamed usage
+    /// while Python's `include_cost_in_streaming_usage` is on: the route then relays whole SSE
+    /// frames, as Python's pass-through stream does.
     fn encode_chunk(&mut self, py: Python<'_>, chunk: Bytes) -> PyResult<Py<PyAny>> {
-        Ok(PyBytes::new(py, &chunk).into_any().unbind())
+        let bytes = PyBytes::new(py, &chunk).into_any();
+        let Some(model) = &self.stream_cost_model else {
+            return Ok(bytes.unbind());
+        };
+        py.import(ROUTE_HOST_MODULE)?
+            .getattr("stream_chunk_with_cost")?
+            .call1((bytes, model.bind(py), self.view.request(py)?))
+            .map(Bound::unbind)
     }
 
     fn map_error(&self, py: Python<'_>, error: Error) -> PyResult<PyErr> {
@@ -303,9 +346,13 @@ impl PythonOwned for MessagesPythonHost {
     fn close(&mut self, _: Python<'_>) {
         self.view.close();
         self.cache.close();
+        self.stream_cost_model = None;
     }
     fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {
         self.view.traverse(visit)?;
+        if let Some(model) = &self.stream_cost_model {
+            visit.call(model)?;
+        }
         self.cache.traverse(visit)
     }
 }

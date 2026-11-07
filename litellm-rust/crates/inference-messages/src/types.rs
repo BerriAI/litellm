@@ -23,6 +23,8 @@ pub struct MessagesCall {
     pub provider_specific_header: Option<ProviderSpecificHeaders>,
     pub timeout: Option<Duration>,
     pub shaping: MessagesShaping,
+    /// The caller's `mock_response` text, answered without calling the provider.
+    pub mock_response: Option<String>,
 }
 
 pub fn messages_body(body: Map<String, Value>) -> Result<MessagesRequest, Error> {
@@ -62,6 +64,10 @@ pub struct MessagesSettings {
     pub additional_drop_params: Vec<String>,
     #[serde(default)]
     pub request_timeout: Option<f64>,
+    /// `litellm.include_cost_in_streaming_usage`: Python relays a stream in whole SSE frames
+    /// so the host can price each usage event.
+    #[serde(default)]
+    pub include_cost_in_streaming_usage: bool,
 }
 
 impl MessagesSettings {
@@ -131,7 +137,8 @@ mod tests {
             "drop_params": true,
             "reasoning_auto_summary": true,
             "additional_drop_params": ["metadata.user_id", "thinking"],
-            "request_timeout": 1800.0
+            "request_timeout": 1800.0,
+            "include_cost_in_streaming_usage": true
         }),
         MessagesShaping {
             settings: MessagesSettings {
@@ -139,6 +146,7 @@ mod tests {
                 reasoning_auto_summary: true,
                 additional_drop_params: vec!["metadata.user_id".to_string(), "thinking".to_string()],
                 request_timeout: Some(1800.0),
+                include_cost_in_streaming_usage: true,
             },
             capabilities: MessagesModelCapabilities {
                 supports_reasoning: true,

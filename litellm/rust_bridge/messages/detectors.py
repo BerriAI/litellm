@@ -8,7 +8,7 @@ import litellm
 from litellm.anthropic_beta_headers_manager import is_foundry_api_base
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.llms.opencode.common_utils import is_opencode_api_base
-from litellm.rust_bridge.detectors import api_base, overridden, present, streaming
+from litellm.rust_bridge.detectors import api_base, overridden, present
 from litellm.rust_bridge.public_call import NativeCall, optional_mapping, optional_sequence, optional_str
 
 
@@ -38,34 +38,11 @@ def anthropic_workload_identity(request: NativeCall) -> bool:
     )
 
 
-_THINKING_BLOCKS: Final = frozenset({"thinking", "redacted_thinking"})
-
-
-def _replays_thinking(message: object) -> bool:
-    content: Final = optional_sequence((optional_mapping(message) or {}).get("content")) or ()
-    return any((optional_mapping(block) or {}).get("type") in _THINKING_BLOCKS for block in content)
-
-
-def thinking_signature_retry(request: NativeCall) -> bool:
-    """Python may strip replayed thinking blocks and retry after a rejected signature."""
-    return any(_replays_thinking(message) for message in optional_sequence(request.resolved.get("messages")) or ())
-
-
-def tool_custom_field(request: NativeCall) -> bool:
-    tools: Final = optional_sequence(request.resolved.get("tools")) or ()
-    return any("custom" in (optional_mapping(tool) or {}) for tool in tools)
-
-
 def strict_tools_retry(request: NativeCall) -> bool:
     tools: Final = optional_sequence(request.resolved.get("tools")) or ()
     return drops_unsupported_params(request.resolved.get("drop_params")) and any(
         (optional_mapping(tool) or {}).get("strict") is True for tool in tools
     )
-
-
-def stream_cost_injection(request: NativeCall) -> bool:
-    """Python adds response cost to streaming usage when the global setting is truthy."""
-    return streaming(request) and bool(litellm.include_cost_in_streaming_usage)
 
 
 def pre_request_hook(_request: NativeCall) -> bool:

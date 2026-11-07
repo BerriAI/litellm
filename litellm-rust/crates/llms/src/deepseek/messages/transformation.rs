@@ -10,6 +10,7 @@ use litellm_llms_types::{
 use litellm_router_types::LitellmParams;
 use serde_json::Value;
 
+use crate::anthropic::common_utils::CustomToolField;
 use crate::{
     Error,
     anthropic::{
@@ -66,6 +67,8 @@ impl BaseMessagesConfig for DeepSeekAnthropicMessagesConfig {
         request: MessagesRequest,
         context: &MessagesTransformContext,
     ) -> Result<MessagesRequest, Error> {
+        let custom_tools =
+            CustomToolField::rewrite("deepseek", &request.model, context.drop_params);
         let request = transform_messages_request(
             MessagesRequest {
                 params: MessagesOptionalParams {
@@ -78,6 +81,7 @@ impl BaseMessagesConfig for DeepSeekAnthropicMessagesConfig {
                 ..request
             },
             context,
+            custom_tools,
         )?;
         Ok(MessagesRequest {
             params: MessagesOptionalParams {
