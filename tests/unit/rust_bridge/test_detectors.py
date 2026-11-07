@@ -46,6 +46,24 @@ def call(**kwargs: object) -> NativeCall:
 
 
 @pytest.mark.parametrize(
+    ("model", "provider", "expected"),
+    (
+        ("openai/gpt-luna-latest", None, True),
+        ("gpt-luna-latest", "openai", True),
+        ("gemini/gemini-pro-latest", None, False),
+        ("gpt-luna-latest", None, True),
+        ("anthropic/claude-opus-latest", None, True),
+        ("moonshot/kimi-latest", None, True),
+        ("kimi-latest", None, False),
+        ("claude-opus-latest", "anthropic", True),
+        ("", None, False),
+    ),
+)
+def test_floating_alias_requires_python(model: str, provider: str | None, expected: bool) -> None:
+    assert detectors.latest_alias(call(model=model, custom_llm_provider=provider)) is expected
+
+
+@pytest.mark.parametrize(
     ("model", "provider", "tools", "expected"),
     (
         ("deepseek/test-model", None, [{"type": ANTHROPIC_ADVISOR_TOOL_TYPE}], True),
@@ -332,6 +350,17 @@ def test_global_settings_are_detected(
 def test_stream_cost_injection_needs_a_stream(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "include_cost_in_streaming_usage", True)
     assert not messages_detectors.stream_cost_injection(call())
+
+
+def test_foundry_beta_row_reads_the_api_base_the_anthropic_handler_reads(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in ("ANTHROPIC_API_BASE", "ANTHROPIC_BASE_URL"):
+        monkeypatch.delenv(name, raising=False)
+    assert messages_detectors.foundry_beta_row(call(api_base="https://team.services.ai.azure.com/anthropic"))
+    assert messages_detectors.foundry_beta_row(call(base_url="https://team.cognitiveservices.azure.com/anthropic"))
+    assert not messages_detectors.foundry_beta_row(call(api_base="https://api.anthropic.com"))
+    assert not messages_detectors.foundry_beta_row(call())
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://team.services.ai.azure.com/anthropic")
+    assert messages_detectors.foundry_beta_row(call())
 
 
 def test_model_alias_map_applies_only_to_the_requested_model(monkeypatch: pytest.MonkeyPatch) -> None:
