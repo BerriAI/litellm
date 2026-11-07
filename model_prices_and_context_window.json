@@ -32356,6 +32356,7 @@
         "output_cost_per_token_flex": 5e-06,
         "supports_url_context": true,
         "cache_read_input_token_cost_above_200k_tokens_batches": 2.5e-07,
+        "cache_read_input_token_cost_above_200k_tokens_flex": 2.5e-07,
         "deprecation_date": "2026-12-01",
         "deprecation_source": "https://ai.google.dev/gemini-api/docs/deprecations",
         "successor_model": "gemini/gemini-3.8-flash",
