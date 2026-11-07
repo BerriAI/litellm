@@ -969,10 +969,10 @@ def _came_from_bedrock_converse(original_exception: _ProviderHTTPException) -> b
 
 def _get_bedrock_mantle_context_window_message(error_str: str) -> str | None:
     """
-    Mantle reports context overflow as a validation_error carrying the token counts, or as
-    OpenAI's context_length_exceeded code, either in a 400 body or in a streamed error event
-    with no error type. Clients such as Claude Code only treat "prompt is too long" as
-    overflow (litellm/litellm#36546).
+    Mantle reports context overflow as a validation_error carrying the token counts, as
+    OpenAI's context_length_exceeded code, or as the served model's own overflow text, either
+    in a 400 body or in a streamed error event with no error type. Clients such as Claude Code
+    only treat "prompt is too long" as overflow (litellm/litellm#36546).
     """
     match = _BEDROCK_MANTLE_CONTEXT_WINDOW_PATTERN.search(error_str)
     if match is not None:
@@ -980,7 +980,15 @@ def _get_bedrock_mantle_context_window_message(error_str: str) -> str | None:
         return f"prompt is too long: {prompt_tokens} tokens > {max_tokens} maximum"
     if _BEDROCK_MANTLE_CONTEXT_LENGTH_EXCEEDED_CODE_PATTERN.search(error_str) is not None:
         return _BEDROCK_MANTLE_CONTEXT_WINDOW_GENERIC_MESSAGE
+    if ExceptionCheckers.is_error_str_context_window_exceeded(error_str):
+        return _with_prompt_is_too_long(error_str)
     return None
+
+
+def _with_prompt_is_too_long(error_str: str) -> str:
+    if "prompt is too long" in error_str:
+        return error_str
+    return f"prompt is too long: {error_str}"
 
 
 def _map_bedrock_exception(
@@ -1009,9 +1017,10 @@ def _map_bedrock_exception(
         or "prompt is too long" in error_str
         or "prompt: length: 1.." in error_str
         or "Too many input tokens" in error_str
+        or ExceptionCheckers.is_error_str_context_window_exceeded(error_str)
     ):
         raise ContextWindowExceededError(
-            message=f"BedrockException: Context Window Error - {error_str}",
+            message=f"BedrockException: Context Window Error - {_with_prompt_is_too_long(error_str)}",
             model=model,
             llm_provider="bedrock",
             response=getattr(original_exception, "response", None),
