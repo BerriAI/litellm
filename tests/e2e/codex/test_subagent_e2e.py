@@ -28,4 +28,4 @@ class TestCodexSubagent:
         subagents: Final = codex.subagents(run.thread_id)
         assert subagents, run
         assert not any(subagent.forked for subagent in subagents), (subagents, run)
-        assert any(codeword in reply for subagent in subagents for reply in subagent.replies), (subagents, run)
+        assert any(any(codeword in reply for reply in subagent.replies) for subagent in subagents), (subagents, run)
