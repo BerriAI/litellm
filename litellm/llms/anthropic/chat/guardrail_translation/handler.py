@@ -796,13 +796,16 @@ class AnthropicMessagesHandler(BaseTranslation):
         *,
         keep_cache_control: bool = False,
         keep_tool_errors: bool = False,
+        keep_output_config: bool = False,
     ) -> ChatCompletionRequest:
         """Translate Anthropic request to OpenAI chat completion format."""
         (
             chat_completion_compatible_request,
             _tool_name_mapping,
         ) = LiteLLMAnthropicMessagesAdapter(
-            keep_cache_control=keep_cache_control, keep_tool_errors=keep_tool_errors
+            keep_cache_control=keep_cache_control,
+            keep_tool_errors=keep_tool_errors,
+            keep_output_config=keep_output_config,
         ).translate_anthropic_to_openai(
             anthropic_message_request=cast(AnthropicMessagesRequest, scannable_tool_result_request(data)),
             preserve_midturn_system=True,
@@ -857,7 +860,7 @@ class AnthropicMessagesHandler(BaseTranslation):
         )
         translation_source: Final = {**{key: value for key, value in data.items() if key != "system"}, "model": model}
         chat_completion_compatible_request: Final = self._translate_to_openai(
-            translation_source, keep_cache_control=keep_cache_control
+            translation_source, keep_cache_control=keep_cache_control, keep_tool_errors=True, keep_output_config=True
         )
 
         full_structured_messages: Final = cast(
@@ -1047,7 +1050,7 @@ class AnthropicMessagesHandler(BaseTranslation):
         """Convert an OpenAI system message to the client's Anthropic-shaped entry."""
         content: Final = message.get("content")
         if isinstance(content, str):
-            return {"role": "system", "content": content} if content else None
+            return AnthropicMessagesHandler._with_output_config(message, content) if content else None
         if not isinstance(content, list):
             return None
         blocks: Final[list[dict[str, object]]] = []  # mutable-ok: API message payload
@@ -1065,7 +1068,17 @@ class AnthropicMessagesHandler(BaseTranslation):
             if cache_control:
                 anthropic_block["cache_control"] = deepcopy(cache_control)
             blocks.append(anthropic_block)
-        return {"role": "system", "content": blocks} if blocks else None
+        return AnthropicMessagesHandler._with_output_config(message, blocks) if blocks else None
+
+    @staticmethod
+    def _with_output_config(
+        message: Mapping[str, object],
+        content: str | list[dict[str, object]],  # mutable-ok: API message payload
+    ) -> dict[str, object]:  # mutable-ok: API message payload
+        output_config: Final = message.get("output_config")
+        if output_config is None:
+            return {"role": "system", "content": content}
+        return {"role": "system", "content": content, "output_config": deepcopy(output_config)}
 
     @staticmethod
     def _fold_leading_systems_into_top_level(
