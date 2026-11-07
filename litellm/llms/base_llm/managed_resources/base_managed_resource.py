@@ -302,7 +302,7 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
         initial_value: Final = await table.find_first(where={"unified_resource_id": unified_resource_id})
 
         if initial_value is None:
-            raise Exception(f"LiteLLM Managed {self.resource_type} with id={unified_resource_id} not found")
+            return None
 
         # Delete from cache
         await self.internal_usage_cache.async_set_cache(
