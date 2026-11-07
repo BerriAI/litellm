@@ -32957,6 +32957,11 @@ export interface components {
         /** DiscoverAgentRequest */
         DiscoverAgentRequest: {
             /**
+             * Api Key
+             * @description The agent's ``litellm_params.api_key``, sent as ``Authorization: Bearer <api_key>``.
+             */
+            api_key?: string | null;
+            /**
              * @description How to locate the upstream card. ``well_known_fallback`` for pure A2A agents (try standard paths); ``langgraph_platform`` for LangGraph Platform deployments where the card is shared across assistants and disambiguated by a query parameter.
              * @default well_known_fallback
              */
@@ -32967,6 +32972,13 @@ export interface components {
              */
             params?: {
                 [key: string]: unknown;
+            } | null;
+            /**
+             * Static Headers
+             * @description The agent's ``static_headers``, combined with ``api_key`` the way the agent's runtime does.
+             */
+            static_headers?: {
+                [key: string]: string;
             } | null;
             /**
              * Url
