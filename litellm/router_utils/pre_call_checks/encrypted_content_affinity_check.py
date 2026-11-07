@@ -51,7 +51,7 @@ from litellm.exceptions import AuthenticationError, BadRequestError
 from litellm.integrations.custom_logger import CustomLogger, Span
 from litellm.litellm_core_utils.get_llm_provider_logic import declared_provider, get_llm_provider
 from litellm.litellm_core_utils.litellm_logging import has_sensitive_keyword
-from litellm.litellm_core_utils.prompt_templates.common_utils import (
+from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
     anthropic_content_lists,
     encrypted_content_of_block,
     strip_encrypted_reasoning_from_messages,
@@ -148,7 +148,7 @@ class EncryptedContentAffinityCheck(CustomLogger):
 
         return any("encrypted_content_affinity" in checks for checks in model_group_affinity_config.values())
 
-    def _is_enabled_for_model_group(self, model_group: str) -> bool:
+    def is_enabled_for_model_group(self, model_group: str) -> bool:
         group_checks: Final = self.model_group_affinity_config.get(model_group)
         return self.enable_global_affinity or (
             group_checks is not None and "encrypted_content_affinity" in group_checks
@@ -530,7 +530,7 @@ class EncryptedContentAffinityCheck(CustomLogger):
         """
         request_kwargs = request_kwargs or {}
         typed_healthy_deployments: Final = cast(list[dict[str, object]], healthy_deployments)
-        if not self._is_enabled_for_model_group(model):
+        if not self.is_enabled_for_model_group(model):
             return typed_healthy_deployments
         typed_request_kwargs: Final = _REQUEST_KWARGS_ADAPTER.validate_python(request_kwargs)
         target_order: Final = typed_request_kwargs.get("_target_order")

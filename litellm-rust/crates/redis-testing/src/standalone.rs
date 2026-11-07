@@ -5,7 +5,8 @@ use testcontainers_modules::{
 };
 
 use crate::{
-    Error,
+    ClientConnection, Error,
+    deployment::parse_client_list,
     ports::{HOST, start_on_free_ports, wait_for_pong},
 };
 
@@ -14,6 +15,7 @@ pub(crate) const REDIS_TAG: &str =
 
 pub struct RedisServer {
     container: ContainerAsync<Redis>,
+    port: u16,
     url: String,
 }
 
@@ -31,12 +33,28 @@ impl RedisServer {
         wait_for_pong(host_port).await?;
         Ok(Self {
             container,
+            port: host_port,
             url: format!("redis://{HOST}:{host_port}"),
         })
     }
 
     pub fn url(&self) -> &str {
         &self.url
+    }
+
+    pub fn port(&self) -> u16 {
+        self.port
+    }
+
+    pub async fn cli(&self, args: &[&str]) -> Result<String, Error> {
+        crate::exec::run(&self.container, crate::exec::cli(REDIS_PORT, args)).await
+    }
+
+    pub async fn clients(&self) -> Result<Vec<ClientConnection>, Error> {
+        Ok(parse_client_list(
+            REDIS_PORT,
+            &self.cli(&["CLIENT", "LIST"]).await?,
+        ))
     }
 
     pub async fn restart(&self) -> Result<(), Error> {

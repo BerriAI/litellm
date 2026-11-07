@@ -6,10 +6,11 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone, tzinfo
 from types import MappingProxyType
-from typing import Final, Literal, Protocol, TypedDict, cast
+from typing import Final, Literal, Protocol, SupportsFloat, SupportsIndex, TypedDict, cast
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from typing_extensions import ReadOnly
+from pydantic import TypeAdapter
+from typing_extensions import Buffer, ReadOnly
 
 import litellm
 from litellm._internal_context import current_billing_time
@@ -48,10 +49,10 @@ _IMAGE_RESPONSE_CALL_TYPES: Final = frozenset(
     }
 )
 
-# Pre-resolved DataResidency enum values for fast membership checks
 _VALID_DATA_RESIDENCIES: Final = frozenset(r.value for r in DataResidency)
 
 _DEPLOYMENT_PRICING_KEYS: Final[frozenset[str]] = frozenset(CustomPricingLiteLLMParams.model_fields)
+_IMAGE_REQUEST_PARAMS: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
 
 _BASE_CACHE_WRITE_RATE_KEY: Final = "cache_creation_input_token_cost"
 
@@ -1428,6 +1429,13 @@ def get_regional_uplift_multiplier(model_info: ModelInfo, data_residency: str | 
     multiplier: Final = model_info.get(f"regional_processing_uplift_multiplier_{residency}")
     if multiplier is None:
         return 1.0
+    if not isinstance(multiplier, (str, Buffer, SupportsFloat, SupportsIndex)):
+        verbose_logger.error(
+            "Invalid regional_processing_uplift_multiplier_%s for model (got %s); defaulting to 1.0",
+            residency,
+            type(multiplier).__name__,
+        )
+        return 1.0
     try:
         return float(multiplier)
     except (TypeError, ValueError):
@@ -1441,7 +1449,30 @@ def get_regional_uplift_multiplier(model_info: ModelInfo, data_residency: str | 
 _get_regional_uplift_multiplier = get_regional_uplift_multiplier
 
 
-def get_vertex_regional_endpoint_uplift(model_info: ModelInfo, vertex_location: str | None) -> float:
+def get_fedramp_uplift_multiplier(model_info: ModelInfo, data_residency: str | None) -> float:
+    """
+    Resolve the per-model uplift multiplier for the OpenAI FedRAMP endpoint.
+
+    OpenAI applies a flat percentage uplift (e.g. +10%) on all token costs for
+    requests served from gov.api.openai.com. The multiplier is stored on the
+    model entry as ``fedramp_uplift_multiplier`` (e.g. 1.10).
+
+    Returns 1.0 (no uplift) unless ``data_residency`` is ``"fedramp"`` and the
+    model has a multiplier configured.
+    """
+    if data_residency is None or data_residency.lower() != DataResidency.FEDRAMP.value:
+        return 1.0
+    multiplier: Final = model_info.get("fedramp_uplift_multiplier")
+    if multiplier is None:
+        return 1.0
+    try:
+        return float(multiplier)
+    except (TypeError, ValueError):
+        verbose_logger.exception("Invalid fedramp_uplift_multiplier for model; defaulting to 1.0")
+        return 1.0
+
+
+def get_vertex_regional_endpoint_uplift(model_info: Mapping[str, object], vertex_location: str | None) -> float:
     """
     Resolve the per-model uplift multiplier for Vertex AI non-global (regional and
     multi-region) endpoints.
@@ -1550,8 +1581,8 @@ def generic_cost_per_token(
     Input:
         - model: str, the model name without provider prefix
         - usage: LiteLLM Usage block, containing anthropic caching information
-        - data_residency: optional OpenAI data-residency region (e.g. "eu", "us"),
-          used to apply the per-model regional-processing uplift multiplier.
+        - data_residency: optional OpenAI data-residency region (e.g. "eu", "us") or
+          "fedramp", used to apply the per-model regional-processing or FedRAMP uplift multiplier.
         - vertex_location: optional Vertex AI location the request was served from
           (e.g. "us-east5", "global"), used to apply the per-model
           regional-endpoint uplift multiplier when non-global.
@@ -1728,10 +1759,9 @@ def generic_cost_per_token(
         )
         completion_cost += float(video_tokens) * _output_cost_per_video_token
 
-    ## REGIONAL DATA-RESIDENCY UPLIFT
-    # Applied as a flat multiplier across all token costs for the request
-    # when the upstream is a regionalized OpenAI host (eu./us.api.openai.com).
-    uplift: Final = get_regional_uplift_multiplier(resolved_model_info, data_residency)
+    uplift: Final = get_regional_uplift_multiplier(resolved_model_info, data_residency) * get_fedramp_uplift_multiplier(
+        resolved_model_info, data_residency
+    )
     if uplift != 1.0:
         prompt_cost *= uplift
         completion_cost *= uplift
@@ -1874,6 +1904,7 @@ def _cost_map_billed_rates(
     )
     multiplier: Final = (
         get_regional_uplift_multiplier(model_info, data_residency)
+        * get_fedramp_uplift_multiplier(model_info, data_residency)
         * get_vertex_regional_endpoint_uplift(model_info, vertex_location)
         * get_provider_specific_geo_multiplier(model_info=model_info, usage=usage)
         * get_provider_specific_speed_multiplier(model_info=model_info, usage=usage)
@@ -2059,8 +2090,10 @@ def calculate_prompt_caching_savings(
             {ttl: rate - prompt_base_cost for ttl, rate in base_costs.cache_creation_rates_by_ttl.items()}
         ),
     )
-    uplift: Final = get_regional_uplift_multiplier(model_info, data_residency) * get_vertex_regional_endpoint_uplift(
-        model_info, vertex_location
+    uplift: Final = (
+        get_regional_uplift_multiplier(model_info, data_residency)
+        * get_fedramp_uplift_multiplier(model_info, data_residency)
+        * get_vertex_regional_endpoint_uplift(model_info, vertex_location)
     )
     return (read_discount - write_premium) * uplift
 
@@ -2293,6 +2326,20 @@ class CostCalculatorUtils:
         )
         resolved_n: Final = n if n is not None else (len(completion_response.data) if completion_response.data else 0)
         pricing: Final = deployment_pricing(model_info)
+        if custom_llm_provider == litellm.LlmProviders.XAI.value:
+            from litellm.llms.xai.image_generation.cost_calculator import cost_calculator as xai_image_cost_calculator
+
+            xai_cost: Final = xai_image_cost_calculator(
+                model=model,
+                image_response=completion_response,
+                quality=quality,
+                n=resolved_n,
+                optional_params=_IMAGE_REQUEST_PARAMS.validate_python(optional_params),
+                call_type=call_type,
+                model_info=pricing,
+            )
+            if xai_cost is not None:
+                return xai_cost
         model_priced_calculator: Final = _model_priced_image_cost_calculator(custom_llm_provider, model, pricing)
 
         if model_priced_calculator is not None:

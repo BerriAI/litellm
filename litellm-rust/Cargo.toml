@@ -13,6 +13,7 @@ litellm-config = { path = "crates/config" }
 litellm-error = { path = "crates/error" }
 litellm-router = { path = "crates/router" }
 litellm-router-types = { path = "crates/router-types" }
+litellm-router-core = { path = "crates/router-core" }
 litellm-tracing = { path = "crates/tracing" }
 litellm-spend-clickhouse = { path = "crates/spend-clickhouse" }
 litellm-storage-clickhouse = { path = "crates/storage-clickhouse" }
@@ -25,6 +26,7 @@ litellm-inference-ocr = { path = "crates/inference-ocr" }
 litellm-inference-testing = { path = "crates/inference-testing" }
 litellm-gateway-mcp = { path = "crates/gateway-mcp" }
 litellm-gateway = { path = "crates/gateway" }
+litellm-gateway-forward = { path = "crates/gateway-forward" }
 litellm-gateway-inference = { path = "crates/gateway-inference" }
 litellm-gateway-auth = { path = "crates/gateway-auth" }
 litellm-gateway-management = { path = "crates/gateway-management" }
@@ -71,11 +73,17 @@ litellm-host-python = { path = "crates/host-python" }
 litellm-python-compat = { path = "crates/python-compat" }
 litellm-circuit-breaker = { path = "crates/circuit-breaker" }
 litellm-redis-client = { path = "crates/redis-client" }
+litellm-redis-connect = { path = "crates/redis-connect" }
+litellm-redis-store = { path = "crates/redis-store" }
 litellm-redis-testing = { path = "crates/redis-testing" }
+litellm-redis-resolve = { path = "crates/redis-resolve" }
+litellm-redis-types = { path = "crates/redis-types" }
 litellm-cost = { path = "crates/cost" }
 litellm-model-catalog = { path = "crates/model-catalog" }
 litellm-model-catalog-refresh = { path = "crates/model-catalog-refresh" }
 
+arc-swap = "1.9.2"
+async-trait = "0.1.91"
 askama = { version = "0.16.1", default-features = false, features = ["derive", "std"] }
 tracing = "0.1"
 axum = { version = "0.8.9", default-features = false, features = ["http1", "tokio", "multipart"] }
