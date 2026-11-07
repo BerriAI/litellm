@@ -1,35 +1,37 @@
+import type { TFunction } from "i18next";
+import i18n from "@/i18n/i18n";
 import { MCPEnvVar, MCPEnvVarScope, type MCPServer } from "@/components/mcp_tools/types";
 
 export const getMCPNetworkAccess = (
   server: Pick<MCPServer, "available_on_public_internet" | "mcp_info">,
+  t: TFunction = i18n.t.bind(i18n),
 ): {
-  readonly label: "All Networks" | "Internal Only" | "Unknown";
+  readonly label: string;
   readonly dotClassName: string;
   readonly description: string;
 } => {
   const explicitlyPublished = server.mcp_info?.is_public_explicit;
   if (server.available_on_public_internet === true || explicitlyPublished === true) {
     return {
-      label: "All Networks",
+      label: t("mcpServers.utils.networkAccess.allNetworks.label"),
       dotClassName: "bg-success",
       description:
         server.available_on_public_internet === true
-          ? "Allows requests from public and internal IPs. Authentication and access permissions still apply"
-          : "Allows requests from public and internal IPs because this server is published in MCP Hub. Authentication and access permissions still apply",
+          ? t("mcpServers.utils.networkAccess.allNetworks.publicDescription")
+          : t("mcpServers.utils.networkAccess.allNetworks.hubDescription"),
     };
   }
   if (server.available_on_public_internet === false && explicitlyPublished === false) {
     return {
-      label: "Internal Only",
+      label: t("mcpServers.utils.networkAccess.internalOnly.label"),
       dotClassName: "bg-warning",
-      description:
-        "Allows requests only from internal/private IP ranges. Authentication and access permissions still apply",
+      description: t("mcpServers.utils.networkAccess.internalOnly.description"),
     };
   }
   return {
-    label: "Unknown",
+    label: t("mcpServers.utils.networkAccess.unknown.label"),
     dotClassName: "bg-border",
-    description: "The proxy did not report enough network and publication settings to determine allowed client IPs",
+    description: t("mcpServers.utils.networkAccess.unknown.description"),
   };
 };
 
@@ -72,26 +74,24 @@ export const getMaskedAndFullUrl = (url: string): { maskedUrl: string; hasToken:
 };
 
 // Validation utilities for MCP server forms
-export const validateMCPServerUrl = (value: string) => {
+export const validateMCPServerUrl = (value: string, t: TFunction = i18n.t.bind(i18n)) => {
   if (!value) return Promise.resolve();
   // More flexible URL validation that allows Kubernetes service names and various URL formats
   const urlPattern = /^https?:\/\/[^\s/$.?#].[^\s]*$/i;
-  return urlPattern.test(value)
-    ? Promise.resolve()
-    : Promise.reject("Please enter a valid URL (e.g., http://service-name.domain:1234/path or https://example.com)");
+  return urlPattern.test(value) ? Promise.resolve() : Promise.reject(t("mcpServers.utils.validation.invalidUrl"));
 };
 
-export const validateMCPServerName = (value: string) => {
+export const validateMCPServerName = (value: string, t: TFunction = i18n.t.bind(i18n)) => {
   return value && (value.includes("-") || value.includes(" "))
-    ? Promise.reject("Cannot contain '-' (hyphen) or spaces. Please use '_' (underscore) instead.")
+    ? Promise.reject(t("mcpServers.utils.validation.invalidServerName"))
     : Promise.resolve();
 };
 
 export const TOOL_DISPLAY_NAME_PATTERN = /^[a-zA-Z0-9_-]+$/;
 
-export const validateToolDisplayName = (value: string) => {
+export const validateToolDisplayName = (value: string, t: TFunction = i18n.t.bind(i18n)) => {
   return value && !TOOL_DISPLAY_NAME_PATTERN.test(value)
-    ? Promise.reject("Only letters, digits, underscores, and hyphens are allowed (no spaces).")
+    ? Promise.reject(t("mcpServers.utils.validation.invalidToolDisplayName"))
     : Promise.resolve();
 };
 

@@ -71,6 +71,49 @@ export const processSSOSettingsPayload = (formValues: Record<string, any>): Reco
   return payload;
 };
 
+const isEmptySSOValue = (value: unknown): boolean => value === undefined || value === null || value === "";
+
+// An unchecked saml_allow_unsolicited is the same as never having set it
+const comparableSSOValue = (key: string, value: unknown): unknown =>
+  isEmptySSOValue(value) || (key === "saml_allow_unsolicited" && value === "false") ? undefined : value;
+
+// /update/sso_settings is a PATCH: send only the fields that changed, with null for the ones that were emptied
+export const diffSSOSettingsPayload = (
+  before: Record<string, unknown>,
+  after: Record<string, unknown>,
+): Record<string, unknown> =>
+  Object.fromEntries(
+    [...new Set([...Object.keys(before), ...Object.keys(after)])]
+      .filter(
+        (key) =>
+          JSON.stringify(comparableSSOValue(key, before[key])) !== JSON.stringify(comparableSSOValue(key, after[key])),
+      )
+      .map((key) => [key, isEmptySSOValue(after[key]) ? null : after[key]]),
+  );
+
+export const CLEARED_SSO_SETTINGS = {
+  google_client_id: null,
+  google_client_secret: null,
+  microsoft_client_id: null,
+  microsoft_client_secret: null,
+  microsoft_tenant: null,
+  generic_client_id: null,
+  generic_client_secret: null,
+  generic_authorization_endpoint: null,
+  generic_token_endpoint: null,
+  generic_userinfo_endpoint: null,
+  generic_scope: null,
+  saml_idp_metadata_url: null,
+  saml_idp_metadata_xml: null,
+  saml_sp_entity_id: null,
+  saml_allow_unsolicited: null,
+  proxy_base_url: null,
+  user_email: null,
+  ui_access_mode: null,
+  role_mappings: null,
+  team_mappings: null,
+} as const;
+
 // Determine the SSO provider based on the configuration
 export const detectSSOProvider = (values: SSOSettingsValues): string | null => {
   if (values.google_client_id) return "google";

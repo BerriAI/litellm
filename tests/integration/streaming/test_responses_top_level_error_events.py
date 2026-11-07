@@ -22,12 +22,14 @@ from integration._support.responses_stream import (
     data_frames,
     delta,
     error_body,
+    error_event,
     frame,
     function_tools,
     healthy_stream,
     messages_body,
     openai_error_event,
     openai_error_stream,
+    response_object,
     serve,
     spend_row,
     sse_events,
@@ -256,8 +258,10 @@ def _responses_frames(gateway: Gateway, stream: tuple[bytes, ...]) -> tuple[http
     )
     _assert_one_attempt(served.wire, marker)
     assert served.response.status_code == 200, served.response.text
-    assert served.response.text.rstrip().endswith("data: [DONE]"), served.response.text
+    assert "data: [DONE]" not in served.response.text, served.response.text
     frames: Final = data_frames(served.response.text)
+    names: Final = tuple(name for name, _ in sse_events(served.response.text))
+    assert names == tuple(item["type"] for item in frames), served.response.text
     assert frames[-1]["type"] == "response.failed", served.response.text
     return served.response, object_value(object_value(frames[-1]["response"])["error"])
 
@@ -275,6 +279,38 @@ def test_native_responses_stream_fails_with_the_provider_code_and_message(gatewa
     assert [frame["type"] for frame in data_frames(response.text)] == ["response.created", "response.failed"]
     _assert_rate_limit_failure(error)
     _assert_failure_logged(response.headers["x-litellm-call-id"], "429", RATE_LIMIT_MESSAGE)
+
+
+_FLEX_MESSAGE: Final = "Flex processing is temporarily unavailable. Please try again later or use standard processing."
+_FLEX_ERROR: Final = {"type": "resource_unavailable", "code": "flex_unavailable", "message": _FLEX_MESSAGE}
+
+
+def _flex_outage(identity: str, kind: str) -> tuple[bytes, ...]:
+    failure: Final = (
+        error_event(_FLEX_ERROR)
+        if kind == "error"
+        else {
+            "type": "response.failed",
+            "sequence_number": 1,
+            "response": response_object(identity, "failed", error=_FLEX_ERROR),
+        }
+    )
+    return (frame(created(identity)), frame(failure))
+
+
+@pytest.mark.parametrize("kind", ["error", "response.failed"])
+def test_native_responses_stream_flex_outage_fails_as_a_rate_limit(gateway: Gateway, kind: str) -> None:
+    response, error = _responses_frames(gateway, _flex_outage(_identity(), kind))
+    assert error["code"] == "rate_limit_exceeded" and _FLEX_MESSAGE in string_value(error["message"]), error
+    _assert_failure_logged(response.headers["x-litellm-call-id"], "429", _FLEX_MESSAGE)
+
+
+@pytest.mark.parametrize("kind", ["error", "response.failed"])
+def test_chat_stream_flex_outage_is_a_throttling_error_like_the_non_streamed_429(gateway: Gateway, kind: str) -> None:
+    response, _ = _chat(gateway, _flex_outage(_identity(), kind))
+    assert response.status_code == 429, response.text
+    assert_provider_typed_rate_limit(error_body(response), _FLEX_MESSAGE)
+    _assert_failure_logged(response.headers["x-litellm-call-id"], "429", _FLEX_MESSAGE)
 
 
 def test_native_responses_stream_error_after_text_fails_with_the_provider_code(gateway: Gateway) -> None:

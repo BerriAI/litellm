@@ -1,3 +1,5 @@
+from typing import Final
+
 import pytest
 
 from litellm.llms.litellm_proxy.skills.code_execution import (
@@ -104,3 +106,23 @@ class TestHandlerDefaults:
         handler = CodeExecutionHandler(max_iterations=falsy, sandbox_timeout=falsy)
         assert handler.max_iterations == DEFAULT_MAX_ITERATIONS
         assert handler.sandbox_timeout == DEFAULT_SANDBOX_TIMEOUT
+
+
+class TestExecuteWithCodeExecution:
+    async def test_a_reply_without_tool_calls_ends_the_loop_after_one_call(self):
+        messages: Final = [{"role": "user", "content": "Say hi"}]
+
+        outcome: Final = await CodeExecutionHandler().execute_with_code_execution(
+            model="gpt-5.6",
+            messages=messages,
+            tools=[LITELLM_CODE_EXECUTION_TOOL],
+            skill_files={},
+            mock_response="Hi there",
+        )
+
+        response: Final = outcome["response"]
+        assert response is not None
+        assert response.choices[0].message.content == "Hi there"
+        assert outcome["messages"] == [*messages, {"role": "assistant", "content": "Hi there"}]
+        assert messages == [{"role": "user", "content": "Say hi"}]
+        assert (outcome["files"], outcome["execution_results"]) == ([], [])

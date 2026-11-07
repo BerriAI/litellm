@@ -44,7 +44,11 @@ from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module expo
     _is_model_cost_zero,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     is_model_cost_zero,  # pyright: ignore[reportPrivateUsage]  # the zero-cost predicate the auth-time budget checks use; no public equivalent
 )
-from litellm.router import Router
+from litellm.redis.stores.spend_counters import (
+    key_counter,
+    user_counter,
+)
+from litellm.router_api import RegistryReader, RoutingContext
 from litellm.types.llms.base import LiteLLMBaseModel
 
 
@@ -118,7 +122,7 @@ async def is_token_within_budget_for_model(
     *,
     model: str,
     valid_token: UserAPIKeyAuth,
-    llm_router: Router,
+    llm_router: RegistryReader,
     team_member_model_budget_limiter: _TeamMemberModelBudgetLimiter | None = None,
 ) -> bool:
     """
@@ -133,7 +137,7 @@ async def is_token_within_budget_for_model(
     key_budget: Final = valid_token.max_budget
     if key_budget is not None and valid_token.token is not None:
         key_spend: Final = await _counter_spend(
-            counter_key=f"spend:key:{valid_token.token}",
+            counter_key=key_counter(valid_token.token),
             fallback_spend=valid_token.spend or 0.0,
             max_budget=key_budget,
         )
@@ -149,7 +153,7 @@ async def is_token_within_budget_for_model(
         and (valid_token.team_id is None or _applies_user_budget_to_team_keys())
     ):
         user_spend: Final = await _counter_spend(
-            counter_key=f"spend:user:{valid_token.user_id}",
+            counter_key=user_counter(valid_token.user_id),
             fallback_spend=valid_token.user_spend or 0.0,
             max_budget=user_budget,
         )
@@ -187,19 +191,19 @@ class RouterFallbackBudgetCheck:
     is_enforced: Callable[[], bool]
     team_member_model_budget_limiter: _TeamMemberModelBudgetLimiter | None = None
 
-    async def __call__(self, *, model: str, request_kwargs: Mapping[str, object], llm_router: Router) -> bool:
+    async def __call__(self, *, model: str, request_kwargs: Mapping[str, object], ctx: RoutingContext) -> bool:
         if not self.is_enforced():
             return True
         valid_token: Final = _user_api_key_auth_from_request(request_kwargs)
         if valid_token is None:
             return True
-        budget_models: Final = tuple(dict.fromkeys((model, llm_router.registry().resolve(model))))
+        budget_models: Final = tuple(dict.fromkeys((model, ctx.registry().resolve(model))))
         for budget_model in budget_models:
             try:
                 if not await is_token_within_budget_for_model(
                     model=budget_model,
                     valid_token=valid_token,
-                    llm_router=llm_router,
+                    llm_router=ctx,
                     team_member_model_budget_limiter=self.team_member_model_budget_limiter,
                 ):
                     return False
