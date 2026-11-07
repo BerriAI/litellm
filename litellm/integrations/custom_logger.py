@@ -85,6 +85,21 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
     consulted, so a subclass that does not override ``async_pre_call_hook`` inherits nothing.
     """
 
+    runs_on_no_log_requests: bool = False
+    """
+    Whether this callback must still run for a request that asked for ``no-log: true``.
+
+    ``no-log`` asks that the request's *content* not be logged; it is not a request to stop
+    accounting for it. A callback that only moves numbers -- the proxy's spend writer, the
+    router's budget limiter -- sets this True, so the request is still billed and still counts
+    against budgets. Exporters and hooks that ship the payload to a third party leave it False.
+
+    Opting in by attribute rather than by class name is deliberate: a class-name check breaks
+    silently when the class is renamed, which is how a ``no-log`` request started being served
+    without being charged. The attribute inherits to subclasses and reads as intent rather than
+    as a naming convention.
+    """
+
     def __init__(
         self,
         turn_off_message_logging: bool = False,
