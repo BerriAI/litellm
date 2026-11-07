@@ -1,7 +1,5 @@
 """Shared acknowledgement state for model migration alerts."""
 
-import hashlib
-import json
 from datetime import date, datetime, timezone
 from typing import Annotated, Final
 
@@ -10,6 +8,7 @@ from pydantic import TypeAdapter
 
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.model_deprecation import deprecation_alert_state_key
 from litellm.proxy.deps.database import DatabaseDep
 from litellm.repositories.config_repository import ConfigRepository
 from litellm.repositories.daily_activity_buckets import api_key_bucket, api_key_from_bucket
@@ -32,12 +31,6 @@ def alert_tag_repository(database: DatabaseDep) -> DailyTagSpendRepository:
     return DailyTagSpendRepository(database.prisma)
 
 
-def _state_key(model: str, deprecation_date: date) -> str:
-    identity: Final = json.dumps([model, deprecation_date.isoformat()])
-    digest: Final = hashlib.sha256(identity.encode()).hexdigest()
-    return f"model_deprecation_alert:{digest}"
-
-
 def _require_admin(user: UserAPIKeyAuth, *, write: bool) -> None:
     if user.user_role == LitellmUserRoles.PROXY_ADMIN:
         return
@@ -54,7 +47,7 @@ async def get_deprecation_alert_state(
     repository: Annotated[ConfigRepository, Depends(alert_state_repository)],
 ) -> DeprecationAlertState:
     _require_admin(user, write=False)
-    record: Final = await repository.get_param(_state_key(model, deprecation_date))
+    record: Final = await repository.get_param(deprecation_alert_state_key(model, deprecation_date))
     if record is None:
         return DeprecationAlertState(model=model, deprecation_date=deprecation_date)
     return DeprecationAlertState.model_validate(record.param_value)
@@ -70,7 +63,9 @@ async def update_deprecation_alert_state(
     state: Final = DeprecationAlertState(
         **data.model_dump(), updated_at=datetime.now(timezone.utc), updated_by=user.user_id
     )
-    await repository.set_param(_state_key(data.model, data.deprecation_date), state.model_dump(mode="json"))
+    await repository.set_param(
+        deprecation_alert_state_key(data.model, data.deprecation_date), state.model_dump(mode="json")
+    )
     return state
 
 

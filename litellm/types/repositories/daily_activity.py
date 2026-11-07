@@ -39,6 +39,8 @@ class DailyActivityScope:
     model: str | None
     timezone_offset_minutes: int | None
     include_current_utc_day: bool = False
+    provider: str | None = None
+    model_pairs: tuple[tuple[str, str], ...] = ()
 
     def __post_init__(self) -> None:
         if self.entity_id_field not in _ENTITY_FIELDS[self.table]:
@@ -57,6 +59,8 @@ class KeySpendRow:
     failed_requests: int
     cache_read_input_tokens: int
     cache_creation_input_tokens: int
+    total_response_time_ms: int = 0
+    timed_requests: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,6 +79,8 @@ class UserSpendRow:
     api_requests: int
     successful_requests: int
     failed_requests: int
+    total_response_time_ms: int = 0
+    timed_requests: int = 0
 
 
 @dataclass(frozen=True, slots=True)

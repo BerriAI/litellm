@@ -550,6 +550,7 @@ jobs:
               tests/unit/proxy/management_endpoints
               tests/unit/proxy/management_helpers
               tests/unit/proxy/list_api
+              tests/unit/proxy/alerting_endpoints
               tests/unit/proxy/analytics_endpoints
               tests/unit/proxy/decisions_endpoints
               tests/unit/proxy/memory

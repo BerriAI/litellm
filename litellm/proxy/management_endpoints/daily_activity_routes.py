@@ -141,6 +141,8 @@ def _key_activity_row(row: KeySpendRow, metadata: Mapping[str, KeyMetadataRow]) 
             failed_requests=row.failed_requests,
             cache_read_input_tokens=row.cache_read_input_tokens,
             cache_creation_input_tokens=row.cache_creation_input_tokens,
+            total_response_time_ms=row.total_response_time_ms,
+            timed_requests=row.timed_requests,
         ),
         metadata=_key_metadata(row.api_key, metadata),
     )
@@ -175,6 +177,8 @@ def _user_activity_row(row: UserSpendRow, metadata: Mapping[str, UserMetadataRow
         api_requests=row.api_requests,
         successful_requests=row.successful_requests,
         failed_requests=row.failed_requests,
+        total_response_time_ms=row.total_response_time_ms,
+        timed_requests=row.timed_requests,
     )
 
 

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -26,6 +28,11 @@ _NO_MODEL_METADATA: Final[Mapping[str, object]] = MappingProxyType({})
 _SHARED_SCHEDULE_PROVIDER: Final[Mapping[str, str]] = MappingProxyType({"azure_ai": "azure"})
 
 LoadedCatalog: TypeAlias = Callable[[], Mapping[str, Mapping[str, object]]]
+
+
+def deprecation_alert_state_key(model: str, deprecation_date: date) -> str:
+    identity: Final = json.dumps([model, deprecation_date.isoformat()])
+    return f"model_deprecation_alert:{hashlib.sha256(identity.encode()).hexdigest()}"
 
 
 @dataclass(frozen=True, slots=True)

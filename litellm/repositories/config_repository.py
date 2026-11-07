@@ -30,7 +30,7 @@ class _ConfigRow(Protocol):
 class _ConfigTable(Protocol):
     async def find_unique(self, *, where: Mapping[str, str]) -> _ConfigRow | None: ...
 
-    async def find_many(self) -> Sequence[_ConfigRow]: ...
+    async def find_many(self, *, where: Mapping[str, object] | None = None) -> Sequence[_ConfigRow]: ...
 
     async def upsert(self, *, where: Mapping[str, str], data: Mapping[str, Mapping[str, str]]) -> _ConfigRow: ...
 
@@ -82,6 +82,18 @@ class ConfigRepository:
         if isinstance(param_value, str):
             param_value = _decoded_json(param_value)
         return ConfigParam(param_name=param_name, param_value=param_value)
+
+    async def get_params(self, param_names: Sequence[str]) -> tuple[ConfigParam, ...]:
+        if not param_names:
+            return ()
+        records: Final = await self._config_table.find_many(where={"param_name": {"in": tuple(param_names)}})
+        return tuple(
+            ConfigParam(
+                record.param_name,
+                _decoded_json(record.param_value) if isinstance(record.param_value, str) else record.param_value,
+            )
+            for record in records
+        )
 
     async def set_param(self, param_name: str, param_value: object) -> ConfigParam:
         """Set a config parameter in the database."""

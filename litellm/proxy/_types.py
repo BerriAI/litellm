@@ -595,6 +595,21 @@ class LiteLLMRoutes(enum.Enum):
     )
     llm_api_routes_without_mcp = sorted(set(llm_api_routes) - set(mcp_inference_routes))
     info_routes = [
+        "/usage/alert-groups",
+        "/usage/alert-models",
+        "/usage/alert-rules",
+        "/usage/alert-rules/{rule_id}",
+        "/usage/alerts",
+        "/usage/alerts/{alert_id}",
+        "/issues",
+        "/issues/families",
+        "/issues/families/{family}",
+        "/issues/{issue_id}",
+        "/issues/{issue_id}/signals",
+        "/issues/{issue_id}/activity",
+        "/issues/{issue_id}/keys",
+        "/issues/{issue_id}/users",
+        "/issues/{issue_id}/impact",
         "/key/info",
         "/key/health",
         "/team/info",
@@ -662,6 +677,21 @@ class LiteLLMRoutes(enum.Enum):
 
     management_routes = (
         [
+            "/usage/alert-groups",
+            "/usage/alert-models",
+            "/usage/alert-rules",
+            "/usage/alert-rules/{rule_id}",
+            "/usage/alerts",
+            "/usage/alerts/{alert_id}",
+            "/issues",
+            "/issues/families",
+            "/issues/families/{family}",
+            "/issues/{issue_id}",
+            "/issues/{issue_id}/signals",
+            "/issues/{issue_id}/activity",
+            "/issues/{issue_id}/keys",
+            "/issues/{issue_id}/users",
+            "/issues/{issue_id}/impact",
             # user
             "/user/new",
             "/management/v1/users/bulk",
@@ -872,7 +902,26 @@ class LiteLLMRoutes(enum.Enum):
         ]
     )
 
+    usage_alert_routes = (
+        "/usage/alert-groups",
+        "/usage/alert-models",
+        "/usage/alert-rules",
+        "/usage/alert-rules/{rule_id}",
+        "/usage/alerts",
+        "/usage/alerts/{alert_id}",
+        "/issues",
+        "/issues/families",
+        "/issues/families/{family}",
+        "/issues/{issue_id}",
+        "/issues/{issue_id}/signals",
+        "/issues/{issue_id}/activity",
+        "/issues/{issue_id}/keys",
+        "/issues/{issue_id}/users",
+        "/issues/{issue_id}/impact",
+    )
+
     self_managed_routes = [
+        *usage_alert_routes,
         "/lens",
         "/lens/{path:path}",
         "/telemetry/ui_events",

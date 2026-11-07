@@ -40,6 +40,23 @@ def test_each_missing_piece_is_its_own_rule() -> None:
     assert codes == {"OA001", "OA002", "OA003"}
 
 
+def test_created_response_schema_satisfies_the_success_contract() -> None:
+    operation: Final = {**_DOCUMENTED, "responses": {"201": _RESPONSES["200"]}}
+    assert checker.violations({"paths": {"/v1/thing": {"post": operation}}}) == ()
+
+
+@pytest.mark.parametrize("responses", [
+    {"201": {"description": "Created"}},
+    {"400": _RESPONSES["200"]},
+    {"200": {}, "201": _RESPONSES["200"]},
+])
+def test_success_response_must_still_have_a_schema(responses: Mapping[str, object]) -> None:
+    operation: Final = {**_DOCUMENTED, "responses": responses}
+    assert checker.violations({"paths": {"/v1/thing": {"post": operation}}}) == (
+        checker.Violation("POST", "/v1/thing", "OA003"),
+    )
+
+
 @pytest.mark.parametrize("body", [{}, {"content": {"multipart/form-data": {}}}])
 def test_only_the_missing_piece_is_reported(body: Mapping[str, object]) -> None:
     no_body: Final = {**_DOCUMENTED, "requestBody": body}
