@@ -462,6 +462,46 @@ def test_completion_forwards_allowed_tools_tool_choice_to_openai_compatible_chat
     assert [tool["function"]["name"] for tool in sent["tools"]] == ["get_time", "get_weather"]
 
 
+_ANTHROPIC_TOOL_USE_RESPONSE: Final = {
+    "id": "msg_1",
+    "type": "message",
+    "role": "assistant",
+    "model": "claude-sonnet-4-5",
+    "content": [{"type": "tool_use", "id": "toolu_1", "name": "get_weather", "input": {}}],
+    "stop_reason": "tool_use",
+    "usage": {"input_tokens": 1, "output_tokens": 1},
+}
+
+
+@pytest.mark.parametrize(
+    "tool_choice",
+    [
+        {"type": "allowed_tools", "function": {"name": "get_weather"}},
+        {**_ALLOWED_TOOLS_TOOL_CHOICE, "function": {"name": "get_weather"}},
+    ],
+)
+@pytest.mark.parametrize("drop_params", [False, True])
+def test_completion_keeps_an_allowed_tools_type_with_a_function_as_the_named_tool_it_was_on_the_line(
+    respx_mock: respx.MockRouter, tool_choice: dict[str, object], drop_params: bool
+):
+    mock_route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=httpx.Response(status_code=200, json=_ANTHROPIC_TOOL_USE_RESPONSE)
+    )
+
+    response: Final = litellm.completion(
+        model="anthropic/claude-sonnet-4-5",
+        messages=[{"role": "user", "content": "What is the weather?"}],
+        tools=_TWO_TOOLS,
+        tool_choice=tool_choice,
+        api_key="fake_api_key",
+        drop_params=drop_params,
+    )
+
+    assert mock_route.called
+    assert json.loads(respx_mock.calls[0].request.content)["tool_choice"] == {"type": "tool", "name": "get_weather"}
+    assert [call.function.name for call in response.choices[0].message.tool_calls] == ["get_weather"]
+
+
 @pytest.mark.parametrize("tool_choice", [_ALLOWED_TOOLS_TOOL_CHOICE, _RESPONSES_LAYOUT_ALLOWED_TOOLS_TOOL_CHOICE])
 @pytest.mark.parametrize("model", ["anthropic/claude-sonnet-4-5", "gemini/gemini-2.5-flash", "bedrock/converse/x"])
 def test_completion_allowed_tools_tool_choice_is_a_400_where_the_provider_cannot_enforce_it(

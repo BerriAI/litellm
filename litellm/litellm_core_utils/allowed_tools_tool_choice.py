@@ -55,6 +55,7 @@ class _ToolChoiceType(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     type: str
+    function: object = None
 
 
 _TOOL_CHOICE_TYPE: Final = TypeAdapter(_ToolChoiceType)
@@ -62,9 +63,10 @@ _TOOL_CHOICE_TYPE: Final = TypeAdapter(_ToolChoiceType)
 
 def is_allowed_tools_tool_choice(tool_choice: object) -> bool:
     try:
-        return _TOOL_CHOICE_TYPE.validate_python(tool_choice).type == "allowed_tools"
+        parsed: Final = _TOOL_CHOICE_TYPE.validate_python(tool_choice)
     except ValidationError:
         return False
+    return parsed.type == "allowed_tools" and parsed.function is None
 
 
 def drops_unsupported_allowed_tools_tool_choice(
