@@ -1705,7 +1705,9 @@ ROUTING_REQUEST_TAGS_METADATA_KEY: Final = "_routing_request_tags"
 BAGGAGE_MAPPED_TAGS_METADATA_KEY: Final = "_baggage_mapped_tags"
 VECTOR_STORE_CALLER_METADATA_KWARG: Final = "litellm_vector_store_caller_metadata"
 ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY: Final = "_litellm_router_usage_counted_tokens"
-ROUTER_BUDGET_ATTRIBUTED_SPEND_METADATA_KEY: Final = "_litellm_router_budget_attributed_spend"
+# On a request's logging object (its ``model_call_details``, the success callbacks' kwargs), never in metadata: the
+# spend a cascade already charged to its cheap leg's deployment before the request's one row is billed.
+ROUTER_BUDGET_ATTRIBUTED_SPEND_CALL_DETAIL_KEY: Final = "_litellm_router_budget_attributed_spend"
 INTERNAL_CALL_ORIGIN_METADATA_KEY: Final = "internal_call_origin"
 RESPONSES_WEBSOCKET_CALL_ID_METADATA_KEY: Final = "responses_websocket_call_id"
 BILLED_RETRY_ATTEMPT_METADATA_KEY: Final = "billed_retry_attempt"

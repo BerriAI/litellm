@@ -9,21 +9,19 @@ counts the strong deployment's.
 
 import contextlib
 import uuid
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final  # noqa: TID251  # request kwargs forwarded to acompletion are untyped
 
 from litellm._internal_context import internal_sub_call
 from litellm._logging import verbose_router_logger
-from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY, ROUTER_BUDGET_ATTRIBUTED_SPEND_METADATA_KEY
+from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY, ROUTER_BUDGET_ATTRIBUTED_SPEND_CALL_DETAIL_KEY
 from litellm.litellm_core_utils.core_helpers import get_parent_otel_span_from_kwargs
 from litellm.router_strategy.cascade_router import cascade_router as _cascade_mod
 from litellm.router_strategy.cascade_router.cascade_router import CascadeRouter, StrongOutcome
-from litellm.router_utils.router_callbacks.track_deployment_metrics import (
-    attributed_spend_marker,
-    find_deployment_metadata,
-)
+from litellm.router_utils.router_callbacks.track_deployment_metrics import attributed_spend_marker
+from litellm.types.router import Deployment, TaggedPreRoutingStrategy
 from litellm.types.utils import CASCADE_VERIFIER_CALL_ORIGIN, ModelResponse
 
 if TYPE_CHECKING:
@@ -65,8 +63,26 @@ def cascade_for_request(hosted: "HostRegistry", kwargs: Mapping[str, object]) ->
     if decision is None or decision.get("router_type") != "cascade" or decision.get("tier") != "cheap":
         return None
     tagged: Final = registry.get(str(decision.get("router_model_name")))
-    strategy: Final[object] = tagged[0].strategy if tagged else None
+    selected: Final = _selected_entry(tagged, decision) if tagged else None
+    strategy: Final[object] = selected.strategy if selected is not None else None
     return strategy if isinstance(strategy, CascadeRouter) else None
+
+
+def _selected_entry(
+    tagged: Sequence[TaggedPreRoutingStrategy[object]], decision: Mapping[str, object]
+) -> TaggedPreRoutingStrategy[object] | None:
+    """The entry pre-routing selected under the alias (tag-matched), read back from its provenance stamps: the
+    marker's config id, else its definition fingerprint; the only entry when there is one."""
+    config_id: Final = decision.get("router_config_id")
+    fingerprint: Final = decision.get("router_config_fingerprint")
+    for entry in tagged:
+        marker: Deployment | None = entry.deployment
+        if config_id is not None and marker is not None and marker.model_info.id == config_id:
+            return entry
+    for entry in tagged:
+        if fingerprint is not None and entry.definition_fingerprint == fingerprint:
+            return entry
+    return tagged[0] if len(tagged) == 1 else None
 
 
 def judging_cascade(hosted: "HostRegistry", kwargs: Mapping[str, object]) -> CascadeRouter | None:
@@ -77,10 +93,6 @@ def judging_cascade(hosted: "HostRegistry", kwargs: Mapping[str, object]) -> Cas
     sub-call (the RAG pipeline) are not inside a cascade and are served."""
     if not hosted._core_cascade_routers:  # pyright: ignore[reportPrivateUsage]  # the registry lives on the host registry
         return None
-    if not _cascade_mod.inside_cascade_leg():
-        # Every request that is not a cascade's own leg starts with clean per-request markers: an SDK caller may
-        # hand the previous request's metadata dict (and even its call id) back in. The leg keeps the request's.
-        _cascade_mod.reset_request_bookkeeping(kwargs)
     strategy: Final = cascade_for_request(hosted, kwargs)
     if strategy is None:
         return None
@@ -146,9 +158,12 @@ def _request_logging_obj(call: "AttemptCall") -> "Logging | None":
 
 def provider_call_scope(kwargs: Mapping[str, object]) -> contextlib.AbstractContextManager[None]:
     """A cascade's strong leg logs no row of its own (the request's one row bills both legs), so its own provider
-    call, the one carrying the request's shared logging object, runs as an internal sub-call. What the leg's
-    routing starts (a classifier, the deployment's silent experiment) logs as its own."""
-    return internal_sub_call() if _cascade_mod.is_cascade_legs_own_call(kwargs) else contextlib.nullcontext()
+    call, the one carrying the request's shared logging object, runs as an internal sub-call owned by that object.
+    What the leg's routing starts (a classifier, the deployment's silent experiment) and what the call itself starts
+    with another logging object (a deployment hook's model call) logs and bills as its own."""
+    if not _cascade_mod.is_cascade_legs_own_call(kwargs):
+        return contextlib.nullcontext()
+    return internal_sub_call(owner=kwargs.get("litellm_logging_obj"))
 
 
 async def judge_cascade_answer(
@@ -293,12 +308,7 @@ async def _strong_call(
     strategy: Final = pending.strategy
     logging_obj: Final = pending.logging_obj
     cfg: Final = strategy.config
-    strong_kwargs: Final[dict[str, Any]] = {  # mutable-ok: unpacked into acompletion
-        **_cascade_mod.forwarded_request_params(call.served),
-        **_cascade_mod.shared_request_kwargs(call.served, logging_obj),
-        "model": cfg.strong_model,
-        "messages": messages,
-    }
+    strong_kwargs: Final = strong_call_kwargs(call.served, logging_obj, cfg.strong_model, messages)
     parent_otel_span: Final = get_parent_otel_span_from_kwargs(kwargs)
     cache: Final = core._cache  # pyright: ignore[reportPrivateUsage]  # the step serves its own core
     # The cheap deployment's itpm/otpm reservation is settled against the cheap usage now, before the strong
@@ -306,7 +316,7 @@ async def _strong_call(
     # reservation to put back); the strong leg's is settled against its own usage below, so the request's one
     # success log (summed usage) has nothing left to reconcile.
     await async_io_token_reconcile_success(cache, kwargs, cheap, parent_otel_span=parent_otel_span)
-    await _attribute_cheap_spend(core, cheap, kwargs)
+    await _attribute_cheap_spend(core, pending, cheap, kwargs)
     state: Final = _cascade_mod.snapshot_request_state(kwargs, logging_obj)
     _cascade_mod.forget_cache_state(logging_obj)  # the strong leg is a fresh call, priced as one
     try:
@@ -315,7 +325,9 @@ async def _strong_call(
     except Exception as exc:
         if cfg.on_strong_error != "cheap":
             _cascade_mod.restore_request_identity(kwargs, state)  # the failure row: this request, the strong deployment
-            _cascade_mod.clear_attributed_spend(kwargs)  # the cheap leg is settled; a fallback's row pays its own way
+            _cascade_mod.clear_attributed_spend(
+                logging_obj
+            )  # the cheap leg is settled; a fallback's row pays its own way
             mark_cascade_escalation_failure(exc)
             await _count_cheap_leg(core, cfg.cheap_model, cheap)
             await _cascade_mod.fail_request_logging(logging_obj, exc, owns_deferral=pending.owns_deferral)
@@ -341,20 +353,18 @@ async def _strong_call(
 
 
 async def _attribute_cheap_spend(
-    core: "RustCore",
-    cheap: ModelResponse,
-    kwargs: dict[str, Any],  # mutable-ok: the attempt's kwargs; the attributed-spend marker is stamped in place
+    core: "RustCore", pending: CascadeAttempt, cheap: ModelResponse, kwargs: Mapping[str, object]
 ) -> None:
     """Before the strong leg: the completed cheap leg is charged to its own deployment's and provider's budgets,
-    whatever the strong leg then does. The spend is stamped as attributed so the request's one success row charges
-    the deployment that answered only the rest."""
+    whatever the strong leg then does. The spend is stamped as attributed on the request's logging object, whose
+    callback kwargs the budget limiter reads, so the request's one success row charges the deployment that answered
+    only the rest; a caller's reused metadata dict can neither carry nor overwrite it."""
     from litellm.litellm_core_utils.get_llm_provider_logic import inferred_provider
 
     cheap_id, cheap_name = _cascade_mod.leg_deployment(cheap)
     hosted: Final = core._hosted  # pyright: ignore[reportPrivateUsage]  # the step serves its own core
     limiter: Final = hosted._core_get_router_deployment_budget_limiter()  # pyright: ignore[reportPrivateUsage]  # the host registry's budget callback
-    deployment_metadata: Final = find_deployment_metadata(kwargs)
-    if cheap_id is None or limiter is None or deployment_metadata is None:
+    if cheap_id is None or limiter is None:
         return
     cheap_cost: Final = _cascade_mod.inner_call_cost(cheap) or 0.0
     deployment: Final = hosted._core_get_deployment(model_id=cheap_id)  # pyright: ignore[reportPrivateUsage]  # the host registry's id lookup
@@ -364,11 +374,11 @@ async def _attribute_cheap_spend(
         custom_llm_provider=declared if isinstance(declared, str) else inferred_provider(cheap_name),
         response_cost=cheap_cost,
     )
-    # Bound to this request's call id: a caller that reuses its metadata dict for the next request, or an
-    # ordinary request after this one, must not have this request's cheap leg subtracted from its charge.
-    deployment_metadata[ROUTER_BUDGET_ATTRIBUTED_SPEND_METADATA_KEY] = attributed_spend_marker(
-        kwargs.get("litellm_call_id"), cheap_cost
-    )
+    if pending.logging_obj is not None:
+        details: Final = pending.logging_obj.model_call_details
+        details[ROUTER_BUDGET_ATTRIBUTED_SPEND_CALL_DETAIL_KEY] = attributed_spend_marker(
+            kwargs.get("litellm_call_id"), cheap_cost
+        )
 
 
 async def _count_cheap_leg(core: "RustCore", cheap_group: str, cheap: ModelResponse) -> None:
@@ -387,6 +397,22 @@ async def _count_cheap_leg(core: "RustCore", cheap_group: str, cheap: ModelRespo
         core.deployment_tracks_usage(cheap_id, group),
     )
     _ = await core._drive_cache_steps(report)  # pyright: ignore[reportPrivateUsage]  # see above
+
+
+def strong_call_kwargs(
+    request: Mapping[str, object], logging_obj: "Logging | None", strong_model: str, messages: object
+) -> dict[str, Any]:  # mutable-ok: unpacked into acompletion
+    """The strong leg's call: the caller's own parameters, the request's policies (its guardrails, its region
+    restriction, its logging and cache opt-outs), and what it shares with the request (logging object, ids, metadata).
+    A request-level ``guardrails`` list replaces the strong deployment's own on this call, as it does on a direct call
+    to that deployment."""
+    return {
+        **_cascade_mod.forwarded_request_params(request),
+        **_cascade_mod.request_policy_kwargs(request),
+        **_cascade_mod.shared_request_kwargs(request, logging_obj),
+        "model": strong_model,
+        "messages": messages,
+    }
 
 
 async def fail_judged_attempt(pending: CascadeAttempt, call: "AttemptCall", error: Exception) -> None:
@@ -409,4 +435,5 @@ __all__ = [
     "judging_cascade",
     "prepare_cascade_attempt",
     "provider_call_scope",
+    "strong_call_kwargs",
 ]

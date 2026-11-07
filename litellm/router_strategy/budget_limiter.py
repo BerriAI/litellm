@@ -591,8 +591,7 @@ class RouterBudgetLimiting(CustomLogger):
 
         # A request answered by two deployments (a cascade's cheap leg, then its strong leg) charged the earlier
         # leg to its own deployment and provider as it went; the row's deployment and provider get the rest.
-        litellm_params: Final = _CALLBACK_FIELDS.validate_python(callback_fields.get("litellm_params") or {})
-        attributed: Final = get_attributed_spend(litellm_params, callback_fields.get("litellm_call_id")) or 0.0
+        attributed: Final = get_attributed_spend(callback_fields, callback_fields.get("litellm_call_id")) or 0.0
         await self.attribute_spend(
             model_id=model_id,
             custom_llm_provider=custom_llm_provider,  # pyright: ignore[reportUnknownArgumentType]  # StandardLoggingPayload.get is untyped upstream

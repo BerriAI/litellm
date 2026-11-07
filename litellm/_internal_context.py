@@ -27,6 +27,12 @@ _T = TypeVar("_T")
 # (e.g., emulated file-search steps that make nested LLM calls).
 is_internal_call: Final[ContextVar[bool]] = ContextVar("is_internal_call", default=False)
 internal_parent_request_id: Final[ContextVar[str | None]] = ContextVar("internal_parent_request_id", default=None)
+# An internal scope that is one call's own: the logging object it belongs to, and the internal state that enclosed
+# it. A public call entered inside that scope with another logging object (a deployment hook's model call) is not
+# part of it: it runs under the enclosing state, so it logs and bills as the enclosing caller would have it.
+_owned_internal_scope: Final[ContextVar[tuple[object, bool, str | None] | None]] = ContextVar(
+    "owned_internal_scope", default=None
+)
 
 # One request prices its totals, its per-token-type lines and the rates it reports on
 # separate code paths. Each reads the clock for off-peak pricing, so without a pinned
@@ -48,15 +54,22 @@ _request_parent_otel_span: Final[ContextVar[Span | None]] = ContextVar("request_
 
 
 @contextmanager
-def internal_sub_call(parent_request_id: str | None = None) -> Generator[None]:
-    """A nested call the parent call logs and bills, so the parent must fold this call's cost into its own."""
+def internal_sub_call(parent_request_id: str | None = None, *, owner: object | None = None) -> Generator[None]:
+    """A nested call the parent call logs and bills, so the parent must fold this call's cost into its own.
+
+    With ``owner`` (a logging object) the scope is that one call's: a public call it starts with another logging
+    object, a deployment hook's model call for one, runs under the state that enclosed this scope instead
+    (``own_call_scope``). Without an owner the scope covers everything inside it, as before."""
+    enclosing: Final = (is_internal_call.get(), internal_parent_request_id.get())
     token: Final = is_internal_call.set(True)
     parent_token: Final = internal_parent_request_id.set(parent_request_id or internal_parent_request_id.get())
+    owner_token: Final = _owned_internal_scope.set((owner, *enclosing) if owner is not None else None)
     try:
         yield
     finally:
         is_internal_call.reset(token)
         internal_parent_request_id.reset(parent_token)
+        _owned_internal_scope.reset(owner_token)
 
 
 @contextmanager
@@ -64,11 +77,34 @@ def billed_separately() -> Generator[None]:
     """A call that writes its own spend row even inside a sub-call whose parent bills the model response."""
     token: Final = is_internal_call.set(False)
     parent_token: Final = internal_parent_request_id.set(None)
+    owner_token: Final = _owned_internal_scope.set(None)
     try:
         yield
     finally:
         is_internal_call.reset(token)
         internal_parent_request_id.reset(parent_token)
+        _owned_internal_scope.reset(owner_token)
+
+
+@contextmanager
+def own_call_scope(logging_obj: object) -> Generator[None]:
+    """A public call entering: an internal scope owned by another call's logging object does not reach it; the call
+    runs under the state that enclosed that scope (internal when an ownerless parent was folding everything in,
+    its own otherwise)."""
+    owned: Final = _owned_internal_scope.get()
+    if owned is None or owned[0] is logging_obj:
+        yield
+        return
+    _, enclosing_internal, enclosing_parent = owned
+    token: Final = is_internal_call.set(enclosing_internal)
+    parent_token: Final = internal_parent_request_id.set(enclosing_parent)
+    owner_token: Final = _owned_internal_scope.set(None)
+    try:
+        yield
+    finally:
+        is_internal_call.reset(token)
+        internal_parent_request_id.reset(parent_token)
+        _owned_internal_scope.reset(owner_token)
 
 
 @contextmanager

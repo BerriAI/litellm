@@ -823,7 +823,13 @@ def _priced_router(
 
     router_kwargs = {
         k: router_or_config.pop(k)
-        for k in ("cache_responses", "caching_groups", "routing_strategy", "content_policy_fallbacks")
+        for k in (
+            "cache_responses",
+            "caching_groups",
+            "routing_strategy",
+            "content_policy_fallbacks",
+            "enable_pre_call_checks",
+        )
         if k in router_or_config
     }
     config = {"cheap_model": "cheap", "strong_model": "strong", "min_chars": 20, **router_or_config}
@@ -896,6 +902,266 @@ async def test_sdk_path_logs_the_request_once_billing_both_legs(monkeypatch):
     assert event["model_group"] == "cascade" and event["deployment_model_name"] == "strong"
     assert event["model"] == "openai/gpt-4o"  # the row names the deployment that answered
     assert event["messages"] == MESSAGES  # the row carries the prompt, as a plain request's row does
+
+
+async def test_tagged_cascades_escalate_through_the_configuration_pre_routing_selected():
+    """Two markers share the alias, one per tag. A tag-b request routes to cheap-b; the judgment must read the same
+    tagged configuration back, so the escalation goes to strong-b (not the first marker's strong-a)."""
+
+    def deployment(name, answer):
+        return {
+            "model_name": name,
+            "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "x", "mock_response": answer},
+            "model_info": {"id": name},
+        }
+
+    def marker(cheap, strong, tag):
+        return {
+            "model_name": "cascade",
+            "litellm_params": {
+                "model": "auto_router/cascade_router",
+                "cascade_router_config": {"cheap_model": cheap, "strong_model": strong, "min_chars": 20},
+                "tags": [tag],
+            },
+            "model_info": {"id": f"cascade-{tag}"},
+        }
+
+    router = Router(
+        model_list=[
+            deployment("cheap-a", "tiny"),
+            deployment("cheap-b", "tiny"),
+            deployment("strong-a", "Answer from strong A, long enough."),
+            deployment("strong-b", "Answer from strong B, long enough."),
+            marker("cheap-a", "strong-a", "a"),
+            marker("cheap-b", "strong-b", "b"),
+        ],
+        num_retries=0,
+    )
+    response = await router.acompletion(model="cascade", messages=MESSAGES, metadata={"tags": ["b"]})
+    assert response.choices[0].message.content == "Answer from strong B, long enough."
+    record = response._hidden_params["cascade"]
+    assert record["served_by"] == "strong-b"
+    assert [c["model"] for c in record["calls"]] == ["cheap-b", "strong-b"]
+
+
+class _HoldFirstSuccess(CustomLogger):
+    """Holds the first request's success callback until released, as a slow logging sink would."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+        self.held = False
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        if not self.held:
+            self.held = True
+            self.started.set()
+            await self.release.wait()
+
+
+async def test_budget_attribution_survives_a_reused_metadata_dict_while_the_first_callback_is_pending(monkeypatch):
+    """Two escalated requests reuse one metadata dict; the second starts while the first's budget callback is still
+    waiting on a slow sink. Each cheap leg ($0.05) stays with the cheap deployment and each strong leg ($0.50) with
+    the strong one: the attribution is the request's own, not something the next request can overwrite."""
+    gate = _HoldFirstSuccess()
+    monkeypatch.setattr(litellm, "callbacks", [gate])
+    router = _priced_router(
+        cheap_params={"max_budget": 100, "budget_duration": "1h"},
+        strong_params={"max_budget": 100, "budget_duration": "1h"},
+    )
+    shared_metadata: dict = {}
+    await router.acompletion(model="cascade", messages=MESSAGES, metadata=shared_metadata)
+    await asyncio.wait_for(gate.started.wait(), 10)
+    try:
+        await router.acompletion(model="cascade", messages=MESSAGES, metadata=shared_metadata)
+    finally:
+        gate.release.set()
+    await _flush_logging()
+    limiter = router.registry().plugins("budget_limiter")
+    assert await limiter.dual_cache.async_get_cache("deployment_spend:cheap:1h") == pytest.approx(0.10)
+    assert await limiter.dual_cache.async_get_cache("deployment_spend:strong:1h") == pytest.approx(1.00)
+
+
+def test_the_strong_call_keeps_the_requests_policies_and_drops_its_credentials():
+    """The caller's own parameters pass; LiteLLM-owned ones do not, except the request's guardrails, region
+    restriction and message-logging opt-out, which must hold on the strong leg as they held on the cheap one."""
+    from litellm.router_rust.steps.cascade import strong_call_kwargs
+
+    request = {
+        "model": "cheap",
+        "messages": MESSAGES,
+        "temperature": 0.2,
+        "guardrails": ["pii-scrub"],
+        "allowed_model_region": "eu",
+        "turn_off_message_logging": True,
+        "no-log": True,
+        "cache": {"no-cache": True},
+        "api_key": "cheap-secret",
+        "mock_response": "tiny",
+        "metadata": {"model_group": "cascade"},
+        "litellm_call_id": "call-1",
+        "stream": True,
+    }
+    kwargs = strong_call_kwargs(request, None, "strong", MESSAGES)
+    assert kwargs["model"] == "strong" and kwargs["messages"] == MESSAGES and kwargs["temperature"] == 0.2
+    assert kwargs["guardrails"] == ["pii-scrub"]
+    assert kwargs["allowed_model_region"] == "eu"
+    assert kwargs["turn_off_message_logging"] is True
+    assert kwargs["no-log"] is True and kwargs["cache"] == {"no-cache": True}
+    assert kwargs["metadata"] is request["metadata"] and kwargs["litellm_call_id"] == "call-1"
+    assert "api_key" not in kwargs and "mock_response" not in kwargs and "stream" not in kwargs
+
+
+async def test_a_no_log_request_stays_unlogged_after_an_escalation(monkeypatch):
+    """`no-log` is LiteLLM-owned and would be dropped from the strong call, whose wrapper then rewrites the shared
+    logging object's params without it; the request's one row must stay suppressed."""
+    recorder = _Recorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    router = _priced_router()
+    response = await router.acompletion(model="cascade", messages=MESSAGES, **{"no-log": True})
+    await _flush_logging()
+    assert response._hidden_params["cascade"]["path"] == "strong"
+    assert recorder.events == []
+
+
+def _verifier_calls(monkeypatch) -> list:
+    """Capture the kwargs of every verifier call (its metadata names the cascade-verifier origin)."""
+    import litellm as litellm_mod
+
+    seen: list = []
+    original = litellm_mod.acompletion
+
+    async def capture(**kwargs):
+        if (kwargs.get("metadata") or {}).get(INTERNAL_CALL_ORIGIN_METADATA_KEY) == "cascade_verifier":
+            seen.append(kwargs)
+        return await original(**kwargs)
+
+    monkeypatch.setattr(litellm_mod, "acompletion", capture)
+    return seen
+
+
+async def test_the_verifier_call_carries_the_requests_cache_and_log_policies(monkeypatch):
+    seen = _verifier_calls(monkeypatch)
+    router = _priced_router(verifier_model="judge", verifier_kind="chat", min_chars=2)
+    response = await router.acompletion(
+        model="cascade",
+        messages=MESSAGES,
+        cache={"no-cache": True},
+        **{"no-log": True},
+    )
+    assert response._hidden_params["cascade"]["path"] == "cheap"
+    (call,) = seen
+    assert call["cache"] == {"no-cache": True}
+    assert call["no-log"] is True
+
+
+async def test_a_region_restricted_request_never_reaches_an_out_of_region_verifier(monkeypatch):
+    """With `allowed_model_region: eu`, a verifier whose only deployment is in another region is not called at all;
+    the verifier error is handled by `on_verifier_error`, as a direct call to that deployment would be refused."""
+    seen = _verifier_calls(monkeypatch)
+    router = _priced_router(
+        verifier_model="judge-us",
+        verifier_kind="chat",
+        min_chars=2,
+        on_verifier_error="accept",
+        enable_pre_call_checks=True,  # the region filter is one of the router's pre-call checks
+        cheap_params={"region_name": "eu"},
+        strong_params={"region_name": "eu"},
+        extra_deployments=[
+            {
+                "model_name": "judge-us",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "x",
+                    "mock_response": "YES",
+                    "region_name": "us",
+                },
+                "model_info": {"id": "judge-us"},
+            }
+        ],
+    )
+    response = await router.acompletion(model="cascade", messages=MESSAGES, allowed_model_region="eu")
+    record = response._hidden_params["cascade"]
+    assert record["path"] == "cheap" and record["verifier_error"] is not None
+    assert seen == []
+
+
+async def test_a_no_log_request_logs_no_verifier_row_either(monkeypatch):
+    recorder = _Recorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    router = _priced_router(verifier_model="judge", verifier_kind="chat", min_chars=2)
+    response = await router.acompletion(model="cascade", messages=MESSAGES, **{"no-log": True})
+    await _flush_logging()
+    assert [c["role"] for c in response._hidden_params["cascade"]["calls"]] == ["cheap", "verifier"]
+    assert recorder.events == []
+
+
+async def test_the_verifier_keeps_the_callers_message_logging_opt_out(monkeypatch):
+    import litellm as litellm_mod
+
+    seen = []
+    original = litellm_mod.acompletion
+
+    async def capture(**kwargs):
+        if (kwargs.get("metadata") or {}).get(INTERNAL_CALL_ORIGIN_METADATA_KEY) == "cascade_verifier":
+            seen.append(kwargs.get("turn_off_message_logging"))
+        return await original(**kwargs)
+
+    monkeypatch.setattr(litellm_mod, "acompletion", capture)
+    router = _priced_router(verifier_model="judge", verifier_kind="chat", min_chars=2)
+    response = await router.acompletion(model="cascade", messages=MESSAGES, turn_off_message_logging=True)
+    assert response._hidden_params["cascade"]["path"] == "cheap"
+    assert seen == [True]
+
+
+async def test_a_guardrails_own_model_call_inside_the_strong_leg_logs_and_pays_as_its_own(monkeypatch):
+    """The strong leg's provider call runs as an internal sub-call of the request, but a deployment hook it runs (a
+    content-filter guardrail asking its image model) is a call of its own: it logs its own row and is charged to its
+    own deployment's budget, as it is when the strong deployment is called directly."""
+    from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import ContentFilterGuardrail
+
+    recorder = _Recorder()
+    side = {
+        "model_name": "side",
+        "litellm_params": {
+            "model": "openai/gpt-4.1",
+            "api_key": "x",
+            "mock_response": "This is a harmless image.",
+            "input_cost_per_token": 0.1,
+            "output_cost_per_token": 0.2,
+            "max_budget": 100,
+            "budget_duration": "1h",
+        },
+        "model_info": {"id": "side"},
+    }
+    # callbacks before the Router, which registers its budget limiter into the same list
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    router = _priced_router(strong_params={"guardrails": ["review-image"]}, extra_deployments=[side])
+    guardrail = ContentFilterGuardrail(
+        guardrail_name="review-image", image_model="side", llm_router=router, event_hook="pre_call"
+    )
+    litellm.callbacks.append(guardrail)
+    image = (
+        "data:image/png;base64,"
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII="
+    )
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Describe this image."},
+                {"type": "image_url", "image_url": {"url": image}},
+            ],
+        }
+    ]
+    response = await router.acompletion(model="cascade", messages=messages)
+    await _flush_logging()
+    assert response._hidden_params["cascade"]["path"] == "strong"
+    rows = sorted((e["status"], e["model"], round(e["cost"], 4)) for e in recorder.events)
+    assert rows == [("success", "openai/gpt-4.1", 5.0), ("success", "openai/gpt-4o", 0.55)]
+    limiter = router.registry().plugins("budget_limiter")
+    assert await limiter.dual_cache.async_get_cache("deployment_spend:side:1h") == pytest.approx(5.0)
 
 
 def _content_filtered(text: str) -> ModelResponse:

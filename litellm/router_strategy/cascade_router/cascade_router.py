@@ -36,10 +36,11 @@ from litellm._logging import verbose_router_logger
 from litellm.constants import (
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
     KUBERNETES_POD_ROUTING_KEY,
-    ROUTER_BUDGET_ATTRIBUTED_SPEND_METADATA_KEY,
+    ROUTER_BUDGET_ATTRIBUTED_SPEND_CALL_DETAIL_KEY,
 )
 from litellm.litellm_core_utils.internal_call_metadata import (
     IO_TOKEN_RESERVATION_KEYS,
+    effective_turn_off_message_logging,
     forwarded_internal_call_metadata,
     parent_session_kwargs,
 )
@@ -84,6 +85,9 @@ _SHARED_WITH_STRONG: Final = (
     "litellm_metadata",
 )
 _METADATA_BUCKETS: Final = ("metadata", "litellm_metadata")
+# LiteLLM-owned request kwargs that are the request's policies, not its credentials or routing: they hold on every
+# call the cascade makes for the request (the strong leg, the verifier) as they held on the cheap call.
+REQUEST_POLICY_PARAMS: Final = ("guardrails", "allowed_model_region", "turn_off_message_logging", "no-log", "cache")
 # Stamps that describe the request rather than the leg that answered it; the strong leg's own routing rewrites
 # them (its group, a fresh fallback count) and they are put back whatever the leg's outcome.
 _REQUEST_IDENTITY_STAMPS: Final = ("model_group", "model_group_alias", "original_model_group", "attempted_fallbacks")
@@ -229,6 +233,20 @@ def inner_call_cost(response: object, call_type: str | None = None) -> float | N
     except Exception:  # noqa: BLE001 - unpriced deployments are legal; the record then shows no cost
         return None
     return float(priced)
+
+
+def request_policy_kwargs(
+    request_kwargs: Mapping[str, object],
+) -> dict[str, object]:  # mutable-ok: unpacked into a call
+    """The request's policies, for a call the cascade makes on its behalf; `turn_off_message_logging` as the
+    request's callbacks resolve it (set at the top level or in its metadata)."""
+    policies: Final[dict[str, object]] = {  # mutable-ok: built below
+        key: value for key in REQUEST_POLICY_PARAMS if (value := request_kwargs.get(key)) is not None
+    }
+    privacy: Final = effective_turn_off_message_logging(request_kwargs)
+    if privacy is not None:
+        policies["turn_off_message_logging"] = privacy
+    return policies
 
 
 def forwarded_request_params(
@@ -426,23 +444,12 @@ def forget_cache_state(logging_obj: "Logging | None") -> None:
     logging_obj.reset_caching_details()
 
 
-def reset_request_bookkeeping(request_kwargs: Mapping[str, object]) -> None:
-    """Before the cheap call: drop the attributed-spend marker an SDK caller's reused metadata dict may still carry
-    from an earlier request, so this request's budget accounting starts clean."""
-    for name in _METADATA_BUCKETS:
-        bucket = request_kwargs.get(name)
-        if isinstance(bucket, dict):
-            bucket.pop(ROUTER_BUDGET_ATTRIBUTED_SPEND_METADATA_KEY, None)  # pyright: ignore[reportUnknownMemberType]  # the request's own metadata dict
-
-
-def clear_attributed_spend(request_kwargs: Mapping[str, object]) -> None:
+def clear_attributed_spend(logging_obj: "Logging | None") -> None:
     """The cascade attempt failed: its cheap leg was charged to its own deployment directly and its failure row never
     reaches the budget limiter, so the attributed-spend marker must not ride into a fallback attempt's row (which
     would be charged its cost minus the cheap leg's)."""
-    for name in _METADATA_BUCKETS:
-        bucket = request_kwargs.get(name)
-        if isinstance(bucket, dict):
-            bucket.pop(ROUTER_BUDGET_ATTRIBUTED_SPEND_METADATA_KEY, None)  # pyright: ignore[reportUnknownMemberType]  # the request's own metadata dict
+    if logging_obj is not None:
+        _ = logging_obj.model_call_details.pop(ROUTER_BUDGET_ATTRIBUTED_SPEND_CALL_DETAIL_KEY, None)
 
 
 def leg_deployment(response: ModelResponse) -> tuple[str | None, str | None]:
@@ -874,6 +881,9 @@ class CascadeRouter:
         }
         call_kwargs: Final[dict[str, Any]] = {  # mutable-ok: unpacked into the verifier call
             "metadata": metadata,
+            # the verifier's own call and row carry the request and the cheap answer: the request's region
+            # restriction, logging opt-outs, cache policy and guardrails hold for it
+            **request_policy_kwargs(parent),
             **parent_session_kwargs(parent),
         }
         prompt: Final = f"Request:\n{question}\n\nAnswer:\n{answer}"

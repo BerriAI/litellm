@@ -268,3 +268,79 @@ def test_every_function_that_reaches_redis_directly_declares_its_family() -> Non
         for function in _direct_redis_callers_without_a_family(name)
     )  # comprehension-ok: flatten per-file findings
     assert undeclared == ()
+
+
+class TestOwnedInternalScope:
+    """An internal scope that is one call's own (``internal_sub_call(owner=...)``) reaches only the call carrying that
+    logging object; a public call entered inside it with another one runs under the state that enclosed the scope."""
+
+    def test_an_ownerless_scope_covers_every_call_inside_it(self):
+        from litellm._internal_context import internal_sub_call, is_internal_call, own_call_scope
+
+        with internal_sub_call():
+            with own_call_scope(object()):
+                assert is_internal_call.get() is True
+            with own_call_scope(None):
+                assert is_internal_call.get() is True
+
+    def test_the_owners_own_call_stays_internal_and_another_calls_does_not(self):
+        from litellm._internal_context import internal_sub_call, is_internal_call, own_call_scope
+
+        owner = object()
+        with internal_sub_call(owner=owner):
+            with own_call_scope(owner):
+                assert is_internal_call.get() is True
+            with own_call_scope(object()):
+                assert is_internal_call.get() is False
+            with own_call_scope(None):
+                assert is_internal_call.get() is False
+            assert is_internal_call.get() is True
+        assert is_internal_call.get() is False
+
+    def test_a_foreign_call_runs_under_the_enclosing_state_not_as_public(self):
+        """A cascade inside an ordinary internal parent (a RAG step): a hook's call inside the strong leg is still
+        the parent's internal call, folded into the parent's row."""
+        from litellm._internal_context import (
+            internal_parent_request_id,
+            internal_sub_call,
+            is_internal_call,
+            own_call_scope,
+        )
+
+        with internal_sub_call("parent-1"), internal_sub_call(owner=object()):
+            with own_call_scope(object()):
+                assert is_internal_call.get() is True
+                assert internal_parent_request_id.get() == "parent-1"
+
+    def test_an_ownerless_scope_inside_an_owned_one_covers_everything_again(self):
+        from litellm._internal_context import internal_sub_call, is_internal_call, own_call_scope
+
+        with internal_sub_call(owner=object()), internal_sub_call():
+            with own_call_scope(object()):
+                assert is_internal_call.get() is True
+
+    def test_billed_separately_clears_the_owner_too(self):
+        from litellm._internal_context import billed_separately, internal_sub_call, is_internal_call, own_call_scope
+
+        owner = object()
+        with internal_sub_call(owner=owner), billed_separately():
+            assert is_internal_call.get() is False
+            with own_call_scope(owner):
+                assert is_internal_call.get() is False
+
+    def test_state_is_restored_when_the_foreign_call_raises(self):
+        from litellm._internal_context import internal_sub_call, is_internal_call, own_call_scope
+
+        owner = object()
+
+        def foreign_call_that_fails() -> None:
+            with own_call_scope(object()):
+                assert is_internal_call.get() is False
+                raise RuntimeError("boom")
+
+        with internal_sub_call(owner=owner):
+            with pytest.raises(RuntimeError, match="boom"):
+                foreign_call_that_fails()
+            assert is_internal_call.get() is True
+            with own_call_scope(owner):
+                assert is_internal_call.get() is True
