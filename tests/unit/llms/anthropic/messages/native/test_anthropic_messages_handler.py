@@ -1306,7 +1306,9 @@ async def test_bridged_messages_keep_the_deployments_entra_credential_over_the_e
     api_base: Final = {} if api_base_from_env else {"api_base": "https://example-resource.cognitiveservices.azure.com"}
 
     with (
-        patch("litellm.llms.azure.common_utils.get_azure_ad_token_from_entra_id", return_value=lambda: "entra-token"),  # test-quality-ok: stands in for the Entra token fetch so the test can see which credential reaches Azure
+        patch(
+            "litellm.llms.azure.common_utils.get_azure_ad_token_from_entra_id", return_value=lambda: "entra-token"
+        ),  # test-quality-ok: stands in for the Entra token fetch so the test can see which credential reaches Azure
         patch(
             "litellm.llms.azure.common_utils.get_azure_ad_token_from_username_password",
             return_value=lambda: "entra-token",
@@ -1353,7 +1355,9 @@ async def test_bridged_messages_keep_the_azure_env_credential_when_the_deploymen
     litellm.in_memory_llm_clients_cache.flush_cache()
 
     with (
-        patch("litellm.llms.azure.common_utils.get_azure_ad_token_from_entra_id", return_value=lambda: "entra-token"),  # test-quality-ok: stands in for the Entra token fetch so the test can see which credential reaches Azure
+        patch(
+            "litellm.llms.azure.common_utils.get_azure_ad_token_from_entra_id", return_value=lambda: "entra-token"
+        ),  # test-quality-ok: stands in for the Entra token fetch so the test can see which credential reaches Azure
         respx.mock(assert_all_called=True) as respx_mock,
     ):
         upstream: Final = respx_mock.route().mock(side_effect=httpx.ConnectError("cut at the wire"))
@@ -2809,3 +2813,120 @@ async def test_json_provider_anthropic_messages_still_drops_cache_salt() -> None
     )
 
     assert "cache_salt" not in upstream.bodies[-1]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("stream", [False, True], ids=["complete", "stream"])
+@pytest.mark.parametrize(
+    "model,model_info,responses_target",
+    [
+        ("azure/responses/qa-deployment", None, True),
+        ("azure/qa-deployment", {"mode": "responses"}, True),
+        ("azure/qa-deployment", None, False),
+        ("azure/qa-deployment", {"mode": "chat"}, False),
+    ],
+    ids=["responses-prefix", "responses-pin", "chat-deployment", "chat-pin"],
+)
+async def test_azure_messages_replay_encrypted_reasoning_only_to_responses(
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    model_info: dict[str, str] | None,
+    responses_target: bool,
+    stream: bool,
+    is_async: bool,
+) -> None:
+    from litellm.litellm_core_utils.prompt_templates.reasoning_utils import encrypted_reasoning_signature
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            **litellm.model_cost,
+            "azure/qa-deployment": {
+                "litellm_provider": "azure",
+                "mode": "chat",
+                "supported_endpoints": ["/v1/chat/completions", "/v1/responses"],
+                "supports_native_streaming": True,
+            },
+        },
+    )
+    _invalidate_model_cost_lowercase_map()
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    chat_reply: Final = {
+        "id": "chatcmpl-azure",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "qa-deployment",
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": "hello there"}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5},
+    }
+    chat_stream: Final = (
+        'data: {"id":"chatcmpl-azure","object":"chat.completion.chunk","created":1,'
+        '"model":"qa-deployment","choices":[{"index":0,"delta":{"role":"assistant","content":"hello there"},'
+        '"finish_reason":null}]}\n\n'
+        'data: {"id":"chatcmpl-azure","object":"chat.completion.chunk","created":1,'
+        '"model":"qa-deployment","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],'
+        '"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}}\n\n'
+        "data: [DONE]\n\n"
+    ).encode()
+    with respx.mock(assert_all_called=True) as upstream:
+        route: Final = upstream.route(host="qa-resource.openai.azure.com").mock(
+            return_value=(
+                httpx.Response(
+                    200,
+                    headers={"content-type": "text/event-stream"},
+                    content=_sse_body(_RESPONSES_SSE_EVENTS) if responses_target else chat_stream,
+                )
+                if stream
+                else httpx.Response(200, json=_RESPONSES_COMPLETED_BODY if responses_target else chat_reply)
+            )
+        )
+        create: Final = litellm.anthropic.messages.acreate if is_async else litellm.anthropic.messages.create
+        pending: Final = create(
+            model=model,
+            model_info=model_info,
+            max_tokens=100,
+            api_base="https://qa-resource.openai.azure.com/openai/v1",
+            api_version="v1",
+            api_key="test-api-key",
+            stream=stream,
+            messages=[
+                {"role": "user", "content": "Use calc for 17*23."},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "thinking",
+                            "thinking": "Use the calculator.",
+                            "signature": encrypted_reasoning_signature("qa-opaque-reasoning"),
+                        },
+                        {"type": "tool_use", "id": "call_1", "name": "calc", "input": {"x": 391}},
+                    ],
+                },
+                {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "call_1", "content": "391"}]},
+            ],
+        )
+        result: Final = await pending if is_async else pending
+        if stream:
+            chunks: Final = [chunk async for chunk in result] if hasattr(result, "__aiter__") else list(result)
+            assert "message_stop" in "".join(chunk.decode() if isinstance(chunk, bytes) else chunk for chunk in chunks)
+        else:
+            assert result["content"] == [{"type": "text", "text": "hello there"}]
+        body: Final = json.loads(route.calls.last.request.content)
+    if responses_target:
+        assert route.calls.last.request.url.path.endswith("/responses")
+        assert [item for item in body["input"] if item.get("type") == "reasoning"] == [
+            {
+                "type": "reasoning",
+                "summary": [{"type": "summary_text", "text": "Use the calculator."}],
+                "encrypted_content": "qa-opaque-reasoning",
+            }
+        ]
+        assert [item for item in body["input"] if item.get("type") == "function_call_output"] == [
+            {"type": "function_call_output", "call_id": "call_1", "output": [{"type": "input_text", "text": "391"}]}
+        ]
+    else:
+        assert route.calls.last.request.url.path.endswith("/chat/completions")
+        assert "qa-opaque-reasoning" not in json.dumps(body)

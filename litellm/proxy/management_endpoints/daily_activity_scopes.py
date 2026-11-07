@@ -363,7 +363,7 @@ USER_RESOLVER = EntityScopeResolver(
     tags=("Budget & Spend Tracking", "Internal User management"),
     query=_user_query,
     resolve=_resolve_user,
-    include_entity_breakdown=False,
+    include_entity_breakdown=True,
     include_guardrail_breakdown=True,
     operation_names=MappingProxyType(
         {

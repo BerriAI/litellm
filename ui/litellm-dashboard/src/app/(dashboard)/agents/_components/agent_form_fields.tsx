@@ -256,23 +256,24 @@ const AgentFormFields: React.FC<AgentFormFieldsProps> = ({ panels, showAgentName
               <AgentFormField
                 key={field.name}
                 name={field.name}
-                label={field.tooltip ? labelWithHint(field.label, field.tooltip) : field.label}
+                label={field.tooltipKey ? labelWithHint(t(field.labelKey), t(field.tooltipKey)) : t(field.labelKey)}
                 description={field.helpTextKey ? t(field.helpTextKey) : undefined}
                 rules={
                   field.required
-                    ? { required: t("agents.formFields.errors.enterField", { field: field.label.toLowerCase() }) }
+                    ? { required: t("agents.formFields.errors.enterField", { field: t(field.labelKey).toLowerCase() }) }
                     : undefined
                 }
               >
                 {({ value, onChange, ref, ...control }) => {
                   const text = typeof value === "string" ? value : "";
+                  const placeholder = field.placeholderKey ? t(field.placeholderKey) : field.placeholder;
                   if (field.type === "textarea") {
                     return (
                       <Textarea
                         {...control}
                         ref={ref}
                         rows={field.rows}
-                        placeholder={field.placeholder}
+                        placeholder={placeholder}
                         value={text}
                         onChange={onChange}
                       />
@@ -282,7 +283,7 @@ const AgentFormFields: React.FC<AgentFormFieldsProps> = ({ panels, showAgentName
                     return (
                       <Select value={text || null} onValueChange={onChange}>
                         <SelectTrigger {...control} className="w-full">
-                          <SelectValue placeholder={field.placeholder} />
+                          <SelectValue placeholder={placeholder} />
                         </SelectTrigger>
                         <SelectContent>
                           {(field.options ?? []).map((option) => (
@@ -294,9 +295,7 @@ const AgentFormFields: React.FC<AgentFormFieldsProps> = ({ panels, showAgentName
                       </Select>
                     );
                   }
-                  return (
-                    <Input {...control} ref={ref} placeholder={field.placeholder} value={text} onChange={onChange} />
-                  );
+                  return <Input {...control} ref={ref} placeholder={placeholder} value={text} onChange={onChange} />;
                 }}
               </AgentFormField>
             ))}
@@ -320,7 +319,7 @@ const AgentFormFields: React.FC<AgentFormFieldsProps> = ({ panels, showAgentName
             panels={panels}
           >
             {AGENT_FORM_CONFIG.capabilities.fields.map((field) => (
-              <AgentFormField key={field.name} name={field.name} label={field.label}>
+              <AgentFormField key={field.name} name={field.name} label={t(field.labelKey)}>
                 {({ value, onChange, ref, ...control }) => (
                   <Switch {...control} inputRef={ref} checked={value === true} onCheckedChange={onChange} />
                 )}
@@ -336,7 +335,7 @@ const AgentFormFields: React.FC<AgentFormFieldsProps> = ({ panels, showAgentName
             panels={panels}
           >
             {AGENT_FORM_CONFIG.optional.fields.map((field) => (
-              <AgentFormField key={field.name} name={field.name} label={field.label}>
+              <AgentFormField key={field.name} name={field.name} label={t(field.labelKey)}>
                 {({ value, onChange, ref, ...control }) =>
                   field.type === "switch" ? (
                     <Switch {...control} inputRef={ref} checked={value === true} onCheckedChange={onChange} />
@@ -372,7 +371,7 @@ const AgentFormFields: React.FC<AgentFormFieldsProps> = ({ panels, showAgentName
             panels={panels}
           >
             {AGENT_FORM_CONFIG.litellm.fields.map((field) => (
-              <AgentFormField key={field.name} name={field.name} label={field.label}>
+              <AgentFormField key={field.name} name={field.name} label={t(field.labelKey)}>
                 {({ value, onChange, ref, ...control }) =>
                   field.type === "switch" ? (
                     <Switch {...control} inputRef={ref} checked={value === true} onCheckedChange={onChange} />

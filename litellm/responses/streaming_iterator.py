@@ -53,7 +53,7 @@ from litellm.litellm_core_utils.internal_call_metadata import (
     requests_background,
     without_budget_reservation,
 )
-from litellm.litellm_core_utils.litellm_logging import BilledRoundsSpend
+from litellm.litellm_core_utils.litellm_logging import BilledRoundsDispatch, BilledRoundsSpend, UncachedPrice
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.llm_response_utils.get_api_base import get_api_base
 from litellm.litellm_core_utils.llm_response_utils.get_headers import provider_request_id_headers
@@ -250,6 +250,8 @@ _ERROR_CODE_HTTP_STATUS: Final[Mapping[str, int]] = MappingProxyType(
         "server_error": 500,
         "rate_limit_exceeded": 429,
         "insufficient_quota": 429,
+        "resource_unavailable": 429,
+        "flex_unavailable": 429,
         "vector_store_timeout": 504,
         "invalid_prompt": 400,
         "invalid_image": 400,
@@ -638,6 +640,24 @@ class BaseResponsesAPIStreamingIterator:
             self._handle_failure(e)
             raise
 
+    def _deferred_logging_dispatch(
+        self, logging_coroutine: Coroutine[object, object, None], logging_response: object
+    ) -> BilledRoundsDispatch | Coroutine[object, object, None]:
+        response: Final[object] = getattr(logging_response, "response", None)
+        if not isinstance(response, ResponsesAPIResponse):
+            return logging_coroutine
+        price: Final = (
+            UncachedPrice(0.0, None)
+            if self._completed_response_cache_hit
+            else self.logging_obj.uncached_price(response)
+        )
+        spend: Final = BilledRoundsSpend(
+            ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(response.usage),
+            price.cost or 0.0,
+            price.cost_breakdown,
+        )
+        return BilledRoundsDispatch(logging_coroutine, spend)
+
     def _log_completed_response(self, *, is_async: bool) -> None:
         if self._completed_response_logged:
             return
@@ -662,7 +682,9 @@ class BaseResponsesAPIStreamingIterator:
             if deferred_dispatch_armed:
                 # End-of-stream guardrail scans write guardrail_information after
                 # the terminal event; dispatching now would snapshot metadata early.
-                self.logging_obj._deferred_stream_complete_args = (logging_coroutine,)
+                self.logging_obj._deferred_stream_complete_args = (
+                    self._deferred_logging_dispatch(logging_coroutine, logging_response),
+                )
             else:
                 spawn_logging_task(
                     asyncio.get_running_loop(), logging_coroutine, task_name="Responses stream success logging"
@@ -1155,7 +1177,8 @@ class BaseResponsesAPIStreamingIterator:
 
     def _note_yielded_event(self, event: ResponsesAPIStreamingResponse) -> None:
         self._yielded_first_chunk = True
-        if event.type not in PRE_OUTPUT_LIFECYCLE_EVENT_TYPES:
+        event_type: Final[object] = getattr(event, "type", None)
+        if event_type not in PRE_OUTPUT_LIFECYCLE_EVENT_TYPES:
             self._output_started = True
 
     def _fallback_error(self, original: Exception) -> MidStreamFallbackError:

@@ -8,7 +8,7 @@ from datetime import datetime
 from functools import lru_cache
 from itertools import accumulate
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeAlias, cast
 
 from httpx import Response
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
@@ -24,7 +24,12 @@ from litellm.constants import (
     REALTIME_METERED_USAGE_KEY,
 )
 from litellm.litellm_core_utils.audio_utils.utils import normalized_audio_duration_seconds
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or_none, billed_usage_cost
+from litellm.litellm_core_utils.core_helpers import (
+    as_str_mapping,
+    attribute_or_none,
+    billed_usage_cost,
+    require_attributes,
+)
 from litellm.litellm_core_utils.cost_discount import resolve_cost_discount
 from litellm.litellm_core_utils.decisions_pricing import (
     decisions_pricing_fields,
@@ -50,6 +55,7 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
     get_batch_cost_rates,
     get_billable_input_tokens,
     get_cost_per_unit,
+    get_fedramp_uplift_multiplier,
     get_modality_token_cost_key,
     get_regional_uplift_multiplier,
     get_service_tier_cost_key,
@@ -615,11 +621,17 @@ def cost_per_token(
         )
         if per_second is not None:
             return per_second
+        if custom_llm_provider == "anthropic":
+            return anthropic_cost_per_token(
+                model=model, usage=usage_block, service_tier=service_tier, model_info=requested_model_info_override
+            )
         return generic_cost_per_token(
             model=model,
             usage=usage_block,
             custom_llm_provider=custom_llm_provider or "",
             service_tier=service_tier,
+            data_residency=data_residency,
+            vertex_location=vertex_location,
             model_info=requested_model_info_override,
         )
 
@@ -1181,6 +1193,10 @@ def _model_contains_known_llm_provider(model: str) -> bool:
     return _provider_prefix in LlmProvidersSet
 
 
+class _SupportsGet(Protocol):
+    def get(self, key: str, /) -> object: ...
+
+
 def _get_response_model(completion_response: object) -> str | None:
     """
     Extract the model name from a completion response object.
@@ -1212,7 +1228,7 @@ _GEMINI_TRAFFIC_TYPE_TO_SERVICE_TIER: Final[dict] = {
 }
 
 
-def _map_traffic_type_to_service_tier(traffic_type: str | None) -> str | None:
+def _map_traffic_type_to_service_tier(traffic_type: object) -> str | None:
     """
     Map a Gemini usageMetadata.trafficType value to a LiteLLM service_tier string.
 
@@ -1266,11 +1282,13 @@ def _served_service_tier(completion_response: object, usage_object: Usage | None
     usage_tier: Final = _extract_service_tier(usage_object)
     if isinstance(usage_tier, str):
         return usage_tier
-    hidden_params: Final = getattr(completion_response, "_hidden_params", None)
+    hidden_params: Final[object] = getattr(completion_response, "_hidden_params", None)
     if hidden_params is None:
         return None
-    provider_specific: Final = hidden_params.get("provider_specific_fields") or {}
-    raw_traffic_type: Final = provider_specific.get("traffic_type")
+    provider_specific: Final[object] = (
+        require_attributes(hidden_params, _SupportsGet, "get").get("provider_specific_fields") or {}
+    )
+    raw_traffic_type: Final = require_attributes(provider_specific, _SupportsGet, "get").get("traffic_type")
     if not raw_traffic_type:
         return None
     return _map_traffic_type_to_service_tier(raw_traffic_type) or "default"
@@ -1334,8 +1352,16 @@ def get_usage_object(
         return None
 
 
+class _DumpedUsageFields(TypedDict, total=False, extra_items=object):
+    pass
+
+
+def _dumped_usage_fields(usage_model: BaseModel) -> Mapping[str, object]:
+    return usage_model.model_dump()
+
+
 def _usage_from_model(usage_model: BaseModel) -> Usage:
-    return Usage(**usage_model.model_dump())
+    return Usage(**_DumpedUsageFields(**_dumped_usage_fields(usage_model)))
 
 
 def _decisions_prompt_tokens_details(usage: DecisionsUsage | OpenAIDecisionUsage) -> PromptTokensDetailsWrapper:
@@ -3311,7 +3337,9 @@ def batch_cost_calculator(
     text_tokens: Final = usage.completion_tokens - image_tokens
     total_completion_cost = text_tokens * text_rate + image_tokens * image_rate
 
-    uplift: Final = get_regional_uplift_multiplier(model_info, data_residency)
+    uplift: Final = get_regional_uplift_multiplier(model_info, data_residency) * get_fedramp_uplift_multiplier(
+        model_info, data_residency
+    )
     if uplift != 1.0:
         total_prompt_cost *= uplift
         total_completion_cost *= uplift
@@ -3320,15 +3348,35 @@ def batch_cost_calculator(
     return total_prompt_cost * vertex_uplift, total_completion_cost * vertex_uplift
 
 
+def _standard_rate(model_info: ModelInfo, key: str, prompt_tokens: int) -> float | None:
+    return get_cost_per_unit(model_info, get_modality_token_cost_key(model_info, key, prompt_tokens), None)
+
+
+def _cached_audio_batch_fallback(
+    model_info: ModelInfo, batch_cache_read_rate: float | None, cache_read_rate: float | None, prompt_tokens: int
+) -> float:
+    if batch_cache_read_rate is not None:
+        return batch_cache_read_rate
+    standard_audio_rate: Final = _standard_rate(model_info, "cache_read_input_audio_token_cost", prompt_tokens)
+    if standard_audio_rate is not None:
+        return standard_audio_rate
+    return 0.0 if cache_read_rate is None else cache_read_rate
+
+
 def _batch_prompt_cost(
     usage: Usage,
     model_info: ModelInfo,
     input_rate: float,
-    cache_read_rate: float | None,
+    batch_cache_read_rate: float | None,
     cache_creation_rate: float | None,
     cache_creation_rates_by_ttl: Mapping[str, float],
 ) -> float:
     details: Final = parse_prompt_tokens_details(usage)
+    cache_read_rate: Final = (
+        _standard_rate(model_info, "cache_read_input_token_cost", usage.prompt_tokens)
+        if batch_cache_read_rate is None
+        else batch_cache_read_rate
+    )
     cached_tokens: Final = details["cache_hit_tokens"] if cache_read_rate is not None else 0
     cached_audio_tokens: Final = details["cache_hit_audio_tokens"] if cache_read_rate is not None else 0
     bills_cache_writes: Final = cache_creation_rate is not None or bool(cache_creation_rates_by_ttl)
@@ -3349,7 +3397,11 @@ def _batch_prompt_cost(
         + video_tokens * _batch_rate(model_info, "input_cost_per_video_token_batches", input_rate)
         + (cached_tokens - cached_audio_tokens) * (cache_read_rate or 0.0)
         + cached_audio_tokens
-        * _batch_rate(model_info, "cache_read_input_audio_token_cost_batches", cache_read_rate or 0.0)
+        * _batch_rate(
+            model_info,
+            "cache_read_input_audio_token_cost_batches",
+            _cached_audio_batch_fallback(model_info, batch_cache_read_rate, cache_read_rate, usage.prompt_tokens),
+        )
         + (
             calculate_cache_writing_cost(
                 written_tokens,

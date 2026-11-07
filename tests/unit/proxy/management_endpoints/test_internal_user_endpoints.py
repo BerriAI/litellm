@@ -3,7 +3,7 @@ import hashlib
 import json
 import logging
 from collections.abc import AsyncIterator, Mapping, Sequence
-from contextlib import asynccontextmanager
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Final, cast
@@ -13,6 +13,7 @@ import httpx
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 from pytest_mock import MockerFixture
 
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
@@ -47,6 +48,51 @@ from tests.unit.proxy.management_endpoints.jwt_key_mapping_doubles import (
 )
 
 client = TestClient(app)
+
+
+@pytest.mark.parametrize("user_id", ["", " \t\n", "user\x00id", 123, True, [], {}])
+def test_new_user_rejects_invalid_custom_id(user_id: object) -> None:
+    with pytest.raises(ValidationError) as exc:
+        NewUserRequest.model_validate({"user_id": user_id})
+    assert exc.value.errors()[0]["loc"] == ("user_id",)
+
+
+@pytest.mark.parametrize("user_id", [None, "employee-42", "社員@example.test", "  employee-42  "])
+def test_new_user_normalizes_custom_id_and_preserves_auto_generation(user_id: str | None) -> None:
+    request: Final = NewUserRequest(user_id=user_id)
+    assert request.user_id == (user_id.strip() if user_id is not None else None)
+
+
+@pytest.mark.asyncio
+async def test_new_user_returns_conflict_when_id_is_taken_after_duplicate_check(mocker: MockerFixture) -> None:
+    from prisma.errors import UniqueViolationError
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy.utils import PrismaClient
+
+    table: Final = SimpleNamespace(
+        find_first=AsyncMock(return_value=None),
+        count=AsyncMock(return_value=0),
+        create=AsyncMock(side_effect=UniqueViolationError(
+            {"user_facing_error": {"meta": {"target": ["user_id"]}}},
+            message="Unique constraint failed on user_id",
+        )),
+        upsert=AsyncMock(return_value=LiteLLM_UserTable(user_id="employee-42")),
+    )
+    mocker.patch("prisma.Prisma", return_value=SimpleNamespace(litellm_usertable=table))
+    database: Final = PrismaClient(
+        database_url="postgresql://unused:unused@localhost/unused",
+        proxy_logging_obj=proxy_server.proxy_logging_obj,
+    )
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", database)
+    with pytest.raises(ProxyException) as exc:
+        await new_user(
+            data=NewUserRequest(user_id="employee-42", auto_create_key=False, send_invite_email=False),
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+    assert str(exc.value.code) == "409"
+    assert "employee-42" in exc.value.message
+
 
 if TYPE_CHECKING:
     from litellm.caching.redis_cache import RedisCache
@@ -128,6 +174,11 @@ async def test_ui_view_users_proxy_admin_no_org_filter(mocker):
 
 
 UserWhereCondition = InsensitiveContains | Sequence[Mapping[str, InsensitiveContains]]
+
+
+@asynccontextmanager
+async def _transaction_over(db: object) -> AsyncIterator[SimpleNamespace]:
+    yield SimpleNamespace(query_raw=AsyncMock(return_value=[]), litellm_usertable=getattr(db, "litellm_usertable"))
 
 
 def _matches_user_where(row: LiteLLM_UserTableFiltered, where: Mapping[str, UserWhereCondition]) -> bool:
@@ -2419,6 +2470,7 @@ async def test_bulk_user_model_budget_clear_serializes_and_refreshes_cache(mocke
     prisma_client: Final = mocker.MagicMock()
     prisma_client.db.litellm_usertable.find_many = mocker.AsyncMock(return_value=[saved_user])
     prisma_client.db.litellm_usertable.update_many = mocker.AsyncMock(return_value=1)
+    prisma_client.tx = lambda: _transaction_over(prisma_client.db)
     mocker.patch("litellm.proxy.proxy_server.prisma_client", prisma_client)  # test-quality-ok: substitute the database dependency
     cache: Final = UserApiKeyCache()
     await cache.async_set_cache(key=saved_user.user_id, value=saved_user, model_type=LiteLLM_UserTable)
@@ -2465,6 +2517,7 @@ async def test_user_max_budget_update_evicts_cached_user_on_every_worker(mocker:
     prisma_client.db.litellm_usertable.find_first = mocker.AsyncMock(return_value=saved_user)
     prisma_client.db.litellm_usertable.find_many = mocker.AsyncMock(return_value=[saved_user])
     prisma_client.db.litellm_usertable.update_many = mocker.AsyncMock(return_value=1)
+    prisma_client.tx = lambda: _transaction_over(prisma_client.db)
     prisma_client.get_data = mocker.AsyncMock(return_value=[saved_user])
     prisma_client.update_data = mocker.AsyncMock(return_value={"user_id": saved_user.user_id, "data": saved_user})
     mocker.patch("litellm.proxy.proxy_server.prisma_client", prisma_client)  # test-quality-ok: substitute the database dependency
@@ -2574,6 +2627,9 @@ async def test_user_update_reaches_cached_user_on_every_worker(
         async def update_data(self, user_id: str, data: dict[str, object], table_name: str) -> dict[str, object]:
             self.update_data_payload = data
             return {"user_id": user_id, "data": self.updated_user}
+
+        def tx(self) -> AbstractAsyncContextManager[SimpleNamespace]:
+            return _transaction_over(self.db)
 
     saved_user: Final = LiteLLM_UserTable(
         user_id="user-spruce",
@@ -4852,7 +4908,9 @@ async def test_user_new_persists_model_max_budget(monkeypatch, model_max_budget,
         models = []
 
     class _FakePrisma:
-        async def insert_data(self, data, table_name):
+        async def insert_data(
+            self, data: Mapping[str, object], table_name: str, *, allow_existing_user: bool = True
+        ) -> _FakeUserRow | SimpleNamespace:
             if table_name == "user":
                 captured["user_data"] = dict(data)
                 return _FakeUserRow()
@@ -5425,3 +5483,16 @@ async def test_user_update_reports_a_bad_budget_duration_as_a_request_error_not_
     assert (exc_info.value.code, exc_info.value.type) == ("400", "invalid_request_error")
     assert "Invalid budget_duration" in exc_info.value.message
     assert "Authentication Error" not in exc_info.value.message
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fips_mode")
+async def test_fips_user_update_hashes_off_the_event_loop(pbkdf2_on_event_loop: list[bool]) -> None:
+    from litellm.proxy.management_endpoints.internal_user_endpoints import _hash_password_in_dict
+
+    data: Final = {"password": "Str0ng!Passw0rd"}
+
+    await _hash_password_in_dict(data, {"password_policy_check_breached_passwords": False})
+
+    assert pbkdf2_on_event_loop == [False]
+    assert data["password"].startswith("pbkdf2:")

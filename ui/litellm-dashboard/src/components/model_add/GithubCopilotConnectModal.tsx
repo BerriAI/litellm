@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useReducer } from "react";
+import { Trans, useTranslation } from "react-i18next";
 
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { userConnectionPollCall, userConnectionStartCall } from "@/components/networking";
@@ -31,6 +32,7 @@ export default function GithubCopilotConnectModal({
   onConnected,
   onDisconnect,
 }: GithubCopilotConnectModalProps) {
+  const { t } = useTranslation();
   const { accessToken } = useAuthorized();
   const [state, dispatch] = useReducer(connectFlowReducer, initialConnectFlowState);
 
@@ -79,56 +81,77 @@ export default function GithubCopilotConnectModal({
     <Dialog open onOpenChange={(open) => !open && onClose()}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Connect GitHub Copilot</DialogTitle>
-          <DialogDescription>Credential: {credentialName}</DialogDescription>
+          <DialogTitle>{t("modelAdd.githubCopilotConnectModal.title")}</DialogTitle>
+          <DialogDescription>
+            {t("modelAdd.githubCopilotConnectModal.credential", { name: credentialName })}
+          </DialogDescription>
         </DialogHeader>
 
-        {state.kind === "starting" && <p className="text-sm">Requesting a device code from GitHub...</p>}
+        {state.kind === "starting" && (
+          <p className="text-sm">{t("modelAdd.githubCopilotConnectModal.requestingCode")}</p>
+        )}
 
         {state.kind === "awaiting" && (
           <div className="flex flex-col gap-3">
             <p className="text-sm">
-              Open{" "}
-              <a
-                href={state.verificationUri}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-primary underline-offset-4 hover:underline"
-              >
-                {state.verificationUri}
-              </a>{" "}
-              and enter this code:
+              <Trans
+                i18nKey="modelAdd.githubCopilotConnectModal.openAndEnterCode"
+                components={{
+                  verificationLink: (
+                    <a
+                      href={state.verificationUri}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-primary underline-offset-4 hover:underline"
+                    >
+                      {state.verificationUri}
+                    </a>
+                  ),
+                }}
+              />
             </p>
             <div className="flex items-center gap-2">
               <code data-testid="github-device-code" className="rounded-md bg-muted px-3 py-2 font-mono text-lg">
                 {state.userCode}
               </code>
-              <CopyButton value={state.userCode} label="Copy code" copiedLabel="Code copied" />
+              <CopyButton
+                value={state.userCode}
+                label={t("modelAdd.githubCopilotConnectModal.copyCode")}
+                copiedLabel={t("modelAdd.githubCopilotConnectModal.codeCopied")}
+              />
             </div>
-            <p className="text-sm text-muted-foreground">Waiting for you to approve the request on GitHub...</p>
+            <p className="text-sm text-muted-foreground">
+              {t("modelAdd.githubCopilotConnectModal.waitingForApproval")}
+            </p>
           </div>
         )}
 
-        {state.kind === "connected" && <p className="text-sm">Connected as @{state.githubLogin}</p>}
+        {state.kind === "connected" && (
+          <p className="text-sm">{t("modelAdd.githubCopilotConnectModal.connectedAs", { login: state.githubLogin })}</p>
+        )}
 
         {state.kind === "failed" && (
           <p role="alert" className="text-sm text-destructive">
-            {failureMessage(state)}
+            {failureMessage(state, t)}
           </p>
         )}
 
         <DialogFooter>
           {state.kind === "failed" && (
             <Button variant="outline" onClick={() => dispatch({ type: "restarted" })}>
-              Start again
+              {t("modelAdd.githubCopilotConnectModal.startAgain")}
             </Button>
           )}
           {state.kind === "connected" && (
             <Button variant="destructive" onClick={onDisconnect}>
-              Disconnect
+              {t("modelAdd.githubCopilotConnectModal.disconnect")}
             </Button>
           )}
-          <Button onClick={onClose}>{state.kind === "connected" ? "Done" : "Close"}</Button>
+          <Button onClick={onClose}>
+            {state.kind === "connected"
+              ? t("modelAdd.githubCopilotConnectModal.done")
+              : t("modelAdd.githubCopilotConnectModal.close")}
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
