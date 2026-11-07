@@ -3586,10 +3586,11 @@ async def test_refreshing_a_managed_file_in_a_team_bucket_names_that_bucket_to_t
     )
 
     with patch("litellm.afile_retrieve", new_callable=AsyncMock, return_value=provider_file) as provider_retrieve:
-        await proxy_managed_files.afile_retrieve(
+        refreshed: Final = await proxy_managed_files.afile_retrieve(
             file_id="unified-team-file", litellm_parent_otel_span=None, llm_router=router
         )
 
+    assert (refreshed.id, refreshed.filename) == ("unified-team-file", "input.jsonl.out")
     assert provider_retrieve.call_args.kwargs["file_id"] == TEAM_BUCKET_FILE_ID
     assert provider_retrieve.call_args.kwargs["stored_s3_bucket_name"] == "team-a-bucket"
 

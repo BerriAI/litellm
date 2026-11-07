@@ -2858,7 +2858,17 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                         await llm_router.afile_content(
                             model=model_id,
                             file_id=provider_file_id,
-                            **cast(_RouterFileCallKwargs, {**data, **stored_s3_bucket_kwargs(provider_file_id)}),
+                            **cast(
+                                _RouterFileCallKwargs,
+                                {
+                                    **data,
+                                    **(
+                                        stored_s3_bucket_kwargs(provider_file_id)
+                                        if isinstance(provider_file_id, str)
+                                        else {}
+                                    ),
+                                },
+                            ),
                         ),
                     )
                 except Exception as e:

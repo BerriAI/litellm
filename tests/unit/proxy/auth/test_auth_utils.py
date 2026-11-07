@@ -5469,12 +5469,23 @@ def test_team_without_a_usable_allowlist_cannot_pick_a_bucket(team_metadata: Map
     _rejection_for_team({"s3_bucket_name": "team-a-bucket"}, team_metadata)
 
 
+def _team_bucket_admitted(
+    body: Mapping[str, object], team_metadata: Mapping[str, object] | None, **general_settings: object
+) -> bool:
+    try:
+        _enforce_for_team(body, team_metadata, **general_settings)
+    except HTTPException:
+        return False
+    return True
+
+
 def test_proxy_wide_allowlist_still_applies_alongside_the_team_allowlist() -> None:
-    _enforce_for_team(
+    assert _team_bucket_admitted(
         {"s3_bucket_name": "team-a-bucket", "s3_output_bucket_name": "shared-bucket"},
         _TEAM_A_METADATA,
         allowed_client_side_s3_buckets=["shared-bucket"],
     )
+    assert not _team_bucket_admitted({"s3_output_bucket_name": "shared-bucket"}, _TEAM_A_METADATA)
 
 
 def test_team_allowlist_is_checked_for_buckets_nested_in_the_body() -> None:
@@ -5507,11 +5518,19 @@ def _routed_request(method: str, route_template: str | None, path: str) -> Reque
 async def test_auth_leaves_request_buckets_to_the_upload_and_batch_create_handlers(
     route_template: str, path: str
 ) -> None:
-    await pre_db_read_auth_checks(
-        request=_routed_request("POST", route_template, path),
-        request_data={"s3_bucket_name": "team-b-bucket", "s3_output_bucket_name": "team-b-bucket"},
-        route=path,
+    assert await _auth_admits(
+        _routed_request("POST", route_template, path),
+        {"s3_bucket_name": "team-b-bucket", "s3_output_bucket_name": "team-b-bucket"},
+        path,
     )
+
+
+async def _auth_admits(request: Request, request_data: dict[str, object], route: str) -> bool:
+    try:
+        await pre_db_read_auth_checks(request=request, request_data=request_data, route=route)
+    except ValueError:
+        return False
+    return True
 
 
 @pytest.mark.asyncio
