@@ -882,6 +882,48 @@ async def test_generate_content_adapter_pre_call_rules_reject_the_request_before
     assert [(outcome, call_id) for outcome, _, call_id, _ in logged.events] == [("success", _ADAPTER_CALL_ID)]
 
 
+def test_sync_generate_content_adapter_pre_call_rule_rejection_logs_no_failure(
+    _httpx_transport: None, monkeypatch: pytest.MonkeyPatch
+):
+    logged: Final = _LoggedEvents()
+    monkeypatch.setattr(litellm, "callbacks", [logged])
+    monkeypatch.setattr(litellm, "pre_call_rules", [lambda text: "forbidden" not in text])
+    router: Final = _adapter_router()
+
+    with respx.mock(assert_all_called=False) as upstream:
+        route: Final = upstream.post("http://upstream.test/v1/chat/completions").mock(
+            return_value=_upstream_reply(stream=False)
+        )
+        with pytest.raises(litellm.APIResponseValidationError):
+            router.generate_content(
+                model="grok-group", contents=[{"role": "user", "parts": [{"text": "a forbidden question"}]}]
+            )
+        router.generate_content(
+            model="grok-group",
+            contents=[{"role": "user", "parts": [{"text": "hello"}]}],
+            litellm_call_id=_ADAPTER_CALL_ID,
+        )
+    wait_until(lambda: bool(logged.events), message="the allowed request was logged")
+
+    assert route.call_count == 1
+    assert [(outcome, call_id) for outcome, _, call_id, _ in logged.events] == [("success", _ADAPTER_CALL_ID)]
+
+
+@pytest.mark.asyncio
+async def test_generate_content_adapter_pre_call_rules_skip_an_empty_conversation_like_chat(
+    _httpx_transport: None, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "pre_call_rules", [lambda text: text != ""])
+
+    with respx.mock() as upstream:
+        route: Final = upstream.post("http://upstream.test/v1/chat/completions").mock(
+            return_value=_upstream_reply(stream=False)
+        )
+        await _adapter_router().agenerate_content(model="grok-group", contents=[])
+
+    assert route.call_count == 1
+
+
 @pytest.mark.asyncio
 async def test_generate_content_adapter_pre_call_rule_rejections_leave_the_deployments_available(
     _httpx_transport: None, monkeypatch: pytest.MonkeyPatch
