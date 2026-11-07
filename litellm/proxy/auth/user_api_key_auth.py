@@ -4265,9 +4265,12 @@ async def authorize_authenticated_model_access(
                     detail="User is not a member of any team. Add the user to a team via the LiteLLM UI or API.",
                 )
             else:
+                denied_model: Final = next(
+                    (name for name, granted in zip(models, granted_models) if not granted), models[0]
+                )
                 raise HTTPException(
                     status_code=403,
-                    detail=f"No team has access to the requested model: {model}. Checked teams={set(policy.unresolved_team_ids)}. Check `/models` to see all available models.",
+                    detail=f"No team has access to the requested model: {denied_model}. Checked teams={set(policy.unresolved_team_ids)}. Check `/models` to see all available models.",
                 )
     if (
         identity.requires_key_model_check

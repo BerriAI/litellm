@@ -28,6 +28,7 @@ from starlette.requests import Request as StarletteRequest
 from litellm.proxy._types import LiteLLM_AccessGroupTable, ProxyException
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.auth.user_api_key_auth import _authorize_authenticated_request, enforce_key_and_fallback_model_access
+from litellm.types.proxy.auth.user_api_key_auth import JWTModelAccessPolicy
 
 
 class Request:
@@ -35,6 +36,75 @@ class Request:
         self.client = MagicMock()
         self.client.host = client_ip
         self.headers: Dict[str, str] = {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "model,fallbacks,allowed", (("model-a", [], True), ("model-b", [], False), ("model-a", ["model-b"], False))
+)
+async def test_virtual_key_model_policy_on_first_lookup_and_cache_hit(
+    monkeypatch: pytest.MonkeyPatch, model: str, fallbacks: list[str], allowed: bool
+) -> None:
+    server: Final = litellm.proxy.proxy_server
+    cache: Final = UserApiKeyCache()
+    key: Final = "sk-central-model-check"
+    stored: Final = UserAPIKeyAuth(token=server.hash_token(key), models=["model-a"])
+    database: Final = MagicMock(get_data=AsyncMock(side_effect=(stored, AssertionError("unexpected cache miss"))))
+    monkeypatch.setattr(server, "master_key", MASTER_KEY)
+    monkeypatch.setattr(server, "general_settings", {})
+    monkeypatch.setattr(server, "user_api_key_cache", cache)
+    monkeypatch.setattr(server, "prisma_client", database)
+    monkeypatch.setattr(server, "llm_router", None)
+    monkeypatch.setattr(server, "user_custom_auth", None)
+    for _ in range(2):
+        request: Final = StarletteRequest(
+            {"type": "http", "method": "POST", "path": "/chat/completions", "headers": []},
+            receive=AsyncMock(
+                return_value={
+                    "type": "http.request",
+                    "body": json.dumps({"model": model, "fallbacks": fallbacks}).encode(),
+                    "more_body": False,
+                }
+            ),
+        )
+        if allowed:
+            identity: Final = await user_api_key_auth(request=request, api_key=f"Bearer {key}")
+            assert identity.models == ["model-a"]
+        else:
+            with pytest.raises(ProxyException) as denied:
+                await user_api_key_auth(request=request, api_key=f"Bearer {key}")
+            assert denied.value.code == "403"
+            assert "model-b" in denied.value.message
+
+
+@pytest.mark.asyncio
+async def test_unresolved_jwt_team_denial_names_a_denied_model_not_the_model_list(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    server: Final = litellm.proxy.proxy_server
+    cache: Final = UserApiKeyCache()
+    group: Final = LiteLLM_AccessGroupTable(
+        access_group_id="science-id", access_group_name="science", access_model_names=["model-a"]
+    )
+    cache.set_cache("access_group_rule_name:science", group, model_type=LiteLLM_AccessGroupTable)
+    cache.set_cache("access_group_id:science-id", group, model_type=LiteLLM_AccessGroupTable)
+    monkeypatch.setattr(server, "user_api_key_cache", cache)
+    monkeypatch.setattr(server, "prisma_client", MagicMock())
+    monkeypatch.setattr(
+        server,
+        "general_settings",
+        {"access_group_rules": [{"attribute": "user_id", "equals": "science", "access_group": "science"}]},
+    )
+    monkeypatch.setattr(server, "llm_router", None)
+    identity: Final = UserAPIKeyAuth(user_id="science")
+    identity.set_jwt_model_policy(JWTModelAccessPolicy(unresolved_team_ids=frozenset({"missing-team"})))
+    request: Final = StarletteRequest({"type": "http", "method": "POST", "path": "/chat/completions", "headers": []})
+    with pytest.raises(ProxyException) as denied:
+        await _authorize_authenticated_request(
+            identity, request, {"model": ["model-a", "model-b"]}, "/chat/completions", "synthetic"
+        )
+    assert denied.value.code == "403"
+    assert "requested model: model-b." in denied.value.message
 
 
 @pytest.mark.asyncio
