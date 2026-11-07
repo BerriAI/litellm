@@ -11,3 +11,15 @@ updates:
       github-actions:
         patterns:
           - "*"
+
+  - package-ecosystem: "cargo"
+    directory: "/litellm-rust"
+    schedule:
+      interval: "daily"
+    cooldown:
+      default-days: 3
+      semver-major-days: 14
+    groups:
+      cargo:
+        patterns:
+          - "*"
