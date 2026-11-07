@@ -5608,9 +5608,10 @@ async def test_async_messages_with_num_retries_send_the_rejected_reasoning_only_
 
 
 @pytest.mark.usefixtures("_chat_bridge_httpx")
-def test_sync_messages_with_num_retries_send_the_rejected_reasoning_only_once(
-    respx_mock: respx.MockRouter,
+def test_sync_messages_with_global_num_retries_send_the_rejected_reasoning_once_and_keep_the_setting(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setattr(litellm, "num_retries", 2)
     route: Final = respx_mock.post(url__regex=_RETRY_URL).mock(
         side_effect=[_RETRY_REJECTION, httpx.Response(200, json=_RETRY_REPLY)]
     )
@@ -5623,10 +5624,62 @@ def test_sync_messages_with_num_retries_send_the_rejected_reasoning_only_once(
         max_tokens=64,
         tools=_RETRY_TOOLS,
         messages=_history_with_foreign_reasoning(),
-        num_retries=2,
     )
 
     assert [len(_sent_reasoning_items(call.request)) for call in route.calls] == [1, 0]
+    assert litellm.num_retries == 2
+
+
+_SERVER_ERROR: Final = httpx.Response(
+    500, json={"error": {"message": "The server had an error while processing your request.", "type": "server_error"}}
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_chat_bridge_httpx")
+async def test_async_messages_retry_a_server_error_with_the_reasoning_and_drop_it_only_once_rejected(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post(url__regex=_RETRY_URL).mock(
+        side_effect=[_SERVER_ERROR, _RETRY_REJECTION, httpx.Response(200, json=_RETRY_REPLY)]
+    )
+
+    response: Final = await litellm.anthropic.messages.acreate(
+        model="azure/gpt-5.4-nano",
+        api_base=_RETRY_API_BASE,
+        api_key="fake-key",
+        api_version="2025-04-01-preview",
+        max_tokens=64,
+        tools=_RETRY_TOOLS,
+        messages=_history_with_foreign_reasoning(),
+        num_retries=2,
+    )
+
+    assert [len(_sent_reasoning_items(call.request)) for call in route.calls] == [1, 1, 0]
+    assert [block["text"] for block in response["content"] if block["type"] == "text"] == ["Oslo"]
+
+
+@pytest.mark.usefixtures("_chat_bridge_httpx")
+def test_sync_messages_retry_a_server_error_with_the_reasoning_and_drop_it_only_once_rejected(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post(url__regex=_RETRY_URL).mock(
+        side_effect=[_SERVER_ERROR, _RETRY_REJECTION, httpx.Response(200, json=_RETRY_REPLY)]
+    )
+
+    response: Final = litellm.anthropic.messages.create(
+        model="azure/gpt-5.4-nano",
+        api_base=_RETRY_API_BASE,
+        api_key="fake-key",
+        api_version="2025-04-01-preview",
+        max_tokens=64,
+        tools=_RETRY_TOOLS,
+        messages=_history_with_foreign_reasoning(),
+        num_retries=2,
+    )
+
+    assert [len(_sent_reasoning_items(call.request)) for call in route.calls] == [1, 1, 0]
+    assert [block["text"] for block in response["content"] if block["type"] == "text"] == ["Oslo"]
 
 
 class _FailureLog(CustomLogger):
