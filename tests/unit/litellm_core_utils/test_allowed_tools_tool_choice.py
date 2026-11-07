@@ -10,6 +10,7 @@ from litellm.litellm_core_utils.allowed_tools_tool_choice import (
     ChatAllowedToolsToolChoice,
     GatewayTool,
     GatewayTools,
+    allowed_tools_tool_choice_in_auto_mode,
     allowed_tools_tool_choice_in_effect,
     allowed_tools_tool_choice_with_builtin_as_function,
     allowed_tools_tool_choice_with_function,
@@ -549,3 +550,42 @@ def test_an_added_function_joins_the_choice_in_the_callers_layout(
 )
 def test_a_choice_that_is_not_allowed_tools_or_already_lists_the_function_is_left_as_sent(tool_choice: object):
     assert allowed_tools_tool_choice_with_function(tool_choice, "retrieve") is tool_choice
+
+
+@pytest.mark.parametrize(
+    ("tool_choice", "expected"),
+    [
+        (
+            {
+                "type": "allowed_tools",
+                "allowed_tools": {"mode": "required", "tools": [{"type": "function", "function": {"name": "get_time"}}]},
+            },
+            {
+                "type": "allowed_tools",
+                "allowed_tools": {"mode": "auto", "tools": [{"type": "function", "function": {"name": "get_time"}}]},
+            },
+        ),
+        (
+            {
+                "type": "allowed_tools",
+                "mode": "required",
+                "tools": [{"type": "function", "name": "get_time"}, {"type": "mcp", "server_label": "docs"}],
+            },
+            {
+                "type": "allowed_tools",
+                "mode": "auto",
+                "tools": [{"type": "function", "name": "get_time"}, {"type": "mcp", "server_label": "docs"}],
+            },
+        ),
+        (_CHAT_LAYOUT, _CHAT_LAYOUT),
+        ("required", "required"),
+        (
+            {"type": "function", "function": {"name": "get_time"}},
+            {"type": "function", "function": {"name": "get_time"}},
+        ),
+    ],
+)
+def test_auto_mode_lifts_only_the_requirement_and_keeps_the_callers_layout_and_tools(
+    tool_choice: object, expected: object
+):
+    assert allowed_tools_tool_choice_in_auto_mode(tool_choice) == expected
