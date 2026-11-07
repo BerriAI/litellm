@@ -745,6 +745,7 @@ def is_request_body_safe(
         nested = _coerce_metadata_to_dict(request_body.get(nested_key))
         if nested is not None:
             _check_banned_params(nested, general_settings, llm_router, model, manages_deployments=manages_deployments)
+            _reject_client_chosen_fallbacks(nested_key, nested)
     for metadata_key in _NESTED_METADATA_KEYS:
         metadata = _coerce_metadata_to_dict(request_body.get(metadata_key))
         if metadata is not None:
@@ -778,6 +779,14 @@ def is_request_body_safe(
     for user_config_params in _user_config_litellm_params(request_body):  # pyright: ignore[reportUnknownArgumentType]  # request_body is an untyped dict
         reject_api_key_secret_reference(user_config_params)
     return True
+
+
+def _reject_client_chosen_fallbacks(nested_key: str, nested: Mapping[str, object]) -> None:
+    if nested_key == "extra_body" and "fallbacks" in nested:
+        raise ValueError(
+            "Rejected Request: fallbacks inside extra_body can't be checked against the key's allowed models. "
+            "Set server-side fallbacks in the deployment's litellm_params instead."
+        )
 
 
 def _reject_request_credential_params(litellm_params: Mapping[str, object], *, manages_deployments: bool) -> None:
