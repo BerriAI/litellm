@@ -394,7 +394,7 @@ async def acreate_realtime_client_secret(
 async def acreate_realtime_translation_client_secret(
     model: str | None = None,
     session: Mapping[str, Any] | None = None,
-    expires_after: Mapping[str, Any] | None = None,
+    expires_after: Mapping[str, object] | None = None,
     timeout: float | None = None,
     **kwargs: object,  # kwargs-ok: public API preserves provider-specific request options
 ) -> httpx.Response:
@@ -409,7 +409,7 @@ async def acreate_realtime_translation_client_secret(
     req: Final = RealtimeClientSecretRequest(
         model=requested_model_name,
         session=session_config,
-        expires_after=RealtimeExpiresAfter(**expires_after) if expires_after else None,
+        expires_after=RealtimeExpiresAfter.model_validate(expires_after) if expires_after else None,
     )
     litellm_logging_obj: Final = kwargs.get("litellm_logging_obj")
     if not isinstance(litellm_logging_obj, LiteLLMLogging):
@@ -626,7 +626,7 @@ async def arealtime_translation_calls(
     openai_ephemeral_key: str,
     sdp_body: bytes,
     model: str | None = None,
-    session: Mapping[str, Any] | None = None,
+    session: Mapping[str, object] | None = None,
     timeout: float | None = None,
     **kwargs: object,  # kwargs-ok: public API preserves provider-specific request options
 ) -> httpx.Response:

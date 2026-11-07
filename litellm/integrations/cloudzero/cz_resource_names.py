@@ -17,10 +17,16 @@
 """CloudZero Resource Names (CZRN) generation and validation for LiteLLM resources."""
 
 import re
+from collections.abc import Mapping
 from enum import Enum
-from typing import Any, Final, cast
+from typing import Final, Protocol, cast
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import require_attributes
+
+
+class _SupportsLower(Protocol):
+    def lower(self) -> str: ...
 
 
 class CZEntityType(str, Enum):
@@ -35,7 +41,7 @@ class CZRNGenerator:
     def __init__(self):
         """Initialize CZRN generator."""
 
-    def create_from_litellm_data(self, row: dict[str, Any]) -> str:
+    def create_from_litellm_data(self, row: Mapping[str, object]) -> str:
         """Create a CZRN from LiteLLM daily spend data.
 
         CZRN format: czrn:<service-type>:<provider>:<region>:<owner-account-id>:<resource-type>:<cloud-local-id>
@@ -49,19 +55,21 @@ class CZRNGenerator:
         - cloud-local-id: model
         """
         service_type: Final = "litellm"
-        provider: Final = self._normalize_provider(row.get("custom_llm_provider", "unknown"))
+        provider: Final = self._normalize_provider(
+            require_attributes(row.get("custom_llm_provider", "unknown"), _SupportsLower, "lower")
+        )
         region: Final = "cross-region"
 
         # Use the actual entity_id (team_id or user_id) as the owner account
         team_id: Final = row.get("team_id", "unknown")
-        owner_account_id: Final = self._normalize_component(team_id)
+        owner_account_id: Final = self._normalize_owner(team_id)
 
         resource_type: Final = "llm-usage"
 
         # Create a unique identifier with just the model (entity info already in owner_account_id)
         model: Final = row.get("model", "unknown")
 
-        cloud_local_id: Final = model
+        cloud_local_id: Final = f"{model}"
 
         return self.create_from_components(
             service_type=service_type,
@@ -112,7 +120,7 @@ class CZRNGenerator:
 
         return cast(tuple[str, str, str, str, str, str], match.groups())
 
-    def _normalize_provider(self, provider: str) -> str:
+    def _normalize_provider(self, provider: _SupportsLower) -> str:
         """Normalize provider names to standard CZRN format."""
         # Map common provider names to CZRN standards
         provider_map: Final = {
@@ -141,16 +149,14 @@ class CZRNGenerator:
             return "unknown"
 
         # Convert to lowercase unless uppercase is allowed
-        if not allow_uppercase:
-            component = component.lower()
+        return self._clean_component(component if allow_uppercase else component.lower())
 
-        # Replace invalid characters with hyphens
-        component = re.sub(r"[^a-zA-Z0-9-]", "-", component)
+    def _normalize_owner(self, owner: object) -> str:
+        if not owner:
+            return "unknown"
+        return self._clean_component(require_attributes(owner, _SupportsLower, "lower").lower())
 
-        # Remove consecutive hyphens
-        component = re.sub(r"-+", "-", component)
-
-        # Remove leading/trailing hyphens
-        component = component.strip("-")
-
-        return component or "unknown"
+    def _clean_component(self, component: str) -> str:
+        hyphenated: Final = re.sub(r"[^a-zA-Z0-9-]", "-", component)
+        collapsed: Final = re.sub(r"-+", "-", hyphenated)
+        return collapsed.strip("-") or "unknown"

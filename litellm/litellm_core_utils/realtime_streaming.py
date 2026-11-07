@@ -26,7 +26,7 @@ from litellm.constants import (
     REALTIME_SESSION_SUCCESS_LOGGED_KEY,
 )
 from litellm.litellm_core_utils.audio_utils.utils import normalized_audio_duration_seconds
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, decoded_json_object
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.base_llm.realtime.transcription_protocol import RealtimeTranscriptionProtocolError
 from litellm.llms.base_llm.realtime.transformation import (
@@ -674,7 +674,7 @@ class RealTimeStreaming:
         if not self._should_store_message(message_obj):
             return
         try:
-            event_type: Final = message_obj.get("type", "")
+            event_type: Final = decoded_json_object(message_obj).get("type", "")
             if event_type in self._SESSION_EVENT_TYPES:
                 typed_obj: OpenAIRealtimeEvents = OpenAIRealtimeStreamSessionEvents(**message_obj)
             else:

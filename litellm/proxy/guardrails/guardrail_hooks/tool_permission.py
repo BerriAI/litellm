@@ -948,10 +948,10 @@ class ToolPermissionGuardrail(CustomGuardrail):
         return is_allowed, None, message
 
     @staticmethod
-    def _get_mapping_value(item: object, key: str) -> Any:
+    def _get_mapping_value(item: object, key: str) -> object:
         if isinstance(item, dict):
             return item.get(key)
-        return getattr(item, key, None)
+        return attribute_or_none(item, key)
 
     @staticmethod
     def _legacy_function_call_id(choice_index: int) -> str:

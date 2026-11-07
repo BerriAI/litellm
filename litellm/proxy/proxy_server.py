@@ -13711,7 +13711,7 @@ async def moderations(
             llm_router=llm_router,
             user_model=user_model,
         )
-        response: Final = await llm_call
+        response: Final = _UNTYPED_VALUE.validate_python(await llm_call)
 
         ### ALERTING ###
         asyncio.create_task(proxy_logging_obj.update_request_status(litellm_call_id=litellm_call_id, status="success"))
@@ -13993,7 +13993,7 @@ async def audio_transcriptions(
                 llm_router=llm_router,
                 user_model=user_model,
             )
-            response: Final = await llm_call
+            response: Final = _UNTYPED_VALUE.validate_python(await llm_call)
         except Exception as e:
             raise e
         finally:
@@ -14570,7 +14570,7 @@ async def get_assistants(
         # for now use custom_llm_provider=="openai" -> this will change as LiteLLM adds more providers for acreate_batch
         if llm_router is None:
             raise HTTPException(status_code=500, detail={"error": CommonProxyErrors.no_llm_router.value})
-        response: Final = await llm_router.aget_assistants(**data)
+        response: Final = _UNTYPED_VALUE.validate_python(await llm_router.aget_assistants(**data))
 
         ### ALERTING ###
         asyncio.create_task(
@@ -14646,7 +14646,7 @@ async def create_assistant(
         # for now use custom_llm_provider=="openai" -> this will change as LiteLLM adds more providers for acreate_batch
         if llm_router is None:
             raise HTTPException(status_code=500, detail={"error": CommonProxyErrors.no_llm_router.value})
-        response: Final = await llm_router.acreate_assistants(**data)
+        response: Final = _UNTYPED_VALUE.validate_python(await llm_router.acreate_assistants(**data))
 
         ### ALERTING ###
         asyncio.create_task(
@@ -14721,7 +14721,9 @@ async def delete_assistant(
         # for now use custom_llm_provider=="openai" -> this will change as LiteLLM adds more providers for acreate_batch
         if llm_router is None:
             raise HTTPException(status_code=500, detail={"error": CommonProxyErrors.no_llm_router.value})
-        response: Final = await llm_router.adelete_assistant(assistant_id=assistant_id, **data)
+        response: Final = _UNTYPED_VALUE.validate_python(
+            await llm_router.adelete_assistant(assistant_id=assistant_id, **data)
+        )
 
         ### ALERTING ###
         asyncio.create_task(
@@ -14796,7 +14798,7 @@ async def create_threads(
         # for now use custom_llm_provider=="openai" -> this will change as LiteLLM adds more providers for acreate_batch
         if llm_router is None:
             raise HTTPException(status_code=500, detail={"error": CommonProxyErrors.no_llm_router.value})
-        response: Final = await llm_router.acreate_thread(**data)
+        response: Final = _UNTYPED_VALUE.validate_python(await llm_router.acreate_thread(**data))
 
         ### ALERTING ###
         asyncio.create_task(
@@ -14869,7 +14871,7 @@ async def get_thread(
         # for now use custom_llm_provider=="openai" -> this will change as LiteLLM adds more providers for acreate_batch
         if llm_router is None:
             raise HTTPException(status_code=500, detail={"error": CommonProxyErrors.no_llm_router.value})
-        response: Final = await llm_router.aget_thread(thread_id=thread_id, **data)
+        response: Final = _UNTYPED_VALUE.validate_python(await llm_router.aget_thread(thread_id=thread_id, **data))
 
         ### ALERTING ###
         asyncio.create_task(
@@ -14946,7 +14948,7 @@ async def add_messages(
         # for now use custom_llm_provider=="openai" -> this will change as LiteLLM adds more providers for acreate_batch
         if llm_router is None:
             raise HTTPException(status_code=500, detail={"error": CommonProxyErrors.no_llm_router.value})
-        response: Final = await llm_router.a_add_message(thread_id=thread_id, **data)
+        response: Final = _UNTYPED_VALUE.validate_python(await llm_router.a_add_message(thread_id=thread_id, **data))
 
         ### ALERTING ###
         asyncio.create_task(
@@ -15019,7 +15021,7 @@ async def get_messages(
         # for now use custom_llm_provider=="openai" -> this will change as LiteLLM adds more providers for acreate_batch
         if llm_router is None:
             raise HTTPException(status_code=500, detail={"error": CommonProxyErrors.no_llm_router.value})
-        response: Final = await llm_router.aget_messages(thread_id=thread_id, **data)
+        response: Final = _UNTYPED_VALUE.validate_python(await llm_router.aget_messages(thread_id=thread_id, **data))
 
         ### ALERTING ###
         asyncio.create_task(
@@ -15099,7 +15101,9 @@ async def run_thread(
         if "stream" in data and data["stream"] is True:  # use generate_responses to stream responses
 
             async def produce_run_stream() -> StreamingResponse | JSONResponse:
-                run_stream: Final = await router.arun_thread(thread_id=thread_id, **data)
+                run_stream: Final = _UNTYPED_VALUE.validate_python(
+                    await router.arun_thread(thread_id=thread_id, **data)
+                )
                 return await create_response(
                     generator=async_assistants_data_generator(
                         user_api_key_dict=user_api_key_dict,
@@ -15127,7 +15131,7 @@ async def run_thread(
                 on_late_failure=audit_late_failure,
             )
 
-        response: Final = await router.arun_thread(thread_id=thread_id, **data)
+        response: Final = _UNTYPED_VALUE.validate_python(await router.arun_thread(thread_id=thread_id, **data))
 
         ### ALERTING ###
         asyncio.create_task(
@@ -19320,7 +19324,7 @@ async def async_queue_request(
                 return StreamingResponse(
                     async_data_generator(
                         user_api_key_dict=user_api_key_dict,
-                        response=await router.schedule_acompletion(**data),
+                        response=_UNTYPED_VALUE.validate_python(await router.schedule_acompletion(**data)),
                         request_data=data,
                         request=request,
                     ),
@@ -19339,7 +19343,7 @@ async def async_queue_request(
                 on_late_failure=audit_late_failure,
             )
 
-        response: Final = await router.schedule_acompletion(**data)
+        response: Final = _UNTYPED_VALUE.validate_python(await router.schedule_acompletion(**data))
         fastapi_response.headers.update({"x-litellm-priority": str(queued_priority)})
         return response
     except Exception as e:

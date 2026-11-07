@@ -5632,7 +5632,7 @@ def _raise_user_unique_conflict(error: "UniqueViolationError", user_id: object, 
         raise error
     raise HTTPException(
         status_code=409,
-        detail={"error": _user_unique_conflict_message(error.meta, user_id)},
+        detail={"error": _user_unique_conflict_message(_DECODED_JSON.validate_python(error.meta), user_id)},
     ) from error
 
 

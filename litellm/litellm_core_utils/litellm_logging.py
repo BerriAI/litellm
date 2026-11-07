@@ -91,6 +91,7 @@ from litellm.litellm_core_utils.classifier_logging import (
 )
 from litellm.litellm_core_utils.core_helpers import (
     as_str_mapping,
+    attribute_or_none,
     finite_cost,
     get_provider_response_headers_from_hidden_params,
     is_expected_client_error,
@@ -682,6 +683,19 @@ class _MetadataLookup(Protocol):
 
 class _ParamsLookup(Protocol):
     def get(self, key: str, default: object, /) -> object: ...
+
+
+class _HiddenParamsSlot(Protocol):
+    get: Callable[[str], object]
+    __setitem__: Callable[[str, object], None]
+
+
+class _HiddenParamsCopier(Protocol):
+    copy: Callable[[], object]
+
+
+class _MetadataDefaults(Protocol):
+    setdefault: Callable[[str, Mapping[str, object]], object]
 
 
 def _callback_control_params(litellm_params: object) -> dict[str, object]:
@@ -3083,12 +3097,14 @@ class Logging(LiteLLMLoggingBaseClass):
         """
         if logging_result is None:
             return
-        hidden_params: Final = getattr(logging_result, HIDDEN_PARAMS_ATTR, None)
+        hidden_params: Final = attribute_or_none(logging_result, HIDDEN_PARAMS_ATTR)
         if not hidden_params:
             return
         if self.model_call_details.get("litellm_params") is None:
             return
-        metadata_hidden_params: Final = hidden_params.copy()
+        metadata_hidden_params: Final = require_attributes(
+            require_attributes(hidden_params, _HiddenParamsCopier, "copy").copy(), _HiddenParamsSlot, "get"
+        )
         response_cost: Final[object] = self.model_call_details.get("response_cost")
         if metadata_hidden_params.get("response_cost") is None and response_cost is not None:
             metadata_hidden_params["response_cost"] = response_cost
@@ -3111,7 +3127,9 @@ class Logging(LiteLLMLoggingBaseClass):
         hidden_params: Final = getattr(logging_result, HIDDEN_PARAMS_ATTR, {})
         if hidden_params:
             if self.model_call_details.get("litellm_params") is not None:
-                self.model_call_details["litellm_params"].setdefault("metadata", {})
+                require_attributes(
+                    self._model_call_details_view["litellm_params"], _MetadataDefaults, "setdefault"
+                ).setdefault("metadata", {})
                 if self.model_call_details["litellm_params"]["metadata"] is None:
                     self.model_call_details["litellm_params"]["metadata"] = {}
                 self.model_call_details["litellm_params"]["metadata"]["hidden_params"] = getattr(
