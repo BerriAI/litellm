@@ -1,5 +1,6 @@
 import json
 import math
+from collections import Counter
 from collections.abc import Mapping
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Optional, Union
@@ -69,8 +70,12 @@ from litellm.repositories.team_repository import TeamRepository
 from litellm.types.utils import BudgetConfig
 
 if TYPE_CHECKING:
+    from prisma import Prisma
+    from prisma import models as prisma_models
+
     from litellm.proxy._types import NewProjectRequest, UpdateProjectRequest
     from litellm.proxy.utils import PrismaClient, ProxyLogging
+    from litellm.repositories.prisma_protocols import TableActions
 
 _user_has_admin_view: Final = user_api_key_has_admin_view
 
@@ -625,6 +630,20 @@ def _has_meaningful_budget_limit(budget_values: Mapping[str, object]) -> bool:
     return any(_is_set_budget_value(budget_values.get(field)) for field in _TEAM_MEMBER_BUDGET_LIMIT_FIELDS)
 
 
+def _membership_tx_db(tx: "Prisma") -> "TableActions[prisma_models.LiteLLM_TeamMembership]":
+    return tx.litellm_teammembership  # pyright: ignore[reportReturnType]  # TableActions widens the generated inputs to Mapping, as the repositories do
+
+
+async def budget_ids_shared_by_memberships(tx: "Prisma", budget_ids: frozenset[str]) -> frozenset[str]:
+    """The rows in ``budget_ids`` more than one team membership points at, counted across every
+    team so a row shared with another team is protected too."""
+    if not budget_ids:
+        return frozenset()
+    rows: Final = await _membership_tx_db(tx).find_many(where={"budget_id": {"in": sorted(budget_ids)}})
+    references: Final = Counter(row.budget_id for row in rows)
+    return frozenset(budget_id for budget_id in budget_ids if references[budget_id] > 1)
+
+
 async def upsert_budget_and_membership(
     tx,
     *,
@@ -651,8 +670,8 @@ async def upsert_budget_and_membership(
     mutate the shared default that every other member points at.
 
     ``shared_budget_ids`` extends that protection to any other row more than one
-    membership points at, which a caller patching several members at once has
-    already counted; a row listed there is cloned rather than written in place.
+    membership points at (see ``budget_ids_shared_by_memberships``); a row listed
+    there is cloned rather than written in place.
     A patch whose every field already matches the shared row changes nothing and
     is a no-op rather than a clone.
     """
