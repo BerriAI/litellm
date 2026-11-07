@@ -5524,11 +5524,14 @@ class TestAsyncStreamingDataGeneratorFastPath:
             b'"usage":{"prompt_tokens":11,"completion_tokens":4,"total_tokens":15}}\n\n'
         )
 
-        async def stream(headers: dict[str, str]) -> list[bytes]:
+        async def frames() -> AsyncGenerator[bytes, None]:
+            yield usage_frame
+
+        async def stream(headers: dict[str, str]) -> list[object]:
             return [
                 c
                 async for c in ProxyBaseLLMRequestProcessing.async_streaming_data_generator(
-                    response=self._aiter([usage_frame]),
+                    response=frames(),
                     user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
                     request_data={"model": "gpt-4o-mini", "proxy_server_request": {"headers": headers}},
                     proxy_logging_obj=ProxyLogging(user_api_key_cache=MagicMock()),
@@ -5544,6 +5547,7 @@ class TestAsyncStreamingDataGeneratorFastPath:
 
         assert plain == [usage_frame]
         assert declined == [usage_frame]
+        assert isinstance(opted_in[0], bytes)
         payload: Final = json.loads(opted_in[0].decode("utf-8").split("data:", 1)[1].strip())
         assert payload["usage"]["cost"] > 0
         assert payload["usage"]["total_tokens"] == 15

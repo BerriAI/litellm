@@ -4817,7 +4817,9 @@ class ProxyBaseLLMRequestProcessing:
         # await, response-string materialization, and cost-injection call are
         # pure overhead on the streaming hot path (the default config).
         caps: Final = ProxyLogging.callback_capabilities()
-        request_headers: Final = proxy_request_headers(request_data)
+        request_headers: Final = proxy_request_headers(
+            request_data  # pyright: ignore[reportUnknownArgumentType]  # request_data is the untyped proxy request dict
+        )
         cost_injection_enabled: Final = stream_cost_injection_requested(request_headers)
         fast_path = not caps.has_streaming_chunk_override and not caps.has_guardrail and not cost_injection_enabled
         debug_enabled: Final = verbose_proxy_logger.isEnabledFor(logging.DEBUG)
