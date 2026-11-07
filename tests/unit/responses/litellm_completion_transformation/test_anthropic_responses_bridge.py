@@ -591,6 +591,56 @@ async def test_responses_reports_auto_for_an_allowed_tools_choice_it_dropped(
     assert response.tool_choice == "auto"
 
 
+@pytest.mark.usefixtures(httpx_transport.__name__)
+@pytest.mark.asyncio
+async def test_responses_keep_the_400_when_the_provider_would_run_an_mcp_tool(respx_mock: respx.MockRouter) -> None:
+    with pytest.raises(litellm.BadRequestError, match="drop_params does not drop it"):
+        await litellm.aresponses(
+            model="anthropic/claude-haiku-4-5",
+            input="What is the weather?",
+            tools=[{"type": "mcp", "server_label": "docs", "server_url": "https://mcp.example.com/sse"}],
+            tool_choice=_FLAT_ALLOWED_WEATHER,
+            drop_params=True,
+            api_key="sk-ant-fake",
+        )
+
+    assert not respx_mock.calls
+
+
+@pytest.mark.usefixtures(httpx_transport.__name__)
+def test_responses_report_auto_when_an_old_azure_api_version_dropped_the_choice(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(url__regex=r"https://azure-bridge\.example\.com/.*chat/completions.*").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-old-azure",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "gpt-4o",
+                "choices": [
+                    {"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "done"}}
+                ],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+    )
+
+    response: Final = litellm.responses(
+        model="azure/gpt-4o",
+        input="What is the weather?",
+        tools=list(_RESPONSES_TOOLS),
+        tool_choice=_FLAT_ALLOWED_WEATHER,
+        drop_params=True,
+        use_chat_completions_api=True,
+        api_key="fake",
+        api_base="https://azure-bridge.example.com",
+        api_version="2023-07-01-preview",
+    )
+
+    assert "tool_choice" not in json.loads(route.calls[0].request.content)
+    assert response.tool_choice == "auto"
+
+
 def test_streamed_responses_report_auto_for_an_allowed_tools_choice_it_dropped(respx_mock: respx.MockRouter) -> None:
     respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(
         return_value=httpx.Response(

@@ -1517,3 +1517,93 @@ async def test_mcp_tools_keep_the_400_for_an_allowed_tools_choice_the_provider_c
 
     execute.assert_not_awaited()
     assert not respx_mock.calls
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True])
+async def test_mcp_tools_keep_the_400_on_an_azure_api_version_that_drops_the_choice(
+    respx_mock: respx.MockRouter, stream: bool
+):
+    execute: Final = AsyncMock(return_value=[])
+
+    with (
+        patch.object(
+            LiteLLM_Proxy_MCP_Handler,
+            "process_mcp_tools_without_openai_transform",
+            AsyncMock(return_value=([_MCP_ECHO_TOOL], {"echo": "demo"})),
+        ),
+        patch.object(LiteLLM_Proxy_MCP_Handler, "execute_tool_calls", execute),
+        pytest.raises(litellm.BadRequestError, match="drop_params does not drop it"),
+    ):
+        await litellm.acompletion(
+            model="azure/gpt-4o",
+            messages=[{"role": "user", "content": "Call echo"}],
+            tools=[{"type": "mcp", "server_url": "litellm_proxy/mcp/demo", "require_approval": "never"}],
+            tool_choice=_FLAT_ALLOWED_ECHO,
+            drop_params=True,
+            stream=stream,
+            api_key="fake",
+            api_base="https://mcp-chat-rounds.example.com",
+            api_version="2023-07-01-preview",
+        )
+
+    execute.assert_not_awaited()
+    assert not respx_mock.calls
+
+
+_ALLOWED_ONLY_ANOTHER_TOOL: Final = {
+    "type": "allowed_tools",
+    "mode": "auto",
+    "tools": [{"type": "function", "name": "another_tool"}],
+}
+
+
+def _served_by_a_recording_mcp_server(monkeypatch: pytest.MonkeyPatch, call_tool: AsyncMock) -> None:
+    monkeypatch.setitem(
+        sys.modules, "litellm.proxy.proxy_server", SimpleNamespace(proxy_logging_obj=None, prisma_client=None)
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager",
+        SimpleNamespace(
+            catalog=SimpleNamespace(operation=nullcontext),
+            get_registry=MagicMock(return_value={}),
+            call_tool=call_tool,
+            get_mcp_server_from_tool_name=MagicMock(return_value=None),
+            get_mcp_server_by_name=MagicMock(return_value=None),
+        ),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True])
+async def test_an_mcp_tool_the_choice_excludes_never_runs_when_the_model_ignored_the_choice(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, stream: bool
+):
+    _serve_chat_rounds(respx_mock, monkeypatch, (_streamed(_CHAT_ROUND_ONE) if stream else _ok(_CHAT_ROUND_ONE),))
+    call_tool: Final = AsyncMock()
+    _served_by_a_recording_mcp_server(monkeypatch, call_tool)
+
+    async def call_with_the_choice() -> None:
+        response: Final = await litellm.acompletion(
+            model="openai/gpt-5.6",
+            messages=[{"role": "user", "content": "Call echo with PING"}],
+            tools=[{"type": "mcp", "server_url": "litellm_proxy/mcp/demo", "require_approval": "never"}],
+            tool_choice=_ALLOWED_ONLY_ANOTHER_TOOL,
+            api_key="sk-mcp-chat-rounds",
+            api_base="https://mcp-chat-rounds.example.com/v1",
+            stream=stream,
+        )
+        if stream:
+            await _read_all(response)
+
+    with (
+        patch.object(
+            LiteLLM_Proxy_MCP_Handler,
+            "process_mcp_tools_without_openai_transform",
+            AsyncMock(return_value=([_MCP_ECHO_TOOL], {"echo": "demo"})),
+        ),
+        pytest.raises(litellm.BadRequestError, match="LiteLLM did not run the call"),
+    ):
+        await call_with_the_choice()
+
+    call_tool.assert_not_awaited()

@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Any, Final
 from httpx._models import Headers, Response
 
 import litellm
+from litellm.litellm_core_utils.allowed_tools_tool_choice import azure_api_version_takes_tool_choice
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     drop_tool_reference_parts_from_tool_messages,
     flatten_combinators_and_drop_non_python_regex_patterns,
@@ -219,11 +220,7 @@ class AzureOpenAIConfig(BaseConfig):
                 if api_version_year is None or api_version_month is None or api_version_day is None:
                     optional_params["tool_choice"] = value
                 else:
-                    if (
-                        api_version_year < "2023"
-                        or (api_version_year == "2023" and api_version_month < "12")
-                        or (api_version_year == "2023" and api_version_month == "12" and api_version_day < "01")
-                    ):
+                    if not azure_api_version_takes_tool_choice(api_version):
                         if not (litellm.drop_params is True or drop_params is True):
                             raise UnsupportedParamsError(
                                 status_code=400,

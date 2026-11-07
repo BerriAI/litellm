@@ -533,6 +533,22 @@ async def test_a_malformed_allowed_tools_tool_choice_stays_a_400_on_mcp_gateway_
     assert not respx_mock.calls
 
 
+@pytest.mark.asyncio
+async def test_drop_params_keeps_the_400_when_the_provider_would_run_an_mcp_tool(respx_mock: respx.MockRouter):
+    with pytest.raises(litellm.BadRequestError, match="drop_params does not drop it") as exc:
+        await litellm.acompletion(
+            model="anthropic/claude-haiku-4-5",
+            messages=[{"role": "user", "content": "What time is it?"}],
+            tools=[{"type": "mcp", "server_label": "docs", "server_url": "https://mcp.example.com/sse"}],
+            tool_choice={"type": "allowed_tools", "mode": "auto", "tools": [{"type": "function", "name": "get_time"}]},
+            drop_params=True,
+            api_key="sk-ant-fake",
+        )
+
+    assert exc.value.status_code == 400
+    assert not respx_mock.calls
+
+
 _CLAUDE_TOOL_SEARCH_CALL: Final = {
     "id": "srvtoolu_01search",
     "type": "function",

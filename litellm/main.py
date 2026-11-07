@@ -70,6 +70,7 @@ from litellm.constants import (
 from litellm.exceptions import LiteLLMUnknownProvider
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.allowed_tools_tool_choice import (
+    caller_runs_every_tool,
     drops_unsupported_allowed_tools_tool_choice,
     refuse_unenforced_allowed_tools_tool_choice,
 )
@@ -5361,7 +5362,7 @@ def completion(
         tool_choice=tool_choice,
         model=model,
         drop_params=drops_unsupported
-        and not may_name_litellm_mcp_gateway(tools),  # pyright: ignore[reportUnknownArgumentType]  # untyped tools list
+        and caller_runs_every_tool(tools),  # pyright: ignore[reportUnknownArgumentType]  # untyped tools list
     )
     # validate optional params
     stop = validate_openai_optional_params(stop=stop)
@@ -5626,6 +5627,7 @@ def completion(
                 ),
                 custom_llm_provider=custom_llm_provider,
                 model=model,
+                api_version=api_version,
             )
 
         drops_tool_choice: Final = drops_unsupported_allowed_tools_tool_choice(
@@ -5635,6 +5637,7 @@ def completion(
             custom_llm_provider=custom_llm_provider,
             model=model,
             drop_params=drops_unsupported,
+            tools=tools,  # pyright: ignore[reportUnknownArgumentType]  # untyped tools list
         )
 
         if provider_specific_header is not None:

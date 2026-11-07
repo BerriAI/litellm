@@ -805,6 +805,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                 tool_server_map=self.tool_server_map,
                 served_tools=self.served_tools,
                 tool_calls=tool_calls,
+                tool_choice=self.original_request_params.get("tool_choice"),
                 user_api_key_auth=self.user_api_key_auth,
                 mcp_auth_header=self.mcp_auth_header,
                 mcp_server_auth_headers=self.mcp_server_auth_headers,

@@ -441,6 +441,7 @@ async def acompletion_with_mcp(
                             tool_server_map=self.tool_server_map,
                             served_tools=deduplicated_mcp_tools,
                             tool_calls=self.tool_calls,
+                            tool_choice=kwargs.get("tool_choice"),
                             user_api_key_auth=self.user_api_key_auth,
                             mcp_auth_header=self.mcp_auth_header,
                             mcp_server_auth_headers=self.mcp_server_auth_headers,
@@ -614,6 +615,7 @@ async def acompletion_with_mcp(
     tool_results: Final = await LiteLLM_Proxy_MCP_Handler.execute_tool_calls(
         tool_server_map=tool_server_map,
         tool_calls=tool_calls,
+        tool_choice=kwargs.get("tool_choice"),
         served_tools=deduplicated_mcp_tools,
         user_api_key_auth=user_api_key_auth,
         mcp_auth_header=mcp_auth_header,
