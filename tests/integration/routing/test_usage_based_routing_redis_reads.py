@@ -21,7 +21,6 @@ from integration._support.redis_process import owned_redis
 from integration._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue, TypeAdapter
 from redis import Redis
-from redis.exceptions import TimeoutError as RedisTimeoutError
 
 JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 MODEL_INFO_ENTRIES: Final = TypeAdapter(tuple[dict[str, JsonValue], ...])
@@ -130,21 +129,19 @@ def _capture_redis_commands(host: str, port: int) -> Iterator[SimpleQueue[str]]:
     stop_marker: Final = f"monitor-stop-{uuid.uuid4().hex}"
 
     def capture() -> None:
-        with Redis(host=host, port=port, socket_timeout=1, decode_responses=True) as client:
+        with Redis(host=host, port=port, decode_responses=True) as client:
             with client.monitor() as monitor:
                 started.set()
-                stream: Final = iter(monitor.listen())
                 while not stopped.is_set():
-                    try:
-                        record: Final = MONITOR_COMMAND.validate_python(next(stream))
-                    except RedisTimeoutError:
-                        continue
+                    record: Final = MONITOR_COMMAND.validate_python(monitor.next_command())
                     command: Final = record.get("command")
                     if not isinstance(command, str):
                         continue
                     commands.put(command)
                     if ready_marker in command:
                         armed.set()
+                    if stop_marker in command:
+                        stopped.set()
 
     thread: Final = threading.Thread(target=capture, daemon=True)
     thread.start()
@@ -155,9 +152,9 @@ def _capture_redis_commands(host: str, port: int) -> Iterator[SimpleQueue[str]]:
         assert armed.wait(timeout=5), "Redis MONITOR did not capture its readiness command"
         yield commands
     finally:
-        stopped.set()
         with Redis(host=host, port=port, socket_timeout=1, decode_responses=True) as client:
             client.set(stop_marker, "stop", ex=1)
+        assert stopped.wait(timeout=5), "Redis MONITOR stopped before it captured the stop command"
         thread.join(timeout=5)
         assert not thread.is_alive(), "Redis MONITOR thread survived cleanup"
 
