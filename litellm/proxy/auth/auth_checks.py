@@ -5536,6 +5536,22 @@ async def can_key_call_model(
     Raises:
         - Exception: If token not allowed to call model
     """
+    if valid_token.access_group_rules_only:
+        rule_principal: Final = valid_token.model_copy(
+            update={"access_group_ids": list(valid_token.access_group_rule_grants)}
+        )
+        for name in (model,) if isinstance(model, str) else model:
+            if not await key_access_group_grants_model(
+                model=name, valid_token=rule_principal, team_object=None, llm_router=llm_router
+            ):
+                raise ModelAccessDeniedProxyException(
+                    message=model_access_denied_client_message(model=name),
+                    internal_message="JWT model access requires a matching access group rule",
+                    type=ProxyErrorTypes.key_model_access_denied,
+                    param="model",
+                    code=status.HTTP_403_FORBIDDEN,
+                )
+        return True
     key_models: Final = _resolve_key_models_for_auth_check(valid_token=valid_token)
     try:
         return can_object_call_model(
@@ -5841,7 +5857,7 @@ async def get_authorized_resources_from_key_access_groups(
             continue
         team_authorized = bool(key_team_id and key_team_id in (ag.assigned_team_ids or []))
         key_authorized = bool(key_token and key_token in (ag.assigned_key_ids or []))
-        if team_authorized or key_authorized:
+        if team_authorized or key_authorized or ag_id in valid_token.access_group_rule_grants:
             authorized_resources.extend(getattr(ag, resource_field, []) or [])
 
     return list(set(authorized_resources))

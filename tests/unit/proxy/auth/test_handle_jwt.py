@@ -30,7 +30,7 @@ from litellm.proxy._types import (
     ScopeMapping,
 )
 from litellm.proxy.agent_endpoints.agent_registry import AgentRegistry
-from litellm.proxy.auth.auth_checks import TeamNotFoundError
+from litellm.proxy.auth.auth_checks import TeamNotFoundError, can_key_call_model
 from litellm.proxy.auth.handle_jwt import (
     ID_JAG_TYP,
     JWKS_FETCH_ATTEMPTS,
@@ -46,6 +46,81 @@ from litellm.proxy.auth.handle_jwt import (
 from litellm.proxy.auth.model_access_denied import ModelAccessDeniedHTTPException
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.types.agents import AgentResponse
+from litellm.proxy._types import UserAPIKeyAuth, LiteLLM_AccessGroupTable
+from litellm.proxy.auth.user_api_key_auth import _authorize_authenticated_request
+from starlette.requests import Request
+import litellm.proxy.proxy_server as proxy_server
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "model,matching,enabled,allowed,fallback",
+    (
+        ("group-model", True, True, True, None),
+        ("outside", True, True, False, None),
+        ("group-model", False, True, False, None),
+        ("group-model", True, False, False, None),
+        ("group-model", True, True, False, "outside"),
+    ),
+)
+async def test_jwt_group_rules_defer_team_rejection_until_central_authorization(
+    monkeypatch: pytest.MonkeyPatch, model: str, matching: bool, enabled: bool, allowed: bool, fallback: str | None
+) -> None:
+    handler: Final = JWTHandler()
+    handler.litellm_jwtauth = LiteLLM_JWTAuth(enforce_team_based_model_access=True)
+    cache: Final = UserApiKeyCache()
+    group: Final = LiteLLM_AccessGroupTable(
+        access_group_id="science-id", access_group_name="science", access_model_names=["group-model"]
+    )
+    cache.set_cache("access_group_rule_name:science", group, model_type=LiteLLM_AccessGroupTable)
+    cache.set_cache("access_group_id:science-id", group, model_type=LiteLLM_AccessGroupTable)
+    monkeypatch.setattr(
+        proxy_server,
+        "general_settings",
+        {"access_group_rules": [{"attribute": "jwt_claims.groups", "contains": "science", "access_group": "science"}]}
+        if enabled
+        else {},
+    )
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
+    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+    monkeypatch.setattr(proxy_server, "llm_router", None)
+    monkeypatch.setattr(proxy_server, "user_custom_auth", None)
+
+    async def original_team_check() -> object:
+        return await JWTAuthManager.find_team_with_model_access(
+            set(), model, "/chat/completions", handler, None, cache, None, MagicMock()
+        )
+
+    if not enabled:
+        with pytest.raises(HTTPException, match="403") as denied:
+            await original_team_check()
+        assert (
+            denied.value.detail
+            == "No teams found in token. `enforce_team_based_model_access` is set to True. Token must belong to a team."
+        )
+        return
+    assert await JWTAuthManager.find_team_with_model_access(
+        set(), model, "/chat/completions", handler, None, cache, None, MagicMock(), defer_model_access=True
+    ) == (None, None)
+    principal: Final = UserAPIKeyAuth(jwt_claims={"groups": ["science" if matching else "other"]})
+    principal.defer_model_checks((original_team_check,))
+    request: Final = Request({"type": "http", "method": "POST", "path": "/chat/completions", "headers": []})
+    request_data: Final = {"model": model, **({"fallbacks": [fallback]} if fallback else {})}
+    if allowed:
+        assert (
+            await _authorize_authenticated_request(
+                principal, request, request_data, "/chat/completions", "synthetic"
+            )
+            is None
+        )
+        assert principal.access_group_ids == ["science-id"]
+        with pytest.raises(ProxyException, match="model"):
+            await can_key_call_model("outside", None, principal, None)
+    else:
+        with pytest.raises(ProxyException, match="model" if fallback else "No teams found in token"):
+            await _authorize_authenticated_request(
+                principal, request, request_data, "/chat/completions", "synthetic"
+            )
 
 
 @pytest.mark.asyncio
