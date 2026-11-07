@@ -16,7 +16,8 @@ from typing import Final, Literal, TypeAlias
 
 from pydantic import ConfigDict, SecretStr
 
-from litellm.proxy.common_utils.fips import derive_key_from_salt_key, fips_mode_active
+from litellm.proxy.common_utils.encrypt_decrypt_utils import derive_key_from_salt_key
+from litellm.proxy.common_utils.fips import fips_mode_active
 from litellm.proxy.mcp_server.outbound_credentials.envelope import (
     EnvelopeIdentity,
     EnvelopeKeys,
