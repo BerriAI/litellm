@@ -1,6 +1,6 @@
 import json
 import types
-from collections.abc import AsyncIterator, Iterator, Mapping
+from collections.abc import AsyncGenerator, AsyncIterator, Iterator, Mapping
 from typing import TYPE_CHECKING, Final
 
 import httpx
@@ -218,6 +218,20 @@ def _stream_decoder(
     return AWSEventStreamDecoder(model=model, json_mode=json_mode)
 
 
+async def _aiter_bytes_then_close(
+    response: httpx.Response, *, chunk_size: int | None = None
+) -> AsyncGenerator[bytes, None]:
+    try:
+        if chunk_size is not None:
+            async for chunk in response.aiter_bytes(chunk_size=chunk_size):
+                yield chunk
+        else:
+            async for chunk in response.aiter_bytes():
+                yield chunk
+    finally:
+        await response.aclose()
+
+
 async def make_call(
     client: AsyncHTTPHandler | None,
     api_base: str,
@@ -289,7 +303,7 @@ async def make_call(
                 response_format_schema=response_format_schema_from_request(data, json_mode),
             )
             completion_stream = decoder.aiter_bytes(
-                response.aiter_bytes(chunk_size=stream_chunk_size), response_headers=response.headers
+                _aiter_bytes_then_close(response, chunk_size=stream_chunk_size), response_headers=response.headers
             )
 
         # LOGGING
@@ -876,14 +890,18 @@ class AWSEventStreamDecoder:
         event_stream_buffer: Final = EventStreamBuffer()
         tally: Final = _EventStreamTally(get_bedrock_stream_event_statuses())
         request_id_headers: Final = provider_request_id_headers(response_headers)
-        async for chunk in iterator:
-            event_stream_buffer.add_data(chunk)
-            tally.add_chunk(chunk)
-            for event in event_stream_buffer:
-                message = self._decode_event(event, tally, request_id_headers)
-                if message:
-                    _data = json.loads(message)
-                    yield self.chunk_parser(chunk_data=_data)
+        try:
+            async for chunk in iterator:
+                event_stream_buffer.add_data(chunk)
+                tally.add_chunk(chunk)
+                for event in event_stream_buffer:
+                    message = self._decode_event(event, tally, request_id_headers)
+                    if message:
+                        _data = json.loads(message)
+                        yield self.chunk_parser(chunk_data=_data)
+        finally:
+            if hasattr(iterator, "aclose") and callable(iterator.aclose):
+                await iterator.aclose()
         undecoded_stream_error: Final = tally.undecoded_stream_error(response_headers)
         if undecoded_stream_error is not None:
             raise undecoded_stream_error

@@ -32,6 +32,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.llms.anthropic.messages.native.mid_conversation_system import (
     as_system_content_blocks,
 )
+from litellm.llms.bedrock.chat.invoke_handler import AWSEventStreamDecoder
 from litellm.llms.bedrock.common_utils import (
     ensure_bedrock_anthropic_messages_tool_names,
     normalize_custom_field_on_tools,
@@ -3624,6 +3625,103 @@ async def test_get_async_streaming_response_iterator_yields_small_frame_before_u
     await iterator.aclose()
 
 
+@pytest.mark.asyncio
+async def test_get_async_streaming_response_iterator_aclose_closes_httpx_response(monkeypatch: pytest.MonkeyPatch):
+    """Ensure aborting / closing the streaming iterator closes the underlying httpx response (Issue #50514)."""
+    import litellm.llms.anthropic.messages.native.streaming_iterator as streaming_iterator_module
+
+    monkeypatch.setattr(streaming_iterator_module, "ANTHROPIC_MESSAGES_MAX_DETACHED_STREAM_DRAINS", 0)
+    monkeypatch.setattr(streaming_iterator_module, "ANTHROPIC_MESSAGES_STREAM_RELAY_QUEUE_MAXSIZE", 4)
+
+    closed = False
+
+    class _TrackedByteStream(httpx.AsyncByteStream):
+        async def __aiter__(self) -> AsyncIterator[bytes]:
+            yield _bedrock_event_frame(
+                {
+                    "type": "message_start",
+                    "message": {
+                        "id": "msg_test",
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [],
+                        "model": "us.anthropic.claude-sonnet-4-6",
+                        "usage": {"input_tokens": 3, "output_tokens": 1},
+                    },
+                }
+            )
+            for i in range(50):
+                yield _bedrock_event_frame(
+                    {
+                        "type": "content_block_delta",
+                        "index": 0,
+                        "delta": {"type": "text_delta", "text": f"word{i} "},
+                    }
+                )
+
+        async def aclose(self) -> None:
+            nonlocal closed
+            closed = True
+
+    response: Final = httpx.Response(
+        200,
+        stream=_TrackedByteStream(),
+    )
+
+    iterator: Final = AmazonAnthropicClaudeMessagesConfig().get_async_streaming_response_iterator(
+        model="us.anthropic.claude-sonnet-4-6",
+        httpx_response=response,
+        request_body={"model": "us.anthropic.claude-sonnet-4-6"},
+        litellm_logging_obj=LiteLLMLoggingObj(
+            model="bedrock/us.anthropic.claude-sonnet-4-6",
+            messages=[{"role": "user", "content": "Hello"}],
+            stream=True,
+            call_type="chat",
+            start_time=datetime.now(),
+            litellm_call_id="test_aclose_closes_httpx_response",
+            function_id="test_aclose_closes_httpx_response",
+        ),
+    )
+
+    first: Final = await asyncio.wait_for(anext(iterator), timeout=10)
+    assert first.startswith(b"event: message_start\n"), first
+    assert not closed
+
+    await iterator.aclose()
+
+    for _ in range(50):
+        if closed:
+            break
+        await asyncio.sleep(0.01)
+
+    assert closed, "Underlying httpx response stream was not closed on iterator.aclose()"
+
+
+@pytest.mark.asyncio
+async def test_bedrock_chat_aiter_bytes_closes_source_on_aclose():
+    """Ensure AWSEventStreamDecoder.aiter_bytes closes the source iterator on aclose()."""
+    source_closed = False
+
+    async def mock_source():
+        try:
+            yield _bedrock_event_frame({"type": "message_start", "message": {"id": "m1"}})
+            while True:
+                await asyncio.sleep(0.01)
+                yield b"never"
+        finally:
+            nonlocal source_closed
+            source_closed = True
+
+    decoder = AWSEventStreamDecoder(model="test-model")
+    stream = decoder.aiter_bytes(mock_source())
+    try:
+        await anext(stream)
+    except Exception:
+        pass
+    await stream.aclose()
+    assert source_closed, "Decoder did not close underlying byte iterator on aclose()"
+
+
 @pytest.mark.usefixtures("local_model_cost_map", "local_beta_headers_config")
 @pytest.mark.parametrize("nested_output_config", [False, True])
 @pytest.mark.parametrize("explicit_beta", [False, True])
@@ -4328,7 +4426,9 @@ def test_bedrock_messages_offers_a_native_output_retry_only_when_it_sends_native
     )
     retry_params: Final = config.native_output_fallback_litellm_params(model, optional_params, litellm_params)
 
-    assert (retry_params is not None) is ("format" in REASONING_BODY_ADAPTER.validate_python(body.get("output_config", {})))
+    assert (retry_params is not None) is (
+        "format" in REASONING_BODY_ADAPTER.validate_python(body.get("output_config", {}))
+    )
 
 
 # Bedrock's 400 bodies for requests past Claude's strict tool limits, seen live on us.anthropic.claude-sonnet-4-6 on 2026-10-29
@@ -4644,7 +4744,10 @@ async def test_bedrock_messages_fallback_to_anthropic_sends_the_tool_names_bedro
                     "aws_region_name": "us-east-1",
                 },
             },
-            {"model_name": "anthropic-claude", "litellm_params": {"model": "anthropic/claude-opus-4-8", "api_key": "test"}},
+            {
+                "model_name": "anthropic-claude",
+                "litellm_params": {"model": "anthropic/claude-opus-4-8", "api_key": "test"},
+            },
         ],
         fallbacks=[{"bedrock-claude": ["anthropic-claude"]}],
         num_retries=0,
