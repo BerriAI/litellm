@@ -56,7 +56,7 @@ def _strings(value: object) -> tuple[str, ...]:
 def _answers_audio_only(model: str, custom_llm_provider: str | None) -> bool:
     if litellm.utils.is_gemini_tts_model(model):
         return True
-    info: Final = litellm.utils.lookup_model_info_for_registration(model, custom_llm_provider)
+    info: Final = litellm.utils.lookup_catalog_model_info(model, custom_llm_provider)
     if isinstance(info, litellm.utils.ModelInfoLookupMiss):
         return False
     modalities: Final = cost_map_output_modalities(info["key"]) or frozenset()

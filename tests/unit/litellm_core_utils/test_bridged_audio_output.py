@@ -8,6 +8,7 @@ import respx
 
 import litellm
 from litellm.caching.llm_caching_handler import LLMClientCache
+from litellm.litellm_core_utils.bridged_audio_output import bridged_audio_output_request
 
 GEMINI_API: Final = "https://generativelanguage.googleapis.com/"
 VOICE_API: Final = "https://voice.test/v1"
@@ -196,6 +197,17 @@ async def test_text_request_passes_through(respx_mock: respx.MockRouter, bridge:
     await bridge(model, api_base=VOICE_API, modalities=["text"])
 
     assert _sent_body(upstream)["modalities"] == ["text"]
+
+
+@pytest.mark.respx(assert_all_called=False)
+def test_checking_for_audio_output_fetches_no_model_config(respx_mock: respx.MockRouter) -> None:
+    model_config: Final = respx_mock.get(url__startswith="https://huggingface.co/").mock(
+        return_value=httpx.Response(200, json={})
+    )
+    request: Final = {"modalities": ["text"]}
+
+    assert bridged_audio_output_request(request, "litellm-test/text-model", "huggingface") == request
+    assert not model_config.called
 
 
 @pytest.mark.respx(assert_all_called=True)
