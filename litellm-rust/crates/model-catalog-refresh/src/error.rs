@@ -1,6 +1,9 @@
-use std::io;
-
+use litellm_s3::sdk::config::http::HttpResponse;
+use litellm_s3::sdk::error::SdkError;
+use litellm_s3::sdk::operation::get_object::GetObjectError;
+use litellm_s3::sdk::primitives::ByteStreamError;
 use thiserror::Error;
+use tokio::time::error::Elapsed;
 
 #[derive(Debug, Error)]
 #[error(transparent)]
@@ -10,17 +13,47 @@ pub struct Error(Box<Repr>);
 enum Repr {
     #[error(transparent)]
     Http(#[from] litellm_http::Error),
-    #[error("could not read the catalog")]
-    Read(#[source] io::Error),
     #[error("invalid catalog URL")]
     InvalidUrl(#[source] url::ParseError),
     #[error("unsupported catalog URL scheme {scheme}")]
     UnsupportedScheme { scheme: String },
+    #[error("invalid S3 URL")]
+    S3Uri(#[source] litellm_s3::Error),
+    #[error("S3 GetObject failed")]
+    S3GetObject(#[source] Box<SdkError<GetObjectError, HttpResponse>>),
+    #[error("S3 GetObject body read failed")]
+    S3Body(#[source] ByteStreamError),
+    #[error("S3 GetObject timed out")]
+    S3Timeout(#[source] Elapsed),
+    #[error("response body is over the {limit} byte limit")]
+    BodyTooLarge { limit: u64 },
 }
 
 impl Error {
     pub fn unsupported_scheme(scheme: String) -> Self {
         Self(Box::new(Repr::UnsupportedScheme { scheme }))
+    }
+
+    pub(crate) fn body_too_large(limit: u64) -> Self {
+        Self(Box::new(Repr::BodyTooLarge { limit }))
+    }
+}
+
+impl From<SdkError<GetObjectError, HttpResponse>> for Error {
+    fn from(cause: SdkError<GetObjectError, HttpResponse>) -> Self {
+        Self(Box::new(Repr::S3GetObject(Box::new(cause))))
+    }
+}
+
+impl From<ByteStreamError> for Error {
+    fn from(cause: ByteStreamError) -> Self {
+        Self(Box::new(Repr::S3Body(cause)))
+    }
+}
+
+impl From<Elapsed> for Error {
+    fn from(cause: Elapsed) -> Self {
+        Self(Box::new(Repr::S3Timeout(cause)))
     }
 }
 
@@ -30,9 +63,9 @@ impl From<litellm_http::Error> for Error {
     }
 }
 
-impl From<io::Error> for Error {
-    fn from(cause: io::Error) -> Self {
-        Self(Box::new(Repr::Read(cause)))
+impl From<litellm_s3::Error> for Error {
+    fn from(cause: litellm_s3::Error) -> Self {
+        Self(Box::new(Repr::S3Uri(cause)))
     }
 }
 
@@ -44,29 +77,18 @@ impl From<url::ParseError> for Error {
 
 #[cfg(test)]
 mod tests {
+    use std::io;
+
     use litellm_error::{Report, find};
     use rstest::rstest;
 
     use super::*;
-    use crate::{DoneReason, Reply, Step};
 
     #[rstest]
-    fn exhausted_transport_keeps_its_typed_cause() {
-        let reply = Reply::Transport {
-            error: io::Error::from(io::ErrorKind::ConnectionReset).into(),
-        };
-        let Reply::Transport { error } = reply else {
-            panic!("transport failure")
-        };
-        let step = Step::Done {
-            reason: DoneReason::Exhausted(error),
-        };
-        let Step::Done {
-            reason: DoneReason::Exhausted(error),
-        } = step
-        else {
-            panic!("exhausted attempts")
-        };
+    fn an_s3_failure_keeps_its_typed_cause_once() {
+        let error = Error::from(SdkError::<GetObjectError, HttpResponse>::timeout_error(
+            io::Error::from(io::ErrorKind::ConnectionReset),
+        ));
         let cause = find::<io::Error>(&error).expect("typed I/O cause");
         assert_eq!(cause.kind(), io::ErrorKind::ConnectionReset);
         assert_eq!(

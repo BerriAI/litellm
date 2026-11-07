@@ -5,7 +5,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use litellm_auth_aws::AwsAuthConfig;
+use litellm_auth_aws::{AwsAuthConfig, AwsAuthService, AwsCredentialsProvider};
 use litellm_cache::JsonCodec;
 use litellm_cache_s3::{S3Cache, S3CacheConfig, S3Endpoint};
 use serde_json::Value;
@@ -22,12 +22,16 @@ pub fn config(endpoint: &str) -> S3CacheConfig {
         endpoint: Some(S3Endpoint {
             url: endpoint.to_string(),
         }),
-        auth: AwsAuthConfig {
-            access_key_id: Some("key".into()),
-            secret_access_key: Some("secret".into()),
-            region_name: Some("us-east-1".to_string()),
-            ..Default::default()
-        },
+        credentials: AwsCredentialsProvider::configured(
+            AwsAuthService::default(),
+            AwsAuthConfig {
+                access_key_id: Some("key".into()),
+                secret_access_key: Some("secret".into()),
+                region_name: Some("us-east-1".to_string()),
+                ..Default::default()
+            },
+            |_| None,
+        ),
     }
 }
 

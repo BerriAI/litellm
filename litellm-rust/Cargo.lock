@@ -894,6 +894,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cffb0e931875b666fc4fcb20fee52e9bbd1ef836fd9e9e04ec21555f9f85f7ef"
 dependencies = [
  "fastrand",
+ "tokio",
 ]
 
 [[package]]
@@ -3657,19 +3658,15 @@ dependencies = [
 name = "litellm-cache-s3"
 version = "0.1.0"
 dependencies = [
- "aws-credential-types",
  "aws-sdk-s3",
- "aws-smithy-runtime-api",
  "aws-smithy-types",
- "aws-types",
  "futures-util",
- "http 1.4.2",
  "litellm-auth-aws",
  "litellm-cache",
  "litellm-cache-testing",
  "litellm-error",
  "litellm-http",
- "reqwest",
+ "litellm-s3",
  "rstest",
  "serde_json",
  "tokio",
@@ -4361,9 +4358,13 @@ dependencies = [
 name = "litellm-model-catalog-refresh"
 version = "0.1.0"
 dependencies = [
+ "aws-credential-types",
+ "backon",
+ "bytes",
  "litellm-error",
  "litellm-http",
- "litellm-model-catalog",
+ "litellm-s3",
+ "litellm-tracing",
  "reqwest",
  "rstest",
  "thiserror 2.0.19",
@@ -4606,6 +4607,21 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_with",
+]
+
+[[package]]
+name = "litellm-s3"
+version = "0.1.0"
+dependencies = [
+ "aws-credential-types",
+ "aws-sdk-s3",
+ "aws-smithy-runtime-api",
+ "aws-smithy-types",
+ "http 1.4.2",
+ "litellm-http",
+ "reqwest",
+ "rstest",
+ "thiserror 2.0.19",
 ]
 
 [[package]]
