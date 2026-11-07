@@ -129,15 +129,6 @@ def _carries_encrypted_content(item: "Mapping[str, object]") -> bool:
     return any(_is_encrypted_block(block) for block in as_object_list(item.get("content")) or ())
 
 
-def _is_encrypted_block(block: object) -> bool:
-    mapping: Final = as_str_mapping(block)
-    return mapping is not None and bool(mapping.get("encrypted_content"))
-
-
-def _carries_encrypted_content(item: "Mapping[str, object]") -> bool:
-    return any(_is_encrypted_block(block) for block in as_object_list(item.get("content")) or ())
-
-
 def _normalize_agent_message_item(item: "Mapping[str, object]") -> "_RewrittenAssistantMessageItem | None":
     content: Final = _agent_message_content(item)
     if not content:
