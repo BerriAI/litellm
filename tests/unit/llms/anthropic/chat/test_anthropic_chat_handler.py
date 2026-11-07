@@ -3622,6 +3622,14 @@ def test_streamed_json_mode_held_answer_without_an_envelope_keeps_the_model_text
             id="negative_integer_past_the_digit_limit",
         ),
         pytest.param('{"values":[1e400, 2.5]}', "[1e400, 2.5]", id="values_number_past_a_float"),
+        pytest.param(
+            '{"name":"json_tool_call","parameters":{"tier":1e-400,"summary":"x"}}',
+            '{"tier": 1e-400, "summary": "x"}',
+            id="number_below_a_float",
+        ),
+        pytest.param(
+            '{"values":[1e400, 1e-400, 0.0e5]}', "[1e400, 1e-400, 0.0]", id="values_numbers_past_a_float_both_ways"
+        ),
     ],
 )
 def test_streamed_json_mode_held_answer_keeps_out_of_range_numbers_as_the_model_wrote_them(answer: str, expected: str):

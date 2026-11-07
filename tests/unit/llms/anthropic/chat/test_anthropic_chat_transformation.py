@@ -8599,6 +8599,18 @@ _DIGITS_PAST_THE_INT_LIMIT: Final = "1" * (sys.get_int_max_str_digits() + 1)
         ),
         pytest.param('{"count":-1e400}', None, '{"count": -1e400}', id="schemaless_answer_number_past_a_float"),
         pytest.param(
+            '{"values": [1e400, -1E-400, 0e-400]}',
+            None,
+            "[1e400, -1E-400, 0.0]",
+            id="values_numbers_past_a_float_both_ways",
+        ),
+        pytest.param(
+            '{"name": "json_tool_call", "parameters": {"tier": 2.5e-400, "summary": "x"}}',
+            _RISK_SCHEMA,
+            '{"tier": 2.5e-400, "summary": "x"}',
+            id="envelope_number_below_a_float",
+        ),
+        pytest.param(
             '{"name": "json_tool_call", "parameters": {"tier": 1e400, "summary": "\u00e9"}}',
             _RISK_SCHEMA,
             '{"tier": 1e400, "summary": "\u00e9"}',
