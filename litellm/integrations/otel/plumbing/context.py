@@ -8,7 +8,6 @@ from typing import TYPE_CHECKING, Final
 
 from opentelemetry import baggage
 from opentelemetry.context import Context, get_current
-from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.trace import (
     INVALID_SPAN,
     Link,
@@ -96,6 +95,8 @@ def request_root_http_route() -> str | None:
     where the FastAPI instrumentation did not mount.
     """
     span: Final = request_root_span()
+    from opentelemetry.sdk.trace import ReadableSpan
+
     route: Final = span.attributes.get(HTTP.ROUTE) if isinstance(span, ReadableSpan) and span.attributes else None
     return route if isinstance(route, str) and route else None
 
@@ -278,6 +279,8 @@ def post_response_root(span: Span) -> Generator[None]:
 
 
 def _is_post_response(parent: Span, end_time_ns: int | None) -> bool:
+    from opentelemetry.sdk.trace import ReadableSpan
+
     if not isinstance(parent, ReadableSpan):
         return False
     if in_post_response_phase():
