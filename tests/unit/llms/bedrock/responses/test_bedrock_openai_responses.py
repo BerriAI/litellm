@@ -307,7 +307,9 @@ class TestCodexHistoryNormalization:
                 {"type": "encrypted_content", "encrypted_content": "gAAAAABpZ3ciphertext=="},
             ],
         }
-        body = _cfg().transform_responses_api_request(
+        cfg = BedrockOpenAIResponsesConfig.for_model(MODEL)
+        assert cfg is not None
+        body = cfg.transform_responses_api_request(
             model=MODEL,
             input=[json.loads(json.dumps(agent_message)), {"role": "user", "content": "carry on"}],
             response_api_optional_request_params={},

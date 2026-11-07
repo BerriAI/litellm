@@ -75,10 +75,12 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
         self,
         aws_signer: BaseAWSLLM | None = None,
         use_openai_path: bool = True,
+        encrypted_agent_messages: bool = False,
     ):
         super().__init__()
         self._aws_signer = aws_signer or BaseAWSLLM()
         self.use_openai_path = use_openai_path
+        self.encrypted_agent_messages = encrypted_agent_messages
 
     @property
     def custom_llm_provider(self) -> LlmProviders:
@@ -88,7 +90,7 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
         return "auto" if self.use_openai_path else super().auto_reasoning_summary()
 
     def supports_encrypted_agent_messages(self) -> bool:
-        return self.use_openai_path
+        return self.use_openai_path and self.encrypted_agent_messages
 
     def get_error_class(
         self, error_message: str, status_code: int, headers: dict[str, object] | httpx.Headers
