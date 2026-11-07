@@ -100,7 +100,6 @@ from litellm.types.utils import (
     all_litellm_params,
 )
 from litellm.utils import (
-    LITELLM_ONLY_PARAMS,
     ProviderConfigManager,
     client,
 )
@@ -644,10 +643,18 @@ def _chat_completion_request_fields(allowed_openai_params: Sequence[str] | None)
             *DEFAULT_CHAT_COMPLETION_PARAM_VALUES,
             *all_litellm_params,
             *GenericLiteLLMParams.model_fields,
-            *LITELLM_ONLY_PARAMS,
             *(allowed_openai_params or ()),
         )
     ).difference(_RESPONSES_ONLY_REQUEST_FIELDS_NEVER_BRIDGED)
+
+
+def _message_cache_control_points(kwargs: Mapping[str, object]) -> Mapping[str, object]:
+    points: Final = tuple(
+        point
+        for point in configured_injection_points(kwargs.get("cache_control_injection_points"))
+        if point.get("location") == "message"
+    )
+    return {"cache_control_injection_points": points} if points else {}
 
 
 _ADDITIONAL_DROP_PARAMS: Final = TypeAdapter(list[str])
@@ -667,7 +674,12 @@ def _bridge_kwargs(
 ) -> Mapping[str, object] | _UntranslatableResponsesFields:
     forwarded_keys: Final = _chat_completion_request_fields(allowed_openai_params)
     if responses_api_provider_config is not None:
-        return MappingProxyType({key: value for key, value in kwargs.items() if key in forwarded_keys})
+        return MappingProxyType(
+            {
+                **{key: value for key, value in kwargs.items() if key in forwarded_keys},
+                **_message_cache_control_points(kwargs),
+            }
+        )
     candidate_keys: Final = _RESPONSES_REQUEST_FIELDS.difference(forwarded_keys, _explicitly_dropped_fields(kwargs))
     untranslatable: Final = tuple(sorted(key for key in candidate_keys if kwargs.get(key) is not None))
     if untranslatable and not drops_unsupported_params(kwargs.get("drop_params")):
