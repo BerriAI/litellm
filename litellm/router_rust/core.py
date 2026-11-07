@@ -4378,6 +4378,9 @@ class _Driver:
         self._hop_first: Final[dict[int, BaseException]] = {}  # mutable-ok: filled as the call runs
         # Each level's latest pick error: the one object it logged, recorded and raises.
         self._level_picks: Final[dict[int, BaseException]] = {}  # mutable-ok: filled as the call runs
+        # Failures a retry or a later hop raised past the request's first logged failure, which the
+        # attempt itself recorded: the failed hop's fallback cooldown leaves them alone.
+        self._recorded_blocked: Final[set[int]] = set()  # mutable-ok: filled as the call runs
         self._served: tuple[str | None, Mapping[str, object]] = (None, MappingProxyType({}))
         # The latest attempt's deployment and call, which a blocked response is raised from.
         self._latest_call: tuple[Mapping[str, object], AttemptCall] | None = None
@@ -4804,7 +4807,10 @@ class _Driver:
                     self._level_errors.get(at + 1),
                     self._walk.hop_kwargs(event),
                 )
-                if event.get("succeeded") is not True:
+                if (
+                    event.get("succeeded") is not True
+                    and id(self._level_errors.get(at + 1)) not in self._recorded_blocked
+                ):
                     self._core.trigger_fallback_cooldown(
                         self._request,
                         self._level_errors.get(at + 1),
@@ -4967,6 +4973,28 @@ class _Driver:
             or _raised_before_provider(error),
         }
 
+    def _records_blocked(
+        self, failed: Mapping[str, object], call: "AttemptCall | None", error: BaseException, in_call: bool
+    ) -> bool:
+        """Record a failure the shared logging object skipped (a retry or later hop), like the first one."""
+        from litellm.router_utils.fallback_event_handlers import (
+            _failure_callbacks_blocked_logging_object,  # pyright: ignore[reportPrivateUsage]  # the fallback path's own rule
+        )
+
+        if not in_call or call is None or failed.get("outside_deployment") is True:
+            return False
+        if self._plan.sync:
+            if not failure_already_logged(call.kwargs, "sync_failure"):
+                return False
+        elif _failure_callbacks_blocked_logging_object(call.kwargs) is None:
+            return False
+        if not self._core.outcome_callbacks(call.kwargs, sync=self._plan.sync).get("failure", True):
+            return False
+        if self._core.blocked_failure_exempt(error, call.kwargs, self._plan.kind in _GENERIC_API_KINDS):
+            return False
+        self._recorded_blocked.add(id(error))
+        return True
+
     def _caller_entra_failure(self, error: BaseException, sent: Mapping[str, object], deployment_id: object) -> bool:
         """``is_caller_entra_credential_failure``: Entra ID rejected a credential the caller sent, not
         the deployment's own, so the failure is the caller's."""
@@ -5128,6 +5156,7 @@ class _Driver:
         # Whether a failure raised now runs the failure callbacks: none raised before the litellm
         # call or after it answered does, nor any but the first on a shared logging object.
         logs_failure: bool = False  # rebind-ok: set around the litellm call
+        in_call: bool = False  # rebind-ok: set around the litellm call, whichever attempt logs its failure
         reading_stream: StreamAttempt | None = None  # rebind-ok: set while the first chunk is read
         refused_call: Final = self._default_call_error(step)
         if refused_call is not None:
@@ -5160,6 +5189,7 @@ class _Driver:
                         return await self._refused(step, deployment, call, refused)
                 first_to_log: Final = not failure_already_logged(call.kwargs, "async_failure")
                 logs_failure = first_to_log  # rebind-ok: whether a failure here is this attempt's to log
+                in_call = True  # rebind-ok: see above
                 pending: Final[object] = (
                     self._core._endpoints.create_file_everywhere(  # pyright: ignore[reportPrivateUsage]  # see above
                         _with_target_order(call.kwargs, step.get("target_order")),
@@ -5173,12 +5203,15 @@ class _Driver:
                 awaited: Final = self._plan.kind == "generic" or inspect.isawaitable(pending)
                 answered: Final[object] = await pending if awaited else pending  # pyright: ignore[reportGeneralTypeIssues, reportUnknownVariableType]  # see above
                 logs_failure = False  # rebind-ok: see above
+                in_call = False  # rebind-ok: see above
                 self._core._endpoints.check_response(self._plan, answered, call)  # pyright: ignore[reportPrivateUsage, reportUnknownArgumentType]  # see above
                 stream: Final = self._stream_attempt(step, call.kwargs, slot)
                 logs_failure = first_to_log  # rebind-ok: the stream's own failure logging, for its first chunk
+                in_call = True  # rebind-ok: see above
                 reading_stream = stream  # rebind-ok: None until the attempt opens a stream
                 response: Final = await open_attempt_stream(stream, answered)  # pyright: ignore[reportUnknownArgumentType]  # see above
                 logs_failure = False  # rebind-ok: see above
+                in_call = False  # rebind-ok: see above
                 # `self.success_calls[model_name] += 1`, inside the try: a counter replaced with a
                 # plain dict fails the attempt.
                 self._core._endpoints.counters.succeeded(self._plan, call)  # pyright: ignore[reportPrivateUsage]  # see above
@@ -5194,7 +5227,10 @@ class _Driver:
                     )
             failed: Final = self._failed(step, deployment, call, error)
             if reading_stream is None or not logs_failure:
-                return {**failed, "recorded": not logs_failure}
+                return {
+                    **failed,
+                    "recorded": not logs_failure and not self._records_blocked(failed, call, error, in_call),
+                }
             # `_dispatch_stream_failure`: the stream logs its failure in a task of its own.
             reading_stream.report_first_chunk_failure(error)
             return {**failed, "recorded": True}
@@ -5212,6 +5248,7 @@ class _Driver:
         deployment: Mapping[str, object] = as_str_mapping(step.get("deployment")) or {}  # rebind-ok: see attempt
         call: AttemptCall | None = None  # rebind-ok: see attempt
         logs_failure: bool = False  # rebind-ok: see attempt
+        in_call: bool = False  # rebind-ok: see attempt
         self._reading_first_chunk = False
         refused_call: Final = self._default_call_error(step)
         if refused_call is not None:
@@ -5228,22 +5265,27 @@ class _Driver:
                 return {**self._failed(step, deployment, call, refused), "recorded": True}
             first_to_log: Final = not failure_already_logged(call.kwargs, "sync_failure")
             logs_failure = first_to_log  # rebind-ok: see attempt
+            in_call = True  # rebind-ok: see attempt
             answered: Final = self._core._host.invoke(call.host_op)(**call.kwargs)  # pyright: ignore[reportPrivateUsage]  # a sync endpoint
             logs_failure = False  # rebind-ok: see attempt
+            in_call = False  # rebind-ok: see attempt
             if inspect.isawaitable(answered):
                 raise _NotSynchronous(f"the host's {call.host_op} endpoint is not synchronous")
             self._core._endpoints.check_response(self._plan, answered, call)  # pyright: ignore[reportPrivateUsage]  # see above
             stream: Final = self._stream_attempt(step, call.kwargs)
             logs_failure = first_to_log  # rebind-ok: see attempt
+            in_call = True  # rebind-ok: see attempt
             self._reading_first_chunk = True
             response: Final = open_attempt_stream_sync(stream, answered)
             self._reading_first_chunk = False
             logs_failure = False  # rebind-ok: see attempt
+            in_call = False  # rebind-ok: see attempt
             self._core._endpoints.counters.succeeded(self._plan, call)  # pyright: ignore[reportPrivateUsage]  # see attempt
         except _NotSynchronous:
             raise
         except Exception as error:  # noqa: BLE001  # see attempt
-            return {**self._failed(step, deployment, call, error), "recorded": not logs_failure}
+            failed: Final = self._failed(step, deployment, call, error)
+            return {**failed, "recorded": not logs_failure and not self._records_blocked(failed, call, error, in_call)}
         return self._succeeded(call, response, "", stream)
 
     async def select(self, step: Mapping[str, object]) -> object:
