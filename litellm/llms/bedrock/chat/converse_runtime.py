@@ -82,8 +82,8 @@ class AmazonConverseRuntimeConfig(AmazonConverseConfig, SignsRequestsWithAWS):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         stream: bool | None = None,
     ) -> str:
         params: Final = with_aws_credential_fallbacks(optional_params, litellm_params)
@@ -99,15 +99,15 @@ class AmazonConverseRuntimeConfig(AmazonConverseConfig, SignsRequestsWithAWS):
 
     def sign_request(
         self,
-        headers: dict,
-        optional_params: dict,
-        request_data: dict,
+        headers: dict[str, object],
+        optional_params: dict[str, object],
+        request_data: dict[str, object],
         api_base: str,
         api_key: str | None = None,
         model: str | None = None,
         stream: bool | None = None,
         fake_stream: bool | None = None,
-    ) -> tuple[dict, bytes | None]:
+    ) -> tuple[dict[str, object], bytes | None]:
         return _AWS._sign_request(
             service_name="bedrock",
             headers=headers,
@@ -124,10 +124,10 @@ class AmazonConverseRuntimeConfig(AmazonConverseConfig, SignsRequestsWithAWS):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-    ) -> dict:
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
+        headers: dict[str, object],
+    ) -> dict[str, object]:
         return super().transform_request(
             model=model,
             messages=messages,
@@ -140,12 +140,12 @@ class AmazonConverseRuntimeConfig(AmazonConverseConfig, SignsRequestsWithAWS):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-    ) -> dict:
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
+        headers: dict[str, object],
+    ) -> dict[str, object]:
         return cast(
-            dict,
+            "dict[str, object]",
             await self._async_transform_request(
                 model=model,
                 messages=messages,
@@ -165,10 +165,10 @@ class AmazonConverseRuntimeConfig(AmazonConverseConfig, SignsRequestsWithAWS):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: "LiteLLMLoggingObj",
-        request_data: dict,
+        request_data: dict[str, object],
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
@@ -204,9 +204,9 @@ class AmazonConverseRuntimeConfig(AmazonConverseConfig, SignsRequestsWithAWS):
         custom_llm_provider: str,
         logging_obj: "LiteLLMLoggingObj",
         api_base: str,
-        headers: dict,
-        data: dict,
-        messages: list,
+        headers: dict[str, object],
+        data: dict[str, object],
+        messages: list[AllMessageValues],
         client: AsyncHTTPHandler | None = None,
         json_mode: bool | None = None,
         signed_json_body: bytes | None = None,
@@ -241,9 +241,9 @@ class AmazonConverseRuntimeConfig(AmazonConverseConfig, SignsRequestsWithAWS):
         custom_llm_provider: str,
         logging_obj: "LiteLLMLoggingObj",
         api_base: str,
-        headers: dict,
-        data: dict,
-        messages: list,
+        headers: dict[str, object],
+        data: dict[str, object],
+        messages: list[AllMessageValues],
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         json_mode: bool | None = None,
         signed_json_body: bytes | None = None,
