@@ -146,6 +146,8 @@ class LoggingSurface(Protocol):
 
     def claim_async_success_log(self) -> bool: ...
 
+    def mark_async_success_log_enqueued(self) -> None: ...
+
     def handle_sync_success_callbacks_for_async_calls(
         self, result: object, start_time: datetime.datetime, end_time: datetime.datetime, cache_hit: bool | None = None
     ) -> None: ...
@@ -301,6 +303,10 @@ def defers_async_logging(logger: LoggingSurface) -> bool:
 
 def claim_async_success_log(logger: LoggingSurface) -> bool:
     return logger.claim_async_success_log()
+
+
+def mark_async_success_enqueued(logger: LoggingSurface) -> None:
+    logger.mark_async_success_log_enqueued()
 
 
 def defer_success(
