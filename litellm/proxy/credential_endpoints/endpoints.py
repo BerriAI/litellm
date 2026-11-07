@@ -324,7 +324,7 @@ async def create_credential(
     Stores credential in DB.
     Reloads credentials in memory.
     """
-    from litellm.proxy.proxy_server import prisma_client
+    from litellm.proxy.proxy_server import MODEL_RECONCILE_LOCK, prisma_client
 
     try:
         if prisma_client is None:
@@ -365,21 +365,22 @@ async def create_credential(
         credentials_dict_jsonified: Final = cast(  # cast-ok: deep-copies a model_dump, so keys are str
             "dict[str, object]", jsonify_object(credentials_dict)
         )
-        try:
-            await CredentialsRepository(prisma_client).create(
-                data={
-                    **credentials_dict_jsonified,
-                    "created_by": user_api_key_dict.user_id,
-                    "updated_by": user_api_key_dict.user_id,
-                }
-            )
-        except Exception as e:
-            if not is_unique_violation(e):
-                raise
-            raise HTTPException(status_code=409, detail=_credential_exists_detail(credential.credential_name))
+        async with MODEL_RECONCILE_LOCK:
+            try:
+                await CredentialsRepository(prisma_client).create(
+                    data={
+                        **credentials_dict_jsonified,
+                        "created_by": user_api_key_dict.user_id,
+                        "updated_by": user_api_key_dict.user_id,
+                    }
+                )
+            except Exception as e:
+                if not is_unique_violation(e):
+                    raise
+                raise HTTPException(status_code=409, detail=_credential_exists_detail(credential.credential_name))
 
-        ## ADD TO LITELLM ##
-        CredentialAccessor.upsert_credentials([processed_credential])
+            ## ADD TO LITELLM ##
+            CredentialAccessor.upsert_credentials([processed_credential])
 
         return {"success": True, "message": "Credential created successfully"}
     except Exception as e:
@@ -865,7 +866,7 @@ async def delete_credential(
     """
     [BETA] endpoint. This might change unexpectedly.
     """
-    from litellm.proxy.proxy_server import prisma_client
+    from litellm.proxy.proxy_server import MODEL_RECONCILE_LOCK, prisma_client
 
     try:
         if prisma_client is None:
@@ -876,14 +877,15 @@ async def delete_credential(
         _reject_non_admin_wif_fields(
             await named_credential_wif_fields(credential_name, prisma_client), user_api_key_dict
         )
-        deleted: Final = await CredentialsRepository(prisma_client).delete_by_name(credential_name)
-        if deleted is None:
-            raise _not_found_unless_config_defined(
-                credential_name, "Credential not found. Got credential name: " + credential_name
-            )
+        async with MODEL_RECONCILE_LOCK:
+            deleted: Final = await CredentialsRepository(prisma_client).delete_by_name(credential_name)
+            if deleted is None:
+                raise _not_found_unless_config_defined(
+                    credential_name, "Credential not found. Got credential name: " + credential_name
+                )
 
-        ## DELETE FROM LITELLM ##
-        litellm.credential_list = [cred for cred in litellm.credential_list if cred.credential_name != credential_name]
+            ## DELETE FROM LITELLM ##
+            litellm.credential_list = [cred for cred in litellm.credential_list if cred.credential_name != credential_name]
         await _purge_user_connections_for_credential(credential_name)
         return {"success": True, "message": "Credential deleted successfully"}
     except Exception as e:
@@ -983,7 +985,7 @@ async def update_credential(
     """
     [BETA] endpoint. This might change unexpectedly.
     """
-    from litellm.proxy.proxy_server import prisma_client
+    from litellm.proxy.proxy_server import MODEL_RECONCILE_LOCK, prisma_client
 
     try:
         if credential.credential_name and credential.credential_name != credential_name:
@@ -1043,17 +1045,18 @@ async def update_credential(
         credential_object_jsonified: Final = cast(  # cast-ok: deep-copies a model_dump, so keys are str
             "dict[str, object]", jsonify_object(merged_credential.model_dump(exclude_none=True))
         )
-        await credentials_repository.update_by_name(
-            credential_name,
-            data={
-                **credential_object_jsonified,
-                "display_name": merged_credential.display_name,
-                "updated_by": user_api_key_dict.user_id,
-            },
-        )
+        async with MODEL_RECONCILE_LOCK:
+            await credentials_repository.update_by_name(
+                credential_name,
+                data={
+                    **credential_object_jsonified,
+                    "display_name": merged_credential.display_name,
+                    "updated_by": user_api_key_dict.user_id,
+                },
+            )
 
-        # Sync in-memory credential_list (skip if not in memory - e.g., proxy restarted)
-        _sync_in_memory_credential(normalized_patch, credential_name)
+            # Sync in-memory credential_list (skip if not in memory - e.g., proxy restarted)
+            _sync_in_memory_credential(normalized_patch, credential_name)
 
         from litellm.llms.github_copilot.github_host import normalized_github_host
 

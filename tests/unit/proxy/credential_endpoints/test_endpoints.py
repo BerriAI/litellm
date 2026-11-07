@@ -3345,3 +3345,71 @@ def test_get_credential_by_model_masks_the_deployment_credentials(monkeypatch):
     with pytest.raises(ProxyException) as missing:
         asyncio.run(get_credential_by_model(MagicMock(), MagicMock(), "no-such-id", caller))
     assert missing.value.code == "404"
+
+
+def test_create_credential_acquires_model_reconcile_lock(credential_store):
+    from litellm.proxy.proxy_server import MODEL_RECONCILE_LOCK
+
+    was_locked = False
+
+    async def fake_create(*args, **kwargs):
+        nonlocal was_locked
+        was_locked = MODEL_RECONCILE_LOCK.locked()
+        return MagicMock()
+
+    credential_store(create=AsyncMock(side_effect=fake_create))
+    response = _post_credential({"credential_name": "locked-test-create", "credential_values": {"api_key": "sk-123"}, "credential_info": {}})
+
+    assert response.status_code == 200, response.text
+    assert was_locked is True
+    assert MODEL_RECONCILE_LOCK.locked() is False
+
+
+def test_delete_credential_acquires_model_reconcile_lock(credential_store):
+    from litellm.proxy.proxy_server import MODEL_RECONCILE_LOCK
+
+    stored = CredentialItem(
+        credential_name="doomed-lock",
+        credential_values={"api_key": "sk-old"},
+        credential_info={"custom_llm_provider": "openai"},
+    )
+    was_locked = False
+
+    async def fake_delete(*args, **kwargs):
+        nonlocal was_locked
+        was_locked = MODEL_RECONCILE_LOCK.locked()
+        return MagicMock()
+
+    credential_store(in_memory=(stored,), delete_by_name=AsyncMock(side_effect=fake_delete))
+    response = _delete_credential("doomed-lock")
+
+    assert response.status_code == 200, response.text
+    assert was_locked is True
+    assert MODEL_RECONCILE_LOCK.locked() is False
+
+
+def test_update_credential_acquires_model_reconcile_lock(credential_store):
+    from litellm.proxy.proxy_server import MODEL_RECONCILE_LOCK
+
+    stored = CredentialItem(
+        credential_name="patched-lock",
+        credential_values={"api_key": "sk-old"},
+        credential_info={},
+    )
+    was_locked = False
+
+    async def fake_update(*args, **kwargs):
+        nonlocal was_locked
+        was_locked = MODEL_RECONCILE_LOCK.locked()
+        return MagicMock()
+
+    credential_store(
+        in_memory=(stored,),
+        find_by_name=AsyncMock(return_value=stored),
+        update_by_name=AsyncMock(side_effect=fake_update),
+    )
+    response = _patch_credential("patched-lock", {"credential_values": {"api_key": "sk-new"}, "credential_info": {}})
+
+    assert response.status_code == 200, response.text
+    assert was_locked is True
+    assert MODEL_RECONCILE_LOCK.locked() is False
