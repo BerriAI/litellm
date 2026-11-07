@@ -90,6 +90,17 @@ const parseMetadata = (raw: unknown): unknown => {
   }
 };
 
+const selectedTags = (raw: unknown): unknown[] | undefined => (Array.isArray(raw) && raw.length > 0 ? raw : undefined);
+
+const metadataWithSelectedTags = (parsed: unknown, rawTags: unknown): unknown => {
+  const tags = selectedTags(rawTags);
+  if (!tags) return parsed;
+  if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
+    return { ...parsed, tags };
+  }
+  return { tags };
+};
+
 const buildMetadataJson = (values: Record<string, unknown>, input: KeyCreateInput): string => {
   const parsed = parseMetadata(values.metadata);
   if (input.keyOwner === "service_account") {
@@ -103,7 +114,7 @@ const buildMetadataJson = (values: Record<string, unknown>, input: KeyCreateInpu
     input.disabledCallbacks.length > 0
       ? { ...(logged as object), litellm_disabled_callbacks: mapDisplayToInternalNames(input.disabledCallbacks) }
       : logged;
-  return JSON.stringify(disabled);
+  return JSON.stringify(metadataWithSelectedTags(disabled, values.tags));
 };
 
 interface PermissionSources {
@@ -183,7 +194,10 @@ export const buildKeyCreatePayload = (input: KeyCreateInput): KeyPayloadResult =
 
   const sources = readPermissionSources(values);
   const objectPermission = buildObjectPermission(sources);
-  const dropped = consumedSourceKeys(values, sources);
+  const dropped = new Set<string>([
+    ...consumedSourceKeys(values, sources),
+    ...(selectedTags(values.tags) ? ["tags"] : []),
+  ]);
 
   const duration = values.duration;
   const validWindows = input.budgetLimits.filter(
