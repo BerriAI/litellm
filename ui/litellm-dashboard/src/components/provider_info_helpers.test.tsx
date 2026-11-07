@@ -606,6 +606,20 @@ describe("provider_info_helpers", () => {
       expect(getPlaceholder("PARALLEL_AI")).toBe("parallel_ai/decision");
     });
 
+    it("lists Butler decision models and resolves the provider name and model placeholder", () => {
+      const modelMap = {
+        "butler/cicero": { litellm_provider: "butler", mode: "evaluation" },
+        "nace/drex-latest": { litellm_provider: "nace", mode: "evaluation" },
+      };
+      expect(getProviderModels("BUTLER", modelMap)).toEqual(["butler/cicero"]);
+      expect(getProviderLogoAndName("butler")).toEqual({
+        displayName: "Butler",
+        logo: providerLogoMap[Providers.BUTLER],
+      });
+      expect(providerLogoMap[Providers.BUTLER]).toContain("butler");
+      expect(getPlaceholder("BUTLER")).toBe("butler/cicero");
+    });
+
     it("lists Nace decision models and resolves the provider name and model placeholder", () => {
       const modelMap = {
         "nace/drex-latest": { litellm_provider: "nace", mode: "evaluation" },

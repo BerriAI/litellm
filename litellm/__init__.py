@@ -1796,6 +1796,9 @@ if TYPE_CHECKING:
     from .llms.bespoke.decisions.transformation import (
         BespokeDecisionsConfig as BespokeDecisionsConfig,
     )
+    from .llms.butler.decisions.transformation import (
+        ButlerDecisionsConfig as ButlerDecisionsConfig,
+    )
     from .llms.empiriolabs.decisions.transformation import (
         EmpirioLabsDecisionsConfig as EmpirioLabsDecisionsConfig,
     )

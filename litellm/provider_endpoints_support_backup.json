@@ -672,6 +672,32 @@
         "generateContent": true
       }
     },
+    "butler": {
+      "display_name": "Butler (`butler`)",
+      "url": "https://docs.litellm.ai/docs/providers/butler",
+      "endpoints": {
+        "chat_completions": true,
+        "responses": true,
+        "text_completion": true,
+        "embeddings": false,
+        "image_generations": false,
+        "image_edits": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "rerank": false,
+        "ocr": false,
+        "search": false,
+        "moderations": false,
+        "realtime": false,
+        "video_generations": false,
+        "batches": false,
+        "messages": true,
+        "interactions": true,
+        "systemone": true,
+        "a2a": true,
+        "generateContent": true
+      }
+    },
     "bytez": {
       "display_name": "Bytez (`bytez`)",
       "url": "https://docs.litellm.ai/docs/providers/bytez",
