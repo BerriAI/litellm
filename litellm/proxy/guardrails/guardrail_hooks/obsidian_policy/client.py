@@ -72,12 +72,17 @@ class _Verdict(BaseModel):
     matched_policies: tuple[MatchedPolicy, ...] = Field(default=())
 
 
+class _ErrorInfo(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    code: str | None = None
+    message: str | None = None
+
+
 class _ErrorBody(BaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
-    error: str | None = None
-    code: str | None = None
-    message: str | None = None
+    error: _ErrorInfo | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -218,8 +223,10 @@ class ObsidianClient:
 
 def _error_detail(response: httpx.Response) -> str:
     try:
-        parsed: Final = _ErrorBody.model_validate_json(response.content)
+        info: Final = _ErrorBody.model_validate_json(response.content).error
     except ValidationError:
         return ""
-    parts: Final = tuple(dict.fromkeys(part for part in (parsed.error, parsed.code, parsed.message) if part))
+    if info is None:
+        return ""
+    parts: Final = tuple(part for part in (info.code, info.message) if part)
     return f" ({': '.join(parts)[:160]})" if parts else ""

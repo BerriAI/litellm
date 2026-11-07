@@ -146,12 +146,19 @@ async def test_client_error_is_not_retried_and_reports_obsidian_detail():
 
     def handler(request: httpx.Request) -> httpx.Response:
         calls.append(request)
-        return httpx.Response(400, json={"error": "bad_request", "code": "unregistered_runtime_extension"})
+        return httpx.Response(
+            400,
+            json={
+                "error": {"code": "unregistered_runtime_extension", "message": "namespace is not registered"},
+                "event_id": "e-1",
+            },
+        )
 
     decision = await _client(handler).evaluate(_event())
     assert decision.allowed is False
     assert "HTTP 400" in (decision.message or "")
     assert "unregistered_runtime_extension" in (decision.message or "")
+    assert "namespace is not registered" in (decision.message or "")
     assert len(calls) == 1
 
 
