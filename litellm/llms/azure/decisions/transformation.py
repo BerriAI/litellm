@@ -5,6 +5,7 @@ from typing import Final
 from pydantic import ValidationError
 
 import litellm
+from litellm.llms.azure.chat.gpt_reasoning_transformation import AzureOpenAIGPT5Config
 from litellm.llms.azure.common_utils import (
     BaseAzureLLM,
     cached_azure_ad_token_refresh_provider,
@@ -73,6 +74,9 @@ class AzureDecisionsConfig(OpenAIDecisionsConfig):
         litellm_params: Mapping[str, object],
     ) -> Mapping[str, str]:
         return await asyncio.to_thread(self.validate_environment, headers, model, api_key, litellm_params)
+
+    def canonical_model(self, model: str) -> str:
+        return model.removeprefix(AzureOpenAIGPT5Config.GPT5_SERIES_ROUTE)
 
     def get_complete_url(self, api_base: str, model: str) -> str:
         return BaseAzureLLM.get_base_azure_url(api_base, None, route="/openai/v1/decisions")
