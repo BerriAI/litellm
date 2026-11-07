@@ -2936,7 +2936,7 @@ async def insert_sso_user(
                 user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
             )
         except ProxyException as error:
-            if premium_user is True:
+            if premium_user is True and error.code != "403":
                 raise
             raise _SSOUserAdmissionError(
                 message=error.message, type=error.type, param=error.param, code=error.code
