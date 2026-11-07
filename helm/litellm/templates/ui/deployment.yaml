@@ -7,7 +7,14 @@ metadata:
   name: {{ include "litellm.ui.fullname" . }}
   labels:
     {{- include "litellm.commonLabels" . | nindent 4 }}
+    {{- with .Values.ui.deploymentLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
     app.kubernetes.io/component: ui
+  {{- with .Values.ui.deploymentAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 spec:
   {{- if and (not .Values.ui.hpa.enabled) (not (kindIs "invalid" .Values.ui.replicaCount)) }}
   replicas: {{ .Values.ui.replicaCount }}
