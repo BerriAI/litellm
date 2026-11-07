@@ -1,4 +1,5 @@
 from collections.abc import Callable, Iterable, Mapping
+from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final, Literal
 
@@ -179,16 +180,26 @@ def _allowed_tool_names(tool_choice: object) -> frozenset[object]:
     return frozenset(tool.get("name") for tool in flattened if tool is not None and _server_entry(tool) is None)
 
 
-def refuse_a_malformed_allowed_tools_tool_choice(tool_choice: object, model: str) -> None:
-    if is_allowed_tools_tool_choice(tool_choice) and parse_allowed_tools_tool_choice(tool_choice) is None:
-        raise BadRequestError(
-            message=(
-                f"Invalid tool choice, tool_choice={tool_choice}. An allowed_tools tool_choice must be "
-                f"{CHAT_ALLOWED_TOOLS_LAYOUT} or {RESPONSES_ALLOWED_TOOLS_LAYOUT}"
-            ),
-            model=model,
-            llm_provider="",
-        )
+def parse_allowed_tools_tool_choice_or_refuse(
+    tool_choice: object, model: str, drop_params: bool
+) -> ChatAllowedToolsToolChoice | None:
+    parsed: Final = parse_allowed_tools_tool_choice(tool_choice)
+    if parsed is not None or drop_params:
+        return parsed
+    raise BadRequestError(
+        message=(
+            f"Invalid tool choice, tool_choice={tool_choice}. An allowed_tools tool_choice must be "
+            f"{CHAT_ALLOWED_TOOLS_LAYOUT} or {RESPONSES_ALLOWED_TOOLS_LAYOUT}"
+        ),
+        model=model,
+        llm_provider="",
+    )
+
+
+def allowed_tools_tool_choice_in_effect(tool_choice: object, model: str, drop_params: bool) -> object:
+    if not is_allowed_tools_tool_choice(tool_choice):
+        return tool_choice
+    return None if parse_allowed_tools_tool_choice_or_refuse(tool_choice, model, drop_params) is None else tool_choice
 
 
 def _server_entry(tool: Mapping[str, object]) -> tuple[str, str | None] | None:
@@ -205,14 +216,32 @@ def _server_entries(tool_choice: object) -> frozenset[tuple[str, str | None]]:
     return frozenset(entry for entry in entries if entry is not None)
 
 
-def _a_server_entry_allows(entries: frozenset[tuple[str, str | None]], name: str, labels: frozenset[str]) -> bool:
-    return any(label in labels and entry_name in (None, name) for label, entry_name in entries)
+@dataclass(frozen=True, slots=True)
+class GatewayTool:
+    names: frozenset[str]
+    server_labels: frozenset[str]
+
+
+@dataclass(frozen=True, slots=True)
+class GatewayTools:
+    server_labels: frozenset[str]
+    tools: Mapping[str, GatewayTool]
+
+
+NO_GATEWAY_TOOLS: Final = GatewayTools(server_labels=frozenset(), tools=MappingProxyType({}))
+
+
+def _server_entry_allows(entry: tuple[str, str | None], tool: GatewayTool | None) -> bool:
+    label, name = entry
+    return tool is not None and label in tool.server_labels and (name is None or name in tool.names)
+
+
+def _a_server_entry_allows(entries: Iterable[tuple[str, str | None]], tool: GatewayTool | None) -> bool:
+    return any(_server_entry_allows(entry, tool) for entry in entries)
 
 
 def tool_calls_the_choice_excludes(
-    tool_choice: object,
-    tool_names: Iterable[str],
-    server_labels_by_tool: Mapping[str, frozenset[str]] = MappingProxyType({}),
+    tool_choice: object, tool_names: Iterable[str], gateway: GatewayTools = NO_GATEWAY_TOOLS
 ) -> tuple[str, ...]:
     if not is_allowed_tools_tool_choice(tool_choice):
         return ()
@@ -221,8 +250,7 @@ def tool_calls_the_choice_excludes(
     return tuple(
         name
         for name in tool_names
-        if name not in allowed
-        and not _a_server_entry_allows(server_entries, name, server_labels_by_tool.get(name, frozenset()))
+        if name not in allowed and not _a_server_entry_allows(server_entries, gateway.tools.get(name))
     )
 
 
@@ -246,29 +274,80 @@ def _with_builtin_as(
     return function_entry if tool.get("type") not in ("function", "custom", "mcp") and is_builtin(tool) else tool
 
 
+def _function_entry(
+    layout: ChatAllowedToolsToolChoice | ResponsesAllowedToolsToolChoice, name: str
+) -> Mapping[str, object]:
+    match layout:
+        case ChatAllowedToolsToolChoice():
+            return {"type": "function", "function": {"name": name}}
+        case ResponsesAllowedToolsToolChoice():
+            return {"type": "function", "name": name}
+
+
+def _entries_of(
+    layout: ChatAllowedToolsToolChoice | ResponsesAllowedToolsToolChoice,
+) -> tuple[Mapping[str, object], ...]:
+    match layout:
+        case ChatAllowedToolsToolChoice():
+            return layout.allowed_tools.tools
+        case ResponsesAllowedToolsToolChoice():
+            return layout.tools
+
+
+def _with_entries(
+    layout: ChatAllowedToolsToolChoice | ResponsesAllowedToolsToolChoice, tools: Iterable[Mapping[str, object]]
+) -> Mapping[str, object]:
+    entries: Final = [dict(tool) for tool in tools]
+    match layout:
+        case ChatAllowedToolsToolChoice():
+            return {"type": "allowed_tools", "allowed_tools": {"mode": layout.allowed_tools.mode, "tools": entries}}
+        case ResponsesAllowedToolsToolChoice():
+            return {"type": "allowed_tools", "mode": layout.mode, "tools": entries}
+
+
+def _callers_layout(tool_choice: object) -> ChatAllowedToolsToolChoice | ResponsesAllowedToolsToolChoice | None:
+    if parse_allowed_tools_tool_choice(tool_choice) is None:
+        return None
+    return _ALLOWED_TOOLS_TOOL_CHOICE.validate_python(tool_choice)
+
+
 def allowed_tools_tool_choice_with_builtin_as_function(
     tool_choice: object, is_builtin: Callable[[Mapping[str, object]], bool], function_name: str
 ) -> object:
-    if parse_allowed_tools_tool_choice(tool_choice) is None:
+    layout: Final = _callers_layout(tool_choice)
+    if layout is None:
         return tool_choice
-    parsed: Final = _ALLOWED_TOOLS_TOOL_CHOICE.validate_python(tool_choice)
-    match parsed:
-        case ChatAllowedToolsToolChoice():
-            nested: Final = {"type": "function", "function": {"name": function_name}}
-            return {
-                "type": "allowed_tools",
-                "allowed_tools": {
-                    "mode": parsed.allowed_tools.mode,
-                    "tools": [dict(_with_builtin_as(tool, is_builtin, nested)) for tool in parsed.allowed_tools.tools],
-                },
-            }
-        case ResponsesAllowedToolsToolChoice():
-            flat: Final = {"type": "function", "name": function_name}
-            return {
-                "type": "allowed_tools",
-                "mode": parsed.mode,
-                "tools": [dict(_with_builtin_as(tool, is_builtin, flat)) for tool in parsed.tools],
-            }
+    entry: Final = _function_entry(layout, function_name)
+    return _with_entries(layout, (_with_builtin_as(tool, is_builtin, entry) for tool in _entries_of(layout)))
+
+
+def allowed_tools_tool_choice_with_function(tool_choice: object, function_name: str) -> object:
+    layout: Final = _callers_layout(tool_choice)
+    if layout is None or function_name in _allowed_tool_names(tool_choice):
+        return tool_choice
+    return _with_entries(layout, (*_entries_of(layout), _function_entry(layout, function_name)))
+
+
+def _gateway_entry(tool: Mapping[str, object], gateway_labels: frozenset[str]) -> tuple[str, str | None] | None:
+    entry: Final = _server_entry(tool)
+    return entry if entry is not None and entry[0] in gateway_labels else None
+
+
+def allowed_tools_tool_choice_with_gateway_tools_as_functions(tool_choice: object, gateway: GatewayTools) -> object:
+    layout: Final = _callers_layout(tool_choice)
+    entries: Final = () if layout is None else _entries_of(layout)
+    gateway_entries: Final = tuple(
+        entry for entry in (_gateway_entry(tool, gateway.server_labels) for tool in entries) if entry is not None
+    )
+    if layout is None or not gateway_entries:
+        return tool_choice
+    kept: Final = tuple(tool for tool in entries if _gateway_entry(tool, gateway.server_labels) is None)
+    allowed: Final = tuple(
+        name for name, tool in gateway.tools.items() if _a_server_entry_allows(gateway_entries, tool)
+    )
+    if not kept and not allowed:
+        return "none"
+    return _with_entries(layout, (*kept, *(_function_entry(layout, name) for name in allowed)))
 
 
 def chat_allowed_tools_tool_choice(choice: ChatAllowedToolsToolChoice) -> ChatCompletionAllowedToolChoiceParam:

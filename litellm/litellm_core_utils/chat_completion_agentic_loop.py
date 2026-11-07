@@ -1,7 +1,7 @@
 # this is a patch to allow for agentic loops covering llm_http_handler.py and openai sdk based calling flows for the .completion() api
 
 import json
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from itertools import chain
 from types import MappingProxyType
 from typing import Final
@@ -16,11 +16,13 @@ from litellm.litellm_core_utils.agentic_loop_settings import (
     validated_max_agentic_loops,
 )
 from litellm.litellm_core_utils.allowed_tools_tool_choice import (
-    is_allowed_tools_tool_choice,
+    parse_allowed_tools_tool_choice,
     refuse_tool_calls_the_choice_excludes,
+    tool_calls_the_choice_excludes,
 )
 from litellm.litellm_core_utils.get_litellm_params import AGENTIC_LOOP_TOOL_CHOICE_KEY
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field, parts_of
 from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
 from litellm.types.integrations.custom_logger import (
     CHAT_COMPLETION_AGENTIC_SURFACE,
@@ -154,15 +156,49 @@ def _called_tool_names(response: ModelResponse) -> tuple[str, ...]:
     return tuple(map(_tool_call_name, calls))
 
 
-def _refuse_a_call_the_choice_excludes(response: ModelResponse, kwargs: Mapping[str, object], model: str) -> None:
-    refuse_tool_calls_the_choice_excludes(kwargs.get(AGENTIC_LOOP_TOOL_CHOICE_KEY), _called_tool_names(response), model)
+_TOOL_CALL_ITEM_TYPES: Final = frozenset({"function_call", "custom_tool_call", "tool_use"})
 
 
-def _with_caller_tool_choice(
+def called_tool_names(response: object) -> frozenset[str]:
+    items: Final = (*parts_of(message_field(response, "output")), *parts_of(message_field(response, "content")))
+    names: Final = (message_field(item, "name") for item in items if message_field(item, "type") in _TOOL_CALL_ITEM_TYPES)
+    return frozenset(name for name in names if isinstance(name, str))
+
+
+def _client_tool_names(tool_names: Iterable[str], callbacks: Iterable[object]) -> tuple[str, ...]:
+    server_fulfilled: Final = frozenset(
+        chain.from_iterable(
+            callback.server_fulfilled_tool_names for callback in callbacks if isinstance(callback, CustomLogger)
+        )
+    )
+    return tuple(name for name in tool_names if name not in server_fulfilled)
+
+
+def holds_a_call_the_choice_excludes(
+    tool_names: Iterable[str], kwargs: Mapping[str, object], callbacks: Iterable[object]
+) -> bool:
+    return bool(
+        tool_calls_the_choice_excludes(
+            kwargs.get(AGENTIC_LOOP_TOOL_CHOICE_KEY), _client_tool_names(tool_names, callbacks)
+        )
+    )
+
+
+def refuse_a_call_the_choice_excludes(
+    response: object, kwargs: Mapping[str, object], callbacks: Iterable[object], model: str
+) -> None:
+    if not isinstance(response, ModelResponse):
+        return
+    refuse_tool_calls_the_choice_excludes(
+        kwargs.get(AGENTIC_LOOP_TOOL_CHOICE_KEY), _client_tool_names(_called_tool_names(response), callbacks), model
+    )
+
+
+def with_caller_tool_choice(
     kwargs: Mapping[str, object], optional_params: Mapping[str, object]
 ) -> Mapping[str, object]:
     tool_choice: Final = optional_params.get("tool_choice")
-    if AGENTIC_LOOP_TOOL_CHOICE_KEY in kwargs or not is_allowed_tools_tool_choice(tool_choice):
+    if AGENTIC_LOOP_TOOL_CHOICE_KEY in kwargs or parse_allowed_tools_tool_choice(tool_choice) is None:
         return kwargs
     return {**kwargs, AGENTIC_LOOP_TOOL_CHOICE_KEY: tool_choice}
 
@@ -296,7 +332,7 @@ async def maybe_run_chat_completion_agentic_loop(
     import litellm
 
     callbacks: Final = litellm.callbacks + (getattr(logging_obj, "dynamic_success_callbacks", None) or [])
-    request_kwargs: Final = _with_caller_tool_choice(kwargs, optional_params)
+    request_kwargs: Final = with_caller_tool_choice(kwargs, optional_params)
     depth, max_loops, fingerprints = _agentic_loop_settings(request_kwargs)
     tools: Final = optional_params.get("tools", [])
 
@@ -332,7 +368,7 @@ async def maybe_run_chat_completion_agentic_loop(
         if not should_run:
             continue
 
-        _refuse_a_call_the_choice_excludes(response, request_kwargs, model)
+        refuse_a_call_the_choice_excludes(response, request_kwargs, callbacks, model)
         fingerprint = _check_agentic_loop_safety(
             tool_calls=tool_calls,
             fingerprints=fingerprints,

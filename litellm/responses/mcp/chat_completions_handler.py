@@ -7,6 +7,9 @@ from typing import TYPE_CHECKING, Final, cast
 
 from typing_extensions import TypedDict, Unpack
 
+from litellm.litellm_core_utils.allowed_tools_tool_choice import (
+    allowed_tools_tool_choice_with_gateway_tools_as_functions,
+)
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, set_hidden_params
 from litellm.responses.mcp.litellm_proxy_mcp_handler import (
     LiteLLM_Proxy_MCP_Handler,
@@ -150,6 +153,9 @@ async def acompletion_with_mcp(
         deduplicated_mcp_tools,
         target_format="chat",
     )
+    gateway: Final = await LiteLLM_Proxy_MCP_Handler.gateway_tools(
+        kwargs.get("tool_choice"), tool_server_map, mcp_tools_with_litellm_proxy, user_api_key_auth
+    )
 
     # Combine with other tools
     all_tools: Final = openai_tools + other_tools if (openai_tools or other_tools) else None
@@ -169,6 +175,7 @@ async def acompletion_with_mcp(
         "tools": all_tools,
         "_skip_mcp_handler": True,  # Prevent recursion
         **clean_kwargs,
+        "tool_choice": allowed_tools_tool_choice_with_gateway_tools_as_functions(kwargs.get("tool_choice"), gateway),
     }
 
     # If not auto-executing, just make the call with transformed tools
@@ -435,8 +442,7 @@ async def acompletion_with_mcp(
                     self.tool_calls = LiteLLM_Proxy_MCP_Handler.tool_calls_to_run(
                         LiteLLM_Proxy_MCP_Handler.extract_tool_calls_from_chat_response(response=complete_response),
                         kwargs.get("tool_choice"),
-                        self.tool_server_map,
-                        mcp_tools_with_litellm_proxy,
+                        gateway,
                     )
 
                     if self.tool_calls:
@@ -608,8 +614,7 @@ async def acompletion_with_mcp(
     tool_calls: Final = LiteLLM_Proxy_MCP_Handler.tool_calls_to_run(
         LiteLLM_Proxy_MCP_Handler.extract_tool_calls_from_chat_response(response=initial_response),
         kwargs.get("tool_choice"),
-        tool_server_map,
-        mcp_tools_with_litellm_proxy,
+        gateway,
     )
 
     if not tool_calls:

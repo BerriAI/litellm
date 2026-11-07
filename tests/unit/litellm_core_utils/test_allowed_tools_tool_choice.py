@@ -8,12 +8,16 @@ import litellm
 from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.allowed_tools_tool_choice import (
     ChatAllowedToolsToolChoice,
+    GatewayTool,
+    GatewayTools,
+    allowed_tools_tool_choice_in_effect,
     allowed_tools_tool_choice_with_builtin_as_function,
+    allowed_tools_tool_choice_with_function,
+    allowed_tools_tool_choice_with_gateway_tools_as_functions,
     drops_unsupported_allowed_tools_tool_choice,
     is_allowed_tools_tool_choice,
     chat_allowed_tools_tool_choice,
     parse_allowed_tools_tool_choice,
-    refuse_a_malformed_allowed_tools_tool_choice,
     refuse_tool_calls_the_choice_excludes,
     tool_calls_the_choice_excludes,
     unenforced_allowed_tools_tool_choice,
@@ -266,11 +270,12 @@ def test_a_choice_the_provider_cannot_take_answers_400_without_drop_params():
         *_CHOICES_WITH_A_NAME_THAT_IS_NOT_A_STRING,
     ],
 )
-def test_a_malformed_choice_is_refused(tool_choice: object):
+def test_a_malformed_choice_is_refused_without_drop_params_and_dropped_with_it(tool_choice: object):
     with pytest.raises(BadRequestError, match="Invalid tool choice") as exc:
-        refuse_a_malformed_allowed_tools_tool_choice(tool_choice, "the-model")
+        allowed_tools_tool_choice_in_effect(tool_choice, "the-model", False)
 
     assert exc.value.status_code == 400
+    assert allowed_tools_tool_choice_in_effect(tool_choice, "the-model", True) is None
 
 
 @pytest.mark.parametrize("tool_choice", _CHOICES_WITH_A_NAME_THAT_IS_NOT_A_STRING)
@@ -279,8 +284,9 @@ def test_a_name_that_is_not_a_string_lists_no_tool(tool_choice: object):
 
 
 @pytest.mark.parametrize("tool_choice", [_FLAT_CHOICE, _CHAT_LAYOUT, "required", None])
-def test_a_valid_choice_or_any_other_choice_is_not_called_malformed(tool_choice: object):
-    assert refuse_a_malformed_allowed_tools_tool_choice(tool_choice, "the-model") is None
+@pytest.mark.parametrize("drop_params", [True, False])
+def test_a_valid_choice_or_any_other_choice_stays_in_effect(tool_choice: object, drop_params: bool):
+    assert allowed_tools_tool_choice_in_effect(tool_choice, "the-model", drop_params) is tool_choice
 
 
 @pytest.mark.parametrize(
@@ -295,7 +301,7 @@ def test_a_valid_choice_or_any_other_choice_is_not_called_malformed(tool_choice:
 )
 def test_an_mcp_entry_with_a_null_name_is_a_valid_choice(tool_choice: object):
     assert parse_allowed_tools_tool_choice(tool_choice) is not None
-    assert refuse_a_malformed_allowed_tools_tool_choice(tool_choice, "the-model") is None
+    assert allowed_tools_tool_choice_in_effect(tool_choice, "the-model", False) is tool_choice
 
 
 _DOCS_SEARCH: Final = {
@@ -305,12 +311,36 @@ _DOCS_SEARCH: Final = {
 }
 
 
-def test_a_named_mcp_entry_allows_its_call_on_a_server_its_label_serves():
-    assert tool_calls_the_choice_excludes(_DOCS_SEARCH, ("search",), {"search": frozenset({"docs", "other"})}) == ()
+def _gateway_serving_search(*server_labels: str) -> GatewayTools:
+    return GatewayTools(
+        server_labels=frozenset({"docs", "other"}),
+        tools={
+            "docs_server-search": GatewayTool(
+                names=frozenset({"docs_server-search", "search"}), server_labels=frozenset(server_labels)
+            )
+        },
+    )
+
+
+@pytest.mark.parametrize("name", ["search", "docs_server-search"])
+def test_a_named_mcp_entry_allows_its_call_on_a_server_its_label_serves(name: str):
+    tool_choice: Final = {
+        "type": "allowed_tools",
+        "mode": "auto",
+        "tools": [{"type": "mcp", "server_label": "docs", "name": name}],
+    }
+
+    assert (
+        tool_calls_the_choice_excludes(tool_choice, ("docs_server-search",), _gateway_serving_search("docs", "other"))
+        == ()
+    )
 
 
 def test_an_mcp_entry_without_a_name_allows_every_call_its_server_serves():
-    assert tool_calls_the_choice_excludes(_WHOLE_DOCS_SERVER, ("search",), {"search": frozenset({"docs"})}) == ()
+    assert (
+        tool_calls_the_choice_excludes(_WHOLE_DOCS_SERVER, ("docs_server-search",), _gateway_serving_search("docs"))
+        == ()
+    )
 
 
 @pytest.mark.parametrize(
@@ -329,7 +359,9 @@ def test_an_mcp_entry_without_a_name_allows_every_call_its_server_serves():
 def test_an_mcp_entry_allows_no_call_outside_its_server_or_its_name(
     tool_choice: object, server_labels: frozenset[str]
 ):
-    assert tool_calls_the_choice_excludes(tool_choice, ("search",), {"search": server_labels}) == ("search",)
+    assert tool_calls_the_choice_excludes(
+        tool_choice, ("docs_server-search",), _gateway_serving_search(*server_labels)
+    ) == ("docs_server-search",)
 
 
 def _is_web_search(tool: Mapping[str, object]) -> bool:
@@ -388,3 +420,132 @@ def test_a_function_or_mcp_entry_is_never_taken_for_a_builtin():
 )
 def test_any_other_or_malformed_choice_is_left_as_sent(tool_choice: object):
     assert allowed_tools_tool_choice_with_builtin_as_function(tool_choice, _is_web_search, "litellm_web_search") is tool_choice
+
+
+_GATEWAY_WITH_TWO_SERVERS: Final = GatewayTools(
+    server_labels=frozenset({"docs", "weather"}),
+    tools={
+        "docs_server-search": GatewayTool(
+            names=frozenset({"docs_server-search", "search"}), server_labels=frozenset({"docs"})
+        ),
+        "docs_server-read": GatewayTool(names=frozenset({"docs_server-read", "read"}), server_labels=frozenset({"docs"})),
+        "weather_server-forecast": GatewayTool(
+            names=frozenset({"weather_server-forecast", "forecast"}), server_labels=frozenset({"weather"})
+        ),
+    },
+)
+
+
+@pytest.mark.parametrize(
+    ("tool_choice", "expected"),
+    [
+        (
+            {
+                "type": "allowed_tools",
+                "mode": "required",
+                "tools": [{"type": "mcp", "server_label": "docs"}, {"type": "function", "name": "get_time"}],
+            },
+            {
+                "type": "allowed_tools",
+                "mode": "required",
+                "tools": [
+                    {"type": "function", "name": "get_time"},
+                    {"type": "function", "name": "docs_server-search"},
+                    {"type": "function", "name": "docs_server-read"},
+                ],
+            },
+        ),
+        (
+            {
+                "type": "allowed_tools",
+                "allowed_tools": {
+                    "mode": "auto",
+                    "tools": [{"type": "mcp", "server_label": "weather", "name": "forecast"}],
+                },
+            },
+            {
+                "type": "allowed_tools",
+                "allowed_tools": {
+                    "mode": "auto",
+                    "tools": [{"type": "function", "function": {"name": "weather_server-forecast"}}],
+                },
+            },
+        ),
+    ],
+)
+def test_gateway_mcp_entries_become_the_functions_they_allow_in_the_callers_layout(
+    tool_choice: dict[str, object], expected: dict[str, object]
+):
+    assert allowed_tools_tool_choice_with_gateway_tools_as_functions(tool_choice, _GATEWAY_WITH_TWO_SERVERS) == expected
+
+
+def test_an_mcp_entry_of_a_label_the_gateway_does_not_serve_is_forwarded_as_sent():
+    tool_choice: Final = {
+        "type": "allowed_tools",
+        "mode": "auto",
+        "tools": [{"type": "mcp", "server_label": "remote"}, {"type": "mcp", "server_label": "docs", "name": "read"}],
+    }
+
+    assert allowed_tools_tool_choice_with_gateway_tools_as_functions(tool_choice, _GATEWAY_WITH_TWO_SERVERS) == {
+        "type": "allowed_tools",
+        "mode": "auto",
+        "tools": [{"type": "mcp", "server_label": "remote"}, {"type": "function", "name": "docs_server-read"}],
+    }
+
+
+@pytest.mark.parametrize("mode", ["auto", "required"])
+def test_gateway_entries_that_allow_no_converted_tool_send_none_instead_of_an_empty_list(mode: str):
+    tool_choice: Final = {
+        "type": "allowed_tools",
+        "mode": mode,
+        "tools": [{"type": "mcp", "server_label": "docs", "name": "delete"}],
+    }
+
+    assert allowed_tools_tool_choice_with_gateway_tools_as_functions(tool_choice, _GATEWAY_WITH_TWO_SERVERS) == "none"
+
+
+@pytest.mark.parametrize("tool_choice", ["auto", None, _FLAT_CHOICE, {"type": "allowed_tools", "mode": "auto", "tools": []}])
+def test_a_choice_without_gateway_entries_is_forwarded_as_sent(tool_choice: object):
+    assert allowed_tools_tool_choice_with_gateway_tools_as_functions(tool_choice, _GATEWAY_WITH_TWO_SERVERS) is tool_choice
+
+
+@pytest.mark.parametrize(
+    ("tool_choice", "expected"),
+    [
+        (
+            {"type": "allowed_tools", "mode": "auto", "tools": [{"type": "function", "name": "get_time"}]},
+            {
+                "type": "allowed_tools",
+                "mode": "auto",
+                "tools": [{"type": "function", "name": "get_time"}, {"type": "function", "name": "retrieve"}],
+            },
+        ),
+        (
+            {"type": "allowed_tools", "allowed_tools": {"mode": "required", "tools": [{"type": "mcp", "server_label": "x"}]}},
+            {
+                "type": "allowed_tools",
+                "allowed_tools": {
+                    "mode": "required",
+                    "tools": [{"type": "mcp", "server_label": "x"}, {"type": "function", "function": {"name": "retrieve"}}],
+                },
+            },
+        ),
+    ],
+)
+def test_an_added_function_joins_the_choice_in_the_callers_layout(
+    tool_choice: dict[str, object], expected: dict[str, object]
+):
+    assert allowed_tools_tool_choice_with_function(tool_choice, "retrieve") == expected
+
+
+@pytest.mark.parametrize(
+    "tool_choice",
+    [
+        "auto",
+        None,
+        {"type": "function", "function": {"name": "get_time"}},
+        {"type": "allowed_tools", "mode": "auto", "tools": [{"type": "function", "name": "retrieve"}]},
+    ],
+)
+def test_a_choice_that_is_not_allowed_tools_or_already_lists_the_function_is_left_as_sent(tool_choice: object):
+    assert allowed_tools_tool_choice_with_function(tool_choice, "retrieve") is tool_choice
