@@ -10,9 +10,11 @@ from ...litellm_core_utils.get_llm_provider_logic import (
 from ...types.router import LiteLLM_Params
 
 
-def _api_base_without_login(provider: str) -> str | None:
+def _api_base_without_login(provider: str, params: LiteLLM_Params) -> str | None:
     if provider == "github_copilot":
-        return litellm.GithubCopilotConfig().api_base_without_login()
+        from litellm.llms.github_copilot.per_user_auth import github_copilot_user_session_from
+
+        return litellm.GithubCopilotConfig().api_base_without_login(github_copilot_user_session_from(params))
     if provider == "chatgpt":
         return litellm.ChatGPTConfig().api_base_without_login()
     return None
@@ -68,7 +70,7 @@ def get_api_base(model: str, optional_params: dict | LiteLLM_Params) -> str | No
         model = litellm.model_alias_map[model]
     declared: Final = declared_authenticating_provider(model, _optional_params.custom_llm_provider)
     if declared is not None:
-        return _api_base_without_login(declared)
+        return _api_base_without_login(declared, _optional_params)
     try:
         (
             model,

@@ -4,7 +4,7 @@ import respx
 import litellm
 from litellm.litellm_core_utils.llm_response_utils import get_api_base as get_api_base_module
 from litellm.llms.chatgpt.common_utils import CHATGPT_API_BASE
-from litellm.llms.github_copilot.common_utils import DEFAULT_GITHUB_COPILOT_API_BASE
+from litellm.llms.github_copilot.common_utils import DEFAULT_GITHUB_COPILOT_API_BASE, prefetch_copilot_plan_api_base
 
 
 @pytest.fixture
@@ -52,6 +52,14 @@ class TestDeclaredAuthenticatingProvider:
         assert resolution_lookups == []
         assert api_base == expected
 
+    def test_copilot_reports_configured_environment_base(self, isolated_token_dirs, resolution_lookups, monkeypatch):
+        monkeypatch.setenv("GITHUB_COPILOT_API_BASE", "https://configured.example.com/v1")
+
+        api_base = litellm.get_api_base(model="github_copilot/gpt-4o", optional_params={})
+
+        assert resolution_lookups == []
+        assert api_base == "https://configured.example.com/v1"
+
     def test_copilot_uses_the_user_endpoint_for_an_enterprise_api_base(self, isolated_token_dirs, resolution_lookups):
         token_dir = isolated_token_dirs / "github_copilot"
         token_dir.mkdir()
@@ -61,7 +69,9 @@ class TestDeclaredAuthenticatingProvider:
             route = router.get("https://api.github.com/copilot_internal/user").respond(
                 json={"endpoints": {"api": "https://api.enterprise.githubcopilot.com"}}
             )
-            api_base = litellm.get_api_base(model="github_copilot/gpt-4o", optional_params={})
+            prefetch_copilot_plan_api_base(token)
+
+        api_base = litellm.get_api_base(model="github_copilot/gpt-4o", optional_params={})
 
         assert resolution_lookups == []
         assert api_base == "https://api.enterprise.githubcopilot.com"
@@ -84,7 +94,10 @@ class TestDeclaredAuthenticatingProvider:
 @pytest.mark.parametrize(
     "model, expected",
     [
-        ("gemini/gemini-2.5-pro", "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent"),
+        (
+            "gemini/gemini-2.5-pro",
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent",
+        ),
         ("openai/gpt-4o", "https://api.openai.com"),
     ],
 )

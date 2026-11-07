@@ -7,18 +7,21 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import subprocess
 import sys
-from itertools import chain
 from dataclasses import dataclass
+from itertools import chain
 from typing import Final
 
-import litellm
 import openai
-from litellm.integrations.prometheus import PrometheusLogger
-from litellm.llms.github_copilot.per_user_auth import GithubCopilotUserSession
 from prometheus_client import REGISTRY
 from pydantic import TypeAdapter
+
+import litellm
+from litellm.integrations.prometheus import PrometheusLogger
+from litellm.llms.github_copilot.github_host import github_host_endpoints
+from litellm.llms.github_copilot.per_user_auth import GithubCopilotUserSession
 
 COPILOT_DEPLOYMENT: Final = "copilot-per-user-deployment"
 OPERATOR_DEPLOYMENT: Final = "operator-key-deployment"
@@ -77,6 +80,7 @@ _REPORT: Final = TypeAdapter(WorkerReport)
 def run_copilot_session_worker(api_base: str) -> WorkerReport:
     completed: Final = subprocess.run(
         (sys.executable, "-P", __file__, api_base),
+        env={**os.environ, "GITHUB_COPILOT_API_BASE": api_base},
         capture_output=True,
         text=True,
         timeout=WORKER_TIMEOUT_SECONDS,
@@ -146,7 +150,7 @@ async def _direct_attempt(api_base: str) -> Outcome:
 
 async def main(api_base: str) -> None:
     litellm.callbacks = [PrometheusLogger()]  # test-quality-ok: this worker process exits right after the report
-    session: Final = GithubCopilotUserSession(token=CALLER_SESSION_TOKEN, api_base=api_base)
+    session: Final = GithubCopilotUserSession(token=CALLER_SESSION_TOKEN, endpoints=github_host_endpoints("github.com"))
     router: Final = _router(api_base)
     outcomes: Final = (
         await _attempt(router, COPILOT_DEPLOYMENT, github_copilot_user_session=session),

@@ -32,12 +32,14 @@ def test_normalized_github_host_accepts_only_bare_supported_hosts(raw: object, e
 def test_github_com_endpoints_read_url_overrides_at_call_time(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GITHUB_COPILOT_DEVICE_CODE_URL", "https://device.example/code")
     monkeypatch.setenv("GITHUB_COPILOT_ACCESS_TOKEN_URL", "https://device.example/token")
+    monkeypatch.setenv("GITHUB_COPILOT_API_BASE", "https://copilot.example")
     monkeypatch.setenv("GITHUB_COPILOT_CLIENT_ID", "custom-client")
 
     endpoints: Final = github_host_endpoints("github.com")
 
     assert endpoints.device_code_url == "https://device.example/code"
     assert endpoints.access_token_url == "https://device.example/token"
+    assert endpoints.configured_copilot_api_base == "https://copilot.example"
     assert endpoints.copilot_user_url == "https://api.github.com/copilot_internal/user"
     assert endpoints.client_id == "custom-client"
 
@@ -45,6 +47,7 @@ def test_github_com_endpoints_read_url_overrides_at_call_time(monkeypatch: pytes
 def test_ghe_endpoints_ignore_github_com_url_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GITHUB_COPILOT_DEVICE_CODE_URL", "https://device.example/code")
     monkeypatch.setenv("GITHUB_COPILOT_ACCESS_TOKEN_URL", "https://device.example/token")
+    monkeypatch.setenv("GITHUB_COPILOT_API_BASE", "https://copilot.example")
     monkeypatch.setenv("GITHUB_COPILOT_CLIENT_ID", "custom-client")
 
     endpoints: Final = github_host_endpoints("octo.ghe.com")
@@ -52,6 +55,7 @@ def test_ghe_endpoints_ignore_github_com_url_overrides(monkeypatch: pytest.Monke
     assert endpoints.device_code_url == "https://octo.ghe.com/login/device/code"
     assert endpoints.access_token_url == "https://octo.ghe.com/login/oauth/access_token"
     assert endpoints.copilot_user_url == "https://api.octo.ghe.com/copilot_internal/user"
+    assert endpoints.configured_copilot_api_base is None
     assert endpoints.user_url == "https://api.octo.ghe.com/user"
     assert endpoints.default_copilot_api_base == "https://copilot-api.octo.ghe.com"
     assert endpoints.client_id == "custom-client"

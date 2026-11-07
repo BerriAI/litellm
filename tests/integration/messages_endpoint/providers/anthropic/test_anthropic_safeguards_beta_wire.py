@@ -677,7 +677,7 @@ def test_github_copilot_messages_forward_safeguards_without_deriving_the_beta(
             model: Final = scenario.model(model="github_copilot/claude-sonnet-4-5", api_base=peers.api.url)
             response: Final = _post(owned, messages_body(model, marker), beta=_CLIENT_BETAS_WITH_DANGEROUS)
             _assert_answered(response, marker)
-            observed: Final = _only(peers.api.secure)
+            observed: Final = _only(peers.api.plain)
             _expect_messages(
                 observed, target="/v1/messages", auth=("authorization", "Bearer synthetic-copilot-token"), beta=None
             )
