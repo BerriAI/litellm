@@ -141,10 +141,12 @@ If you're seeing a delay in your PR being merged, ping the LiteLLM Team on [Slac
      short bullet points inside each, just like the TLDR: one line per bullet, roughly 10 words max
      Call out known limitations, follow-up work, or anything a reviewer should watch out for
      Include only the tiers that have caveats; drop the empty ones
-     - Severe: inherent to what the PR deliberately ships, there even when the code works as intended:
-       it can degrade or take down a running deployment (e.g. a slow or table-locking boot migration),
-       rewrite data by design, break an existing workflow on purpose, or change auth behavior. An
-       operator must plan around it before rollout
+     - Severe: an evidenced rollout hazard inherent to the intended change, requiring operator planning,
+       such as downtime, destructive data changes or a supported workflow requiring migration.
+       A changed value or auth implementation alone is not such a hazard. For compatibility breaks,
+       name the previously valid request/config, before/after behavior and required migration.
+       Provider price refreshes and fixes restoring intended behavior are not breaking by themselves.
+       Keep billing and security risks assessed separately (2026-11-03, price correction false positive)
      - High: an unintended hole: a correctness, security, data-loss, or backward-compatibility bug,
        unsafe to ship as is
      - Medium: a real gap someone can hit, but with a workaround or a narrow blast radius
