@@ -50,6 +50,7 @@ interface UsersTableProps {
   onUserClick: (userId: string, openInEditMode?: boolean) => void;
   onDeleteUser: (user: UserInfo) => void;
   onResetPassword: (userId: string) => void;
+  onAdjustBudget?: (user: UserInfo) => void;
 }
 
 const FILTER_LABEL_KEYS: Readonly<Record<string, ParseKeys>> = {
@@ -93,6 +94,7 @@ export function UsersTable({
   onUserClick,
   onDeleteUser,
   onResetPassword,
+  onAdjustBudget,
 }: UsersTableProps) {
   const { t } = useTranslation();
   const [filtersOpen, setFiltersOpen] = useState(false);
@@ -105,10 +107,11 @@ export function UsersTable({
       onUserClick,
       onDeleteUser,
       onResetPassword,
+      onAdjustBudget,
       t,
     };
     return getUsersTableColumns(columnDeps);
-  }, [possibleUIRoles, selectionEnabled, canViewUserUsage, onUserClick, onDeleteUser, onResetPassword, t]);
+  }, [possibleUIRoles, selectionEnabled, canViewUserUsage, onUserClick, onDeleteUser, onResetPassword, onAdjustBudget, t]);
 
   const filterLabels = useMemo(
     () => Object.fromEntries(Object.entries(FILTER_LABEL_KEYS).map(([columnId, key]) => [columnId, t(key)])),
