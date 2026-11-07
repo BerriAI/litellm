@@ -3,12 +3,15 @@ Tests for separate ITPM/OTPM deployment rate limits (enforce_model_rate_limits).
 """
 
 import asyncio
+import contextvars
 from collections.abc import Awaitable, Callable, Mapping
 from datetime import datetime, timezone
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import pytest
+import respx
 from fakeredis import FakeRedis, FakeServer
 from fakeredis.aioredis import FakeRedis as FakeAsyncRedis
 
@@ -38,6 +41,7 @@ from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import (
     refund_stale_reservation_before_retry,
     set_io_token_rate_limit_request_kwargs,
 )
+from litellm.router_utils.attempt_settlement import routed_attempt
 from litellm.router_utils.pre_call_checks.model_rate_limit_check import (
     ModelRateLimitingCheck,
 )
@@ -950,11 +954,8 @@ class TestModelRateLimitingCheckIOTokens:
             usage=Usage(prompt_tokens=3, completion_tokens=0, total_tokens=3),
         )
 
-        with pytest.raises(RuntimeError):
-            await async_io_token_reconcile_success(dual_cache, kwargs, response)
+        await async_io_token_reconcile_success(dual_cache, kwargs, response)
 
-        # The stash is cleared even though reconciliation raised, so a duplicate
-        # success event can't re-process it.
         assert ITPM_RESERVED_KEY not in metadata
         assert ITPM_CACHE_KEY not in metadata
 
@@ -1853,3 +1854,200 @@ async def test_a_later_turn_is_admitted_on_this_instance_s_count_when_the_shared
     admitted: Final = await async_admit_io_token_turn(dual_cache, _turn_deployment(kind), _TURN_AT)
 
     assert admitted[ITPM_CACHE_KEY if kind == "itpm" else OTPM_CACHE_KEY] == _turn_key(kind)
+
+
+_HELD_DEPLOYMENT: Final = {
+    "litellm_params": {"model": ROUTER_IO_MODEL, "itpm": 50000, "otpm": 50000},
+    "model_info": {"id": "held-id"},
+    "model_name": "limited",
+}
+
+
+def _held_keys() -> tuple[str, str]:
+    minute: Final = _current_minute()
+    return (
+        f"global_router:held-id:{ROUTER_IO_MODEL}:itpm:{minute}",
+        f"global_router:held-id:{ROUTER_IO_MODEL}:otpm:{minute}",
+    )
+
+
+class _HeldIncrement(DualCache):
+    """Holds the first increment matching ``holds`` until ``release`` is set."""
+
+    def __init__(self, holds: Callable[[str, int], bool]) -> None:
+        super().__init__()
+        self._holds: Final = holds
+        self.holding: Final = asyncio.Event()
+        self.release: Final = asyncio.Event()
+
+    async def async_increment_cache(self, key: str, value: float, **kwargs: object) -> float | None:
+        if not self.holding.is_set() and self._holds(key, int(value)):
+            self.holding.set()
+            await self.release.wait()
+        return await super().async_increment_cache(key=key, value=value, **kwargs)
+
+
+async def _counts(cache: DualCache) -> tuple[int, int]:
+    for _ in range(10):
+        await asyncio.sleep(0)
+    itpm_key, otpm_key = _held_keys()
+    itpm: Final[object] = await cache.async_get_cache(key=itpm_key)
+    otpm: Final[object] = await cache.async_get_cache(key=otpm_key)
+    return (itpm if isinstance(itpm, int) else 0), (otpm if isinstance(otpm, int) else 0)
+
+
+async def _cancel_twice_while_held(cache: _HeldIncrement, held: "asyncio.Task[object]") -> None:
+    await cache.holding.wait()
+    held.cancel()
+    held.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await held
+    cache.release.set()
+
+
+@pytest.mark.asyncio
+async def test_a_request_cancelled_mid_reservation_hands_back_what_it_reserved() -> None:
+    cache: Final = _HeldIncrement(lambda key, value: ":otpm:" in key and value > 0)
+    request: Final[dict[str, object]] = {"messages": PROXY_MESSAGES, "max_tokens": 100, "metadata": {}}
+
+    async def reserve() -> object:
+        set_io_token_rate_limit_request_kwargs(request, metadata_channel="metadata")
+        return await async_io_token_pre_call_check(cache, dict(_HELD_DEPLOYMENT))
+
+    await _cancel_twice_while_held(cache, asyncio.create_task(reserve()))
+
+    assert await _counts(cache) == (0, 0)
+    assert ITPM_RESERVED_KEY not in request["metadata"]
+
+
+def _stashed(itpm_reserved: int, otpm_reserved: int) -> dict[str, object]:
+    itpm_key, otpm_key = _held_keys()
+    return {
+        "metadata": {
+            ITPM_RESERVED_KEY: itpm_reserved,
+            OTPM_RESERVED_KEY: otpm_reserved,
+            ITPM_CACHE_KEY: itpm_key,
+            OTPM_CACHE_KEY: otpm_key,
+        }
+    }
+
+
+async def _reserved(cache: DualCache, itpm_reserved: int, otpm_reserved: int) -> dict[str, object]:
+    itpm_key, otpm_key = _held_keys()
+    await cache.async_increment_cache(key=itpm_key, value=itpm_reserved)
+    await cache.async_increment_cache(key=otpm_key, value=otpm_reserved)
+    return _stashed(itpm_reserved, otpm_reserved)
+
+
+@pytest.mark.asyncio
+async def test_a_refund_cancelled_between_its_decrements_still_hands_back_both() -> None:
+    cache: Final = _HeldIncrement(lambda key, value: ":itpm:" in key and value < 0)
+    kwargs: Final = await _reserved(cache, 9, 100)
+
+    await _cancel_twice_while_held(
+        cache, asyncio.create_task(ModelRateLimitingCheck(cache).async_log_failure_event(kwargs, None, None, None))
+    )
+
+    assert await _counts(cache) == (0, 0)
+
+
+class _YieldingIncrement(DualCache):
+    async def async_increment_cache(self, key: str, value: float, **kwargs: object) -> float | None:
+        await asyncio.sleep(0)
+        return await super().async_increment_cache(key=key, value=value, **kwargs)
+
+
+@pytest.mark.asyncio
+async def test_competing_failure_callbacks_hand_a_reservation_back_once() -> None:
+    cache: Final = _YieldingIncrement()
+    kwargs: Final = await _reserved(cache, 9, 100)
+    check: Final = ModelRateLimitingCheck(cache)
+
+    await asyncio.gather(*(check.async_log_failure_event(kwargs, None, None, None) for _ in range(2)))
+
+    assert await _counts(cache) == (0, 0)
+
+
+@pytest.mark.asyncio
+async def test_a_late_failure_callback_of_one_attempt_leaves_the_next_attempts_reservation_held() -> None:
+    cache: Final = DualCache()
+    check: Final = ModelRateLimitingCheck(cache)
+    request: Final[dict[str, object]] = {"messages": PROXY_MESSAGES, "max_tokens": 100, "metadata": {}}
+
+    async def attempt() -> contextvars.Context:
+        with routed_attempt():
+            set_io_token_rate_limit_request_kwargs(request, metadata_channel="metadata")
+            await async_io_token_pre_call_check(cache, dict(_HELD_DEPLOYMENT))
+            return contextvars.copy_context()
+
+    def failure_logged_in(context: contextvars.Context) -> "asyncio.Task[None]":
+        return context.run(asyncio.create_task, check.async_log_failure_event(request, None, None, None))
+
+    first: Final = await attempt()
+    await failure_logged_in(first)
+    _ = await attempt()
+    held_by_second: Final = await _counts(cache)
+
+    await failure_logged_in(first)
+
+    assert held_by_second[1] == 100
+    assert await _counts(cache) == held_by_second
+
+
+def _anthropic_reply() -> dict[str, object]:
+    return {
+        "id": "msg_held",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-haiku-5-5",
+        "content": [{"type": "text", "text": "done"}],
+        "stop_reason": "end_turn",
+        "usage": {"input_tokens": 3, "output_tokens": 1},
+    }
+
+
+@pytest.mark.parametrize(
+    "attempts",
+    [("hang",), ("503", "hang")],
+    ids=["cancelled_while_waiting_on_the_provider", "cancelled_on_its_retry"],
+)
+@pytest.mark.asyncio
+async def test_a_cancelled_request_sharing_one_logging_object_hands_back_every_reservation(
+    attempts: tuple[str, ...], respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    waiting_on_provider: Final = asyncio.Event()
+    script: Final = iter((*attempts, "ok"))
+
+    async def upstream(_: httpx.Request) -> httpx.Response:
+        match next(script):
+            case "503":
+                return httpx.Response(
+                    503, json={"type": "error", "error": {"type": "overloaded_error", "message": "x"}}
+                )
+            case "hang":
+                waiting_on_provider.set()
+                await asyncio.Event().wait()
+        return httpx.Response(200, json=_anthropic_reply())
+
+    respx_mock.post("https://api.anthropic.com/v1/messages").mock(side_effect=upstream)
+    router: Final = _router_with_io_limits()
+    first_minute: Final = _current_minute()
+    call: Final["asyncio.Task[object]"] = asyncio.create_task(
+        router.acompletion(
+            model="limited",
+            messages=PROXY_MESSAGES,
+            max_tokens=100,
+            metadata={"user_api_key_hash": "hashed-key"},
+            litellm_call_id="proxy-call",
+            litellm_logging_obj=_logging_obj_shared_across_attempts("acompletion"),
+        )
+    )
+    await waiting_on_provider.wait()
+    call.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await call
+
+    assert await _io_counters_since(router, first_minute) == (0, 0)
+    assert await _proxy_chat(router, "hi") == await _io_counters_since(router, first_minute)

@@ -2507,7 +2507,9 @@ def client(original_function):
                         exception=deployment_error,
                         call_type=call_type,
                     )
-                except BaseException:  # noqa: S110, BLE001  # hook dispatch - including cancellation mid-await - must never replace the real deployment failure, so there is nothing to do with what it raises
+                except asyncio.CancelledError:
+                    raise
+                except BaseException:  # noqa: S110, BLE001  # a failing hook must never replace the real deployment failure, so there is nothing to do with what it raises
                     pass
                 raise
             end_time = datetime.datetime.now()

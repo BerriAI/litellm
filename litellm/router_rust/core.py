@@ -209,7 +209,15 @@ from litellm.router_rust.surface.settings import (
     request_timeout,
     settings_view,
 )
-from litellm.router_strategy.least_busy import CALL_IDENTITY, call_id_of, owning_picks, pick_reserves, picks_reserve
+from litellm.router_strategy.least_busy import (
+    CALL_IDENTITY,
+    call_id_of,
+    owning_picks,
+    pick_reserves,
+    picks_reserve,
+    release_started_attempt,
+)
+from litellm.router_utils.attempt_settlement import ATTEMPT_SETTLEMENT_GRACE_SECONDS, released, routed_attempt
 from litellm.router_utils.cooldown_handlers import get_cooldown_deployment_info, mark_deployment_selection_failure
 from litellm.router_utils.endpoint_eligibility import endpoint_for_call, selected_endpoint
 from litellm.router_utils.kubernetes_pod_discovery import (
@@ -218,7 +226,7 @@ from litellm.router_utils.kubernetes_pod_discovery import (
     resolve_pods_after_bound,
 )
 from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import EncryptedContentAffinityCheck
-from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import async_io_token_refund_failure
+from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import release_io_token_reservation
 from litellm.router_utils.router_callbacks.track_deployment_metrics import find_deployment_metadata
 from litellm.router_utils.routing_read_batch import RoutingReadBatch
 from litellm.types.router import (
@@ -5122,6 +5130,24 @@ class _Driver:
     async def attempt(self, step: Mapping[str, object]) -> Mapping[str, object]:
         if self._passthrough is not None and not step.get("deployment_id"):
             return await self._passthrough_attempt(step)
+        with routed_attempt() as attempt_id:
+            return await self._routed_attempt(step, attempt_id)
+
+    def _release(self, call: AttemptCall, attempt_id: str) -> "tuple[asyncio.Task[None], ...]":
+        """What a failed or cancelled attempt still holds, whatever its logging object (shared across
+        attempts, it logs only the first failure)."""
+        core: Final = self._core
+        releases: Final = (
+            release_started_attempt(core._selectors.reservations, core._cache, attempt_id),  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core
+            release_io_token_reservation(
+                core._cache,  # pyright: ignore[reportPrivateUsage]  # see above
+                call.kwargs,  # pyright: ignore[reportArgumentType]  # the call's kwargs dict
+                parent_otel_span=get_parent_otel_span_from_kwargs(call.kwargs),
+            ),
+        )
+        return tuple(release for release in releases if release is not None)
+
+    async def _routed_attempt(self, step: Mapping[str, object], attempt_id: str) -> Mapping[str, object]:
         step = await self._resolve_pods(step)  # rebind-ok: the picked deployment, resolved to a pod
         deployment: Mapping[str, object] = as_str_mapping(step.get("deployment")) or {}  # rebind-ok: the picked one
         call: AttemptCall | None = None  # rebind-ok: built inside the try
@@ -5182,16 +5208,13 @@ class _Driver:
                 # `self.success_calls[model_name] += 1`, inside the try: a counter replaced with a
                 # plain dict fails the attempt.
                 self._core._endpoints.counters.succeeded(self._plan, call)  # pyright: ignore[reportPrivateUsage]  # see above
+        except asyncio.CancelledError:
+            if call is not None:
+                await released(self._release(call, attempt_id), ATTEMPT_SETTLEMENT_GRACE_SECONDS)
+            raise
         except Exception as error:  # noqa: BLE001  # every attempt failure is classified and handed to the Rust call loop
             if call is not None:
-                # `make_call`: a failed call hands back the io tokens it reserved, whatever its
-                # logging object (shared across attempts, it logs only the first failure).
-                with contextlib.suppress(Exception):
-                    await async_io_token_refund_failure(
-                        self._core._cache,  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core
-                        call.kwargs,  # pyright: ignore[reportArgumentType]  # the call's kwargs dict
-                        parent_otel_span=get_parent_otel_span_from_kwargs(call.kwargs),
-                    )
+                await released(self._release(call, attempt_id))
             failed: Final = self._failed(step, deployment, call, error)
             if reading_stream is None or not logs_failure:
                 return {**failed, "recorded": not logs_failure}
