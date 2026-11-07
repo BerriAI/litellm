@@ -1328,6 +1328,18 @@ class UnifiedLLMGuardrails(CustomLogger):
                     async for remaining_item in response:
                         yield remaining_item
                     return
+                if (
+                    chunk_counter == 1
+                    and buffer_until_moderated
+                    and guardrail_to_apply.mask_response_content
+                    and not mappings[CallTypes(call_type)]().delivers_ended_stream_rewrites
+                ):
+                    verbose_proxy_logger.warning(
+                        "UnifiedLLMGuardrails: guardrail %s masks response content, but the %s translation cannot write "
+                        "a rewrite back into a buffered stream, so the scan can only block or release the original chunks",
+                        guardrail_to_apply.guardrail_name,
+                        call_type,
+                    )
 
                 # If end_of_stream_only mode, yield chunks without processing.
                 # When buffering, withhold them instead -- they are released (or

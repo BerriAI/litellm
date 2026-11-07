@@ -210,6 +210,12 @@ def _post_guardrail_tool_call_shapes(
     returned_shapes: Final = tuple(_returned_tool_call_shape(tool_call) for tool_call in returned_tool_calls)
     validated_shapes: Final = tuple(shape for shape in returned_shapes if shape is not None)
     if len(validated_shapes) != len(returned_shapes):
+        if deliver_ended_stream_rewrites:
+            from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
+
+            raise UndeliverableStreamRewrite(
+                guardrail_name or "unknown", "the guardrail returned a tool call without a function name and arguments"
+            )
         verbose_proxy_logger.warning(
             "OpenAI Responses API: guardrail %s returned tool calls without a function name and arguments, "
             "leaving the tool call output items unchanged",

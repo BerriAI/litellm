@@ -624,6 +624,18 @@ class _ToolClearingGuardrail(_MaskingGuardrail):
         return {**masked, "tool_calls": tool_calls or []}
 
 
+class _ToolManglingGuardrail(_MaskingGuardrail):
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Any | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        masked = await super().apply_guardrail(inputs, request_data, input_type, logging_obj)
+        return {**masked, "tool_calls": [{"type": "function"} for _ in inputs.get("tool_calls") or []]}
+
+
 async def _anthropic_tool_use_stream():
     yield _sse_event(
         "message_start",
@@ -853,8 +865,11 @@ async def test_buffered_responses_stream_delivers_masked_text_to_the_client():
 
 
 @pytest.mark.asyncio
-async def test_buffered_responses_stream_withholds_everything_when_the_guardrail_drops_a_tool_call():
-    guardrail = _ToolDroppingGuardrail(guardrail_name="dropper", event_hook="post_call")
+@pytest.mark.parametrize(
+    "guardrail_cls", [_ToolDroppingGuardrail, _ToolManglingGuardrail], ids=["returns fewer", "returns a nameless call"]
+)
+async def test_buffered_responses_stream_withholds_everything_when_the_guardrail_drops_a_tool_call(guardrail_cls: type):
+    guardrail = guardrail_cls(guardrail_name="dropper", event_hook="post_call")
     guardrail.streaming_buffer_until_moderated = True
     guardrail.streaming_buffer_release_on_scan = False
     unified = UnifiedLLMGuardrails()
