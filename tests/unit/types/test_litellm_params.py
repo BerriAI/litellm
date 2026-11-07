@@ -97,6 +97,7 @@ CONNECTION_NAMES: Final = (
     "use_xai_oauth",
     "chatgpt_auth_file",
     "fireworks_forward_user_id",
+    "xai_oauth_token_file",
     "aws_batch_role_arn",
     "aws_bedrock_control_plane_endpoint",
     "s3_bucket_name",
