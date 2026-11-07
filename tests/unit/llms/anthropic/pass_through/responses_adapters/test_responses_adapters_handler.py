@@ -3,7 +3,7 @@ import datetime
 import json
 import os
 import sys
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import nullcontext
 from typing import Final, cast
 from unittest.mock import AsyncMock, patch
@@ -28,6 +28,7 @@ from litellm.llms.anthropic.pass_through.responses_adapters.handler import (
 )
 from litellm.router import Router
 from litellm.types.integrations.custom_logger import CONVERTED_STREAM_KEYS, converted_stream_requested
+from litellm.types.utils import StandardLoggingPayload
 
 MESSAGES = [{"role": "user", "content": "hello"}]
 CLAUDE_CODE_USER_ID = json.dumps({"device_id": "d" * 64, "account_uuid": "", "session_id": "session-abc"})
@@ -916,9 +917,13 @@ class _SuccessLog(CustomLogger):
         self.logged_reasoning_item_ids: tuple[tuple[object, ...], ...] = ()
         self.logged: Final = asyncio.Event()
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
-        logged: Final = kwargs["standard_logging_object"]["response"]
-        items: Final = logged["choices"][0]["message"].get("reasoning_items") or ()
+    async def async_log_success_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        payload: Final = cast(StandardLoggingPayload, kwargs["standard_logging_object"])
+        logged: Final = cast(Mapping[str, Sequence[Mapping[str, Mapping[str, object]]]], payload["response"])
+        message: Final = logged["choices"][0]["message"]
+        items: Final = cast(Sequence[Mapping[str, object]], message.get("reasoning_items") or ())
         self.logged_reasoning_item_ids = (*self.logged_reasoning_item_ids, tuple(item["id"] for item in items))
         self.logged.set()
 

@@ -1,5 +1,4 @@
 import json
-import time
 from datetime import datetime
 from pathlib import Path
 from typing import Final
@@ -381,9 +380,12 @@ def _two_reasoning_tool_turn_stream() -> httpx.Response:
     return httpx.Response(200, headers={"content-type": "text/event-stream"}, text=body)
 
 
+_FAR_FUTURE_EXPIRY: Final = 4_102_444_800
+
+
 @pytest.fixture
 def _chatgpt_backend(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter) -> None:
-    auth: Final = {"access_token": "chatgpt-test-token", "expires_at": time.time() + 3600, "account_id": "acct_test"}
+    auth: Final = {"access_token": "chatgpt-test-token", "expires_at": _FAR_FUTURE_EXPIRY, "account_id": "acct_test"}
     (tmp_path / "auth.json").write_text(json.dumps(auth))
     monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path))
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
