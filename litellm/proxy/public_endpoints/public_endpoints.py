@@ -5,6 +5,7 @@ import re
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from functools import cache
 from importlib.resources import files
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Protocol
 
 from fastapi import APIRouter, HTTPException, Request
@@ -302,7 +303,13 @@ async def public_model_hub():
     if prisma_client is not None:
         try:
             latest_checks: Final = await prisma_client.get_all_latest_health_checks()
-            for model_name, check in latest_by_model_name(latest_checks).items():
+            active_model_ids: Final = MappingProxyType(
+                {
+                    group.model_group: frozenset(llm_router.registry().names(group.model_group, kind="ids"))
+                    for group in model_groups
+                }
+            )
+            for model_name, check in latest_by_model_name(latest_checks, active_model_ids).items():
                 health_checks_map[model_name] = convert_health_check_to_dict(check)
         except Exception:
             pass

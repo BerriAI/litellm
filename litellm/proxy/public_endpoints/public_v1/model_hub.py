@@ -25,6 +25,7 @@ from litellm.proxy.list_api.list_framework import (
     handle_list,
 )
 from litellm.proxy.utils import PrismaClient
+from litellm.router_api import RegistryReader
 from litellm.types.proxy.management_endpoints.management_v1 import (
     FacetListResponse,
     ListResponse,
@@ -55,9 +56,13 @@ class HealthSnapshotLookup(Protocol):
 @dataclass(frozen=True, slots=True)
 class PrismaHealthSnapshotLookup:
     prisma_client: PrismaClient
+    router: RegistryReader
 
     async def latest_for(self, model_groups: Sequence[str]) -> Mapping[str, HealthSnapshot]:
         checks: Final = await self.prisma_client.get_latest_health_checks_for_models(model_groups)
+        active_model_ids: Final = MappingProxyType(
+            {name: frozenset(self.router.registry().names(name, kind="ids")) for name in model_groups}
+        )
         return MappingProxyType(
             {
                 model_group: HealthSnapshot(
@@ -65,7 +70,7 @@ class PrismaHealthSnapshotLookup:
                     response_time_ms=check.response_time_ms,
                     checked_at=check.checked_at.isoformat() if check.checked_at else None,
                 )
-                for model_group, check in latest_by_model_name(checks).items()
+                for model_group, check in latest_by_model_name(checks, active_model_ids).items()
             }
         )
 
@@ -218,13 +223,14 @@ def _published_rows() -> Sequence[ModelGroupInfoProxy]:
 def _executor(
     rows: Sequence[ModelGroupInfoProxy],
     prisma_client: PrismaClient | None,
+    router: RegistryReader | None,
 ) -> InMemoryListExecutor[ModelGroupInfoProxy]:
-    if prisma_client is None:
+    if prisma_client is None or router is None:
         return InMemoryListExecutor(rows=rows, cells=_cells)
     return InMemoryListExecutor(
         rows=rows,
         cells=_cells,
-        enrich_page=HealthEnricher(lookup=PrismaHealthSnapshotLookup(prisma_client=prisma_client)),
+        enrich_page=HealthEnricher(lookup=PrismaHealthSnapshotLookup(prisma_client=prisma_client, router=router)),
     )
 
 
@@ -253,11 +259,11 @@ async def public_model_hub_list(
     ```
     """
     try:
-        from litellm.proxy.proxy_server import prisma_client
+        from litellm.proxy.proxy_server import llm_router, prisma_client
 
         return await handle_list(
             spec=MODEL_HUB_LIST_SPEC,
-            executor=_executor(_published_rows(), prisma_client),
+            executor=_executor(_published_rows(), prisma_client, llm_router),
             request=request,
             caller=user_api_key_dict,
         )

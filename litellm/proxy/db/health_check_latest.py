@@ -10,7 +10,7 @@ worker on every call. ``SELECT DISTINCT ON`` keeps the transfer at one row per
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
@@ -109,11 +109,20 @@ async def fetch_latest_health_checks_for_models(
         return ()
 
 
-def latest_by_model_name(rows: Iterable[LatestHealthCheckRow]) -> Mapping[str, LatestHealthCheckRow]:
+def latest_by_model_name(
+    rows: Iterable[LatestHealthCheckRow],
+    active_model_ids: Mapping[str, Collection[str]] | None = None,
+) -> Mapping[str, LatestHealthCheckRow]:
     """The newest row per model name.
 
     The queries above return one row per (model_id, model_name), so a model group with several
     deployments comes back as several rows, plus one without a model_id if it was ever checked by
     name. They arrive in model_id order with NULL last, which says nothing about which check is newest.
+    Active IDs exclude retired deployments while keeping legacy name-only probes eligible.
     """
-    return MappingProxyType({row.model_name: row for row in sorted(rows, key=lambda row: row.checked_at)})
+    eligible_rows: Final = (
+        row
+        for row in rows
+        if active_model_ids is None or row.model_id is None or row.model_id in active_model_ids.get(row.model_name, ())
+    )
+    return MappingProxyType({row.model_name: row for row in sorted(eligible_rows, key=lambda row: row.checked_at)})

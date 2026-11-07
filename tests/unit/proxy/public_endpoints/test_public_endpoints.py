@@ -959,6 +959,41 @@ def _stored_health_check(model_id: str | None, status: str, checked_at: datetime
     )
 
 
+@pytest.mark.parametrize("retired_status,active_status", [("unhealthy", "healthy"), ("healthy", "unhealthy")])
+@pytest.mark.parametrize("retired_hour", [10, 12], ids=["older-retired-check", "newer-retired-check"])
+def test_public_model_hub_ignores_checks_for_retired_deployments(
+    retired_status: str, active_status: str, retired_hour: int
+) -> None:
+    app: Final = FastAPI()
+    app.include_router(router)
+    client: Final = TestClient(app)
+    active: Final = _stored_health_check(
+        "deployment-a", active_status, datetime(2026, 10, 16, 11, 10, tzinfo=timezone.utc)
+    )
+    retired: Final = _stored_health_check(
+        "deployment-z", retired_status, datetime(2026, 10, 16, retired_hour, 0, tzinfo=timezone.utc)
+    )
+    mock_prisma: Final = MagicMock()
+    mock_prisma.get_all_latest_health_checks = AsyncMock(return_value=(active, retired))
+    mock_router: Final = MagicMock()
+    mock_router.registry.return_value.names.return_value = ("deployment-a",)
+
+    with (
+        patch("litellm.public_model_groups", ["gpt-4"]),
+        patch("litellm.proxy.proxy_server.get_model_group_info") as mock_get_info,
+        patch("litellm.proxy.proxy_server.llm_router", mock_router),
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+    ):
+        mock_get_info.return_value = [
+            ModelGroupInfoProxy(model_group="gpt-4", providers=["openai"], is_public_model_group=True)
+        ]
+        response: Final = client.get("/public/model_hub")
+
+    assert response.status_code == 200
+    assert response.json()[0]["health_status"] == active_status
+    assert response.json()[0]["health_checked_at"] == "2026-10-16T11:10:00+00:00"
+
+
 def test_public_model_hub_reports_the_newest_check_of_a_group_not_the_last_row_read():
     """Rows come back in model_id order with NULL last, so a stale name-probe row used to overwrite the fresh one."""
     app = FastAPI()
@@ -969,11 +1004,13 @@ def test_public_model_hub_reports_the_newest_check_of_a_group_not_the_last_row_r
     stale = _stored_health_check(None, "unhealthy", datetime(2026, 9, 4, 11, 20, tzinfo=timezone.utc))
     mock_prisma = MagicMock()
     mock_prisma.get_all_latest_health_checks = AsyncMock(return_value=(fresh, stale))
+    mock_router: Final = MagicMock()
+    mock_router.registry.return_value.names.return_value = ("deployment-a",)
 
     with (
         patch("litellm.public_model_groups", ["gpt-4"]),
         patch("litellm.proxy.proxy_server.get_model_group_info") as mock_get_info,
-        patch("litellm.proxy.proxy_server.llm_router", MagicMock()),
+        patch("litellm.proxy.proxy_server.llm_router", mock_router),
         patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
     ):
         mock_get_info.return_value = [
