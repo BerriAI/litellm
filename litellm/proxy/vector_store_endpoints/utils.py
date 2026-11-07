@@ -1,15 +1,18 @@
 import json
 import re
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
+from itertools import accumulate
 from types import MappingProxyType
 from typing import Final, Literal
 
+import httpx
 from fastapi import HTTPException, Request
 from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping
+from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreConfig
 from litellm.proxy._types import (
     LiteLLM_ObjectPermissionTable,
     LitellmUserRoles,
@@ -21,9 +24,10 @@ from litellm.proxy.mcp_server.ui_session_utils import (
 )
 from litellm.proxy.openai_files_endpoints.common_utils import managed_file_ids_for_provider_file_ids
 from litellm.types.utils import LlmProviders
-from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
+from litellm.types.vector_stores import LiteLLM_ManagedVectorStore, VectorStoreIndexEndpoints
 from litellm.utils import ProviderConfigManager
 
+_PLAIN_PROVIDER_PATH: Final = re.compile(r"[\w\-/:.$]+")
 _JSON_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
 
 
@@ -439,6 +443,55 @@ async def assert_user_can_read_vector_store_id(
     if vector_store is not None:
         await assert_user_can_read_vector_store(vector_store, user_api_key_dict)
     return vector_store
+
+
+def _store_marker_count(segments: Sequence[str], marker: str) -> int:
+    """How many stores the path names: a segment ending in the marker, as an unanchored extractor matches it,
+    followed by an id, which may itself contain the marker."""
+
+    def opens_a_store(after_marker: bool, segment_and_next: tuple[str, str | None]) -> bool:
+        segment, following = segment_and_next
+        return segment.endswith(marker) and following is not None and not after_marker
+
+    return sum(accumulate(zip(segments, (*segments[1:], None)), opens_a_store, initial=False))
+
+
+def _is_provider_read_request(
+    endpoints: VectorStoreIndexEndpoints, method: str, endpoint: str, store_segment: str | None
+) -> bool:
+    """A substring match could hide a write, so a read needs a plain path the forwarder keeps as is, ending with a
+    read entry. A GET only has to contain one."""
+    path: Final = endpoint if endpoint.startswith("/") else f"/{endpoint}"
+    if _PLAIN_PROVIDER_PATH.fullmatch(path) is None or not {"", ".", ".."}.isdisjoint(path.split("/")[1:]):
+        return False
+    if httpx.URL(endpoint).path != endpoint:
+        return False
+    if store_segment is not None and _store_marker_count(path.split("/"), store_segment) > 1:
+        return False
+    if any(write_method == method and write_path in path for write_method, write_path in endpoints["write"]):
+        return False
+    return any(
+        read_method == method and (path.endswith(read_path) or (method == "GET" and read_path in path))
+        for read_method, read_path in endpoints["read"]
+    )
+
+
+async def assert_user_can_call_vector_store_passthrough(
+    vector_store: LiteLLM_ManagedVectorStore,
+    user_api_key_dict: UserAPIKeyAuth,
+    provider_config: BaseVectorStoreConfig | None,
+    method: str,
+    endpoint: str,
+    store_segment: str | None = None,
+) -> None:
+    """Pass-through routes also carry writes, so groups count only on a read the provider's table names.
+    A path naming a second store through `store_segment` is never a read, since the gate checked only the first."""
+    if provider_config is not None and _is_provider_read_request(
+        provider_config.get_vector_store_endpoints_by_type(), method, endpoint, store_segment
+    ):
+        await assert_user_can_read_vector_store(vector_store, user_api_key_dict)
+        return
+    await assert_user_can_access_vector_store(vector_store, user_api_key_dict)
 
 
 def _does_endpoint_match(endpoint_path: str, request_path: str) -> bool:

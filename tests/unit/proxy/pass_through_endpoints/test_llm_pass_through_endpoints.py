@@ -8,7 +8,7 @@ import logging
 import os
 import re
 import traceback
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping, Sequence
 from datetime import datetime, timezone
 from pathlib import Path
 from types import MappingProxyType, SimpleNamespace
@@ -83,6 +83,15 @@ from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
 from litellm.proxy._types import LitellmUserRoles, SpecialHeaders, UserAPIKeyAuth
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy._types import LiteLLM_TeamTableCachedObj
+from litellm.proxy.proxy_server import app
+from litellm.types.vector_stores import (
+    IndexCreateLiteLLMParams,
+    LiteLLM_ManagedVectorStore,
+    LiteLLM_ManagedVectorStoreIndex,
+)
+from litellm.vector_stores.vector_store_registry import VectorStoreIndexRegistry, VectorStoreRegistry
+from tests.unit.proxy.vector_store_access_group_state import OTHER_TEAM_ID, TEAM_ID, ProxyState, make_key, make_team
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.passthrough_endpoints.vertex_ai import VertexPassThroughCredentials
 from litellm.llms.eu_jev.common_utils import eu_jev_scoped_model, eu_jev_upstream_body
@@ -5668,7 +5677,7 @@ class TestAzureProxyRouteCrossIndexAuthorization:
                 "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.is_allowed_to_call_vector_store_endpoint"
             ) as mock_is_allowed,
             patch(
-                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.assert_user_can_access_vector_store",
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.assert_user_can_call_vector_store_passthrough",
                 new=AsyncMock(),
             ),
             patch(
@@ -11167,3 +11176,270 @@ class TestOpenSearchProxyRoute:
         policy: Final = json.loads(sts.assume_role_with_web_identity.call_args.kwargs["Policy"])
         granted: Final = frozenset(action for statement in policy["Statement"] for action in statement["Action"])
         assert (response.status_code, action in granted) == (200, True)
+
+
+_GROUP_DISCOVERY: Final = "/vertex_ai/discovery/v1/projects/p/locations/global/collections/default_collection/dataStores"
+_GROUP_KEY: Final = "sk-group-member"
+
+
+def _group_test_store(store_id: str, provider: str) -> LiteLLM_ManagedVectorStore:
+    return LiteLLM_ManagedVectorStore(
+        vector_store_id=store_id,
+        custom_llm_provider=provider,
+        team_id=OTHER_TEAM_ID,
+        vector_store_name=f"name-{store_id}",
+        litellm_params={"api_base": "https://provider.example", "api_key": "k", "vertex_project": "p"},
+    )
+
+
+def _group_test_index(index_name: str, store_id: str) -> LiteLLM_ManagedVectorStoreIndex:
+    return LiteLLM_ManagedVectorStoreIndex(
+        id=index_name,
+        index_name=index_name,
+        litellm_params=IndexCreateLiteLLMParams(vector_store_index=index_name, vector_store_name=f"name-{store_id}"),
+    )
+
+
+def _group_test_key(
+    team_id: str = TEAM_ID, own_stores: Sequence[str] | None = None, indexes: Sequence[str] = ("idx-a", "idx-b")
+) -> UserAPIKeyAuth:
+    return make_key(own_stores, team_id=team_id).model_copy(
+        update={
+            "token": hash_token(_GROUP_KEY),
+            "metadata": {
+                "allowed_vector_store_indexes": [
+                    {"index_name": name, "index_permissions": ["read", "write"]} for name in indexes
+                ]
+            },
+        }
+    )
+
+
+_GROUP_READS: Final = (
+    pytest.param("POST", "/milvus/v2/vectordb/entities/search", {"collectionName": "{index}"}, id="milvus-search"),
+    pytest.param("POST", "/milvus/v2/vectordb/entities/query", {"collectionName": "{index}"}, id="milvus-query"),
+    pytest.param("POST", "/milvus/v2/vectordb/entities/get", {"collectionName": "{index}"}, id="milvus-get"),
+    pytest.param("POST", "/azure_ai/indexes/{index}/docs/search", {"search": "hi"}, id="azure-search"),
+    pytest.param("POST", "/azure_ai/indexes/{index}/docs/suggest", {"search": "hi"}, id="azure-suggest"),
+    pytest.param("GET", "/azure_ai/indexes/{index}", None, id="azure-get"),
+    pytest.param("GET", "/azure_ai/indexes/{index}/docs/$count", None, id="azure-count"),
+    pytest.param("GET", "/azure_ai/indexes/{index}/docs/indexes", None, id="azure-document-key-named-indexes"),
+    pytest.param(
+        "POST", _GROUP_DISCOVERY + "/{store}/servingConfigs/default_config:search", {"query": "hi"}, id="vertex-search"
+    ),
+    pytest.param(
+        "POST",
+        "/vertex_ai/discovery/v1/projects/models/locations/global/collections/default_collection"
+        "/dataStores/{store}/servingConfigs/c:search",
+        {"query": "hi"},
+        id="vertex-project-named-models",
+    ),
+)
+
+_GROUP_WRITES: Final = (
+    pytest.param("POST", "/milvus/v2/vectordb/entities/upsert", {"collectionName": "{index}"}, id="milvus-upsert"),
+    pytest.param("POST", "/milvus/v2/vectordb/entities/insert", {"collectionName": "{index}"}, id="milvus-insert"),
+    pytest.param("POST", "/azure_ai/indexes/{index}/docs/index", {"value": []}, id="azure-index"),
+    pytest.param("POST", _GROUP_DISCOVERY + "/{store}/branches/0/documents:import", {}, id="vertex-import"),
+    pytest.param(
+        "POST", _GROUP_DISCOVERY + "/{store}/dataStores/store-b/servingConfigs/c:search", {}, id="vertex-second-store"
+    ),
+    pytest.param("POST", "/azure_ai/indexes/{index}/indexes/idx-b/docs/search", {}, id="azure-second-index"),
+    pytest.param("GET", "/azure_ai/indexers/indexes/{index}", None, id="azure-index-name-inside-another-resource"),
+    pytest.param(
+        "POST",
+        "/vertex_ai/discovery/v1/projects/p/locations/global/collections/c"
+        "/xdataStores/{store}/dataStores/store-b/c:search",
+        {},
+        id="vertex-store-hidden-in-a-longer-segment",
+    ),
+    pytest.param("GET", "/azure_ai/indexes/{index}/indexes/idx-b", None, id="azure-second-index-get"),
+    pytest.param("DELETE", _GROUP_DISCOVERY + "/{store}", None, id="vertex-delete"),
+    pytest.param("POST", _GROUP_DISCOVERY + "/{store}/x:search/%2e%2e/%2e%2e/documents:purge", {}, id="vertex-traversal"),
+    pytest.param("POST", _GROUP_DISCOVERY + "/{store}/documents:purge%3Fx:search", {}, id="vertex-encoded-query"),
+    pytest.param("POST", _GROUP_DISCOVERY + "/{store}/documents:purge%23x:search", {}, id="vertex-encoded-fragment"),
+    pytest.param("POST", _GROUP_DISCOVERY + "/{store}/documents:purge;x:search", {}, id="vertex-semicolon"),
+    pytest.param(
+        "POST", _GROUP_DISCOVERY + "/{store}/models/vertex-m:search", {}, id="vertex-path-the-router-rewrites"
+    ),
+    pytest.param("POST", "/milvus/x:/v2/vectordb/entities/search", {"collectionName": "{index}"}, id="milvus-scheme"),
+    pytest.param("POST", "/milvus/host:1/v2/vectordb/entities/search", {"collectionName": "{index}"}, id="milvus-port"),
+    pytest.param("GET", "/azure_ai///indexes/{index}", None, id="azure-leading-empty-segment"),
+    pytest.param("POST", _GROUP_DISCOVERY + "/{store}//servingConfigs/x:search", {}, id="vertex-empty-segment"),
+    pytest.param(
+        "POST", _GROUP_DISCOVERY + "/{store}/%2e%2e/store-b/servingConfigs/x:search", {}, id="vertex-into-another-store"
+    ),
+    pytest.param("DELETE", _GROUP_DISCOVERY + "/{store}/servingConfigs/x:search", None, id="vertex-delete-on-a-read-path"),
+    pytest.param("POST", _GROUP_DISCOVERY + "/{store}/x:search/documents:purge", {}, id="vertex-read-inside-a-write-path"),
+    pytest.param("POST", "/azure_ai/indexes/{index}/docs/index/docs/search", {}, id="azure-write-inside-a-read-path"),
+    pytest.param("POST", "/azure_ai/indexes/{index}/docs/index/%2e%2e/search", {}, id="azure-traversal"),
+    pytest.param(
+        "POST",
+        "/milvus/v2/vectordb/entities/delete%3Fx/entities/search",
+        {"collectionName": "{index}"},
+        id="milvus-encoded-query",
+    ),
+)
+
+
+class _GroupRoutes:
+    """The real routes and auth, with the provider hosts stubbed. The team's group lists store-a; another team owns both."""
+
+    def __init__(self, proxy: ProxyState, client: TestClient, upstream: respx.Route) -> None:
+        self.proxy: Final = proxy
+        self.client: Final = client
+        self.upstream: Final = upstream
+
+    async def send_as(
+        self, key: UserAPIKeyAuth, method: str, path: str, body: Mapping[str, object] | None, index: str, store: str
+    ) -> int:
+        await self.proxy.cache.async_set_cache(key=hash_token(_GROUP_KEY), value=key)
+
+        def fill(value: object) -> object:
+            return value.replace("{index}", index).replace("{store}", store) if isinstance(value, str) else value
+
+        response: Final = self.client.request(
+            method,
+            str(fill(path)),
+            json=None if body is None else {name: fill(value) for name, value in body.items()},
+            headers={"Authorization": f"Bearer {_GROUP_KEY}"},
+        )
+        return response.status_code
+
+
+@pytest.fixture
+async def group_routes(
+    monkeypatch: pytest.MonkeyPatch, httpx_transport: None, respx_mock: respx.MockRouter
+) -> AsyncIterator[_GroupRoutes]:
+    proxy: Final = ProxyState(monkeypatch)
+    await proxy.add_group("g1", ("store-a",))
+    await proxy.add_team(make_team(groups=("g1",)))
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", SHARED_MASTER_KEY)
+    monkeypatch.setattr(
+        litellm,
+        "vector_store_registry",
+        VectorStoreRegistry(vector_stores=[_group_test_store("store-a", "milvus"), _group_test_store("store-b", "milvus")]),
+    )
+    monkeypatch.setattr(
+        litellm,
+        "vector_store_index_registry",
+        VectorStoreIndexRegistry(
+            vector_store_indexes=[_group_test_index("idx-a", "store-a"), _group_test_index("idx-b", "store-b")]
+        ),
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.llm_router",
+        litellm.Router(
+            model_list=[
+                {"model_name": "m", "litellm_params": {"model": "openai/m", "api_key": "k"}},
+                {
+                    "model_name": "vertex-m",
+                    "litellm_params": {
+                        "model": "vertex_ai/gemini-2.0-flash",
+                        "vertex_project": "p",
+                        "vertex_location": "global",
+                        "use_in_pass_through": True,
+                    },
+                },
+            ]
+        ),
+    )
+    upstream: Final = respx_mock.route(host__in=("provider.example", "discoveryengine.googleapis.com")).mock(
+        return_value=httpx.Response(200, json={"results": []})
+    )
+    credentials: Final = MagicMock(token="google-token", expired=False, valid=True, quota_project_id=None)
+    with patch("google.auth.default", return_value=(credentials, "p")):
+        yield _GroupRoutes(proxy, TestClient(app, raise_server_exceptions=False), upstream)
+
+
+class TestVectorStorePassthroughGroupReads:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(("method", "path", "body"), _GROUP_READS)
+    async def test_group_member_reads_only_the_group_store(
+        self, group_routes: _GroupRoutes, method: str, path: str, body: Mapping[str, object] | None
+    ) -> None:
+        key: Final = _group_test_key()
+
+        assert await group_routes.send_as(key, method, path, body, "idx-b", "store-b") == 403
+        assert group_routes.upstream.call_count == 0
+        assert await group_routes.send_as(key, method, path, body, "idx-a", "store-a") == 200
+        assert group_routes.upstream.call_count == 1
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(("method", "path", "body"), _GROUP_WRITES)
+    async def test_group_member_cannot_write(
+        self, group_routes: _GroupRoutes, method: str, path: str, body: Mapping[str, object] | None
+    ) -> None:
+        assert await group_routes.send_as(_group_test_key(), method, path, body, "idx-a", "store-a") == 403
+        assert group_routes.upstream.call_count == 0
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(("method", "path", "body"), _GROUP_READS)
+    async def test_key_limited_to_another_store_cannot_read_the_group_store(
+        self, group_routes: _GroupRoutes, method: str, path: str, body: Mapping[str, object] | None
+    ) -> None:
+        key: Final = _group_test_key(own_stores=("store-x",))
+
+        assert await group_routes.send_as(key, method, path, body, "idx-a", "store-a") == 403
+        assert group_routes.upstream.call_count == 0
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("path", "body"),
+        [
+            pytest.param("/azure_ai/indexes/indexes/docs/search", {"search": "hi"}, id="azure-index-named-indexes"),
+            pytest.param(
+                _GROUP_DISCOVERY + "/dataStores/servingConfigs/c:search",
+                {"query": "hi"},
+                id="vertex-store-named-datastores",
+            ),
+        ],
+    )
+    async def test_a_store_named_like_the_path_marker_is_still_one_store(
+        self, group_routes: _GroupRoutes, monkeypatch: pytest.MonkeyPatch, path: str, body: Mapping[str, object]
+    ) -> None:
+        await group_routes.proxy.add_group("g1", ("store-a", "dataStores"))
+        monkeypatch.setattr(
+            litellm,
+            "vector_store_registry",
+            VectorStoreRegistry(
+                vector_stores=[_group_test_store("store-a", "milvus"), _group_test_store("dataStores", "vertex_ai")]
+            ),
+        )
+        monkeypatch.setattr(
+            litellm,
+            "vector_store_index_registry",
+            VectorStoreIndexRegistry(vector_store_indexes=[_group_test_index("indexes", "store-a")]),
+        )
+
+        assert await group_routes.send_as(_group_test_key(indexes=("indexes",)), "POST", path, body, "", "") == 200
+        assert group_routes.upstream.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_group_grant_does_not_replace_the_index_permission(self, group_routes: _GroupRoutes) -> None:
+        status: Final = await group_routes.send_as(
+            _group_test_key(indexes=()),
+            "POST",
+            "/milvus/v2/vectordb/entities/search",
+            {"collectionName": "idx-a"},
+            "idx-a",
+            "store-a",
+        )
+
+        assert status == 403
+        assert group_routes.upstream.call_count == 0
+
+    @pytest.mark.asyncio
+    async def test_store_owner_keeps_writes(self, group_routes: _GroupRoutes) -> None:
+        await group_routes.proxy.add_team(LiteLLM_TeamTableCachedObj(team_id=OTHER_TEAM_ID))
+        status: Final = await group_routes.send_as(
+            _group_test_key(team_id=OTHER_TEAM_ID),
+            "POST",
+            "/milvus/v2/vectordb/entities/upsert",
+            {"collectionName": "idx-a"},
+            "idx-a",
+            "store-a",
+        )
+
+        assert status == 200
+        assert group_routes.upstream.call_count == 1
