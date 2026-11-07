@@ -1915,15 +1915,21 @@ def _mantle_unreachable(request: httpx.Request) -> httpx.Response:
 
 
 @pytest.mark.asyncio
-async def test_anthropic_count_tokens_on_bedrock_counts_a_malformed_tool_again_without_the_options(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize(
+    "malformed",
+    (
+        {"tools": [{"type": 5, "name": "x", "input_schema": {"type": "object"}}]},
+        {"messages": [{"role": "user", "content": 5}]},
+        {"messages": [{"role": "user", "content": [{"text": "Weather in SF?"}]}]},
+    ),
+    ids=("tool_type_not_a_string", "content_not_iterable", "block_without_type"),
+)
+async def test_anthropic_count_tokens_on_bedrock_counts_a_malformed_request_again_without_the_options(
+    monkeypatch: pytest.MonkeyPatch, malformed: dict[str, JsonValue]
 ) -> None:
     response, requests = await _count_on_a_bedrock_claude_deployment(
         monkeypatch,
-        {
-            "tools": [{"type": 5, "name": "x", "input_schema": {"type": "object"}}],
-            "thinking": {"type": "enabled", "budget_tokens": 2000},
-        },
+        {**malformed, "thinking": {"type": "enabled", "budget_tokens": 2000}},
         _runtime_counts_only_without_options,
         _mantle_unreachable,
     )
@@ -2070,7 +2076,11 @@ async def _claude_inference_body(model: str, options: Mapping[str, JsonValue]) -
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("request_drop_params", "user_agent"),
-    (({"drop_params": True}, "python-httpx/0.28.1"), ({}, "claude-cli/2.1.0 (external, cli)")),
+    (
+        ({"drop_params": True}, "python-httpx/0.28.1"),
+        ({"drop_params": " true "}, "python-httpx/0.28.1"),
+        ({}, "claude-cli/2.1.0 (external, cli)"),
+    ),
 )
 async def test_anthropic_count_tokens_on_a_claude_deployment_sends_the_thinking_drop_params_makes_inference_send(
     monkeypatch: pytest.MonkeyPatch, request_drop_params: dict[str, JsonValue], user_agent: str

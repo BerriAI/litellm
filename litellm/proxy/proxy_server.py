@@ -14943,9 +14943,9 @@ async def _count_retrying_without_options(
     if not (isinstance(counted, ProviderCountFailure) and counted.rejected_request):
         return counted
     verbose_proxy_logger.warning(
-        "Token count for %s answered %s with the request's %s, so it counts again without them",
+        "Token count for %s %s with the request's %s, so it counts again without them and the caller's betas",
         model,
-        counted.status_code,
+        "could not be built" if counted.rejected_before_provider_call else f"answered {counted.status_code}",
         ", ".join(forwarded_options),
     )
     return await count_with(model, region, request_options=MappingProxyType({}))

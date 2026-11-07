@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from itertools import chain
 from types import MappingProxyType
 from typing import (
+    TYPE_CHECKING,
     Final,
     Protocol,
     TypeAlias,
@@ -31,6 +32,9 @@ from litellm.llms.anthropic.wif import resolve_anthropic_base
 from litellm.llms.base_llm.anthropic_messages.transformation import BaseAnthropicMessagesConfig
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionImageObject, ValidUserMessageContentTypes
 from litellm.types.utils import LlmProviders, TokenCountMessagesFormat, TokenCountResponse
+
+if TYPE_CHECKING:
+    from litellm.types.router import GenericLiteLLMParams
 
 _COUNT_REQUEST: Final = TypeAdapter(dict[str, JsonValue])
 _SYSTEM_BLOCKS: Final = TypeAdapter(list[JsonValue])
@@ -353,21 +357,55 @@ def is_request_rejection(status_code: int) -> bool:
     return 400 <= status_code < 500 and status_code not in _STATUSES_NOT_CAUSED_BY_THE_REQUEST
 
 
+def deployment_inference_model(deployment: Mapping[str, object] | None) -> str | None:
+    deployment_params: Final = _INFERENCE_PARAMS.validate_python((deployment or {}).get("litellm_params") or {})
+    deployment_model: Final = deployment_params.get("model")
+    if not isinstance(deployment_model, str):
+        return None
+    from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+
+    provider_hint: Final = deployment_params.get("custom_llm_provider")
+    api_base: Final = deployment_params.get("api_base")
+    inference_model, _, _, _ = get_llm_provider(
+        model=deployment_model,
+        custom_llm_provider=provider_hint if isinstance(provider_hint, str) else None,
+        api_base=api_base if isinstance(api_base, str) else None,
+    )
+    return inference_model
+
+
+def _messages_transform(model: str, provider: LlmProviders) -> tuple[str, BaseAnthropicMessagesConfig] | None:
+    from litellm.utils import ProviderConfigManager
+
+    messages_config: Final = ProviderConfigManager.get_provider_anthropic_messages_config(model, provider)
+    return None if messages_config is None else (model, messages_config)
+
+
+def _transform_litellm_params(deployment: Mapping[str, object] | None) -> "GenericLiteLLMParams":
+    from litellm.types.router import GenericLiteLLMParams
+
+    resolved_deployment: Final = deployment or {}
+    deployment_params: Final = _INFERENCE_PARAMS.validate_python(resolved_deployment.get("litellm_params") or {})
+    return GenericLiteLLMParams.model_validate(
+        {
+            "drop_params": deployment_params.get("drop_params"),
+            "model_info": resolved_deployment.get("model_info"),
+        }
+    )
+
+
 def _claude_count_options_for(
     messages_config: BaseAnthropicMessagesConfig,
     model: str,
+    litellm_params: "GenericLiteLLMParams",
     provider: LlmProviders,
     messages: Sequence[Mapping[str, object]],
     tools: Sequence[Mapping[str, object]] | None,
     sent: Mapping[str, JsonValue],
     anthropic_beta: str | None,
-    deployment: Mapping[str, object] | None,
 ) -> ClaudeCountOptions:
     from litellm.anthropic_beta_headers_manager import update_headers_with_filtered_beta
-    from litellm.types.router import GenericLiteLLMParams
 
-    resolved_deployment: Final = deployment or {}
-    deployment_params: Final = _INFERENCE_PARAMS.validate_python(resolved_deployment.get("litellm_params") or {})
     leading_system, conversation = split_leading_system_run(messages)
     sent_conversation: Final = copy.deepcopy([dict(message) for message in conversation])
     sent_params: Final = {
@@ -386,12 +424,7 @@ def _claude_count_options_for(
         model=model,
         messages=sent_conversation,
         anthropic_messages_optional_request_params={**sent_params, "max_tokens": _MAX_TOKENS_ABOVE_ANY_BUDGET},
-        litellm_params=GenericLiteLLMParams.model_validate(
-            {
-                "drop_params": deployment_params.get("drop_params"),
-                "model_info": resolved_deployment.get("model_info"),
-            }
-        ),
+        litellm_params=litellm_params,
         headers=sent_headers,
     )
     transformed: Final = _ANTHROPIC_CHAT_REQUEST.validate_python(request)
@@ -415,20 +448,24 @@ def claude_count_options(
     sent: Final = {name: value for name, value in request_options.items() if value is not None}
     if not sent:
         return NO_CLAUDE_COUNT_OPTIONS
+    inference_model: Final = deployment_inference_model(deployment)
+    transform: Final = (
+        None if inference_model is None else _messages_transform(inference_model, provider)
+    ) or _messages_transform(model, provider)
+    if transform is None:
+        return NO_CLAUDE_COUNT_OPTIONS
+    transform_model, messages_config = transform
+    litellm_params: Final = _transform_litellm_params(deployment)
     from litellm.exceptions import BadRequestError
     from litellm.llms.anthropic.common_utils import AnthropicError
-    from litellm.utils import ProviderConfigManager
 
-    messages_config: Final = ProviderConfigManager.get_provider_anthropic_messages_config(model, provider)
-    if messages_config is None:
-        return NO_CLAUDE_COUNT_OPTIONS
     try:
         return _claude_count_options_for(
-            messages_config, model, provider, messages, tools, sent, anthropic_beta, deployment
+            messages_config, transform_model, litellm_params, provider, messages, tools, sent, anthropic_beta
         )
     except (AnthropicError, BadRequestError) as e:
         return ChatCountTranslationError(message=str(e.message))
-    except (AttributeError, IndexError, KeyError, TypeError, ValueError) as e:
+    except (AttributeError, KeyError, TypeError, ValueError) as e:
         return ChatCountTranslationError(message=f"Invalid request for token counting: {e}")
 
 

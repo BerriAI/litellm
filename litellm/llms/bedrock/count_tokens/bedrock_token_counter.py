@@ -19,6 +19,7 @@ from litellm.llms.anthropic.count_tokens.transformation import (
     ClaudeCountOptions,
     anthropic_count_fields,
     claude_count_options,
+    deployment_inference_model,
     is_request_rejection,
 )
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
@@ -27,6 +28,7 @@ from litellm.llms.bedrock.count_tokens.handler import BedrockCountTokensHandler
 from litellm.llms.bedrock.count_tokens.mantle_handler import BedrockMantleCountTokensHandler
 from litellm.llms.bedrock_mantle.common_utils import is_mantle_claude_model
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.types.llms.anthropic import ANTHROPIC_EFFORT_BETA_HEADER
 from litellm.types.utils import (
     CountContextManagement,
     LiteLLMPydanticObjectBase,
@@ -85,10 +87,41 @@ def _mantle_answered_for_runtime(fallback: CountTokensOutcome, forwarded_options
     return not forwarded_options or isinstance(fallback, CountedTokens) or is_request_rejection(fallback.status_code)
 
 
-def _invoke_fields(claude_options: ClaudeCountOptions) -> Mapping[str, object]:
+def _invoke_fields(options: Mapping[str, JsonValue], betas: Sequence[str]) -> Mapping[str, object]:
+    return {**options, **({"anthropic_beta": list(betas)} if betas else {})}
+
+
+def _sets_effort(options: Mapping[str, JsonValue]) -> bool:
+    output_config: Final = options.get("output_config")
+    return isinstance(output_config, dict) and "effort" in output_config
+
+
+def _runtime_count_betas(claude_options: ClaudeCountOptions) -> tuple[str, ...]:
+    if not _sets_effort(claude_options.options) or ANTHROPIC_EFFORT_BETA_HEADER in claude_options.betas:
+        return claude_options.betas
+    return (*claude_options.betas, ANTHROPIC_EFFORT_BETA_HEADER)
+
+
+def _runs_on_converse(inference_model: str) -> bool:
+    from litellm.llms.bedrock.common_utils import BedrockModelInfo
+
+    return BedrockModelInfo.get_bedrock_provider_config_for_messages_api(inference_model) is None
+
+
+def _options_converse_sends(
+    request_options: Mapping[str, JsonValue], inference_model: str | None
+) -> Mapping[str, JsonValue]:
+    tool_choice: Final = request_options.get("tool_choice")
+    if (
+        not isinstance(tool_choice, dict)
+        or "disable_parallel_tool_use" not in tool_choice
+        or inference_model is None
+        or not _runs_on_converse(inference_model)
+    ):
+        return request_options
     return {
-        **claude_options.options,
-        **({"anthropic_beta": list(claude_options.betas)} if claude_options.betas else {}),
+        **request_options,
+        "tool_choice": {key: value for key, value in tool_choice.items() if key != "disable_parallel_tool_use"},
     }
 
 
@@ -193,7 +226,7 @@ class BedrockTokenCounter(BaseTokenCounter):
                 LlmProviders.BEDROCK_MANTLE if use_mantle else LlmProviders.BEDROCK,
                 sent_messages,
                 sent_tools,
-                request_options,
+                _options_converse_sends(request_options, deployment_inference_model(deployment)),
                 anthropic_beta,
                 deployment,
             )
@@ -202,17 +235,22 @@ class BedrockTokenCounter(BaseTokenCounter):
         )
         if isinstance(claude_options, ChatCountTranslationError):
             return claude_options.response(request_model, model_to_use, primary_tokenizer)
-        invoke_fields: Final = _invoke_fields(claude_options)
+        invoke_fields: Final = _invoke_fields(claude_options.options, claude_options.betas)
+        counted_request: Final = _request_data(
+            model_to_use,
+            sent_messages if claude_options.messages is None else claude_options.messages,
+            sent_tools if claude_options.messages is None else claude_options.tools,
+            system if translated is None else translated.system,
+        )
         runtime_request: Final = {
-            **_request_data(
-                model_to_use,
-                sent_messages if claude_options.messages is None else claude_options.messages,
-                sent_tools if claude_options.messages is None else claude_options.tools,
-                system if translated is None else translated.system,
-            ),
-            **invoke_fields,
+            **counted_request,
+            **_invoke_fields(claude_options.options, _runtime_count_betas(claude_options)),
         }
-        mantle_request: Final = runtime_request if translated is None else {**runtime_request, **translated.options}
+        mantle_request: Final = {
+            **counted_request,
+            **invoke_fields,
+            **({} if translated is None else translated.options),
+        }
 
         primary: Final = (
             await self._count_with(
