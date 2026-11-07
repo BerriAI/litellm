@@ -271,6 +271,27 @@ def test_process_azure_endpoint_url(api_base, model, expected_endpoint):
     assert result == expected_endpoint, "Unexpected endpoint"
 
 
+@respx.mock
+@pytest.mark.parametrize("api_version", ("2025-04-01-preview", "v1"))
+def test_azure_image_generation_keeps_deployment_url_query_params(api_version: str):
+    route: Final = respx.post(url__regex=r"https://azure-gateway\.example\.com/.*").mock(
+        return_value=httpx.Response(200, json={"created": 1, "data": [{"b64_json": "aGk="}]})
+    )
+
+    litellm.image_generation(
+        model="azure/gpt-image-1",
+        prompt="a red circle",
+        api_base="https://azure-gateway.example.com/openai/deployments/gpt-image-1/images/generations?subscription-key=gateway-key",
+        api_version=api_version,
+        api_key="test-azure-key",
+    )
+
+    request_url: Final = route.calls.last.request.url
+    assert request_url.path.endswith("/images/generations")
+    assert request_url.params["subscription-key"] == "gateway-key"
+    assert request_url.params["api-version"] == api_version
+
+
 @patch("azure.identity.UsernamePasswordCredential")
 @patch("azure.identity.get_bearer_token_provider")
 def test_get_azure_ad_token_from_username_password(mock_get_bearer_token_provider, mock_credential):

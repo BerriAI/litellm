@@ -1119,6 +1119,7 @@ class _ModerationsEndpointThatRecordsTheAuthorization:
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("openai_token_exchange_via_httpx")
 @respx.mock
 async def test_openai_moderation_sends_the_federated_bearer_when_only_workload_identity_is_set(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
@@ -1149,6 +1150,7 @@ async def test_openai_moderation_sends_the_federated_bearer_when_only_workload_i
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("openai_token_exchange_via_httpx")
 @respx.mock
 async def test_openai_moderation_federates_with_the_identity_in_its_own_guardrail_config(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path

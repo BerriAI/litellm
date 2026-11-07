@@ -1116,7 +1116,7 @@ def test_truncated_http_stream_is_an_error_and_next_stream_succeeds() -> None:
             try:
                 if truncated:
                     with pytest.raises(
-                        litellm.exceptions.MidStreamFallbackError, match="incomplete chunked read"
+                        litellm.exceptions.MidStreamFallbackError, match="OpenAIException - Connection error"
                     ) as failure:
                         tuple(stream)
                     assert isinstance(failure.value.original_exception, litellm.APIConnectionError)

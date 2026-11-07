@@ -1037,7 +1037,7 @@ def test_streamed_transcription_error_mid_stream_ends_with_an_error_event_and_ru
     assert tuple(frame.get("delta") for frame in frames[:2]) == ("hello ", "world")
     assert len(frames) == 3
     assert data_lines[-1] == "[DONE]"
-    assert "upstream connection dropped" in frames[2]["error"]["message"]
+    assert "APIConnectionError" in frames[2]["error"]["message"]
     assert "/srv/app/stt_stream.py" not in frames[2]["error"]["message"]
     assert "stt.internal.corp" not in frames[2]["error"]["message"]
     assert set(frames[2]["error"]) == {"message", "type", "param", "code"}

@@ -8,15 +8,20 @@ import pytest
 
 import json
 
+from openai.types.responses.response_usage import ResponseUsage as OpenAIResponseUsage
+
 import litellm
 from litellm.types.llms.openai import (
     ContentPartDoneEvent,
     ContentPartDonePartOutputText,
     HttpxBinaryResponseContent,
+    InputTokensDetails,
     OpenAIChatCompletionLogprobsContent,
     OpenAIModerationResponse,
     OpenAIVideoObject,
     OutputTextDeltaEvent,
+    OutputTokensDetails,
+    ResponseAPIUsage,
     ResponseCompletedEvent,
     ResponsesAPIResponse,
     ResponsesAPIStreamEvents,
@@ -574,6 +579,35 @@ def test_shell_call_output_the_sdk_cannot_type_serializes_as_sent():
     assert json.loads(response.model_dump_json())["output"] == [item]
 
 
+@pytest.mark.parametrize(
+    "dump",
+    [
+        lambda response: response.model_dump(exclude_none=True),
+        lambda response: json.loads(response.model_dump_json(exclude_none=True)),
+    ],
+    ids=["python", "json"],
+)
+def test_function_call_and_tool_dump_async_under_its_wire_name(dump) -> None:
+    call: Final = {
+        "id": "fc_1",
+        "type": "function_call",
+        "call_id": "call_1",
+        "name": "get_weather",
+        "arguments": "{}",
+        "status": "completed",
+        "async": True,
+    }
+    tool: Final = {"type": "function", "name": "get_weather", "parameters": {}, "strict": True, "async": False}
+    response: Final = ResponsesAPIResponse.model_validate(
+        {"id": "resp_1", "created_at": 1, "object": "response", "status": "completed", "output": [call], "tools": [tool]}
+    )
+
+    dumped: Final = dump(response)
+
+    assert (dumped["output"], dumped["tools"]) == ([call], [tool])
+    assert ResponsesAPIResponse.model_validate(dumped).model_dump(exclude_none=True)["output"] == [call]
+
+
 def test_normalize_fine_tuning_job_dict_maps_azure_pending():
     from litellm.llms.openai.fine_tuning.handler import _normalize_fine_tuning_job_dict
 
@@ -818,6 +852,22 @@ def test_rebuilding_a_dumped_responses_answer_keeps_the_tool_search_call_keys(ex
     rebuilt: Final = ResponsesAPIResponse(**answer.model_dump())
 
     assert rebuilt.model_dump()["output"] == [search_call]
+
+
+@pytest.mark.parametrize(("cache_write_tokens", "reported"), ((None, 0), (7, 7)))
+def test_responses_usage_dump_matches_the_openai_sdk_usage_schema(cache_write_tokens: int | None, reported: int) -> None:
+    usage: Final = ResponseAPIUsage(
+        input_tokens=10,
+        output_tokens=2,
+        total_tokens=12,
+        input_tokens_details=InputTokensDetails(cached_tokens=5, cache_write_tokens=cache_write_tokens),
+        output_tokens_details=OutputTokensDetails(reasoning_tokens=0),
+    )
+
+    sdk_usage: Final = OpenAIResponseUsage.model_validate(usage.model_dump(exclude_none=True))
+
+    assert sdk_usage.input_tokens_details.cache_write_tokens == reported
+    assert sdk_usage.input_tokens_details.cached_tokens == 5
 
 
 def _text_delta() -> OutputTextDeltaEvent:

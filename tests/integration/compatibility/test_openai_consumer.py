@@ -1,7 +1,9 @@
 import json
+import os
+import subprocess
 import uuid
 from collections.abc import Callable
-from importlib.metadata import version
+from pathlib import Path
 from typing import Final
 
 import httpx
@@ -11,12 +13,22 @@ from integration._support.wire import Reply, Request, wire_server
 from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
 
 
-@pytest.mark.covers("other.compatibility.openai.retained_client_parses_tools_and_usage")
-async def test_retained_openai_clients_parse_real_proxy_tool_and_usage_responses(gateway: Gateway) -> None:
-    assert version("openai") == "2.33.0", (
-        "Retain this consumer version independently before upgrading the candidate lock"
-    )
+_RETAINED_OPENAI_VERSION: Final = "2.33.0"
+_RETAINED_CONSUMER: Final = Path(__file__).with_name("_retained_openai_consumer.py")
 
+
+def _retained_openai_python() -> str:
+    python: Final = os.environ.get("RETAINED_OPENAI_PYTHON")
+    if not python:
+        pytest.fail(
+            f"Set RETAINED_OPENAI_PYTHON to a Python with openai=={_RETAINED_OPENAI_VERSION} installed, "
+            "as .circleci/scripts/run_integration.sh does for the extensions suite"
+        )
+    return python
+
+
+@pytest.mark.covers("other.compatibility.openai.retained_client_parses_tools_and_usage")
+def test_retained_openai_clients_parse_real_proxy_tool_and_usage_responses(gateway: Gateway) -> None:
     def provider(request: Request) -> Reply:
         assert request.method == "POST" and request.target == "/v1/chat/completions"
         body: Final = json.loads(request.body)
@@ -72,40 +84,35 @@ async def test_retained_openai_clients_parse_real_proxy_tool_and_usage_responses
             ],
             "extra_body": {"cache": {"no-cache": True}},
         }
-        plain: Final = {name: value for name, value in parameters.items() if name != "tools"}
-        with OpenAI(
-            api_key=key,
-            base_url=str(gateway.client.base_url).rstrip("/") + "/v1",
-            max_retries=0,
-            http_client=httpx.Client(timeout=10, trust_env=False),
-        ) as sync:
-            first: Final = sync.chat.completions.create(**parameters)
-            first_text: Final = sync.chat.completions.create(**plain)
-        async with AsyncOpenAI(
-            api_key=key,
-            base_url=str(gateway.client.base_url).rstrip("/") + "/v1",
-            max_retries=0,
-            http_client=httpx.AsyncClient(timeout=10, trust_env=False),
-        ) as asynchronous:
-            second: Final = await asynchronous.chat.completions.create(**parameters)
-            second_text: Final = await asynchronous.chat.completions.create(**plain)
-        assert len({response.id for response in (first, second, first_text, second_text)}) == 4
-        for response in (first, second, first_text, second_text):
-            assert response.object == "chat.completion"
-            assert (
-                response.usage.prompt_tokens == 11
-                and response.usage.completion_tokens == 4
-                and response.usage.total_tokens == 15
-            )
-        for response in (first, second):
-            assert response.choices[0].finish_reason == "tool_calls"
-            call: Final = response.choices[0].message.tool_calls[0]
-            assert call.id == "synthetic-call" and call.function.name == "add"
-            assert json.loads(call.function.arguments) == {"a": 3, "b": 5}
-        for response in (first_text, second_text):
-            assert response.choices[0].finish_reason == "stop"
-            assert response.choices[0].message.content == "Synthetic answer: 8"
-            assert not response.choices[0].message.tool_calls
+        consumer: Final = subprocess.run(
+            (
+                _retained_openai_python(),
+                "-I",
+                str(_RETAINED_CONSUMER),
+                str(gateway.client.base_url).rstrip("/") + "/v1",
+                key,
+                json.dumps(parameters),
+            ),
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+        assert consumer.returncode == 0, consumer.stderr
+        observed: Final = json.loads(consumer.stdout)
+        assert observed["openai"] == _RETAINED_OPENAI_VERSION
+        responses: Final = (*observed["tools"], *observed["text"])
+        assert len({response["id"] for response in responses}) == 4
+        for response in responses:
+            assert response["object"] == "chat.completion"
+            assert response["usage"] == [11, 4, 15]
+        for response in observed["tools"]:
+            assert response["finish_reason"] == "tool_calls"
+            assert response["tool_calls"] == [["synthetic-call", "add", {"a": 3, "b": 5}]]
+        for response in observed["text"]:
+            assert response["finish_reason"] == "stop"
+            assert response["content"] == "Synthetic answer: 8"
+            assert response["tool_calls"] == []
         assert len(wire.drain()) == 4
 
 
