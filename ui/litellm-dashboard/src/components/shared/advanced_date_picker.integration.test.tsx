@@ -339,6 +339,32 @@ describe("AdvancedDatePicker", () => {
     });
   });
 
+  it.each([
+    ["Start date", "2025-01-02", new Date(2025, 0, 2), new Date(2025, 0, 31, 23, 59, 59, 999)],
+    ["End date", "2025-01-30", new Date(2025, 0, 1), new Date(2025, 0, 30, 23, 59, 59, 999)],
+  ])("requires a cleared %s before applying the edited range", async (label, replacement, from, to) => {
+    render(<AdvancedDatePicker value={defaultValue} onValueChange={mockOnValueChange} />);
+    fireEvent.click(screen.getByRole("button", { expanded: false }));
+
+    const input = screen.getByLabelText(label);
+    fireEvent.change(input, { target: { value: "" } });
+
+    expect(screen.getByRole("button", { name: "Apply" })).toBeDisabled();
+    expect(screen.getByText("Start and end dates are required")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+    expect(mockOnValueChange).not.toHaveBeenCalled();
+    expect(input).toBeInTheDocument();
+
+    fireEvent.change(input, { target: { value: replacement } });
+    expect(screen.queryByText("Start and end dates are required")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Apply" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+
+    expect(mockOnValueChange).toHaveBeenNthCalledWith(1, { from, to }, null);
+    await waitFor(() => expect(mockOnValueChange).toHaveBeenNthCalledWith(2, { from, to }, null));
+    expect(screen.queryByLabelText(label)).not.toBeInTheDocument();
+  });
+
   it("should label compact custom date inputs, validate their order and apply the corrected range", async () => {
     const user = userEvent.setup();
     render(<AdvancedDatePicker value={defaultValue} onValueChange={mockOnValueChange} compact />);
