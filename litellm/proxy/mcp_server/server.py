@@ -84,6 +84,7 @@ from litellm.proxy.mcp_server.scope_challenge import (
     SCOPE_RESPONSE_KEY,
     OAuthScopeResponse,
     finish_scope_response,
+    is_listing_request,
     is_tool_call_request,
 )
 from litellm.proxy.mcp_server.ui_session_utils import (
@@ -2470,6 +2471,20 @@ if MCP_AVAILABLE:
             ),
         )
 
+    def _server_to_reauthorize(
+        mcp_servers: Sequence[str] | None, scoped_server_endpoint: bool, body: bytes, client_ip: str | None
+    ) -> str | None:
+        """The server a client addressed alone for a listing it can fix by authenticating again."""
+        if not scoped_server_endpoint or mcp_servers is None or len(mcp_servers) != 1 or not is_listing_request(body):
+            return None
+        server: Final = operations.global_mcp_server_manager.get_mcp_server_by_identifier(
+            mcp_servers[0], client_ip=client_ip
+        )
+        reauthorizes: Final = (
+            server is not None and MCPServerManager.resolve_oauth2_flow_for_request(server).reauthorizes_in_client
+        )
+        return mcp_servers[0] if reauthorizes else None
+
     async def handle_streamable_http_mcp(scope: Scope, receive: Receive, send: Send) -> None:
         """Handle MCP requests through StreamableHTTP."""
         try:
@@ -2638,13 +2653,15 @@ if MCP_AVAILABLE:
                 await rejection(scope, receive, send)
                 return
 
+            reauthorize_as: Final = _server_to_reauthorize(mcp_servers, scoped_server_endpoint, body, _client_ip)
             scope_response: Final = (
                 OAuthScopeResponse(
                     send,
                     get_request_base_url(StarletteRequest(scope)),
                     get_route_relative_request_path(scope),
+                    reauthorize_as=reauthorize_as,
                 )
-                if is_tool_call_request(body) or len(body) >= _MCP_ROUTING_PEEK_MAX_BYTES
+                if is_tool_call_request(body) or len(body) >= _MCP_ROUTING_PEEK_MAX_BYTES or reauthorize_as is not None
                 else None
             )
             if scope_response is not None:
