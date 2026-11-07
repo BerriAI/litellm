@@ -534,6 +534,15 @@ def _config_per_server_oauth_discovery(
     return enabled
 
 
+def _reject_config_secret_headers(server_ref: str, auth_type: MCPAuthType | None) -> None:
+    if auth_type == MCPAuth.secret_headers:
+        raise ValueError(
+            f"Invalid config for MCP server '{server_ref}': auth_type secret_headers is not supported in "
+            "config.yaml, because the headers are stored encrypted with the server. Create the server in "
+            "the dashboard or through the API instead."
+        )
+
+
 def _pinned_config_server_id(raw_server_id: object, server_name: str) -> str | None:
     """Return the ``server_id`` an admin pinned for this config.yaml server, or ``None`` when absent.
 
@@ -2643,6 +2652,7 @@ class MCPServerManager:
             warn_if_mcp_stdio_blocked(server_name, server_config.get("transport"))
 
             auth_type = server_config.get("auth_type", None)
+            _reject_config_secret_headers(server_name, auth_type)
             manual_issuer = _blank_to_none(server_config.get("issuer"))
             manual_authorization_url = _blank_to_none(server_config.get("authorization_url"))
             manual_token_url = _blank_to_none(server_config.get("token_url"))
