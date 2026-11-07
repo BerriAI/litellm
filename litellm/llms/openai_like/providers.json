@@ -30,6 +30,13 @@
     "base_url": "https://api.scaleway.ai/v1",
     "api_key_env": "SCW_SECRET_KEY"
   },
+  "tsubasa": {
+    "base_url": "https://api.tsubasa.sh/v1",
+    "api_key_env": "TSUBASA_API_KEY",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    }
+  },
   "synthetic": {
     "base_url": "https://api.synthetic.new/openai/v1",
     "api_key_env": "SYNTHETIC_API_KEY",
