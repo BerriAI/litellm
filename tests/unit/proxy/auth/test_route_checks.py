@@ -5025,13 +5025,22 @@ def _legacy_route_request(path: str, query_params: Mapping[str, str]) -> Request
     )
 
 
-def test_llm_api_route() -> None:
+@pytest.mark.parametrize(
+    "route",
+    (
+        "/v1/chat/completions",
+        "/guardrails/apply_guardrail",
+        "/apply_guardrail",
+    ),
+)
+def test_llm_api_route(route: str) -> None:
+    assert RouteChecks.is_llm_api_route(route) is True
     assert (
         RouteChecks.non_proxy_admin_allowed_routes_check(
             user_obj=None,
             _user_role=LitellmUserRoles.INTERNAL_USER.value,
-            route="/v1/chat/completions",
-            request=_legacy_route_request("/v1/chat/completions", {}),
+            route=route,
+            request=_legacy_route_request(route, {}),
             valid_token=UserAPIKeyAuth(api_key="test_key"),
             request_data={},
         )

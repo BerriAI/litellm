@@ -6,10 +6,10 @@ import asyncio
 import inspect
 import json
 import os
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from datetime import datetime, timezone
 from types import MappingProxyType, UnionType
-from typing import TYPE_CHECKING, Any, Final, Protocol, TypeVar, Union, cast, get_args, get_origin
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeVar, Union, cast, get_args, get_origin
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -17,7 +17,11 @@ from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
-from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.integrations.custom_guardrail import (
+    CustomGuardrail,
+    _append_slg_to_litellm_params,
+    _sync_guardrail_info_to_logging_obj,
+)
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -34,6 +38,9 @@ from litellm.proxy.guardrails.guardrail_hooks.custom_code.custom_code_guardrail 
 from litellm.proxy.guardrails.guardrail_hooks.custom_code.sandbox import (
     build_sandbox_globals,
     compile_sandboxed,
+)
+from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
+    RequestAttachmentScanner,
 )
 from litellm.proxy.guardrails.guardrail_registry import (
     GuardrailRegistry,
@@ -81,6 +88,7 @@ from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.proxy.guardrails.guardrail_hooks.hide_secrets import (
     HideSecretsGuardrailConfigModel,
 )
+from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
     from types import CodeType
@@ -2382,6 +2390,133 @@ def _patch_logging_obj_for_guardrail(litellm_logging_obj: _GuardrailLoggingObj, 
     )
 
 
+def _attachment_scan_messages(request: ApplyGuardrailRequest) -> Sequence[Mapping[str, object]]:
+    base_messages: Final[Sequence[Mapping[str, object]]] = list(request.messages) if request.messages else []
+    if not request.images:
+        return base_messages
+    image_blocks: Final[Sequence[Mapping[str, object]]] = [
+        {"type": "image_url", "image_url": {"url": image_url}} for image_url in request.images
+    ]
+    return [*base_messages, {"role": "user", "content": image_blocks}]
+
+
+def _extract_guardrail_entries(request_data: Mapping[str, object]) -> Sequence[object]:
+    metadata: Final = request_data.get("metadata")
+    if not isinstance(metadata, Mapping):
+        return ()
+    entries: Final = metadata.get("standard_logging_guardrail_information")
+    if isinstance(entries, Sequence) and not isinstance(entries, (str, bytes)):
+        return tuple(entry for entry in entries if isinstance(entry, Mapping))
+    return (entries,) if isinstance(entries, Mapping) else ()
+
+
+def _extract_content_texts(content: object) -> tuple[str, ...]:
+    if isinstance(content, str):
+        return (content,) if content else ()
+    if isinstance(content, Sequence) and not isinstance(content, (str, bytes)):
+        return tuple(
+            text
+            for item in content
+            if isinstance(item, Mapping) and isinstance(text := item.get("text"), str) and text
+        )
+    return ()
+
+
+def _iter_message_texts(messages: Sequence[Mapping[str, object]]) -> Iterator[str]:
+    for msg in messages:
+        if isinstance(msg, Mapping):
+            yield from _extract_content_texts(msg.get("content"))
+
+
+def _extract_message_texts(messages: Sequence[Mapping[str, object]] | None) -> tuple[str, ...]:
+    if not messages:
+        return ()
+    return tuple(_iter_message_texts(messages))
+
+
+async def _run_endpoint_guardrail(
+    active_guardrail: CustomGuardrail,
+    request: ApplyGuardrailRequest,
+    request_data: Mapping[str, object],
+    input_type: Literal["request", "response"],
+) -> GenericGuardrailAPIInputs:
+    if "text" not in request.model_fields_set and not request.messages and not request.images:
+        raise HTTPException(
+            status_code=422,
+            detail="At least one of 'text', 'messages', or 'images' must be provided.",
+        )
+    is_attachment_scanner: Final = isinstance(active_guardrail, RequestAttachmentScanner) and hasattr(
+        type(active_guardrail), "async_scan_request_attachments"
+    )
+    if request.images and not is_attachment_scanner:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Guardrail '{request.guardrail_name}' does not support image scanning "
+                f"for input_type='{input_type}'."
+            ),
+        )
+    message_texts: Final = _extract_message_texts(request.messages)
+    scan_messages: Final = _attachment_scan_messages(request)
+    if scan_messages and is_attachment_scanner:
+        scan_event_type: Final = (
+            GuardrailEventHooks.post_call if input_type == "response" else GuardrailEventHooks.pre_call
+        )
+        existing_metadata: Final = request_data.get("metadata")
+        clean_metadata: Final = (
+            {
+                key: value
+                for key, value in existing_metadata.items()
+                if key != "standard_logging_guardrail_information"
+            }
+            if isinstance(existing_metadata, Mapping)
+            else None
+        )
+        attachment_scan_data: Final[Mapping[str, object]] = {
+            **request_data,
+            **({"metadata": clean_metadata} if clean_metadata is not None else {}),
+            "messages": scan_messages,
+        }
+        try:
+            await active_guardrail.async_scan_request_attachments(
+                data=attachment_scan_data,  # pyright: ignore[reportArgumentType]  # scanner mutates fresh per-call copy
+                call_type="acompletion",
+                event_type=scan_event_type,
+            )
+        finally:
+            scanned_entries: Final = _extract_guardrail_entries(attachment_scan_data)
+            if scanned_entries:
+                _append_slg_to_litellm_params(request_data, list(scanned_entries))
+        if request.images and not scanned_entries:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Guardrail '{request.guardrail_name}' did not scan the provided images.",
+            )
+        if not request.text and not message_texts and scanned_entries:
+            return {"texts": [], "images": list(request.images)} if request.images else {"texts": []}
+
+    texts_to_scan: Final[list[str]] = (
+        [request.text]
+        if request.text or ("text" in request.model_fields_set and not message_texts and not request.images)
+        else list(message_texts)
+    )
+    if not texts_to_scan and "text" not in request.model_fields_set:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Guardrail '{request.guardrail_name}' requires scannable text.",
+        )
+    inputs: Final[GenericGuardrailAPIInputs] = (
+        {"texts": texts_to_scan, "images": list(request.images)}
+        if request.images is not None
+        else {"texts": texts_to_scan}
+    )
+    return await active_guardrail.apply_guardrail(
+        inputs=inputs,
+        request_data=request_data,  # pyright: ignore[reportArgumentType]  # CustomGuardrail expects dict
+        input_type=input_type,
+    )
+
+
 async def _guardrail_response_after_success_hook(
     response_handler: StandardGuardrailResponseHandler,
     proxy_logging_obj: _GuardrailProxyLogging,
@@ -2504,14 +2639,21 @@ async def apply_guardrail(
         response_handler: Final = GUARDRAIL_RESPONSE_HANDLERS[request.response_format]
         request_data: Final = dict(response_handler.prepare_request_data(request))
         input_type: Final = response_handler.resolve_input_type(request, active_guardrail)
-        guardrailed_inputs: Final = await active_guardrail.apply_guardrail(
-            inputs={"texts": [request.text]},
-            request_data=request_data,
-            input_type=input_type,
-        )
+        try:
+            guardrailed_inputs: Final = await _run_endpoint_guardrail(
+                active_guardrail=active_guardrail,
+                request=request,
+                request_data=request_data,
+                input_type=input_type,
+            )
+        finally:
+            recorded_entries: Final = _extract_guardrail_entries(request_data)
+            if recorded_entries:
+                _append_slg_to_litellm_params(data, list(recorded_entries))
+                _sync_guardrail_info_to_logging_obj(request_data, litellm_logging_obj)
         response: Final = response_handler.build_response(request, guardrailed_inputs, request_data)
     except Exception as e:
-        if litellm_logging_obj is not None and not isinstance(e, HTTPException):
+        if litellm_logging_obj is not None:
             try:
                 await litellm_logging_obj.async_failure_handler(
                     exception=e,

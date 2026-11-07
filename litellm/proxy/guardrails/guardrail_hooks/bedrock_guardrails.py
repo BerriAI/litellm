@@ -2561,6 +2561,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         # This means all actions were ANONYMIZED or NONE, so don't raise exception
         return False
 
+    def supports_image_inputs(self, input_type: Literal["request", "response"] = "request") -> bool:
+        return self.checks is None and not effective_scan_only_tool_results_for_guardrail(self)
+
     async def async_scan_request_attachments(
         self,
         data: dict[str, object],  # mutable-ok: proxy request body dict, mutated by the logging helper
@@ -2592,7 +2595,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         if not images:
             return
         bedrock_request_data: Final = {
-            "source": "INPUT",
+            "source": "OUTPUT" if event_type == GuardrailEventHooks.post_call else "INPUT",
             **_allowed_dynamic_body_params(
                 self.get_guardrail_dynamic_request_body_params(request_data=data)  # pyright: ignore[reportUnknownArgumentType, reportUnknownMemberType]  # the base helper returns an untyped dict
             ),
