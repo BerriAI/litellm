@@ -115,6 +115,35 @@ describe("CredentialsPanel", () => {
     vi.clearAllMocks();
   });
 
+  it("keeps credential actions usable when the panel rerenders with refreshed data", async () => {
+    const user = userEvent.setup();
+    mockUseAuthorized.mockReturnValue({ accessToken: "test-token", userRole: "Admin" });
+    mockUseCredentials.mockReturnValue({ data: { credentials }, isLoading: false, refetch: vi.fn() });
+    const client = createQueryClient();
+    const panel = (
+      <QueryClientProvider client={client}>
+        <CredentialsPanel />
+      </QueryClientProvider>
+    );
+    const { rerender } = render(panel);
+
+    await user.click(screen.getByTestId("credential-actions-openai-key"));
+    expect(await screen.findByTestId("credential-action-edit")).toBeVisible();
+    mockUseCredentials.mockReturnValue({
+      data: { credentials: credentials.map((credential) => ({ ...credential })) },
+      isLoading: false,
+      refetch: vi.fn(),
+    });
+    rerender(
+      <QueryClientProvider client={client}>
+        <CredentialsPanel />
+      </QueryClientProvider>,
+    );
+
+    await user.click(screen.getByTestId("credential-action-edit"));
+    expect(screen.getByTestId("credential-modal-edit-submit")).toBeInTheDocument();
+  });
+
   it("renders the Add Credential button for an admin", () => {
     mockUseAuthorized.mockReturnValue({ accessToken: "test-token", userRole: "Admin" });
     mockUseCredentials.mockReturnValue({ data: { credentials: [] }, isLoading: false, refetch: vi.fn() });
