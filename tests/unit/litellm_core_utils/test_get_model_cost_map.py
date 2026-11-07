@@ -8,12 +8,15 @@ import asyncio, importlib, importlib.resources as importlib_get_model, json, lit
 import os
 import sys
 import threading
+from pathlib import Path
 from typing import Final
 
 import boto3
 import pytest
+from pydantic import ValidationError
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
+from litellm.litellm_core_utils import get_model_cost_map as get_model_cost_map_module
 from litellm.litellm_core_utils.fallback_generalizations import (
     get_fallback_generalization_rules,
     match_capability_generalizations,
@@ -396,9 +399,10 @@ async def test_refetch_shrunk_map_fails_integrity_not_swapped_in():
 
 
 @pytest.mark.asyncio
-async def test_refetch_respects_local_env_override(monkeypatch):
-    """LITELLM_LOCAL_MODEL_COST_MAP=True short-circuits to the bundled backup, zero HTTP."""
-    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+@pytest.mark.parametrize("flag", ["LITELLM_LOCAL_MODEL_COST_MAP", "LITELLM_OFFLINE_MODE"])
+async def test_refetch_respects_local_env_override(monkeypatch, flag):
+    """LITELLM_LOCAL_MODEL_COST_MAP=True or LITELLM_OFFLINE_MODE=True short-circuits to the bundled backup, zero HTTP."""
+    monkeypatch.setenv(flag, "True")
 
     def _fail(request):
         raise AssertionError("no HTTP request should be made when local map is forced")
@@ -705,9 +709,10 @@ def test_boot_load_falls_back_when_urlsplit_rejects_the_url():
     assert "invalid URL" in (source["fallback_reason"] or "")
 
 
-def test_boot_load_respects_local_env_override(monkeypatch):
-    """LITELLM_LOCAL_MODEL_COST_MAP=True still short-circuits to the backup with zero HTTP."""
-    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+@pytest.mark.parametrize("flag", ["LITELLM_LOCAL_MODEL_COST_MAP", "LITELLM_OFFLINE_MODE"])
+def test_boot_load_respects_local_env_override(monkeypatch, flag):
+    """LITELLM_LOCAL_MODEL_COST_MAP=True or LITELLM_OFFLINE_MODE=True still short-circuits to the backup with zero HTTP."""
+    monkeypatch.setenv(flag, "True")
 
     def _fail(request):
         raise AssertionError("no HTTP request should be made when local map is forced")
@@ -1246,3 +1251,16 @@ def test_get_backup_model_cost_map():
         print("inside backup")
         content = json.load(f)
         print("content", content)
+
+
+@pytest.mark.parametrize("backup", [b'["only-in-the-backup"]', b'"only-in-the-backup"', b"null"])
+def test_a_bundled_backup_that_is_not_a_json_object_is_rejected_without_quoting_it(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, backup: bytes
+):
+    (tmp_path / "model_prices_and_context_window_backup.json").write_bytes(backup)
+    monkeypatch.setattr(get_model_cost_map_module, "files", lambda _package: tmp_path)
+
+    with pytest.raises(ValidationError) as rejected:
+        GetModelCostMap.load_local_model_cost_map_with_revision()
+
+    assert "only-in-the-backup" not in str(rejected.value)

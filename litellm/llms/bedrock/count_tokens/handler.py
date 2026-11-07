@@ -7,13 +7,17 @@ Simplified handler leveraging existing LiteLLM Bedrock infrastructure.
 from typing import Any, Final
 
 import httpx
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.core_helpers import decoded_json_object
 from litellm.llms.bedrock.base_aws_llm import run_aws_signing
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.bedrock.count_tokens.transformation import BedrockCountTokensConfig
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, get_async_httpx_client
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class BedrockCountTokensHandler(BedrockCountTokensConfig):
@@ -29,7 +33,7 @@ class BedrockCountTokensHandler(BedrockCountTokensConfig):
         litellm_params: dict[str, Any],
         resolved_model: str,
         client: AsyncHTTPHandler | None = None,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """
         Handle a CountTokens request using existing LiteLLM patterns.
 
@@ -48,7 +52,8 @@ class BedrockCountTokensHandler(BedrockCountTokensConfig):
             verbose_logger.debug("Processing CountTokens request for resolved model: %s", resolved_model)
 
             # Get AWS region using existing LiteLLM function
-            aws_region_name: Final = self.get_aws_region_name(
+            aws_region_name: Final = await run_aws_signing(
+                self.get_aws_region_name,
                 optional_params=litellm_params,
                 model=resolved_model,
                 model_id=None,
@@ -64,7 +69,8 @@ class BedrockCountTokensHandler(BedrockCountTokensConfig):
             # Get endpoint URL using simplified function
             api_base: Final = litellm_params.get("api_base", None)
             aws_bedrock_runtime_endpoint: Final = litellm_params.get("aws_bedrock_runtime_endpoint", None)
-            endpoint_url: Final = self.get_bedrock_count_tokens_endpoint(
+            endpoint_url: Final = await run_aws_signing(
+                self.get_bedrock_count_tokens_endpoint,
                 model=resolved_model,
                 aws_region_name=aws_region_name,
                 api_base=api_base,
@@ -109,12 +115,12 @@ class BedrockCountTokensHandler(BedrockCountTokensConfig):
                     response=response,
                 )
 
-            bedrock_response: Final = response.json()
+            bedrock_response: Final = _DECODED_JSON.validate_python(response.json())
 
             verbose_logger.debug("Bedrock response: %s", bedrock_response)
 
             # Transform response back to expected format
-            final_response: Final = self.transform_bedrock_response_to_anthropic(bedrock_response)
+            final_response: Final = self.transform_bedrock_response_to_anthropic(decoded_json_object(bedrock_response))
 
             verbose_logger.debug("Final response: %s", final_response)
 

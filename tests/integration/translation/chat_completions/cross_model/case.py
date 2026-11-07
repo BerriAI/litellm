@@ -6,6 +6,7 @@ from integration.translation.chat_completions.cross_model import (
     azure,
     azure_ai,
     bedrock_converse,
+    gemini,
     openai,
     vertex_ai,
 )
@@ -127,6 +128,16 @@ MID: Final[tuple[AgentCases, ...]] = (
         bedrock_converse.CLAUDE_OPUS_5_5_AGENT_STREAMING_TEST_CASE,
     ),
     (
+        bedrock_converse.CLAUDE_SONNET_5_5_AGENT_TEST_CASE,
+        bedrock_converse.CLAUDE_SONNET_5_5_AGENT_FOLLOWUP_TEST_CASE,
+        bedrock_converse.CLAUDE_SONNET_5_5_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
+        anthropic.CLAUDE_SONNET_5_5_AGENT_TEST_CASE,
+        anthropic.CLAUDE_SONNET_5_5_AGENT_FOLLOWUP_TEST_CASE,
+        anthropic.CLAUDE_SONNET_5_5_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
         bedrock_converse.CLAUDE_OPUS_5_TEST_CASE,
         bedrock_converse.CLAUDE_OPUS_5_AGENT_FOLLOWUP_TEST_CASE,
         bedrock_converse.CLAUDE_OPUS_5_AGENT_STREAMING_TEST_CASE,
@@ -188,9 +199,19 @@ MID: Final[tuple[AgentCases, ...]] = (
         vertex_ai.GEMINI_3_8_FLASH_AGENT_STREAMING_TEST_CASE,
     ),
     (
+        gemini.GEMINI_3_8_FLASH_AGENT_TEST_CASE,
+        gemini.GEMINI_3_8_FLASH_AGENT_FOLLOWUP_TEST_CASE,
+        gemini.GEMINI_3_8_FLASH_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
         vertex_ai.GEMINI_3_1_PRO_PREVIEW_AGENT_TEST_CASE,
         vertex_ai.GEMINI_3_1_PRO_PREVIEW_AGENT_FOLLOWUP_TEST_CASE,
         vertex_ai.GEMINI_3_1_PRO_PREVIEW_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
+        gemini.GEMINI_3_1_PRO_PREVIEW_AGENT_TEST_CASE,
+        gemini.GEMINI_3_1_PRO_PREVIEW_AGENT_FOLLOWUP_TEST_CASE,
+        gemini.GEMINI_3_1_PRO_PREVIEW_AGENT_STREAMING_TEST_CASE,
     ),
 )
 

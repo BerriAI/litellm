@@ -264,6 +264,17 @@ def test_transform_cancel_eval_request(config: OpenAIEvalsConfig):
     assert request_body == {}
 
 
+def test_transform_cancel_eval_request_appends_cancel_to_an_eval_id_named_cancel(config: OpenAIEvalsConfig) -> None:
+    eval_url, _ = config.transform_get_eval_request(
+        eval_id="cancel", api_base="https://api.openai.com", litellm_params=GenericLiteLLMParams(), headers={}
+    )
+    cancel_url, _, _ = config.transform_cancel_eval_request(
+        eval_id="cancel", api_base="https://api.openai.com", litellm_params=GenericLiteLLMParams(), headers={}
+    )
+
+    assert cancel_url == f"{eval_url}/cancel"
+
+
 def test_transform_cancel_eval_response(config: OpenAIEvalsConfig):
     """Test transformation of cancel eval response"""
     response = httpx.Response(
