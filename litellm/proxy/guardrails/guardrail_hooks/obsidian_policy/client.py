@@ -44,6 +44,12 @@ class ObsidianSettings:
 
 
 @dataclass(frozen=True, slots=True)
+class InvalidSettings:
+    reason: str
+    fail_open: bool
+
+
+@dataclass(frozen=True, slots=True)
 class ToolEvent:
     stage: Stage
     server_name: str
@@ -130,7 +136,7 @@ def build_event(
 
 
 class ObsidianClient:
-    def __init__(self, settings: ObsidianSettings, http: httpx.AsyncClient) -> None:
+    def __init__(self, settings: ObsidianSettings | InvalidSettings, http: httpx.AsyncClient) -> None:
         self._settings: Final = settings
         self._http: Final = http
 
@@ -140,35 +146,40 @@ class ObsidianClient:
 
     async def evaluate(self, event: ToolEvent) -> PolicyDecision:
         """Ask Obsidian for a verdict on one tool event. Never raises."""
-        body: Final = build_event(event, self._settings.client_platform)
-        outcome: Final = await self._send(body)
+        match self._settings:
+            case InvalidSettings():
+                return self.failure("error", "the guardrail configuration is invalid, see the proxy log")
+            case ObsidianSettings() as settings:
+                outcome: Final = await self._send(settings, build_event(event, settings.client_platform))
         match outcome:
             case _Failure(message=message):
                 return self.failure("error", message)
             case httpx.Response():
                 return await self._decide(outcome)
 
-    async def _send(self, body: Mapping[str, object], attempt: int = 0) -> httpx.Response | _Failure:
+    async def _send(
+        self, settings: ObsidianSettings, body: Mapping[str, object], attempt: int = 0
+    ) -> httpx.Response | _Failure:
         try:
             response: Final = await self._http.post(
-                self._settings.endpoint,
+                settings.endpoint,
                 json=body,
                 headers=MappingProxyType(
                     {
-                        "Authorization": f"Bearer {self._settings.gateway_token}",
-                        "User-Agent": f"{self._settings.client_platform}/1.0",
+                        "Authorization": f"Bearer {settings.gateway_token}",
+                        "User-Agent": f"{settings.client_platform}/1.0",
                     }
                 ),
-                timeout=self._settings.timeout_seconds,
+                timeout=settings.timeout_seconds,
             )
         except httpx.TimeoutException:
-            return _Failure(f"Obsidian evaluation timed out after {int(self._settings.timeout_seconds * 1000)}ms")
+            return _Failure(f"Obsidian evaluation timed out after {int(settings.timeout_seconds * 1000)}ms")
         except httpx.TransportError as exc:
             if attempt < MAX_RETRIES:
-                return await self._send(body, attempt + 1)
+                return await self._send(settings, body, attempt + 1)
             return _Failure(f"Obsidian request failed: {type(exc).__name__}")
         if response.status_code >= 500 and attempt < MAX_RETRIES:
-            return await self._send(body, attempt + 1)
+            return await self._send(settings, body, attempt + 1)
         return response
 
     async def _decide(self, response: httpx.Response) -> PolicyDecision:

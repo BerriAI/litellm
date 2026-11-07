@@ -11,11 +11,16 @@ from mcp.types import CallToolResult, ImageContent, TextContent
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.obsidian_policy import (
     ObsidianPolicyGuardrail,
+    build_guardrail,
     guardrail_class_registry,
     guardrail_initializer_registry,
     resolve_settings,
 )
-from litellm.proxy.guardrails.guardrail_hooks.obsidian_policy.client import ObsidianClient, ObsidianSettings
+from litellm.proxy.guardrails.guardrail_hooks.obsidian_policy.client import (
+    InvalidSettings,
+    ObsidianClient,
+    ObsidianSettings,
+)
 from litellm.proxy.mcp_server.operations import _http_detail_message
 from litellm.types.guardrails import GuardrailEventHooks, LitellmParams, SupportedGuardrailIntegrations
 from litellm.types.llms.base import HiddenParams
@@ -254,10 +259,11 @@ def _params(**overrides) -> LitellmParams:
     return LitellmParams(guardrail="obsidian_policy", mode="pre_mcp_call", **overrides)
 
 
-def test_settings_require_a_gateway_token(monkeypatch):
+def test_settings_without_a_gateway_token_are_invalid(monkeypatch):
     monkeypatch.delenv("OBSIDIAN_GATEWAY_TOKEN", raising=False)
-    with pytest.raises(ValueError, match="OBSIDIAN_GATEWAY_TOKEN"):
-        resolve_settings(_params())
+    settings = resolve_settings(_params())
+    assert isinstance(settings, InvalidSettings)
+    assert "OBSIDIAN_GATEWAY_TOKEN" in settings.reason
 
 
 def test_settings_read_token_and_overrides_from_environment(monkeypatch):
@@ -278,9 +284,65 @@ def test_explicit_params_win_over_environment(monkeypatch):
     assert settings.timeout_seconds == 7.0
 
 
-def test_reserved_client_platform_is_rejected_at_startup():
-    with pytest.raises(ValueError, match="reserved"):
-        resolve_settings(_params(api_key="t", client_platform="Cursor"))
+def test_reserved_client_platform_is_invalid():
+    settings = resolve_settings(_params(api_key="t", client_platform="Cursor"))
+    assert isinstance(settings, InvalidSettings)
+    assert "reserved" in settings.reason
+
+
+def _never_called(request: httpx.Request) -> httpx.Response:
+    raise AssertionError("a misconfigured guardrail must not contact Obsidian")
+
+
+_MISCONFIGURATIONS = pytest.mark.parametrize(
+    "overrides",
+    [
+        {"api_key": None},
+        {"client_platform": "cursor"},
+        {"mode": "pre_mpc_call"},
+        {"mode": "pre_call"},
+    ],
+    ids=["no-token", "reserved-platform", "unknown-mode", "non-mcp-mode"],
+)
+
+
+def _built(monkeypatch, **overrides) -> ObsidianPolicyGuardrail:
+    monkeypatch.delenv("OBSIDIAN_GATEWAY_TOKEN", raising=False)
+    params = {"api_key": "t", "mode": ["pre_mcp_call", "post_mcp_call"], "default_on": True, **overrides}
+    http = httpx.AsyncClient(transport=httpx.MockTransport(_never_called))
+    return build_guardrail(LitellmParams(guardrail="obsidian_policy", **params), "obsidian", http)
+
+
+@_MISCONFIGURATIONS
+async def test_misconfigured_guardrail_still_denies_tool_calls_instead_of_being_skipped(monkeypatch, overrides):
+    guardrail = _built(monkeypatch, **overrides)
+
+    with pytest.raises(HTTPException) as raised:
+        await guardrail.async_pre_call_hook(_auth(), None, _pre_data(), "call_mcp_tool")
+    assert _http_detail_message(raised.value.detail) == (
+        "Obsidian policy check unavailable: the guardrail configuration is invalid, see the proxy log"
+    )
+    withheld = await guardrail.async_post_mcp_tool_call_hook(_post_kwargs(), _post_response("hunter2"), None, None)
+    assert withheld is not None and "hunter2" not in withheld.mcp_tool_call_response[0].text
+
+
+@_MISCONFIGURATIONS
+async def test_misconfigured_guardrail_allows_tool_calls_when_set_to_fail_open(monkeypatch, overrides):
+    guardrail = _built(monkeypatch, unreachable_fallback="fail_open", **overrides)
+
+    data = _pre_data()
+    assert await guardrail.async_pre_call_hook(_auth(), None, data, "call_mcp_tool") is data
+    assert await guardrail.async_post_mcp_tool_call_hook(_post_kwargs(), _post_response(), None, None) is None
+
+
+async def test_valid_configuration_builds_a_guardrail_that_consults_obsidian(monkeypatch):
+    captured, handler = _recorder(_verdict("pass"))
+    params = LitellmParams(guardrail="obsidian_policy", mode="pre_mcp_call", api_key="t", default_on=True)
+    guardrail = build_guardrail(params, "obsidian", httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+
+    data = _pre_data()
+    assert await guardrail.async_pre_call_hook(_auth(), None, data, "call_mcp_tool") is data
+    assert captured[0].headers["Authorization"] == "Bearer t"
 
 
 @pytest.mark.parametrize("fallback, fail_open", [("fail_closed", False), ("fail_open", True)])
