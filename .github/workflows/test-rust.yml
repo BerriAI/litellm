@@ -114,8 +114,20 @@ jobs:
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
   rust-test:
+    name: rust-test (${{ matrix.shard }})
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - shard: workspace
+          - shard: token-counter
+            features: "none fast huggingface tiktoken fast,huggingface fast,tiktoken huggingface,tiktoken fast,huggingface,tiktoken"
+          - shard: secrets-single
+            features: "none aws google hashicorp azure cyberark"
+          - shard: secrets-combined
+            features: "aws,google aws,azure google,azure aws,google,azure aws,google,cyberark aws,google,azure,cyberark aws,google,hashicorp,azure,cyberark"
     # Trim debuginfo to keep the job's target dir within the runner's disk
     env:
       CARGO_PROFILE_DEV_DEBUG: line-tables-only
@@ -132,10 +144,12 @@ jobs:
           python-version: "3.12"
 
       - uses: ./.github/actions/setup-uv-with-retries
+        if: matrix.shard == 'workspace'
         with:
           version: "0.10.9"
 
       - name: Install Python dependencies for the bridge tests
+        if: matrix.shard == 'workspace'
         working-directory: .
         run: |
           uv sync --frozen --no-install-project
@@ -144,12 +158,14 @@ jobs:
       - run: rustup toolchain install --no-self-update
 
       - uses: taiki-e/install-action@d438492cf8a250514fa2d34b30bc3c0dc37c65ff # v2.87.8
+        if: matrix.shard == 'workspace'
         with:
           tool: cargo-nextest@0.9.143
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: litellm-rust
+          key: ${{ matrix.shard }}
           cache-on-failure: true
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
@@ -159,25 +175,41 @@ jobs:
           version: "v0.18.0"
 
       - name: Check generated trace contracts
+        if: matrix.shard == 'workspace'
         working-directory: .
         run: uv run scripts/generate_trace_types.py --check
 
-      - run: cargo nextest run --workspace --locked
+      - name: Run workspace tests
+        if: matrix.shard == 'workspace'
+        run: cargo nextest run --workspace --locked
 
-      - run: cargo test --workspace --doc --locked
+      - name: Run workspace doc tests
+        if: matrix.shard == 'workspace'
+        run: cargo test --workspace --doc --locked
 
       - name: Test token counter feature combinations
+        if: matrix.shard == 'token-counter'
+        env:
+          FEATURES: ${{ matrix.features }}
         run: |
-          for features in '' fast huggingface tiktoken fast,huggingface fast,tiktoken huggingface,tiktoken fast,huggingface,tiktoken; do
-            cargo test -p litellm-token-counter --locked --no-default-features --features "$features"
-            cargo check -p litellm-python-bridge --locked --no-default-features --features "abi3${features:+,$features}"
+          for features in $FEATURES; do
+            cargo_features="${features/none/}"
+            cargo test -p litellm-token-counter --locked --no-default-features --features "$cargo_features"
+            cargo check -p litellm-python-bridge --locked --no-default-features --features "abi3${cargo_features:+,$cargo_features}"
           done
 
+      - name: Test auth-gcp without default features
+        if: matrix.shard == 'secrets-single'
+        run: cargo test -p litellm-auth-gcp --locked --no-default-features
+
       - name: Test secret manager feature combinations
+        if: startsWith(matrix.shard, 'secrets-')
+        env:
+          FEATURES: ${{ matrix.features }}
         run: |
-          cargo test -p litellm-auth-gcp --locked --no-default-features
-          for features in '' aws google hashicorp azure cyberark aws,google aws,azure google,azure aws,google,azure aws,google,cyberark aws,google,azure,cyberark aws,google,hashicorp,azure,cyberark; do
-            cargo test -p litellm-secrets --locked --no-default-features --features "$features"
+          for features in $FEATURES; do
+            cargo_features="${features/none/}"
+            cargo test -p litellm-secrets --locked --no-default-features --features "$cargo_features"
           done
 
   rust-wheel:
