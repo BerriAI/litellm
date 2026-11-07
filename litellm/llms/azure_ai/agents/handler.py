@@ -29,6 +29,7 @@ import httpx
 from typing_extensions import ReadOnly
 
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.core_helpers import decoded_json_object, subscript
 from litellm.litellm_core_utils.hidden_params import set_hidden_param
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
 from litellm.llms.azure_ai.agents.transformation import (
@@ -81,19 +82,6 @@ class _AzureMessagesData(TypedDict, total=False):
     data: ReadOnly[list[_AzureMessage]]
 
 
-class _CreatedObject(TypedDict):
-    id: ReadOnly[str]
-
-
-class _RunError(TypedDict, total=False):
-    message: ReadOnly[str]
-
-
-class _RunStatus(TypedDict, total=False):
-    status: ReadOnly[str]
-    last_error: ReadOnly[_RunError]
-
-
 class _SSEDelta(TypedDict, total=False):
     content: ReadOnly[list[_AzureContentItem]]
 
@@ -112,6 +100,14 @@ class _AsyncAgentRequest(Protocol):
     def __call__(
         self, method: str, url: str, json_data: Mapping[str, object] | None = None
     ) -> Awaitable[httpx.Response]: ...
+
+
+class _JsonResponse(Protocol):
+    def json(self) -> object: ...
+
+
+def _json_body(response: _JsonResponse) -> object:
+    return response.json()
 
 
 class AzureAIAgentsHandler:
@@ -133,21 +129,21 @@ class AzureAIAgentsHandler:
     def _build_thread_url(self, api_base: str, api_version: str) -> str:
         return f"{join_api_base(api_base, 'threads')}?api-version={api_version}"
 
-    def _build_messages_url(self, api_base: str, thread_id: str, api_version: str) -> str:
+    def _build_messages_url(self, api_base: str, thread_id: object, api_version: str) -> str:
         encoded_thread_id: Final = encode_url_path_segment(thread_id, field_name="thread_id")
         return f"{join_api_base(api_base, f'threads/{encoded_thread_id}/messages')}?api-version={api_version}"
 
-    def _build_runs_url(self, api_base: str, thread_id: str, api_version: str) -> str:
+    def _build_runs_url(self, api_base: str, thread_id: object, api_version: str) -> str:
         encoded_thread_id: Final = encode_url_path_segment(thread_id, field_name="thread_id")
         return f"{join_api_base(api_base, f'threads/{encoded_thread_id}/runs')}?api-version={api_version}"
 
-    def _build_run_status_url(self, api_base: str, thread_id: str, run_id: str, api_version: str) -> str:
+    def _build_run_status_url(self, api_base: str, thread_id: object, run_id: object, api_version: str) -> str:
         encoded_thread_id: Final = encode_url_path_segment(thread_id, field_name="thread_id")
         encoded_run_id: Final = encode_url_path_segment(run_id, field_name="run_id")
         run_status_route: Final = f"threads/{encoded_thread_id}/runs/{encoded_run_id}"
         return f"{join_api_base(api_base, run_status_route)}?api-version={api_version}"
 
-    def _build_list_messages_url(self, api_base: str, thread_id: str, api_version: str) -> str:
+    def _build_list_messages_url(self, api_base: str, thread_id: object, api_version: str) -> str:
         encoded_thread_id: Final = encode_url_path_segment(thread_id, field_name="thread_id")
         return f"{join_api_base(api_base, f'threads/{encoded_thread_id}/messages')}?api-version={api_version}"
 
@@ -217,7 +213,7 @@ class AzureAIAgentsHandler:
         model: str,
         content: str,
         model_response: ModelResponse,
-        thread_id: str,
+        thread_id: object,
         messages: list[dict[str, object]],
         annotations: list[_TransformedAnnotation] | None = None,
     ) -> ModelResponse:
@@ -354,10 +350,10 @@ class AzureAIAgentsHandler:
         api_base: str,
         api_version: str,
         agent_id: str,
-        thread_id: str | None,
+        thread_id: object,
         messages: list[dict[str, object]],
         optional_params: dict,
-    ) -> tuple[str, str, list[_TransformedAnnotation] | None]:
+    ) -> tuple[object, str, list[_TransformedAnnotation] | None]:
         """Execute the agent flow synchronously. Returns (thread_id, content, annotations)."""
 
         # Step 1: Create thread if not provided
@@ -365,8 +361,7 @@ class AzureAIAgentsHandler:
             verbose_logger.debug("Creating thread at: %s", self._build_thread_url(api_base, api_version))
             response = make_request("POST", self._build_thread_url(api_base, api_version), {})
             self._check_response(response, [200, 201], "Failed to create thread")
-            thread_data: Final[_CreatedObject] = response.json()
-            thread_id = thread_data["id"]
+            thread_id = subscript(_json_body(response), "id")
             verbose_logger.debug("Created thread: %s", thread_id)
 
         # At this point thread_id is guaranteed to be a string
@@ -386,8 +381,7 @@ class AzureAIAgentsHandler:
 
         response = make_request("POST", self._build_runs_url(api_base, thread_id, api_version), run_payload)
         self._check_response(response, [200, 201], "Failed to create run")
-        run_data: Final[_CreatedObject] = response.json()
-        run_id: Final = run_data["id"]
+        run_id: Final = subscript(_json_body(response), "id")
         verbose_logger.debug("Created run: %s", run_id)
 
         # Step 4: Poll for completion
@@ -396,15 +390,15 @@ class AzureAIAgentsHandler:
             response = make_request("GET", status_url)
             self._check_response(response, [200], "Failed to get run status")
 
-            status_data: _RunStatus = response.json()
+            status_data = decoded_json_object(_json_body(response))
             status = status_data.get("status")
             verbose_logger.debug("Run status: %s", status)
 
             if status == "completed":
                 break
             elif status in ["failed", "cancelled", "expired"]:
-                error_data: _RunStatus = response.json()
-                error_msg = error_data.get("last_error", {}).get("message", "Unknown error")
+                error_data = decoded_json_object(_json_body(response))
+                error_msg = decoded_json_object(error_data.get("last_error", {})).get("message", "Unknown error")
                 raise AzureAIAgentsError(status_code=500, message=f"Run {status}: {error_msg}")
 
             time.sleep(self.config.POLL_INTERVAL_SECONDS)
@@ -482,10 +476,10 @@ class AzureAIAgentsHandler:
         api_base: str,
         api_version: str,
         agent_id: str,
-        thread_id: str | None,
+        thread_id: object,
         messages: list[dict[str, object]],
         optional_params: dict,
-    ) -> tuple[str, str, list[_TransformedAnnotation] | None]:
+    ) -> tuple[object, str, list[_TransformedAnnotation] | None]:
         """Execute the agent flow asynchronously. Returns (thread_id, content, annotations)."""
 
         # Step 1: Create thread if not provided
@@ -493,8 +487,7 @@ class AzureAIAgentsHandler:
             verbose_logger.debug("Creating thread at: %s", self._build_thread_url(api_base, api_version))
             response = await make_request("POST", self._build_thread_url(api_base, api_version), {})
             self._check_response(response, [200, 201], "Failed to create thread")
-            thread_data: Final[_CreatedObject] = response.json()
-            thread_id = thread_data["id"]
+            thread_id = subscript(_json_body(response), "id")
             verbose_logger.debug("Created thread: %s", thread_id)
 
         # At this point thread_id is guaranteed to be a string
@@ -514,8 +507,7 @@ class AzureAIAgentsHandler:
 
         response = await make_request("POST", self._build_runs_url(api_base, thread_id, api_version), run_payload)
         self._check_response(response, [200, 201], "Failed to create run")
-        run_data: Final[_CreatedObject] = response.json()
-        run_id: Final = run_data["id"]
+        run_id: Final = subscript(_json_body(response), "id")
         verbose_logger.debug("Created run: %s", run_id)
 
         # Step 4: Poll for completion
@@ -524,15 +516,15 @@ class AzureAIAgentsHandler:
             response = await make_request("GET", status_url)
             self._check_response(response, [200], "Failed to get run status")
 
-            status_data: _RunStatus = response.json()
+            status_data = decoded_json_object(_json_body(response))
             status = status_data.get("status")
             verbose_logger.debug("Run status: %s", status)
 
             if status == "completed":
                 break
             elif status in ["failed", "cancelled", "expired"]:
-                error_data: _RunStatus = response.json()
-                error_msg = error_data.get("last_error", {}).get("message", "Unknown error")
+                error_data = decoded_json_object(_json_body(response))
+                error_msg = decoded_json_object(error_data.get("last_error", {})).get("message", "Unknown error")
                 raise AzureAIAgentsError(status_code=500, message=f"Run {status}: {error_msg}")
 
             await asyncio.sleep(self.config.POLL_INTERVAL_SECONDS)

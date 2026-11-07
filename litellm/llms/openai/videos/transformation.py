@@ -2,14 +2,21 @@ import mimetypes
 from collections.abc import Mapping
 from io import BufferedReader, BytesIO
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final, Protocol, cast
 from urllib.parse import quote
 
 import httpx
 from httpx._types import FileContent, FileTypes, RequestFiles
 from pydantic import TypeAdapter
 
-from litellm.litellm_core_utils.core_helpers import as_object_list
+from litellm.litellm_core_utils.core_helpers import (
+    as_object_list,
+    decoded_json_object,
+    iter_items,
+    json_contains,
+    require_attributes,
+    subscript,
+)
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
 from litellm.llms.base_llm.videos.async_task_utils import unsupported_video_fields
 from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
@@ -46,6 +53,42 @@ _REQUEST_VALUE: Final = TypeAdapter(object)
 
 def _dict_fields(value: object) -> Mapping[str, object] | None:
     return value if isinstance(value, dict) else None
+
+
+class _JsonResponse(Protocol):
+    def json(self) -> object: ...
+
+
+def _json_body(response: _JsonResponse) -> object:
+    return response.json()
+
+
+def _model_label(model: object) -> str | None:
+    return format(model) if model else None
+
+
+def _encoded_video_id(video_id: object, provider: str, model: object) -> object:
+    if not video_id:
+        return video_id
+    return encode_video_id_with_provider(
+        require_attributes(video_id, str, "startswith"),
+        provider,
+        _model_label(model),
+    )
+
+
+def _with_encoded_id(video: object, provider: str) -> object:
+    fields: Final = _dict_fields(video)
+    if fields is None or "id" not in fields:
+        return video
+    return {**fields, "id": _encoded_video_id(fields["id"], provider, fields.get("model"))}
+
+
+def _edge_model(data: object, index: int) -> object:
+    if not data:
+        return None
+    edge: Final = _dict_fields(subscript(data, index))
+    return None if edge is None else edge.get("model")
 
 
 def _decoded_character(character: object) -> object:
@@ -348,41 +391,27 @@ class OpenAIVideoConfig(BaseVideoConfig):
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
         custom_llm_provider: str | None = None,
-    ) -> dict[str, str]:
-        response_data: Final = raw_response.json()
+    ) -> object:
+        response_data: Final = _json_body(raw_response)
+        if not custom_llm_provider or not json_contains(response_data, "data"):
+            return response_data
 
-        if custom_llm_provider and "data" in response_data:
-            for video_obj in response_data.get("data", []):
-                if isinstance(video_obj, dict) and "id" in video_obj:
-                    video_obj["id"] = encode_video_id_with_provider(
-                        video_obj["id"],
-                        custom_llm_provider,
-                        video_obj.get("model"),
-                    )
+        fields: Final = decoded_json_object(response_data)
+        data: Final = fields.get("data", [])
+        encoded_items: Final = [_with_encoded_id(item, custom_llm_provider) for item in iter_items(data)]
+        encoded_data: Final = encoded_items if as_object_list(data) is not None else data
 
-            # Encode pagination cursor IDs so they remain consistent
-            # with the wrapped data[].id format
-            data_list: Final = response_data.get("data", [])
-            if response_data.get("first_id"):
-                first_model = None
-                if data_list and isinstance(data_list[0], dict):
-                    first_model = data_list[0].get("model")
-                response_data["first_id"] = encode_video_id_with_provider(
-                    response_data["first_id"],
-                    custom_llm_provider,
-                    first_model,
-                )
-            if response_data.get("last_id"):
-                last_model = None
-                if data_list and isinstance(data_list[-1], dict):
-                    last_model = data_list[-1].get("model")
-                response_data["last_id"] = encode_video_id_with_provider(
-                    response_data["last_id"],
-                    custom_llm_provider,
-                    last_model,
-                )
-
-        return response_data
+        # Encode pagination cursor IDs so they remain consistent
+        # with the wrapped data[].id format
+        first_id: Final = fields.get("first_id")
+        encoded_first: Final[Mapping[str, object]] = (
+            {"first_id": _encoded_video_id(first_id, custom_llm_provider, _edge_model(data, 0))} if first_id else {}
+        )
+        last_id: Final = fields.get("last_id")
+        encoded_last: Final[Mapping[str, object]] = (
+            {"last_id": _encoded_video_id(last_id, custom_llm_provider, _edge_model(data, -1))} if last_id else {}
+        )
+        return {**fields, "data": encoded_data, **encoded_first, **encoded_last}
 
     def transform_video_delete_request(
         self,

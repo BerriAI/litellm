@@ -47,6 +47,12 @@ _REQUEST_PARAMS: Final = TypeAdapter(dict[str, object])
 _DECODED_JSON: Final = TypeAdapter(object)
 
 
+def _json_document(value: object) -> str | bytes | bytearray:
+    if isinstance(value, (str, bytes, bytearray)):
+        return value
+    raise TypeError(f"the JSON object must be str, bytes or bytearray, not {value.__class__.__name__}")
+
+
 class OllamaChatConfig(BaseConfig):
     """
     Reference: https://github.com/ollama/ollama/blob/main/docs/api.md#parameters
@@ -354,7 +360,7 @@ class OllamaChatConfig(BaseConfig):
                 # remap 'thinking' to 'reasoning_content'
                 response_json_message["reasoning_content"] = response_json_message["thinking"]
                 del response_json_message["thinking"]
-            elif response_json_message.get("content") is not None:
+            elif decoded_json_object(_DECODED_JSON.validate_python(response_json_message)).get("content") is not None:
                 # parse reasoning content from content
                 from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
                     parse_content_for_reasoning,
@@ -370,7 +376,9 @@ class OllamaChatConfig(BaseConfig):
             and response_json_message is not None
         ):
             function_call: Final = decoded_json_object(
-                _DECODED_JSON.validate_python(json.loads(response_json_message["content"]))
+                _DECODED_JSON.validate_python(
+                    json.loads(_json_document(_DECODED_JSON.validate_python(response_json_message["content"])))
+                )
             )
             message: Final = litellm.Message(
                 content=None,

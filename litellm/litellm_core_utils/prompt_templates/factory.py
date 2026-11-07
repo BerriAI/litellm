@@ -13,7 +13,7 @@ from types import MappingProxyType
 from typing import Annotated, Any, Final, Protocol, TypeAlias, TypedDict, TypeVar, cast, overload
 
 from jinja2.sandbox import ImmutableSandboxedEnvironment
-from pydantic import BaseModel, BeforeValidator, ConfigDict, JsonValue, TypeAdapter, ValidationError, model_validator
+from pydantic import BaseModel, BeforeValidator, ConfigDict, TypeAdapter, ValidationError, model_validator
 from pydantic_core import ErrorDetails, PydanticCustomError
 
 import litellm
@@ -22,7 +22,12 @@ import litellm.types.llms
 from litellm import verbose_logger
 from litellm._uuid import uuid
 from litellm.constants import REDACTED_BY_LITELLM
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or_none, require_attributes
+from litellm.litellm_core_utils.core_helpers import (
+    as_object_list,
+    as_str_mapping,
+    attribute_or_none,
+    require_attributes,
+)
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import (
     anthropic_system_messages,
     find_anthropic_server_tool_result,
@@ -1455,22 +1460,25 @@ def convert_to_gemini_tool_call_invoke(
         raise Exception(f"Unable to convert openai tool calls={message} to gemini tool calls. Received error={e}")
 
 
-def _json_children(node: JsonValue) -> Iterable[JsonValue]:
-    if isinstance(node, dict):
-        return node.values()
-    if isinstance(node, list):
-        return (child for child in node if not isinstance(child, list))
+def _json_children(node: object) -> Iterable[object]:
+    mapping: Final = as_str_mapping(node)
+    if mapping is not None:
+        return mapping.values()
+    items: Final = as_object_list(node)
+    if items is not None:
+        return (child for child in items if not isinstance(child, list))
     return ()
 
 
-def _next_json_level(level: tuple[JsonValue, ...], _: None) -> tuple[JsonValue, ...]:
+def _next_json_level(level: tuple[object, ...], _: None) -> tuple[object, ...]:
     return tuple(itertools.chain.from_iterable(_json_children(node) for node in level))
 
 
-def _is_part_reference(node: JsonValue) -> bool:
-    if not isinstance(node, dict):
+def _is_part_reference(node: object) -> bool:
+    mapping: Final = as_str_mapping(node)
+    if mapping is None:
         return False
-    ref: Final[JsonValue] = node.get("$ref")
+    ref: Final = mapping.get("$ref")
     return isinstance(ref, str) and ref != ""
 
 
@@ -1482,7 +1490,7 @@ def _may_spell_ref_key(raw_json: str) -> bool:
     return '"$ref"' in raw_json or _REF_CHAR_ESCAPE.search(raw_json) is not None
 
 
-def _contains_part_reference(payload: JsonValue) -> bool:
+def _contains_part_reference(payload: object) -> bool:
     """Gemini reads a {"$ref": "<non-empty string>"} object in a function_response as a pointer to one of its parts,
     unless it sits under a list nested directly in a list
 
@@ -1739,7 +1747,7 @@ def convert_to_gemini_tool_call_result(
     try:
         if content_str.strip().startswith("{") or content_str.strip().startswith("["):
             # Try to parse as JSON (for Computer Use structured responses)
-            parsed: Final[JsonValue] = json.loads(content_str)
+            parsed: Final = as_str_mapping(_DECODED_JSON.validate_python(json.loads(content_str)))
             if isinstance(parsed, dict) and not (_may_spell_ref_key(content_str) and _contains_part_reference(parsed)):
                 response_data = parsed  # Use the parsed JSON directly
             else:

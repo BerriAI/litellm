@@ -803,7 +803,7 @@ class MinimaxVideoConfig(BaseVideoConfig):
             params.update(extra_query)
         return f"{api_base}/v2/query/video_generation", params
 
-    def transform_video_list_response(  # pyright: ignore[reportIncompatibleMethodOverride]  # base declares dict[str, str] but the payload is a heterogeneous list body
+    def transform_video_list_response(
         self,
         raw_response: httpx.Response,
         logging_obj: "Logging",

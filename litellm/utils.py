@@ -89,6 +89,7 @@ from litellm.litellm_core_utils.allowed_tools_tool_choice import (
     parse_chat_allowed_tools_tool_choice,
 )
 from litellm.litellm_core_utils.core_helpers import (
+    as_str_mapping,
     bind_budget_reservation_to_callbacks,
     has_attributes,
     iter_items,
@@ -567,6 +568,7 @@ additional_details: Final[dict[str, str] | None] = {}
 local_cache: Final[dict[str, str] | None] = {}
 last_fetched_at: Final = None
 last_fetched_at_keys: Final = None
+_OPAQUE_VALUE: Final = TypeAdapter(object)
 ######## Model Response #########################
 
 # All liteLLM Model responses will be in this format, Follows the OpenAI Format
@@ -1423,7 +1425,7 @@ def function_setup(
                 level="info",
             )
         if "logger_fn" in kwargs:
-            user_logger_fn = kwargs["logger_fn"]
+            user_logger_fn = _OPAQUE_VALUE.validate_python(kwargs["logger_fn"])
         # INIT LOGGER - for user-specified integrations
         model: Final = args[0] if len(args) > 0 else kwargs.get("model", None)
         call_type: Final = original_function
@@ -1507,9 +1509,9 @@ def function_setup(
         elif call_type == CallTypes.embedding.value or call_type == CallTypes.aembedding.value:
             messages = args[1] if len(args) > 1 else kwargs.get("input", None)
         elif call_type == CallTypes.image_generation.value or call_type == CallTypes.aimage_generation.value:
-            messages = args[0] if len(args) > 0 else kwargs["prompt"]
+            messages = _OPAQUE_VALUE.validate_python(args[0] if len(args) > 0 else kwargs["prompt"])
         elif call_type == CallTypes.moderation.value or call_type == CallTypes.amoderation.value:
-            messages = args[1] if len(args) > 1 else kwargs["input"]
+            messages = _OPAQUE_VALUE.validate_python(args[1] if len(args) > 1 else kwargs["input"])
         elif call_type == CallTypes.atext_completion.value or call_type == CallTypes.text_completion.value:
             messages = args[0] if len(args) > 0 else kwargs.get("prompt")
         elif call_type == CallTypes.rerank.value or call_type == CallTypes.arerank.value:
@@ -1536,10 +1538,10 @@ def function_setup(
                 kwargs["metadata"] = {"file_checksum": file_checksum}
             messages = file_checksum
         elif call_type == CallTypes.aspeech.value or call_type == CallTypes.speech.value:
-            messages = kwargs.get("input", "speech")
+            messages = _OPAQUE_VALUE.validate_python(kwargs.get("input", "speech"))
         elif call_type == CallTypes.aresponses.value or call_type == CallTypes.responses.value:
             # Handle both 'input' (standard Responses API) and 'messages' (Cursor chat format)
-            messages = (
+            messages = _OPAQUE_VALUE.validate_python(
                 args[0] if len(args) > 0 else kwargs.get("input") or kwargs.get("messages", "default-message-value")
             )
         elif (
@@ -4530,7 +4532,7 @@ def get_optional_params_transcription(
     passed_params.pop("custom_llm_provider")
     passed_params.pop("drop_params")
     normalized_drop_params: Final = normalize_drop_params(drop_params)
-    special_params: Final[Mapping[str, object]] = passed_params.pop("kwargs")
+    special_params: Final = as_str_mapping(_OPAQUE_VALUE.validate_python(passed_params.pop("kwargs"))) or {}
     from litellm.litellm_core_utils.audio_utils.transcription_streaming import (
         transcription_stream_flag,
         transcription_stream_unset,
@@ -4555,9 +4557,10 @@ def get_optional_params_transcription(
             message="`stream` must be a boolean. To drop it from the call, set `litellm.drop_params = True`.",
         )
 
+    passed_entries: Final[Mapping[str, object]] = MappingProxyType(passed_params)
     non_default_params: Final = {
         k: v
-        for k, v in passed_params.items()
+        for k, v in passed_entries.items()
         if k in default_params and v != default_params[k] and not (k == "stream" and (stream_unset or malformed_stream))
     }
     optional_params = {}
@@ -4796,7 +4799,7 @@ def get_optional_params_embeddings(
     # retrieve all parameters passed to the function
     passed_params: Final = locals()
     passed_params.pop("custom_llm_provider", None)
-    special_params: Final = passed_params.pop("kwargs")
+    special_params: Final = as_str_mapping(_OPAQUE_VALUE.validate_python(passed_params.pop("kwargs"))) or {}
 
     passed_params.pop("drop_params", None)
     drop_params = normalize_drop_params(drop_params)
@@ -5257,7 +5260,7 @@ class PreProcessNonDefaultParams:
     @staticmethod
     def base_pre_process_non_default_params(
         passed_params: dict,
-        special_params: dict,
+        special_params: Mapping[str, object],
         custom_llm_provider: str,
         additional_drop_params: list[str] | None,
         default_param_values: dict,
@@ -5302,7 +5305,7 @@ class PreProcessNonDefaultParams:
     @staticmethod
     def embedding_pre_process_non_default_params(
         passed_params: dict,
-        special_params: dict,
+        special_params: Mapping[str, object],
         custom_llm_provider: str,
         additional_drop_params: list[str] | None,
         model: str,
@@ -5323,7 +5326,7 @@ class PreProcessNonDefaultParams:
 
 def pre_process_non_default_params(
     passed_params: dict,
-    special_params: dict,
+    special_params: Mapping[str, object],
     custom_llm_provider: str,
     additional_drop_params: list[str] | None,
     model: str,
@@ -7690,7 +7693,8 @@ def get_model_info_helper(
                 token_count_tokenizer=_model_info.get("token_count_tokenizer", None),
                 vertex_ai_audio_api=_model_info.get("vertex_ai_audio_api", None),
             )
-            for cost_key, cost_value in _model_info.items():
+            cost_entries: Final[Mapping[str, object]] = MappingProxyType(_model_info)
+            for cost_key, cost_value in cost_entries.items():
                 if cost_key not in returned_model_info and _ABOVE_THRESHOLD_COST_KEY.search(cost_key) is not None:
                     returned_model_info[cost_key] = cost_value
             return returned_model_info
@@ -7910,7 +7914,7 @@ def function_to_dict(input_function) -> dict:
                         # may represent a set of acceptable values
                         # translating as enum for function calling
                         try:
-                            param_enum = str(list(literal_eval(param_type)))
+                            param_enum = str(list(iter_items(_OPAQUE_VALUE.validate_python(literal_eval(param_type)))))
                             param_type = "string"
                         except Exception:
                             pass

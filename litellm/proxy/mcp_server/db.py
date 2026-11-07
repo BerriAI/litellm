@@ -5,6 +5,7 @@ import json
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from types import TracebackType
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypedDict, cast
 
 from fastapi import HTTPException
@@ -68,8 +69,11 @@ if TYPE_CHECKING:
 
 
 class _UserEnvVarsTransactionClient(Protocol):
-    litellm_mcpuserenvvars: "TableActions[prisma_db_models.LiteLLM_MCPUserEnvVars]"
-    litellm_mcpservertable: "TableActions[prisma_db_models.LiteLLM_MCPServerTable]"
+    @property
+    def litellm_mcpuserenvvars(self) -> "TableActions[prisma_db_models.LiteLLM_MCPUserEnvVars]": ...
+
+    @property
+    def litellm_mcpservertable(self) -> "TableActions[prisma_db_models.LiteLLM_MCPServerTable]": ...
 
     async def execute_raw(self, query: str, *args: object) -> int: ...
 
@@ -77,7 +81,13 @@ class _UserEnvVarsTransactionClient(Protocol):
 class _UserEnvVarsTransaction(Protocol):
     async def __aenter__(self) -> _UserEnvVarsTransactionClient: ...
 
-    async def __aexit__(self, exc_type: object, exc_value: object, traceback: object) -> bool | None: ...
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+        /,
+    ) -> bool | None: ...
 
 
 @dataclass(frozen=True, slots=True)

@@ -2506,6 +2506,7 @@ class _InvitationAcceptTxManager(Protocol):
         exc_type: type[BaseException] | None,
         exc_value: BaseException | None,
         traceback: TracebackType | None,
+        /,
     ) -> bool | None: ...
 
 
@@ -20006,7 +20007,7 @@ async def claim_onboarding_link(data: InvitationClaim, request: Request):
         )
 
     if user_obj and hasattr(user_obj, "__dict__"):
-        user_obj.__dict__.pop("password", None)
+        vars(user_obj).pop("password", None)
 
     # The password just changed via an invitation/reset link; any UI session
     # minted under the old password may be in hostile hands. Revoke them all —
