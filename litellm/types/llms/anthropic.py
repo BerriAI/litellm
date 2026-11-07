@@ -402,6 +402,7 @@ class AnthropicSystemMessageContent(TypedDict, total=False):
 class AnthropicMessagesSystemMessageParam(TypedDict, total=False):
     role: Required[Literal["system"]]
     content: Required[str | Iterable[AnthropicSystemMessageContent]]
+    output_config: ReadOnly[Mapping[str, object]]
 
 
 AllAnthropicMessageValues = AnthropicMessagesUserMessageParam | AnthopicMessagesAssistantMessageParam

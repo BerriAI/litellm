@@ -1939,8 +1939,6 @@ def convert_to_anthropic_tool_result(
         # Sanitize tool_use_id to match Anthropic's pattern requirement: ^[a-zA-Z0-9_-]+$
         sanitized_tool_use_id = sanitize_anthropic_tool_use_id(tool_call_id)
 
-        # We can't determine from openai message format whether it's a successful or
-        # error call result so default to the successful result template
         anthropic_tool_result = AnthropicMessagesToolResultParam(
             type="tool_result",
             tool_use_id=sanitized_tool_use_id,
