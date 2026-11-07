@@ -976,11 +976,12 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
             return getattr(llm_router, f"{route_type}")(**data)
 
         elif data["model"] not in router_model_names:
+            is_a2a_agent: Final = _is_a2a_agent_model(data.get("model", ""))
             # Check wildcards before checking deployment_names
             # Priority: 1. Exact model_name match, 2. Wildcard match, 3. deployment_names match
             if llm_router.settings().router_general_settings.pass_through_all_models:
                 return getattr(litellm, f"{route_type}")(**direct_litellm_kwargs())
-            elif (
+            elif not is_a2a_agent and (
                 llm_router.settings().default_deployment is not None
                 or len(llm_router.registry().patterns().patterns) > 0
             ):
@@ -1035,7 +1036,7 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
                 except Exception:
                     # If router fails (e.g., model not found in router), fall back to direct call
                     return getattr(litellm, f"{route_type}")(**direct_litellm_kwargs())
-            elif _is_a2a_agent_model(data.get("model", "")):
+            elif is_a2a_agent:
                 from litellm.proxy.agent_endpoints.a2a_routing import (
                     route_a2a_agent_request,
                 )

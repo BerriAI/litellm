@@ -26,7 +26,9 @@ from fastapi import HTTPException
 
 from litellm.caching.caching import DualCache
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy.agent_endpoints import agent_registry
+from litellm.proxy.agent_endpoints.agent_registry import AgentRegistry
 from litellm.proxy.route_llm_request import (
     JSON_OBJECT_ADAPTER,
     ProxyModelNotFoundError,
@@ -41,6 +43,7 @@ from litellm.router_strategy.adaptive_router.config import (
     ADAPTIVE_ROUTER_RESPONSE_HEADER,
 )
 from litellm.types.router import RouterErrors, RouterGeneralSettings, RouterRateLimitError
+from litellm.types.agents import AgentResponse
 
 
 @pytest.mark.parametrize(
@@ -2184,7 +2187,90 @@ async def test_route_request_routing_group_name_passes_model_gate():
 
 
 @pytest.mark.asyncio
-async def test_route_request_a2a_agent_miss_does_not_consume_model_read_through(fresh_agent_read_through, monkeypatch):
+@pytest.mark.parametrize("model_name", ("some-other-model", "bedrock/*", "a2a/*", "*"))
+async def test_route_request_registered_agent_bypasses_router_wildcards(
+    monkeypatch: pytest.MonkeyPatch, model_name: str
+) -> None:
+    registry: Final = AgentRegistry()
+    registry.register_agent(
+        AgentResponse(
+            agent_id="dbx-routing-agent-id",
+            agent_name="dbx-routing-agent",
+            agent_card_params={"url": "https://dbx-agent.example/serving-endpoints/responses"},
+            litellm_params={
+                "custom_llm_provider": "databricks_agent",
+                "model": "support-agent",
+                "api_base": "https://dbx-agent.example/serving-endpoints/responses",
+                "api_key": "synthetic-agent-pat",
+            },
+        )
+    )
+    monkeypatch.setattr(agent_registry, "global_agent_registry", registry)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = litellm.Router(
+        model_list=[
+            {"model_name": model_name, "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "fake"}},
+            {
+                "model_name": "control-model",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "fake",
+                    "api_base": "https://control.example/v1",
+                },
+            },
+        ]
+    )
+    with respx.mock() as transport:
+        agent: Final = transport.post("https://dbx-agent.example/serving-endpoints/responses").respond(
+            200,
+            json={
+                "output": [
+                    {
+                        "type": "message",
+                        "id": "msg-1",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "agent answer"}],
+                    }
+                ],
+                "usage": {"input_tokens": 11, "output_tokens": 3, "total_tokens": 14},
+            },
+        )
+        control: Final = transport.post("https://control.example/v1/chat/completions").mock(
+            return_value=_chat_completion_response("gpt-4o-mini")
+        )
+        response: Final = await (
+            await route_request(
+                {"model": "a2a/dbx-routing-agent", "messages": [{"role": "user", "content": "Hello"}]},
+                router,
+                None,
+                "acompletion",
+                user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+            )
+        )
+        ordinary: Final = await (
+            await route_request(
+                {"model": "control-model", "messages": [{"role": "user", "content": "Hello"}]},
+                router,
+                None,
+                "acompletion",
+            )
+        )
+    assert response.choices[0].message.content == "agent answer"
+    assert agent.call_count == 1
+    assert json.loads(agent.calls.last.request.content) == {
+        "model": "support-agent",
+        "input": [{"role": "user", "content": "Hello"}],
+    }
+    assert agent.calls.last.request.headers["authorization"] == "Bearer synthetic-agent-pat"
+    assert ordinary.choices[0].message.content == "hi"
+    assert control.call_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("router_model", ("some-other-model", "bedrock/*", "a2a/*", "*"))
+async def test_route_request_a2a_agent_miss_does_not_consume_model_read_through(
+    fresh_agent_read_through, monkeypatch, router_model
+):
     from types import SimpleNamespace
     from unittest.mock import AsyncMock
 
@@ -2195,7 +2281,7 @@ async def test_route_request_a2a_agent_miss_does_not_consume_model_read_through(
     router = litellm.Router(
         model_list=[
             {
-                "model_name": "some-other-model",
+                "model_name": router_model,
                 "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake"},
             }
         ]
