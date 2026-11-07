@@ -18,7 +18,7 @@ import psycopg
 import pytest
 from litellm_proxy_extras import migration_data_checks, migration_dry_run, request_log_indexes
 from litellm_proxy_extras.migration_lock import MIGRATION_LOCK_KEY, migration_lock
-from litellm_proxy_extras.migration_recovery import roll_back_failed_inert_migration
+from litellm_proxy_extras.migration_recovery import recover_completed_migration, roll_back_failed_inert_migration
 from litellm_proxy_extras.request_log_indexes import (
     REQUEST_LOG_INDEXES,
     RequestLogIndex,
@@ -43,11 +43,37 @@ PACKAGE: Final = REPO / "litellm-proxy-extras" / "litellm_proxy_extras"
 PARTITION_SCRIPT: Final = REPO / "db_scripts" / "partition_spend_logs.sql"
 API_KEY_INDEX_MIGRATION: Final = "20260823000000_add_spend_logs_api_key_starttime_index"
 CALL_ID_INDEX_MIGRATION: Final = "20260831120001_spend_logs_litellm_call_id_index"
+TOOL_INDEX_MIGRATION: Final = "20260226120000_add_spend_log_tool_index"
 API_KEY_INDEX: Final = "LiteLLM_SpendLogs_api_key_startTime_idx"
 CALL_ID_INDEX: Final = "LiteLLM_SpendLogs_litellm_call_id_idx"
 PARTITIONED_PARENT_ERROR: Final = 'cannot create index on partitioned table "LiteLLM_SpendLogs" concurrently'
 ORIGINAL_MIGRATION_SQL: Final = MappingProxyType(
     {
+        "20250510142544_add_session_id_index_spend_logs": (
+            'CREATE INDEX IF NOT EXISTS "LiteLLM_SpendLogs_session_id_idx" '
+            'ON "LiteLLM_SpendLogs"("session_id");\n'
+        ),
+        TOOL_INDEX_MIGRATION: (
+            "-- CreateTable\n"
+            'CREATE TABLE IF NOT EXISTS "LiteLLM_SpendLogToolIndex" (\n'
+            '    "request_id" TEXT NOT NULL,\n'
+            '    "tool_name" TEXT NOT NULL,\n'
+            '    "start_time" TIMESTAMP(3) NOT NULL,\n'
+            '\n'
+            '    CONSTRAINT "LiteLLM_SpendLogToolIndex_pkey" PRIMARY KEY ("request_id","tool_name")\n'
+            ');\n\n'
+            "-- CreateIndex\n"
+            'CREATE INDEX IF NOT EXISTS "LiteLLM_SpendLogToolIndex_tool_name_start_time_idx" '
+            'ON "LiteLLM_SpendLogToolIndex"("tool_name", "start_time");\n'
+        ),
+        "20260228100000_add_spend_logs_composite_index": (
+            'CREATE INDEX IF NOT EXISTS "LiteLLM_SpendLogs_startTime_request_id_idx" '
+            'ON "LiteLLM_SpendLogs"("startTime", "request_id");\n'
+        ),
+        "20260724000000_add_spend_log_tool_index_start_time_idx": (
+            'CREATE INDEX IF NOT EXISTS "LiteLLM_SpendLogToolIndex_start_time_idx" '
+            'ON "LiteLLM_SpendLogToolIndex"("start_time");\n'
+        ),
         API_KEY_INDEX_MIGRATION: (
             "-- CreateIndex\n"
             'CREATE INDEX IF NOT EXISTS "LiteLLM_SpendLogs_api_key_startTime_idx" '
@@ -89,8 +115,8 @@ def _migrate_deploy(database_url: str, schema: Path) -> "subprocess.CompletedPro
 
 
 def _release_layout(prisma_dir: Path, before: str) -> Path:
-    """The shipped migrations older than `before`, with the two index migrations written
-    the way the releases that shipped them did: the Prisma layout of a proxy on that release."""
+    """The shipped migrations older than `before`, with index migrations written the way
+    the releases that shipped them did: the Prisma layout of a proxy on that release."""
     (prisma_dir / "migrations").mkdir(parents=True)
     shutil.copy(PACKAGE / "schema.prisma", prisma_dir / "schema.prisma")
     for migration in sorted((PACKAGE / "migrations").iterdir()):
@@ -170,6 +196,26 @@ def _fail_the_call_id_migration_like_the_shipped_release(database_url: str, tmp_
     failed: Final = _migrate_deploy(database_url, _release_layout(tmp_path / "v1.103.0", "99999999999999"))
     assert failed.returncode != 0 and PARTITIONED_PARENT_ERROR in failed.stderr, failed.stderr
     assert _ledger(database_url)[CALL_ID_INDEX_MIGRATION] == (False, False)
+
+
+def _leave_the_tool_index_migration_unfinished(database_url: str, checksum: str) -> None:
+    original: Final = ORIGINAL_MIGRATION_SQL[TOOL_INDEX_MIGRATION]
+    with psycopg.connect(database_url, autocommit=True) as conn:
+        conn.execute("DELETE FROM _prisma_migrations WHERE migration_name = %s", (TOOL_INDEX_MIGRATION,))
+        conn.execute('DROP TABLE "LiteLLM_SpendLogToolIndex"')
+        conn.execute(original)
+        conn.execute(
+            "INSERT INTO _prisma_migrations "
+            "(id, checksum, migration_name, logs, started_at, applied_steps_count) "
+            "VALUES (%s, %s, %s, '', current_timestamp, 1)",
+            (str(uuid.uuid4()), checksum, TOOL_INDEX_MIGRATION),
+        )
+
+
+def _recover_tool_index_migration(database_url: str) -> bool:
+    migration: Final = PACKAGE / "migrations" / TOOL_INDEX_MIGRATION / "migration.sql"
+    with migration_lock(database_url) as coordinator:
+        return recover_completed_migration(coordinator, "public", migration)
 
 
 @dataclass(frozen=True, slots=True)
@@ -382,6 +428,33 @@ def test_a_failed_call_id_ledger_row_from_a_v1_103_boot_is_rolled_back_and_the_i
             (CALL_ID_INDEX_MIGRATION,),
         ).fetchall()
     assert rows == [(False, True), (True, False)], rows
+
+
+@requires_db
+@pytest.mark.parametrize(
+    "checksum,use_v2_migration_job,expected",
+    (
+        (hashlib.sha256(ORIGINAL_MIGRATION_SQL[TOOL_INDEX_MIGRATION].encode()).hexdigest(), True, True),
+        (hashlib.sha256(b"unrelated checksum").hexdigest(), False, False),
+    ),
+    ids=("shipped-checksum", "unrelated-checksum"),
+)
+def test_tool_index_recovery_accepts_only_the_shipped_checksum(
+    scratch_database: str, checksum: str, use_v2_migration_job: bool, expected: bool
+) -> None:
+    _leave_the_tool_index_migration_unfinished(scratch_database, checksum)
+
+    recovered: Final = (
+        _migration_job(True) if use_v2_migration_job else _recover_tool_index_migration(scratch_database)
+    )
+
+    assert recovered is expected
+    with psycopg.connect(scratch_database) as conn:
+        row: Final = conn.execute(
+            "SELECT checksum, finished_at IS NOT NULL FROM _prisma_migrations WHERE migration_name = %s",
+            (TOOL_INDEX_MIGRATION,),
+        ).fetchone()
+    assert row == (checksum, expected)
 
 
 @requires_db

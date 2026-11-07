@@ -4,6 +4,7 @@ import subprocess
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 from uuid import uuid4
 
@@ -15,6 +16,16 @@ if TYPE_CHECKING:
     import psycopg
 
 
+# SHA-256 of earlier shipped files whose successful run applied everything the current file does.
+SUPERSEDED_CHECKSUMS: Final = MappingProxyType(
+    {
+        "20260226120000_add_spend_log_tool_index": frozenset(
+            {"019ae3e4e71f35763d6d515e1d463d97e75b8c50e7637c842e4e16ce59009a4b"}
+        )
+    }
+)
+
+
 @dataclass(frozen=True, slots=True)
 class MigrationProgress:
     checksum: str
@@ -23,11 +34,11 @@ class MigrationProgress:
     id: str = ""
     finished: bool = False
 
-    def confirms_completion(self, script: bytes) -> bool:
+    def confirms_completion(self, checksums: frozenset[str]) -> bool:
         return (
             self.applied_steps_count == 1
             and not self.logs.strip()
-            and self.checksum == hashlib.sha256(script).hexdigest()
+            and self.checksum in checksums
         )
 
 
@@ -60,9 +71,12 @@ def recover_completed_migration(coordinator: MigrationCoordinator, schema: str, 
     records: Final = _migration_records(coordinator.connection, schema, migration)
     unfinished: Final = tuple(record for record in records if not record.finished)
     script: Final = migration.read_bytes()
+    checksums: Final = frozenset({hashlib.sha256(script).hexdigest()}) | SUPERSEDED_CHECKSUMS.get(
+        migration.parent.name, frozenset()
+    )
     if not unfinished:
-        return any(record.checksum == hashlib.sha256(script).hexdigest() for record in records)
-    if len(unfinished) != 1 or not unfinished[0].confirms_completion(script):
+        return any(record.checksum in checksums for record in records)
+    if len(unfinished) != 1 or not unfinished[0].confirms_completion(checksums):
         return False
     progress: Final = unfinished[0]
     result: Final = coordinator.connection.execute(
