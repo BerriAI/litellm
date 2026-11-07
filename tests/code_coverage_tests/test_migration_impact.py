@@ -390,6 +390,22 @@ def test_compound_alter_keeps_the_worst_effect(benign: str, change: str, severit
     assert finding.statement == statement
 
 
+@pytest.mark.parametrize(
+    "columns,severity,reported_column",
+    [
+        ('DROP COLUMN IF EXISTS "unknown", DROP COLUMN "key_name"', impact.BREAKING, "key_name"),
+        ('DROP COLUMN "key_name", DROP COLUMN IF EXISTS "unknown"', impact.BREAKING, "key_name"),
+        ('DROP COLUMN IF EXISTS "unknown", DROP COLUMN IF EXISTS "another_unknown"', impact.INFO, "unknown"),
+    ],
+)
+def test_compound_drop_checks_all_columns(columns: str, severity: str, reported_column: str) -> None:
+    statement: Final = f'ALTER TABLE "LiteLLM_VerificationToken" {columns}'
+    finding: Final = _classify(statement, schema=_base_schema())
+    assert finding.severity == severity
+    assert f"`{reported_column}`" in finding.effect
+    assert finding.statement == statement
+
+
 def test_drop_not_null_beside_an_add_column_is_not_breaking() -> None:
     # 20250707230009_add_mcp_namespaced_tool_name: the `NOT NULL` here belongs to `DROP NOT NULL`.
     finding = _classify(
