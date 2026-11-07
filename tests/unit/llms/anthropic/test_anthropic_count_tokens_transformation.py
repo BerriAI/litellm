@@ -916,21 +916,27 @@ async def _messages_inference_request(
     return sent.get()
 
 
+def _on_both_counters(
+    *betas: str,
+) -> Mapping[type[AnthropicTokenCounter] | type[AzureAIAnthropicTokenCounter], frozenset[str]]:
+    return MappingProxyType({AnthropicTokenCounter: frozenset(betas), AzureAIAnthropicTokenCounter: frozenset(betas)})
+
+
 def _betas(request: httpx.Request) -> frozenset[str]:
     return frozenset(beta for beta in request.headers.get("anthropic-beta", "").split(",") if beta)
 
 
 @pytest.mark.asyncio
-@pytest.mark.usefixtures("httpx_transport_clients")
+@pytest.mark.usefixtures("httpx_transport_clients", "local_beta_headers_config")
 @_COUNTERS
 @pytest.mark.parametrize(
     ("request_options", "expected_betas"),
     (
-        ({"thinking": _ENABLED_THINKING}, frozenset()),
-        ({"tool_choice": {"type": "any"}}, frozenset()),
+        ({"thinking": _ENABLED_THINKING}, _on_both_counters()),
+        ({"tool_choice": {"type": "any"}}, _on_both_counters()),
         (
             {"output_config": {"effort": "low"}, "output_format": {"type": "json_schema", "schema": _ANSWER_SCHEMA}},
-            frozenset((ANTHROPIC_BETA_HEADER_VALUES.STRUCTURED_OUTPUT_2025_09_25.value,)),
+            _on_both_counters(ANTHROPIC_BETA_HEADER_VALUES.STRUCTURED_OUTPUT_2025_09_25.value),
         ),
         (
             {
@@ -939,9 +945,17 @@ def _betas(request: httpx.Request) -> frozenset[str]:
                     "edits": [{"type": "clear_tool_uses_20250919"}, {"type": "clear_thinking_20251015"}]
                 },
             },
-            frozenset((ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value,)),
+            _on_both_counters(ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value),
         ),
-        ({"context_management": {"edits": [{"type": "compact_20260112"}]}}, frozenset()),
+        (
+            {"context_management": {"edits": [{"type": "compact_20260112"}]}},
+            MappingProxyType(
+                {
+                    AnthropicTokenCounter: frozenset((ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_01_12.value,)),
+                    AzureAIAnthropicTokenCounter: frozenset(),
+                }
+            ),
+        ),
     ),
     ids=("thinking", "tool_choice", "output_config_and_output_format", "context_edits", "compact_edit"),
 )
@@ -949,7 +963,7 @@ async def test_counter_sends_the_options_and_context_edits_messages_inference_se
     counter_type: type[AnthropicTokenCounter] | type[AzureAIAnthropicTokenCounter],
     count_endpoint: str,
     request_options: dict[str, JsonValue],
-    expected_betas: frozenset[str],
+    expected_betas: Mapping[type[AnthropicTokenCounter] | type[AzureAIAnthropicTokenCounter], frozenset[str]],
 ) -> None:
     inference: Final = await _messages_inference_request(
         counter_type, count_endpoint.removesuffix("/count_tokens"), request_options
@@ -977,7 +991,7 @@ async def test_counter_sends_the_options_and_context_edits_messages_inference_se
     assert {name: count_body.get(name) for name in ("thinking", "tool_choice", "context_management")} == {
         name: inference_body.get(name) for name in ("thinking", "tool_choice", "context_management")
     }
-    assert expected_betas <= _betas(count) - {ANTHROPIC_TOKEN_COUNTING_BETA_VERSION} == _betas(inference)
+    assert expected_betas[counter_type] == _betas(count) - {ANTHROPIC_TOKEN_COUNTING_BETA_VERSION} == _betas(inference)
 
 
 @pytest.mark.asyncio
@@ -1009,6 +1023,30 @@ async def test_counter_sends_the_thinking_display_and_caller_betas_messages_infe
     counted_betas: Final = _betas(count) - {ANTHROPIC_TOKEN_COUNTING_BETA_VERSION}
     assert counted_betas == _betas(inference)
     assert {ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER, caller_beta} <= counted_betas
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("httpx_transport_clients")
+@_COUNTERS
+async def test_counter_without_options_sends_only_the_token_counting_beta_and_the_bare_count_body(
+    counter_type: type[AnthropicTokenCounter] | type[AzureAIAnthropicTokenCounter], count_endpoint: str
+) -> None:
+    _, (count,) = await _counted_requests(
+        counter_type,
+        count_endpoint,
+        [{"role": "user", "content": "Weather in SF?"}],
+        [_WEATHER_TOOL],
+        "anthropic",
+        anthropic_beta=ANTHROPIC_BETA_HEADER_VALUES.WEB_FETCH_2025_09_10.value,
+        model="claude-haiku-5-5",
+    )
+
+    assert _betas(count) == {ANTHROPIC_TOKEN_COUNTING_BETA_VERSION}
+    assert _JSON_BODY.validate_json(count.content) == {
+        "model": "claude-haiku-5-5",
+        "messages": [{"role": "user", "content": "Weather in SF?"}],
+        "tools": [_WEATHER_TOOL],
+    }
 
 
 @pytest.mark.asyncio

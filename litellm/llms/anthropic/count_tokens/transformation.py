@@ -28,6 +28,7 @@ from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import 
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.anthropic.common_utils import merge_anthropic_beta_headers
 from litellm.llms.anthropic.wif import resolve_anthropic_base
+from litellm.llms.base_llm.anthropic_messages.transformation import BaseAnthropicMessagesConfig
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionImageObject, ValidUserMessageContentTypes
 from litellm.types.utils import LlmProviders, TokenCountMessagesFormat, TokenCountResponse
 
@@ -345,17 +346,61 @@ _COUNTED_MESSAGES: Final = TypeAdapter(tuple[Mapping[str, JsonValue], ...])
 _MAX_TOKENS_ABOVE_ANY_BUDGET: Final = 2**31 - 1
 
 
-def _with_provider_betas(headers: Mapping[str, str], provider: str) -> Mapping[str, str]:
-    from litellm.anthropic_beta_headers_manager import filter_and_transform_beta_headers
+_STATUSES_NOT_CAUSED_BY_THE_REQUEST: Final = frozenset({401, 403, 429})
 
-    beta_header: Final = headers.get("anthropic-beta")
-    if beta_header is None:
-        return headers
-    supported: Final = filter_and_transform_beta_headers(
-        [beta.strip() for beta in beta_header.split(",") if beta.strip()], provider
+
+def is_request_rejection(status_code: int) -> bool:
+    return 400 <= status_code < 500 and status_code not in _STATUSES_NOT_CAUSED_BY_THE_REQUEST
+
+
+def _claude_count_options_for(
+    messages_config: BaseAnthropicMessagesConfig,
+    model: str,
+    provider: LlmProviders,
+    messages: Sequence[Mapping[str, object]],
+    tools: Sequence[Mapping[str, object]] | None,
+    sent: Mapping[str, JsonValue],
+    anthropic_beta: str | None,
+    deployment: Mapping[str, object] | None,
+) -> ClaudeCountOptions:
+    from litellm.anthropic_beta_headers_manager import update_headers_with_filtered_beta
+    from litellm.types.router import GenericLiteLLMParams
+
+    resolved_deployment: Final = deployment or {}
+    deployment_params: Final = _INFERENCE_PARAMS.validate_python(resolved_deployment.get("litellm_params") or {})
+    leading_system, conversation = split_leading_system_run(messages)
+    sent_conversation: Final = copy.deepcopy([dict(message) for message in conversation])
+    sent_params: Final = {
+        **copy.deepcopy(sent),
+        **({"tools": copy.deepcopy([dict(tool) for tool in tools])} if tools else {}),
+    }
+    beta_headers: Final = messages_config.headers_with_anthropic_betas(
+        {"anthropic-beta": anthropic_beta} if anthropic_beta else {}, sent_params, sent_conversation
     )
-    other_headers: Final = {name: value for name, value in headers.items() if name != "anthropic-beta"}
-    return {**other_headers, "anthropic-beta": ",".join(supported)} if supported else other_headers
+    sent_headers: Final = (
+        update_headers_with_filtered_beta(headers=dict(beta_headers), provider=provider.value)
+        if messages_config.should_filter_anthropic_beta_headers()
+        else dict(beta_headers)
+    )
+    request: Final = messages_config.transform_anthropic_messages_request(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # the base config signature takes and returns bare dicts
+        model=model,
+        messages=sent_conversation,
+        anthropic_messages_optional_request_params={**sent_params, "max_tokens": _MAX_TOKENS_ABOVE_ANY_BUDGET},
+        litellm_params=GenericLiteLLMParams.model_validate(
+            {
+                "drop_params": deployment_params.get("drop_params"),
+                "model_info": resolved_deployment.get("model_info"),
+            }
+        ),
+        headers=sent_headers,
+    )
+    transformed: Final = _ANTHROPIC_CHAT_REQUEST.validate_python(request)
+    return ClaudeCountOptions(
+        options=_count_options(transformed),
+        betas=messages_config.sent_anthropic_betas(sent_headers, _INFERENCE_PARAMS.validate_python(request)),
+        messages=(*_COUNTED_MESSAGES.validate_python(leading_system), *transformed["messages"]),
+        tools=transformed.get("tools"),
+    )
 
 
 def claude_count_options(
@@ -372,50 +417,19 @@ def claude_count_options(
         return NO_CLAUDE_COUNT_OPTIONS
     from litellm.exceptions import BadRequestError
     from litellm.llms.anthropic.common_utils import AnthropicError
-    from litellm.types.router import GenericLiteLLMParams
     from litellm.utils import ProviderConfigManager
 
     messages_config: Final = ProviderConfigManager.get_provider_anthropic_messages_config(model, provider)
     if messages_config is None:
         return NO_CLAUDE_COUNT_OPTIONS
-    resolved_deployment: Final = deployment or {}
-    deployment_params: Final = _INFERENCE_PARAMS.validate_python(resolved_deployment.get("litellm_params") or {})
-    leading_system, conversation = split_leading_system_run(messages)
-    sent_conversation: Final = copy.deepcopy([dict(message) for message in conversation])
-    sent_params: Final = {
-        **copy.deepcopy(sent),
-        **({"tools": copy.deepcopy([dict(tool) for tool in tools])} if tools else {}),
-    }
-    beta_headers: Final = messages_config.headers_with_anthropic_betas(
-        {"anthropic-beta": anthropic_beta} if anthropic_beta else {}, sent_params, sent_conversation
-    )
-    sent_headers: Final = dict(
-        _with_provider_betas(beta_headers, provider.value)
-        if messages_config.should_filter_anthropic_beta_headers()
-        else beta_headers
-    )
     try:
-        request: Final = messages_config.transform_anthropic_messages_request(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # the base config signature takes and returns bare dicts
-            model=model,
-            messages=sent_conversation,
-            anthropic_messages_optional_request_params={**sent_params, "max_tokens": _MAX_TOKENS_ABOVE_ANY_BUDGET},
-            litellm_params=GenericLiteLLMParams.model_validate(
-                {
-                    "drop_params": deployment_params.get("drop_params"),
-                    "model_info": resolved_deployment.get("model_info"),
-                }
-            ),
-            headers=sent_headers,
+        return _claude_count_options_for(
+            messages_config, model, provider, messages, tools, sent, anthropic_beta, deployment
         )
     except (AnthropicError, BadRequestError) as e:
         return ChatCountTranslationError(message=str(e.message))
-    transformed: Final = _ANTHROPIC_CHAT_REQUEST.validate_python(request)
-    return ClaudeCountOptions(
-        options=_count_options(transformed),
-        betas=messages_config.sent_anthropic_betas(sent_headers, _INFERENCE_PARAMS.validate_python(request)),
-        messages=(*_COUNTED_MESSAGES.validate_python(leading_system), *transformed["messages"]),
-        tools=transformed.get("tools"),
-    )
+    except (AttributeError, IndexError, KeyError, TypeError, ValueError) as e:
+        return ChatCountTranslationError(message=f"Invalid request for token counting: {e}")
 
 
 async def anthropic_count_fields(

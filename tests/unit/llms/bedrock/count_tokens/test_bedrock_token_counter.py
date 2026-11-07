@@ -1,6 +1,6 @@
 import base64
 import json
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Final
 
 import httpx
@@ -487,6 +487,77 @@ async def test_mantle_count_sends_the_thinking_display_beta_mantle_inference_sen
     assert bedrock.posted_hosts() == (MANTLE_HOST,)
     assert _sent_betas(bedrock.requests[0]) == _sent_betas(inference.requests[0])
     assert ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER in _sent_betas(bedrock.requests[0])
+
+
+def _mantle_answers(status_code: int, body: Mapping[str, JsonValue]) -> Callable[[httpx.Request], httpx.Response]:
+    return lambda request: httpx.Response(status_code, json=dict(body), request=request)
+
+
+def _mantle_unreachable(error: type[httpx.TransportError]) -> Callable[[httpx.Request], httpx.Response]:
+    def unreachable(request: httpx.Request) -> httpx.Response:
+        raise error("bedrock-mantle is unreachable", request=request)
+
+    return unreachable
+
+
+_MANTLE_REJECTION: Final[dict[str, JsonValue]] = {
+    "type": "error",
+    "error": {"type": "invalid_request_error", "message": "thinking: unsupported"},
+}
+_MANTLE_FAILURE: Final[dict[str, JsonValue]] = {"type": "error", "error": {"type": "api_error", "message": "down"}}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("request_options", "mantle", "expected"),
+    (
+        (_DISPLAY_THINKING, _mantle_unreachable(httpx.ConnectError), (True, 400, "bedrock_api")),
+        (_DISPLAY_THINKING, _mantle_unreachable(httpx.ReadTimeout), (True, 400, "bedrock_api")),
+        (_DISPLAY_THINKING, _mantle_answers(503, _MANTLE_FAILURE), (True, 400, "bedrock_api")),
+        (_DISPLAY_THINKING, _mantle_answers(429, _MANTLE_FAILURE), (True, 400, "bedrock_api")),
+        (_DISPLAY_THINKING, _mantle_answers(403, _MANTLE_FAILURE), (True, 400, "bedrock_api")),
+        (_DISPLAY_THINKING, _mantle_answers(400, _MANTLE_REJECTION), (True, 400, "bedrock_mantle_api")),
+        (_DISPLAY_THINKING, _mantle_answers(422, _MANTLE_REJECTION), (True, 422, "bedrock_mantle_api")),
+        (_DISPLAY_THINKING, _mantle_answers(200, {"input_tokens": 2177}), (False, None, "bedrock_mantle_api")),
+        ({}, _mantle_answers(503, _MANTLE_FAILURE), (True, 503, "bedrock_mantle_api")),
+    ),
+    ids=(
+        "mantle-unreachable",
+        "mantle-timeout",
+        "mantle-5xx",
+        "mantle-rate-limit",
+        "mantle-denied",
+        "mantle-rejects-the-options",
+        "mantle-rejects-the-body",
+        "mantle-counts",
+        "no-options-mantle-5xx",
+    ),
+)
+async def test_runtime_rejecting_the_options_is_answered_unless_mantle_counts_or_rejects_the_request(
+    request_options: dict[str, JsonValue],
+    mantle: Callable[[httpx.Request], httpx.Response],
+    expected: tuple[bool, int | None, str],
+) -> None:
+    def bedrock(request: httpx.Request) -> httpx.Response:
+        if request.url.host == RUNTIME_HOST:
+            return httpx.Response(400, json=UNSUPPORTED, request=request)
+        return mantle(request)
+
+    result: Final = await BedrockTokenCounter(
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(bedrock))
+    ).count_tokens(
+        model_to_use="us.anthropic.claude-opus-5-5",
+        messages=MESSAGES,
+        contents=None,
+        deployment={
+            "litellm_params": {**DEPLOYMENT["litellm_params"], "model": "bedrock/us.anthropic.claude-opus-5-5"}
+        },
+        request_model="claude-opus-5-5",
+        request_options=request_options,
+    )
+
+    assert result is not None
+    assert (result.error, result.status_code, result.tokenizer_type) == expected
 
 
 @pytest.mark.asyncio

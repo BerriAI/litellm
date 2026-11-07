@@ -83,6 +83,8 @@ from litellm.proxy.proxy_server import (
 )
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.rust_bridge.fork_guard import ForkedAfterNativeRuntimeStarted
+from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
+from litellm.types.router import CustomRoutingStrategyBase
 from litellm.types.secret_managers.main import KeyManagementSettings, KeyManagementSystem
 from litellm.types.utils import (
     ADDRESSED_RESPONSE_ID_FIELD,
@@ -1739,7 +1741,7 @@ async def test_anthropic_count_tokens_on_a_claude_deployment_sends_the_options_i
     )
 
 
-_CALLER_BETA: Final = "web-fetch-2025-09-10"
+_CALLER_BETA: Final = ANTHROPIC_BETA_HEADER_VALUES.WEB_FETCH_2025_09_10.value
 
 
 async def _count_on_a_claude_deployment(
@@ -1811,9 +1813,9 @@ async def test_anthropic_count_tokens_counts_again_without_the_options_when_the_
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("status_code", (401, 403, 404))
-async def test_anthropic_count_tokens_answers_the_error_the_count_without_the_options_also_gets(
-    monkeypatch: pytest.MonkeyPatch, status_code: int
+@pytest.mark.parametrize(("status_code", "counted_again"), ((401, False), (403, False), (404, True), (422, True)))
+async def test_anthropic_count_tokens_counts_again_only_when_the_claude_count_rejects_the_request(
+    monkeypatch: pytest.MonkeyPatch, status_code: int, counted_again: bool
 ) -> None:
     response, requests = await _count_on_a_claude_deployment(
         monkeypatch,
@@ -1824,7 +1826,30 @@ async def test_anthropic_count_tokens_answers_the_error_the_count_without_the_op
 
     assert isinstance(response, JSONResponse)
     assert response.status_code == status_code
-    assert [bool(_sent_option_paths(json.loads(sent.content))) for sent in requests] == [True, False]
+    assert [bool(_sent_option_paths(json.loads(sent.content))) for sent in requests] == [
+        True,
+        *((False,) if counted_again else ()),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_anthropic_count_tokens_warns_with_every_option_it_counts_again_without(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    verbose_proxy_logger.addHandler(caplog.handler)
+    try:
+        with caplog.at_level(logging.WARNING, logger=verbose_proxy_logger.name):
+            await _count_on_a_claude_deployment(
+                monkeypatch, "anthropic/claude-haiku-5-5", _CLAUDE_COUNT_OPTIONS, _counts_only_without_options
+            )
+    finally:
+        verbose_proxy_logger.removeHandler(caplog.handler)
+
+    warnings: Final = {
+        record.getMessage() for record in caplog.records if "counts again without" in record.getMessage()
+    }
+    (warning,) = warnings
+    assert all(option in warning for option in _CLAUDE_COUNT_OPTIONS)
 
 
 @pytest.mark.asyncio
@@ -1841,6 +1866,179 @@ async def test_anthropic_count_tokens_does_not_count_again_after_a_rate_limit(
     assert isinstance(response, JSONResponse)
     assert response.status_code == 429
     assert len(requests) == 1
+
+
+_BEDROCK_RUNTIME_HOST: Final = "bedrock-runtime.us-east-1.amazonaws.com"
+_BEDROCK_MANTLE_HOST: Final = "bedrock-mantle.us-east-1.api.aws"
+_BEDROCK_CLAUDE_DEPLOYMENT: Final[dict[str, str]] = {
+    "model": "bedrock/us.anthropic.claude-count-probe-v1:0",
+    "aws_access_key_id": "AKIATESTACCESSKEY",
+    "aws_secret_access_key": "test-secret",
+    "aws_region_name": "us-east-1",
+}
+
+
+async def _count_on_a_bedrock_claude_deployment(
+    monkeypatch: pytest.MonkeyPatch,
+    body: Mapping[str, JsonValue],
+    runtime: Callable[[httpx.Request], httpx.Response],
+    mantle: Callable[[httpx.Request], httpx.Response],
+) -> tuple[object, tuple[httpx.Request, ...]]:
+    import litellm.proxy.proxy_server as proxy_server
+
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    monkeypatch.delenv("BEDROCK_MANTLE_API_BASE", raising=False)
+    router: Final = Router(model_list=[{"model_name": "claude-agent", "litellm_params": _BEDROCK_CLAUDE_DEPLOYMENT}])
+    request: Final = _json_request(
+        {"model": "claude-agent", "messages": [{"role": "user", "content": "Weather in SF?"}], **body},
+        "python-httpx/0.28.1",
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "proxy_config", proxy_server.ProxyConfig())
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+
+    with respx.mock as bedrock:
+        bedrock.route(host=_BEDROCK_RUNTIME_HOST).mock(side_effect=runtime)
+        bedrock.route(host=_BEDROCK_MANTLE_HOST).mock(side_effect=mantle)
+        response: Final = await anthropic_count_tokens(request, UserAPIKeyAuth())
+        return response, tuple(call.request for call in bedrock.calls)
+
+
+def _runtime_counts_only_without_options(request: httpx.Request) -> httpx.Response:
+    if "invokeModel" in json.loads(request.content)["input"]:
+        return httpx.Response(400, json={"message": "thinking: unsupported"})
+    return httpx.Response(200, json={"inputTokens": 9})
+
+
+def _mantle_unreachable(request: httpx.Request) -> httpx.Response:
+    raise httpx.ConnectError("bedrock-mantle is unreachable", request=request)
+
+
+@pytest.mark.asyncio
+async def test_anthropic_count_tokens_on_bedrock_counts_a_malformed_tool_again_without_the_options(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    response, requests = await _count_on_a_bedrock_claude_deployment(
+        monkeypatch,
+        {
+            "tools": [{"type": 5, "name": "x", "input_schema": {"type": "object"}}],
+            "thinking": {"type": "enabled", "budget_tokens": 2000},
+        },
+        _runtime_counts_only_without_options,
+        _mantle_unreachable,
+    )
+
+    assert not isinstance(response, JSONResponse)
+    assert response["input_tokens"] == 9
+    assert [request.url.host for request in requests] == [_BEDROCK_RUNTIME_HOST]
+    assert "invokeModel" not in json.loads(requests[0].content)["input"]
+
+
+@pytest.mark.asyncio
+async def test_anthropic_count_tokens_on_bedrock_counts_again_without_the_options_when_mantle_is_unreachable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    response, requests = await _count_on_a_bedrock_claude_deployment(
+        monkeypatch,
+        {"thinking": {"type": "enabled", "budget_tokens": 2000}},
+        _runtime_counts_only_without_options,
+        _mantle_unreachable,
+    )
+
+    assert not isinstance(response, JSONResponse)
+    assert response["input_tokens"] == 9
+    hosts: Final = [request.url.host for request in requests]
+    assert hosts[0] == hosts[-1] == _BEDROCK_RUNTIME_HOST
+    assert _BEDROCK_MANTLE_HOST in hosts
+    assert "invokeModel" not in json.loads(requests[-1].content)["input"]
+
+
+_KEEPS_CONTEXT_MANAGEMENT: Final = "sk-ant-keeps-context-management"
+_DROPS_CONTEXT_MANAGEMENT: Final = "sk-ant-drops-context-management"
+_CONTEXT_EDITS: Final[dict[str, JsonValue]] = {"edits": [{"type": "clear_tool_uses_20250919"}]}
+_CLAUDE_MESSAGE_REPLY: Final[dict[str, JsonValue]] = {
+    "id": "msg_1",
+    "type": "message",
+    "role": "assistant",
+    "model": "claude-haiku-5-5",
+    "content": [{"type": "text", "text": "ok"}],
+    "stop_reason": "end_turn",
+    "usage": {"input_tokens": 3, "output_tokens": 1},
+}
+
+
+class _RoutesTo(CustomRoutingStrategyBase):
+    def __init__(self, router: Router, api_key: str) -> None:
+        self._router: Final = router
+        self._api_key: Final = api_key
+
+    async def async_get_available_deployment(self, *args: object, **kwargs: object) -> Mapping[str, object]:
+        return next(
+            deployment
+            for deployment in self._router.model_list
+            if deployment["litellm_params"]["api_key"] == self._api_key
+        )
+
+
+def _mixed_drop_group(routed_key: str) -> Router:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "claude-agent",
+                "litellm_params": {"model": "anthropic/claude-haiku-5-5", "api_key": _KEEPS_CONTEXT_MANAGEMENT},
+            },
+            {
+                "model_name": "claude-agent",
+                "litellm_params": {
+                    "model": "anthropic/claude-haiku-5-5",
+                    "api_key": _DROPS_CONTEXT_MANAGEMENT,
+                    "additional_drop_params": ["context_management"],
+                },
+            },
+        ]
+    )
+    router.set_custom_routing_strategy(_RoutesTo(router, routed_key))
+    return router
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("routed_key", (_KEEPS_CONTEXT_MANAGEMENT, _DROPS_CONTEXT_MANAGEMENT))
+async def test_anthropic_count_tokens_in_a_mixed_drop_group_sends_context_management_when_the_routed_inference_does(
+    monkeypatch: pytest.MonkeyPatch, routed_key: str
+) -> None:
+    import litellm.proxy.proxy_server as proxy_server
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(proxy_server, "llm_router", _mixed_drop_group(routed_key))
+    monkeypatch.setattr(proxy_server, "proxy_config", proxy_server.ProxyConfig())
+    messages: Final = [{"role": "user", "content": "Weather in SF?"}]
+
+    with respx.mock:
+        inference_route: Final = respx.post("https://api.anthropic.com/v1/messages").mock(
+            return_value=httpx.Response(200, json=_CLAUDE_MESSAGE_REPLY)
+        )
+        count_route: Final = respx.post("https://api.anthropic.com/v1/messages/count_tokens").mock(
+            return_value=httpx.Response(200, json={"input_tokens": 7})
+        )
+        await _mixed_drop_group(routed_key).aanthropic_messages(
+            model="claude-agent", messages=messages, max_tokens=16, context_management=_CONTEXT_EDITS
+        )
+        response: Final = await anthropic_count_tokens(
+            _json_request(
+                {"model": "claude-agent", "messages": messages, "context_management": _CONTEXT_EDITS},
+                "python-httpx/0.28.1",
+            ),
+            UserAPIKeyAuth(),
+        )
+
+    assert not isinstance(response, JSONResponse)
+    inference: Final = inference_route.calls.last.request
+    count: Final = count_route.calls.last.request
+    assert inference.headers["x-api-key"] == count.headers["x-api-key"] == routed_key
+    assert ("context_management" in json.loads(count.content)) == (
+        "context_management" in json.loads(inference.content)
+    )
+    assert ("context_management" in json.loads(count.content)) == (routed_key == _KEEPS_CONTEXT_MANAGEMENT)
 
 
 async def _claude_inference_body(model: str, options: Mapping[str, JsonValue]) -> dict[str, JsonValue]:

@@ -19,6 +19,7 @@ from litellm.llms.anthropic.count_tokens.transformation import (
     ClaudeCountOptions,
     anthropic_count_fields,
     claude_count_options,
+    is_request_rejection,
 )
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
 from litellm.llms.bedrock.common_utils import BedrockError, get_bedrock_base_model
@@ -78,6 +79,10 @@ def _runtime_rejected_claude_model(outcome: CountTokensOutcome, resolved_model: 
         and outcome.status_code in _RUNTIME_FALLBACK_STATUSES
         and is_mantle_claude_model(resolved_model)
     )
+
+
+def _mantle_answered_for_runtime(fallback: CountTokensOutcome, forwarded_options: bool) -> bool:
+    return not forwarded_options or isinstance(fallback, CountedTokens) or is_request_rejection(fallback.status_code)
 
 
 def _invoke_fields(claude_options: ClaudeCountOptions) -> Mapping[str, object]:
@@ -225,11 +230,16 @@ class BedrockTokenCounter(BaseTokenCounter):
                 primary_tokenizer,
             )
         )
-        outcome: Final = (
+        fallback: Final = (
             await self._count_with(
                 self._count_on_mantle(mantle_request, litellm_params, resolved_model), MANTLE_TOKENIZER_TYPE
             )
             if not use_mantle and _runtime_rejected_claude_model(primary, resolved_model)
+            else None
+        )
+        outcome: Final = (
+            fallback
+            if fallback is not None and _mantle_answered_for_runtime(fallback, forwarded_options=bool(invoke_fields))
             else primary
         )
         match outcome:

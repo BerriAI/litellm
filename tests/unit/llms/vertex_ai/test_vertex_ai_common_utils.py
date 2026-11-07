@@ -33,6 +33,7 @@ from litellm.llms.vertex_ai.common_utils import (
 )
 from litellm.llms.vertex_ai.count_tokens import handler as vertex_count_tokens_handler
 from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import VertexAIAnthropicConfig
+from litellm.types.llms.anthropic_tool_search import get_tool_search_beta_header
 from litellm.types.utils import CountContextManagement, TokenCountMessagesFormat
 
 
@@ -1970,20 +1971,13 @@ _PARTNER_CLAUDE_REPLY: Final[dict[str, JsonValue]] = {
 }
 
 
-@pytest.mark.asyncio
-async def test_vertex_claude_count_sends_the_options_context_edits_and_beta_vertex_messages_inference_sends() -> None:
+async def _vertex_claude_inference_and_count(
+    tools: list[dict[str, JsonValue]], request_options: Mapping[str, JsonValue]
+) -> tuple[httpx.Request, httpx.Request]:
     from litellm.llms.vertex_ai.vertex_ai_partner_models.count_tokens import handler
     from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 
-    context_edits: Final[dict[str, JsonValue]] = {
-        "edits": [{"type": "clear_tool_uses_20250919"}, {"type": "clear_thinking_20251015"}]
-    }
-    options: Final[dict[str, JsonValue]] = {
-        "thinking": {"type": "enabled", "budget_tokens": 2000},
-        "tool_choice": {"type": "auto"},
-    }
     messages: Final[list[dict[str, JsonValue]]] = [{"role": "user", "content": "Weather in SF?"}]
-    tools: Final[list[dict[str, JsonValue]]] = [{"name": "get_weather", "input_schema": {"type": "object"}}]
     sent: Final[SimpleQueue[httpx.Request]] = SimpleQueue()
 
     def vertex(request: httpx.Request) -> httpx.Response:
@@ -2004,11 +1998,10 @@ async def test_vertex_claude_count_sends_the_options_context_edits_and_beta_vert
             messages=messages,
             tools=tools,
             max_tokens=4096,
-            context_management=context_edits,
             vertex_project="test-project",
             vertex_location="us-east5",
             client=client,
-            **options,
+            **request_options,
         )
         result: Final = await VertexAITokenCounter().count_tokens(
             model_to_use="claude-haiku-5-5",
@@ -2016,18 +2009,48 @@ async def test_vertex_claude_count_sends_the_options_context_edits_and_beta_vert
             contents=None,
             deployment={"litellm_params": {"vertex_project": "test-project", "vertex_location": "us-east5"}},
             tools=tools,
-            request_options={**options, "context_management": context_edits},
+            request_options=request_options,
         )
 
     assert result is not None
     assert result.total_tokens == 37
     inference, count = tuple(sent.get() for _ in range(sent.qsize()))
     assert count.url.path.endswith("count-tokens:rawPredict")
+    return inference, count
+
+
+@pytest.mark.asyncio
+async def test_vertex_claude_count_sends_the_options_context_edits_and_beta_vertex_messages_inference_sends() -> None:
+    inference, count = await _vertex_claude_inference_and_count(
+        [{"name": "get_weather", "input_schema": {"type": "object"}}],
+        {
+            "thinking": {"type": "enabled", "budget_tokens": 2000},
+            "tool_choice": {"type": "auto"},
+            "context_management": {
+                "edits": [{"type": "clear_tool_uses_20250919"}, {"type": "clear_thinking_20251015"}]
+            },
+        },
+    )
+
     counted: Final = TypeAdapter(dict[str, JsonValue]).validate_json(count.content)
     inferred: Final = TypeAdapter(dict[str, JsonValue]).validate_json(inference.content)
     fields: Final = ("thinking", "tool_choice", "output_config", "context_management")
     assert {name: counted.get(name) for name in fields} == {name: inferred.get(name) for name in fields}
     assert count.headers["anthropic-beta"] == inference.headers["anthropic-beta"]
+
+
+@pytest.mark.asyncio
+async def test_vertex_claude_count_sends_the_tool_search_beta_vertex_messages_inference_sends() -> None:
+    inference, count = await _vertex_claude_inference_and_count(
+        [
+            {"type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex"},
+            {"name": "get_weather", "input_schema": {"type": "object"}, "defer_loading": True},
+        ],
+        {"thinking": {"type": "enabled", "budget_tokens": 2000}},
+    )
+
+    assert count.headers["anthropic-beta"] == inference.headers["anthropic-beta"]
+    assert get_tool_search_beta_header("vertex_ai") in count.headers["anthropic-beta"].split(",")
 
 
 @pytest.mark.asyncio
