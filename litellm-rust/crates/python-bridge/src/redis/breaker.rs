@@ -16,11 +16,8 @@ use crate::redis::{
 /// `litellm.redis.store_settings.RedisBreakerSettings`, filled from `litellm.constants`.
 #[derive(FromPyObject)]
 pub(crate) struct BreakerSettings {
-    #[pyo3(attribute)]
     failure_threshold: u32,
-    #[pyo3(attribute)]
     recovery_timeout: f64,
-    #[pyo3(attribute)]
     timeout_min_duration: f64,
 }
 

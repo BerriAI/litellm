@@ -70,13 +70,9 @@ impl<'a, 'py> FromPyObject<'a, 'py> for RedisSpec {
 /// `litellm.redis.store_settings.RedisStoreSettings`, which a `RedisCache` captures when it is built.
 #[derive(FromPyObject)]
 pub(crate) struct StoreSettings {
-    #[pyo3(attribute)]
     redis_kwargs: RedisSpec,
-    #[pyo3(attribute)]
     namespace: Option<String>,
-    #[pyo3(attribute)]
     default_ttl: f64,
-    #[pyo3(attribute)]
     breaker: Option<Py<NativeRedisBreaker>>,
 }
 
