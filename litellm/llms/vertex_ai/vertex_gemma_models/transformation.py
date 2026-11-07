@@ -8,7 +8,7 @@ Handles the custom request/response format:
 The actual message transformation reuses OpenAIGPTConfig since Gemma uses OpenAI-compatible format.
 """
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Final, cast
 
 import httpx
@@ -267,6 +267,7 @@ class VertexGemmaConfig(OpenAIGPTConfig):
         timeout: float | httpx.Timeout | None = None,
         encoding=None,
         custom_llm_provider: str = "vertex_ai",
+        headers: Mapping[str, str] | None = None,
     ):
         """
         Make completion request to Vertex Gemma endpoint.
@@ -287,6 +288,7 @@ class VertexGemmaConfig(OpenAIGPTConfig):
                 client=async_client,
                 timeout=timeout,
                 encoding=encoding,
+                headers=headers,
             )
         else:
             sync_client = client if isinstance(client, (HTTPHandler, httpx.Client)) else None
@@ -303,6 +305,7 @@ class VertexGemmaConfig(OpenAIGPTConfig):
                 client=sync_client,
                 timeout=timeout,
                 encoding=encoding,
+                headers=headers,
             )
 
     def _sync_completion(
@@ -319,6 +322,7 @@ class VertexGemmaConfig(OpenAIGPTConfig):
         client: HTTPHandler | httpx.Client | None = None,
         timeout: float | httpx.Timeout | None = None,
         encoding: "Tokenizer | None" = None,
+        headers: Mapping[str, str] | None = None,
     ):
         """Synchronous completion request"""
         from litellm.utils import convert_to_model_response_object
@@ -336,9 +340,10 @@ class VertexGemmaConfig(OpenAIGPTConfig):
         )
 
         # Set up headers
-        headers: Final = {
-            "Authorization": f"Bearer {api_key}",
+        request_headers: Final = {
             "Content-Type": "application/json",
+            **(headers or {}),
+            "Authorization": f"Bearer {api_key}",
         }
 
         # Log the request
@@ -355,7 +360,7 @@ class VertexGemmaConfig(OpenAIGPTConfig):
         response: Final = self._sync_post(
             client=client,
             api_base=api_base,
-            headers=headers,
+            headers=request_headers,
             request_data=request_data,
             timeout=timeout,
         )
@@ -414,6 +419,7 @@ class VertexGemmaConfig(OpenAIGPTConfig):
         client: AsyncHTTPHandler | httpx.AsyncClient | None = None,
         timeout: float | httpx.Timeout | None = None,
         encoding: "Tokenizer | None" = None,
+        headers: Mapping[str, str] | None = None,
     ):
         """Asynchronous completion request"""
         from litellm.utils import convert_to_model_response_object
@@ -431,9 +437,10 @@ class VertexGemmaConfig(OpenAIGPTConfig):
         )
 
         # Set up headers
-        headers: Final = {
-            "Authorization": f"Bearer {api_key}",
+        request_headers: Final = {
             "Content-Type": "application/json",
+            **(headers or {}),
+            "Authorization": f"Bearer {api_key}",
         }
 
         # Log the request
@@ -450,7 +457,7 @@ class VertexGemmaConfig(OpenAIGPTConfig):
         response: Final = await self._async_post(
             client=client,
             api_base=api_base,
-            headers=headers,
+            headers=request_headers,
             request_data=request_data,
             timeout=timeout,
         )
