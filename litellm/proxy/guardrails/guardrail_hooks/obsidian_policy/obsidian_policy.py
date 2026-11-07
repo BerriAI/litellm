@@ -142,9 +142,17 @@ def _tool_response_payload(response_obj: MCPPostCallResponseObject) -> Mapping[s
     }
 
 
+def _denial_summary(decision: PolicyDecision) -> str:
+    if decision.via_fail_mode:
+        return f"Obsidian policy check unavailable: {decision.message}"
+    reason: Final = f": {decision.message}" if decision.message else ""
+    reference: Final = f" (evaluation_id {decision.evaluation_id})" if decision.evaluation_id else ""
+    return f"Blocked by Obsidian policy{reason}{reference}"
+
+
 def _denial_detail(guardrail_name: str | None, stage: Stage, decision: PolicyDecision) -> Mapping[str, object]:
     return {
-        "error": "Blocked by Obsidian policy",
+        "error": _denial_summary(decision),
         "guardrail": guardrail_name,
         "stage": stage,
         "message": decision.message,

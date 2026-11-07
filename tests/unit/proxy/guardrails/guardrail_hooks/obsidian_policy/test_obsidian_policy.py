@@ -16,6 +16,7 @@ from litellm.proxy.guardrails.guardrail_hooks.obsidian_policy import (
     resolve_settings,
 )
 from litellm.proxy.guardrails.guardrail_hooks.obsidian_policy.client import ObsidianClient, ObsidianSettings
+from litellm.proxy.mcp_server.operations import _http_detail_message
 from litellm.types.guardrails import GuardrailEventHooks, LitellmParams, SupportedGuardrailIntegrations
 from litellm.types.llms.base import HiddenParams
 from litellm.types.mcp import MCPPostCallResponseObject
@@ -128,6 +129,15 @@ async def test_pre_call_block_raises_403_with_evaluation_id_and_message():
     assert raised.value.detail["matched_policies"] == [{"id": "p1", "name": "Repo deletion"}]
 
 
+async def test_pre_call_block_reaches_mcp_clients_with_policy_message_and_evaluation_id():
+    handler = lambda request: _verdict("block", message="No repo deletion")  # noqa: E731
+    with pytest.raises(HTTPException) as raised:
+        await _guardrail(handler).async_pre_call_hook(_auth(), None, _pre_data(), "call_mcp_tool")
+
+    shown_to_mcp_client = _http_detail_message(raised.value.detail)
+    assert shown_to_mcp_client == "Blocked by Obsidian policy: No repo deletion (evaluation_id eval-9)"
+
+
 async def test_pre_call_fails_closed_when_obsidian_is_unreachable():
     def handler(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("refused", request=request)
@@ -135,6 +145,9 @@ async def test_pre_call_fails_closed_when_obsidian_is_unreachable():
     with pytest.raises(HTTPException) as raised:
         await _guardrail(handler).async_pre_call_hook(_auth(), None, _pre_data(), "call_mcp_tool")
     assert raised.value.status_code == 403
+    assert _http_detail_message(raised.value.detail) == (
+        "Obsidian policy check unavailable: Obsidian request failed: ConnectError"
+    ), "an outage must not read as a policy block"
 
 
 async def test_pre_call_ignores_non_mcp_calls_without_contacting_obsidian():
