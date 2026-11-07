@@ -10,9 +10,11 @@ is attached to a vector store or read back under shared provider credentials.
 """
 
 import base64
+import json
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -299,7 +301,11 @@ _TEAM_OPENAI_BASE: Final = "https://team-openai.example/v1"
 _PROXY_OPENAI_BASE: Final = "https://proxy-openai.example/v1"
 
 
-def _proxy_and_team_b_openai_router() -> litellm.Router:
+def _proxy_and_team_b_openai_router(
+    team_litellm_params: Mapping[str, object] = MappingProxyType(
+        {"api_key": "team-openai-key", "api_base": _TEAM_OPENAI_BASE}
+    ),
+) -> litellm.Router:
     return litellm.Router(
         model_list=[
             {
@@ -313,7 +319,7 @@ def _proxy_and_team_b_openai_router() -> litellm.Router:
             },
             {
                 "model_name": "model_name_team-b_6f0c8a52",
-                "litellm_params": {"model": "openai/*", "api_key": "team-openai-key", "api_base": _TEAM_OPENAI_BASE},
+                "litellm_params": {"model": "openai/*", **team_litellm_params},
                 "model_info": {
                     "id": "team-b-openai",
                     "team_id": "team-b",
@@ -562,3 +568,105 @@ async def test_managed_file_id_on_a_store_holding_only_the_upload_copy_reaches_t
     assert team_copy_lookup.call_count == 1
     assert upstream.call_count == 1
     assert upstream.calls.last.request.headers["Authorization"] == "Bearer proxy-openai-key"
+
+
+@pytest.mark.asyncio
+async def test_managed_file_id_attached_by_a_team_key_attaches_the_team_copy(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    caller: Final = UserAPIKeyAuth(api_key="sk-test", user_id="caller-user", team_id="team-b")
+    router: Final = _proxy_and_team_b_openai_router()
+    managed_file_id: Final = (
+        base64.urlsafe_b64encode(
+            SpecialEnums.LITELLM_MANAGED_FILE_COMPLETE_STR.value.format(
+                "text/plain", "two-copy-unified-id", "openai/*", "file-proxy-copy", "proxy-openai"
+            ).encode()
+        )
+        .decode()
+        .rstrip("=")
+    )
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        upstream: Final = respx_mock.post(f"{_TEAM_OPENAI_BASE}/vector_stores/vs-test/files").mock(
+            return_value=httpx.Response(200, json=dict(_vector_store_file_row("file-team-copy")))
+        )
+        data, _ = await _update_request_data_with_managed_file_id(
+            data={"vector_store_id": "vs-test", "file_id": managed_file_id},
+            file_id=managed_file_id,
+            request=MagicMock(headers={}, query_params={}),
+            user_api_key_dict=caller,
+            managed_files_obj=ManagedFileCopiesStub(
+                copies={"proxy-openai": "file-proxy-copy", "team-b-openai": "file-team-copy"}
+            ),
+            llm_router=router,
+            attaching=True,
+        )
+        await (
+            await route_request(
+                {**data, "custom_llm_provider": "openai"},
+                router,
+                None,
+                "avector_store_file_create",
+                user_api_key_dict=caller,
+            )
+        )
+
+    assert upstream.call_count == 1
+    assert json.loads(upstream.calls.last.request.content)["file_id"] == "file-team-copy"
+    assert upstream.calls.last.request.headers["Authorization"] == "Bearer team-openai-key"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("credential_setting", [{"timeout": 30}, {"extra_headers": {"X-Team": "team-b"}}])
+async def test_team_copy_lookup_works_with_a_named_credential_that_sets_request_options(
+    monkeypatch: pytest.MonkeyPatch, credential_setting: Mapping[str, object]
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="team-b-openai",
+                credential_values={"api_key": "team-openai-key", "api_base": _TEAM_OPENAI_BASE, **credential_setting},
+                credential_info={},
+            )
+        ],
+    )
+    caller: Final = UserAPIKeyAuth(api_key="sk-test", user_id="caller-user", team_id="team-b")
+    router: Final = _proxy_and_team_b_openai_router(MappingProxyType({"litellm_credential_name": "team-b-openai"}))
+    managed_file_id: Final = (
+        base64.urlsafe_b64encode(
+            SpecialEnums.LITELLM_MANAGED_FILE_COMPLETE_STR.value.format(
+                "text/plain", "two-copy-unified-id", "openai/*", "file-proxy-copy", "proxy-openai"
+            ).encode()
+        )
+        .decode()
+        .rstrip("=")
+    )
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        team_copy: Final = respx_mock.get(f"{_TEAM_OPENAI_BASE}/vector_stores/vs-test/files/file-team-copy").mock(
+            return_value=httpx.Response(200, json=dict(_vector_store_file_row("file-team-copy")))
+        )
+        data, _ = await _update_request_data_with_managed_file_id(
+            data={"vector_store_id": "vs-test", "file_id": managed_file_id},
+            file_id=managed_file_id,
+            request=MagicMock(headers={}, query_params={}),
+            user_api_key_dict=caller,
+            managed_files_obj=ManagedFileCopiesStub(
+                copies={"proxy-openai": "file-proxy-copy", "team-b-openai": "file-team-copy"}
+            ),
+            llm_router=router,
+        )
+        await (
+            await route_request(
+                {**data, "custom_llm_provider": "openai"},
+                router,
+                None,
+                "avector_store_file_retrieve",
+                user_api_key_dict=caller,
+            )
+        )
+
+    assert team_copy.call_count == 2
+    assert team_copy.calls.last.request.headers["Authorization"] == "Bearer team-openai-key"

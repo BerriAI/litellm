@@ -125,6 +125,9 @@ class _ManagedFileCopy:
     provider_file_id: str
 
 
+_PROBE_ARGUMENTS: Final = frozenset({"vector_store_id", "file_id", "extra_headers", "timeout", "custom_llm_provider"})
+
+
 async def _store_holds_file(
     provider: LlmProviders, vector_store_id: str, file_id: str, credentials: Mapping[str, object]
 ) -> bool:
@@ -135,7 +138,7 @@ async def _store_holds_file(
             extra_headers=None,
             timeout=None,
             custom_llm_provider=provider.value,
-            **{key: value for key, value in credentials.items() if key != "custom_llm_provider"},
+            **{key: value for key, value in credentials.items() if key not in _PROBE_ARGUMENTS},
             **{"no-log": True},
         )
     except openai.APIError:
@@ -148,6 +151,7 @@ async def _caller_team_copy_of_managed_file(
     file_id: str,
     upload_copy: str | None,
     vector_store_id: object,
+    attaching: bool,
     user_api_key_dict: UserAPIKeyAuth,
     managed_files_obj: object | None,
     llm_router: Optional["Router"],
@@ -162,9 +166,13 @@ async def _caller_team_copy_of_managed_file(
     )
     if team_deployment is None or provider_file_id is None:
         return None
-    if provider_file_id != upload_copy and not (
-        isinstance(vector_store_id, str)
-        and await _store_holds_file(provider, vector_store_id, provider_file_id, team_deployment.credentials)
+    if (
+        provider_file_id != upload_copy
+        and not attaching
+        and not (
+            isinstance(vector_store_id, str)
+            and await _store_holds_file(provider, vector_store_id, provider_file_id, team_deployment.credentials)
+        )
     ):
         return None
     return _ManagedFileCopy(team_deployment.deployment_id, provider_file_id)
@@ -187,6 +195,7 @@ async def _update_request_data_with_managed_file_id(
     managed_files_obj: object | None,
     llm_router: Optional["Router"] = None,
     managed_vector_store: LiteLLM_ManagedVectorStore | None = None,
+    attaching: bool = False,
 ) -> tuple[dict, str | None]:
     """
     Update request data with model routing information from managed file ID.
@@ -269,6 +278,7 @@ async def _update_request_data_with_managed_file_id(
                     file_id,
                     llm_output_file_id,
                     data.get("vector_store_id"),
+                    attaching,
                     user_api_key_dict,
                     managed_files_obj,
                     llm_router,
@@ -672,6 +682,7 @@ async def vector_store_file_create(
             managed_files_obj=proxy_logging_obj.get_proxy_hook("managed_files"),
             llm_router=llm_router,
             managed_vector_store=managed_vector_store,
+            attaching=True,
         )
 
     # Then handle managed vector store IDs
