@@ -11,6 +11,7 @@ still executes the tool, just with no credentials.
 from collections.abc import Iterable, Mapping
 from copy import deepcopy
 from dataclasses import dataclass
+from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
@@ -25,6 +26,66 @@ class _AuthCarryingMetadata(TypedDict):
     """The one key this module reads out of a request's ``metadata`` / ``litellm_metadata``."""
 
     user_api_key_auth: ReadOnly[NotRequired["UserAPIKeyAuth | None"]]
+
+
+PROVIDER_MCP_ENFORCEMENT_SETTING: Final = "enforce_provider_mcp_permissions"
+
+
+def provider_mcp_enforcement_enabled() -> bool:
+    """Provider-native MCP checks are opt-in. Off (the default) forwards provider-run MCP attachments
+    unchecked, exactly as before registrations existed. Read per request, so a config reload applies."""
+    from litellm.proxy import proxy_server
+
+    value: Final = proxy_server.general_settings.get(PROVIDER_MCP_ENFORCEMENT_SETTING)
+    return value is True or (isinstance(value, str) and value.strip().lower() == "true")
+
+
+async def authorize_provider_mcp_request(
+    body: Mapping[str, object], context: Mapping[str, object], *, provider_bound: bool = False
+) -> None:
+    buckets: Final = tuple(
+        TypeAdapter(dict[str, object]).validate_python(context[key])
+        for key in ("litellm_metadata", "metadata")
+        if isinstance(context.get(key), Mapping)
+    )
+    auth: Final = next((bucket["user_api_key_auth"] for bucket in buckets if "user_api_key_auth" in bucket), None)
+    if auth is None or not provider_mcp_enforcement_enabled():
+        return
+    extra: Final = body.get("extra_body")
+    effective: Final = (
+        {**body, **TypeAdapter(dict[str, object]).validate_python(extra)} if isinstance(extra, Mapping) else body
+    )
+    tools: Final = (*_tool_list(effective.get("tools")), *_input_item_tools(effective.get("input")))
+    has_native_tools: Final = any(
+        isinstance(tool, Mapping)
+        and TypeAdapter(dict[str, object]).validate_python(tool).get("type") in ("mcp", "mcp_toolset", "url")
+        for tool in tools
+    )
+    if not has_native_tools and not effective.get("mcp_servers"):
+        return
+    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
+
+    if not isinstance(auth, UserAPIKeyAuth):
+        return
+    from litellm.proxy.mcp_server.auth.provider_mcp import authorize_provider_mcp
+
+    await authorize_provider_mcp({**effective, "tools": list(tools)}, auth, provider_bound=provider_bound)
+
+
+def _tool_list(value: object) -> tuple[object, ...]:
+    return TypeAdapter(tuple[object, ...]).validate_python(value) if isinstance(value, (list, tuple)) else ()
+
+
+def _input_item_tools(value: object) -> tuple[object, ...]:
+    """Tool definitions carried inside Responses input items, such as ``tool_search_output``; the provider
+    loads them like top-level tools, so they need the same admission."""
+    return tuple(
+        chain.from_iterable(
+            _tool_list(TypeAdapter(dict[str, object]).validate_python(item).get("tools"))
+            for item in _tool_list(value)
+            if isinstance(item, Mapping)
+        )
+    )
 
 
 @dataclass(frozen=True, slots=True)

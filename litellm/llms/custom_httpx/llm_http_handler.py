@@ -622,6 +622,40 @@ _DECODED_BODY_STALE_HEADERS: Final[frozenset[str]] = frozenset({"content-encodin
 _OPTIONAL_PARAMS: Final = TypeAdapter(Mapping[str, object])
 _JSON_OBJECT: Final = TypeAdapter(dict[str, object])
 _JSON_OBJECTS: Final = TypeAdapter(list[dict[str, object]])
+
+
+async def _admit_hosted_mcp_chat_request(
+    provider_config: BaseConfig,
+    data: Mapping[str, object],
+    litellm_params: Mapping[str, object],
+    *,
+    model: str,
+    custom_llm_provider: str,
+    api_base: str,
+) -> None:
+    """Check provider-run MCP attachments in the final chat body against the caller's tool grants.
+
+    Only chat configs that forward MCP server URLs to the provider (Claude Platform on Bedrock)
+    need this; the Anthropic chat handler runs the same check on its own path."""
+    from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+    from litellm.proxy._types import ProxyException
+    from litellm.responses.mcp.request_context import authorize_provider_mcp_request
+
+    if not (isinstance(provider_config, AnthropicConfig) and provider_config.runs_hosted_mcp()):
+        return
+    try:
+        await authorize_provider_mcp_request(
+            _JSON_OBJECT.validate_python(data), _JSON_OBJECT.validate_python(litellm_params), provider_bound=True
+        )
+    except ProxyException as error:
+        raise litellm.PermissionDeniedError(
+            message=error.message,
+            model=model,
+            llm_provider=custom_llm_provider,
+            response=httpx.Response(403, request=httpx.Request("POST", api_base)),
+        ) from error
+
+
 _DECODED_JSON: Final = TypeAdapter(object)
 
 
@@ -1031,6 +1065,21 @@ class BaseLLMHTTPHandler:
                 shared_session=shared_session,
             )
 
+        async def admit_then_dispatch(
+            data: dict[str, object],  # mutable-ok: async_completion takes dict
+            signed_headers: dict[str, object],  # mutable-ok: async_completion takes dict
+            signed_json_body: bytes | None,
+        ) -> ModelResponse | CustomStreamWrapper:
+            await _admit_hosted_mcp_chat_request(
+                provider_config,
+                data,
+                cast("Mapping[str, object]", litellm_params),  # cast-ok: completion's litellm_params is a bare dict
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                api_base=api_base,
+            )
+            return await dispatch_async(data, signed_headers, signed_json_body)
+
         if acompletion is True and provider_config.uses_async_transform_request:
 
             async def transform_then_dispatch() -> ModelResponse | CustomStreamWrapper:
@@ -1049,7 +1098,7 @@ class BaseLLMHTTPHandler:
                     if isinstance(provider_config, SignsRequestsWithAWS)
                     else asyncio.to_thread(sign_and_log, transformed)
                 )
-                return await dispatch_async(*signed_request)
+                return await admit_then_dispatch(*signed_request)
 
             return transform_then_dispatch()
 
@@ -1064,7 +1113,7 @@ class BaseLLMHTTPHandler:
         )
 
         if acompletion is True:
-            return dispatch_async(data, signed_headers, signed_json_body)
+            return admit_then_dispatch(data, signed_headers, signed_json_body)
 
         if stream is True:
             data = self._add_stream_param_to_request_body(
@@ -2710,6 +2759,9 @@ class BaseLLMHTTPHandler:
             litellm_params=litellm_params,
             headers=headers,
         )
+        from litellm.responses.mcp.request_context import authorize_provider_mcp_request
+
+        await authorize_provider_mcp_request(_JSON_OBJECT.validate_python(request_body), kwargs, provider_bound=True)
         logging_obj.stream = stream
         logging_obj.model_call_details.update(request_body)
 
@@ -3314,6 +3366,13 @@ class BaseLLMHTTPHandler:
                     extra_body=extra_body, request=data, model=model, litellm_params=litellm_params
                 )
             )
+        from litellm.responses.mcp.request_context import authorize_provider_mcp_request
+
+        await authorize_provider_mcp_request(
+            data,
+            {"litellm_metadata": litellm_metadata},
+            provider_bound=True,
+        )
         stream = bool(stream or data.get("stream"))
 
         # Preserve the OpenAI-style request context (not sent to the provider) for streaming

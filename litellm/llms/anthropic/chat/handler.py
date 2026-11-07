@@ -547,6 +547,9 @@ class AnthropicChatCompletion(BaseLLM):
 
         async def acompletion_dispatch() -> "ModelResponse | CustomStreamWrapper":
             """Translate then send, so the provider config can inline remote media off the event loop."""
+            from litellm.proxy._types import ProxyException
+            from litellm.responses.mcp.request_context import authorize_provider_mcp_request
+
             request_headers, data = finish_request(
                 await config.async_transform_request(
                     model=model,
@@ -556,6 +559,19 @@ class AnthropicChatCompletion(BaseLLM):
                     headers=headers,
                 )
             )
+            try:
+                await authorize_provider_mcp_request(
+                    TypeAdapter(dict[str, object]).validate_python(data),
+                    TypeAdapter(dict[str, object]).validate_python(litellm_params),
+                    provider_bound=True,
+                )
+            except ProxyException as error:
+                raise litellm.PermissionDeniedError(
+                    message=error.message,
+                    model=model,
+                    llm_provider="anthropic",
+                    response=httpx.Response(403, request=httpx.Request("POST", api_base)),
+                ) from error
             if (
                 stream is True
             ):  # if function call - fake the streaming (need complete blocks for output parsing in openai format)
