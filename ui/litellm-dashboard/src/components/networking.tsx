@@ -4579,6 +4579,24 @@ export const deleteMCPServer = async (accessToken: string, serverId: string) => 
   }
 };
 
+export const enableMCPServerCall = async (accessToken: string, serverId: string) => {
+  try {
+    return await apiClient.put(`/v1/mcp/server/${serverId}/enable`, { accessToken });
+  } catch (error) {
+    console.error("Failed to enable MCP server:", error);
+    throw error;
+  }
+};
+
+export const disableMCPServerCall = async (accessToken: string, serverId: string) => {
+  try {
+    return await apiClient.put(`/v1/mcp/server/${serverId}/disable`, { accessToken });
+  } catch (error) {
+    console.error("Failed to disable MCP server:", error);
+    throw error;
+  }
+};
+
 export const fetchMCPToolsets = async (accessToken: string): Promise<any[]> => {
   try {
     return await apiClient.get(`/v1/mcp/toolset`, { accessToken });

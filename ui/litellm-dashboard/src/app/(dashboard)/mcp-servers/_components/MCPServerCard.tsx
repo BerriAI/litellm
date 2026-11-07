@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { Check, CircleAlert, Ellipsis, Trash2, Zap } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -31,6 +32,9 @@ interface MCPServerCardProps {
   onByokConnect?: () => void;
   onOpenFillFields?: () => void;
   onDelete?: () => void;
+  // Provided only for admins; omitting it hides the enable/disable switch.
+  onToggleEnabled?: (enabled: boolean) => void;
+  isTogglingEnabled?: boolean;
   stdioEnabled?: boolean;
 }
 
@@ -55,6 +59,8 @@ const MCPServerCard: FC<MCPServerCardProps> = ({
   onByokConnect,
   onOpenFillFields,
   onDelete,
+  onToggleEnabled,
+  isTogglingEnabled,
   stdioEnabled = true,
 }) => {
   const { t } = useTranslation();
@@ -80,6 +86,8 @@ const MCPServerCard: FC<MCPServerCardProps> = ({
 
   const missing = missingUserFields ?? [];
   const needsAttention = missing.length > 0;
+
+  const isEnabled = server.enabled !== false;
 
   const cardClass = needsAttention
     ? "border-2 border-destructive/40 bg-destructive/5 hover:border-destructive/60 hover:shadow-md"
@@ -128,9 +136,11 @@ const MCPServerCard: FC<MCPServerCardProps> = ({
         tabIndex={0}
         onClick={onClick}
         onKeyDown={handleKeyDown}
+        data-testid="mcp-server-card"
         className={cn(
           "group relative flex h-full cursor-pointer flex-col gap-3 rounded-lg p-4 transition-all duration-150 focus:outline-hidden focus-visible:ring-2 focus-visible:ring-ring",
           cardClass,
+          !isEnabled && "opacity-60",
         )}
       >
         <div className="flex items-start gap-3">
@@ -156,6 +166,19 @@ const MCPServerCard: FC<MCPServerCardProps> = ({
               </Tooltip>
             </div>
           </div>
+          {onToggleEnabled && (
+            // The wrapper stops propagation for the switch's hidden input too,
+            // so toggling never triggers the card-level click.
+            <span className="mt-1 shrink-0" onClick={stop} onKeyDown={stop}>
+              <Switch
+                size="sm"
+                checked={isEnabled}
+                disabled={isTogglingEnabled}
+                aria-label={t("mcpServers.serverCard.enabledToggle.label")}
+                onCheckedChange={(checked) => onToggleEnabled(checked)}
+              />
+            </span>
+          )}
           {hasMenu && (
             <DropdownMenu>
               <DropdownMenuTrigger
@@ -223,6 +246,14 @@ const MCPServerCard: FC<MCPServerCardProps> = ({
             error={server.health_check_error}
             dotClass={healthTone.dot}
           />
+          {!isEnabled && (
+            <Tooltip>
+              <TooltipTrigger
+                render={<Badge variant="secondary">{t("mcpServers.serverCard.enabledToggle.disabledBadge")}</Badge>}
+              />
+              <TooltipContent>{t("mcpServers.serverCard.enabledToggle.disabledTooltip")}</TooltipContent>
+            </Tooltip>
+          )}
           <Badge variant="outline">{displayTransport.toUpperCase()}</Badge>
           <Badge variant="outline">{authType}</Badge>
           {transport === "stdio" && !stdioEnabled && (

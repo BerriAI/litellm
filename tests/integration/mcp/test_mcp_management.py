@@ -134,6 +134,41 @@ def test_delete_removes_listing_calls_and_database_row(gateway: Gateway) -> None
         assert caller.list_tools().tools == (), caller.list_tools().raw
 
 
+def test_enable_disable_hides_server_from_callers_but_not_admin_and_restores(gateway: Gateway) -> None:
+    with mcp_peer() as peer, gateway.scenario() as scenario:
+        alias: Final = "mgmt" + uuid.uuid4().hex[:8]
+        identity: Final = register_mcp(scenario, peer, alias)
+        key: Final = scenario.key(object_permission={"mcp_servers": [identity]})
+        name: Final = tool_names(gateway, key, identity)["add"]
+        assert call_tool(gateway, key, identity, name, ADD).status_code == 200
+        assert _servers(gateway)[identity]["enabled"] is True
+
+        disabled: Final = gateway.request("PUT", f"/v1/mcp/server/{identity}/disable")
+        assert disabled.status_code == 200, disabled.text
+        assert disabled.json()["enabled"] is False
+        eventually(
+            lambda: gateway.client.get(
+                "/mcp-rest/tools/list", headers={"x-litellm-api-key": key}, params={"server_id": identity}
+            ),
+            lambda value: value.status_code >= 400 or value.json().get("tools") == [],
+        )
+        peer.drain()
+        rejected: Final = call_tool(gateway, key, identity, name, ADD)
+        assert rejected.status_code >= 400, rejected.text
+        assert tool_calls(peer.drain()) == ()
+        assert _servers(gateway)[identity]["enabled"] is False
+
+        enabled: Final = gateway.request("PUT", f"/v1/mcp/server/{identity}/enable")
+        assert enabled.status_code == 200, enabled.text
+        assert enabled.json()["enabled"] is True
+        restored: Final = eventually(
+            lambda: call_tool(gateway, key, identity, name, ADD), lambda value: value.status_code == 200
+        )
+        assert restored.json()["content"][0]["text"] == "9", restored.text
+        assert name in listed_tools(gateway, key, identity)
+        assert _servers(gateway)[identity]["enabled"] is True
+
+
 def test_duplicate_alias_is_rejected_so_tool_prefixes_cannot_collide(gateway: Gateway) -> None:
     import concurrent.futures
 

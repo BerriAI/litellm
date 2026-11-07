@@ -5106,3 +5106,90 @@ async def test_rest_guardrail_bearer_excludes_admission_key(
             assert (authorization.removeprefix("Bearer ") or None) == expected
     finally:
         global_mcp_tool_registry.unregister_tools_with_prefix("guarded-")
+
+
+class TestRestDisabledConfigServer:
+    """Task 3 fix: a disabled CONFIG server must be absent from the REST tools/list and
+    rejected on the REST tools/call allowed-server resolution."""
+
+    pytestmark = pytest.mark.asyncio
+
+    @staticmethod
+    def _disabled_config_manager():
+        from litellm.proxy.mcp_server.mcp_server_manager import MCPServerManager
+
+        server = MCPServer(
+            server_id="disabled-config-rest",
+            name="disabled_config_rest",
+            server_name="disabled_config_rest",
+            transport=MCPTransport.http,
+            url="https://flaky.example.com/mcp",
+        )
+        manager = MCPServerManager()
+        # Config servers stay resident even when disabled; the caller-facing views subtract them.
+        manager.config_mcp_servers[server.server_id] = server
+        manager._disabled_config_server_ids.add(server.server_id)
+        return manager, server
+
+    async def test_disabled_config_server_absent_from_rest_list(self, monkeypatch):
+        manager, server = self._disabled_config_manager()
+        caller = UserAPIKeyAuth()
+        upstream = AsyncMock(return_value=[Tool(name="should-not-list", inputSchema={})])
+
+        monkeypatch.setattr(rest_endpoints, "global_mcp_server_manager", manager)
+        monkeypatch.setattr(rest_endpoints, "build_effective_auth_contexts", AsyncMock(return_value=[caller]))
+        monkeypatch.setattr(manager, "get_allowed_mcp_servers", AsyncMock(return_value=[server.server_id]))
+        monkeypatch.setattr(manager, "filter_server_ids_by_ip_with_info", lambda ids, _ip: (list(ids), 0))
+        monkeypatch.setattr(manager, "get_tools_from_server", upstream)
+
+        # Aggregate listing: the only "allowed" server is a disabled config server, so after the
+        # caller-facing subtraction nothing is listable and no upstream fetch is attempted.
+        with pytest.raises(HTTPException) as exc_info:
+            await rest_endpoints.list_tool_rest_api(
+                _build_request(path="/mcp-rest/tools/list", method="GET"),
+                user_api_key_dict=caller,
+            )
+
+        assert exc_info.value.status_code == 403
+        assert exc_info.value.detail["error"] == "access_denied"
+        upstream.assert_not_awaited()
+
+    async def test_disabled_config_server_rejected_on_rest_call_resolution(self, monkeypatch):
+        manager, server = self._disabled_config_manager()
+        caller = UserAPIKeyAuth()
+
+        monkeypatch.setattr(rest_endpoints, "global_mcp_server_manager", manager)
+        monkeypatch.setattr(rest_endpoints, "build_effective_auth_contexts", AsyncMock(return_value=[caller]))
+        monkeypatch.setattr(manager, "get_allowed_mcp_servers", AsyncMock(return_value=[server.server_id]))
+        monkeypatch.setattr(manager, "filter_server_ids_by_ip", lambda ids, _ip: list(ids))
+
+        # The call path resolves allowed servers here; a disabled config server is subtracted,
+        # so it is no longer in the allowed set and the request is rejected (not dispatched).
+        with pytest.raises(HTTPException) as exc_info:
+            await rest_endpoints._resolve_allowed_mcp_servers_with_ip_filter(
+                _build_request(path="/mcp-rest/tools/call", method="POST"),
+                caller,
+                server.server_id,
+            )
+
+        assert exc_info.value.status_code == 403
+        assert exc_info.value.detail["error"] == "access_denied"
+
+    async def test_enabled_config_server_still_resolves_on_rest_call(self, monkeypatch):
+        # Control: without the disable, the same resolution admits the server.
+        manager, server = self._disabled_config_manager()
+        manager._disabled_config_server_ids.discard(server.server_id)
+        caller = UserAPIKeyAuth()
+
+        monkeypatch.setattr(rest_endpoints, "global_mcp_server_manager", manager)
+        monkeypatch.setattr(rest_endpoints, "build_effective_auth_contexts", AsyncMock(return_value=[caller]))
+        monkeypatch.setattr(manager, "get_allowed_mcp_servers", AsyncMock(return_value=[server.server_id]))
+        monkeypatch.setattr(manager, "filter_server_ids_by_ip", lambda ids, _ip: list(ids))
+
+        allowed, canonical = await rest_endpoints._resolve_allowed_mcp_servers_with_ip_filter(
+            _build_request(path="/mcp-rest/tools/call", method="POST"),
+            caller,
+            server.server_id,
+        )
+        assert canonical == server.server_id
+        assert server.server_id in {s.server_id for s in allowed}

@@ -90,8 +90,9 @@ class SemanticMCPToolFilter:
         )
 
         try:
-            # Get all servers from registry without auth checks
-            registry: Final = global_mcp_server_manager.get_registry()
+            # Get all servers from registry without auth checks. Subtract admin-disabled config
+            # servers so their tools are never indexed into the caller-facing semantic router.
+            registry: Final = global_mcp_server_manager.get_filtered_registry()
             if not registry:
                 verbose_logger.warning("MCP registry is empty")
                 self.tool_router = None

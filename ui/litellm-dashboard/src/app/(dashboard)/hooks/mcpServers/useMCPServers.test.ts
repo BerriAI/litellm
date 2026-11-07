@@ -1,13 +1,15 @@
 /* @vitest-environment jsdom */
 import React from "react";
-import { renderHook, waitFor } from "@testing-library/react";
+import { renderHook, waitFor, act } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { useMCPServers } from "./useMCPServers";
+import { useMCPServers, useToggleMCPServerEnabled } from "./useMCPServers";
 import * as networking from "@/components/networking";
 
 vi.mock("@/components/networking", () => ({
   fetchMCPServers: vi.fn(),
+  enableMCPServerCall: vi.fn(),
+  disableMCPServerCall: vi.fn(),
 }));
 
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
@@ -142,5 +144,74 @@ describe("useMCPServers", () => {
     });
 
     expect(result.current.data).toEqual([]);
+  });
+});
+
+describe("useToggleMCPServerEnabled", () => {
+  const sharedWrapper = () => {
+    const queryClient = createQueryClient();
+    const w = ({ children }: { children: React.ReactNode }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    return { w, queryClient };
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("calls enableMCPServerCall when enabling and refetches the list", async () => {
+    vi.mocked(networking.fetchMCPServers).mockResolvedValue(mockServers as any);
+    vi.mocked(networking.enableMCPServerCall).mockResolvedValue({} as any);
+    const { w } = sharedWrapper();
+    const { result } = renderHook(() => ({ list: useMCPServers(), toggle: useToggleMCPServerEnabled() }), {
+      wrapper: w,
+    });
+    await waitFor(() => expect(result.current.list.isSuccess).toBe(true));
+    expect(networking.fetchMCPServers).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await result.current.toggle.mutateAsync({ serverId: "server-1", enabled: true });
+    });
+
+    expect(networking.enableMCPServerCall).toHaveBeenCalledWith(mockAccessToken, "server-1");
+    expect(networking.disableMCPServerCall).not.toHaveBeenCalled();
+    await waitFor(() => expect(networking.fetchMCPServers).toHaveBeenCalledTimes(2));
+  });
+
+  it("calls disableMCPServerCall when disabling", async () => {
+    vi.mocked(networking.fetchMCPServers).mockResolvedValue(mockServers as any);
+    vi.mocked(networking.disableMCPServerCall).mockResolvedValue({} as any);
+    const { w } = sharedWrapper();
+    const { result } = renderHook(() => useToggleMCPServerEnabled(), { wrapper: w });
+
+    await act(async () => {
+      await result.current.mutateAsync({ serverId: "server-1", enabled: false });
+    });
+
+    expect(networking.disableMCPServerCall).toHaveBeenCalledWith(mockAccessToken, "server-1");
+    expect(networking.enableMCPServerCall).not.toHaveBeenCalled();
+  });
+
+  it("optimistically updates cached list and rolls back on error", async () => {
+    vi.mocked(networking.fetchMCPServers).mockResolvedValue([{ ...mockServers[0], enabled: true }] as any);
+    let reject: (e: Error) => void = () => {};
+    vi.mocked(networking.disableMCPServerCall).mockImplementation(() => new Promise((_, rej) => (reject = rej)) as any);
+    const { w } = sharedWrapper();
+    const { result } = renderHook(() => ({ list: useMCPServers(), toggle: useToggleMCPServerEnabled() }), {
+      wrapper: w,
+    });
+    await waitFor(() => expect(result.current.list.isSuccess).toBe(true));
+
+    let p: Promise<unknown> = Promise.resolve();
+    act(() => {
+      p = result.current.toggle.mutateAsync({ serverId: "server-1", enabled: false }).catch(() => undefined);
+    });
+    await waitFor(() => expect(result.current.list.data?.[0].enabled).toBe(false));
+    await act(async () => {
+      reject(new Error("boom"));
+      await p;
+    });
+    await waitFor(() => expect(result.current.toggle.isError).toBe(true));
+    await waitFor(() => expect(result.current.list.data?.[0].enabled).toBe(true));
   });
 });

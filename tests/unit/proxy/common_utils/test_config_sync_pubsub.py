@@ -42,6 +42,7 @@ _EXPECTED_CONFIG_SYNCED_TABLE_NAMES = frozenset(
         "litellm_managedvectorstoreindextable",
         "litellm_managedvectorstorestable",
         "litellm_mcpservertable",
+        "litellm_mcpserverstateoverride",
         "litellm_policyattachmenttable",
         "litellm_policytable",
         "litellm_prompttable",
