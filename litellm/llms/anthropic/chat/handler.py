@@ -719,6 +719,7 @@ class ModelResponseIterator:
         self.json_mode = json_mode
         self.speed = speed
         self._cumulative_usage: Mapping[str, object] = MappingProxyType({})
+        self._fallback_blocks: tuple[Mapping[str, object], ...] = ()
         # rewritten-name -> caller's original. Built per-request from the
         # forward map in AnthropicConfig._build_request_tool_name_maps; only
         # contains entries we actually rewrote, so a tool legitimately named
@@ -803,13 +804,18 @@ class ModelResponseIterator:
             return True
         return False
 
-    def _handle_usage(self, anthropic_usage_chunk: Mapping[str, object]) -> Usage:
+    def _handle_usage(
+        self,
+        anthropic_usage_chunk: Mapping[str, object],
+        stop: Mapping[str, object] = MappingProxyType({}),
+    ) -> Usage:
         # message_delta usage is cumulative but may omit fields reported at message_start.
         self._cumulative_usage = MappingProxyType({**self._cumulative_usage, **anthropic_usage_chunk})
         reasoning_content: Final = "".join(self.reasoning_content_chunks) if self.reasoning_content_chunks else None
         usage: Final = AnthropicConfig().calculate_usage(
             usage_object=self._cumulative_usage,
             reasoning_content=reasoning_content,
+            completion_response={**stop, "content": list(self._fallback_blocks)},
             speed=self.speed,
         )
         if usage.speed is not None:
@@ -1096,6 +1102,9 @@ class ModelResponseIterator:
                         content_block_start=content_block_start,
                         provider_specific_fields=provider_specific_fields,
                     )
+
+                elif content_block_start["content_block"]["type"] == "fallback":
+                    self._fallback_blocks = (*self._fallback_blocks, content_block_start["content_block"])
 
                 elif content_block_start["content_block"]["type"] == "compaction":
                     # Handle compaction blocks
@@ -1455,7 +1464,9 @@ class ModelResponseIterator:
         )
         finish_reason: Final = "stop" if called_only_the_response_format_tool else provider_finish_reason
         usage: Final = (
-            self._handle_usage(anthropic_usage_chunk=message_delta["usage"]) if "usage" in message_delta else None
+            self._handle_usage(anthropic_usage_chunk=message_delta["usage"], stop=message_delta["delta"])
+            if "usage" in message_delta
+            else None
         )
         container: Final = message_delta["delta"].get("container")
         return finish_reason, usage, container, stop_reason_provider_specific_fields(message_delta["delta"])

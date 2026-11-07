@@ -4429,3 +4429,215 @@ def test_anthropic_chat_completion_picks_the_beta_row_by_api_base(
         client.close()
 
     assert frozenset(",".join(upstream.anthropic_beta).split(",")) == forwarded_betas
+
+
+def _fallback_chain_response(
+    refusal_category: str | None, declined_output_tokens: int, final_refusal_category: str | None
+) -> dict[str, object]:
+    """Claude Fable 5 declines and Claude Opus 4.8 runs next, in the response shape of
+    https://platform.claude.com/docs/en/build-with-claude/refusals-and-fallback (fetched 2026-11-03). A
+    ``final_refusal_category`` makes Opus decline too, which ends the chain with its refusal"""
+    served_output_tokens: Final = 264 if final_refusal_category is None else 0
+    return {
+        "id": "msg_01XFUDYJgAACzvnptvVoYEL",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-opus-4-8",
+        "content": [
+            {
+                "type": "fallback",
+                "from": {"model": "claude-fable-5"},
+                "to": {"model": "claude-opus-4-8"},
+                "trigger": {"type": "refusal", "category": refusal_category},
+            },
+            *([{"type": "text", "text": "Hi! How can I help you today?"}] if final_refusal_category is None else []),
+        ],
+        "stop_reason": "end_turn" if final_refusal_category is None else "refusal",
+        "stop_details": (
+            None
+            if final_refusal_category is None
+            else {"type": "refusal", "category": final_refusal_category, "explanation": None}
+        ),
+        "usage": {
+            "input_tokens": 412,
+            "output_tokens": served_output_tokens,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0,
+            "iterations": [
+                {
+                    "type": "message",
+                    "model": "claude-fable-5",
+                    "input_tokens": 535,
+                    "output_tokens": declined_output_tokens,
+                    "cache_read_input_tokens": 0,
+                    "cache_creation_input_tokens": 0,
+                },
+                {
+                    "type": "fallback_message",
+                    "model": "claude-opus-4-8",
+                    "input_tokens": 412,
+                    "output_tokens": served_output_tokens,
+                    "cache_read_input_tokens": 0,
+                    "cache_creation_input_tokens": 0,
+                },
+            ],
+        },
+    }
+
+
+def _fallback_chain_stream(message: dict[str, object]) -> bytes:
+    content: Final = message["content"]
+    assert isinstance(content, list)
+    events: Final = (
+        {
+            "type": "message_start",
+            "message": {
+                **message,
+                "content": [],
+                "stop_reason": None,
+                "stop_details": None,
+                "usage": {"input_tokens": 412, "output_tokens": 1},
+            },
+        },
+        *chain.from_iterable(
+            (
+                {"type": "content_block_start", "index": index, "content_block": block},
+                {"type": "content_block_stop", "index": index},
+            )
+            for index, block in enumerate(content)
+        ),
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": message["stop_reason"], "stop_details": message["stop_details"]},
+            "usage": message["usage"],
+        },
+        {"type": "message_stop"},
+    )
+    return "".join(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n" for event in events).encode()
+
+
+def _fallback_chain_cost(message: dict[str, object], stream: bool) -> float:
+    if not stream:
+        client: Final = HTTPHandler(
+            client=httpx.Client(transport=httpx.MockTransport(lambda _: httpx.Response(200, json=message)))
+        )
+        try:
+            response: Final = litellm.completion(
+                model="anthropic/claude-fable-5",
+                messages=[{"role": "user", "content": "Hello"}],
+                api_key="test-key",
+                client=client,
+                max_tokens=300,
+            )
+        finally:
+            client.close()
+        return response._hidden_params["response_cost"]
+    stream_client: Final = HTTPHandler(
+        client=httpx.Client(
+            transport=httpx.MockTransport(
+                lambda _: httpx.Response(
+                    200, headers={"content-type": "text/event-stream"}, content=_fallback_chain_stream(message)
+                )
+            )
+        )
+    )
+    try:
+        chunks: Final = list(
+            litellm.completion(
+                model="anthropic/claude-fable-5",
+                messages=[{"role": "user", "content": "Hello"}],
+                api_key="test-key",
+                client=stream_client,
+                max_tokens=300,
+                stream=True,
+            )
+        )
+    finally:
+        stream_client.close()
+    return litellm.completion_cost(completion_response=litellm.stream_chunk_builder(chunks))
+
+
+def _attempt_cost(model: str, prompt_tokens: int, completion_tokens: int) -> float:
+    prompt_cost, completion_cost = litellm.cost_per_token(
+        model=model, prompt_tokens=prompt_tokens, completion_tokens=completion_tokens
+    )
+    return prompt_cost + completion_cost
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["non_streaming", "streaming"])
+@pytest.mark.parametrize(
+    ("refusal_category", "declined_output_tokens", "final_refusal_category", "billed_attempts"),
+    [
+        pytest.param("cyber", 0, None, (("claude-opus-4-8", 412, 264),), id="unbilled_refusal"),
+        pytest.param("bio", 0, None, (("claude-fable-5", 535, 0), ("claude-opus-4-8", 412, 264)), id="billed_refusal"),
+        pytest.param(None, 0, None, (("claude-opus-4-8", 412, 264),), id="refusal_without_a_category"),
+        pytest.param(
+            "cyber",
+            37,
+            None,
+            (("claude-fable-5", 535, 37), ("claude-opus-4-8", 412, 264)),
+            id="refusal_after_partial_output",
+        ),
+        pytest.param("cyber", 0, "bio", (("claude-opus-4-8", 412, 0),), id="every_model_declines_billed_last"),
+        pytest.param("cyber", 0, "general_harms", (), id="every_model_declines_unbilled"),
+    ],
+)
+def test_anthropic_chat_prices_each_server_side_fallback_attempt_at_its_own_model_rate(
+    refusal_category: str | None,
+    declined_output_tokens: int,
+    final_refusal_category: str | None,
+    billed_attempts: tuple[tuple[str, int, int], ...],
+    stream: bool,
+) -> None:
+    """Billing rules from https://platform.claude.com/docs/en/build-with-claude/refusals-and-fallback (fetched
+    2026-11-03): each attempt bills at its own model's rates, and a refusal before any output bills only for the
+    bio, frontier_llm and reasoning_extraction categories"""
+    message: Final = _fallback_chain_response(refusal_category, declined_output_tokens, final_refusal_category)
+
+    cost: Final = _fallback_chain_cost(message, stream)
+
+    assert cost == pytest.approx(sum(_attempt_cost(*attempt) for attempt in billed_attempts))
+
+
+@pytest.mark.parametrize(
+    ("refusal_category", "billed_input_tokens"),
+    [pytest.param("bio", 535 + 412, id="billed_refusal"), pytest.param("cyber", 412, id="unbilled_refusal")],
+)
+@pytest.mark.parametrize(
+    ("deployment_pricing", "priced_as"),
+    [
+        pytest.param({"input_cost_per_token": 1e-3, "output_cost_per_token": 2e-3}, None, id="deployment_prices"),
+        pytest.param({"base_model": "anthropic/claude-haiku-5-5"}, "claude-haiku-5-5", id="base_model"),
+    ],
+)
+def test_anthropic_chat_prices_a_whole_fallback_chain_by_the_deployment_pricing(
+    refusal_category: str,
+    billed_input_tokens: int,
+    deployment_pricing: dict[str, object],
+    priced_as: str | None,
+) -> None:
+    message: Final = _fallback_chain_response(refusal_category, 0, None)
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "fable",
+                "litellm_params": {"model": "anthropic/claude-fable-5", "api_key": "test-key", **deployment_pricing},
+            }
+        ]
+    )
+    client: Final = HTTPHandler(
+        client=httpx.Client(transport=httpx.MockTransport(lambda _: httpx.Response(200, json=message)))
+    )
+    try:
+        response: Final = router.completion(
+            model="fable", messages=[{"role": "user", "content": "Hello"}], client=client, max_tokens=300
+        )
+    finally:
+        client.close()
+    expected: Final = (
+        billed_input_tokens * 1e-3 + 264 * 2e-3
+        if priced_as is None
+        else _attempt_cost(priced_as, billed_input_tokens, 264)
+    )
+
+    assert response._hidden_params["response_cost"] == pytest.approx(expected)

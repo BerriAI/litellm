@@ -397,10 +397,57 @@ def _hosted_web_call(call_id: str, tool_name: str, tool_input: object, result: o
 class _AnthropicUsageIteration(TypedDict, total=False):
     """One entry of the ``usage.iterations`` array on an Anthropic response."""
 
+    type: ReadOnly[str]
     input_tokens: ReadOnly[int | None]
     output_tokens: ReadOnly[int | None]
     cache_creation_input_tokens: ReadOnly[int | None]
     cache_read_input_tokens: ReadOnly[int | None]
+
+
+class _RefusalProbe(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    category: str | None = None
+
+
+class _ContentBlockProbe(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    type: str | None = None
+    name: str | None = None
+    trigger: _RefusalProbe | None = None
+
+
+class _ResponseProbe(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    content: tuple[_ContentBlockProbe, ...] = ()
+    stop_reason: str | None = None
+    stop_details: _RefusalProbe | None = None
+
+
+class _FallbackChainUsageFields(TypedDict, total=False):
+    fallback_refusal_categories: ReadOnly[tuple[str | None, ...]]
+
+
+def _refusal_category(refusal: _RefusalProbe | None) -> str | None:
+    return None if refusal is None else refusal.category
+
+
+def _response_probe(completion_response: Mapping[str, object] | None) -> _ResponseProbe:
+    try:
+        return _ResponseProbe.model_validate(completion_response or {})
+    except ValidationError:
+        return _ResponseProbe()
+
+
+def _fallback_refusal_categories(response: _ResponseProbe) -> tuple[str | None, ...]:
+    """The refusal category of each declined attempt in a server-side fallback chain, in attempt order. Every
+    ``fallback`` content block marks one declined attempt, and a final refusal means the last model declined too."""
+    handoffs: Final = tuple(_refusal_category(block.trigger) for block in response.content if block.type == "fallback")
+    if response.stop_reason != "refusal":
+        return handoffs
+    return (*handoffs, _refusal_category(response.stop_details))
 
 
 class _AnthropicToolResultBlock(TypedDict, total=False):
@@ -2963,8 +3010,17 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         )
 
     @staticmethod
+    def _summable_iterations(usage: Mapping[str, Any]) -> Sequence[_AnthropicUsageIteration] | None:
+        """``usage.iterations`` when every entry ran on the response's model. A server-side fallback chain spans
+        models, and its top-level usage already is the attempt that served the turn, so it is never summed."""
+        iterations: Final[Sequence[_AnthropicUsageIteration] | None] = usage.get("iterations")
+        if not iterations or any(iteration.get("type") == "fallback_message" for iteration in iterations):
+            return None
+        return iterations
+
+    @staticmethod
     def _resolve_cache_creation_token_details(usage: Mapping[str, Any]) -> CacheCreationTokenDetails | None:
-        iterations: Final = usage.get("iterations")
+        iterations: Final = AnthropicConfig._summable_iterations(usage)
         if iterations:
             aggregated: Final = AnthropicConfig._aggregate_cache_creation_token_details(iterations)
             if aggregated is not None:
@@ -2981,7 +3037,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         self,
         usage_object: Mapping[str, Any],
         reasoning_content: str | None,
-        completion_response: dict | None = None,
+        completion_response: Mapping[str, object] | None = None,
         speed: str | None = None,
     ) -> Usage:
         # NOTE: Sometimes the usage object has None set explicitly for token counts, meaning .get() & key access returns None, and we need to account for this
@@ -3005,7 +3061,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         raw_speed: Final = _usage.get("speed")
         resolved_speed: Final = raw_speed if isinstance(raw_speed, str) else speed
 
-        iterations: Final[Sequence[_AnthropicUsageIteration] | None] = _usage.get("iterations")
+        reported_iterations: Final[Sequence[_AnthropicUsageIteration] | None] = _usage.get("iterations")
+        iterations: Final = self._summable_iterations(_usage)
         if iterations:
             prompt_tokens = sum(it.get("input_tokens", 0) or 0 for it in iterations)
             completion_tokens = sum(it.get("output_tokens", 0) or 0 for it in iterations)
@@ -3032,15 +3089,15 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             ):
                 tool_search_requests = cast(int, _usage["server_tool_use"]["tool_search_requests"])
 
+        response_probe: Final = _response_probe(completion_response)
         # Count tool_search_requests from content blocks if not in usage
         # Anthropic doesn't always include tool_search_requests in the usage object
-        if tool_search_requests is None and completion_response is not None:
-            tool_search_count = 0
-            for content in completion_response.get("content", []):
-                if content.get("type") == "server_tool_use":
-                    tool_name = content.get("name", "")
-                    if "tool_search" in tool_name:
-                        tool_search_count += 1
+        if tool_search_requests is None:
+            tool_search_count: Final = sum(
+                1
+                for block in response_probe.content
+                if block.type == "server_tool_use" and "tool_search" in (block.name or "")
+            )
             if tool_search_count > 0:
                 tool_search_requests = tool_search_count
 
@@ -3059,6 +3116,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             completion_response=completion_response,
         )
         total_tokens: Final = prompt_tokens + completion_tokens
+        fallback_chain_fields: Final = (
+            _FallbackChainUsageFields(fallback_refusal_categories=_fallback_refusal_categories(response_probe))
+            if reported_iterations and iterations is None
+            else _FallbackChainUsageFields()
+        )
 
         usage: Final = Usage(
             prompt_tokens=prompt_tokens,
@@ -3068,7 +3130,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             cache_creation_input_tokens=cache_creation_input_tokens,
             cache_read_input_tokens=cache_read_input_tokens,
             completion_tokens_details=completion_token_details,
-            iterations=iterations,
+            iterations=reported_iterations,
+            **fallback_chain_fields,
             server_tool_use=(
                 ServerToolUse(
                     web_search_requests=web_search_requests,
