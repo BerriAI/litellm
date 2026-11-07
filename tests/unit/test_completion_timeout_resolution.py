@@ -134,7 +134,7 @@ def test_httpx_timeout_coerced_for_provider_without_httpx_timeout_support():
     out = CompletionTimeout.resolve(
         t,
         {},
-        "azure_ai",
+        "replicate",
         global_timeout=None,
         supports_httpx_timeout=supports_httpx_timeout,
         stream_kind=StreamKind.NOT_STREAMED,
@@ -182,7 +182,7 @@ def test_sdk_timeout_coerces_read_timeout_for_providers_without_httpx_support(
         CompletionTimeout.resolve(
             SDKTimeout(connect=2.0, read=read_timeout, write=5.0, pool=7.0),
             {},
-            "azure_ai",
+            "replicate",
             global_timeout=None,
             supports_httpx_timeout=supports_httpx_timeout,
             stream_kind=StreamKind.NOT_STREAMED,
@@ -231,3 +231,22 @@ def test_fake_stream_with_only_a_stream_timeout_keeps_the_global_request_timeout
         )
         == 600.0
     )
+
+
+@pytest.mark.parametrize(
+    "provider",
+    ("mistral", "custom_openai", "anthropic", "cohere", "ollama", "groq", "deepseek"),
+)
+def test_httpx_timeout_preserved_for_extended_providers(provider: str) -> None:
+    t = httpx.Timeout(10.0, connect=1.0)
+    out = CompletionTimeout.resolve(
+        t,
+        {},
+        provider,
+        global_timeout=None,
+        supports_httpx_timeout=supports_httpx_timeout,
+        stream_kind=StreamKind.NOT_STREAMED,
+    )
+    assert out is t
+    assert isinstance(out, httpx.Timeout)
+    assert out.connect == 1.0
