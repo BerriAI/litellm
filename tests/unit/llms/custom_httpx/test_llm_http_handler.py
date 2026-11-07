@@ -2818,6 +2818,82 @@ async def test_agentic_follow_up_uses_the_client_max_tokens_unless_the_hook_sets
     assert [json.loads(call.request.content)["max_tokens"] for call in upstream.calls] == [4000, follow_up_max_tokens]
 
 
+def _follow_up_rejected_above(max_tokens_that_fit: int, message: str) -> Callable[[httpx.Request], httpx.Response]:
+    def answer(request: httpx.Request) -> httpx.Response:
+        requested: Final = json.loads(request.content)["max_tokens"]
+        if b'"tool_result"' not in request.content or requested <= max_tokens_that_fit:
+            return _answer_after_the_lookup(request)
+        return httpx.Response(
+            400,
+            json={
+                "type": "error",
+                "error": {"type": "invalid_request_error", "message": message.format(requested=requested)},
+            },
+        )
+
+    return answer
+
+
+@pytest.mark.asyncio
+async def test_agentic_follow_up_over_the_context_window_retries_with_the_room_left(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "callbacks", [_PlannedLoop(max_tokens=None)])
+    upstream: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        side_effect=_follow_up_rejected_above(
+            1500,
+            "input length and `max_tokens` exceed context limit: 198500 + {requested} > 200000, "
+            "decrease input length or `max_tokens` and try again",
+        )
+    )
+
+    result: Final = await litellm.anthropic.messages.acreate(
+        model="anthropic/claude-haiku-5-5",
+        messages=[{"role": "user", "content": "look the answer up"}],
+        max_tokens=4000,
+        api_key="sk-ant-test",
+        tools=[_LOOKUP_TOOL],
+    )
+
+    assert isinstance(result, dict)
+    assert result["content"] == [{"type": "text", "text": "the answer"}]
+    assert [json.loads(call.request.content)["max_tokens"] for call in upstream.calls] == [4000, 4000, 1500]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "message",
+    [
+        pytest.param("prompt is too long: 201000 tokens > 200000 maximum", id="input-alone-over-the-window"),
+        pytest.param(
+            "input length and `max_tokens` exceed context limit: 200500 + {requested} > 200000, "
+            "decrease input length or `max_tokens` and try again",
+            id="no-room-left-for-any-output",
+        ),
+    ],
+)
+async def test_agentic_follow_up_over_the_context_window_fails_when_no_output_fits(
+    message: str, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "callbacks", [_PlannedLoop(max_tokens=None)])
+    upstream: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        side_effect=_follow_up_rejected_above(0, message)
+    )
+
+    with pytest.raises(litellm.BadRequestError):
+        await litellm.anthropic.messages.acreate(
+            model="anthropic/claude-haiku-5-5",
+            messages=[{"role": "user", "content": "look the answer up"}],
+            max_tokens=4000,
+            api_key="sk-ant-test",
+            tools=[_LOOKUP_TOOL],
+        )
+
+    assert [json.loads(call.request.content)["max_tokens"] for call in upstream.calls] == [4000, 4000]
+
+
 @pytest.mark.asyncio
 async def test_realtime_backend_open_retries_then_succeeds():
     """A hung/slow open handshake is retried; a later fresh attempt connects.

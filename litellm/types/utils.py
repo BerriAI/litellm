@@ -284,7 +284,7 @@ class AgenticLoopParams(TypedDict, total=False):
     """The LLM provider name (e.g., 'bedrock', 'anthropic'), when the recorder resolved one"""
 
     max_tokens: ReadOnly[int]
-    """The client's max_tokens, which the request transform removes from the params the hooks receive"""
+    """The max_tokens of the /v1/messages request this round came from, removed from the params the hooks receive"""
 
 
 class OffPeakWindow(TypedDict, total=False):

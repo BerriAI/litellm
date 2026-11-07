@@ -2,6 +2,7 @@ import asyncio
 import copy
 import inspect
 import json
+import re
 import ssl
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Coroutine, Iterator, Mapping, Sequence
 from contextlib import asynccontextmanager
@@ -45,6 +46,7 @@ from litellm.anthropic_beta_headers_manager import (
     update_headers_with_filtered_beta,
 )
 from litellm.constants import MAX_FILE_LIST_LIMIT, REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
+from litellm.exceptions import BadRequestError
 from litellm.files.types import FileContentStreamingResult
 from litellm.litellm_core_utils.agentic_followup_kwargs import build_agentic_followup_kwargs
 from litellm.litellm_core_utils.agentic_loop_refusal import (
@@ -424,6 +426,33 @@ def _send_with_goaway_retry(send: Callable[[], httpx.Response]) -> httpx.Respons
             raise
         verbose_logger.warning(_GOAWAY_RETRY_MESSAGE)
         return send()
+
+
+_CONTEXT_LIMIT_OVERFLOW: Final = re.compile(r"exceed context limit: (\d+) \+ \d+ > (\d+)")
+
+
+def _max_tokens_that_fit(error: BadRequestError) -> int | None:
+    overflow: Final = _CONTEXT_LIMIT_OVERFLOW.search(str(error))
+    if overflow is None:
+        return None
+    room: Final = int(overflow.group(2)) - int(overflow.group(1))
+    return room if room > 0 else None
+
+
+async def _acreate_within_context_window(
+    create: Callable[[Mapping[str, int]], Awaitable[_ResponseT]],
+) -> _ResponseT:
+    try:
+        return await create({})
+    except BadRequestError as error:
+        fitting_max_tokens: Final = _max_tokens_that_fit(error)
+        if fitting_max_tokens is None:
+            raise
+        verbose_logger.warning(
+            "Agentic follow-up does not fit the context window, retrying once with max_tokens=%d",
+            fitting_max_tokens,
+        )
+        return await create({"max_tokens": fitting_max_tokens})
 
 
 def _is_sized_json_body(response: httpx.Response) -> bool:
@@ -6179,15 +6208,21 @@ class BaseLLMHTTPHandler:
         kwargs_for_followup["max_agentic_loops"] = max_loops
         kwargs_for_followup["_agentic_loop_fingerprints"] = [*fingerprints, fingerprint]
 
-        response: AnthropicMessagesResponse | AsyncIterator[object] = await anthropic_messages.acreate(
-            **{
-                "max_tokens": max_tokens,
-                "messages": patch.messages,
-                "model": patch.model or full_model_name,
-                "stream": stream,
-                **optional_params,
-                **kwargs_for_followup,
-            }
+        async def send_follow_up(overrides: Mapping[str, int]) -> AnthropicMessagesResponse | AsyncIterator[object]:
+            return await anthropic_messages.acreate(
+                **{
+                    "max_tokens": max_tokens,
+                    "messages": patch.messages,
+                    "model": patch.model or full_model_name,
+                    "stream": stream,
+                    **optional_params,
+                    **kwargs_for_followup,
+                    **overrides,
+                }
+            )
+
+        response: AnthropicMessagesResponse | AsyncIterator[object] = await _acreate_within_context_window(
+            send_follow_up
         )
 
         if callback is not None:
