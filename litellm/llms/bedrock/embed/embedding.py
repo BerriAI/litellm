@@ -25,6 +25,7 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.secret_managers.main import get_secret
 from litellm.types.llms.bedrock import (
     AmazonEmbeddingRequest,
+    AwsAuthParams,
     CohereEmbeddingRequest,
     TwelveLabsAsyncInvokeStatusResponse,
 )
@@ -439,7 +440,7 @@ class BedrockEmbedding(BaseAWSLLM):
         bedrock_model: Final = _without_region_path(model_without_async_route)
         credentials, aws_region_name = self._load_credentials(
             optional_params,
-            bearer_token=bedrock_bearer_token(api_key),
+            bearer_token=bedrock_bearer_token(api_key, AwsAuthParams.model_validate(optional_params)),
             region_from_model=self._get_aws_region_from_model_arn(model_id_param) or path_region,
         )
 

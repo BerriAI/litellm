@@ -551,6 +551,36 @@ def test_bearer_api_key_is_sent_as_the_authorization_header(monkeypatch):
 
 
 @pytest.mark.parametrize(
+    "auth_kwargs, authorization_prefix",
+    [
+        (
+            {
+                "aws_access_key_id": SIGV4_PARAMS["aws_access_key_id"],
+                "aws_secret_access_key": SIGV4_PARAMS["aws_secret_access_key"],
+            },
+            f"AWS4-HMAC-SHA256 Credential={SIGV4_PARAMS['aws_access_key_id']}/",
+        ),
+        ({}, "Bearer env-bedrock-token"),
+    ],
+    ids=["explicit-keys-sign-sigv4", "no-keys-use-env-token"],
+)
+def test_explicit_aws_keys_win_over_the_env_bearer_token(
+    local_cost_map, fake_aws_env, monkeypatch, auth_kwargs, authorization_prefix
+):
+    monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "env-bedrock-token")
+    requests, client = _recording_client(json=_chat_completion_json("ok", "us.xai.grok-4.6"))
+    litellm.completion(
+        model="bedrock/chat_completions/us.xai.grok-4.6",
+        messages=[{"role": "user", "content": "hello"}],
+        client=client,
+        **auth_kwargs,
+    )
+
+    assert len(requests) == 1
+    assert requests[0].headers["Authorization"].startswith(authorization_prefix), requests[0].headers
+
+
+@pytest.mark.parametrize(
     "request_params, expected_route",
     [
         ({"tools": [GET_WEATHER_TOOL]}, "converse"),
