@@ -3370,10 +3370,10 @@ class TestCredentialWritesHoldTheReconcileLock:
     async def _assert_write_waits_for_the_lock(
         monkeypatch: pytest.MonkeyPatch, call_endpoint: Callable[[], Awaitable[dict[str, object]]], write: str
     ) -> dict[str, object]:
-        lock = asyncio.Lock()
+        lock: Final = asyncio.Lock()
         monkeypatch.setattr("litellm.proxy.proxy_server.MODEL_RECONCILE_LOCK", lock)
         async with lock:
-            task = asyncio.create_task(call_endpoint())
+            task: Final = asyncio.create_task(call_endpoint())
             for _ in range(50):
                 await asyncio.sleep(0)
             assert not task.done(), (
@@ -3399,7 +3399,7 @@ class TestCredentialWritesHoldTheReconcileLock:
                 llm_router=None,
             )
 
-        response = await self._assert_write_waits_for_the_lock(monkeypatch, call_endpoint, "create")
+        response: Final = await self._assert_write_waits_for_the_lock(monkeypatch, call_endpoint, "create")
 
         assert response["success"] is True
         assert [credential.credential_name for credential in litellm.credential_list] == ["fresh"]
@@ -3407,7 +3407,7 @@ class TestCredentialWritesHoldTheReconcileLock:
     async def test_update_credential_waits_for_an_in_flight_reload(
         self, monkeypatch: pytest.MonkeyPatch, credential_store: Callable[..., None]
     ) -> None:
-        stored = CredentialItem(
+        stored: Final = CredentialItem(
             credential_name="existing",
             display_name="before",
             credential_values={"api_key": "sk-old"},
@@ -3429,7 +3429,7 @@ class TestCredentialWritesHoldTheReconcileLock:
                 llm_router=None,
             )
 
-        response = await self._assert_write_waits_for_the_lock(monkeypatch, call_endpoint, "update")
+        response: Final = await self._assert_write_waits_for_the_lock(monkeypatch, call_endpoint, "update")
 
         assert response["success"] is True
         assert [credential.display_name for credential in litellm.credential_list] == ["after"]
@@ -3437,7 +3437,7 @@ class TestCredentialWritesHoldTheReconcileLock:
     async def test_delete_credential_waits_for_an_in_flight_reload(
         self, monkeypatch: pytest.MonkeyPatch, credential_store: Callable[..., None]
     ) -> None:
-        stored = CredentialItem(
+        stored: Final = CredentialItem(
             credential_name="doomed",
             credential_values={"api_key": "sk-old"},
             credential_info={"custom_llm_provider": "openai"},
@@ -3452,7 +3452,7 @@ class TestCredentialWritesHoldTheReconcileLock:
                 user_api_key_dict=_as_admin(),
             )
 
-        response = await self._assert_write_waits_for_the_lock(monkeypatch, call_endpoint, "delete")
+        response: Final = await self._assert_write_waits_for_the_lock(monkeypatch, call_endpoint, "delete")
 
         assert response["success"] is True
         assert litellm.credential_list == []
