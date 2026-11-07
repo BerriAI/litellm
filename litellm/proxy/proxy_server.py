@@ -987,6 +987,7 @@ from litellm.proxy.spend_tracking.background_interaction_settlement import (
 )
 from litellm.proxy.spend_tracking.budget_reservation import (
     get_budget_window_start,
+    release_budget_reservation_on_cancel,  # pyright: ignore[reportUnknownVariableType]  # takes the untyped reservation dict
     release_unbound_budget_reservation,
     stamp_budget_reservation_actual_cost,
 )
@@ -10833,6 +10834,7 @@ async def async_data_generator(
     )
     stream_source: AsyncIterator[object] | None = None  # rebind-ok: bound once the keepalive policy resolves
     stream_started: bool = False  # rebind-ok: set once a ping or a hook-cleared chunk is sent, then errors go in-band
+    provider_output_sent: bool = False  # rebind-ok: set once a provider chunk, not just a keepalive ping, goes out
     try:
         error_message: str | None = None
         requested_model_from_client: Final = _get_client_requested_model_for_streaming(request_data=request_data)
@@ -10902,6 +10904,7 @@ async def async_data_generator(
                     str_so_far=_str_so_far,
                 )
             stream_started = True
+            provider_output_sent = True
 
             # Mid-stream fallbacks surface metadata on individual chunks rather than
             # the response wrapper. Keep scanning chunks until a fallback model is
@@ -11028,6 +11031,8 @@ async def async_data_generator(
         for guarded_layer in (stream_source, stream_iterator):
             if guarded_layer is not response:
                 await close_guarded_stream(guarded_layer)
+        if not provider_output_sent:
+            await release_budget_reservation_on_cancel(getattr(user_api_key_dict, "budget_reservation", None))
         raise
     except Exception as e:  # noqa: BLE001  # stream boundary: any failure must end the SSE body as an error event
         verbose_proxy_logger.exception("litellm.proxy.proxy_server.async_data_generator(): Exception occured - %s", e)
