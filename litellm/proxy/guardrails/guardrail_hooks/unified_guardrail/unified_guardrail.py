@@ -245,6 +245,14 @@ def _ensure_litellm_metadata(data: dict, user_api_key_dict: UserAPIKeyAuth) -> N
             data["litellm_metadata"] = user_metadata
 
 
+def _route_delivers_ended_stream_rewrites(
+    request_route: str | None, mappings: Mapping[CallTypes, type["BaseTranslation"]]
+) -> bool:
+    call_types: Final = get_call_types_for_route(request_route) if request_route is not None else None
+    translation: Final = mappings.get(call_types[0]) if call_types else None
+    return translation is not None and translation.delivers_ended_stream_rewrites
+
+
 async def _scan_ended_stream(
     endpoint_translation: "BaseTranslation",
     *,
@@ -1216,11 +1224,29 @@ class UnifiedLLMGuardrails(CustomLogger):
         # path; "incremental_diff" emits them as synthetic deltas (see
         # _run_incremental_transform_stream).
         streaming_transform_mode: Final = _streaming_setting("streaming_transform_mode", "block_only")
+        mappings: Final = load_guardrail_translation_mappings()
         # Withhold every chunk until end-of-stream moderation passes, then release the chunks
         # (with the guardrail's rewrite written into them) or only the block message.
-        buffer_until_moderated: Final = _streaming_setting(
+        buffering_requested: Final = _streaming_setting(
             "streaming_buffer_until_moderated", buffer_until_moderated_default
         )
+        undeliverable_masking_guardrail: Final = (
+            guardrail_to_apply
+            if buffering_requested
+            and isinstance(guardrail_to_apply, CustomGuardrail)
+            and guardrail_to_apply.mask_response_content
+            and not _route_delivers_ended_stream_rewrites(user_api_key_dict.request_route, mappings)
+            else None
+        )
+        if undeliverable_masking_guardrail is not None:
+            verbose_proxy_logger.warning(
+                "UnifiedLLMGuardrails: streaming_buffer_until_moderated is disabled for %s because "
+                "mask_response_content=True and route %s cannot write the masked output back into a buffered "
+                "stream, so buffered replay would release the unredacted original chunks",
+                undeliverable_masking_guardrail.guardrail_name,
+                user_api_key_dict.request_route,
+            )
+        buffer_until_moderated: Final = buffering_requested and undeliverable_masking_guardrail is None
         release_on_scan: Final = _streaming_setting("streaming_buffer_release_on_scan", False)
 
         if buffer_until_moderated and not release_on_scan:
@@ -1247,8 +1273,6 @@ class UnifiedLLMGuardrails(CustomLogger):
             async for item in response:
                 yield item
             return
-
-        mappings: Final = load_guardrail_translation_mappings()
 
         # Streaming text transformation (incremental_diff) diverges enough from the
         # block_only path that it runs as its own iterator. It requires a route we
@@ -1328,18 +1352,6 @@ class UnifiedLLMGuardrails(CustomLogger):
                     async for remaining_item in response:
                         yield remaining_item
                     return
-                if (
-                    chunk_counter == 1
-                    and buffer_until_moderated
-                    and guardrail_to_apply.mask_response_content
-                    and not mappings[CallTypes(call_type)]().delivers_ended_stream_rewrites
-                ):
-                    verbose_proxy_logger.warning(
-                        "UnifiedLLMGuardrails: guardrail %s masks response content, but the %s translation cannot write "
-                        "a rewrite back into a buffered stream, so the scan can only block or release the original chunks",
-                        guardrail_to_apply.guardrail_name,
-                        call_type,
-                    )
 
                 # If end_of_stream_only mode, yield chunks without processing.
                 # When buffering, withhold them instead -- they are released (or

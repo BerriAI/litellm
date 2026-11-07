@@ -61,6 +61,7 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
     stream_item_field,
     stream_item_fingerprint,
     unappliable_request_rewrite,
+    undeliverable_tool_calls_reason,
 )
 from litellm.types.llms.anthropic import (
     ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX,
@@ -528,13 +529,11 @@ def _ended_stream_tool_calls(
     """A guardrail that adds or drops a tool call on an ended stream cannot be written back, block for block."""
     if returned_tool_calls is None:
         return streamed_tool_calls
-    if len(returned_tool_calls) != expected_count:
+    undeliverable_reason: Final = undeliverable_tool_calls_reason(returned_tool_calls, expected_count)
+    if undeliverable_reason is not None:
         from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
 
-        raise UndeliverableStreamRewrite(
-            guardrail_name,
-            f"the guardrail returned {len(returned_tool_calls)} tool calls for a stream that carried {expected_count}",
-        )
+        raise UndeliverableStreamRewrite(guardrail_name, undeliverable_reason)
     return returned_tool_calls
 
 

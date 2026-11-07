@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from litellm.llms.custom_httpx.sse_lines import split_sse_lines
 from litellm.types.llms.anthropic import claude_hosted_web_tool_call
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicUsage
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import AllMessageValues, ResponseAPIUsage
 from litellm.types.responses.main import with_hosted_web_tool_arguments
 
@@ -130,6 +131,37 @@ def blocked_responses_api_usage(original_response: object) -> ResponseAPIUsage:
         output_tokens=output_tokens,
         total_tokens=total_tokens or input_tokens + output_tokens,
     )
+
+
+class ReturnedToolCallFunction(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    name: str | None = None
+    arguments: str = ""
+
+
+class _ReturnedToolCall(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    function: ReturnedToolCallFunction
+
+
+def returned_tool_call_function(tool_call: object) -> ReturnedToolCallFunction | None:
+    payload: Final = tool_call.model_dump() if isinstance(tool_call, BaseModel) else tool_call
+    try:
+        return _ReturnedToolCall.model_validate(payload).function
+    except ValidationError:
+        return None
+
+
+def undeliverable_tool_calls_reason(returned_tool_calls: Sequence[object] | None, scanned_count: int) -> str | None:
+    if returned_tool_calls is None:
+        return None
+    if len(returned_tool_calls) != scanned_count:
+        return f"the guardrail returned {len(returned_tool_calls)} tool calls for a stream that carried {scanned_count}"
+    if any(returned_tool_call_function(tool_call) is None for tool_call in returned_tool_calls):
+        return "the guardrail returned tool calls without a function name and arguments"
+    return None
 
 
 def stream_item_field(item: object, field: str) -> object | None:

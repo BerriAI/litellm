@@ -966,3 +966,60 @@ def test_pipeline_live_streaming_resolves_the_flag_like_the_flat_streaming_path(
     monkeypatch.setattr(litellm, "callbacks", [guardrail])
 
     assert _pipelines_stream_live(_detect_only_pipeline(guardrail)) is streams_live
+
+
+async def _a2a_ndjson_stream(yielded_count: list[int], collected: list[Any]) -> AsyncGenerator[str, None]:
+    for text in ["Here is ", ORIGINAL_MARKER, " for you."]:
+        yielded_count.append(len(collected))
+        yield (
+            json.dumps(
+                {
+                    "jsonrpc": "2.0",
+                    "id": "1",
+                    "result": {"kind": "artifact-update", "artifact": {"parts": [{"kind": "text", "text": text}]}},
+                }
+            )
+            + "\n"
+        )
+
+
+@pytest.mark.asyncio
+async def test_buffered_masking_guardrail_streams_live_on_a_translation_that_cannot_deliver_rewrites():
+    guardrail = _MaskingGuardrail(guardrail_name="masker", event_hook="post_call", mask_response_content=True)
+    guardrail.streaming_buffer_until_moderated = True
+    guardrail.streaming_buffer_release_on_scan = False
+    unified = UnifiedLLMGuardrails()
+    user_api_key_dict = UserAPIKeyAuth(api_key="test", request_route="/a2a/agent-1/message/stream")
+    request_data = {
+        "messages": [{"role": "user", "content": "hi"}],
+        "guardrail_to_apply": guardrail,
+        "metadata": {"guardrails": [guardrail.guardrail_name]},
+    }
+    collected: list[Any] = []
+    yielded_count: list[int] = []
+    async for chunk in unified.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=user_api_key_dict,
+        response=_a2a_ndjson_stream(yielded_count, collected),
+        request_data=request_data,
+    ):
+        collected.append(chunk)
+    assert len(collected) == 3
+    assert yielded_count == [0, 1, 2], "the stream was withheld although the rewrite cannot be delivered"
+
+
+@pytest.mark.asyncio
+async def test_buffered_chat_stream_withholds_everything_when_the_guardrail_returns_a_malformed_tool_call():
+    guardrail = _ToolManglingGuardrail(guardrail_name="mangler", event_hook="post_call")
+    with pytest.raises(HTTPException) as raised:
+        await _run_buffered_chat(guardrail, [f"call {ORIGINAL_MARKER}"], ['{"cmd": "', TOOL_ARGUMENTS_MARKER, '"}'])
+    assert raised.value.status_code == 500
+    assert "mangler" in str(raised.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_buffered_messages_stream_withholds_everything_when_the_guardrail_returns_a_malformed_tool_call():
+    guardrail = _ToolManglingGuardrail(guardrail_name="mangler", event_hook="post_call")
+    with pytest.raises(HTTPException) as raised:
+        await _run_messages_stream(guardrail, _anthropic_tool_use_stream())
+    assert raised.value.status_code == 500
+    assert "mangler" in str(raised.value.detail)

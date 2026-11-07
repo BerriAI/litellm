@@ -57,6 +57,7 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
     stream_item_fingerprint,
     stream_item_items,
     unappliable_request_rewrite,
+    undeliverable_tool_calls_reason,
 )
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -523,18 +524,15 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
             guardrailed_texts: Final = guardrailed_inputs.get("texts", [])
             returned_tool_calls: Final = guardrailed_inputs.get("tool_calls")
-            if (
-                deliver_ended_stream_rewrites
-                and isinstance(returned_tool_calls, list)
-                and len(returned_tool_calls) != pre_guardrail_tool_call_count
-            ):
+            undeliverable_reason: Final = (
+                undeliverable_tool_calls_reason(returned_tool_calls, pre_guardrail_tool_call_count)
+                if deliver_ended_stream_rewrites and isinstance(returned_tool_calls, list)
+                else None
+            )
+            if undeliverable_reason is not None:
                 from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
 
-                raise UndeliverableStreamRewrite(
-                    guardrail_to_apply.guardrail_name or "unknown",
-                    f"the guardrail returned {len(returned_tool_calls)} tool calls for a stream that carried "
-                    f"{pre_guardrail_tool_call_count}",
-                )
+                raise UndeliverableStreamRewrite(guardrail_to_apply.guardrail_name or "unknown", undeliverable_reason)
             guardrailed_tool_calls: Final[list[dict[str, object]]] = (
                 cast(list[dict[str, object]], returned_tool_calls)
                 if isinstance(returned_tool_calls, list)
