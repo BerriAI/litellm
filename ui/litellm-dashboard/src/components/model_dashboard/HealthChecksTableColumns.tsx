@@ -60,6 +60,11 @@ const SENTINEL_LABEL_KEYS: Readonly<Record<string, ParseKeys>> = {
 const sentinelLabel = (value: string, t: TFunction): string =>
   Object.hasOwn(SENTINEL_LABEL_KEYS, value) ? t(SENTINEL_LABEL_KEYS[value]) : value;
 
+const checkTimeLabel = (value: string, t: TFunction): string => {
+  const checkedAt = new Date(value);
+  return Number.isNaN(checkedAt.getTime()) ? sentinelLabel(value, t) : checkedAt.toLocaleString();
+};
+
 function HealthStatusBadge({ status }: { status: string }) {
   const tone = HEALTH_STATUS_TONES[status];
   if (!tone) {
@@ -427,7 +432,7 @@ export const getHealthChecksTableColumns = (
       <span className="text-sm text-muted-foreground">
         {row.original.health_loading
           ? t("modelDashboard.healthChecksTableColumns.sentinels.checkInProgress")
-          : sentinelLabel(row.original.last_check, t)}
+          : checkTimeLabel(row.original.last_check, t)}
       </span>
     ),
   },
@@ -453,7 +458,7 @@ export const getHealthChecksTableColumns = (
     cell: ({ row }) => {
       const modelId = row.original.model_info?.id ?? "";
       const lastSuccess = modelHealthStatuses[modelId]?.lastSuccess || NONE;
-      return <span className="text-sm text-muted-foreground">{sentinelLabel(lastSuccess, t)}</span>;
+      return <span className="text-sm text-muted-foreground">{checkTimeLabel(lastSuccess, t)}</span>;
     },
   },
   {
