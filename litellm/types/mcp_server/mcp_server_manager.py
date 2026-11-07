@@ -1,4 +1,5 @@
 import json
+import sys
 from collections.abc import Mapping
 from datetime import datetime
 from typing import Annotated, Any, Final, Literal
@@ -25,6 +26,15 @@ def _validate_mcp_protocol_metadata(value: dict[str, object]) -> dict[str, objec
         TypeAdapter[MCPUpstreamProtocol](MCPUpstreamProtocol).validate_python(value["protocol_version"])
     if "skip_tool_output_validation" in value:
         TypeAdapter[bool](bool).validate_python(value["skip_tool_output_validation"], strict=True)
+    if "output_schema_cache_ttl_seconds" in value:
+        ttl: Final = value["output_schema_cache_ttl_seconds"]
+        if (
+            isinstance(ttl, bool)
+            or not isinstance(ttl, (int, float))
+            or ttl > sys.float_info.max
+            or not 0 <= ttl < float("inf")
+        ):
+            raise ValueError("output_schema_cache_ttl_seconds must be a finite number of seconds, 0 or more")
     return value
 
 
@@ -302,6 +312,10 @@ class MCPServer(LiteLLMBaseModel):
     @property
     def skip_tool_output_validation(self) -> bool:
         return (self.mcp_info or {}).get("skip_tool_output_validation") is True
+
+    @property
+    def output_schema_cache_ttl_seconds(self) -> float:
+        return float((self.mcp_info or {}).get("output_schema_cache_ttl_seconds", 0))
 
     @model_validator(mode="after")
     def resolve_protocol_version(self) -> Self:

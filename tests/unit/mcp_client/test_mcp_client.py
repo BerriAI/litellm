@@ -5,7 +5,7 @@ import json
 import os
 import queue
 import sys
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from pathlib import Path
 from types import ModuleType
@@ -75,6 +75,7 @@ from litellm.proxy.mcp_server.outbound_credentials.httpx_auth import StaticHeade
 from litellm.types.mcp import MCPAuth, MCPStdioConfig, MCPTransport
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 from tests._support.clock_loops import AutojumpClockLoop, ManualClockLoop
+from litellm.mcp_client.output_schema_memory import OutputSchemaMemory
 from tests._support.mcp_count_tool_upstream import count_tool_upstream, methods_received
 
 _JSONRPC_MESSAGE_ADAPTER: Final = TypeAdapter(JSONRPCMessage)
@@ -5304,3 +5305,171 @@ async def test_a_skipped_validation_passes_the_upstreams_result_through_unchange
 
     assert isinstance(result, CallToolResult)
     assert result.structured_content == {"n": "not-an-integer"}
+
+
+def _remembering_client(
+    upstream: Callable[[httpx2.Request], httpx2.Response],
+    memory: OutputSchemaMemory,
+    *,
+    tenant: str = "alice",
+    ttl_seconds: float = 60.0,
+) -> "_MockTransportClient":
+    return _MockTransportClient(
+        upstream,
+        server_url="https://upstream.example/mcp",
+        transport_type=MCPTransport.http,
+        extra_headers={"x-tenant": tenant},
+        output_schema_memory=memory,
+        output_schema_cache_ttl_seconds=ttl_seconds,
+    )
+
+
+def _new_memory() -> OutputSchemaMemory:
+    return OutputSchemaMemory(max_entries=8)
+
+
+@pytest.mark.asyncio
+async def test_a_later_call_reuses_the_schemas_an_earlier_call_listed() -> None:
+    memory: Final = _new_memory()
+    first_seen: Final[queue.SimpleQueue[str]] = queue.SimpleQueue()
+    second_seen: Final[queue.SimpleQueue[str]] = queue.SimpleQueue()
+
+    first: Final = await _remembering_client(count_tool_upstream({"n": 1}, first_seen), memory).call_tool(
+        CallToolRequestParams(name="count", arguments={})
+    )
+    second: Final = await _remembering_client(count_tool_upstream({"n": 2}, second_seen), memory).call_tool(
+        CallToolRequestParams(name="count", arguments={})
+    )
+
+    assert isinstance(first, CallToolResult) and isinstance(second, CallToolResult)
+    assert not first.is_error and not second.is_error
+    assert "tools/list" in methods_received(first_seen)
+    assert "tools/list" not in methods_received(second_seen)
+
+
+@pytest.mark.asyncio
+async def test_remembered_schemas_still_reject_invalid_output() -> None:
+    memory: Final = _new_memory()
+    await _remembering_client(count_tool_upstream({"n": 1}, queue.SimpleQueue()), memory).call_tool(
+        CallToolRequestParams(name="count", arguments={})
+    )
+
+    result: Final = await _remembering_client(
+        count_tool_upstream({"n": "not-an-integer"}, queue.SimpleQueue()), memory
+    ).call_tool(CallToolRequestParams(name="count", arguments={}))
+
+    assert isinstance(result, CallToolResult)
+    assert result.is_error is True
+
+
+@pytest.mark.asyncio
+async def test_a_schema_the_upstream_changed_does_not_reject_output_that_matches_the_new_schema() -> None:
+    memory: Final = _new_memory()
+    await _remembering_client(count_tool_upstream({"n": 1}, queue.SimpleQueue()), memory).call_tool(
+        CallToolRequestParams(name="count", arguments={})
+    )
+    renamed_schema: Final = {"type": "object", "properties": {"label": {"type": "string"}}, "required": ["label"]}
+    seen: Final[queue.SimpleQueue[str]] = queue.SimpleQueue()
+
+    result: Final = await _remembering_client(
+        count_tool_upstream({"label": "x"}, seen, output_schema=renamed_schema), memory
+    ).call_tool(CallToolRequestParams(name="count", arguments={}))
+
+    assert isinstance(result, CallToolResult)
+    assert result.is_error is False
+    assert "tools/list" in methods_received(seen)
+
+
+@pytest.mark.asyncio
+async def test_callers_with_different_credentials_do_not_share_remembered_schemas() -> None:
+    memory: Final = _new_memory()
+    await _remembering_client(count_tool_upstream({"n": 1}, queue.SimpleQueue()), memory, tenant="alice").call_tool(
+        CallToolRequestParams(name="count", arguments={})
+    )
+    seen: Final[queue.SimpleQueue[str]] = queue.SimpleQueue()
+
+    await _remembering_client(count_tool_upstream({"n": 1}, seen), memory, tenant="bob").call_tool(
+        CallToolRequestParams(name="count", arguments={})
+    )
+
+    assert "tools/list" in methods_received(seen)
+
+
+@pytest.mark.asyncio
+async def test_a_zero_ttl_lists_tools_on_every_call_and_enforces_a_tightened_schema() -> None:
+    memory: Final = _new_memory()
+    await _remembering_client(count_tool_upstream({"n": 1}, queue.SimpleQueue()), memory, ttl_seconds=0).call_tool(
+        CallToolRequestParams(name="count", arguments={})
+    )
+    tightened_schema: Final = {"type": "object", "properties": {"b": {"type": "string"}}, "required": ["b"]}
+    seen: Final[queue.SimpleQueue[str]] = queue.SimpleQueue()
+
+    result: Final = await _remembering_client(
+        count_tool_upstream({"a": "x"}, seen, output_schema=tightened_schema), memory, ttl_seconds=0
+    ).call_tool(CallToolRequestParams(name="count", arguments={}))
+
+    assert isinstance(result, CallToolResult)
+    assert result.is_error is True
+    assert "tools/list" in methods_received(seen)
+
+
+def _paginated_upstream(structured: Mapping[str, object], *, first_page_tool: str = "first") -> Callable[[httpx2.Request], httpx2.Response]:
+    schema: Final = {"type": "object", "properties": {"n": {"type": "integer"}}, "required": ["n"]}
+
+    def respond(request: httpx2.Request) -> httpx2.Response:
+        if request.method != "POST":
+            return httpx2.Response(200)
+        payload: Final = json.loads(request.content)
+        if "id" not in payload:
+            return httpx2.Response(202)
+        on_second_page: Final = (payload.get("params") or {}).get("cursor") == "page-2"
+        results: Final = {
+            "initialize": {
+                "protocolVersion": payload.get("params", {}).get("protocolVersion"),
+                "capabilities": {"tools": {}},
+                "serverInfo": {"name": "paged", "version": "1"},
+            },
+            "tools/list": {
+                "tools": [
+                    {
+                        "name": "second" if on_second_page else first_page_tool,
+                        "inputSchema": {"type": "object"},
+                        "outputSchema": schema,
+                    }
+                ],
+                **({} if on_second_page else {"nextCursor": "page-2"}),
+            },
+            "tools/call": {"content": [{"type": "text", "text": "ok"}], "structuredContent": structured},
+        }
+        return httpx2.Response(
+            200, json={"jsonrpc": "2.0", "id": payload["id"], "result": results.get(payload["method"], {})}
+        )
+
+    return respond
+
+
+@pytest.mark.asyncio
+async def test_a_tool_beyond_the_first_listing_page_is_not_validated_when_remembered_schemas_are_in_use() -> None:
+    memory: Final = _new_memory()
+    await _remembering_client(_paginated_upstream({"n": 1}), memory).list_tools()
+
+    result: Final = await _remembering_client(_paginated_upstream({"n": "not-an-integer"}), memory).call_tool(
+        CallToolRequestParams(name="second", arguments={})
+    )
+
+    assert isinstance(result, CallToolResult)
+    assert result.is_error is False
+
+
+@pytest.mark.asyncio
+async def test_a_remembered_tool_that_left_the_first_page_is_not_validated_against_its_old_schema() -> None:
+    memory: Final = _new_memory()
+    await _remembering_client(_paginated_upstream({"n": 1}), memory).list_tools()
+    first_page_only: Final = _paginated_upstream({"n": "not-an-integer"}, first_page_tool="other")
+
+    result: Final = await _remembering_client(first_page_only, memory).call_tool(
+        CallToolRequestParams(name="first", arguments={})
+    )
+
+    assert isinstance(result, CallToolResult)
+    assert result.is_error is False

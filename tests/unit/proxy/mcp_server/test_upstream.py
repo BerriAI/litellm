@@ -190,3 +190,25 @@ async def test_upstream_client_ignores_the_setting_where_the_call_already_lists_
     )
 
     assert client.skip_tool_output_validation is expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("setting", "expected"), [(None, 0.0), (0, 0.0), (45, 45.0)])
+async def test_upstream_client_takes_its_output_schema_cache_ttl_from_the_server(
+    setting: float | None, expected: float
+) -> None:
+    server: Final = MCPServer.model_validate(
+        {
+            "server_id": "schema-cache",
+            "name": "schema_cache",
+            "url": _HTTP_URL,
+            "transport": MCPTransport.http,
+            "mcp_info": {} if setting is None else {"output_schema_cache_ttl_seconds": setting},
+        }
+    )
+
+    client: Final = await prepare_upstream_client(
+        server, provider=UpstreamCredentialProvider(), root_path="/mcp", protocol_version="auto"
+    )
+
+    assert client._output_schema_cache_ttl_seconds == expected
