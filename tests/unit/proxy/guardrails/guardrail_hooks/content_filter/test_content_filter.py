@@ -9,8 +9,6 @@ from typing import Final
 from unittest.mock import MagicMock
 
 import pytest
-
-
 from fastapi import HTTPException
 
 from litellm import Router
@@ -18,6 +16,7 @@ from litellm.constants import (
     CONTENT_FILTER_STREAMING_HOLDBACK_CHARS,
     CONTENT_FILTER_STREAMING_SCAN_CONTEXT_CHARS,
 )
+from litellm.llms.base_llm.guardrail_translation.utils import stream_item_field
 from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import (
     ContentFilterGuardrail,
 )
@@ -27,12 +26,11 @@ from litellm.types.guardrails import (
     ContentFilterPattern,
     GuardrailEventHooks,
 )
+from litellm.types.llms.openai import OutputTextDeltaEvent, ResponsesAPIStreamEvents
 from litellm.types.proxy.guardrails.guardrail_hooks.litellm_content_filter import (
     ContentFilterCategoryConfig,
     ContentFilterDetection,
 )
-from litellm.llms.base_llm.guardrail_translation.utils import stream_item_field
-from litellm.types.llms.openai import OutputTextDeltaEvent, ResponsesAPIStreamEvents
 from litellm.types.utils import (
     Delta,
     ModelResponseStream,
@@ -1185,6 +1183,99 @@ class TestContentFilterGuardrail:
         assert "harmful_child_safety" in str(exc_info.value.detail)
         entry: Final = metadata["standard_logging_guardrail_information"][0]
         assert entry["guardrail_status"] == "guardrail_intervened"
+
+    @pytest.mark.parametrize(
+        ("pattern_name", "prefix", "gap_unit", "completion"),
+        [
+            ("generic_api_key", "api_key:", " ", "7391826405518273640192837465"),
+            ("street_address", "742 ", "word ", "Street"),
+        ],
+    )
+    @pytest.mark.parametrize(
+        "gap_len",
+        [20, 256, 2 * CONTENT_FILTER_STREAMING_SCAN_CONTEXT_CHARS, 2048],
+    )
+    @pytest.mark.asyncio
+    async def test_streamed_scan_detects_what_the_one_shot_scan_detects(
+        self, pattern_name, prefix, gap_unit, completion, gap_len
+    ):
+        """
+        A pattern whose distinguishing prefix is separated from the rest of the
+        match by an unbounded run that can contain whitespace was detected when
+        the text was scanned whole, but not when the prefix and the completion
+        arrived in different chunks.
+
+        Once the buffer passes twice the scan context, the streamed scan trims it
+        to the last context-sized tail, taking the cut only when head and tail
+        mask to the same output as the whole. With the prefix buffered but no
+        completion yet, nothing matches anywhere, so the cut looks safe and the
+        prefix is dropped; when the completion arrives the match can no longer
+        form and the match is never reported.
+        """
+        guardrail: Final = ContentFilterGuardrail(
+            guardrail_name=f"test-gap-detection-{pattern_name}",
+            patterns=[
+                ContentFilterPattern(
+                    pattern_type="prebuilt",
+                    pattern_name=pattern_name,
+                    action=ContentFilterAction.MASK,
+                )
+            ],
+            event_hook=GuardrailEventHooks.post_call,
+        )
+        head: Final = prefix + gap_unit * (gap_len // len(gap_unit))
+        whole: Final = head + completion
+
+        one_shot: Final[list[ContentFilterDetection]] = []
+        guardrail._filter_single_text(whole, detections=one_shot)
+        want: Final = sorted({d["pattern_name"] for d in one_shot if d.get("pattern_name")})
+        assert want == [pattern_name], (
+            f"gap={gap_len}: a one-shot scan of this text must still detect"
+            f" {pattern_name}, got {want}"
+        )
+
+        metadata: Final[dict[str, list[StandardLoggingGuardrailInformation]]] = {}
+        await self._collect_streamed_text(guardrail, [head, completion], metadata)
+        entry: Final = metadata["standard_logging_guardrail_information"][0]
+        got: Final = sorted(
+            {
+                d["pattern_name"]
+                for d in entry["guardrail_response"]
+                if d.get("pattern_name")
+            }
+        )
+
+        assert got == want, (
+            f"gap={gap_len}: the streamed scan reported {got} but a one-shot scan"
+            f" of the same text reported {want}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_streamed_scan_detects_custom_regex_with_prefix_pattern(self):
+        """
+        Custom regex with an explicit prefix_pattern defers trimming until
+        the completion arrives across chunks.
+        """
+        guardrail: Final = ContentFilterGuardrail(
+            guardrail_name="test-streaming-custom-prefix-pattern",
+            patterns=[
+                ContentFilterPattern(
+                    pattern_type="regex",
+                    pattern=r"\bsecret_token:\s+[0-9a-f]{32}\b",
+                    prefix_pattern=r"\bsecret_token:\s+$",
+                    name="secret_token",
+                    action=ContentFilterAction.MASK,
+                )
+            ],
+            event_hook=GuardrailEventHooks.post_call,
+        )
+        head: Final = "secret_token:" + " " * 2048
+        completion: Final = "0123456789abcdef0123456789abcdef"
+        metadata: Final[dict[str, list[StandardLoggingGuardrailInformation]]] = {}
+        await self._collect_streamed_text(guardrail, [head, completion], metadata)
+        entry: Final = metadata["standard_logging_guardrail_information"][0]
+        got: Final = [d["pattern_name"] for d in entry["guardrail_response"] if d.get("pattern_name")]
+        assert got == ["secret_token"]
 
     @pytest.mark.asyncio
     async def test_streaming_hook_masks_every_email_in_long_stream_and_logs_once(

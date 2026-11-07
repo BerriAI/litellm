@@ -131,11 +131,13 @@ class CompiledPatternEntry(TypedDict):
     action: ContentFilterAction
     keyword_regex: Pattern[str] | None
     allow_word_numbers: bool
+    prefix_regex: Pattern[str] | None
 
 
 class _PatternExtraLookup(TypedDict):
     keyword_pattern: str | None
     allow_word_numbers: bool
+    prefix_pattern: str | None
 
 
 class _CategoryConfigView(TypedDict):
@@ -225,6 +227,7 @@ class _StreamedScanPlan:
     context_chars: int
     exception_phrases: tuple[str, ...]
     conditional_words: tuple[str, ...]
+    pattern_prefixes: tuple[Pattern[str], ...] = ()
 
 
 class CategoryFileData(TypedDict, total=False):
@@ -821,7 +824,11 @@ class ContentFilterGuardrail(CustomGuardrail):
             pattern_config: ContentFilterPattern configuration
         """
         try:
-            extra_config: _PatternExtraLookup = {"keyword_pattern": None, "allow_word_numbers": False}
+            extra_config: _PatternExtraLookup = {
+                "keyword_pattern": None,
+                "allow_word_numbers": False,
+                "prefix_pattern": None,
+            }
             if pattern_config.pattern_type == "prebuilt":
                 if not pattern_config.pattern_name:
                     raise ValueError("pattern_name is required for prebuilt patterns")
@@ -839,6 +846,11 @@ class ContentFilterGuardrail(CustomGuardrail):
             keyword_pattern: Final = extra_config["keyword_pattern"]
             keyword_regex: Final = re.compile(keyword_pattern, re.IGNORECASE) if keyword_pattern else None
 
+            prefix_pattern: Final = (
+                getattr(pattern_config, "prefix_pattern", None) or extra_config["prefix_pattern"]
+            )
+            prefix_regex: Final = re.compile(prefix_pattern, re.IGNORECASE) if prefix_pattern else None
+
             self.compiled_patterns.append(
                 {
                     "regex": compiled,
@@ -846,6 +858,7 @@ class ContentFilterGuardrail(CustomGuardrail):
                     "action": pattern_config.action,
                     "keyword_regex": keyword_regex,
                     "allow_word_numbers": extra_config["allow_word_numbers"],
+                    "prefix_regex": prefix_regex,
                 }
             )
             verbose_proxy_logger.debug("Added pattern: %s with action %s", pattern_name, pattern_config.action)
@@ -859,6 +872,7 @@ class ContentFilterGuardrail(CustomGuardrail):
         return {
             "keyword_pattern": extra.get("keyword_pattern") if extra is not None else None,
             "allow_word_numbers": bool(extra.get("allow_word_numbers")) if extra is not None else False,
+            "prefix_pattern": extra.get("prefix_pattern") if extra is not None else None,
         }
 
     def _load_blocked_words_file(self, file_path: str) -> None:
@@ -2089,6 +2103,9 @@ class ContentFilterGuardrail(CustomGuardrail):
                 for config in self.conditional_categories.values()
                 for word in (*config["identifier_words"], *config["block_words"])
             ),
+            pattern_prefixes=tuple(
+                p["prefix_regex"] for p in self.compiled_patterns if p.get("prefix_regex") is not None
+            ),
         )
 
     @staticmethod
@@ -2100,7 +2117,12 @@ class ContentFilterGuardrail(CustomGuardrail):
         cut_sentence: Final = (
             SENTENCE_TERMINATORS.split(head.lower())[-1] + SENTENCE_TERMINATORS.split(tail_lower, maxsplit=1)[0]
         )
-        return any(word in cut_sentence for word in plan.conditional_words)
+        if any(word in cut_sentence for word in plan.conditional_words):
+            return True
+        return any(
+            pattern.search(buffered_text) is not None and pattern.search(tail) is None
+            for pattern in plan.pattern_prefixes
+        )
 
     def _trim_streamed_choice_buffer(
         self, state: _StreamedChoiceState, masked_text: str, plan: _StreamedScanPlan
