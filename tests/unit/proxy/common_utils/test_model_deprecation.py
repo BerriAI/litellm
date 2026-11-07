@@ -17,6 +17,8 @@ from litellm import Router
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.get_model_cost_map import AliasedCostEntry
 from litellm.proxy.common_utils.model_deprecation import (
+    DeprecationScanCursor,
+    RouterDeprecationSource,
     _classify,
     _parse_deprecation_date,
     collect_model_deprecations,
@@ -753,3 +755,91 @@ class TestRecommendationSources:
         assert info.successor_model == "b-next"
         assert info.successor_model_source == "model_cost_map"
         assert info.deprecation_source == "https://provider.example/b"
+
+
+def test_retirement_pages_resume_inside_large_alias_without_losing_configured_successor() -> None:
+    router = Router(
+        model_list=[
+            {
+                "model_name": "alias",
+                "litellm_params": {"model": "openai/paged-model"},
+                "model_info": {
+                    "id": f"paged-{index}",
+                    "deprecation_date": "2026-11-20",
+                    **({"successor_model": "replacement"} if index == 149 else {}),
+                },
+            }
+            for index in range(150)
+        ]
+    )
+    source = RouterDeprecationSource(lambda: router)
+    today = date(2026, 11, 5)
+    first = source.page(today, DeprecationScanCursor())
+    assert not first.complete and first.models == ()
+    cursor = DeprecationScanCursor.model_validate_json(first.cursor.model_dump_json())
+    models = ()
+    for _ in range(20):
+        page = source.page(today, cursor)
+        assert len(page.models) <= 10
+        models += page.models
+        cursor = DeprecationScanCursor.model_validate_json(page.cursor.model_dump_json())
+        if page.complete:
+            break
+    else:
+        pytest.fail("bounded alias scan did not finish")
+    expected = collect_model_deprecations(router, today=today).imminent
+    assert models == tuple(expected)
+    assert len(models) == 1
+    assert models[0].litellm_model == "openai/paged-model"
+    assert models[0].successor_model == "replacement"
+
+
+def test_retirement_pages_preserve_distinct_models_sharing_an_alias_and_date() -> None:
+    router = Router(
+        model_list=[
+            {
+                "model_name": "shared-alias",
+                "litellm_params": {"model": model},
+                "model_info": {"id": model, "deprecation_date": "2026-11-20"},
+            }
+            for model in ("openai/unused-retired-model", "openai/used-retired-model")
+        ]
+    )
+    page = RouterDeprecationSource(lambda: router).page(date(2026, 11, 5), DeprecationScanCursor())
+    assert page.complete
+    assert tuple(model.litellm_model for model in page.models) == (
+        "openai/unused-retired-model",
+        "openai/used-retired-model",
+    )
+
+
+def test_retirement_source_bounds_pages_and_restarts_identity_after_router_replacement() -> None:
+    router = Router(
+        model_list=[
+            {
+                "model_name": f"paged-{index}",
+                "litellm_params": {"model": f"openai/paged-model-{index}"},
+                "model_info": {"id": f"page-{index}", "deprecation_date": "2026-11-20"},
+            }
+            for index in range(25)
+        ]
+    )
+    source = RouterDeprecationSource(lambda: router)
+    first = source.page(date(2026, 11, 5), DeprecationScanCursor())
+    assert len(first.models) == 10 and not first.complete
+    second = source.page(date(2026, 11, 5), first.cursor)
+    assert len(second.models) == 10 and not second.complete
+    third = source.page(date(2026, 11, 5), second.cursor)
+    assert len(third.models) == 5 and third.complete
+    assert len({model.model_name for model in (*first.models, *second.models, *third.models)}) == 25
+    revision = source.revision
+    router = Router(model_list=[])
+    assert source.revision != revision
+    assert source.revision != RouterDeprecationSource(lambda: router).revision
+
+
+def test_unavailable_retirement_router_is_not_a_completed_empty_catalog() -> None:
+    source = RouterDeprecationSource(lambda: None)
+    cursor = DeprecationScanCursor()
+    page = source.page(date(2026, 11, 5), cursor)
+    assert page.models == () and page.cursor == cursor and not page.complete

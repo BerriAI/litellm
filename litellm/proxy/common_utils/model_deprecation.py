@@ -8,7 +8,15 @@ from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from itertools import groupby
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, TypeAlias
+from typing import (
+    TYPE_CHECKING,
+    Final,
+    TypeAlias,
+    cast,  # noqa: TID251  # router exposes its live validated deployment list
+)
+from uuid import uuid4
+
+from pydantic import BaseModel, Field
 
 import litellm
 from litellm._logging import verbose_logger
@@ -206,6 +214,8 @@ def _build_info(
     warn_within_days: int,
     catalog: Mapping[str, object],
     successor_log_level: int,
+    *,
+    check_successor: bool = True,
 ) -> _DeploymentInfo | None:
     model_name: Final = deployment.get("model_name")
     if not isinstance(model_name, str) or not model_name:
@@ -217,7 +227,11 @@ def _build_info(
 
     days_until: Final = (resolved.deprecation_date - today).days
     model_info: Final = _mapping_field(deployment, "model_info")
-    configured: Final = _checked_successor(model_name, model_info, llm_router, successor_log_level)
+    configured: Final = (
+        _checked_successor(model_name, model_info, llm_router, successor_log_level)
+        if check_successor
+        else _non_empty_string(model_info.get("successor_model"))
+    )
     team_public_model_name_value: Final = model_info.get("team_public_model_name")
     team_public_model_name: Final = (
         team_public_model_name_value
@@ -353,6 +367,104 @@ def collect_model_deprecations(
         warn_within_days=warn_within_days,
         checked_at=snapshot_time,
     )
+
+
+class DeprecationScanCursor(BaseModel, frozen=True):
+    deployment: int = Field(default=0, ge=0)
+    group_position: int = Field(default=0, ge=0)
+    model: ModelDeprecationInfo | None = None
+    configured_successor: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class DeprecationModelPage:
+    models: tuple[ModelDeprecationInfo, ...]
+    cursor: DeprecationScanCursor
+    complete: bool
+
+
+def _scan_deprecation_model(
+    router: Router,
+    deployments: Sequence[Mapping[str, object]],
+    cursor: DeprecationScanCursor,
+    today: date,
+    catalog: Mapping[str, object],
+) -> tuple[DeprecationScanCursor, ModelDeprecationInfo | None]:
+    def info(position: int) -> _DeploymentInfo | None:
+        return _build_info(
+            deployments[position],
+            router,
+            today,
+            DEFAULT_DEPRECATION_WARN_DAYS,
+            catalog,
+            logging.DEBUG,
+            check_successor=False,
+        )
+
+    if cursor.model is None:
+        current: Final = info(cursor.deployment)
+        if current is None or current.info.status == "upcoming":
+            return DeprecationScanCursor(deployment=cursor.deployment + 1), None
+        return cursor.model_copy(
+            update={"model": current.info, "configured_successor": current.configured_successor}
+        ), None
+    positions: Final = router.registry().index("model_name").get(cursor.model.model_name, ())
+    if cursor.group_position >= len(positions):
+        return DeprecationScanCursor(deployment=cursor.deployment + 1), cursor.model
+    position: Final = positions[cursor.group_position]
+    candidate: Final = info(position)
+    advanced: Final = cursor.model_copy(update={"group_position": cursor.group_position + 1})
+    if candidate is None or (
+        candidate.info.deprecation_date,
+        candidate.info.litellm_model,
+        candidate.info.litellm_provider,
+    ) != (cursor.model.deprecation_date, cursor.model.litellm_model, cursor.model.litellm_provider):
+        return advanced, None
+    if position < cursor.deployment:
+        return DeprecationScanCursor(deployment=cursor.deployment + 1), None
+    merged: Final = _merge_group((_DeploymentInfo(cursor.model, cursor.configured_successor), candidate), logging.DEBUG)
+    return advanced.model_copy(
+        update={
+            "model": merged,
+            "configured_successor": cursor.configured_successor or candidate.configured_successor,
+        }
+    ), None
+
+
+class RouterDeprecationSource:
+    """Read pages from router-owned views; never retain a second deployment catalog."""
+
+    def __init__(
+        self, router: Callable[[], Router | None], loaded_catalog: LoadedCatalog = GetModelCostMap.loaded_model_cost_map
+    ) -> None:
+        self._router = router
+        self._loaded_catalog = loaded_catalog
+        self._instance = str(uuid4())
+
+    @property
+    def revision(self) -> str:
+        router: Final = self._router()
+        version: Final = router.registry().version if router is not None else 0
+        model_cost_identity: Final = id(litellm.model_cost)  # pyright: ignore[reportUnknownMemberType,reportUnknownArgumentType]  # identity only, from the legacy untyped catalog
+        return f"{self._instance}:{id(router)}:{version}:{model_cost_identity}:{id(self._loaded_catalog())}"
+
+    def page(self, today: date, cursor: DeprecationScanCursor) -> DeprecationModelPage:
+        router: Final = self._router()
+        if router is None:
+            return DeprecationModelPage((), cursor, False)
+        deployments: Final = cast(  # cast-ok: router validated each deployment
+            Sequence[Mapping[str, object]], router.registry().all()
+        )
+        catalog: Final = self._loaded_catalog()
+        position = cursor  # rebind-ok: bounded scan continuation
+        models: tuple[ModelDeprecationInfo, ...] = ()  # rebind-ok: bounded result page
+        for _ in range(100):
+            if position.deployment >= len(deployments) or len(models) == 10:
+                break
+            position, model = _scan_deprecation_model(router, deployments, position, today, catalog)
+            if model is not None:
+                models += (model,)
+        return DeprecationModelPage(models, position, position.deployment >= len(deployments))
 
 
 def _escape_slack_mrkdwn(value: str) -> str:

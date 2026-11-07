@@ -8379,6 +8379,9 @@ async def send_email(
     html: str | None = None,
     text: str | None = None,
     message_id: str | None = None,
+    *,
+    raise_on_error: bool = False,
+    attempt_timeout: float | None = None,
 ) -> bool:
     """
     smtp_host,
@@ -8423,7 +8426,10 @@ async def send_email(
     email_message.attach(MIMEText(html, "html"))
 
     try:
-        smtp_timeout: Final = float(os.getenv("SMTP_TIMEOUT", "30"))
+        configured_timeout: Final = float(os.getenv("SMTP_TIMEOUT", "30"))
+        smtp_timeout: Final = (
+            configured_timeout if attempt_timeout is None else min(configured_timeout, attempt_timeout)
+        )
         await asyncio.to_thread(
             _send_smtp_message,
             email_message=email_message,
@@ -8437,6 +8443,8 @@ async def send_email(
         )
 
     except Exception as e:
+        if raise_on_error:
+            raise
         verbose_proxy_logger.exception("An error occurred while sending the email:" + str(e))
         return False
     return True

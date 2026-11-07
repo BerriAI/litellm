@@ -27295,7 +27295,7 @@ export interface components {
          * @description Enum for alert types and management event types
          * @enum {string}
          */
-        AlertType: "llm_exceptions" | "llm_too_slow" | "llm_requests_hanging" | "budget_alerts" | "spend_reports" | "failed_tracking_spend" | "user_spend_thresholds" | "user_spend_anomalies" | "db_exceptions" | "daily_reports" | "cooldown_deployment" | "new_model_added" | "model_deprecation_warnings" | "outage_alerts" | "region_outage_alerts" | "fallback_reports" | "new_virtual_key_created" | "virtual_key_updated" | "virtual_key_deleted" | "new_team_created" | "team_updated" | "team_deleted" | "new_internal_user_created" | "internal_user_updated" | "internal_user_deleted" | "mcp_tool_description_blocked" | "mcp_pinned_tools_changed";
+        AlertType: "llm_exceptions" | "llm_too_slow" | "llm_requests_hanging" | "budget_alerts" | "spend_reports" | "failed_tracking_spend" | "user_spend_thresholds" | "user_spend_anomalies" | "usage_alerts" | "db_exceptions" | "daily_reports" | "cooldown_deployment" | "new_model_added" | "model_deprecation_warnings" | "outage_alerts" | "region_outage_alerts" | "fallback_reports" | "new_virtual_key_created" | "virtual_key_updated" | "virtual_key_deleted" | "new_team_created" | "team_updated" | "team_deleted" | "new_internal_user_created" | "internal_user_updated" | "internal_user_deleted" | "mcp_tool_description_blocked" | "mcp_pinned_tools_changed";
         /** AllowedVectorStoreIndexItem */
         AllowedVectorStoreIndexItem: {
             /** Index Name */
@@ -51689,6 +51689,8 @@ export interface components {
             first_seen: string;
             /** Id */
             id: string;
+            /** Last Notification Attempt */
+            last_notification_attempt?: string | null;
             /**
              * Last Seen
              * Format: date-time
@@ -51699,6 +51701,20 @@ export interface components {
              * @enum {string}
              */
             metric: "spend" | "requests" | "latency" | "errors" | "error_rate";
+            /** Next Notification Attempt */
+            next_notification_attempt?: string | null;
+            /**
+             * Notification Attempts
+             * @default 0
+             */
+            notification_attempts: number;
+            /** Notification Error */
+            notification_error?: ("delivery_failed" | "transport_not_configured") | null;
+            /**
+             * Notified Channels
+             * @default []
+             */
+            notified_channels: ("email" | "slack")[];
             /** Observed Value */
             observed_value: number;
             /** Rule Id */
@@ -51741,6 +51757,11 @@ export interface components {
              * @default 0
              */
             complete: number;
+            /**
+             * Delayed
+             * @default 0
+             */
+            delayed: number;
             /**
              * Insufficient Coverage
              * @default 0
@@ -51871,6 +51892,29 @@ export interface components {
             /** Scope Id */
             scope_id: string;
         };
+        /**
+         * UsageAlertProgress
+         * @description Internal durable position; never part of rule input or public output.
+         */
+        UsageAlertProgress: {
+            /** Cursor */
+            cursor?: string | null;
+            /**
+             * Day
+             * Format: date
+             */
+            day: string;
+            /**
+             * Evaluated
+             * @default false
+             */
+            evaluated: boolean;
+            /**
+             * Revision
+             * Format: date-time
+             */
+            revision: string;
+        };
         /** UsageAlertRule */
         UsageAlertRule: {
             /**
@@ -51905,7 +51949,7 @@ export interface components {
              * @default pending
              * @enum {string}
              */
-            evaluation_status: "pending" | "complete" | "insufficient_coverage" | "insufficient_history";
+            evaluation_status: "pending" | "complete" | "insufficient_coverage" | "insufficient_history" | "delayed";
             /** Id */
             id: string;
             /**
