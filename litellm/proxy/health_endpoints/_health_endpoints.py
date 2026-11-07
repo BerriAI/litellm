@@ -75,6 +75,7 @@ from litellm.proxy.db.db_lookup_gate import db_lookup_stall_tracker
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.db.health_check_latest import (
     LatestHealthCheckRow,
+    latest_by_model_name,
     query_latest_health_checks,
 )
 from litellm.proxy.db.proxy_worker_heartbeat import count_live_proxy_workers
@@ -1803,20 +1804,34 @@ async def latest_health_checks_endpoint(
 
     Returns the most recent health check result for each model.
     """
+    from litellm.proxy.proxy_server import llm_router
+
     prisma_client: Final = _check_prisma_client()
 
     try:
         latest_checks: Final = await prisma_client.get_all_latest_health_checks()
 
-        # Convert to dict format for JSON response using helper function
+        checks_by_id: Final = {(check.model_id or check.model_name): check for check in latest_checks}
+        checks_by_name: Final = latest_by_model_name(latest_checks)
+        aliases: Final = await _caller_aliases(user_api_key_dict)
+        alias_names: Final = await _names_key_may_request(
+            _alias_names_caller_may_request(aliases, llm_router),
+            aliases,
+            user_api_key_dict,
+            await _key_owner(user_api_key_dict),
+            llm_router,
+        )
+        alias_targets: Final = {
+            alias: checks_by_name.get(_served_group(alias, aliases, llm_router)) for alias in alias_names
+        }
+        alias_checks: Final = {alias: check for alias, check in alias_targets.items() if check is not None}
         checks_data: Final = {
-            (check.model_id if check.model_id else check.model_name): convert_health_check_to_dict(check)
-            for check in latest_checks
+            name: convert_health_check_to_dict(check) for name, check in {**alias_checks, **checks_by_id}.items()
         }
 
         return {
             "latest_health_checks": checks_data,
-            "total_models": len(checks_data),
+            "total_models": len(checks_by_id),
         }
     except Exception as e:
         verbose_proxy_logger.error("Error getting latest health checks: %s", e)
