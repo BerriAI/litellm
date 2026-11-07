@@ -110,12 +110,12 @@ describe("decision model presets", () => {
 });
 
 describe("collieai preset", () => {
-  it("opens the CollieAi card as an always-on guardrail on both halves of the call", () => {
+  it("opens the CollieAi card on both halves of the call, off until a request or Always On asks for it", () => {
     const expectedPreset = {
       provider: "Collieai",
       guardrailNameSuggestion: "CollieAi",
       mode: ["pre_call", "post_call"],
-      defaultOn: true,
+      defaultOn: false,
     };
     expect(GUARDRAIL_PRESETS["collieai"]).toEqual(expectedPreset);
   });

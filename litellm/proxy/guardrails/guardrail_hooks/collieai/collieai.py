@@ -36,19 +36,39 @@ def package_guardrail(package: object) -> type[CustomGuardrail] | None:
     return guardrail if issubclass(guardrail, CustomGuardrail) else None
 
 
-def missing_package(import_error: ImportError | None) -> type[CustomGuardrail]:
-    class MissingPackage(CustomGuardrail):
+def unavailable_package(message: str, cause: BaseException | None) -> type[CustomGuardrail]:
+    class UnavailablePackage(CustomGuardrail):
         def __init__(self, **kwargs: object) -> None:  # kwargs-ok: mirrors the package constructor, only raises
-            raise ImportError(MISSING_PACKAGE_MESSAGE) from import_error
+            raise ImportError(message) from cause
 
-    return MissingPackage
+    return UnavailablePackage
+
+
+def missing_package(import_error: ImportError | None) -> type[CustomGuardrail]:
+    return unavailable_package(MISSING_PACKAGE_MESSAGE, import_error)
+
+
+def broken_package(load_error: Exception) -> type[CustomGuardrail]:
+    return unavailable_package(
+        "collieai-litellm-guardrail is installed but failed to load with this LiteLLM version "
+        f"({type(load_error).__name__}: {load_error}). "
+        'Upgrade it with: pip install -U "collieai-litellm-guardrail>=1.0.0"',
+        load_error,
+    )
+
+
+def is_the_package_missing(import_error: ImportError) -> bool:
+    package_root: Final = PACKAGE_MODULE.partition(".")[0]
+    return isinstance(import_error, ModuleNotFoundError) and (import_error.name or "").partition(".")[0] == package_root
 
 
 def load_base(import_module: Callable[[str], object] = importlib.import_module) -> type[CustomGuardrail]:
     try:
         package: Final = import_module(PACKAGE_MODULE)
     except ImportError as import_error:
-        return missing_package(import_error)
+        return missing_package(import_error) if is_the_package_missing(import_error) else broken_package(import_error)
+    except Exception as load_error:  # noqa: BLE001  # a broken third-party install must not break the guardrail routes
+        return broken_package(load_error)
     return package_guardrail(package) or missing_package(None)
 
 

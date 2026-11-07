@@ -28,9 +28,9 @@ class CollieAiGuardrailConfigModelOptionalParams(LiteLLMBaseModel):
 class CollieAiGuardrailConfigModel(GuardrailConfigModel[CollieAiGuardrailConfigModelOptionalParams]):
     model_config = ConfigDict(frozen=True)
 
-    api_key: str = Field(
-        min_length=1,
-        description="CollieAi project API key, starting with clai_. Env: COLLIEAI_API_KEY.",
+    api_key: str | None = Field(
+        default=None,
+        description="CollieAi project API key, starting with clai_. Leave empty to use COLLIEAI_API_KEY.",
     )
     api_base: str | None = Field(
         default=DEFAULT_API_BASE,

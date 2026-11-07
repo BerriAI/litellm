@@ -24,7 +24,9 @@ def initialize_guardrail(
     import litellm
     from litellm.secret_managers.main import get_secret_str
 
-    extras: Final = litellm_params.model_extra or _NO_EXTRAS
+    extras: Final = MappingProxyType(
+        {key: value for key, value in (litellm_params.model_extra or _NO_EXTRAS).items() if value is not None}
+    )
     try:
         _callback: Final = guardrail_cls(
             **{
@@ -34,6 +36,7 @@ def initialize_guardrail(
                 "guardrail_name": guardrail["guardrail_name"],
                 "event_hook": litellm_params.mode,
                 "default_on": litellm_params.default_on,
+                "stream_scope": litellm_params.stream_scope,
             }
         )
     except Exception as setup_error:

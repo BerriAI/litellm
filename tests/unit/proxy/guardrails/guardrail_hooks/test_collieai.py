@@ -52,17 +52,26 @@ class _RecordingGuardrail(CustomGuardrail):
         guardrail_name: str | None = None,
         event_hook: object = None,
         default_on: bool | None = None,
+        stream_scope: object = None,
         **settings: object,
     ) -> None:
-        super().__init__(guardrail_name=guardrail_name, default_on=bool(default_on))
+        super().__init__(guardrail_name=guardrail_name, default_on=bool(default_on), stream_scope=stream_scope)
         self.given = {
             "api_base": api_base,
             "api_key": api_key,
             "guardrail_name": guardrail_name,
             "event_hook": event_hook,
             "default_on": default_on,
+            "stream_scope": stream_scope,
             **settings,
         }
+
+
+class _RefusesStreamScope(_RecordingGuardrail):
+    def apply_stream_scope(self, stream_scope: object) -> None:
+        if stream_scope not in (None, "both"):
+            raise RuntimeError("enforcement_mode block needs stream_scope unset or both")
+        super().apply_stream_scope(stream_scope)
 
 
 def _params(**extras: object) -> LitellmParams:
@@ -100,6 +109,7 @@ def test_hands_the_entry_and_every_setting_to_the_package() -> None:
             summary_interval_s=30,
             synthetic_interval_s=0,
             workspace_id="not-a-collieai-setting",
+            stream_scope="non_streaming",
         )
     )
 
@@ -109,6 +119,7 @@ def test_hands_the_entry_and_every_setting_to_the_package() -> None:
         "guardrail_name": "collieai",
         "event_hook": ["pre_call", "post_call"],
         "default_on": True,
+        "stream_scope": "non_streaming",
         "enforcement_mode": "block",
         "deadline_ms": 2000,
         "network_margin_ms": 300,
@@ -126,7 +137,24 @@ def test_points_at_app_collieai_io_unless_told_otherwise() -> None:
 
     # The hosted service's base URL, from https://docs.collieai.io/integrations/litellm (2026-10-29)
     assert callback.given["api_base"] == DEFAULT_API_BASE == "https://app.collieai.io/v1/integrations/litellm"
-    assert set(callback.given) == {"api_base", "api_key", "guardrail_name", "event_hook", "default_on"}
+    assert set(callback.given) == {"api_base", "api_key", "guardrail_name", "event_hook", "default_on", "stream_scope"}
+
+
+def test_a_cleared_optional_setting_leaves_the_package_its_default() -> None:
+    callback: Final = _init(_params(deadline_ms=None, forward_conversation_id=None, network_margin_ms=300))
+
+    assert "deadline_ms" not in callback.given
+    assert "forward_conversation_id" not in callback.given
+    assert callback.given["network_margin_ms"] == 300
+
+
+def test_a_stream_scope_the_package_refuses_is_a_setup_error_and_adds_no_callback() -> None:
+    litellm_params: Final = _params(enforcement_mode="block", stream_scope="streaming")
+
+    with pytest.raises(CollieAiSetupError, match="stream_scope"):
+        initialize_guardrail(litellm_params, _guardrail(litellm_params), guardrail_cls=_RefusesStreamScope)
+
+    assert litellm.callbacks == []
 
 
 def test_hands_each_entry_its_own_name_phase_and_default_on() -> None:
@@ -173,7 +201,7 @@ async def test_ui_offers_collieai_fields_without_the_package() -> None:
     fields: Final = (await get_provider_specific_params())["collieai"]
 
     assert fields["ui_friendly_name"] == "CollieAi"
-    assert fields["api_key"]["required"] is True
+    assert fields["api_key"]["required"] is False
     assert fields["api_base"]["default_value"] == DEFAULT_API_BASE
     assert set(fields["optional_params"]["fields"]) == {"deadline_ms", "forward_conversation_id"}
 
@@ -214,7 +242,7 @@ def test_builds_on_the_package_only_when_it_is_current() -> None:
 
 
 def test_without_the_package_building_the_guardrail_names_what_to_install() -> None:
-    cause: Final = ImportError("No module named 'collieai_guardrail'")
+    cause: Final = ModuleNotFoundError("No module named 'collieai_guardrail'", name="collieai_guardrail")
 
     def import_module(name: str) -> object:
         raise cause
@@ -223,6 +251,27 @@ def test_without_the_package_building_the_guardrail_names_what_to_install() -> N
         load_base(import_module)(guardrail_name="collieai")
 
     assert str(raised.value) == MISSING_PACKAGE_MESSAGE
+    assert raised.value.__cause__ is cause
+
+
+@pytest.mark.parametrize(
+    "cause",
+    [
+        ModuleNotFoundError("No module named 'litellm.gone'", name="litellm.gone"),
+        ImportError("cannot import name 'Moved' from 'litellm.types'", name="litellm.types"),
+        ImportError("cannot import name 'Observer' from 'collieai_guardrail.observer'", name="collieai_guardrail.observer"),
+        AttributeError("module 'litellm' has no attribute 'moved'"),
+    ],
+)
+def test_an_installed_package_that_fails_to_load_says_so_instead_of_asking_to_install_it(cause: Exception) -> None:
+    def import_module(name: str) -> object:
+        raise cause
+
+    with pytest.raises(ImportError, match="installed but failed to load") as raised:
+        load_base(import_module)(guardrail_name="collieai")
+
+    assert str(cause) in str(raised.value)
+    assert MISSING_PACKAGE_MESSAGE not in str(raised.value)
     assert raised.value.__cause__ is cause
 
 
