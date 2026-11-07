@@ -38,9 +38,9 @@ mod _native {
     #[pymodule_export]
     use crate::model_registry::bundled_model_cost_map;
     #[pymodule_export]
-    use crate::redis::client::NativeRedisClient;
+    use crate::redis::breaker::{NativeAdmission, NativeRedisBreaker, native_redis_breaker_states};
     #[pymodule_export]
-    use crate::redis::client::native_redis_breaker_states;
+    use crate::redis::client::NativeRedisClient;
     #[pymodule_export]
     use crate::redis::store::auth_cache::{NativeAuthCache, PyLocalSizes};
     #[pymodule_export]
@@ -136,6 +136,8 @@ mod tests {
                 "ResponsesWebSocketConnection",
                 "NativeDiagnosticProcessor",
                 "NativeRedisClient",
+                "NativeRedisBreaker",
+                "NativeAdmission",
                 "NativeRequestRedis",
                 "NativeSend",
                 "NativeAuthCache",

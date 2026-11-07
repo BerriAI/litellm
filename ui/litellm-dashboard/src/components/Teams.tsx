@@ -71,6 +71,7 @@ import DeleteResourceModal from "./common_components/DeleteResourceModal";
 import { teamCreateCall } from "./networking";
 import { normalizeTeamModelSelection } from "./team/teamModelAccess";
 import { ModelSelect } from "./ModelSelect/ModelSelect";
+import { StorePromptsToggle } from "./common_components/StorePromptsToggle";
 
 const SUPPRESSED_BY_DESCRIPTION = "";
 
@@ -877,6 +878,19 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, isViewOnly 
                   </FormField>
                   <Field>
                     <FieldLabel>{t("teams.page.create.fields.metadata.label")}</FieldLabel>
+                    <FormField control={form.control} name="metadata">
+                      {({ value, onChange }) => (
+                        <StorePromptsToggle
+                          value={metadataPairsToObject(value).store_prompts_in_spend_logs}
+                          onChange={(store) =>
+                            onChange([
+                              ...(value ?? []).filter((pair) => pair.key !== "store_prompts_in_spend_logs"),
+                              { key: "store_prompts_in_spend_logs", value: JSON.stringify(store) },
+                            ])
+                          }
+                        />
+                      )}
+                    </FormField>
                     <MetadataKeyValueFields
                       control={form.control}
                       getValues={form.getValues}

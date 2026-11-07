@@ -65,6 +65,7 @@ if TYPE_CHECKING:
     from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
     from litellm.router_strategy.complexity_router.complexity_router import ComplexityRouter
     from litellm.router_strategy.quality_router.quality_router import QualityRouter
+    from litellm.router_strategy.switchyard_router.switchyard_router import SwitchyardRouter
     from litellm.router_utils.cooldown_cache import CooldownCache
     from litellm.router_utils.fallback_event_handlers import AttemptedFallbackTargets as _AttemptedFallbackTargets
     from litellm.router_utils.health_state_cache import DeploymentHealthCache
@@ -106,6 +107,7 @@ if TYPE_CHECKING:
         | dict[str, list[TaggedPreRoutingStrategy[ComplexityRouter]]]
         | dict[str, list[TaggedPreRoutingStrategy[QualityRouter]]]
         | dict[str, list[TaggedPreRoutingStrategy[AdaptiveRouter]]]
+        | dict[str, list[TaggedPreRoutingStrategy[SwitchyardRouter]]]
         | list[RoutingPlugin]
         | RouterBudgetLimiting
         | DualCache
@@ -158,6 +160,7 @@ GroupField: TypeAlias = Literal[
     "display_name",
     "mode",
     "service_tiers",
+    "pinned_reasoning_efforts",
     "max_input_tokens",
     "deployment_model_info",
     "token_limits",
@@ -170,6 +173,7 @@ PluginKind: TypeAlias = Literal[
     "complexity",
     "quality",
     "adaptive",
+    "switchyard",
     "routing",
     "budget_limiter",
     "prompt_caching_pins",
@@ -939,7 +943,7 @@ class RouterRegistry:
         self,
         name: str,
         *,
-        field: Literal["service_tiers"],
+        field: Literal["service_tiers", "pinned_reasoning_efforts"],
         include_hidden: bool = False,
         team_id: str | None = None,
     ) -> tuple[object, ...]: ...
@@ -1001,6 +1005,7 @@ class RouterRegistry:
           (were ``get_configured_display_name``, ``get_configured_mode``,
           ``get_configured_token_limits``, ``get_model_listing_info``)
         - ``service_tiers``: (was ``get_configured_service_tiers``)
+        - ``pinned_reasoning_efforts``: the ``reasoning_effort`` each routable deployment pins
         - ``max_input_tokens``: each routable deployment's own ``model_info.max_input_tokens``
         - ``deployment_model_info``: each routable deployment's model info, merged with the pricing map
         """
@@ -1015,6 +1020,8 @@ class RouterRegistry:
             return r._core_get_configured_mode(name)
         if field == "service_tiers":
             return r._core_get_configured_service_tiers(name, team_id=team_id)
+        if field == "pinned_reasoning_efforts":
+            return r._core_get_pinned_reasoning_efforts(name, team_id=team_id)
         if field == "max_input_tokens":
             return r._core_get_configured_max_input_tokens(name, team_id=team_id)
         if field == "deployment_model_info":
@@ -1103,6 +1110,11 @@ class RouterRegistry:
     ) -> "dict[str, list[TaggedPreRoutingStrategy[AdaptiveRouter]]]": ...  # mutable-ok: the live dict
 
     @overload
+    def plugins(
+        self, kind: Literal["switchyard"]
+    ) -> "dict[str, list[TaggedPreRoutingStrategy[SwitchyardRouter]]]": ...  # mutable-ok: the live dict
+
+    @overload
     def plugins(self, kind: Literal["routing"]) -> "list[RoutingPlugin]": ...  # mutable-ok: the live list
 
     @overload
@@ -1128,6 +1140,8 @@ class RouterRegistry:
             return r._core_quality_routers
         if kind == "adaptive":
             return r._core_adaptive_routers
+        if kind == "switchyard":
+            return r._core_switchyard_routers
         if kind == "routing":
             return r._core_routing_plugins
         if kind == "budget_limiter":
@@ -1135,6 +1149,18 @@ class RouterRegistry:
         if kind == "prompt_caching_pins":
             return r._core_prompt_caching_pin_cache
         raise ValueError(f"unknown plugin kind {kind!r}")
+
+    def decryptable_reasoning(
+        self, model_group: str, request_input: Sequence[object], targets: "Sequence[Deployment]"
+    ) -> tuple[object, ...]:
+        """
+        ``request_input`` without the encrypted reasoning that ``targets``, the deployments a
+        ``model_group`` request may go to, cannot decrypt, keeping each item's readable summary.
+        When encrypted content affinity is on for the group, the router sends the request to the
+        reasoning's origin, so reasoning one target can decrypt stays; otherwise every target must
+        decrypt it (was reading ``optional_callbacks`` for ``EncryptedContentAffinityCheck``).
+        """
+        return self._router._core_decryptable_reasoning(model_group, request_input, targets)
 
 
 # Settings a caller may read. Assigning one from outside the router goes through apply(ChangeSet(assign=...)).

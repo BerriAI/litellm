@@ -37,6 +37,7 @@ import BudgetDurationDropdown from "../common_components/budget_duration_dropdow
 import SchemaFormFields from "../common_components/check_openapi_schema";
 import KeyLifecycleSettings from "../common_components/KeyLifecycleSettings";
 import ModelAliasManager from "../common_components/ModelAliasManager";
+import { StorePromptsMetadataToggle } from "../common_components/StorePromptsToggle";
 import {
   MountedFormField,
   MountedFormProvider,
@@ -1571,12 +1572,18 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                         className="mt-4"
                       >
                         {(control) => (
-                          <Textarea
-                            {...control}
-                            value={(control.value as string | undefined) ?? ""}
-                            rows={4}
-                            placeholder={t("createKey.metadata.placeholder")}
-                          />
+                          <>
+                            <StorePromptsMetadataToggle
+                              value={control.value as string | undefined}
+                              onChange={control.onChange}
+                            />
+                            <Textarea
+                              {...control}
+                              value={(control.value as string | undefined) ?? ""}
+                              rows={4}
+                              placeholder={t("createKey.metadata.placeholder")}
+                            />
+                          </>
                         )}
                       </MountedFormField>
                       <MountedFormField
@@ -1777,6 +1784,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                               key={routerSettingsKey}
                               ref={routerSettingsRef}
                               accessToken={accessToken || ""}
+                              teamId={selectedCreateKeyTeam?.team_id}
                               value={routerSettings || undefined}
                               onChange={setRouterSettings}
                               modelData={

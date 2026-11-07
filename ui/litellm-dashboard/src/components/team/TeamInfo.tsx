@@ -114,6 +114,8 @@ import SearchToolSelector from "../search_tools/SearchToolSelector";
 import SkillSelector from "../skills/SkillSelector";
 import EditLoggingSettings from "./EditLoggingSettings";
 import RouterSettingsAccordion, { RouterSettingsAccordionRef } from "../common_components/RouterSettingsAccordion";
+import { RouterWeightsSummary } from "../common_components/RouterSettingsSummary";
+import { StorePromptsToggle } from "../common_components/StorePromptsToggle";
 import MemberModal from "./EditMembership";
 import MemberPermissions from "./member_permissions";
 import MyUserTab from "./MyUserTab";
@@ -1976,6 +1978,19 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
                   <Field>
                     <FieldLabel>{t("teams.teamInfo.editForm.metadata")}</FieldLabel>
+                    <FormField control={form.control} name="metadata">
+                      {({ value, onChange }) => (
+                        <StorePromptsToggle
+                          value={metadataPairsToObject(value).store_prompts_in_spend_logs}
+                          onChange={(store) =>
+                            onChange([
+                              ...(value ?? []).filter((pair) => pair.key !== "store_prompts_in_spend_logs"),
+                              { key: "store_prompts_in_spend_logs", value: JSON.stringify(store) },
+                            ])
+                          }
+                        />
+                      )}
+                    </FormField>
                     <MetadataKeyValueFields
                       control={form.control}
                       getValues={form.getValues}
@@ -2659,6 +2674,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     {info.router_settings.enable_tag_filtering && (
                       <div>{t("teams.teamInfo.settingsView.router.tagFilteringEnabled")}</div>
                     )}
+                    <RouterWeightsSummary weights={info.router_settings.weights} />
                   </div>
                 ) : (
                   <div className="text-muted-foreground">{t("teams.teamInfo.settingsView.router.none")}</div>
