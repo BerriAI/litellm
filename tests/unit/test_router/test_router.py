@@ -2868,6 +2868,7 @@ async def test_continued_stream_sharing_the_proxy_logging_object_bills_the_cut_t
 async def test_a_failure_after_a_continued_stream_success_bills_nothing_the_success_row_already_billed(
     monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
 ) -> None:
+    from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
     from litellm.proxy.utils import _failure_fields_to_lift
 
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
@@ -2880,7 +2881,12 @@ async def test_a_failure_after_a_continued_stream_success_bills_nothing_the_succ
     (success,) = recorder.successes
     assert success["cost_breakdown"]["additional_costs"]["mid_stream_partial_cost"] > 0
     late_failure: Final = _failure_fields_to_lift({"litellm_logging_obj": shared_logging}, provider_billed=True)
-    assert (late_failure.get("combined_usage_object"), late_failure.get("response_cost")) == (None, None)
+    late_failure_row: Final = get_logging_payload(dict(late_failure), None, datetime.now(), datetime.now())
+    assert (late_failure_row["prompt_tokens"], late_failure_row["completion_tokens"], late_failure_row["spend"]) == (
+        0,
+        0,
+        0.0,
+    )
 
 
 _AGENTIC_FIRST_CALL_USAGE: Final = {"prompt_tokens": 50, "completion_tokens": 7, "total_tokens": 57}
@@ -3286,6 +3292,7 @@ def _backup_responses_cost() -> float:
 async def test_responses_fallback_sharing_the_proxy_logging_object_bills_the_cut_partial_once(
     monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, failed_usage: Mapping[str, int] | None
 ) -> None:
+    from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
     from litellm.proxy.utils import _failure_fields_to_lift
 
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
@@ -3318,7 +3325,12 @@ async def test_responses_fallback_sharing_the_proxy_logging_object_bills_the_cut
         success["response_cost"],
     )
     late_failure: Final = _failure_fields_to_lift({"litellm_logging_obj": shared_logging}, provider_billed=True)
-    assert (late_failure.get("combined_usage_object"), late_failure.get("response_cost")) == (None, None)
+    late_failure_row: Final = get_logging_payload(dict(late_failure), None, datetime.now(), datetime.now())
+    assert (late_failure_row["prompt_tokens"], late_failure_row["completion_tokens"], late_failure_row["spend"]) == (
+        0,
+        0,
+        0.0,
+    )
 
 
 @pytest.mark.asyncio

@@ -28,6 +28,7 @@ from litellm.llms.anthropic.messages.native.streaming_iterator import (
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 from litellm.proxy.utils import ProxyLogging, _failure_fields_to_lift
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import Usage
@@ -782,9 +783,11 @@ async def test_chat_stream_callback_error_after_its_success_dispatch_leaves_the_
             pass
     await asyncio.sleep(0)
 
-    lifted: Final = _failure_fields_to_lift(request_data, provider_billed=True)
+    failure_row: Final = get_logging_payload(
+        dict(_failure_fields_to_lift(request_data, provider_billed=True)), None, datetime.now(), datetime.now()
+    )
     assert events == ["success_dispatched"]
-    assert (lifted.get("combined_usage_object"), lifted.get("response_cost")) == (None, None)
+    assert (failure_row["prompt_tokens"], failure_row["completion_tokens"], failure_row["spend"]) == (0, 0, 0.0)
 
 
 @pytest.mark.asyncio
