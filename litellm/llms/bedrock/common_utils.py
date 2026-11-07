@@ -1554,10 +1554,10 @@ def _bedrock_serves_responses(model: str) -> bool:
 
 
 def bedrock_responses_bridge_optional_params(optional_params: Mapping[str, object]) -> Mapping[str, object]:
-    if optional_params.get("store") is not None:
-        return optional_params
     extra_body: Final = optional_params.get("extra_body")
     extra_body_params: Final = _EXTRA_BODY_ADAPTER.validate_python(extra_body) if isinstance(extra_body, dict) else {}
+    if extra_body_params.get("store", optional_params.get("store")) is True:
+        return optional_params
     include: Final = extra_body_params.get("include", optional_params.get("include"))
     requested: Final = _INCLUDE_ADAPTER.validate_python(include or ())
     return {

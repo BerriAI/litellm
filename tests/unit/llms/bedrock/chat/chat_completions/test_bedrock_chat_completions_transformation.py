@@ -1253,20 +1253,43 @@ async def test_a_provider_specific_param_keeps_converse_and_reaches_the_model(lo
     assert json.loads(requests[0].content)["additionalModelRequestFields"]["foo_bar"] == 1
 
 
-async def test_tools_with_reasoning_bridge_stores_only_when_the_caller_asks(local_cost_map, fake_aws_env):
+@pytest.mark.parametrize("store_param", [{"store": True}, {"extra_body": {"store": True}}])
+async def test_tools_with_reasoning_bridge_stores_only_when_the_caller_asks(local_cost_map, fake_aws_env, store_param):
     requests, client = _async_recording_client(json={**RESPONSES_TOOL_CALL_JSON, "model": "global.openai.gpt-6-sol"})
     await litellm.acompletion(
         model="bedrock/global.openai.gpt-6-sol",
         messages=[{"role": "user", "content": "weather in Paris"}],
         tools=[GET_WEATHER_TOOL],
         reasoning_effort="low",
-        store=True,
         client=client,
+        **store_param,
     )
 
     body = json.loads(requests[0].content)
     assert body["store"] is True
     assert "include" not in body
+
+
+@pytest.mark.parametrize(
+    "store_param",
+    [{}, {"store": False}, {"extra_body": {"store": False}}, {"store": True, "extra_body": {"store": False}}],
+)
+async def test_tools_with_reasoning_bridge_asks_for_encrypted_reasoning_whenever_store_is_off(
+    local_cost_map, fake_aws_env, store_param
+):
+    requests, client = _async_recording_client(json={**RESPONSES_TOOL_CALL_JSON, "model": "global.openai.gpt-6-sol"})
+    await litellm.acompletion(
+        model="bedrock/global.openai.gpt-6-sol",
+        messages=[{"role": "user", "content": "weather in Paris"}],
+        tools=[GET_WEATHER_TOOL],
+        reasoning_effort="low",
+        client=client,
+        **store_param,
+    )
+
+    body = json.loads(requests[0].content)
+    assert body["store"] is False
+    assert body["include"] == ["reasoning.encrypted_content"]
 
 
 @pytest.mark.parametrize(
