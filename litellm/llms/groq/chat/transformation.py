@@ -57,6 +57,7 @@ class GroqChatConfig(OpenAILikeChatConfig):
     response_format: dict | None = None
     tools: list | None = None
     tool_choice: str | dict | None = None
+    reasoning_format: str | None = None
 
     def __init__(
         self,
@@ -73,6 +74,7 @@ class GroqChatConfig(OpenAILikeChatConfig):
         response_format: dict | None = None,
         tools: list | None = None,
         tool_choice: str | dict | None = None,
+        reasoning_format: str | None = None,
     ) -> None:
         locals_: Final[Mapping[str, object]] = dict(locals())
         for key, value in locals_.items():
@@ -113,12 +115,48 @@ class GroqChatConfig(OpenAILikeChatConfig):
             base_params.remove("web_search_options")
 
         try:
-            if litellm.supports_reasoning(model=model, custom_llm_provider=self.custom_llm_provider):
-                base_params.append("reasoning_effort")
+            if self._supports_reasoning(model):
+                base_params.append("reasoning_format")
+                if self._model_supports_reasoning_effort(model):
+                    base_params.append("reasoning_effort")
         except Exception as e:
             verbose_logger.debug("Error checking if model supports reasoning: %s", e)
 
         return base_params
+
+    @classmethod
+    def _model_supports_reasoning_effort(cls, model: str) -> bool:
+        """
+        Check if the model accepts reasoning_effort on Groq.
+        First consults the model catalog (if an explicit flag like supports_reasoning_effort is present),
+        and falls back to excluding DeepSeek R1 models which reason unconditionally and reject this parameter.
+        """
+        try:
+            from litellm.utils import get_model_info
+
+            model_info = get_model_info(model=model, custom_llm_provider="groq")
+            if model_info.get("supports_reasoning_effort") is False:
+                return False
+            if model_info.get("supports_reasoning_effort") is True:
+                return True
+        except Exception:
+            pass
+        return not cls._is_deepseek_r1_model(model)
+
+    @staticmethod
+    def _is_deepseek_r1_model(model: str) -> bool:
+        clean_model = model.removeprefix("groq/").lower()
+        return "deepseek-r1" in clean_model
+
+    @classmethod
+    def _supports_reasoning(cls, model: str) -> bool:
+        clean_model = model.removeprefix("groq/").lower()
+        if "deepseek-r1" in clean_model or "qwq" in clean_model:
+            return True
+        try:
+            return litellm.supports_reasoning(model=model, custom_llm_provider="groq")
+        except Exception:
+            return False
 
     @staticmethod
     def _is_compound_model(model: str) -> bool:
@@ -278,6 +316,22 @@ class GroqChatConfig(OpenAILikeChatConfig):
                         "response_format", None
                     )  # only remove if it's a json_schema - handled via using groq's tool calling params.
                 # else: model supports native json_schema, let response_format pass through
+        reasoning_format: Final = non_default_params.pop("reasoning_format", None)
+        if reasoning_format is not None:
+            optional_params["reasoning_format"] = reasoning_format
+
+        if not self._model_supports_reasoning_effort(model) and "reasoning_effort" in non_default_params:
+            if drop_params or litellm.drop_params:
+                verbose_logger.warning(
+                    f"Dropping reasoning_effort={non_default_params['reasoning_effort']} for model={model} because Groq does not support reasoning_effort on this model."
+                )
+                non_default_params.pop("reasoning_effort", None)
+            else:
+                raise litellm.UnsupportedParamsError(
+                    message=f"reasoning_effort is not supported for {model} on Groq. To drop unsupported params set `litellm.drop_params = True`",
+                    status_code=400,
+                )
+
         web_search_options: Final = non_default_params.pop("web_search_options", None)
         optional_params = super().map_openai_params(non_default_params, optional_params, model, drop_params)
         if web_search_options is None:
