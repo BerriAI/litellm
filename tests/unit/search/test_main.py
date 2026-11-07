@@ -279,3 +279,11 @@ async def test_async_linkup_deep_search_reports_the_deep_price(
     )
     assert json.loads(respx_mock.calls.last.request.content)["depth"] == "deep"
     assert response.hidden_params["response_cost"] == pytest.approx(0.011)
+
+
+def test_search_tool_name_is_not_sent_to_a_provider_api(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(TAVILY_SEARCH_URL).respond(json={"results": []})
+
+    litellm.search(query="q", search_provider="tavily", api_key="test-tavily-key", search_tool_name="web-search")
+
+    assert "search_tool_name" not in json.loads(route.calls.last.request.content)

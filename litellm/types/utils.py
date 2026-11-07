@@ -4856,6 +4856,7 @@ class SearchProviders(str, Enum):
     BING_GROUNDING = "bing_grounding"
     DEEPSEEK = "deepseek"
     XAI = "xai"
+    LITELLM_PROXY = "litellm_proxy"
 
 
 # Create a set of all search provider values for quick lookup

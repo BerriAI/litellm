@@ -11474,6 +11474,7 @@ class ProviderConfigManager:
         from litellm.llms.firecrawl.search.transformation import FirecrawlSearchConfig
         from litellm.llms.google_pse.search.transformation import GooglePSESearchConfig
         from litellm.llms.linkup.search.transformation import LinkupSearchConfig
+        from litellm.llms.litellm_proxy.search.transformation import LiteLLMProxySearchConfig
         from litellm.llms.nimble.search.transformation import NimbleSearchConfig
         from litellm.llms.parallel_ai.search.transformation import (
             ParallelAISearchConfig,
@@ -11510,6 +11511,7 @@ class ProviderConfigManager:
             SearchProviders.BING_GROUNDING: BingGroundingSearchConfig,
             SearchProviders.DEEPSEEK: DeepSeekSearchConfig,
             SearchProviders.XAI: XAISearchConfig,
+            SearchProviders.LITELLM_PROXY: LiteLLMProxySearchConfig,
         }
         config_class: Final = PROVIDER_TO_CONFIG_MAP.get(provider, None)
         if config_class is None:

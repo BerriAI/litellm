@@ -2437,7 +2437,7 @@
         "audio_speech": false,
         "rerank": false,
         "ocr": false,
-        "search": false,
+        "search": true,
         "moderations": false,
         "realtime": false,
         "video_generations": false,
