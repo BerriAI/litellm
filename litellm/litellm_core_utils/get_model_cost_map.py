@@ -606,7 +606,7 @@ def _expand_model_aliases(model_cost: dict[str, dict[str, object]]) -> dict[str,
 
     for model_name, model_info in model_cost.items():
         aliases: object = model_info.get("aliases")
-        if aliases is None:
+        if aliases is None or model_name in pointer_rows:
             continue
         keys_with_aliases.append(model_name)
         if not isinstance(aliases, list):
