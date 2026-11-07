@@ -33,6 +33,7 @@ import bingLogo from "../../../../../public/assets/logos/bing.png";
 import dataforseoLogo from "../../../../../public/assets/logos/dataforseo.png";
 import exaAiLogo from "../../../../../public/assets/logos/exa_ai.png";
 import googlePseLogo from "../../../../../public/assets/logos/google_pse.png";
+import keenableLogo from "../../../../../public/assets/logos/keenable.png";
 import nimbleLogo from "../../../../../public/assets/logos/nimble.png";
 import parallelAiLogo from "../../../../../public/assets/logos/parallel_ai.png";
 import perplexityLogo from "../../../../../public/assets/logos/perplexity.png";
@@ -44,6 +45,7 @@ const searchProviderLogoMap: Record<string, string> = {
   tavily: tavilyLogo.src,
   parallel_ai: parallelAiLogo.src,
   exa_ai: exaAiLogo.src,
+  keenable: keenableLogo.src,
   google_pse: googlePseLogo.src,
   dataforseo: dataforseoLogo.src,
   nimble: nimbleLogo.src,

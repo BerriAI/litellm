@@ -10,6 +10,7 @@ SEARCH_PROVIDERS = [
     "google_pse",
     "parallel_ai",
     "exa_ai",
+    "keenable",
     "brave",
     "firecrawl",
     "fastcrw",

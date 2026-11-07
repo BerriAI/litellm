@@ -15,6 +15,12 @@ describe("SearchProviderLabel", () => {
     expect(img).toHaveAttribute("src", expect.stringContaining("exa_ai.png"));
   });
 
+  it("renders the keenable logo file for the keenable slug", () => {
+    render(<SearchProviderLabel providerName="keenable" displayName="Keenable" />);
+    const img = screen.getByRole("img", { name: "Keenable logo" });
+    expect(img).toHaveAttribute("src", expect.stringContaining("keenable.png"));
+  });
+
   it("renders the google_pse logo file for the google_pse slug", () => {
     render(<SearchProviderLabel providerName="google_pse" displayName="Google PSE" />);
     expect(screen.getByRole("img", { name: "Google PSE logo" })).toHaveAttribute(
