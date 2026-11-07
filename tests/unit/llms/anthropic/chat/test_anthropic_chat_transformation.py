@@ -8584,6 +8584,24 @@ def test_convert_tool_response_to_message_keeps_arguments_too_deep_to_decode(arg
     assert message.content == arguments
 
 
+@pytest.mark.parametrize("arguments", ["[1, 2]", '"x"', "5"])
+def test_convert_tool_response_to_message_keeps_a_non_object_answer_as_written(arguments: str) -> None:
+    message: Final = AnthropicConfig.convert_tool_response_to_message(
+        tool_calls=[
+            ChatCompletionToolCallChunk(
+                id="toolu_1",
+                type="function",
+                function=ChatCompletionToolCallFunctionChunk(name=RESPONSE_FORMAT_TOOL_NAME, arguments=arguments),
+                index=0,
+            )
+        ],
+        response_format_schema=None,
+    )
+
+    assert message is not None
+    assert message.content == arguments
+
+
 _DEEPLY_NESTED: Final = "[" * 300 + "]" * 300
 
 
@@ -8601,7 +8619,7 @@ _DEEPLY_NESTED: Final = "[" * 300 + "]" * 300
 )
 def test_convert_tool_response_to_message_unwraps_a_deeply_nested_answer(
     arguments: str, schema: dict[str, object] | None, expected: str
-):
+) -> None:
     message = AnthropicConfig.convert_tool_response_to_message(
         tool_calls=[
             ChatCompletionToolCallChunk(
