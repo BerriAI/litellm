@@ -80,6 +80,11 @@ describe("AdvancedDatePicker", () => {
     expect(getTrigger(container)).toHaveTextContent(/\d{1,2} \w{3}, \d{2}:\d{2} - \d{1,2} \w{3}, \d{2}:\d{2}/);
   });
 
+  it("shows dates without times for a daily range", () => {
+    render(<AdvancedDatePicker value={defaultValue} onValueChange={mockOnValueChange} showTimeRange={false} />);
+    expect(screen.getByRole("button", { name: "1 Jan - 31 Jan" })).toBeInTheDocument();
+  });
+
   it("should open dropdown when clicked", () => {
     const { container } = render(<AdvancedDatePicker value={defaultValue} onValueChange={mockOnValueChange} />);
 

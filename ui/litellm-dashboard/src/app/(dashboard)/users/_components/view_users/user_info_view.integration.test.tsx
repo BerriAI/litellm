@@ -628,3 +628,5 @@ describe("UserInfoView savings", () => {
     expect(mockUserDailyActivityAggregatedCall).not.toHaveBeenCalled();
   });
 });
+
+vi.mock("@/lib/telemetry/uiEvents", () => ({ recordUiEvent: vi.fn() }));

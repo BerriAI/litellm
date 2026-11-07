@@ -41,3 +41,36 @@ export function modelOrAccessGroupHref(
   if (accessGroupNames === undefined) return undefined;
   return accessGroupNames.has(name) ? accessGroupHref(name) : modelGroupHref(name);
 }
+
+export type ActivityScope = "key" | "team" | "user" | "model";
+
+export interface ActivityLinkContext {
+  from: string;
+  to: string;
+  alert?: string;
+}
+
+export function entityActivityHref(scope: ActivityScope, id: string, context: ActivityLinkContext): string | undefined {
+  if (!id.trim()) return undefined;
+  const unsafeKey = id.trim().startsWith("sk-") || id === "unattributed";
+  if (scope === "key" && unsafeKey) return undefined;
+  let href: string | undefined;
+  switch (scope) {
+    case "key":
+      href = keyDetailHref(id);
+      break;
+    case "team":
+      href = teamDetailHref(id);
+      break;
+    case "user":
+      href = userDetailHref(id);
+      break;
+    case "model":
+      href = `${uiHref("models-and-endpoints")}?activity_model=${encodeURIComponent(id)}`;
+      break;
+  }
+  if (!href) return undefined;
+  const params = new URLSearchParams({ detail_tab: "activity", activity_from: context.from, activity_to: context.to });
+  if (context.alert) params.set("alert", context.alert);
+  return `${href}&${params}`;
+}

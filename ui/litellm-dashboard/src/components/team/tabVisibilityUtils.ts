@@ -7,6 +7,7 @@ import type { ParseKeys } from "i18next";
 
 export const TEAM_INFO_TAB_KEYS = {
   OVERVIEW: "overview",
+  ACTIVITY: "activity",
   MY_USER: "my-user",
   VIRTUAL_KEYS: "virtual-keys",
   MEMBERS: "members",
@@ -16,6 +17,7 @@ export const TEAM_INFO_TAB_KEYS = {
 
 export const TEAM_INFO_TAB_LABELS: Record<string, ParseKeys> = {
   [TEAM_INFO_TAB_KEYS.OVERVIEW]: "teams.teamInfo.tabs.overview",
+  [TEAM_INFO_TAB_KEYS.ACTIVITY]: "entityActivity.title",
   [TEAM_INFO_TAB_KEYS.MY_USER]: "teams.teamInfo.tabs.myUser",
   [TEAM_INFO_TAB_KEYS.VIRTUAL_KEYS]: "teams.teamInfo.tabs.virtualKeys",
   [TEAM_INFO_TAB_KEYS.MEMBERS]: "teams.teamInfo.tabs.members",
@@ -25,11 +27,16 @@ export const TEAM_INFO_TAB_LABELS: Record<string, ParseKeys> = {
 
 /**
  * Returns the list of tab keys that should be visible based on permissions.
- * - Overview, My User, Virtual Keys: always visible
+ * - Overview, Activity, My User, Virtual Keys: always visible
  * - Members, Member Permissions, Settings: only when canEditTeam is true
  */
 export function getTeamInfoVisibleTabs(canEditTeam: boolean): readonly string[] {
-  const baseTabs = [TEAM_INFO_TAB_KEYS.OVERVIEW, TEAM_INFO_TAB_KEYS.MY_USER, TEAM_INFO_TAB_KEYS.VIRTUAL_KEYS];
+  const baseTabs = [
+    TEAM_INFO_TAB_KEYS.OVERVIEW,
+    TEAM_INFO_TAB_KEYS.ACTIVITY,
+    TEAM_INFO_TAB_KEYS.MY_USER,
+    TEAM_INFO_TAB_KEYS.VIRTUAL_KEYS,
+  ];
   if (canEditTeam) {
     return [
       ...baseTabs,

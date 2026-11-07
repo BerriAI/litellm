@@ -71,6 +71,10 @@ class _QueryRaw(Protocol):
     async def __call__(self, query: str, *values: object) -> Sequence[Mapping[str, object]] | None: ...
 
 
+class DailyActivityQueryDatabase(Protocol):
+    async def query_raw(self, query: str, *values: object) -> Sequence[Mapping[str, object]] | None: ...
+
+
 class _DailyActivityDatabase(Protocol):
     query_raw: _QueryRaw
     litellm_usertable: TableActions[_UserTableRow]
@@ -155,9 +159,16 @@ def _next_export_cursor(batch: tuple[ExportRow, ...], export_type: ExportType) -
 
 
 class DailyActivityRepository:
-    def __init__(self, prisma_client: DailyActivityDatabase, *, proxy_reads: DailyActivityProxyReads) -> None:
+    def __init__(
+        self,
+        prisma_client: DailyActivityDatabase,
+        *,
+        proxy_reads: DailyActivityProxyReads,
+        query_database: DailyActivityQueryDatabase | None = None,
+    ) -> None:
         self._prisma_client = prisma_client
         self._proxy_reads = proxy_reads
+        self._query_database = query_database if query_database is not None else prisma_client.db
 
     async def _query(self, query: SqlQuery) -> tuple[Mapping[str, object], ...]:
         from litellm.proxy.db.db_span import db_span
@@ -166,7 +177,7 @@ class DailyActivityRepository:
         first_line: Final = query.sql.lstrip().splitlines()[0].lstrip("(").strip()
         verbose_proxy_logger.debug("DailyActivityRepository query: %s", first_line)
         async with db_span("daily_activity_query", sql_relation(query.sql)):
-            result: Sequence[Mapping[str, object]] | None = await self._prisma_client.db.query_raw(
+            result: Final[Sequence[Mapping[str, object]] | None] = await self._query_database.query_raw(
                 query.sql, *query.params
             )
         if result is None:

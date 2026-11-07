@@ -1,3 +1,5 @@
+import EntityActivity from "@/components/UsagePage/EntityActivity";
+import { useUrlTab } from "@/hooks/useUrlTab";
 import type { ParseKeys } from "i18next";
 import React, { useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -34,6 +36,7 @@ import { hasProxyWideSpendView, rolesWithWriteAccess } from "@/utils/roles";
 import { teamDetailHref } from "@/utils/entityLinks";
 import { BadgeLink } from "@/components/shared/BadgeLink";
 import { UserEditView } from "../user_edit_view";
+import { toUserEditData } from "../user_edit_data";
 import OnboardingModal, { InvitationLink } from "@/components/onboarding_link";
 import { formatNumberWithCommas, copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
 import { ArrowLeft, CheckIcon, CopyIcon, Plus, RefreshCw, Trash2 } from "lucide-react";
@@ -106,7 +109,11 @@ export default function UserInfoView({
   const [isInvitationLinkModalVisible, setIsInvitationLinkModalVisible] = useState(false);
   const [invitationLinkData, setInvitationLinkData] = useState<InvitationLink | null>(null);
   const [baseUrl, setBaseUrl] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<string>(initialTab === 1 ? "details" : "overview");
+  const [activeTab, setActiveTab] = useUrlTab(
+    ["overview", "activity", "details", "savings", "auto-router-usage"],
+    initialTab === 1 ? "details" : "overview",
+    "detail_tab",
+  );
   const hiddenSavingsTab = activeTab === "savings" && !canViewSavings;
   const hiddenRouterTab = activeTab === "auto-router-usage" && !canViewAutoRouterUsage;
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
@@ -404,25 +411,7 @@ export default function UserInfoView({
     userData.max_budget !== null ? `$${formatNumberWithCommas(userData.max_budget, 2)}` : unlimitedLabel;
   const teamPickerPlaceholder = t("users.userInfo.addTeamDialog.teamPlaceholder");
 
-  // Build a legacy-compatible shape for UserEditView
-  const userDataForEdit = {
-    user_id: userData.user_id,
-    user_info: {
-      user_email: userData.user_email,
-      user_alias: userData.user_alias,
-      user_role: userData.user_role,
-      models: userData.models,
-      max_budget: userData.max_budget,
-      tpm_limit: userData.tpm_limit,
-      rpm_limit: userData.rpm_limit,
-      budget_duration: userData.budget_duration,
-      metadata: userData.metadata,
-      // Without these the per-model budget editor mounts empty and a save
-      // replaces the user's existing budgets with whatever was typed.
-      model_max_budget: userData.model_max_budget,
-      model_max_budget_usage: userData.model_max_budget_usage,
-    },
-  };
+  const userDataForEdit = toUserEditData(userData);
 
   return (
     <div className="p-4">
@@ -491,12 +480,15 @@ export default function UserInfoView({
 
       <Tabs
         value={hiddenSavingsTab || hiddenRouterTab ? "overview" : activeTab}
-        onValueChange={(v: unknown) => setActiveTab(String(v))}
+        onValueChange={(v: unknown) => setActiveTab(String(v) as typeof activeTab)}
         className="gap-0"
       >
-        <TabsList variant="line" className="mb-4">
+        <TabsList variant="line" className="mb-4 w-full justify-start overflow-x-auto">
           <TabsTrigger value="overview" className="flex-none data-active:text-primary after:bg-primary">
             {t("users.userInfo.tabs.overview")}
+          </TabsTrigger>
+          <TabsTrigger value="activity" className="flex-none data-active:text-primary after:bg-primary">
+            {t("entityActivity.title")}
           </TabsTrigger>
           <TabsTrigger value="details" className="flex-none data-active:text-primary after:bg-primary">
             {t("users.userInfo.tabs.details")}
@@ -514,6 +506,9 @@ export default function UserInfoView({
         </TabsList>
 
         {/* Overview Panel */}
+        <TabsContent value="activity">
+          {activeTab === "activity" && <EntityActivity scope="user" id={userId} />}
+        </TabsContent>
         <TabsContent value="overview" keepMounted>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
             <Card className="block p-6">

@@ -12,6 +12,7 @@ describe("team_info_tabs", () => {
   describe("TEAM_INFO_TAB_LABELS", () => {
     it("should have label for every tab key", () => {
       expect(i18n.t(TEAM_INFO_TAB_LABELS[TEAM_INFO_TAB_KEYS.OVERVIEW])).toBe("Overview");
+      expect(i18n.t(TEAM_INFO_TAB_LABELS[TEAM_INFO_TAB_KEYS.ACTIVITY])).toBe("Activity");
       expect(i18n.t(TEAM_INFO_TAB_LABELS[TEAM_INFO_TAB_KEYS.MY_USER])).toBe("My User");
       expect(i18n.t(TEAM_INFO_TAB_LABELS[TEAM_INFO_TAB_KEYS.VIRTUAL_KEYS])).toBe("Virtual Keys");
       expect(i18n.t(TEAM_INFO_TAB_LABELS[TEAM_INFO_TAB_KEYS.MEMBERS])).toBe("Members");
@@ -21,15 +22,21 @@ describe("team_info_tabs", () => {
   });
 
   describe("getTeamInfoVisibleTabs", () => {
-    it("returns overview, my user, and virtual keys when user cannot edit team", () => {
+    it("returns overview, activity, my user, and virtual keys when user cannot edit team", () => {
       const tabs = getTeamInfoVisibleTabs(false);
-      expect(tabs).toEqual([TEAM_INFO_TAB_KEYS.OVERVIEW, TEAM_INFO_TAB_KEYS.MY_USER, TEAM_INFO_TAB_KEYS.VIRTUAL_KEYS]);
+      expect(tabs).toEqual([
+        TEAM_INFO_TAB_KEYS.OVERVIEW,
+        TEAM_INFO_TAB_KEYS.ACTIVITY,
+        TEAM_INFO_TAB_KEYS.MY_USER,
+        TEAM_INFO_TAB_KEYS.VIRTUAL_KEYS,
+      ]);
     });
 
     it("returns all tabs when user can edit team", () => {
       const tabs = getTeamInfoVisibleTabs(true);
       expect(tabs).toEqual([
         TEAM_INFO_TAB_KEYS.OVERVIEW,
+        TEAM_INFO_TAB_KEYS.ACTIVITY,
         TEAM_INFO_TAB_KEYS.MY_USER,
         TEAM_INFO_TAB_KEYS.VIRTUAL_KEYS,
         TEAM_INFO_TAB_KEYS.MEMBERS,

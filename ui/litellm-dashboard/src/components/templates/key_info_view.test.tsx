@@ -5,7 +5,14 @@ import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { KeyResponse, Team } from "../key_team_helpers/key_list";
-import { keyDeleteCall, keyUpdateCall, regenerateKeyCall, teamInfoCall } from "../networking";
+import {
+  dailyActivityAggregatedCall,
+  keyDeleteCall,
+  keyUpdateCall,
+  regenerateKeyCall,
+  teamInfoCall,
+} from "../networking";
+import { EMPTY_DAILY_ACTIVITY_RESPONSE } from "../UsagePage/dailyActivityApi";
 import { QueryClient } from "@tanstack/react-query";
 import KeyInfoView, { needsLifetimeSpendBackfill } from "./key_info_view";
 
@@ -19,7 +26,7 @@ const editViewMocks = vi.hoisted(() => ({
   onSubmit: undefined as ((v: Record<string, any>) => Promise<void>) | undefined,
 }));
 
-vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }), usePathname: () => "/" }));
 
 vi.mock("@/app/(dashboard)/hooks/organizations/useOrganizations", () => ({
   useOrganizations: () => ({ data: [] }),
@@ -92,6 +99,7 @@ vi.mock("../networking", () => ({
   serverRootPath: "",
   keyDeleteCall: vi.fn().mockResolvedValue({}),
   keyUpdateCall: vi.fn().mockResolvedValue({}),
+  dailyActivityAggregatedCall: vi.fn(),
   regenerateKeyCall: vi.fn().mockResolvedValue({ key: "sk-regenerated", token: "regenerated-token" }),
   teamInfoCall: vi.fn(),
   getPolicyInfoWithGuardrails: vi.fn().mockResolvedValue({
@@ -116,6 +124,7 @@ vi.mock("@/utils/dataUtils", () => ({
 
 describe("KeyInfoView", () => {
   beforeEach(() => {
+    vi.mocked(dailyActivityAggregatedCall).mockReset().mockResolvedValue(EMPTY_DAILY_ACTIVITY_RESPONSE);
     vi.mocked(teamInfoCall).mockReset();
     vi.mocked(useTeams).mockReturnValue({
       teams: [],
@@ -228,6 +237,25 @@ describe("KeyInfoView", () => {
     await userEvent.click(await screen.findByRole("button", { name: /more key actions/i }));
   };
 
+  it("loads key activity only after opening its tab", async () => {
+    vi.mocked(useAuthorized).mockReturnValue({ ...baseUseAuthorizedMock, userRole: "Admin" });
+    renderWithProviders(<KeyInfoView keyData={MOCK_KEY_DATA} onClose={() => {}} keyId="test-key-id" teams={[]} />);
+
+    expect(screen.getByRole("tab", { name: "Overview" })).toHaveAttribute("aria-selected", "true");
+    expect(dailyActivityAggregatedCall).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByRole("tab", { name: "Activity" }));
+    await screen.findByText("No activity in this date range.");
+    expect(dailyActivityAggregatedCall).toHaveBeenCalledExactlyOnceWith(
+      "user",
+      expect.objectContaining({ apiKey: "test-key-id", bounded: true, includeModelBreakdown: true }),
+    );
+
+    await userEvent.click(screen.getByRole("tab", { name: "Overview" }));
+    expect(screen.queryByText("No activity in this date range.")).not.toBeInTheDocument();
+    expect(dailyActivityAggregatedCall).toHaveBeenCalledTimes(1);
+  });
+
   it("shows key-scoped auto-router usage as its own admin tab", async () => {
     vi.mocked(useAuthorized).mockReturnValue({ ...baseUseAuthorizedMock, userRole: "Admin" });
     renderWithProviders(<KeyInfoView keyData={MOCK_KEY_DATA} onClose={() => {}} keyId="test-key-id" teams={[]} />);
@@ -258,6 +286,44 @@ describe("KeyInfoView", () => {
     renderWithProviders(<KeyInfoView keyData={MOCK_KEY_DATA} onClose={() => {}} keyId="test-key-id" teams={[]} />);
 
     expect(screen.queryByRole("tab", { name: "Auto-router usage" })).not.toBeInTheDocument();
+  });
+
+  it.each(["detail_tab", "key_detail_tab"])("rejects the hidden auto-router tab from %s", async (tabQueryKey) => {
+    vi.mocked(useAuthorized).mockReturnValue({ ...baseUseAuthorizedMock, userRole: "Internal User" });
+    const onUrlUpdate = vi.fn();
+    renderWithProviders(
+      <KeyInfoView
+        keyData={MOCK_KEY_DATA}
+        onClose={() => {}}
+        keyId="test-key-id"
+        teams={[]}
+        tabQueryKey={tabQueryKey}
+      />,
+      { searchParams: `${tabQueryKey}=auto-router-usage`, onUrlUpdate, resetUrlUpdateQueueOnMount: false },
+    );
+
+    expect(screen.getByRole("tab", { name: "Overview" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.queryByTestId("key-auto-router-usage")).not.toBeInTheDocument();
+    await waitFor(() => expect(onUrlUpdate.mock.lastCall?.[0].searchParams.has(tabQueryKey)).toBe(false));
+  });
+
+  it("keeps the team tab when changing a nested key tab", async () => {
+    vi.mocked(useAuthorized).mockReturnValue(baseUseAuthorizedMock);
+    const onUrlUpdate = vi.fn();
+    renderWithProviders(
+      <KeyInfoView
+        keyData={MOCK_KEY_DATA}
+        onClose={() => {}}
+        keyId="test-key-id"
+        teams={[]}
+        tabQueryKey="key_detail_tab"
+      />,
+      { searchParams: "detail_tab=virtual_keys", onUrlUpdate },
+    );
+    await userEvent.click(screen.getByRole("tab", { name: "Savings" }));
+    expect(screen.getByRole("tab", { name: "Savings" })).toHaveAttribute("aria-selected", "true");
+    await waitFor(() => expect(onUrlUpdate.mock.lastCall?.[0].searchParams.get("key_detail_tab")).toBe("savings"));
+    expect(onUrlUpdate.mock.lastCall?.[0].searchParams.get("detail_tab")).toBe("virtual_keys");
   });
 
   describe("last updated", () => {

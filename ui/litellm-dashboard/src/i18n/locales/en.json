@@ -1,4 +1,13 @@
 {
+  "entityActivity": {
+    "title": "Activity",
+    "modelRequiresGlobal": "Model activity requires access to global usage.",
+    "invalidRange": "The start date must be on or before the end date.",
+    "loading": "Loading activity…",
+    "failed": "Unable to load activity.",
+    "retry": "Retry",
+    "empty": "No activity in this date range."
+  },
   "format": {
     "number": "{{val, number}}",
     "compactNumber": "{{val, compact}}",
