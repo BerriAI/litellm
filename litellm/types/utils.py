@@ -4691,6 +4691,7 @@ class LlmProviders(str, Enum):
     QWEN_AI_PLATFORM = "qwen_ai_platform"
     MODELSCOPE = "modelscope"
     MOONSHOT = "moonshot"
+    QIANFAN = "qianfan"
     PUBLICAI = "publicai"
     V0 = "v0"
     MORPH = "morph"
