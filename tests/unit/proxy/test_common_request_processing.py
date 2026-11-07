@@ -90,6 +90,7 @@ from litellm.types.router import RouterRateLimitError, RouterRateLimitErrorBasic
 from litellm.types.utils import CachingDetails, Delta, ModelResponseStream, StreamingChoices
 from litellm.utils import ModelResponseListIterator
 from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
+from tests.unit.skippable_clock_loop import SkippableClockLoop, run_on_skippable_clock
 
 
 def test_attach_guardrail_information_copies_recorded_entries_onto_model_response():
@@ -13163,47 +13164,71 @@ class TestTotalTimeout:
 
     @pytest.mark.parametrize(
         ("body", "headers"),
-        [({"total_timeout": 0.2}, {}), ({}, {"x-litellm-total-timeout": "0.2"})],
+        [({"total_timeout": 60}, {}), ({}, {"x-litellm-total-timeout": "60"})],
         ids=["body", "header"],
     )
-    async def test_a_request_past_its_total_timeout_is_answered_with_a_408_and_its_call_is_cancelled(
+    def test_a_request_past_its_total_timeout_is_answered_with_a_408_and_its_call_is_cancelled(
         self, monkeypatch: pytest.MonkeyPatch, body: Mapping[str, object], headers: Mapping[str, str]
     ) -> None:
-        upstream_cancelled: Final = asyncio.Event()
+        async def provider_hangs_past_the_budget(loop: SkippableClockLoop) -> tuple[ProxyException, bool]:
+            provider_called: Final = asyncio.Event()
+            upstream_cancelled: Final = asyncio.Event()
 
-        async def hanging(_: Mapping[str, object]) -> object:
-            try:
-                await asyncio.Event().wait()
-            except asyncio.CancelledError:
-                upstream_cancelled.set()
-                raise
-            raise AssertionError
+            async def hanging(_: Mapping[str, object]) -> object:
+                provider_called.set()
+                try:
+                    await asyncio.Event().wait()
+                except asyncio.CancelledError:
+                    upstream_cancelled.set()
+                    raise
+                raise AssertionError
 
-        with pytest.raises(ProxyException) as raised:
-            await self._process(monkeypatch, hanging, body=body, headers=headers)
+            processing: Final = asyncio.create_task(self._process(monkeypatch, hanging, body=body, headers=headers))
+            await provider_called.wait()
+            loop.skip(61)
+            with pytest.raises(ProxyException) as raised:
+                await processing
+            return raised.value, upstream_cancelled.is_set()
 
-        assert raised.value.code == "408"
-        assert raised.value.param == "total_timeout"
-        assert upstream_cancelled.is_set()
+        expired, upstream_cancelled = run_on_skippable_clock(provider_hangs_past_the_budget)
 
-    async def test_a_moderation_check_outlasting_the_budget_after_the_provider_answered_prepares_its_cost(
+        assert expired.code == "408"
+        assert expired.param == "total_timeout"
+        assert upstream_cancelled
+
+    def test_a_moderation_check_outlasting_the_budget_after_the_provider_answered_prepares_its_cost(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         answer: Final = litellm.ModelResponse()
-        logging_objs: Final[list[MagicMock]] = []
 
-        async def answered(data: Mapping[str, object]) -> object:
-            logging_objs.append(data["litellm_logging_obj"])  # pyright: ignore[reportArgumentType]  # the harness's logging double
-            return answer
+        async def moderation_outlasts_the_budget(loop: SkippableClockLoop) -> tuple[ProxyException, MagicMock]:
+            answered: Final = asyncio.Event()
+            moderating: Final = asyncio.Event()
+            logging_objs: Final[list[MagicMock]] = []
 
-        async def slow_moderation(**_: object) -> None:
-            await asyncio.Event().wait()
+            async def provider(data: Mapping[str, object]) -> object:
+                logging_objs.append(data["litellm_logging_obj"])  # pyright: ignore[reportArgumentType]  # the harness's logging double
+                answered.set()
+                return answer
 
-        with pytest.raises(ProxyException) as raised:
-            await self._process(monkeypatch, answered, body={"total_timeout": 0.2}, moderation=slow_moderation)
+            async def slow_moderation(**_: object) -> None:
+                moderating.set()
+                await asyncio.Event().wait()
 
-        costed: Final = [call.args[0] for call in logging_objs[0].prepare_response_cost.call_args_list]
-        assert raised.value.code == "408"
+            processing: Final = asyncio.create_task(
+                self._process(monkeypatch, provider, body={"total_timeout": 60}, moderation=slow_moderation)
+            )
+            await answered.wait()
+            await moderating.wait()
+            loop.skip(61)
+            with pytest.raises(ProxyException) as raised:
+                await processing
+            return raised.value, logging_objs[0]
+
+        expired, logging_obj = run_on_skippable_clock(moderation_outlasts_the_budget)
+
+        costed: Final = [call.args[0] for call in logging_obj.prepare_response_cost.call_args_list]
+        assert expired.code == "408"
         assert costed
         assert all(response is answer for response in costed)
 
@@ -13288,53 +13313,79 @@ class TestTotalTimeout:
             return litellm.ModelResponse()
 
         await self._process(
-            monkeypatch, answered, body=body, headers={"x-litellm-total-timeout": "0.2"}, route_type=route_type
+            monkeypatch, answered, body=body, headers={"x-litellm-total-timeout": "60"}, route_type=route_type
         )
 
         assert bounded == [False]
 
-    async def test_a_post_call_hook_outlasting_the_budget_is_a_408_not_a_client_disconnect(
+    def test_a_post_call_hook_outlasting_the_budget_is_a_408_not_a_client_disconnect(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         hooks: Final = MagicMock(spec=ProxyLogging)
 
-        async def answered(_: Mapping[str, object]) -> object:
-            return litellm.ModelResponse()
+        async def guardrail_outlasts_the_budget(loop: SkippableClockLoop) -> ProxyException:
+            guarding: Final = asyncio.Event()
 
-        async def slow_guardrail(**_: object) -> object:
-            await asyncio.Event().wait()
-            raise AssertionError
+            async def answered(_: Mapping[str, object]) -> object:
+                return litellm.ModelResponse()
 
-        with pytest.raises(ProxyException) as raised:
-            await self._process(
-                monkeypatch, answered, body={"total_timeout": 0.2}, post_call=slow_guardrail, proxy_logging_obj=hooks
+            async def slow_guardrail(**_: object) -> object:
+                guarding.set()
+                await asyncio.Event().wait()
+                raise AssertionError
+
+            processing: Final = asyncio.create_task(
+                self._process(
+                    monkeypatch, answered, body={"total_timeout": 60}, post_call=slow_guardrail, proxy_logging_obj=hooks
+                )
             )
+            await guarding.wait()
+            loop.skip(61)
+            with pytest.raises(ProxyException) as raised:
+                await processing
+            return raised.value
 
-        assert raised.value.code == "408"
+        expired: Final = run_on_skippable_clock(guardrail_outlasts_the_budget)
+
+        assert expired.code == "408"
         hooks.post_call_failure_hook.assert_not_awaited()
 
-    async def test_a_budget_that_runs_out_while_routing_also_stops_the_moderation_check(
+    def test_a_budget_that_runs_out_while_routing_also_stops_the_moderation_check(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        moderation_stopped: Final = asyncio.Event()
+        async def routing_outlasts_the_budget(loop: SkippableClockLoop) -> tuple[ProxyException, bool]:
+            moderating: Final = asyncio.Event()
+            routing: Final = asyncio.Event()
+            moderation_stopped: Final = asyncio.Event()
 
-        async def moderation(**_: object) -> None:
-            try:
+            async def moderation(**_: object) -> None:
+                moderating.set()
+                try:
+                    await asyncio.Event().wait()
+                except asyncio.CancelledError:
+                    moderation_stopped.set()
+                    raise
+
+            async def stuck_routing() -> None:
+                routing.set()
                 await asyncio.Event().wait()
-            except asyncio.CancelledError:
-                moderation_stopped.set()
-                raise
 
-        async def stuck_routing() -> None:
-            await asyncio.Event().wait()
+            async def never_called(_: Mapping[str, object]) -> object:
+                raise AssertionError
 
-        async def never_called(_: Mapping[str, object]) -> object:
-            raise AssertionError
-
-        with pytest.raises(ProxyException) as raised:
-            await self._process(
-                monkeypatch, never_called, routing=stuck_routing, body={"total_timeout": 0.2}, moderation=moderation
+            processing: Final = asyncio.create_task(
+                self._process(
+                    monkeypatch, never_called, routing=stuck_routing, body={"total_timeout": 60}, moderation=moderation
+                )
             )
+            await moderating.wait()
+            await routing.wait()
+            loop.skip(61)
+            with pytest.raises(ProxyException) as raised:
+                await processing
+            return raised.value, moderation_stopped.is_set()
 
-        assert raised.value.code == "408"
-        assert moderation_stopped.is_set()
+        expired, moderation_stopped = run_on_skippable_clock(routing_outlasts_the_budget)
+
+        assert expired.code == "408"
+        assert moderation_stopped

@@ -11,7 +11,7 @@ import logging
 import threading
 import traceback
 import uuid
-from collections.abc import Callable, Coroutine, Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import replace
 from functools import partial
 from pathlib import Path
@@ -61,7 +61,6 @@ from litellm.llms.gemini.count_tokens import handler as gemini_count_tokens_hand
 from litellm.llms.openai.responses.count_tokens import handler as openai_count_tokens_http
 from litellm.llms.vertex_ai.vertex_ai_partner_models.count_tokens.handler import VertexAIPartnerModelsTokenCounter
 from litellm.proxy._types import ProxyException, TokenCountRequest, UserAPIKeyAuth
-from litellm.responses.litellm_completion_transformation.session_handler import ResponsesSessionHandler
 from litellm.proxy.anthropic_endpoints.endpoints import (
     count_tokens as anthropic_count_tokens,
 )
@@ -80,6 +79,7 @@ from litellm.proxy.proxy_server import (
     count_request_tokens,
     token_counter,
 )
+from litellm.responses.litellm_completion_transformation.session_handler import ResponsesSessionHandler
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.rust_bridge.fork_guard import ForkedAfterNativeRuntimeStarted
 from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
@@ -91,8 +91,8 @@ from litellm.types.utils import (
     TokenCountMessagesFormat,
     TokenCountResponse,
 )
-
 from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
+from tests.unit.skippable_clock_loop import SkippableClockLoop, run_on_skippable_clock
 
 
 def _hugging_face_offline() -> NoReturn:
@@ -2366,27 +2366,6 @@ async def _count_status(model: str = "kimi") -> str:
     return response.count_source or ""
 
 
-class _SkippableClockLoop(asyncio.SelectorEventLoop):
-    skipped_seconds: float = 0.0
-
-    def time(self) -> float:
-        return super().time() + self.skipped_seconds
-
-    def skip(self, seconds: float) -> None:
-        self.skipped_seconds += seconds
-
-
-def _run_on_skippable_clock(
-    scenario: Callable[[_SkippableClockLoop], Coroutine[object, object, tuple[str, ...]]],
-) -> tuple[str, ...]:
-    loop: Final = _SkippableClockLoop()
-    try:
-        return loop.run_until_complete(scenario(loop))
-    finally:
-        loop.run_until_complete(loop.shutdown_default_executor())
-        loop.close()
-
-
 async def _until_finished(tasks: tuple[asyncio.Future[str], ...], count: int) -> None:
     for finished in itertools.islice(asyncio.as_completed(tasks), count):
         await finished
@@ -2420,7 +2399,7 @@ def test_hanging_tokenizer_download_answers_the_provider_error_after_the_wait_wi
     monkeypatch.setattr(litellm.proxy.proxy_server, "TOKENIZER_LOAD_WAIT_SECONDS", 30)
     monkeypatch.setattr(litellm.proxy.proxy_server, "TOKENIZER_LOAD_REUSE_SECONDS", 1e-9)
 
-    async def burst_past_the_wait_then_one_more(loop: _SkippableClockLoop) -> tuple[str, ...]:
+    async def burst_past_the_wait_then_one_more(loop: SkippableClockLoop) -> tuple[str, ...]:
         try:
             burst: Final = asyncio.gather(*(_count_status() for _ in range(60)))
             await asyncio.to_thread(download_started.wait, 10)
@@ -2431,7 +2410,7 @@ def test_hanging_tokenizer_download_answers_the_provider_error_after_the_wait_wi
             hub_released.set()
         return (*answered, later)
 
-    assert set(_run_on_skippable_clock(burst_past_the_wait_then_one_more)) == {"400"}
+    assert set(run_on_skippable_clock(burst_past_the_wait_then_one_more)) == {"400"}
     assert len(downloads) == 1
 
 
@@ -2499,7 +2478,7 @@ def test_failed_tokenizer_load_is_reused_for_the_window_after_it_fails(monkeypat
     monkeypatch.setattr(litellm.proxy.proxy_server, "TOKENIZER_LOAD_WAIT_SECONDS", 1000)
     monkeypatch.setattr(litellm.proxy.proxy_server, "TOKENIZER_LOAD_REUSE_SECONDS", 60)
 
-    async def fail_after_longer_than_the_window_then_retry(loop: _SkippableClockLoop) -> tuple[str, ...]:
+    async def fail_after_longer_than_the_window_then_retry(loop: SkippableClockLoop) -> tuple[str, ...]:
         first: Final = asyncio.ensure_future(_count_status())
         try:
             await asyncio.to_thread(download_started.wait, 10)
@@ -2508,7 +2487,7 @@ def test_failed_tokenizer_load_is_reused_for_the_window_after_it_fails(monkeypat
             hub_released.set()
         return await asyncio.wait_for(first, 8), await asyncio.wait_for(_count_status(), 8)
 
-    assert _run_on_skippable_clock(fail_after_longer_than_the_window_then_retry) == ("400", "400")
+    assert run_on_skippable_clock(fail_after_longer_than_the_window_then_retry) == ("400", "400")
     assert len(downloads) == 1
 
 
