@@ -855,8 +855,8 @@ def test_rag_ingest_keeps_the_provider_file_id_when_the_upload_used_other_creden
     assert hook.registrations == ()
 
 
-def test_rag_ingest_keeps_the_provider_file_id_for_a_key_the_team_deployment_checks_reject(client_team_a):
-    router: Final = Router(
+def _team_wildcard_router() -> Router:
+    return Router(
         model_list=[
             {
                 "model_name": "openai/*",
@@ -865,18 +865,23 @@ def test_rag_ingest_keeps_the_provider_file_id_for_a_key_the_team_deployment_che
             }
         ]
     )
+
+
+_ONE_MODEL_TEAM_KEY: Final = UserAPIKeyAuth(user_id="test_team_user", team_id=_TEAM_ID, models=["openai/gpt-5.4-mini"])
+
+
+def test_rag_ingest_keeps_the_provider_file_id_for_a_key_the_team_deployment_checks_reject(client_team_a):
     hook: Final = _ManagedFilesHookStub(managed_file_id=_managed_file_id("file_123"))
     aingest_patch, registry_patch = _patched_ingest_boundary(
         None,
         {"status": "completed", "vector_store_id": "vs_new", "file_id": "file_123"},
     )
-    one_model_key: Final = UserAPIKeyAuth(user_id="test_team_user", team_id=_TEAM_ID, models=["openai/gpt-5.4-mini"])
 
     with (
         aingest_patch as aingest,
         registry_patch,
-        patch("litellm.proxy.proxy_server.llm_router", router),
-        patch.dict(app.dependency_overrides, {user_api_key_auth: lambda: one_model_key}),
+        patch("litellm.proxy.proxy_server.llm_router", _team_wildcard_router()),
+        patch.dict(app.dependency_overrides, {user_api_key_auth: lambda: _ONE_MODEL_TEAM_KEY}),
         _patched_prisma_client(None),
         _installed_managed_files_hook(hook),
     ):
@@ -994,6 +999,40 @@ def test_rag_ingest_with_a_managed_file_id_attaches_the_team_deployment_copy(cli
     assert response.status_code == 200, response.json()
     assert response.json()["file_id"] == managed_file_id
     assert mock_aingest.await_args.kwargs["file_id"] == "file-team-copy"
+
+
+def test_rag_ingest_with_a_managed_file_id_attaches_the_copy_matching_the_credentials_for_a_key_limited_to_one_model(
+    client_team_a,
+):
+    router: Final = _team_wildcard_router()
+    team_deployment_id: Final = router.registry().all()[0]["model_info"]["id"]
+    managed_file_id: Final = _managed_file_id("file-other-copy")
+    hook: Final = _ManagedFilesHookStub(
+        managed_file_id=None,
+        model_mappings={managed_file_id: {"team-deployment": "file-other-copy", team_deployment_id: "file-team-copy"}},
+    )
+    aingest_patch, registry_patch = _patched_ingest_boundary(
+        None,
+        {"status": "completed", "vector_store_id": "vs_new", "file_id": "file-team-copy"},
+    )
+
+    with (
+        aingest_patch as mock_aingest,
+        registry_patch,
+        patch("litellm.proxy.proxy_server.llm_router", router),
+        patch.dict(app.dependency_overrides, {user_api_key_auth: lambda: _ONE_MODEL_TEAM_KEY}),
+        _patched_prisma_client(None),
+        _installed_managed_files_hook(hook),
+    ):
+        response: Final = client_team_a.post(
+            "/v1/rag/ingest",
+            json={"file_id": managed_file_id, "ingest_options": {"vector_store": {"custom_llm_provider": "openai"}}},
+        )
+
+    assert response.status_code == 200, response.json()
+    assert response.json()["file_id"] == managed_file_id
+    assert mock_aingest.await_args.kwargs["file_id"] == "file-team-copy"
+    assert mock_aingest.await_args.kwargs["ingest_options"]["vector_store"]["api_key"] == _TEAM_PROVIDER_KEY
 
 
 def test_rag_ingest_rejects_a_managed_file_id_the_caller_cannot_access(client_team_a):

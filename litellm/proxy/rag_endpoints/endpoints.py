@@ -840,13 +840,12 @@ async def rag_ingest(
         )
 
         managed_files_obj: Final = proxy_logging_obj.get_proxy_hook("managed_files")
-        upload_deployment: Final = (
-            None
-            if forwarded_credentials
-            else await team_deployment_the_caller_may_use(team_deployment, llm_router, user_api_key_dict)
+        credential_deployment: Final = None if forwarded_credentials else team_deployment
+        upload_deployment: Final = await team_deployment_the_caller_may_use(
+            credential_deployment, llm_router, user_api_key_dict
         )
         ingest_file_id: Final = await _provider_file_id_for_ingest(
-            file_id, upload_deployment, managed_files_obj, user_api_key_dict
+            file_id, credential_deployment, managed_files_obj, user_api_key_dict
         )
 
         # Call ingest
