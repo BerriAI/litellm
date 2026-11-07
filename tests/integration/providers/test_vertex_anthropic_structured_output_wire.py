@@ -1892,7 +1892,7 @@ def test_vertex_chat_malformed_schema_stream_keeps_numeric_fragments_verbatim(
                 stream=True,
                 response_format={
                     "type": "json_schema",
-                    "json_schema": {"name": "risk", "schema": {"type": "object", "properties": "tier"}},
+                    "json_schema": {"name": "risk", "schema": {"type": "object", "properties": None}},
                 },
             ),
         )
