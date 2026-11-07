@@ -164,7 +164,7 @@ def _without(expected: Expected, field: str) -> Expected:
 def _converse_chat(effort: str, thinking: Mapping[str, JsonValue]) -> Expected:
     return lambda marker: {
         "messages": [{"role": "user", "content": [{"text": prompt(marker)}]}],
-        "inferenceConfig": {},
+        "inferenceConfig": {"maxTokens": DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS},
         "additionalModelRequestFields": {"thinking": dict(thinking), "output_config": {"effort": effort}},
         "additionalModelResponseFieldPaths": ["/usage/output_tokens_details"],
     }
@@ -173,7 +173,7 @@ def _converse_chat(effort: str, thinking: Mapping[str, JsonValue]) -> Expected:
 def _converse_chat_without_effort(thinking: Mapping[str, JsonValue]) -> Expected:
     return lambda marker: {
         "messages": [{"role": "user", "content": [{"text": prompt(marker)}]}],
-        "inferenceConfig": {},
+        "inferenceConfig": {"maxTokens": DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS},
         "additionalModelRequestFields": {"thinking": dict(thinking)},
         "additionalModelResponseFieldPaths": ["/usage/output_tokens_details"],
     }

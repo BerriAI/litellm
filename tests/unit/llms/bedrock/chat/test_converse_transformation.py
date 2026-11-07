@@ -4733,9 +4733,7 @@ def test_thinking_with_max_completion_tokens():
     )
 
     assert "maxTokens" in result
-    assert result["maxTokens"] == max(
-        5000 + DEFAULT_MAX_TOKENS, litellm.model_cost["anthropic.claude-sonnet-4-5-20250929-v1:0"]["max_output_tokens"]
-    )
+    assert result["maxTokens"] == 5000 + DEFAULT_MAX_TOKENS
     # Should have thinking config
     assert "thinking" in result
     assert result["thinking"]["type"] == "enabled"
@@ -12318,7 +12316,7 @@ def test_application_profile_arn_sends_its_base_models_output_cap(
 
 
 @pytest.mark.respx(assert_all_called=True)
-def test_deployment_max_output_tokens_is_the_default_over_the_mapped_cap(
+def test_deployment_max_output_tokens_below_the_mapped_cap_is_the_default(
     respx_mock: respx.Router, local_model_cost_map: None
 ) -> None:
     deployment_cap: Final = litellm.model_cost[_SONNET_5_5_BASE_ROW]["max_output_tokens"] // 4
@@ -12331,6 +12329,19 @@ def test_deployment_max_output_tokens_is_the_default_over_the_mapped_cap(
 
 
 @pytest.mark.respx(assert_all_called=True)
+def test_deployment_max_output_tokens_above_the_mapped_cap_sends_the_mapped_cap(
+    respx_mock: respx.Router, local_model_cost_map: None
+) -> None:
+    mapped_cap: Final = litellm.model_cost["anthropic.claude-haiku-4-5-20251001-v1:0"]["max_output_tokens"]
+
+    max_tokens: Final = _routed_converse_max_tokens(
+        respx_mock, "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0", {"max_output_tokens": mapped_cap * 2}
+    )
+
+    assert max_tokens == mapped_cap
+
+
+@pytest.mark.respx(assert_all_called=True)
 def test_caller_max_tokens_wins_over_the_default_cap(respx_mock: respx.Router, local_model_cost_map: None) -> None:
     max_tokens: Final = _routed_converse_max_tokens(
         respx_mock, f"bedrock/{_SONNET_5_5}", {"max_output_tokens": 32000}, max_tokens=111
@@ -12339,26 +12350,18 @@ def test_caller_max_tokens_wins_over_the_default_cap(respx_mock: respx.Router, l
     assert max_tokens == 111
 
 
-@pytest.mark.parametrize(
-    ("model_info", "expected_max_tokens"),
-    [
-        ({}, litellm.model_cost["anthropic.claude-sonnet-4-5-20250929-v1:0"]["max_output_tokens"]),
-        ({"max_output_tokens": 3000}, 2048 + litellm.constants.DEFAULT_MAX_TOKENS),
-    ],
-    ids=["cap_above_budget", "budget_above_cap"],
-)
 @pytest.mark.respx(assert_all_called=True)
-def test_thinking_budget_without_max_tokens_gets_the_larger_of_the_cap_and_its_budget_based_size(
-    model_info: Mapping[str, int], expected_max_tokens: int, respx_mock: respx.Router, local_model_cost_map: None
+def test_thinking_budget_without_max_tokens_keeps_its_budget_based_cap(
+    respx_mock: respx.Router, local_model_cost_map: None
 ) -> None:
     max_tokens: Final = _routed_converse_max_tokens(
         respx_mock,
         "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
-        model_info,
+        {},
         thinking={"type": "enabled", "budget_tokens": 2048},
     )
 
-    assert max_tokens == expected_max_tokens
+    assert max_tokens == 2048 + litellm.constants.DEFAULT_MAX_TOKENS
 
 
 @pytest.mark.respx(assert_all_called=True)

@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any, Final
 import httpx
 from pydantic import TypeAdapter
 
+import litellm
 from litellm.anthropic_beta_gated_fields import strip_beta_gated_request_body
 from litellm.anthropic_beta_headers_manager import filter_and_transform_beta_headers
 from litellm.constants import DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS
@@ -29,7 +30,6 @@ from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation
 from litellm.llms.bedrock.common_utils import (
     BEDROCK_INVOKE_TRACE_FIELD,
     BedrockModelInfo,
-    anthropic_config_max_tokens,
     apply_bedrock_invoke_structured_output,
     bedrock_capability_model,
     bedrock_chat_uses_native_structured_output,
@@ -68,6 +68,10 @@ _NON_DEFAULT_PARAMS: Final = TypeAdapter(Mapping[str, object])
 _LITELLM_PARAMS: Final = TypeAdapter(Mapping[str, object])
 
 
+def _anthropic_config_max_tokens() -> int | None:
+    return litellm.AnthropicConfig.max_tokens
+
+
 class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
     """
     Reference:
@@ -91,7 +95,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
     def __init__(
         self,
         model_info: Mapping[str, object] | None = None,
-        read_configured_max_tokens: Callable[[], int | None] = anthropic_config_max_tokens,
+        read_configured_max_tokens: Callable[[], int | None] = _anthropic_config_max_tokens,
     ) -> None:
         super().__init__()
         self._deployment_model_info: Final = model_info

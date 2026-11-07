@@ -1273,17 +1273,11 @@ class AmazonConverseConfig(BaseConfig):
 
         default_max_tokens: Final = (
             None
-            if "max_tokens" in request_params or "max_completion_tokens" in request_params
+            if "maxTokens" in optional_params
             else bedrock_converse_claude_default_max_tokens(base_model, model_info)
         )
         if default_max_tokens is not None:
-            match optional_params:
-                case {"maxTokens": int() as thinking_max_tokens}:
-                    optional_params["maxTokens"] = max(  # rebind-ok: fills the caller's dict by contract
-                        default_max_tokens, thinking_max_tokens
-                    )
-                case dict():
-                    optional_params["maxTokens"] = default_max_tokens  # rebind-ok: fills the caller's dict by contract
+            optional_params["maxTokens"] = default_max_tokens  # rebind-ok: fills the caller's dict by contract
 
         final_is_thinking_enabled: Final = self.is_thinking_enabled(optional_params)
         if final_is_thinking_enabled and "tool_choice" in optional_params:

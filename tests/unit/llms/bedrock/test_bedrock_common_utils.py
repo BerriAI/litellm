@@ -8,7 +8,6 @@ from litellm.llms.bedrock.common_utils import (
     AmazonBedrockGlobalConfig,
     BedrockModelInfo,
     NativeOutputFallback,
-    bedrock_converse_claude_default_max_tokens,
     bedrock_native_output_is_opt_in,
     bedrock_strict_tools_fallback,
     bedrock_model_name_without_provider,
@@ -2516,22 +2515,3 @@ def test_bedrock_strict_tools_fallback_retries_only_when_the_request_sent_strict
     fallback: Final = bedrock_strict_tools_fallback(model, {"tools": tools}, litellm_params)
 
     assert (fallback is not None) == sent_strict
-
-
-@pytest.mark.parametrize(
-    ("model_info", "configured_max_tokens", "expected_max_tokens"),
-    [
-        ({}, 1000, 1000),
-        ({"max_output_tokens": 50}, 1000, 50),
-        ({"max_output_tokens": 8192}, 1000, 1000),
-    ],
-    ids=["configured_only", "deployment_below_configured", "configured_below_deployment"],
-)
-def test_converse_claude_default_max_tokens_is_capped_by_anthropic_config(
-    model_info: dict[str, int], configured_max_tokens: int, expected_max_tokens: int
-) -> None:
-    default_max_tokens: Final = bedrock_converse_claude_default_max_tokens(
-        "anthropic.claude-sonnet-5-5", model_info, lambda: configured_max_tokens
-    )
-
-    assert default_max_tokens == expected_max_tokens
