@@ -50,6 +50,7 @@ from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm.proxy.mcp_server.catalog import catalog_operation, public_catalog_operation
+from litellm.types.mcp import MCPExecutionMode
 
 try:
     from prisma.errors import RecordNotFoundError, UniqueViolationError
@@ -257,6 +258,7 @@ if MCP_AVAILABLE:
     )
     from litellm.proxy.mcp_server.server_resolution import (
         MCPServerTargetCatalog,
+        ResolvedMCPServer,
         authorize_mcp_server,
         resolve_mcp_server,
     )
@@ -272,6 +274,7 @@ if MCP_AVAILABLE:
         MCPCredentials,
         MCPGatewaySessionsResponse,
         MCPGatewaySessionsTerminateResponse,
+        MCPTransportType,
         MCPUpstreamProtocol,
         normalize_upstream_header_name,
         validate_mcp_protocol_transport,
@@ -332,6 +335,11 @@ if MCP_AVAILABLE:
         _validate_upstream_token_header(payload)
 
     def mcp_identifier_conflict_message(conflict: McpIdentifierConflict) -> str:
+        if conflict.field == "url":
+            return (
+                f"Provider MCP registration {conflict.server_id} already uses {conflict.value}. "
+                "Each provider endpoint can be registered once."
+            )
         return (
             f"An MCP server with {conflict.field} '{conflict.value}' already exists "
             f"(server_id={conflict.server_id}). "
@@ -340,7 +348,7 @@ if MCP_AVAILABLE:
 
     def raise_mcp_identifier_conflict(conflict: McpIdentifierConflict) -> NoReturn:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=status.HTTP_409_CONFLICT if conflict.field == "url" else status.HTTP_400_BAD_REQUEST,
             detail={"error": mcp_identifier_conflict_message(conflict)},
         )
 
@@ -1207,6 +1215,23 @@ if MCP_AVAILABLE:
     def _mcp_server_display_order(server: LiteLLM_MCPServerTable) -> tuple[str, str]:
         return ((server.server_name or server.alias or server.server_id).lower(), server.server_id)
 
+    def _provider_registration_for_identifier(
+        servers: Sequence[LiteLLM_MCPServerTable], identifier: str
+    ) -> LiteLLM_MCPServerTable | None:
+        """An exact server_id wins over every name or alias, so another row's alias cannot shadow it."""
+        exact: Final = next((server for server in servers if server.server_id == identifier), None)
+        if exact is not None:
+            return exact if exact.execution_mode == MCPExecutionMode.provider else None
+        return next(
+            (
+                server
+                for server in servers
+                if server.execution_mode == MCPExecutionMode.provider
+                and identifier in (server.server_name, server.alias)
+            ),
+            None,
+        )
+
     def _get_user_mcp_management_mode() -> UserMCPManagementMode:
         from litellm.proxy.proxy_server import (
             general_settings as proxy_general_settings,
@@ -1342,13 +1367,34 @@ if MCP_AVAILABLE:
         aligned with the cards actually rendered: an admin in view_all mode sees
         every server even when their key carries no per-server MCP grant.
         """
-        if _get_user_mcp_management_mode() == "view_all" and not _is_restricted_virtual_key_request(user_api_key_dict):
-            return await global_mcp_server_manager.get_all_mcp_servers_unfiltered()
+        unrestricted: Final = not _is_restricted_virtual_key_request(user_api_key_dict)
+        view_all: Final = unrestricted and _get_user_mcp_management_mode() == "view_all"
+        view_providers: Final = unrestricted and user_api_key_has_admin_view(user_api_key_dict)
+        inventory: Final = (
+            await global_mcp_server_manager.get_all_mcp_servers_unfiltered() if view_all or view_providers else []
+        )
+        visible_inventory: Final = [
+            server
+            for server in inventory
+            if view_providers
+            or getattr(server, "execution_mode", MCPExecutionMode.litellm) != MCPExecutionMode.provider
+        ]
+        if view_all:
+            return visible_inventory
 
-        aggregated: Final[dict[str, LiteLLM_MCPServerTable]] = {}
-        for auth_context in await build_effective_auth_contexts(user_api_key_dict):
-            for server in await global_mcp_server_manager.get_all_allowed_mcp_servers(user_api_key_auth=auth_context):
-                aggregated.setdefault(server.server_id, server)
+        provider_servers: Final = [
+            server
+            for server in visible_inventory
+            if getattr(server, "execution_mode", MCPExecutionMode.litellm) == MCPExecutionMode.provider
+        ]
+        allowed_by_context: Final = [
+            await global_mcp_server_manager.get_all_allowed_mcp_servers(user_api_key_auth=auth_context)
+            for auth_context in await build_effective_auth_contexts(user_api_key_dict)
+        ]
+        aggregated: Final = {
+            server.server_id: server
+            for server in (*chain.from_iterable(reversed(allowed_by_context)), *provider_servers)
+        }
         return list(aggregated.values())
 
     @catalog_operation(lambda: global_mcp_server_manager)
@@ -1949,20 +1995,31 @@ if MCP_AVAILABLE:
         --header 'Authorization: Bearer your_api_key_here'
         ```
         """
-        prisma_client: Final = get_prisma_client_or_throw("Database not connected. Connect a database to your proxy")
-
         from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 
         client_ip: Final = IPAddressUtils.get_mcp_client_ip(request)
         is_admin_view: Final = user_api_key_has_admin_view(user_api_key_dict)
         is_restricted_virtual_key: Final = _is_restricted_virtual_key_request(user_api_key_dict)
-        resolved: Final = await resolve_mcp_server(
-            server_id,
-            manager=global_mcp_server_manager,
-            db_lookup=lambda sid: get_mcp_server(prisma_client, sid),
-            id_client_ip=client_ip,
-            name_client_ip=client_ip,
-            match_name=True,
+        snapshot: Final = global_mcp_server_manager.catalog.current()
+        provider_match: Final = (
+            _provider_registration_for_identifier(tuple(snapshot.management_servers.values()), server_id)
+            if snapshot is not None
+            else None
+        )
+        resolved: Final = (
+            ResolvedMCPServer(table=provider_match, runtime=None, source="registry")
+            if provider_match is not None and provider_match.is_config
+            else await resolve_mcp_server(
+                provider_match.server_id if provider_match is not None else server_id,
+                manager=global_mcp_server_manager,
+                db_lookup=lambda sid: get_mcp_server(
+                    get_prisma_client_or_throw("Database not connected. Connect a database to your proxy"),
+                    sid,
+                ),
+                id_client_ip=client_ip,
+                name_client_ip=client_ip,
+                match_name=True,
+            )
         )
         authorized: Final = await authorize_mcp_server(
             resolved,
@@ -1992,18 +2049,21 @@ if MCP_AVAILABLE:
         if from_db:
             await global_mcp_server_manager.add_server(mcp_server)
 
-        # Perform health check on the server using server manager
-        try:
-            health_result: Final = await global_mcp_server_manager.health_check_server(server_id)
-            # Update the server object with health check results
-            mcp_server.status = _mcp_health_status_for_response(health_result.status, include_reachability) or "unknown"
-            mcp_server.last_health_check = health_result.last_health_check
-            mcp_server.health_check_error = health_result.health_check_error
-        except Exception as e:
-            verbose_proxy_logger.debug("Error performing health check on server %s: %s", server_id, e)
-            mcp_server.status = "unknown"
-            mcp_server.last_health_check = datetime.now()
-            mcp_server.health_check_error = str(e)
+        if mcp_server.execution_mode == MCPExecutionMode.litellm:
+            # Perform health check on the server using server manager
+            try:
+                health_result: Final = await global_mcp_server_manager.health_check_server(server_id)
+                # Update the server object with health check results
+                mcp_server.status = (
+                    _mcp_health_status_for_response(health_result.status, include_reachability) or "unknown"
+                )
+                mcp_server.last_health_check = health_result.last_health_check
+                mcp_server.health_check_error = health_result.health_check_error
+            except Exception as e:
+                verbose_proxy_logger.debug("Error performing health check on server %s: %s", server_id, e)
+                mcp_server.status = "unknown"
+                mcp_server.last_health_check = datetime.now()
+                mcp_server.health_check_error = str(e)
 
         redacted: Final = _redact_mcp_credentials(mcp_server)
         if is_restricted_virtual_key:
@@ -2087,6 +2147,12 @@ if MCP_AVAILABLE:
                 payload,
                 touched_by=user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
             )
+        except UniqueViolationError as exc:
+            raise HTTPException(
+                status_code=409, detail="An MCP registration already uses this identity or provider endpoint"
+            ) from exc
+        except HTTPException:
+            raise
         except Exception as e:
             verbose_proxy_logger.exception("Error creating mcp server: %s", e)
             raise HTTPException(
@@ -3190,7 +3256,7 @@ if MCP_AVAILABLE:
                 TypeAdapter[MCPUpstreamProtocol](MCPUpstreamProtocol).validate_python(
                     (effective_info or {}).get("protocol_version", "auto")
                 ),
-                effective_transport,
+                TypeAdapter[MCPTransportType](MCPTransportType).validate_python(effective_transport),
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -3302,12 +3368,17 @@ if MCP_AVAILABLE:
                 )
 
         # try to update the mcp server
-        mcp_server_record_updated: Final = await update_mcp_server(
-            prisma_client,
-            payload,
-            touched_by=user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
-            fields_set=payload_fields_set,
-        )
+        try:
+            mcp_server_record_updated: Final = await update_mcp_server(
+                prisma_client,
+                payload,
+                touched_by=user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
+                fields_set=payload_fields_set,
+            )
+        except UniqueViolationError as exc:
+            raise HTTPException(
+                status_code=409, detail="An MCP registration already uses this provider endpoint"
+            ) from exc
 
         if isinstance(mcp_server_record_updated, McpIdentifierConflict):
             raise_mcp_identifier_conflict(mcp_server_record_updated)

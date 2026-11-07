@@ -50,12 +50,18 @@ SERVER_ONLY_MARKERS = (
 )
 
 
-@pytest.mark.parametrize("request_type", [NewMCPServerRequest, UpdateMCPServerRequest])
-def test_gateway_management_requests_do_not_ignore_provider_execution_mode(
-    request_type: type[NewMCPServerRequest] | type[UpdateMCPServerRequest],
-) -> None:
-    with pytest.raises(ValidationError, match="execution_mode"):
-        request_type(server_id="docs", url="https://docs.example/mcp", execution_mode="provider")
+def test_provider_management_create_normalizes_the_registration() -> None:
+    request: Final = NewMCPServerRequest(
+        server_id="docs",
+        url="https://DOCS.example:443/mcp",
+        execution_mode="provider",
+        allowed_tools=["search", "search"],
+    )
+    assert request.url == "https://docs.example/mcp"
+    assert request.transport is None
+    assert request.credentials is None
+    assert request.allowed_tools == ["search"]
+    assert request.mcp_info == {"tool_allowlist_enforced": True}
 
 
 @pytest.mark.parametrize("mode", ["litellm", "provider", None])

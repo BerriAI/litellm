@@ -1671,6 +1671,9 @@ if MCP_AVAILABLE:
         Returns:
             The dict returned by *operation*, or an error dict on failure.
         """
+        if request.transport is None:
+            return {"error": "Provider-executed MCP registrations do not support gateway connections"}
+
         try:
             client_id, client_secret, scopes = _extract_credentials(request)
 

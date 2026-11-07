@@ -40185,12 +40185,8 @@ export interface components {
             };
             /** Env Vars */
             env_vars?: components["schemas"]["MCPEnvVar"][] | null;
-            /**
-             * Execution Mode
-             * @default litellm
-             * @constant
-             */
-            execution_mode: "litellm";
+            /** @default litellm */
+            execution_mode: components["schemas"]["MCPExecutionMode"];
             /** Extra Headers */
             extra_headers?: string[] | null;
             /** Instructions */
@@ -40269,9 +40265,8 @@ export interface components {
             /**
              * Transport
              * @default sse
-             * @enum {string}
              */
-            transport: "sse" | "http" | "stdio";
+            transport: ("sse" | "http" | "stdio") | null;
             /** Url */
             url?: string | null;
         };
@@ -50360,9 +50355,8 @@ export interface components {
             /**
              * Transport
              * @default sse
-             * @enum {string}
              */
-            transport: "sse" | "http" | "stdio";
+            transport: ("sse" | "http" | "stdio") | null;
             /** Url */
             url?: string | null;
         };
