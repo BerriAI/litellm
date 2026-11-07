@@ -1199,6 +1199,9 @@ class SyncResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
     def __iter__(self):
         return self
 
+    def close(self) -> None:
+        self.response.close()
+
     def __next__(self):
         try:
             self._check_max_streaming_duration()
