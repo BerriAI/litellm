@@ -2716,3 +2716,67 @@ async def test_anthropic_messages_strict_tools_rejection_is_sent_again_without_s
     assert first["tools"] == [tool]
     assert second == {**first, "tools": [{"name": "lookup_record", "input_schema": {"type": "object"}}]}
     assert _JSON_BODY.validate_python(response)["id"] == "msg_strict_retry"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("deployment_params", "fallbacks_sent"),
+    [
+        pytest.param(
+            {"extra_headers": {"anthropic-beta": "server-side-fallback-2026-07-01"}}, True, id="fallback_beta"
+        ),
+        pytest.param({"drop_params": True}, False, id="no_fallback_beta_with_drop_params"),
+    ],
+)
+async def test_anthropic_messages_sends_the_deployment_extra_body_at_the_top_level(
+    monkeypatch: pytest.MonkeyPatch, deployment_params: dict[str, object], fallbacks_sent: bool
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "drop_params", False)
+    monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "true")
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "sonnet",
+                "litellm_params": {
+                    "model": "anthropic/claude-sonnet-5-5",
+                    "api_key": "test-key",
+                    "extra_body": {
+                        "fallbacks": "default",
+                        "stop_sequences": ["5"],
+                        "max_tokens": 4096,
+                        "model": "claude-opus-5-5",
+                        "messages": [{"role": "user", "content": "unchecked"}],
+                        "system": "unchecked",
+                        "tools": [{"name": "unchecked", "input_schema": {"type": "object"}}],
+                    },
+                    **deployment_params,
+                },
+            }
+        ]
+    )
+    with respx.mock(assert_all_called=True) as respx_mock:
+        upstream: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": "msg_extra_body",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": "claude-sonnet-5-5",
+                    "content": [{"type": "text", "text": "Hello"}],
+                    "stop_reason": "end_turn",
+                    "usage": {"input_tokens": 1, "output_tokens": 1},
+                },
+            )
+        )
+        await router.aanthropic_messages(model="sonnet", messages=[{"role": "user", "content": "Hello"}], max_tokens=16)
+
+    assert json.loads(upstream.calls.last.request.content) == {
+        "model": "claude-sonnet-5-5",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "max_tokens": 16,
+        "stream": False,
+        "stop_sequences": ["5"],
+        **({"fallbacks": "default"} if fallbacks_sent else {}),
+    }

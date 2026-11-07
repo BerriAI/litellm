@@ -72,6 +72,7 @@ from litellm.types.llms.openai import AllMessageValues
 from litellm.types.proxy.auth.special_headers import SpecialHeaders
 from litellm.types.proxy.model_listing import ModelInfoResponse
 from litellm.types.utils import LlmProviders
+from litellm.utils import EXTRA_BODY_ROUTING_KEYS
 
 _MessageT = TypeVar("_MessageT")
 
@@ -125,12 +126,23 @@ _CLAUDE_CODE_BILLING_HEADER_PREFIX: Final = "x-anthropic-billing-header:"
 OBJECT_MAPPING_ADAPTER: Final = TypeAdapter(dict[object, object])
 OBJECT_LIST_ADAPTER: Final = TypeAdapter(list[object])
 _DECODED_JSON: Final = TypeAdapter(object)
+_EXTRA_BODY: Final = TypeAdapter(Mapping[str, object])
+_EXTRA_BODY_GUARDED_KEYS: Final = EXTRA_BODY_ROUTING_KEYS | frozenset({"messages", "system", "tools"})
 _JSON_VALUE: Final = TypeAdapter(JsonValue)
 
 
 _CLAUDE_CODE_USER_AGENT_PREFIXES: Final = ("claude-cli/", "claude-code/")
 
 NATIVE_COMPACTION_PROVIDERS: Final = frozenset({"anthropic", "azure_ai", "vertex_ai"})
+
+
+def anthropic_extra_body_fields(extra_body: object, request: Mapping[str, object]) -> Mapping[str, object]:
+    """The ``extra_body`` fields an Anthropic request sends at its top level. They never replace a field the request
+    already sets, nor the model, messages, system prompt or tools that the proxy checked before the call."""
+    fields: Final = _EXTRA_BODY.validate_python(extra_body or {})
+    return MappingProxyType(
+        {key: value for key, value in fields.items() if key not in request and key not in _EXTRA_BODY_GUARDED_KEYS}
+    )
 
 
 def is_claude_tool_target(custom_llm_provider: str | None, model: str) -> bool:

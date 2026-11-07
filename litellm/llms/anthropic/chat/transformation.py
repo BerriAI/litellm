@@ -116,7 +116,6 @@ from litellm.types.utils import (
 )
 from litellm.types.utils import Message as LitellmMessage
 from litellm.utils import (
-    EXTRA_BODY_ROUTING_KEYS,
     ModelResponse,
     Usage,
     add_dummy_tool,
@@ -133,6 +132,7 @@ from ..common_utils import (
     STOP_REASON_FIELDS,
     AnthropicError,
     AnthropicModelInfo,
+    anthropic_extra_body_fields,
     eager_input_streaming_flag,
     process_anthropic_headers,
     refusal_params,
@@ -181,7 +181,6 @@ _LITELLM_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _RESPONSE_BLOCKS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
 _PENDING_WEB_SEARCH_RESULT: Final = MappingProxyType({"content": ()})
 _REQUEST_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
-_EXTRA_BODY_GUARDED_KEYS: Final = EXTRA_BODY_ROUTING_KEYS | frozenset({"messages", "system", "tools"})
 _NATIVE_OUTPUT_STRING_FORMATS: Final = frozenset(
     ("date-time", "time", "date", "duration", "email", "hostname", "uri", "ipv4", "ipv6", "uuid")
 )
@@ -2546,7 +2545,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         request_params: Final = cast(  # cast-ok: optional_params is the untyped dict of the shared transform signature
             dict[str, object], optional_params
         )
-        extra_body: Final = _REQUEST_PARAMS_ADAPTER.validate_python(request_params.pop("extra_body", None) or {})
+        extra_body: Final = request_params.pop("extra_body", None)
         marked_tools: Final = tools_marked_for_a_tool_config_point(
             request_params.get("tools"), request_params.pop("cache_control_injection_points", None)
         )
@@ -2585,11 +2584,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             **request_params,
             **({} if marked_tools is None else {"tools": list(marked_tools)}),
         }
-        withheld_extra_body_keys: Final = request_body.keys() | _EXTRA_BODY_GUARDED_KEYS
-        data: Final = {
-            **request_body,
-            **{k: v for k, v in extra_body.items() if k not in withheld_extra_body_keys},
-        }
+        data: Final = {**request_body, **anthropic_extra_body_fields(extra_body, request_body)}
 
         self._apply_output_config(data=data, model=model, optional_params=optional_params)
 

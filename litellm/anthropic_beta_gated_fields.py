@@ -262,6 +262,7 @@ class StrippedNativeRequest:
     thinking_stripped: bool
     messages: Sequence[object]
     messages_stripped: bool
+    fallbacks_stripped: bool
     stripped: tuple[str, ...]
 
 
@@ -274,6 +275,7 @@ def unstripped_native_request(optional_params: object, messages: object) -> Stri
         thinking_stripped=False,
         messages=message_sequence if message_sequence is not None else (),
         messages_stripped=False,
+        fallbacks_stripped=False,
         stripped=(),
     )
 
@@ -294,12 +296,14 @@ def strip_beta_gated_native_request(
         if message_sequence is not None
         else StrippedMessages(messages=(), stripped=())
     )
+    fallbacks_gated: Final = FALLBACKS in params and field_is_gated(FALLBACKS, active_betas)
     return StrippedNativeRequest(
         thinking=thinking.thinking,
         thinking_stripped=bool(thinking.stripped),
         messages=system_messages.messages,
         messages_stripped=bool(system_messages.stripped),
-        stripped=(*thinking.stripped, *system_messages.stripped),
+        fallbacks_stripped=fallbacks_gated,
+        stripped=(*thinking.stripped, *system_messages.stripped, *((FALLBACKS,) if fallbacks_gated else ())),
     )
 
 

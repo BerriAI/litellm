@@ -7,6 +7,7 @@ from pydantic import TypeAdapter
 import litellm
 from litellm._logging import verbose_logger
 from litellm.anthropic_beta_gated_fields import (
+    FALLBACKS,
     log_beta_gated_strips,
     strip_beta_gated_native_request,
     strip_beta_gated_system_messages,
@@ -793,7 +794,11 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             ),
             max_tokens=max_tokens,
             model=model,
-            **anthropic_messages_optional_request_params,
+            **{
+                key: value
+                for key, value in anthropic_messages_optional_request_params.items()
+                if not (gated.fallbacks_stripped and key == FALLBACKS)
+            },
         )
         request: Final = (
             {**dict(anthropic_messages_request), "thinking": gated.thinking}
