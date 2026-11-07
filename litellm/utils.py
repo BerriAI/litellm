@@ -11490,6 +11490,7 @@ class ProviderConfigManager:
             ParallelAISearchConfig,
         )
         from litellm.llms.perplexity.search.transformation import PerplexitySearchConfig
+        from litellm.llms.scavio.search.transformation import ScavioSearchConfig
         from litellm.llms.searchapi.search.transformation import SearchAPIConfig
         from litellm.llms.searxng.search.transformation import SearXNGSearchConfig
         from litellm.llms.serper.search.transformation import SerperSearchConfig
@@ -11518,6 +11519,7 @@ class ProviderConfigManager:
             SearchProviders.TINYFISH: TinyfishSearchConfig,
             SearchProviders.AGENTCORE: AgentCoreSearchConfig,
             SearchProviders.NIMBLE: NimbleSearchConfig,
+            SearchProviders.SCAVIO: ScavioSearchConfig,
             SearchProviders.BING_GROUNDING: BingGroundingSearchConfig,
             SearchProviders.DEEPSEEK: DeepSeekSearchConfig,
             SearchProviders.XAI: XAISearchConfig,
