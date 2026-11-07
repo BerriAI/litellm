@@ -14,7 +14,10 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import contextvars
-from collections.abc import Mapping, MutableMapping
+import threading
+import time
+from collections import OrderedDict
+from collections.abc import Callable, Mapping, MutableMapping
 from dataclasses import dataclass
 from datetime import datetime
 from types import MappingProxyType
@@ -29,7 +32,6 @@ from litellm._internal_context import with_service_target
 from litellm._logging import verbose_router_logger
 from litellm._uuid import uuid
 from litellm.caching.dual_cache import DualCache
-from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.caching.redis_cache import RedisCache, RedisCircuitBreakerOpenError
 from litellm.constants import NO_MAX_TOKENS_TPM_RESERVATION_FRACTION
 from litellm.litellm_core_utils.core_helpers import coerce_token_limit
@@ -59,9 +61,31 @@ else:
     Span = Any
 
 RoutingArgsTTL: Final = 60
-# Reservations already settled, by id: a copy of a stash that outlives the dict it was claimed from (the
-# logging object copies litellm_metadata) is never settled a second time.
-_SETTLED_RESERVATIONS: Final = InMemoryCache(max_size_in_memory=10_000, default_ttl=RoutingArgsTTL * 2)
+
+
+class _SettledReservations:
+    """The ids of reservations settled within the counters' window, so a copy of a stash that outlives
+    the dict it was claimed from (the logging object copies litellm_metadata) is never settled twice.
+    Ids leave only once their window has passed, never to make room."""
+
+    def __init__(self, window: float, clock: Callable[[], float] = time.monotonic) -> None:
+        self._window: Final = window
+        self._clock: Final = clock
+        self._expiries: Final[OrderedDict[str, float]] = OrderedDict()  # mutable-ok: pruned oldest first as ids expire
+        self._lock: Final = threading.Lock()
+
+    def claim(self, reservation_id: str) -> bool:
+        with self._lock:
+            now: Final = self._clock()
+            while self._expiries and next(iter(self._expiries.values())) <= now:
+                _ = self._expiries.popitem(last=False)
+            if reservation_id in self._expiries:
+                return False
+            self._expiries[reservation_id] = now + self._window
+            return True
+
+
+_SETTLED_RESERVATIONS: Final = _SettledReservations(window=RoutingArgsTTL * 2)
 
 
 @dataclass(frozen=True, slots=True)
@@ -458,11 +482,8 @@ def _claim_reservation_from_kwargs(
     reservation: Final = _extract_reservation(stashed)
     reservation_id: Final = stashed.get(IO_TOKEN_RESERVATION_ID_KEY)
     _clear_reservation_from_kwargs(kwargs)
-    if not isinstance(reservation_id, str):
-        return reservation
-    if _SETTLED_RESERVATIONS.get_cache(reservation_id) is not None:
+    if isinstance(reservation_id, str) and not _SETTLED_RESERVATIONS.claim(reservation_id):
         return 0, 0, None, None
-    _SETTLED_RESERVATIONS.set_cache(reservation_id, True)
     return reservation
 
 

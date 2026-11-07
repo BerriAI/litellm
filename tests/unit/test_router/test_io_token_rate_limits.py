@@ -23,6 +23,7 @@ from litellm.caching.redis_cache import RedisCache, RedisCircuitBreakerOpenError
 from litellm.constants import NO_MAX_TOKENS_TPM_RESERVATION_FRACTION
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.litellm_core_utils.internal_call_metadata import IO_TOKEN_RESERVATION_ID_KEY
 from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import (
     ITPM_CACHE_KEY,
     ITPM_RESERVED_KEY,
@@ -2119,3 +2120,26 @@ async def test_a_request_cancelled_after_its_provider_answered_keeps_the_tokens_
 
     _, otpm = await _io_counters_since(router, first_minute)
     assert otpm == 100
+
+
+def _stashed_as(reservation_id: str, itpm_reserved: int, otpm_reserved: int) -> dict[str, object]:
+    stashed: Final = _stashed(itpm_reserved, otpm_reserved)
+    return {"metadata": {**stashed["metadata"], IO_TOKEN_RESERVATION_ID_KEY: reservation_id}}  # pyright: ignore[reportGeneralTypeIssues]  # the stash is a dict
+
+
+@pytest.mark.asyncio
+async def test_a_settled_reservation_stays_settled_however_many_others_settle_after_it() -> None:
+    cache: Final = DualCache()
+    check: Final = ModelRateLimitingCheck(cache)
+    itpm_key, otpm_key = _held_keys()
+    await cache.async_increment_cache(key=itpm_key, value=9)
+    await cache.async_increment_cache(key=otpm_key, value=100)
+    first: Final = _stashed_as("first-reservation", 9, 100)
+    logged_copy: Final = {"litellm_params": {"metadata": dict(first["metadata"])}}  # pyright: ignore[reportArgumentType]  # the stash is a dict
+    await check.async_log_failure_event(first, None, None, None)
+    for n in range(10_001):
+        io_token_refund_failure(cache, _stashed_as(f"later-reservation-{n}", 0, 0))
+
+    await check.async_log_failure_event(logged_copy, None, None, None)
+
+    assert await _counts(cache) == (0, 0)
