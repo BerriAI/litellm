@@ -1201,7 +1201,9 @@ class BaseLLMHTTPHandler:
                 json_mode=json_mode,
             )
 
-            completion_stream: object = MockResponseIterator(model_response=model_response, json_mode=json_mode)
+            completion_stream: object = MockResponseIterator(
+                model_response=model_response, json_mode=json_mode, preserve_logprobs=True
+            )
         else:
             completion_stream = provider_config.get_model_response_iterator_for_request(
                 streaming_response=iter_sse_lines(response.iter_text()),
@@ -1344,7 +1346,9 @@ class BaseLLMHTTPHandler:
                 json_mode=json_mode,
             )
 
-            completion_stream: object = MockResponseIterator(model_response=model_response, json_mode=json_mode)
+            completion_stream: object = MockResponseIterator(
+                model_response=model_response, json_mode=json_mode, preserve_logprobs=True
+            )
         else:
             completion_stream = provider_config.get_model_response_iterator_for_request(
                 streaming_response=aiter_sse_lines(response.aiter_text()),
