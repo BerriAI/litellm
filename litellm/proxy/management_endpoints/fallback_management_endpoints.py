@@ -22,6 +22,7 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import fallback_target_model_name
 from litellm.proxy.auth.model_checks import get_all_fallbacks
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_config_section, encrypt_config_section
 from litellm.proxy.utils import PrismaClient, invalidate_config_param
 
 if TYPE_CHECKING:
@@ -142,7 +143,7 @@ async def _stored_router_settings(prisma_client: PrismaClient) -> Mapping[str, J
         return {}
     if row is None or not isinstance(row.param_value, Mapping):
         return {}
-    return _STORED_ROUTER_SETTINGS.validate_python(row.param_value)
+    return decrypt_config_section(ROUTER_SETTINGS_PARAM, _STORED_ROUTER_SETTINGS.validate_python(row.param_value))
 
 
 def _editable_rules(
@@ -174,7 +175,7 @@ async def _write_rules(
 
 
 async def _persist_router_settings(prisma_client: PrismaClient, router_settings: Mapping[str, object]) -> None:
-    router_settings_json: Final = json.dumps(router_settings)
+    router_settings_json: Final = json.dumps(encrypt_config_section(ROUTER_SETTINGS_PARAM, router_settings))
     await ConfigRepository(prisma_client).table.upsert(
         where={"param_name": ROUTER_SETTINGS_PARAM},
         data={
