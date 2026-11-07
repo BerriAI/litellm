@@ -1569,6 +1569,59 @@ async def test_anthropic_count_tokens_does_not_count_again_after_a_rate_limit(
     assert len(requests) == 1
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("deployment_model", "deployment_params", "count_host", "provider_calls"),
+    (
+        ("gemini/gemini-3.8-flash", {}, "generativelanguage.googleapis.com", 1),
+        ("anthropic/claude-haiku-5-5", {}, "api.anthropic.com", 2),
+        (
+            "azure_ai/claude-haiku-5-5",
+            {"api_base": "https://example-resource.services.ai.azure.com/anthropic"},
+            "example-resource.services.ai.azure.com",
+            2,
+        ),
+    ),
+    ids=(
+        "counter-without-claude-options",
+        "claude-counter-forwarding-the-options",
+        "azure-ai-claude-counter-forwarding-the-options",
+    ),
+)
+async def test_anthropic_count_tokens_counts_again_without_the_options_only_when_the_counter_forwarded_them(
+    monkeypatch: pytest.MonkeyPatch,
+    deployment_model: str,
+    deployment_params: dict[str, JsonValue],
+    count_host: str,
+    provider_calls: int,
+) -> None:
+    from litellm.proxy import proxy_server
+
+    request: Final = _json_request(
+        {
+            "model": "claude-agent",
+            "messages": [{"role": "user", "content": "Weather in SF?"}],
+            "thinking": {"type": "enabled", "budget_tokens": 2000},
+        },
+        "python-httpx/0.28.1",
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", _claude_router(deployment_model, deployment_params))
+    monkeypatch.setattr(proxy_server, "proxy_config", proxy_server.ProxyConfig())
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+
+    with respx.mock:
+        route: Final = respx.route(host=count_host).mock(
+            return_value=httpx.Response(
+                400, json={"type": "error", "error": {"type": "invalid_request_error", "message": "rejected"}}
+            )
+        )
+        response: Final = await anthropic_count_tokens(request, UserAPIKeyAuth())
+
+    assert isinstance(response, JSONResponse)
+    assert response.status_code == 400
+    assert route.call_count == provider_calls
+
+
 _BEDROCK_RUNTIME_HOST: Final = "bedrock-runtime.us-east-1.amazonaws.com"
 _BEDROCK_MANTLE_HOST: Final = "bedrock-mantle.us-east-1.api.aws"
 _BEDROCK_CLAUDE_DEPLOYMENT: Final[dict[str, str]] = {

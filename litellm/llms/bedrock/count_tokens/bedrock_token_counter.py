@@ -259,6 +259,7 @@ class BedrockTokenCounter(BaseTokenCounter):
                     error=True,
                     error_message=outcome.message,
                     status_code=outcome.status_code,
+                    carried_request_options=claude_options.carries_request_options,
                 )
             case _:
                 assert_never(outcome)

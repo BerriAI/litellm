@@ -62,14 +62,15 @@ class ProviderCountFailure:
     status_code: int
     message: str
     rejected_before_provider_call: bool = False
+    carried_request_options: bool = False
 
     @property
     def cannot_count_model(self) -> bool:
         return not self.rejected_before_provider_call and self.status_code in CANNOT_COUNT_MODEL_STATUSES
 
     @property
-    def rejected_request(self) -> bool:
-        return is_request_rejection(self.status_code)
+    def rejected_request_options(self) -> bool:
+        return self.carried_request_options and is_request_rejection(self.status_code)
 
     def with_hint(self, hint: str) -> "ProviderCountFailure":
         return replace(self, message=_with_hint(self.message, hint))

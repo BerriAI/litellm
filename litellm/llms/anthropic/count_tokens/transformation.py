@@ -85,6 +85,7 @@ def _lift_leading_system(
 @dataclass(frozen=True, slots=True)
 class ChatCountTranslationError:
     message: str
+    carried_request_options: bool = False
 
     def response(self, request_model: str, model_used: str, tokenizer_type: str) -> TokenCountResponse:
         return TokenCountResponse(
@@ -96,6 +97,7 @@ class ChatCountTranslationError:
             error_message=self.message,
             status_code=400,
             rejected_before_provider_call=True,
+            carried_request_options=self.carried_request_options,
         )
 
 
@@ -146,6 +148,10 @@ class ClaudeCountOptions:
     betas: tuple[str, ...]
     messages: tuple[Mapping[str, JsonValue], ...] | None
     tools: tuple[Mapping[str, JsonValue], ...] | None
+
+    @property
+    def carries_request_options(self) -> bool:
+        return bool(self.options) or bool(self.betas)
 
 
 NO_CLAUDE_COUNT_OPTIONS: Final = ClaudeCountOptions(options=MappingProxyType({}), betas=(), messages=None, tools=None)
@@ -273,9 +279,11 @@ def claude_count_options(
             messages_config, transform_model, litellm_params, provider, messages, tools, sent, anthropic_beta
         )
     except (AnthropicError, BadRequestError) as e:
-        return ChatCountTranslationError(message=str(e.message))
+        return ChatCountTranslationError(message=str(e.message), carried_request_options=True)
     except (AttributeError, KeyError, TypeError, ValueError) as e:
-        return ChatCountTranslationError(message=f"Invalid request for token counting: {e}")
+        return ChatCountTranslationError(
+            message=f"Invalid request for token counting: {e}", carried_request_options=True
+        )
 
 
 class AnthropicCountTokensConfig:

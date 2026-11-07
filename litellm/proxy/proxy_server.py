@@ -14326,6 +14326,7 @@ async def _try_provider_token_count(
             status_code=result.status_code or 500,
             message=result.error_message or "Token counting failed",
             rejected_before_provider_call=result.rejected_before_provider_call,
+            carried_request_options=result.carried_request_options,
         )
     return result
 
@@ -14384,7 +14385,7 @@ async def _count_retrying_without_options(
     region: str | None,
 ) -> Union["TokenCountResponse", ProviderCountFailure, None]:
     counted: Final = await count_with(model, region)
-    if not (isinstance(counted, ProviderCountFailure) and counted.rejected_request):
+    if not (isinstance(counted, ProviderCountFailure) and counted.rejected_request_options):
         return counted
     verbose_proxy_logger.warning(
         "Token count for %s %s with the request's %s, so it counts again without them and the caller's betas",
