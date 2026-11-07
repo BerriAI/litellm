@@ -982,10 +982,12 @@ class TestOllamaToolCallTransformation:
         [
             ("", {}),
             (None, {}),
+            ("null", {}),
             ('{"path": "a.rs"', {"path": "a.rs"}),
+            ('{"path": "a.rs", "limit": 2}', {"path": "a.rs", "limit": 2}),
             ({"path": "a.rs"}, {"path": "a.rs"}),
         ],
-        ids=["empty", "null", "truncated", "object"],
+        ids=["empty", "null", "null_string", "truncated", "non_string_value", "object"],
     )
     def test_replayed_tool_call_arguments_are_forwarded_as_an_object(self, arguments: object, expected: object):
         result: Final = OllamaChatConfig().transform_request(
@@ -1000,8 +1002,8 @@ class TestOllamaToolCallTransformation:
 
     @pytest.mark.parametrize(
         "arguments",
-        ['{"path": "a.rs"}{"path": "b.rs"}', '["a.rs", "b.rs"]'],
-        ids=["glued", "array"],
+        ['{"path": "a.rs"}{"path": "b.rs"}', '["a.rs", "b.rs"]', '[["path", "a.rs"]]'],
+        ids=["glued", "array", "pairs"],
     )
     def test_replayed_tool_call_arguments_that_are_not_an_object_answer_400(self, arguments: str):
         with pytest.raises(litellm.BadRequestError) as exc_info:
@@ -1013,6 +1015,7 @@ class TestOllamaToolCallTransformation:
 
         assert exc_info.value.status_code == 400
         assert "call_abc123" in str(exc_info.value)
+
 
 class TestOllamaStreamingParallelToolCallIndex:
     """Regression for https://github.com/BerriAI/litellm/issues/33678.

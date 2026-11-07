@@ -2,6 +2,7 @@ import base64
 import copy
 import functools
 import json
+import logging
 import os
 import sys
 from collections.abc import Mapping
@@ -2439,3 +2440,14 @@ def test_schema_has_unresolvable_ref_flags_refs_that_cannot_be_inlined(schema, u
 def test_schema_size_counts_every_written_object_once(schema, properties, branches):
     assert schema_property_count(schema) == properties
     assert schema_grammar_branch_count(schema) == branches
+
+
+def test_parse_tool_call_arguments_repair_warning_leaves_out_argument_content(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        result: Final = parse_tool_call_arguments('{"patient": "Jane Doe"', tool_name="lookup", context="test")
+
+    assert result == {"patient": "Jane Doe"}
+    assert "Repaired truncated tool call arguments for tool 'lookup'" in caplog.text
+    assert "Jane Doe" not in caplog.text
