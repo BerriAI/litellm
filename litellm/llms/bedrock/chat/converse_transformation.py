@@ -557,7 +557,9 @@ class AmazonConverseConfig(BaseConfig):
             }
         }
 
-    def _handle_reasoning_effort_parameter(self, model: str, reasoning_effort: str, optional_params: dict) -> None:
+    def _handle_reasoning_effort_parameter(
+        self, model: str, reasoning_effort: str, optional_params: dict, drop_params: bool = False
+    ) -> None:
         """
         Handle the reasoning_effort parameter based on the model type.
 
@@ -582,6 +584,7 @@ class AmazonConverseConfig(BaseConfig):
                 model=model,
                 custom_llm_provider="bedrock",
                 llm_provider="bedrock_converse",
+                drop_params=drop_params,
             )
             if mapped_thinking is None or mapped_thinking.get("type") == "disabled":
                 optional_params.pop("thinking", None)
@@ -1243,7 +1246,7 @@ class AmazonConverseConfig(BaseConfig):
                 verbose_logger.warning(DROP_DISABLED_REASONING_EFFORT_WARNING, "reasoning_effort", value, model)
             elif param == "reasoning_effort" and isinstance(value, str):
                 self._handle_reasoning_effort_parameter(
-                    model=model, reasoning_effort=value, optional_params=optional_params
+                    model=model, reasoning_effort=value, optional_params=optional_params, drop_params=drop_params
                 )
             elif param == "output_config" and isinstance(value, dict):
                 mapped_output_config = dict(value)

@@ -466,7 +466,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
 
     @staticmethod
     def _translate_reasoning_effort_to_anthropic(
-        model: str, optional_params: dict, max_tokens: int | None, custom_llm_provider: str
+        model: str, optional_params: dict, max_tokens: int | None, custom_llm_provider: str, drop_params: bool = False
     ) -> None:
         """Map OpenAI-style ``reasoning_effort`` to native Anthropic params.
 
@@ -494,6 +494,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
                 reasoning_effort=reasoning_effort,
                 model=model,
                 custom_llm_provider=custom_llm_provider,
+                drop_params=drop_params,
             )
         except _BadRequestError as e:
             raise AnthropicError(message=str(e.message), status_code=400)
@@ -710,6 +711,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             optional_params=anthropic_messages_optional_request_params,
             max_tokens=max_tokens,
             custom_llm_provider=self._resolved_provider,
+            drop_params=litellm_params.drop_params is True,
         )
         if self._report_reasoning_drops:
             warn_non_string_reasoning_effort(requested_reasoning_effort, model)

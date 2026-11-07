@@ -1716,11 +1716,20 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         model: str,
         custom_llm_provider: str,
         llm_provider: str = "anthropic",
+        drop_params: bool = False,
     ) -> AnthropicThinkingParam | None:
         """Capability probes read the cost map under ``custom_llm_provider``; ``llm_provider`` only tags raised exceptions."""
         if reasoning_effort is None:
             return None
         if reasoning_effort == "none":
+            if AnthropicModelInfo._is_always_on_thinking_model(model, custom_llm_provider):
+                if not (drop_params or litellm.drop_params):
+                    raise litellm.exceptions.BadRequestError(
+                        message=f"Model {model} cannot disable thinking. Set drop_params=True to omit reasoning_effort='none'.",
+                        model=model,
+                        llm_provider=llm_provider,
+                    )
+                return None
             if AnthropicModelInfo.thinks_by_default(
                 model, custom_llm_provider
             ) and not AnthropicModelInfo._is_always_on_thinking_model(model, custom_llm_provider):
@@ -1784,8 +1793,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         model: str,
         custom_llm_provider: str,
         llm_provider: str = "anthropic",
+        drop_params: bool = False,
     ) -> AnthropicThinkingParam | None:
-        return cls._map_reasoning_effort(reasoning_effort, model, custom_llm_provider, llm_provider)
+        return cls._map_reasoning_effort(reasoning_effort, model, custom_llm_provider, llm_provider, drop_params)
 
     @staticmethod
     def cap_thinking_budget_to_max_tokens(
@@ -2131,6 +2141,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     model=model,
                     custom_llm_provider=self._resolved_provider,
                     llm_provider=self._resolved_provider,
+                    drop_params=drop_params,
                 )
                 if mapped_thinking is None or mapped_thinking.get("type") == "disabled":
                     optional_params.pop("thinking", None)

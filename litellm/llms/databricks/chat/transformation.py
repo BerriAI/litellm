@@ -628,6 +628,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
                 model=model,
                 custom_llm_provider="databricks",
                 llm_provider="databricks",
+                drop_params=drop_params,
             )
             if mapped_thinking is None or mapped_thinking.get("type") == "disabled":
                 optional_params.pop("thinking", None)

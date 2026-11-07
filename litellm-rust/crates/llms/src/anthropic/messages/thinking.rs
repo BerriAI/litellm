@@ -170,6 +170,16 @@ fn translate_reasoning_effort(
         output_effort(effort),
         budget_for_effort(&context.budgets, effort),
     ) else {
+        if context.capabilities.thinking_always_on && !context.drop_params {
+            return Err(Error::InvalidRequest(
+                crate::ErrorDetail::UnsupportedParameter {
+                    model: request.model.clone(),
+                    param: "reasoning_effort".into(),
+                    value: "none".into(),
+                    hint: "This model cannot disable thinking. ".into(),
+                },
+            ));
+        }
         return Ok(MessagesRequest {
             params: MessagesOptionalParams {
                 thinking: (context.capabilities.thinking_on_by_default
@@ -755,7 +765,6 @@ mod tests {
     #[rstest]
     #[case::default_thinking(true, false, Some(serde_json::json!({"type": "disabled"}))) ]
     #[case::legacy(false, false, None)]
-    #[case::always_on(true, true, None)]
     fn none_disables_only_optional_default_thinking(
         #[case] thinking_on_by_default: bool,
         #[case] thinking_always_on: bool,
@@ -777,6 +786,35 @@ mod tests {
             ),
             Ok(request(expected))
         );
+    }
+
+    #[rstest]
+    #[case::reject(false)]
+    #[case::drop(true)]
+    fn always_on_none_requires_drop_params(#[case] drop_params: bool) {
+        let context = ThinkingContext {
+            drop_params,
+            capabilities: MessagesModelCapabilities {
+                thinking_always_on: true,
+                thinking_on_by_default: true,
+                ..opus_4_7()
+            },
+            ..ThinkingContext::default()
+        };
+        let result = translate_thinking(
+            request(serde_json::json!({"max_tokens": 1024, "reasoning_effort": "none"})),
+            &context,
+        );
+        if drop_params {
+            assert_eq!(result, Ok(request(serde_json::json!({"max_tokens": 1024}))));
+        } else {
+            assert!(matches!(
+                result,
+                Err(Error::InvalidRequest(
+                    crate::ErrorDetail::UnsupportedParameter { .. }
+                ))
+            ));
+        }
     }
 
     #[rstest]
