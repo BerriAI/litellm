@@ -12,11 +12,9 @@ use rstest::rstest;
 
 const POLICY: RetryPolicy = RetryPolicy {
     max_attempts: 3,
-    max_wait: Duration::from_secs(30),
     timeout: Duration::from_secs(5),
-    backoff_base_seconds: 2.0,
-    jitter_min_seconds: 0.0,
-    jitter_max_seconds: 1.0,
+    min_delay: Duration::from_millis(10),
+    max_delay: Duration::from_millis(50),
 };
 
 const OK: &str =
@@ -187,6 +185,25 @@ async fn a_retryable_status_is_retried_until_it_succeeds() {
 
 #[rstest]
 #[tokio::test]
+async fn a_retry_after_shorter_than_the_backoff_is_honored() {
+    let upstream = Upstream::serve(vec![Answer::Raw(UNAVAILABLE), Answer::Raw(OK)]);
+    let policy = RetryPolicy {
+        min_delay: Duration::from_secs(10),
+        max_delay: Duration::from_secs(10),
+        ..POLICY
+    };
+    let fetched = tokio::time::timeout(
+        Duration::from_secs(2),
+        fetched(&target(&upstream.url()), policy, Start::Fresh),
+    )
+    .await
+    .expect("Retry-After: 0 replaces the 10s backoff");
+    assert!(fetched.is_ok(), "{fetched:?}");
+    assert_eq!(upstream.heads().len(), 2);
+}
+
+#[rstest]
+#[tokio::test]
 async fn retryable_failures_stop_at_the_attempt_limit() {
     let upstream = Upstream::serve(vec![Answer::Raw(UNAVAILABLE)]);
     let url = upstream.url();
@@ -195,7 +212,7 @@ async fn retryable_failures_stop_at_the_attempt_limit() {
         Err(Failed {
             reason: format!("HTTP 503 from {url} (after 3 attempts)"),
             retryable: true,
-            retry_after: Some(0.0),
+            retry_after: Some(Duration::ZERO),
         })
     );
     assert_eq!(upstream.heads().len(), 3);
@@ -225,8 +242,6 @@ async fn a_stalled_response_times_out_and_is_retried() {
     let policy = RetryPolicy {
         max_attempts: 2,
         timeout: Duration::from_millis(100),
-        backoff_base_seconds: 0.0,
-        jitter_max_seconds: 0.0,
         ..POLICY
     };
     let failed = fetched(&target(&url), policy, Start::Fresh)
@@ -252,7 +267,7 @@ async fn a_resumed_fetch_makes_only_the_attempts_left() {
     let first = Failed {
         reason: "first".into(),
         retryable: true,
-        retry_after: Some(0.0),
+        retry_after: Some(Duration::ZERO),
     };
     let failed = fetched(&target(&url), POLICY, Start::After(first))
         .await
@@ -395,7 +410,7 @@ async fn an_s3_body_that_stalls_after_the_headers_times_out() {
     assert!(
         failed
             .reason
-            .starts_with(&format!("S3 error fetching {url}: ")),
+            .starts_with(&format!("error fetching {url}: ")),
         "{}",
         failed.reason
     );
@@ -416,7 +431,7 @@ async fn an_s3_error_fails_without_a_retry(#[case] response: &'static str) {
     assert!(
         failed
             .reason
-            .starts_with(&format!("S3 error fetching {url}: ")),
+            .starts_with(&format!("error fetching {url}: ")),
         "{}",
         failed.reason
     );
@@ -435,7 +450,7 @@ async fn an_s3_fetch_without_credentials_fails_without_a_request() {
     assert!(
         failed
             .reason
-            .starts_with(&format!("S3 error fetching {url}: ")),
+            .starts_with(&format!("error fetching {url}: ")),
         "{}",
         failed.reason
     );

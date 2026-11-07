@@ -1,13 +1,13 @@
 use std::time::Duration;
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+use backon::{BackoffBuilder, ExponentialBackoff, ExponentialBuilder};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RetryPolicy {
     pub max_attempts: u32,
-    pub max_wait: Duration,
     pub timeout: Duration,
-    pub backoff_base_seconds: f64,
-    pub jitter_min_seconds: f64,
-    pub jitter_max_seconds: f64,
+    pub min_delay: Duration,
+    pub max_delay: Duration,
 }
 
 pub const RETRYABLE_STATUSES: [u16; 5] = [429, 500, 502, 503, 504];
@@ -17,15 +17,17 @@ pub const DEFAULT_REGISTRY_URL: &str =
     "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json";
 
 impl RetryPolicy {
-    /// How long to wait after failed attempt number `attempt`: the server's `Retry-After` when it sent one, otherwise
-    /// exponential backoff plus jitter, both capped at `max_wait`. `unit` is a uniform sample in `[0, 1)`
-    pub fn wait(&self, attempt: u32, retry_after: Option<f64>, unit: f64) -> Duration {
-        let seconds = retry_after.unwrap_or_else(|| {
-            let jitter = self.jitter_min_seconds
-                + unit * (self.jitter_max_seconds - self.jitter_min_seconds);
-            self.backoff_base_seconds.powf(f64::from(attempt)) + jitter
-        });
-        Duration::from_secs_f64(seconds.min(self.max_wait.as_secs_f64()))
+    pub(crate) fn backoff(&self) -> ExponentialBackoff {
+        ExponentialBuilder::new()
+            .with_min_delay(self.min_delay)
+            .with_max_delay(self.max_delay)
+            .with_max_times(self.max_attempts.saturating_sub(1) as usize)
+            .with_jitter()
+            .build()
+    }
+
+    pub(crate) fn delay(&self, backoff: Duration, retry_after: Option<Duration>) -> Duration {
+        retry_after.map_or(backoff, |server| server.min(self.max_delay))
     }
 }
 
@@ -35,32 +37,40 @@ mod tests {
 
     use super::*;
 
-    const MAIN: RetryPolicy = RetryPolicy {
+    const POLICY: RetryPolicy = RetryPolicy {
         max_attempts: 3,
-        max_wait: Duration::from_secs(30),
         timeout: Duration::from_secs(5),
-        backoff_base_seconds: 2.0,
-        jitter_min_seconds: 0.0,
-        jitter_max_seconds: 1.0,
+        min_delay: Duration::from_secs(1),
+        max_delay: Duration::from_secs(30),
     };
 
     #[rstest]
-    #[case::retry_after_wins(1, Some(7.0), 0.9, 7.0)]
-    #[case::retry_after_capped(1, Some(120.0), 0.0, 30.0)]
-    #[case::infinite_retry_after_capped(1, Some(f64::INFINITY), 0.0, 30.0)]
-    #[case::zero_retry_after(2, Some(0.0), 0.5, 0.0)]
-    #[case::first_backoff(1, None, 0.25, 2.25)]
-    #[case::second_backoff(2, None, 0.5, 4.5)]
-    #[case::backoff_capped(5, None, 0.5, 30.0)]
-    fn wait_follows_mains_retry_wait_seconds(
-        #[case] attempt: u32,
-        #[case] retry_after: Option<f64>,
-        #[case] unit: f64,
-        #[case] seconds: f64,
+    #[case::backoff_without_retry_after(None, 4)]
+    #[case::retry_after_wins(Some(7), 7)]
+    #[case::retry_after_zero(Some(0), 0)]
+    #[case::retry_after_capped(Some(120), 30)]
+    fn the_server_retry_after_overrides_the_backoff_up_to_max_delay(
+        #[case] retry_after: Option<u64>,
+        #[case] seconds: u64,
     ) {
         assert_eq!(
-            MAIN.wait(attempt, retry_after, unit),
-            Duration::from_secs_f64(seconds)
+            POLICY.delay(Duration::from_secs(4), retry_after.map(Duration::from_secs)),
+            Duration::from_secs(seconds)
         );
+    }
+
+    #[rstest]
+    #[case::one_attempt(1, 0)]
+    #[case::three_attempts(3, 2)]
+    #[case::zero_attempts(0, 0)]
+    fn the_backoff_allows_one_retry_fewer_than_the_attempts(
+        #[case] max_attempts: u32,
+        #[case] retries: usize,
+    ) {
+        let policy = RetryPolicy {
+            max_attempts,
+            ..POLICY
+        };
+        assert_eq!(policy.backoff().count(), retries);
     }
 }

@@ -1,18 +1,16 @@
 use std::borrow::Cow;
+use std::cell::Cell;
 use std::fmt;
 use std::time::Duration;
 
+use backon::Retryable;
 use litellm_error::Report;
 use litellm_http::Client;
 use litellm_s3::ProvideCredentials;
-use litellm_s3::sdk::config::retry::RetryConfig;
-use litellm_s3::sdk::config::timeout::TimeoutConfig;
-use reqwest::header::{ETAG, HeaderMap, RETRY_AFTER};
 use url::Url;
 
-use litellm_s3::S3Uri;
-
-use crate::{Attempts, Cause, Error, Failure, Fetched, Reply, RetryPolicy, Source, Step};
+use crate::attempt::{self, Cause, Fetched, Rejected};
+use crate::{RetryPolicy, Source};
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct Target {
@@ -31,18 +29,18 @@ impl fmt::Debug for Target {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Failed {
     pub reason: String,
     /// Another attempt could succeed. Only the attempt limit ended the fetch
     pub retryable: bool,
-    pub retry_after: Option<f64>,
+    pub retry_after: Option<Duration>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Start {
     Fresh,
-    /// Continues a fetch whose first attempt failed retryably elsewhere, waiting for that failure first
+    /// Continues a fetch whose first attempt failed retryably elsewhere, waiting before its next attempt
     After(Failed),
 }
 
@@ -53,191 +51,69 @@ pub async fn fetch(
     policy: RetryPolicy,
     start: Start,
 ) -> Result<Fetched, Failed> {
-    let attempts = match start {
-        Start::Fresh => Attempts::new(policy),
-        Start::After(failed) => {
-            let Some((attempts, wait)) =
-                Attempts::resume(policy, failed.retry_after, rand::random())
-            else {
-                return Err(failed);
-            };
-            tokio::time::sleep(wait).await;
-            attempts
-        }
-    };
-    let source = match Source::parse(&target.url) {
-        Ok(source) => source,
-        Err(error) => {
-            return Err(Failed::of(
-                target,
-                false,
-                &Failure {
-                    cause: Cause::Transport(error),
-                    attempts: 1,
-                    retryable: false,
-                    retry_after: None,
-                },
-            ));
-        }
-    };
-    let s3 = matches!(source, Source::S3(_));
-    retry(client, credentials, target, &source, attempts)
-        .await
-        .map_err(|failure| Failed::of(target, s3, &failure))
-}
-
-async fn retry(
-    client: &Client,
-    credentials: &(impl ProvideCredentials + Clone + 'static),
-    target: &Target,
-    source: &Source,
-    mut attempts: Attempts,
-) -> Result<Fetched, Failure> {
-    loop {
-        let reply = match source {
-            Source::Http(url) => http_attempt(client, url.clone(), attempts.timeout()).await,
-            Source::S3(object) => {
-                s3_attempt(client, credentials, target, object, attempts.timeout()).await
-            }
+    let url = redacted(&target.url);
+    let source =
+        Source::parse(&target.url).map_err(|error| Failed::of(&url, &Rejected::fatal(error), 1))?;
+    let mut backoff = policy.backoff();
+    let made = Cell::new(0);
+    if let Start::After(failed) = start {
+        let Some(wait) = backoff.next() else {
+            return Err(failed);
         };
-        let reason = describe(&reply, &redacted(&target.url));
-        let attempt = attempts.made() + 1;
-        match attempts.next(reply, rand::random()) {
-            Step::Sleep(wait) => {
-                litellm_tracing::warn!(
-                    "LiteLLM: model cost map fetch attempt {attempt}/{} failed ({reason}); retrying in {:.1}s",
-                    attempts.max_attempts(),
-                    wait.as_secs_f64(),
-                );
-                tokio::time::sleep(wait).await;
+        tokio::time::sleep(policy.delay(wait, failed.retry_after)).await;
+        made.set(1);
+    }
+    let attempt = || {
+        made.set(made.get() + 1);
+        async {
+            match &source {
+                Source::Http(http) => attempt::http(client, http.clone(), policy.timeout).await,
+                Source::S3(object) => {
+                    attempt::s3(client, credentials, target, object, policy.timeout).await
+                }
             }
-            Step::Done(result) => return result,
         }
-    }
-}
-
-async fn http_attempt(client: &Client, url: Url, timeout: Duration) -> Reply {
-    let response = match client.get(url).timeout(timeout).send().await {
-        Ok(response) => response,
-        Err(error) => return transport(error, true),
     };
-    let status = response.status().as_u16();
-    let etag = etag(response.headers());
-    let retry_after = response
-        .headers()
-        .get(RETRY_AFTER)
-        .and_then(|value| value.to_str().ok())
-        .and_then(litellm_python_compat::number::float)
-        .filter(|seconds| *seconds >= 0.0);
-    match response.bytes().await {
-        Ok(body) => Reply::Response {
-            status,
-            etag,
-            retry_after,
-            body: body.to_vec(),
-        },
-        Err(error) => transport(error, true),
-    }
-}
-
-/// One `GetObject`. Every failure is final, as boto3's were on main
-async fn s3_attempt(
-    client: &Client,
-    credentials: &(impl ProvideCredentials + Clone + 'static),
-    target: &Target,
-    object: &S3Uri,
-    timeout: Duration,
-) -> Reply {
-    let config = litellm_s3::config(
-        target.aws_region.clone(),
-        target.aws_endpoint_url.as_deref(),
-        client.clone(),
-        credentials.clone(),
-    )
-    .retry_config(RetryConfig::disabled())
-    .timeout_config(
-        TimeoutConfig::builder()
-            .operation_attempt_timeout(timeout)
-            .build(),
-    )
-    .build();
-    let fetched = async {
-        let output = litellm_s3::sdk::Client::from_conf(config)
-            .get_object()
-            .bucket(&object.bucket)
-            .key(&object.key)
-            .send()
-            .await?;
-        let etag = output.e_tag().map(str::to_owned);
-        let body = output.body.collect().await?;
-        Ok::<_, Error>((etag, body.to_vec()))
-    };
-    match tokio::time::timeout(timeout, fetched)
+    attempt
+        .retry(backoff)
+        .sleep(tokio::time::sleep)
+        .when(|rejected| rejected.retryable)
+        .adjust(|rejected, wait| wait.map(|wait| policy.delay(wait, rejected.retry_after)))
+        .notify(|rejected, wait| {
+            litellm_tracing::warn!(
+                "LiteLLM: model cost map fetch attempt {}/{} failed ({}); retrying in {:.1}s",
+                made.get(),
+                policy.max_attempts,
+                reason(&url, &rejected.cause),
+                wait.as_secs_f64(),
+            );
+        })
         .await
-        .unwrap_or_else(|elapsed| Err(Error::from(elapsed)))
-    {
-        Ok((etag, body)) => Reply::Response {
-            status: 200,
-            etag,
-            retry_after: None,
-            body,
-        },
-        Err(error) => Reply::Transport {
-            error,
-            retryable: false,
-        },
-    }
-}
-
-/// Every `ETag` value joined by `", "`, as main read them
-fn etag(headers: &HeaderMap) -> Option<String> {
-    let values: Vec<&str> = headers
-        .get_all(ETAG)
-        .iter()
-        .filter_map(|value| value.to_str().ok())
-        .collect();
-    (!values.is_empty()).then(|| values.join(", "))
-}
-
-fn transport(error: reqwest::Error, retryable: bool) -> Reply {
-    Reply::Transport {
-        error: Error::from(litellm_http::Error::from(error)),
-        retryable,
-    }
-}
-
-fn describe(reply: &Reply, url: &str) -> String {
-    match reply {
-        Reply::Response { status, .. } => format!("HTTP {status} from {url}"),
-        Reply::Transport { error, .. } => format!("error fetching {url}: {}", Report::new(error)),
-    }
+        .map_err(|rejected| Failed::of(&url, &rejected, made.get()))
 }
 
 impl Failed {
-    fn of(target: &Target, s3: bool, failure: &Failure) -> Self {
-        let url = redacted(&target.url);
-        let cause = match &failure.cause {
-            Cause::Status(status) => format!("HTTP {status} from {url}"),
-            Cause::Transport(error) if s3 => {
-                format!("S3 error fetching {url}: {}", Report::new(error))
-            }
-            Cause::Transport(error) => format!("error fetching {url}: {}", Report::new(error)),
-        };
-        let reason = if failure.retryable && failure.attempts > 1 {
-            format!("{cause} (after {} attempts)", failure.attempts)
-        } else {
-            cause
-        };
+    fn of(url: &str, rejected: &Rejected, attempts: u32) -> Self {
+        let reason = reason(url, &rejected.cause);
         Self {
-            reason,
-            retryable: failure.retryable,
-            retry_after: failure.retry_after,
+            reason: match rejected.retryable && attempts > 1 {
+                true => format!("{reason} (after {attempts} attempts)"),
+                false => reason,
+            },
+            retryable: rejected.retryable,
+            retry_after: rejected.retry_after,
         }
     }
 }
 
-/// Drops userinfo, query and fragment, where presigned URLs and tokens carry credentials. Any other URL is shown as
-/// written, as main showed it
+fn reason(url: &str, cause: &Cause) -> String {
+    match cause {
+        Cause::Status(status) => format!("HTTP {status} from {url}"),
+        Cause::Transport(error) => format!("error fetching {url}: {}", Report::new(error)),
+    }
+}
+
+/// Drops userinfo, query and fragment, where presigned URLs and tokens carry credentials
 fn redacted(url: &str) -> Cow<'_, str> {
     let Ok(mut parsed) = Url::parse(url) else {
         return Cow::Borrowed(url);

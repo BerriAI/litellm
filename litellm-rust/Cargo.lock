@@ -894,6 +894,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cffb0e931875b666fc4fcb20fee52e9bbd1ef836fd9e9e04ec21555f9f85f7ef"
 dependencies = [
  "fastrand",
+ "tokio",
 ]
 
 [[package]]
@@ -4358,12 +4359,11 @@ name = "litellm-model-catalog-refresh"
 version = "0.1.0"
 dependencies = [
  "aws-credential-types",
+ "backon",
  "litellm-error",
  "litellm-http",
- "litellm-python-compat",
  "litellm-s3",
  "litellm-tracing",
- "rand 0.8.7",
  "reqwest",
  "rstest",
  "thiserror 2.0.19",

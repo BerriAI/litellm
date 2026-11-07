@@ -6,12 +6,11 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+backon.workspace = true
 litellm-error.workspace = true
 litellm-http.workspace = true
-litellm-python-compat.workspace = true
 litellm-s3.workspace = true
 litellm-tracing.workspace = true
-rand.workspace = true
 reqwest.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["time"] }

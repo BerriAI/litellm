@@ -91,6 +91,7 @@ axum = { version = "0.8.9", default-features = false, features = ["http1", "toki
 axum-login = "0.18.0"
 tower-sessions = { version = "0.14.0", features = ["memory-store"] }
 bytes = "1"
+backon = { version = "1.6.0", default-features = false, features = ["std", "tokio-sleep"] }
 aws-sdk-s3 = { version = "1.146.1", default-features = false, features = ["rt-tokio"] }
 http = "1"
 google-cloud-auth = { version = "1.16.0", default-features = false }
