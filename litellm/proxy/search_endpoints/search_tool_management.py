@@ -639,6 +639,7 @@ async def test_search_tool_connection(request: TestSearchToolConnectionRequest):
             search_provider=search_provider,
             api_key=api_key,
             api_base=api_base,
+            search_tool_name=litellm_params.get("search_tool_name"),
             max_results=1,  # Minimize results to reduce cost
             timeout=10.0,  # 10 second timeout for test
         )
