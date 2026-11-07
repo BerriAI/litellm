@@ -35872,6 +35872,8 @@ export interface components {
             };
             /** Env Vars */
             env_vars?: components["schemas"]["MCPEnvVar"][] | null;
+            /** @default litellm */
+            execution_mode: components["schemas"]["MCPExecutionMode"];
             /** Extra Headers */
             extra_headers?: string[];
             /** Has User Credential */
@@ -35971,11 +35973,8 @@ export interface components {
             tool_name_to_display_name?: {
                 [key: string]: string;
             } | null;
-            /**
-             * Transport
-             * @enum {string}
-             */
-            transport: "sse" | "http" | "stdio";
+            /** Transport */
+            transport: ("sse" | "http" | "stdio") | null;
             /** Updated At */
             updated_at?: string | null;
             /** Updated By */
@@ -38929,6 +38928,11 @@ export interface components {
          */
         MCPEnvVarScope: "global" | "user";
         /**
+         * MCPExecutionMode
+         * @enum {string}
+         */
+        MCPExecutionMode: "litellm" | "provider";
+        /**
          * MCPGatewaySession
          * @description One live stateful Streamable HTTP session held by this proxy worker.
          */
@@ -40181,6 +40185,12 @@ export interface components {
             };
             /** Env Vars */
             env_vars?: components["schemas"]["MCPEnvVar"][] | null;
+            /**
+             * Execution Mode
+             * @default litellm
+             * @constant
+             */
+            execution_mode: "litellm";
             /** Extra Headers */
             extra_headers?: string[] | null;
             /** Instructions */

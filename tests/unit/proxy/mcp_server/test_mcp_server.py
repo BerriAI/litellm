@@ -1560,6 +1560,7 @@ async def test_add_update_server_with_alias():
 
     # Create a mock LiteLLM_MCPServerTable with alias
     mock_mcp_server = MagicMock()
+    mock_mcp_server.execution_mode = "litellm"
     mock_mcp_server.server_id = "test-server-123"
     mock_mcp_server.alias = "my_alias"
     mock_mcp_server.server_name = "Test Server"
@@ -1624,6 +1625,7 @@ async def test_add_update_server_without_alias():
 
     # Create a mock LiteLLM_MCPServerTable without alias
     mock_mcp_server = MagicMock()
+    mock_mcp_server.execution_mode = "litellm"
     mock_mcp_server.server_id = "test-server-123"
     mock_mcp_server.alias = None
     mock_mcp_server.server_name = "Test Server"
@@ -1688,6 +1690,7 @@ async def test_add_update_server_fallback_to_server_id():
 
     # Create a mock LiteLLM_MCPServerTable without alias or server_name
     mock_mcp_server = MagicMock()
+    mock_mcp_server.execution_mode = "litellm"
     mock_mcp_server.server_id = "test-server-123"
     mock_mcp_server.alias = None
     mock_mcp_server.server_name = None
