@@ -887,19 +887,28 @@ async def test_generate_content_adapter_keeps_the_request_no_log_and_session_id(
 async def test_generate_content_adapter_pre_call_rules_reject_the_request_before_the_upstream_call(
     _httpx_transport: None, monkeypatch: pytest.MonkeyPatch, entrypoint: str
 ):
+    logged: Final = _LoggedEvents()
+    monkeypatch.setattr(litellm, "callbacks", [logged])
     monkeypatch.setattr(litellm, "pre_call_rules", [lambda text: "forbidden" not in text])
+    generate: Final = getattr(_adapter_router(), entrypoint)
 
     with respx.mock(assert_all_called=False) as upstream:
         route: Final = upstream.post("http://upstream.test/v1/chat/completions").mock(
             return_value=_upstream_reply(stream=entrypoint == "agenerate_content_stream")
         )
         with pytest.raises(litellm.APIResponseValidationError):
-            await getattr(_adapter_router(), entrypoint)(
-                model="grok-group",
-                contents=[{"role": "user", "parts": [{"text": "a forbidden question"}]}],
-            )
+            await generate(model="grok-group", contents=[{"role": "user", "parts": [{"text": "a forbidden question"}]}])
+        allowed: Final = await generate(
+            model="grok-group",
+            contents=[{"role": "user", "parts": [{"text": "hello"}]}],
+            litellm_call_id=_ADAPTER_CALL_ID,
+        )
+        if entrypoint == "agenerate_content_stream":
+            await _drain(allowed)
+    await await_until(lambda: bool(logged.events), message="the allowed request was logged")
 
-    assert route.call_count == 0
+    assert route.call_count == 1
+    assert [(outcome, call_id) for outcome, _, call_id, _ in logged.events] == [("success", _ADAPTER_CALL_ID)]
 
 
 @pytest.mark.parametrize("entrypoint", ["agenerate_content", "agenerate_content_stream"])

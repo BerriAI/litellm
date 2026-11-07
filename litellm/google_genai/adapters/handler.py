@@ -32,6 +32,15 @@ def _message_text(messages: Iterable[Mapping[str, object]]) -> str:
     return "".join(content for message in messages if isinstance(content := message.get("content"), str))
 
 
+def _run_pre_call_rules(logging_obj: LiteLLMLoggingObj, messages: Iterable[Mapping[str, object]], model: str) -> None:
+    try:
+        Rules().pre_call_rules(input=_message_text(messages), model=model)
+    except Exception:
+        logging_obj.mark_logging_complete(event_type="sync_failure")
+        logging_obj.mark_logging_complete(event_type="async_failure")
+        raise
+
+
 def _adapter_stream_options(requested: object) -> ChatCompletionStreamOptionsParam | None:
     match requested:
         case {"include_usage": True}:
@@ -78,11 +87,9 @@ class GenerateContentToCompletionHandler:
                 **({"stream_options": stream_options} if stream_options is not None else {}),
             )
         )
-        if isinstance(logging_obj, LiteLLMLoggingObj) and Rules.has_pre_call_rules():
-            Rules().pre_call_rules(
-                input=_message_text(completion_kwargs.get("messages", [])),
-                model=model,
-            )
+        messages: Final = completion_kwargs.get("messages", ())
+        if isinstance(logging_obj, LiteLLMLoggingObj) and messages and Rules.has_pre_call_rules():
+            _run_pre_call_rules(logging_obj, messages, model)
 
         return completion_kwargs
 
