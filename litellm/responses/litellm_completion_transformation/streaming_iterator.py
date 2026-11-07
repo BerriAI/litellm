@@ -172,6 +172,9 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self._tool_search_requested: bool = has_server_tool_search(request_tools)
         self._tool_search_call_ids: frozenset[str] = frozenset()
 
+    def close(self) -> None:
+        self.litellm_custom_stream_wrapper.close()
+
     def _is_tool_search_call(self, call_id: str, fn_name: str) -> bool:
         if call_id in self._tool_search_call_ids:
             return True

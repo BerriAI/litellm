@@ -39,6 +39,14 @@ RESPONSES_SSE_BODY = (
     b'"usage":{"input_tokens":3,"output_tokens":4,"total_tokens":7}}}\n\n'
 )
 
+CHAT_COMPLETIONS_SSE_BODY = (
+    b'data: {"id":"chatcmpl-lit6825","object":"chat.completion.chunk","created":1,"model":"gpt-5.6-luna",'
+    b'"choices":[{"index":0,"delta":{"role":"assistant","content":"hi"},"finish_reason":null}]}\n\n'
+    b'data: {"id":"chatcmpl-lit6825","object":"chat.completion.chunk","created":1,"model":"gpt-5.6-luna",'
+    b'"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n'
+    b"data: [DONE]\n\n"
+)
+
 
 def test_build_responses_kwargs_never_asks_the_nested_call_to_replay_a_stream():
     responses_kwargs: Final = _build_responses_kwargs(
@@ -688,11 +696,12 @@ def test_drop_params_drops_the_mcp_toolset_tools_of_dropped_mcp_servers(monkeypa
 
 
 class _RecordingSSEBody(httpx.SyncByteStream):
-    def __init__(self) -> None:
+    def __init__(self, sse_body: bytes = RESPONSES_SSE_BODY) -> None:
+        self.sse_body: Final = sse_body
         self.closed = False
 
     def __iter__(self) -> Iterator[bytes]:
-        yield RESPONSES_SSE_BODY
+        yield self.sse_body
 
     def close(self) -> None:
         self.closed = True
@@ -709,17 +718,19 @@ class _AsyncClosableByteStream(AsyncIterable[bytes], Protocol):
 
 
 def _sync_stream_from_create(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, body: _RecordingSSEBody
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    body: _RecordingSSEBody,
+    model: str = "openai/gpt-5.6-luna",
+    upstream_url: str = "https://api.openai.com/v1/responses",
 ) -> _ClosableByteStream:
     monkeypatch.setenv("OPENAI_API_KEY", "sk-sync-stream-test")
     monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
     litellm.in_memory_llm_clients_cache.flush_cache()
-    respx_mock.post("https://api.openai.com/v1/responses").mock(
+    respx_mock.post(upstream_url).mock(
         return_value=httpx.Response(200, headers={"Content-Type": "text/event-stream"}, stream=body)
     )
-    stream: Final = litellm.anthropic.messages.create(
-        model="openai/gpt-5.6-luna", max_tokens=16, messages=MESSAGES, stream=True
-    )
+    stream: Final = litellm.anthropic.messages.create(model=model, max_tokens=16, messages=MESSAGES, stream=True)
     assert isinstance(stream, _ClosableByteStream)
     return stream
 
@@ -739,11 +750,23 @@ def test_a_sync_streamed_create_on_an_openai_model_is_read_with_a_plain_for_loop
     assert json.loads(frames[1].split("data: ", 1)[1])["usage"] == {"input_tokens": 3, "output_tokens": 4}
 
 
+@pytest.mark.parametrize(
+    ("model", "upstream_url", "sse_body"),
+    [
+        ("openai/gpt-5.6-luna", "https://api.openai.com/v1/responses", RESPONSES_SSE_BODY),
+        (
+            "openai/chat_completions/gpt-5.6-luna",
+            "https://api.openai.com/v1/chat/completions",
+            CHAT_COMPLETIONS_SSE_BODY,
+        ),
+    ],
+    ids=["responses", "chat_completions"],
+)
 def test_closing_a_sync_stream_part_way_closes_the_upstream_response(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, model: str, upstream_url: str, sse_body: bytes
 ) -> None:
-    body: Final = _RecordingSSEBody()
-    stream: Final = _sync_stream_from_create(respx_mock, monkeypatch, body)
+    body: Final = _RecordingSSEBody(sse_body)
+    stream: Final = _sync_stream_from_create(respx_mock, monkeypatch, body, model, upstream_url)
 
     first: Final = next(stream)
     assert not body.closed
