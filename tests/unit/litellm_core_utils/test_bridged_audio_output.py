@@ -8,7 +8,6 @@ import respx
 
 import litellm
 from litellm.caching.llm_caching_handler import LLMClientCache
-from litellm.litellm_core_utils.bridged_audio_output import bridged_audio_output_request
 
 GEMINI_API: Final = "https://generativelanguage.googleapis.com/"
 VOICE_API: Final = "https://voice.test/v1"
@@ -22,6 +21,22 @@ SPOKEN_REPLY: Final = {
             "content": {
                 "role": "model",
                 "parts": [{"inlineData": {"mimeType": "audio/L16;codec=pcm;rate=24000", "data": "AAAAAA=="}}],
+            },
+            "finishReason": "STOP",
+            "index": 0,
+        }
+    ],
+    "usageMetadata": {"promptTokenCount": 2, "candidatesTokenCount": 3, "totalTokenCount": 5},
+}
+SUNG_REPLY: Final = {
+    "candidates": [
+        {
+            "content": {
+                "role": "model",
+                "parts": [
+                    {"text": "La la la"},
+                    {"inlineData": {"mimeType": "audio/mpeg", "data": "AAAAAA=="}},
+                ],
             },
             "finishReason": "STOP",
             "index": 0,
@@ -104,18 +119,29 @@ def _sent_body(route: respx.Route) -> dict[str, object]:
 
 @pytest.mark.respx(assert_all_called=False)
 @pytest.mark.parametrize(("bridge", "endpoint"), BRIDGES)
-@pytest.mark.parametrize("model", [TTS_MODEL, SINGER_MODEL])
-async def test_audio_only_model_is_refused_before_any_upstream_call(
-    respx_mock: respx.MockRouter, bridge: Bridge, endpoint: str, model: str
+async def test_tts_model_is_refused_before_any_upstream_call(
+    respx_mock: respx.MockRouter, bridge: Bridge, endpoint: str
 ) -> None:
     upstream: Final = _upstream(respx_mock, GEMINI_API, SPOKEN_REPLY)
 
     with pytest.raises(litellm.UnsupportedParamsError) as refusal:
-        await bridge(model, drop_params=True)
+        await bridge(TTS_MODEL, drop_params=True)
 
     assert refusal.value.status_code == 400
-    assert f"{model} returns audio, which {endpoint} cannot carry. Call /v1/chat/completions" in str(refusal.value)
+    assert f"{TTS_MODEL} returns audio, which {endpoint} cannot carry. Call /v1/chat/completions" in str(refusal.value)
     assert upstream.call_count == 0
+
+
+@pytest.mark.respx(assert_all_called=True)
+@pytest.mark.parametrize("bridge", SURFACES)
+async def test_model_listed_with_only_audio_output_still_reaches_upstream(
+    respx_mock: respx.MockRouter, bridge: Bridge
+) -> None:
+    upstream: Final = _upstream(respx_mock, GEMINI_API, SUNG_REPLY)
+
+    await bridge(SINGER_MODEL)
+
+    assert upstream.call_count == 1
 
 
 @pytest.mark.respx(assert_all_called=False)
@@ -141,8 +167,10 @@ async def test_audio_request_is_refused_without_drop_params(
         await bridge(VOICE_MODEL, api_base=VOICE_API, **audio_request)
 
     assert refusal.value.status_code == 400
-    assert f"asks {VOICE_MODEL} for audio through {named}, which {endpoint} cannot carry" in str(refusal.value)
-    assert "/v1/chat/completions" in str(refusal.value)
+    assert (
+        f"asks {VOICE_MODEL} for audio through {named}, which {endpoint} cannot carry. "
+        f"Leave out {named}, set drop_params: true, or call /v1/chat/completions"
+    ) in str(refusal.value)
     assert upstream.call_count == 0
 
 
@@ -197,17 +225,6 @@ async def test_text_request_passes_through(respx_mock: respx.MockRouter, bridge:
     await bridge(model, api_base=VOICE_API, modalities=["text"])
 
     assert _sent_body(upstream)["modalities"] == ["text"]
-
-
-@pytest.mark.respx(assert_all_called=False)
-def test_checking_for_audio_output_fetches_no_model_config(respx_mock: respx.MockRouter) -> None:
-    model_config: Final = respx_mock.get(url__startswith="https://huggingface.co/").mock(
-        return_value=httpx.Response(200, json={})
-    )
-    request: Final = {"modalities": ["text"]}
-
-    assert bridged_audio_output_request(request, "litellm-test/text-model", "huggingface") == request
-    assert not model_config.called
 
 
 @pytest.mark.respx(assert_all_called=True)

@@ -4,7 +4,7 @@ from types import MappingProxyType
 from typing import Final, Literal, NoReturn, TypeAlias
 
 from pydantic import TypeAdapter, ValidationError
-from typing_extensions import NotRequired, ReadOnly, TypedDict, assert_never
+from typing_extensions import assert_never
 
 import litellm
 from litellm.exceptions import UnsupportedParamsError
@@ -13,11 +13,6 @@ from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 BridgedEndpoint: TypeAlias = Literal["/v1/responses", "/v1/messages", "/v1/completions"]
 
 
-class _CostMapOutputModalities(TypedDict):
-    supported_output_modalities: NotRequired[ReadOnly[tuple[str, ...]]]
-
-
-_COST_MAP_OUTPUT_MODALITIES: Final = TypeAdapter(_CostMapOutputModalities)
 _STRINGS: Final = TypeAdapter(tuple[str, ...])
 _AUDIO_PARAMS: Final = ("audio", "modalities")
 
@@ -38,29 +33,11 @@ class AudioRequested:
 AudioOutputRefusal: TypeAlias = AudioOnlyModel | AudioRequested
 
 
-def cost_map_output_modalities(cost_map_key: str) -> frozenset[str] | None:
-    try:
-        row: Final = _COST_MAP_OUTPUT_MODALITIES.validate_python(litellm.model_cost.get(cost_map_key))  # pyright: ignore[reportUnknownMemberType]  # cost map rows are untyped JSON
-    except ValidationError:
-        return None
-    return frozenset(row.get("supported_output_modalities", ("text",)))
-
-
 def _strings(value: object) -> tuple[str, ...]:
     try:
         return _STRINGS.validate_python(value)
     except ValidationError:
         return ()
-
-
-def _answers_audio_only(model: str, custom_llm_provider: str | None) -> bool:
-    if litellm.utils.is_gemini_tts_model(model):
-        return True
-    info: Final = litellm.utils.lookup_catalog_model_info(model, custom_llm_provider)
-    if isinstance(info, litellm.utils.ModelInfoLookupMiss):
-        return False
-    modalities: Final = cost_map_output_modalities(info["key"]) or frozenset()
-    return "audio" in modalities and "text" not in modalities
 
 
 def _requested_audio_params(request: Mapping[str, object]) -> tuple[str, ...]:
@@ -85,7 +62,7 @@ def bridged_audio_output_request(
     request: Mapping[str, object], model: str, custom_llm_provider: str | None
 ) -> Mapping[str, object] | AudioOutputRefusal:
     display_name: Final = "/".join(part for part in (custom_llm_provider, model) if part)
-    if _answers_audio_only(model, custom_llm_provider):
+    if litellm.utils.is_gemini_tts_model(model):
         return AudioOnlyModel(model=display_name, custom_llm_provider=custom_llm_provider)
     params: Final = _requested_audio_params(request)
     if not params:
@@ -105,8 +82,8 @@ def _refusal_message(refusal: AudioOutputRefusal, endpoint: BridgedEndpoint) -> 
         case AudioRequested():
             return (
                 f"The request asks {refusal.model} for audio through {' and '.join(refusal.params)}, "
-                f"which {endpoint} cannot carry. Call /v1/chat/completions to get the audio, "
-                "or set drop_params to send the request without it."
+                f"which {endpoint} cannot carry. Leave out {' and '.join(refusal.params)}, set drop_params: true, "
+                "or call /v1/chat/completions, which can return audio."
             )
         case _:
             assert_never(refusal)
