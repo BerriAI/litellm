@@ -1662,6 +1662,33 @@ async def test_connection_error_retry_keeps_bearer_the_engine_did_not_mint() -> 
 
 
 @pytest.mark.asyncio
+async def test_connection_error_retry_keeps_wif_token_sent_to_another_host() -> None:
+    clock: Final = _WifClock()
+    engine: Final = JwtBearerTokenExchangeEngine(
+        poster=_CountingIssuer(), assertion_reader=lambda ref: "identity-jwt", clock=clock
+    )
+    first_token: Final = _minted_bearer(engine)
+    sent: Final[list[str]] = []  # mutable-ok: async closure capture buffer
+
+    async def expire_then_drop(request: httpx.Request) -> httpx.Response:
+        clock.now += 601
+        raise httpx.ConnectError("connection dropped", request=request)
+
+    async def capture_and_succeed(request: httpx.Request) -> httpx.Response:
+        sent.append(request.headers["authorization"])
+        return httpx.Response(200, request=request)
+
+    first: Final = httpx.AsyncClient(transport=httpx.MockTransport(expire_then_drop))
+    retry: Final = httpx.AsyncClient(transport=httpx.MockTransport(capture_and_succeed))
+    async with first, retry:
+        handler: Final = _RetryClientHandler(first=first, retry=retry, token_exchange_engine=engine)
+        await handler.post("https://elsewhere.example/v1/messages", headers={"authorization": f"Bearer {first_token}"})
+        await handler.close()
+
+    assert sent == [f"Bearer {first_token}"]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("method", ["post", "patch"])
 async def test_disconnect_after_send_is_not_replayed(method: str) -> None:
     retried_requests: Final[list[httpx.Request]] = []  # mutable-ok: async closure capture buffer

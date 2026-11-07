@@ -588,8 +588,12 @@ def _raise_masked_sync_error(e: httpx.HTTPStatusError, stream: bool) -> NoReturn
     raise MaskedHTTPStatusError(e, message=_text, text=_text) from None
 
 
+def _same_origin(first: httpx.URL, second: httpx.URL) -> bool:
+    return (first.scheme, first.host, first.port) == (second.scheme, second.host, second.port)
+
+
 async def _with_current_bearer(
-    headers: Mapping[str, str] | None, engine: JwtBearerTokenExchangeEngine
+    headers: Mapping[str, str] | None, url: str, engine: JwtBearerTokenExchangeEngine
 ) -> Mapping[str, str] | None:
     auth_key: Final = next((key for key in headers or () if key.lower() == "authorization"), None)
     if headers is None or auth_key is None:
@@ -598,7 +602,7 @@ async def _with_current_bearer(
     if not auth_value.startswith("Bearer "):
         return headers
     spec: Final = engine.spec_for_access_token(auth_value.removeprefix("Bearer "))
-    if spec is None:
+    if spec is None or not _same_origin(httpx.URL(spec.token_url), httpx.URL(url)):
         return headers
     current: Final = await engine.aget_token(spec)
     if not isinstance(current, MintedToken):
@@ -1059,7 +1063,7 @@ class AsyncHTTPHandler:
                     data=retry_data,
                     json=json,
                     params=params,
-                    headers=await _with_current_bearer(headers, self.token_exchange_engine),
+                    headers=await _with_current_bearer(headers, url, self.token_exchange_engine),
                     timeout=timeout,
                     content=retry_content,
                 )
@@ -1215,7 +1219,7 @@ class AsyncHTTPHandler:
             data=request_data,
             json=json,
             params=params,
-            headers=await _with_current_bearer(headers, self.token_exchange_engine),
+            headers=await _with_current_bearer(headers, url, self.token_exchange_engine),
             content=request_content,
         )
         response: Final = await client.send(req, stream=stream)
