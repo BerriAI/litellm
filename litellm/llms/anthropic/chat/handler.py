@@ -25,10 +25,10 @@ from litellm.litellm_core_utils.json_fragment_accumulator import JSONFragmentAcc
 from litellm.llms.base_llm.base_utils import (
     RESPONSE_FORMAT_ENVELOPE_NAME_KEYS,
     ResponseFormatSchema,
-    decoded_json_object,
+    answer_json_text,
+    decoded_answer_object,
     names_a_response_format_property,
-    partial_response_format_answer_keys,
-    response_format_answer_members,
+    partial_response_format_answer,
     response_format_envelope_contents,
     split_response_format_answer,
 )
@@ -165,25 +165,25 @@ def _prefix_verdict(buffered_json: str, schema: ResponseFormatSchema, tool_name:
 
 
 def _unwrapped_values_answer(arguments: str) -> str:
-    payload_object: Final = decoded_json_object(arguments)
+    payload_object: Final = decoded_answer_object(arguments)
     values: Final = None if payload_object is None else payload_object.get("values")
-    return arguments if values is None else json.dumps(values)
+    return arguments if values is None else answer_json_text(values, ensure_ascii=True)
 
 
 def _held_answer(held: str, schema: ResponseFormatSchema) -> str:
-    payload_object: Final = decoded_json_object(held)
+    payload_object: Final = decoded_answer_object(held)
     contents: Final = (
         None
         if payload_object is None
         else response_format_envelope_contents(payload_object, schema, RESPONSE_FORMAT_TOOL_NAME)
     )
-    return held if contents is None else json.dumps(contents)
+    return held if contents is None else answer_json_text(contents, ensure_ascii=True)
 
 
 def _split_answer_text(blocks: tuple[str, ...], schema: ResponseFormatSchema) -> str:
     answer: Final = split_response_format_answer(blocks, schema)
     if answer is not None:
-        return answer
+        return answer_json_text(answer, ensure_ascii=True)
     return "".join(_held_answer(block, schema) for block in blocks)
 
 
@@ -1288,12 +1288,12 @@ class ModelResponseIterator:
 
     def _join_streamed_answer(self, held: str, schema: ResponseFormatSchema) -> str | None:
         streamed: Final = self._streamed_answer_keys
-        keys: Final = partial_response_format_answer_keys(held, schema)
-        if streamed is None or keys is None or not streamed.isdisjoint(keys):
+        fields: Final = partial_response_format_answer(held, schema)
+        if streamed is None or fields is None or not streamed.isdisjoint(fields):
             return None
-        self._streamed_answer_keys = streamed | keys
+        self._streamed_answer_keys = streamed | frozenset(fields)
         separator: Final = ", " if streamed else ""
-        return f"{separator}{response_format_answer_members(held)}" if keys else ""
+        return f"{separator}{answer_json_text(fields, ensure_ascii=True)[1:-1]}" if fields else ""
 
     def _flush_response_format_buffer(self) -> str:
         schema: Final = self.response_format_schema
@@ -1304,9 +1304,9 @@ class ModelResponseIterator:
         self._response_format_buffer = io.StringIO()
         self._response_format_verdict = "undecided"
         if verdict == "pass_through":
-            keys: Final = partial_response_format_answer_keys(held, schema)
-            close: Final = "" if keys is not None else self._release_answer_close()
-            self._streamed_answer_keys = keys
+            answer: Final = partial_response_format_answer(held, schema)
+            close: Final = "" if answer is not None else self._release_answer_close()
+            self._streamed_answer_keys = None if answer is None else frozenset(answer)
             return close
         joined: Final = self._join_streamed_answer(held, schema)
         if joined is not None:

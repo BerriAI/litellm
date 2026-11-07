@@ -7913,26 +7913,32 @@ _DIGITS_PAST_THE_INT_LIMIT: Final = "1" * (sys.get_int_max_str_digits() + 1)
 
 
 @pytest.mark.parametrize(
-    "arguments, schema",
+    "arguments, schema, expected",
     [
-        pytest.param('{"values": [1e400]}', None, id="values_number_past_a_float"),
+        pytest.param('{"values": [1e400, "\u00e9"]}', None, '[1e400, "\\u00e9"]', id="values_number_past_a_float"),
         pytest.param(
-            '{"values": [' + _DIGITS_PAST_THE_INT_LIMIT + "]}", None, id="values_integer_past_the_digit_limit"
+            '{"values": [' + _DIGITS_PAST_THE_INT_LIMIT + "]}",
+            None,
+            "[" + _DIGITS_PAST_THE_INT_LIMIT + "]",
+            id="values_integer_past_the_digit_limit",
         ),
+        pytest.param('{"count":-1e400}', None, '{"count": -1e400}', id="schemaless_answer_number_past_a_float"),
         pytest.param(
-            '{"name": "json_tool_call", "parameters": {"tier": 1e400, "summary": "x"}}',
+            '{"name": "json_tool_call", "parameters": {"tier": 1e400, "summary": "\u00e9"}}',
             _RISK_SCHEMA,
+            '{"tier": 1e400, "summary": "\\u00e9"}',
             id="envelope_number_past_a_float",
         ),
         pytest.param(
-            '{"tier": ' + _DIGITS_PAST_THE_INT_LIMIT + ', "summary": "x"}',
+            '{"tier":' + _DIGITS_PAST_THE_INT_LIMIT + ',"summary":"x"}',
             _RISK_SCHEMA,
+            '{"tier": ' + _DIGITS_PAST_THE_INT_LIMIT + ', "summary": "x"}',
             id="answer_integer_past_the_digit_limit",
         ),
     ],
 )
-def test_convert_tool_response_to_message_keeps_arguments_it_cannot_write_back_as_json(
-    arguments: str, schema: dict[str, object] | None
+def test_convert_tool_response_to_message_keeps_out_of_range_numbers_as_the_model_wrote_them(
+    arguments: str, schema: dict[str, object] | None, expected: str
 ):
     message = AnthropicConfig.convert_tool_response_to_message(
         tool_calls=[
@@ -7947,19 +7953,41 @@ def test_convert_tool_response_to_message_keeps_arguments_it_cannot_write_back_a
     )
 
     assert message is not None
-    assert message.content == arguments
+    assert message.content == expected
 
 
 @pytest.mark.parametrize(
-    "blocks",
+    "blocks, expected",
     [
-        pytest.param(('{"tier": 1e400}', '{"summary": "x"}'), id="number_past_a_float_first"),
         pytest.param(
-            ('{"summary": "x"}', '{"tier": ' + _DIGITS_PAST_THE_INT_LIMIT + "}"), id="integer_past_the_digit_limit_last"
+            ('{"tier": 1e400}', '{"summary": "x"}'), '{"tier": 1e400, "summary": "x"}', id="number_past_a_float_first"
+        ),
+        pytest.param(
+            ('{"summary": "x"}', '{"tier": ' + _DIGITS_PAST_THE_INT_LIMIT + "}"),
+            '{"summary": "x", "tier": ' + _DIGITS_PAST_THE_INT_LIMIT + "}",
+            id="integer_past_the_digit_limit_last",
+        ),
+        pytest.param(
+            (
+                '{"$PARAMETER_NAME": "tier", "$PARAMETER_VALUE": 1e400}',
+                '{"$PARAMETER_NAME": "summary", "$PARAMETER_VALUE": "x"}',
+            ),
+            '{"tier": 1e400, "summary": "x"}',
+            id="named_field_number_past_a_float_first",
+        ),
+        pytest.param(
+            (
+                ' {"$PARAMETER_NAME":"summary","$PARAMETER_VALUE":"Jos\u00e9"} ',
+                '{"$PARAMETER_NAME":"tier","$PARAMETER_VALUE":' + _DIGITS_PAST_THE_INT_LIMIT + "}",
+            ),
+            '{"summary": "Jos\\u00e9", "tier": ' + _DIGITS_PAST_THE_INT_LIMIT + "}",
+            id="compact_named_field_integer_past_the_digit_limit_last",
         ),
     ],
 )
-def test_convert_tool_response_to_message_joins_split_fields_it_cannot_write_back_as_json(blocks: tuple[str, ...]):
+def test_convert_tool_response_to_message_joins_split_fields_keeping_out_of_range_numbers_as_written(
+    blocks: tuple[str, ...], expected: str
+):
     message = AnthropicConfig.convert_tool_response_to_message(
         tool_calls=[
             ChatCompletionToolCallChunk(
@@ -7974,7 +8002,7 @@ def test_convert_tool_response_to_message_joins_split_fields_it_cannot_write_bac
     )
 
     assert message is not None
-    assert message.content == "{" + ", ".join(block[1:-1] for block in blocks) + "}"
+    assert message.content == expected
 
 
 @pytest.mark.parametrize(
