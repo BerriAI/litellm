@@ -1000,10 +1000,12 @@ class LiteLLMCompletionResponsesConfig:
         return messages
 
     @staticmethod
-    def _without_tool_search_uses_off_anthropic(
-        messages: Sequence[SessionMessage], route: CompletionRoute
+    def _without_tool_search_uses_the_request_cannot_run(
+        messages: Sequence[SessionMessage], route: CompletionRoute, tools: Sequence[object]
     ) -> tuple[SessionMessage, ...]:
-        if provider_builds_anthropic_request(route.model, route.custom_llm_provider):
+        if any(is_anthropic_tool_search_chat_tool(tool) for tool in tools) and provider_builds_anthropic_request(
+            route.model, route.custom_llm_provider
+        ):
             return tuple(messages)
         search_call_ids: Final = tool_search_call_ids(messages)
         return tuple(
@@ -1042,8 +1044,10 @@ class LiteLLMCompletionResponsesConfig:
         _messages: Final = litellm_completion_request.get("messages") or []
         stored_messages: Final = chat_completion_session.get("messages") or []
         replayed_messages: Final = (
-            LiteLLMCompletionResponsesConfig._without_tool_search_uses_off_anthropic(
-                stored_messages, CompletionRoute.model_validate(litellm_completion_request)
+            LiteLLMCompletionResponsesConfig._without_tool_search_uses_the_request_cannot_run(
+                stored_messages,
+                CompletionRoute.model_validate(litellm_completion_request),
+                _OBJECT_LIST_ADAPTER.validate_python(request_fields.get("tools") or []),
             )
             if any(holds_tool_search_use(message) for message in stored_messages)
             else stored_messages

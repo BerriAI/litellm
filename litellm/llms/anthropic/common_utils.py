@@ -1730,6 +1730,10 @@ def without_stale_tool_search_results(
     unloaded: Final = _results_with_unloaded_tools(messages, tool_names)
     if not unloaded:
         return tuple(messages)
+    litellm.verbose_logger.debug(
+        "Leaving out the tools a replayed tool search found that this request no longer sends: %s",
+        sorted(frozenset(chain.from_iterable(result.tool_names for result in unloaded)) - tool_names),
+    )
     stale_ids: Final = frozenset(result.tool_use_id for result in unloaded if tool_names.isdisjoint(result.tool_names))
     return tuple(
         kept

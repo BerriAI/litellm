@@ -14,6 +14,7 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.responses.litellm_completion_transformation.handler import (
     LiteLLMCompletionTransformationHandler,
 )
+from litellm.responses.litellm_completion_transformation.tool_search import anthropic_tool_search_chat_tool
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
 )
@@ -342,6 +343,9 @@ def _search_turn(tool_calls: Sequence[Mapping[str, object]]) -> Mapping[str, obj
     }
 
 
+_ANTHROPIC_SEARCH_TOOL: Final = anthropic_tool_search_chat_tool()
+
+
 async def _follow_up_messages(
     tool_calls: Sequence[Mapping[str, object]], model: str, custom_llm_provider: str
 ) -> Sequence[object]:
@@ -352,7 +356,7 @@ async def _follow_up_messages_after(
     spend_log: Mapping[str, object],
     model: str,
     custom_llm_provider: str,
-    tools: Sequence[Mapping[str, object]] = (),
+    tools: Sequence[Mapping[str, object]] = (_ANTHROPIC_SEARCH_TOOL,),
 ) -> Sequence[object]:
     with patch("litellm.proxy.proxy_server.prisma_client", _FakePrismaClient([spend_log])):
         request: Final = await LiteLLMCompletionResponsesConfig.async_responses_api_session_handler(
@@ -827,6 +831,25 @@ async def test_previous_response_id_sends_back_a_search_the_stored_turn_got_as_i
         _SEARCH_RESULT,
         _WEATHER_USE,
     ]
+
+
+@pytest.mark.asyncio
+async def test_previous_response_id_drops_a_stored_search_when_the_follow_up_sends_no_search_tool() -> None:
+    anthropic: Final = _RecordingRawAnthropicMessages()
+    loaded_weather_tool: Final = {key: value for key, value in _WEATHER_TOOL.items() if key != "defer_loading"}
+
+    with patch("litellm.proxy.proxy_server.prisma_client", _FakePrismaClient([_STATELESS_SEARCH_TURN])):
+        await litellm.aresponses(
+            model=_MODEL,
+            previous_response_id="chatcmpl-search-turn",
+            input="And in Osaka?",
+            tools=[loaded_weather_tool],
+            api_key="sk-ant-fake",
+            client=AsyncHTTPHandler(transport=httpx.MockTransport(anthropic)),
+        )
+
+    messages: Final = json.loads(anthropic.body)["messages"]
+    assert next(message["content"] for message in messages if message["role"] == "assistant") == [_WEATHER_USE]
 
 
 @pytest.mark.asyncio
