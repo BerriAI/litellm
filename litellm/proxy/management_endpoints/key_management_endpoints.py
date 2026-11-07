@@ -966,6 +966,11 @@ def raise_on_unauthorized_callback_reference(
     )
 
 
+def _requested_key_metadata(data: GenerateKeyRequest | UpdateKeyRequest) -> Mapping[str, object] | None:
+    """An explicit ``metadata: null`` wipes the stored metadata on update, so it requests no logging at all."""
+    return {} if data.metadata is None and "metadata" in data.model_fields_set else data.metadata  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # request models declare `metadata` as bare dict
+
+
 def _stored_logging_entries(existing_metadata: Mapping[str, object] | None) -> object:
     """The stored ``logging`` list with its callback vars decrypted, since ciphertext never equals the plaintext sent back."""
     if existing_metadata is None:
@@ -1008,7 +1013,7 @@ def common_key_access_checks(
         premium_user=premium_user,
     )
     raise_on_unauthorized_callback_reference(
-        data.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # request models declare `metadata` as bare dict
+        _requested_key_metadata(data),
         user_api_key_dict,
         existing_metadata=existing_metadata,
     )
@@ -3381,7 +3386,7 @@ async def _process_single_key_update(
         existing_metadata=existing_key_row.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # LiteLLM_VerificationToken.metadata is a bare dict
     )
     raise_on_unauthorized_callback_reference(
-        update_key_request.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # request models declare `metadata` as bare dict
+        _requested_key_metadata(update_key_request),
         user_api_key_dict,
         existing_metadata=existing_key_row.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # LiteLLM_VerificationToken.metadata is a bare dict
     )
@@ -6706,7 +6711,7 @@ async def regenerate_key_fn(
             user_api_key_dict,
         )
         raise_on_unauthorized_callback_reference(
-            None if data is None else data.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # request models declare `metadata` as bare dict
+            None if data is None else _requested_key_metadata(data),
             user_api_key_dict,
             existing_metadata=_key_in_db.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # LiteLLM_VerificationToken.metadata is a bare dict
         )

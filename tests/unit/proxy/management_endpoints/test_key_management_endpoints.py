@@ -24393,7 +24393,8 @@ async def test_generate_key_rejects_callback_vars_on_a_reference_for_everyone() 
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("arize_space_a")
-async def test_update_key_compares_the_sent_logging_against_the_stored_row() -> None:
+@pytest.mark.parametrize("metadata", [{"note": "edited"}, None], ids=["metadata_replaced", "metadata_null"])
+async def test_update_key_compares_the_sent_logging_against_the_stored_row(metadata: dict[str, object] | None) -> None:
     existing_key_row: Final = MagicMock()
     existing_key_row.user_id = "alice"
     existing_key_row.token = "hashed_token"
@@ -24402,7 +24403,7 @@ async def test_update_key_compares_the_sent_logging_against_the_stored_row() -> 
 
     with pytest.raises(HTTPException) as exc:
         await _validate_update_key_data(
-            data=UpdateKeyRequest(key="sk-test-key", metadata={"note": "edited"}),
+            data=UpdateKeyRequest(key="sk-test-key", metadata=metadata),
             existing_key_row=existing_key_row,
             user_api_key_dict=_non_admin(),
             llm_router=None,
@@ -24416,7 +24417,10 @@ async def test_update_key_compares_the_sent_logging_against_the_stored_row() -> 
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("arize_space_a")
-async def test_regenerate_key_cannot_drop_a_reference_for_a_non_admin(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("metadata", [{"note": "edited"}, None], ids=["metadata_replaced", "metadata_null"])
+async def test_regenerate_key_cannot_drop_a_reference_for_a_non_admin(
+    monkeypatch: pytest.MonkeyPatch, metadata: dict[str, object] | None
+) -> None:
     from litellm.proxy.management_endpoints.key_management_endpoints import regenerate_key_fn
 
     key_row: Final = MagicMock()
@@ -24434,7 +24438,7 @@ async def test_regenerate_key_cannot_drop_a_reference_for_a_non_admin(monkeypatc
     with pytest.raises(ProxyException) as exc:
         await regenerate_key_fn(
             key=None,
-            data=RegenerateKeyRequest(key="sk-test", metadata={"note": "edited"}),
+            data=RegenerateKeyRequest(key="sk-test", metadata=metadata),
             user_api_key_dict=_non_admin(),
             litellm_changed_by=None,
         )
@@ -24446,11 +24450,16 @@ async def test_regenerate_key_cannot_drop_a_reference_for_a_non_admin(monkeypatc
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("arize_space_a")
 @pytest.mark.parametrize(
-    "metadata",
-    [{"note": "edited"}, {"logging": [{"callback_name": "arize_space_a", "callback_type": "success"}]}],
+    ("metadata", "stored_metadata"),
+    [
+        ({"note": "edited"}, {"logging": [_REFERENCE_ENTRY]}),
+        (None, {"logging": [_REFERENCE_ENTRY]}),
+        ({"logging": [_REFERENCE_ENTRY]}, {"note": "plain"}),
+    ],
+    ids=["reference_dropped", "metadata_null", "reference_attached"],
 )
 async def test_bulk_key_updates_run_the_callback_reference_gate_against_the_stored_row(
-    metadata: Mapping[str, object],
+    metadata: dict[str, object] | None, stored_metadata: dict[str, object]
 ) -> None:
     """``/key/bulk_update`` and ``/team/key/bulk_update`` write metadata through this helper, so a team admin
     must not be able to drop a reference from, or attach one to, a key this way either."""
@@ -24458,12 +24467,12 @@ async def test_bulk_key_updates_run_the_callback_reference_gate_against_the_stor
     existing_key_row.token = "hashed_token"
     existing_key_row.user_id = "alice"
     existing_key_row.team_id = "team-a"
-    existing_key_row.metadata = {"logging": [_REFERENCE_ENTRY]} if "note" in metadata else {"note": "plain"}
+    existing_key_row.metadata = stored_metadata
     prisma: Final = AsyncMock()
 
     with pytest.raises(HTTPException) as exc:
         await _process_single_key_update(
-            update_key_request=UpdateKeyRequest(key="hashed_token", metadata=dict(metadata)),
+            update_key_request=UpdateKeyRequest(key="hashed_token", metadata=metadata),
             user_api_key_dict=_non_admin(),
             litellm_changed_by=None,
             prisma_client=prisma,
