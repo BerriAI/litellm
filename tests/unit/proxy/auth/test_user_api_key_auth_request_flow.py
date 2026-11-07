@@ -87,6 +87,7 @@ from litellm.proxy.auth.user_api_key_auth import (
     _reserve_budget_after_common_checks,
     _route_requires_auth_despite_public,
     _routing_selector_matches_claim,
+    authorize_authenticated_model_access,
     run_centralized_common_checks,
     _run_post_custom_auth_checks,
     user_api_key_auth_builder,
@@ -446,29 +447,47 @@ async def test_should_not_reuse_cached_key_object_for_request_state():
     assert second_request_key.request_route is None
 
 
-@pytest.mark.asyncio
-async def test_custom_auth_does_not_enforce_key_model_access_by_default():
-    valid_token = UserAPIKeyAuth(token="test_token", models=["gpt-4o-mini"])
-    request_data = {"model": "gpt-4o"}
-
-    with (
-        patch(
-            "litellm.proxy.auth.user_api_key_auth.can_key_call_model",
-            new_callable=AsyncMock,
-        ) as mock_can_key,
-        patch(
-            "litellm.proxy.proxy_server.general_settings",
-            {},
-        ),
-    ):
-        await _run_post_custom_auth_checks(
-            valid_token=valid_token,
-            request=None,
-            request_data=request_data,
-            route="/v1/chat/completions",
-            parent_otel_span=None,
+async def _custom_auth_model_request(
+    monkeypatch: pytest.MonkeyPatch, requested_model: str, *, opt_in: bool, from_header: bool = False
+) -> UserAPIKeyAuth:
+    async def custom_auth(request: Request, api_key: str) -> UserAPIKeyAuth:
+        return UserAPIKeyAuth(
+            models=["allowed-model"],
+            user_role=LitellmUserRoles.INTERNAL_USER,
+            request_route=request.url.path,
+            api_key=api_key,
         )
-        mock_can_key.assert_not_awaited()
+
+    server: Final = litellm.proxy.proxy_server
+    monkeypatch.setattr(litellm, "enable_post_custom_auth_checks", True, raising=False)
+    monkeypatch.setattr(server, "user_custom_auth", custom_auth)
+    monkeypatch.setattr(server, "general_settings", {"custom_auth_run_common_checks": opt_in})
+    monkeypatch.setattr(server, "prisma_client", None)
+    monkeypatch.setattr(server, "llm_router", None)
+    monkeypatch.setattr(server, "llm_model_list", None)
+    monkeypatch.setattr(server, "user_api_key_cache", UserApiKeyCache())
+    request: Final = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/v1/files" if from_header else "/v1/chat/completions",
+            "headers": [(b"x-litellm-model", requested_model.encode())] if from_header else [],
+        },
+        receive=AsyncMock(
+            return_value={
+                "type": "http.request",
+                "more_body": False,
+                "body": json.dumps({} if from_header else {"model": requested_model}).encode(),
+            }
+        ),
+    )
+    return await user_api_key_auth(request=request, api_key="Bearer external-token")
+
+
+@pytest.mark.asyncio
+async def test_custom_auth_does_not_enforce_key_model_access_by_default(monkeypatch: pytest.MonkeyPatch):
+    identity: Final = await _custom_auth_model_request(monkeypatch, "restricted-model", opt_in=False)
+    assert identity.models == ["allowed-model"]
 
 
 @pytest.mark.asyncio
@@ -492,99 +511,30 @@ async def test_post_custom_auth_expired_key_returns_unauthorized():
 
 
 @pytest.mark.asyncio
-async def test_custom_auth_honors_key_level_model_access_restriction_allowed_with_opt_in():
-    valid_token = UserAPIKeyAuth(token="test_token", models=["gpt-4o-mini"])
-    request_data = {"model": "gpt-4o-mini"}
-
-    with (
-        patch(
-            "litellm.proxy.auth.user_api_key_auth.can_key_call_model",
-            new_callable=AsyncMock,
-        ) as mock_can_key,
-        patch("litellm.proxy.auth.user_api_key_auth.common_checks", new_callable=AsyncMock),
-        patch(
-            "litellm.proxy.proxy_server.general_settings",
-            {"custom_auth_run_common_checks": True},
-        ),
-    ):
-        await _run_post_custom_auth_checks(
-            valid_token=valid_token,
-            request=None,
-            request_data=request_data,
-            route="/v1/chat/completions",
-            parent_otel_span=None,
-        )
-        mock_can_key.assert_awaited_once_with(
-            model="gpt-4o-mini",
-            llm_model_list=ANY,
-            valid_token=valid_token,
-            llm_router=ANY,
-        )
+async def test_custom_auth_honors_key_level_model_access_restriction_allowed_with_opt_in(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    identity: Final = await _custom_auth_model_request(monkeypatch, "allowed-model", opt_in=True)
+    assert identity.models == ["allowed-model"]
 
 
 @pytest.mark.asyncio
-async def test_custom_auth_enforces_key_model_access_from_file_route_header_with_opt_in():
-    valid_token = UserAPIKeyAuth(token="test_token", models=["allowed-model"])
-    request = _RoutingRequest(headers={"x-litellm-model": "restricted-model"})
-
-    with (
-        patch(
-            "litellm.proxy.auth.user_api_key_auth.can_key_call_model",
-            new_callable=AsyncMock,
-        ) as mock_can_key,
-        patch("litellm.proxy.auth.user_api_key_auth.common_checks", new_callable=AsyncMock),
-        patch(
-            "litellm.proxy.proxy_server.general_settings",
-            {"custom_auth_run_common_checks": True},
-        ),
-    ):
-        await _run_post_custom_auth_checks(
-            valid_token=valid_token,
-            request=request,
-            request_data={},
-            route="/v1/files",
-            parent_otel_span=None,
-        )
-        mock_can_key.assert_awaited_once_with(
-            model="restricted-model",
-            llm_model_list=ANY,
-            valid_token=valid_token,
-            llm_router=ANY,
-        )
+async def test_custom_auth_enforces_key_model_access_from_file_route_header_with_opt_in(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    with pytest.raises(ProxyException) as denied:
+        await _custom_auth_model_request(monkeypatch, "restricted-model", opt_in=True, from_header=True)
+    assert denied.value.code == "403"
 
 
 @pytest.mark.asyncio
-async def test_custom_auth_honors_key_level_model_access_restriction_denied_with_opt_in():
-    valid_token = UserAPIKeyAuth(token="test_token", models=["gpt-4o-mini"])
-    request_data = {"model": "gpt-4o"}
-
-    with (
-        patch(
-            "litellm.proxy.auth.user_api_key_auth.can_key_call_model",
-            new_callable=AsyncMock,
-        ) as mock_can_key,
-        patch("litellm.proxy.auth.user_api_key_auth.common_checks", new_callable=AsyncMock),
-        patch(
-            "litellm.proxy.proxy_server.general_settings",
-            {"custom_auth_run_common_checks": True},
-        ),
-    ):
-        mock_can_key.side_effect = ProxyException(
-            message="Key not allowed to access model",
-            type=ProxyErrorTypes.key_model_access_denied,
-            param="model",
-            code=401,
-        )
-        with pytest.raises(ProxyException) as exc:
-            await _run_post_custom_auth_checks(
-                valid_token=valid_token,
-                request=None,
-                request_data=request_data,
-                route="/v1/chat/completions",
-                parent_otel_span=None,
-            )
-
-        assert exc.value.type == ProxyErrorTypes.key_model_access_denied
+async def test_custom_auth_honors_key_level_model_access_restriction_denied_with_opt_in(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    with pytest.raises(ProxyException) as denied:
+        await _custom_auth_model_request(monkeypatch, "restricted-model", opt_in=True)
+    assert denied.value.type == ProxyErrorTypes.key_model_access_denied
+    assert denied.value.code == "403"
 
 
 def _proxy_server_attrs_for_custom_auth(*, user_custom_auth):
@@ -1830,8 +1780,7 @@ async def test_db_virtual_key_auth_sets_via_virtual_key_marker():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("model_allowed", [True, False])
-async def test_auth_prefetches_referenced_objects_only_after_the_key_may_call_the_model(model_allowed):
-    """A request denied by the key's model list must not pay for the team/user/org MGET or DB join."""
+async def test_auth_prefetches_referenced_objects_before_central_model_authorization(model_allowed):
     from fastapi import Request
     from starlette.datastructures import URL
 
@@ -1894,7 +1843,7 @@ async def test_auth_prefetches_referenced_objects_only_after_the_key_may_call_th
                 "litellm.proxy.auth.user_api_key_auth.get_user_object", new_callable=AsyncMock, return_value=None
             ),
         ):
-            call = user_api_key_auth_builder(
+            resolved: Final = await user_api_key_auth_builder(
                 request=request,
                 api_key=f"Bearer {api_key}",
                 azure_api_key_header="",
@@ -1903,15 +1852,18 @@ async def test_auth_prefetches_referenced_objects_only_after_the_key_may_call_th
                 azure_apim_header=None,
                 request_data={"model": "gpt-4o"},
             )
+            assert isinstance(resolved, UserAPIKeyAuth)
+            mock_prefetch.assert_awaited_once()
+            assert mock_prefetch.await_args.kwargs["refs"].team_id == "t1"
+            call: Final = authorize_authenticated_model_access(
+                resolved, request=request, request_data={"model": "gpt-4o"}, route="/chat/completions"
+            )
             if model_allowed:
-                assert isinstance(await call, UserAPIKeyAuth)
-                mock_prefetch.assert_awaited_once()
-                assert mock_prefetch.await_args.kwargs["refs"].team_id == "t1"
+                await call
             else:
                 with pytest.raises(ProxyException) as exc:
                     await call
                 assert exc.value.type == ProxyErrorTypes.key_model_access_denied
-                mock_prefetch.assert_not_awaited()
     finally:
         for attr, val in _original_values.items():
             setattr(_proxy_server_mod, attr, val)
@@ -2601,6 +2553,48 @@ async def test_auto_register_map_existing_key_uses_the_issuers_own_user_field_ov
     assert generate_key.await_count == (0 if expect_reuse else 1)
 
 
+def _validated_jwt_admission_cache(*, org_id: str | None = None, end_user_id: str | None = None) -> UserApiKeyCache:
+    cache: Final = UserApiKeyCache()
+    cache.set_cache(
+        "validated-user",
+        LiteLLM_UserTable(
+            user_id="validated-user",
+            user_email="validated@example.com",
+            user_role="internal_user",
+            teams=["validated-team"],
+        ),
+        model_type=LiteLLM_UserTable,
+    )
+    cache.set_cache(
+        "team_id:validated-team",
+        LiteLLM_TeamTableCachedObj(
+            team_id="validated-team",
+            models=["gpt-4o-mini", "gpt-5.6"],
+            members_with_roles=[{"user_id": "validated-user", "role": "user"}],
+            organization_id=org_id,
+        ),
+        model_type=LiteLLM_TeamTableCachedObj,
+    )
+    cache.set_cache(
+        team_membership_reservation_cache_key(user_id="validated-user", team_id="validated-team"),
+        LiteLLM_TeamMembership(user_id="validated-user", team_id="validated-team"),
+        model_type=LiteLLM_TeamMembership,
+    )
+    if org_id is not None:
+        org: Final = LiteLLM_OrganizationTable(
+            organization_id=org_id, budget_id="org-budget", created_by="admin", updated_by="admin"
+        )
+        cache.set_cache(f"org_id:{org_id}", org, model_type=LiteLLM_OrganizationTable)
+        cache.set_cache(f"org_id:{org_id}:with_budget", org, model_type=LiteLLM_OrganizationTable)
+    if end_user_id is not None:
+        cache.set_cache(
+            f"end_user_id:{end_user_id}",
+            LiteLLM_EndUserTable(user_id=end_user_id, blocked=False),
+            model_type=LiteLLM_EndUserTable,
+        )
+    return cache
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("map_existing_key", "master_key", "reused_key_models", "expect_denied"),
@@ -2615,7 +2609,7 @@ async def test_auto_register_map_existing_key_first_request_runs_key_checks(
     map_existing_key: bool, master_key: str | None, reused_key_models: list[str], expect_denied: bool
 ) -> None:
     jwt_token = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyMSJ9.signature"
-    user_api_key_cache = DualCache()
+    user_api_key_cache: Final = _validated_jwt_admission_cache()
     prisma_client = MagicMock()
     jwt_handler = MagicMock()
     jwt_handler.is_jwt.return_value = True
@@ -2648,12 +2642,21 @@ async def test_auto_register_map_existing_key_first_request_runs_key_checks(
         "jwt_claims": {"sub": "user1"},
     }
 
-    mock_request = MagicMock()
-    mock_request.url.path = "/v1/chat/completions"
-    mock_request.method = "POST"
-    mock_request.headers = {"authorization": f"Bearer {jwt_token}"}
-    mock_request.query_params = {}
-    mock_request.state = SimpleNamespace()
+    mock_request: Final = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/v1/chat/completions",
+            "headers": [(b"authorization", f"Bearer {jwt_token}".encode())],
+        },
+        receive=AsyncMock(
+            return_value={
+                "type": "http.request",
+                "more_body": False,
+                "body": json.dumps({"model": "gpt-4o-mini"}).encode(),
+            }
+        ),
+    )
 
     with (
         patch("litellm.proxy.proxy_server.general_settings", {"enable_jwt_auth": True}),
@@ -2686,14 +2689,13 @@ async def test_auto_register_map_existing_key_first_request_runs_key_checks(
             return_value=reused_key,
         ),
     ):
-        call = user_api_key_auth_builder(
+        call = user_api_key_auth(
             request=mock_request,
             api_key=jwt_token,
             azure_api_key_header="",
             anthropic_api_key_header=None,
             google_ai_studio_api_key_header=None,
             azure_apim_header=None,
-            request_data={"model": "gpt-4o-mini"},
         )
         if expect_denied:
             with pytest.raises(ProxyException, match="not available for this API key"):
@@ -2719,7 +2721,7 @@ async def test_auto_register_first_request_propagates_user_email(active: bool) -
     """
     jwt_token = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyMSJ9.signature"
     general_settings = {"enable_jwt_auth": True}
-    user_api_key_cache = DualCache()
+    user_api_key_cache: Final = _validated_jwt_admission_cache()
     prisma_client = MagicMock()
     jwt_handler = MagicMock()
     jwt_handler.is_jwt.return_value = True
@@ -2952,7 +2954,10 @@ async def test_jwt_auto_register_forwards_bound_agent_id():
     id auth_builder resolved must reach the key creation, not be dropped when
     valid_token is swapped for the freshly registered key."""
     jwt_token = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyMSJ9.signature"
-    user_api_key_cache = DualCache()
+    user_api_key_cache: Final = _validated_jwt_admission_cache()
+    prisma_client: Final = MagicMock()
+    prisma_client.writer_db.litellm_agentstable.find_unique = AsyncMock(return_value=None)
+    prisma_client.writer_db.litellm_retiredagent.find_unique = AsyncMock(return_value=None)
     jwt_handler = MagicMock()
     jwt_handler.is_jwt.return_value = True
     jwt_handler.auth_jwt = AsyncMock(return_value={"sub": "user1", "appid": "2f5c9b1e-6a4d-4c8e-9f0b-7d1a3e5c9b21"})
@@ -3001,7 +3006,7 @@ async def test_jwt_auto_register_forwards_bound_agent_id():
             general_settings={"enable_jwt_auth": True},
             premium_user=True,
             master_key="sk-master",
-            prisma_client=MagicMock(),
+            prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
             proxy_logging_obj=MagicMock(),
             jwt_handler=jwt_handler,
@@ -3274,7 +3279,7 @@ class TestJWTOAuth2Coexistence:
     async def test_auto_register_passes_validated_org_context_to_generated_key(self):
         jwt_token = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyMSJ9.signature"
         general_settings = {"enable_jwt_auth": True}
-        user_api_key_cache = DualCache()
+        user_api_key_cache: Final = _validated_jwt_admission_cache(org_id="validated-org", end_user_id="validated-end-user")
         prisma_client = MagicMock()
         jwt_handler = MagicMock()
         jwt_handler.is_jwt.return_value = True
