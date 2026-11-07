@@ -1543,3 +1543,54 @@ async def test_router_responses_deployment_pricing_keeps_inherited_cache_rates(
         uncached_input * rates["input_cost_per_token"] + response.usage.output_tokens * rates["output_cost_per_token"]
     )
     assert floor < _response_cost(response) < full_price
+
+
+@pytest.mark.asyncio
+async def test_aresponses_extra_body_input_precedence_and_immutability(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "fake-api-key")
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    upstream: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(
+        return_value=httpx.Response(200, json=_minimal_responses_api_payload("resp_extra_input", "gpt-5.4"))
+    )
+    caller_extra_body: Final = {"input": "overridden input", "custom_field": "custom_val"}
+
+    response: Final = await litellm.aresponses(
+        model="openai/gpt-5.4",
+        input="initial input",
+        extra_body=caller_extra_body,
+    )
+
+    assert upstream.call_count == 1
+    request_body: Final = json.loads(upstream.calls[0].request.read())
+    assert request_body["input"] == "overridden input"
+    assert request_body["custom_field"] == "custom_val"
+    assert caller_extra_body == {"input": "overridden input", "custom_field": "custom_val"}
+    assert response.output[0].content[0].text == "Done."
+
+
+def test_responses_extra_body_input_precedence_and_immutability(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "fake-api-key")
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    upstream: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(
+        return_value=httpx.Response(200, json=_minimal_responses_api_payload("resp_extra_input_sync", "gpt-5.4"))
+    )
+    caller_extra_body: Final = {"input": "overridden input sync", "custom_field": "custom_val_sync"}
+
+    response: Final = litellm.responses(
+        model="openai/gpt-5.4",
+        input="initial input sync",
+        extra_body=caller_extra_body,
+    )
+
+    assert upstream.call_count == 1
+    request_body: Final = json.loads(upstream.calls[0].request.read())
+    assert request_body["input"] == "overridden input sync"
+    assert request_body["custom_field"] == "custom_val_sync"
+    assert caller_extra_body == {"input": "overridden input sync", "custom_field": "custom_val_sync"}
+    assert response.output[0].content[0].text == "Done."
+

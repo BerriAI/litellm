@@ -261,6 +261,58 @@ class TestResponsesAPIRequestUtils:
         assert decoded.get("custom_llm_provider") == "azure"
         assert decoded.get("response_id") == "cntr_x"
 
+    def test_normalize_responses_input_and_extra_body_precedence(self):
+        caller_extra: Final = {"input": "overridden input", "user": "alice"}
+        normalized_input, remaining_extra = ResponsesAPIRequestUtils.normalize_responses_input_and_extra_body(
+            input="initial input",
+            extra_body=caller_extra,
+        )
+        assert normalized_input == "overridden input"
+        assert remaining_extra == {"user": "alice"}
+        assert caller_extra == {"input": "overridden input", "user": "alice"}
+
+    def test_normalize_responses_input_and_extra_body_list_input(self):
+        caller_input: Final = [{"type": "message", "role": "user", "content": "initial"}]
+        override_input: Final = [{"type": "message", "role": "user", "content": "overridden"}]
+        caller_extra: Final = {"input": override_input}
+        normalized_input, remaining_extra = ResponsesAPIRequestUtils.normalize_responses_input_and_extra_body(
+            input=caller_input,
+            extra_body=caller_extra,
+        )
+        assert normalized_input == override_input
+        assert remaining_extra == {}
+        assert caller_extra == {"input": override_input}
+
+    def test_normalize_responses_input_and_extra_body_no_extra_input(self):
+        caller_extra: Final = {"temperature": 0.5}
+        normalized_input, remaining_extra = ResponsesAPIRequestUtils.normalize_responses_input_and_extra_body(
+            input="initial input",
+            extra_body=caller_extra,
+        )
+        assert normalized_input == "initial input"
+        assert remaining_extra == {"temperature": 0.5}
+
+    def test_normalize_responses_input_and_extra_body_none_extra_body(self):
+        normalized_input, remaining_extra = ResponsesAPIRequestUtils.normalize_responses_input_and_extra_body(
+            input="initial input",
+            extra_body=None,
+        )
+        assert normalized_input == "initial input"
+        assert remaining_extra is None
+
+    def test_normalize_responses_request_data_modifies_data_and_preserves_caller_extra_body(self):
+        caller_extra: Final = {"input": "overridden input", "service_tier": "default"}
+        data: Final = {
+            "model": "gpt-4o",
+            "input": "initial input",
+            "extra_body": caller_extra,
+        }
+        ResponsesAPIRequestUtils.normalize_responses_request_data(data)
+        assert data["input"] == "overridden input"
+        assert data["extra_body"] == {"service_tier": "default"}
+        assert caller_extra == {"input": "overridden input", "service_tier": "default"}
+
+
 
 class TestResponseAPILoggingUtils:
     def test_is_response_api_usage_true(self):
