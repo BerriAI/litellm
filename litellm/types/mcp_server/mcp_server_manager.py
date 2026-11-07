@@ -3,6 +3,7 @@ from collections.abc import Mapping
 from datetime import datetime
 from typing import Annotated, Any, Final, Literal
 
+import regex
 from pydantic import AfterValidator, ConfigDict, Field, TypeAdapter, field_validator, model_validator
 from typing_extensions import Self
 
@@ -91,6 +92,33 @@ _PINNED_TOOLS: Final[TypeAdapter[dict[str, PinnedMCPTool] | None]] = TypeAdapter
 def parse_pinned_tools(value: object) -> dict[str, PinnedMCPTool] | None:
     decoded: Final = json.loads(value) if isinstance(value, str) and value else value
     return _PINNED_TOOLS.validate_python(decoded or None)
+
+
+def _compiles(pattern: str) -> bool:
+    try:
+        regex.compile(pattern)
+    except regex.error:
+        return False
+    return bool(pattern)
+
+
+class MCPDynamicURL(LiteLLMBaseModel):
+    """Opt-in for a server whose upstream URL arrives per request in the ``x-litellm-mcp-url`` header.
+
+    The header URL is used only when its host fully matches one of ``allowed_hosts_regex``, so the
+    caller cannot point the proxy, and the credentials it attaches, at any other host."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    allowed_hosts_regex: tuple[str, ...] = Field(min_length=1)
+
+    @field_validator("allowed_hosts_regex")
+    @classmethod
+    def _check_patterns_compile(cls, patterns: tuple[str, ...]) -> tuple[str, ...]:
+        invalid: Final = tuple(pattern for pattern in patterns if not _compiles(pattern))
+        if invalid:
+            raise ValueError(f"allowed_hosts_regex has patterns that do not compile: {invalid!r}")
+        return patterns
 
 
 class MCPServer(LiteLLMBaseModel):
@@ -264,6 +292,7 @@ class MCPServer(LiteLLMBaseModel):
     short_prefix: str | None = None
     allow_sampling: bool = False
     allow_elicitation: bool = False
+    dynamic_url: MCPDynamicURL | None = None
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     def __repr__(self) -> str:
@@ -399,10 +428,14 @@ class MCPServer(LiteLLMBaseModel):
         This includes:
         - OAuth2 servers without client credentials
         - Servers with auth_type=none but extra_headers configured for auth passthrough
+        - Servers whose URL comes from the request (``dynamic_url``)
 
         Health checks should be skipped for these servers since they cannot
         authenticate without user-provided credentials.
         """
+        if self.dynamic_url is not None:
+            return True
+
         # OAuth2 without client credentials
         if self.needs_user_oauth_token:
             return True

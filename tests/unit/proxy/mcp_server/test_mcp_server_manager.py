@@ -29,10 +29,12 @@ from mcp.types import (
 from mcp.types import (
     CallToolResult,
     GetPromptResult,
+    InputRequiredResult,
     ListToolsResult,
     PaginatedRequestParams,
     Prompt,
     ResourceTemplate,
+    TextContent,
     TextResourceContents,
 )
 from mcp.types import Tool as MCPTool
@@ -10532,7 +10534,7 @@ class TestMCPServerManagerUpstreamInstructionsCache:
     def test_remember_stores_stripped_value(self):
         """_remember_upstream_initialize_instructions stores a stripped string."""
         manager = MCPServerManager()
-        fake_server = MagicMock(server_id="srv")
+        fake_server = MagicMock(server_id="srv", dynamic_url=None)
         fake_client = MagicMock(_last_initialize_instructions="  hello \n")
         manager._remember_upstream_initialize_instructions(fake_server, fake_client)
         assert manager._upstream_initialize_instructions_by_server_id.get("srv") == "hello"
@@ -21900,3 +21902,185 @@ def test_id_jag_listed_tool_metadata_is_isolated_between_identity_assertions() -
     manager.record_listed_tools(server, (first,), callers[0])
     manager.record_listed_tools(server, (second,), callers[1])
     assert tuple(manager.get_listed_tool(server, "list_notes", caller) for caller in callers) == (first, second, None)
+
+
+_TENANT_POLICY: Final = {"allowed_hosts_regex": [r"tenant-[ab]\.warehouse\.example"]}
+_TENANT_JSONRPC_ADAPTER: Final[TypeAdapter[JSONRPCMessage]] = TypeAdapter(JSONRPCMessage)
+
+
+class _TenantUpstreams:
+    """Every tenant endpoint behind one transport: each answers with its own host and tools."""
+
+    def __init__(self) -> None:
+        self.urls: tuple[str, ...] = ()
+
+    def respond(self, request: httpx2.Request) -> httpx2.Response:
+        from mcp.types import JSONRPCRequest
+
+        if request.method != "POST":
+            return httpx2.Response(200)
+        self.urls = (*self.urls, str(request.url))
+        payload: Final = _TENANT_JSONRPC_ADAPTER.validate_json(request.content)
+        if not isinstance(payload, JSONRPCRequest):
+            return httpx2.Response(202)
+        host: Final = request.url.host
+        results: Final[dict[str, dict[str, object]]] = {
+            "initialize": {
+                "protocolVersion": (payload.params or {}).get("protocolVersion"),
+                "capabilities": {"tools": {}},
+                "serverInfo": {"name": host, "version": "1"},
+                "instructions": f"instructions of {host}",
+            },
+            "tools/list": {
+                "tools": [
+                    {"name": "whoami", "inputSchema": {"type": "object"}},
+                    {"name": f"only_on_{host.split('.')[0]}", "inputSchema": {"type": "object"}},
+                ]
+            },
+            "tools/call": {"content": [{"type": "text", "text": f"answered by {host}"}]},
+        }
+        return httpx2.Response(
+            200, json={"jsonrpc": "2.0", "id": payload.id, "result": results.get(payload.method, {})}
+        )
+
+
+def _answer_text(result: CallToolResult | InputRequiredResult) -> str:
+    assert isinstance(result, CallToolResult)
+    content: Final = result.content[0]
+    assert isinstance(content, TextContent)
+    return content.text
+
+
+def _tenant_headers(tenant: str) -> dict[str, str]:
+    return {"x-litellm-mcp-url": f"https://tenant-{tenant}.warehouse.example/mcp?key=secret-{tenant}"}
+
+
+async def _dynamic_url_manager(
+    upstreams: _TenantUpstreams, factory: type[MCPServerManager]
+) -> tuple[MCPServerManager, MCPServer]:
+    manager: Final = factory(upstream_transport=httpx2.MockTransport(upstreams.respond))
+    config: Final[dict[str, MCPServerConfig]] = {
+        "warehouse": {"transport": MCPTransport.http, "dynamic_url": _TENANT_POLICY}
+    }
+    await manager.load_servers_from_config(config)
+    server: Final = next(iter(manager.config_mcp_servers.values()))
+    return manager, server
+
+
+_DYNAMIC_URL_CONFLICTS: Final[tuple[MCPServerConfig, ...]] = (
+    {"transport": MCPTransport.http, "dynamic_url": _TENANT_POLICY, "url": "https://tenant-a.warehouse.example/mcp"},
+    {"transport": MCPTransport.http, "dynamic_url": _TENANT_POLICY, "spec_path": "/tmp/spec.json"},
+    {"transport": MCPTransport.stdio, "dynamic_url": _TENANT_POLICY, "command": "python", "args": ["server.py"]},
+)
+
+
+@pytest.mark.parametrize("server_config", _DYNAMIC_URL_CONFLICTS, ids=["fixed-url", "openapi", "stdio"])
+@pytest.mark.asyncio
+async def test_dynamic_url_config_refuses_a_second_source_of_address(
+    server_config: MCPServerConfig, config_only_mcp_manager_factory: type[MCPServerManager]
+) -> None:
+    config: Final[dict[str, MCPServerConfig]] = {"warehouse": server_config}
+
+    with pytest.raises(ValueError, match="dynamic_url"):
+        await config_only_mcp_manager_factory().load_servers_from_config(config)
+
+
+@pytest.mark.asyncio
+async def test_dynamic_url_config_requires_an_allowlist(
+    config_only_mcp_manager_factory: type[MCPServerManager],
+) -> None:
+    config: Final[dict[str, MCPServerConfig]] = {"warehouse": {"transport": MCPTransport.http, "dynamic_url": {}}}
+
+    with pytest.raises(ValueError, match="allowed_hosts_regex"):
+        await config_only_mcp_manager_factory().load_servers_from_config(config)
+
+
+@pytest.mark.asyncio
+async def test_dynamic_url_tool_calls_reach_the_tenant_named_by_each_request(
+    config_only_mcp_manager_factory: type[MCPServerManager],
+) -> None:
+    upstreams: Final = _TenantUpstreams()
+    manager, _server = await _dynamic_url_manager(upstreams, config_only_mcp_manager_factory)
+
+    answers: Final = await asyncio.gather(
+        *(
+            manager.call_tool("warehouse", "whoami", {}, raw_headers=_tenant_headers(tenant))
+            for tenant in ("a", "b", "a", "b")
+        )
+    )
+
+    assert [_answer_text(answer) for answer in answers] == [
+        f"answered by tenant-{tenant}.warehouse.example" for tenant in ("a", "b", "a", "b")
+    ]
+    assert set(upstreams.urls) == {
+        "https://tenant-a.warehouse.example/mcp?key=secret-a",
+        "https://tenant-b.warehouse.example/mcp?key=secret-b",
+    }
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [None, {"x-litellm-mcp-url": "https://tenant-c.warehouse.example/mcp"}],
+    ids=["missing", "disallowed-host"],
+)
+@pytest.mark.asyncio
+async def test_dynamic_url_tool_call_without_a_usable_header_is_a_400_and_contacts_nobody(
+    headers: dict[str, str] | None, config_only_mcp_manager_factory: type[MCPServerManager]
+) -> None:
+    upstreams: Final = _TenantUpstreams()
+    manager, _server = await _dynamic_url_manager(upstreams, config_only_mcp_manager_factory)
+
+    with pytest.raises(HTTPException) as error:
+        await manager.call_tool("warehouse", "whoami", {}, raw_headers=headers)
+
+    assert error.value.status_code == 400
+    assert upstreams.urls == ()
+
+
+@pytest.mark.asyncio
+async def test_dynamic_url_listing_without_the_header_lists_nothing_and_contacts_nobody(
+    config_only_mcp_manager_factory: type[MCPServerManager],
+) -> None:
+    upstreams: Final = _TenantUpstreams()
+    manager, server = await _dynamic_url_manager(upstreams, config_only_mcp_manager_factory)
+
+    assert await manager.get_tools_from_server(server) == []
+    assert upstreams.urls == ()
+
+
+@pytest.mark.asyncio
+async def test_dynamic_url_listing_with_a_disallowed_header_is_an_invalid_request_fault(
+    config_only_mcp_manager_factory: type[MCPServerManager],
+) -> None:
+    upstreams: Final = _TenantUpstreams()
+    manager, server = await _dynamic_url_manager(upstreams, config_only_mcp_manager_factory)
+
+    with pytest.raises(MCPServerListError) as error:
+        await manager.get_tools_from_server(server, raw_headers={"x-litellm-mcp-url": "https://attacker.test/mcp"})
+
+    assert error.value.fault == ServerListFault(tag="invalid_request", status_code=400)
+    assert upstreams.urls == ()
+
+
+@pytest.mark.asyncio
+async def test_dynamic_url_listings_never_share_one_tenants_tools_with_another(
+    config_only_mcp_manager_factory: type[MCPServerManager],
+) -> None:
+    upstreams: Final = _TenantUpstreams()
+    manager, server = await _dynamic_url_manager(upstreams, config_only_mcp_manager_factory)
+
+    listings: Final = {
+        tenant: sorted(
+            tool.name
+            for tool in await manager.get_tools_from_server(
+                server, raw_headers=_tenant_headers(tenant), add_prefix=False, record_listing=True
+            )
+        )
+        for tenant in ("a", "b")
+    }
+    callers: Final = {tenant: ListedToolsCaller(raw_headers=_tenant_headers(tenant)) for tenant in ("a", "b")}
+
+    assert listings == {"a": ["only_on_tenant-a", "whoami"], "b": ["only_on_tenant-b", "whoami"]}
+    assert manager.get_listed_tool(server, "only_on_tenant-a", callers["b"]) is None
+    assert manager.get_listed_tool(server, "only_on_tenant-a", callers["a"]) is not None
+    assert not any("only_on" in name for name in manager.tool_name_to_mcp_server_name_mapping)

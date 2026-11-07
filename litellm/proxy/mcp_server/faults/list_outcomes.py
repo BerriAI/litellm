@@ -48,6 +48,7 @@ ListFaultCategory: TypeAlias = Literal[
     "timeout",
     "unreachable",
     "upstream_error",
+    "invalid_request",
     "internal",
 ]
 
@@ -61,8 +62,9 @@ class ServerListOk(LiteLLMBaseModel):
 class ServerListFault(LiteLLMBaseModel):
     """Why a server contributed nothing to a listing: the caller must authenticate upstream
     (``auth_required``/``forbidden``), the upstream did not answer (``timeout``/``unreachable``),
-    the upstream answered outside its contract (``upstream_error``), or the gateway itself failed
-    (``internal``). ``status_code`` is the upstream HTTP status when one exists."""
+    the upstream answered outside its contract (``upstream_error``), the request cannot name a usable
+    upstream (``invalid_request``), or the gateway itself failed (``internal``). ``status_code`` is the
+    upstream HTTP status when one exists."""
 
     model_config = ConfigDict(frozen=True)
     tag: ListFaultCategory
@@ -328,7 +330,16 @@ def outcome_wire_value(outcome: ServerOutcome) -> dict[str, object]:
     match outcome.tag:
         case "ok":
             return {"status": "ok", "tool_count": outcome.tool_count}
-        case "auth_required" | "forbidden" | "rate_limited" | "timeout" | "unreachable" | "upstream_error" | "internal":
+        case (
+            "auth_required"
+            | "forbidden"
+            | "rate_limited"
+            | "timeout"
+            | "unreachable"
+            | "upstream_error"
+            | "invalid_request"
+            | "internal"
+        ):
             return {
                 "status": outcome.tag,
                 **({"http_status": outcome.status_code} if outcome.status_code is not None else {}),
@@ -361,6 +372,8 @@ def list_fault_http_status(fault: ServerListFault) -> int:
             return 504
         case "unreachable" | "upstream_error":
             return 502
+        case "invalid_request":
+            return 400
         case "internal":
             return 500
         case _:

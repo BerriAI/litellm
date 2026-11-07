@@ -674,3 +674,10 @@ def test_listing_failed_outright_only_when_every_server_faulted_non_auth() -> No
     )
     assert not listing_failed_outright({"a": ServerListFault(tag="auth_required", status_code=401)})
     assert not listing_failed_outright({"a": ServerListFault(tag="forbidden", status_code=403)})
+
+
+def test_an_invalid_request_fault_is_a_client_error() -> None:
+    fault: Final = ServerListFault(tag="invalid_request", status_code=400)
+
+    assert list_fault_http_status(fault) == 400
+    assert outcome_wire_value(fault) == {"status": "invalid_request", "http_status": 400}
