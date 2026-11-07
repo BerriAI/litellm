@@ -1627,6 +1627,9 @@ class BaseLLMHTTPHandler:
                 api_key=api_key,
                 timeout=timeout,
                 client=client,
+                optional_rerank_params=cast(  # cast-ok: untyped caller dict
+                    Mapping[str, object], optional_rerank_params
+                ),
             )
 
         if client is None or not isinstance(client, HTTPHandler):
@@ -1654,6 +1657,7 @@ class BaseLLMHTTPHandler:
             logging_obj=logging_obj,
             api_key=api_key,
             request_data=data,
+            optional_params=optional_rerank_params,
         )
 
     async def arerank(
@@ -1669,6 +1673,7 @@ class BaseLLMHTTPHandler:
         api_key: str | None = None,
         timeout: float | httpx.Timeout | None = None,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
+        optional_rerank_params: Mapping[str, object] | None = None,
     ) -> RerankResponse:
         if client is None or not isinstance(client, AsyncHTTPHandler):
             async_httpx_client = get_async_httpx_client(llm_provider=litellm.LlmProviders(custom_llm_provider))
@@ -1685,6 +1690,7 @@ class BaseLLMHTTPHandler:
         except Exception as e:
             raise self._handle_error(e=e, provider_config=provider_config)
 
+        resolved_optional_rerank_params: Final = dict(optional_rerank_params or {})
         return provider_config.transform_rerank_response(
             model=model,
             raw_response=response,
@@ -1692,6 +1698,7 @@ class BaseLLMHTTPHandler:
             logging_obj=logging_obj,
             api_key=api_key,
             request_data=request_data,
+            optional_params=resolved_optional_rerank_params,
         )
 
     def _prepare_decisions_request(
