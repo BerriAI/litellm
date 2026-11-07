@@ -1,7 +1,11 @@
-import asyncio, httpx, importlib, json, os
+import asyncio
+import importlib
+import json
+import os
 import sys
 from typing import Final
 
+import httpx
 import pytest
 from pydantic import TypeAdapter
 
@@ -9,19 +13,21 @@ sys.path.insert(
     0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../.."))
 )
 
-import litellm
-from litellm.litellm_core_utils.prompt_templates.common_utils import TOOL_RESULT_IMAGE_BOUNDARY
-from litellm.llms.azure.chat.gpt_reasoning_transformation import AzureOpenAIGPT5Config
-from litellm.llms.azure.chat.gpt_transformation import AzureOpenAIConfig
-from litellm.utils import _invalidate_model_cost_lowercase_map, get_optional_params
 from datetime import datetime
-from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-from litellm.router import Router
+from unittest.mock import AsyncMock
+
 from openai.types.chat import ChatCompletionMessage
 from openai.types.chat.chat_completion import ChatCompletion, Choice
 from respx import MockRouter
+
+import litellm
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.litellm_core_utils.prompt_templates.common_utils import TOOL_RESULT_IMAGE_BOUNDARY
+from litellm.llms.azure.chat.gpt_reasoning_transformation import AzureOpenAIGPT5Config
+from litellm.llms.azure.chat.gpt_transformation import AzureOpenAIConfig
+from litellm.router import Router
+from litellm.utils import _invalidate_model_cost_lowercase_map, get_optional_params
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
-from unittest.mock import AsyncMock
 
 _MAPPED_PARAMS: Final = TypeAdapter(dict[str, object])
 _SUPPORTED_PARAMS: Final = TypeAdapter(list[str])
@@ -505,7 +511,7 @@ async def test_azure_gpt5_async_transform_drops_tool_choice_without_tools() -> N
 def test_transform_request_strips_litellm_format_from_managed_file_id():
     import base64
 
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
         update_messages_with_model_file_ids,
     )
 
@@ -917,7 +923,7 @@ def test_azure_sends_part_breakpoints_as_written_without_drop_params(
     [
         ("unit-breakpoint-ignorer", {"drop_params": True}),
         ("unit-breakpoint-reader", {"drop_params": True, "base_model": "azure/unit-breakpoint-ignorer"}),
-        ("my-azure-alias", {"drop_params": True, "model_info": {"base_model": "azure/unit-breakpoint-ignorer"}}),
+        ("my-azure-alias", {"drop_params": True, "model_info": {"base_model": "azure/gpt-4.1"}}),
     ],
     ids=("known-non-reader", "base-model-known-non-reader", "model-info-base-model-known-non-reader"),
 )

@@ -178,7 +178,6 @@ class AWSPollyTextToSpeechConfig(BaseTextToSpeechConfig, BaseAWSLLM):
         else:
             mapped_params["output_format"] = self.DEFAULT_OUTPUT_FORMAT
 
-        # model arrives without the "aws_polly/" prefix, e.g. "standard"
         engine: Final = self._extract_engine_from_model(model)
         mapped_params["engine"] = engine
 

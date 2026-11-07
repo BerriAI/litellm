@@ -24,6 +24,7 @@ import EmailSettings from "./email_settings";
 import MSTeamsSettings from "./MSTeamsSettings";
 import { Logo } from "@/components/molecules/logo/Logo";
 import { toast } from "@/lib/toast";
+import { useUrlTab } from "@/hooks/useUrlTab";
 
 import AlertingSettings from "./alerting/alerting_settings";
 import CloudZeroCostTracking from "./CloudZeroCostTracking/CloudZeroCostTracking";
@@ -46,6 +47,15 @@ interface SettingsPageProps {
 }
 
 type CallbackFormValues = Record<string, string>;
+const SETTINGS_TABS = [
+  "logging-callbacks",
+  "cloudzero-cost-tracking",
+  "alerting-types",
+  "alerting-settings",
+  "email-alerts",
+  "ms-teams-alerts",
+] as const;
+type SettingsTab = (typeof SETTINGS_TABS)[number];
 
 const assetsLogoFolder = "/ui/assets/logos/";
 
@@ -313,6 +323,7 @@ const buildCallbackPayload = (formValues: Record<string, any>, callbackName: str
 };
 
 const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, premiumUser }) => {
+  const [activeTab, setActiveTab] = useUrlTab(SETTINGS_TABS, "logging-callbacks");
   const { t } = useTranslation();
   const [callbacks, setCallbacks] = useState<AlertingObject[]>([]);
   const [isLoadingCallbacks, setIsLoadingCallbacks] = useState(true);
@@ -597,7 +608,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
   return (
     <div className="mx-4">
       <div className="grid grid-cols-1 gap-2 p-8 w-full mt-2">
-        <Tabs defaultValue="logging-callbacks">
+        <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as SettingsTab)}>
           <TabsList variant="line">
             <TabsTrigger value="logging-callbacks">{t("loggingAndAlerts.page.tabs.loggingCallbacks")}</TabsTrigger>
             <TabsTrigger value="cloudzero-cost-tracking">{t("loggingAndAlerts.page.tabs.cloudZero")}</TabsTrigger>
