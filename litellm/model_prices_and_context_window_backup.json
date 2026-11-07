@@ -87022,6 +87022,13 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_system_messages": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+  "teapot-router/claude-haiku-4-5": { "input_cost_per_token": 0.00000035, "output_cost_per_token": 0.00000175, "litellm_provider": "teapot-router", "mode": "chat", "supports_function_calling": true },
+  "teapot-router/claude-sonnet-5": { "input_cost_per_token": 0.0000007, "output_cost_per_token": 0.0000035, "litellm_provider": "teapot-router", "mode": "chat", "supports_function_calling": true },
+  "teapot-router/claude-sonnet-5-5": { "input_cost_per_token": 0.0000007, "output_cost_per_token": 0.0000035, "litellm_provider": "teapot-router", "mode": "chat", "supports_function_calling": true },
+  "teapot-router/claude-opus-5": { "input_cost_per_token": 0.00000175, "output_cost_per_token": 0.00000875, "litellm_provider": "teapot-router", "mode": "chat", "supports_function_calling": true },
+  "teapot-router/claude-opus-5-5": { "input_cost_per_token": 0.0000014, "output_cost_per_token": 0.000007, "litellm_provider": "teapot-router", "mode": "chat", "supports_function_calling": true },
+  "teapot-router/gpt-6-astra": { "input_cost_per_token": 0.0000035, "output_cost_per_token": 0.000007, "litellm_provider": "teapot-router", "mode": "chat", "supports_function_calling": true },
+  "teapot-router/gpt-6.1-sol": { "input_cost_per_token": 0.0000007, "output_cost_per_token": 0.0000014, "litellm_provider": "teapot-router", "mode": "chat", "supports_function_calling": true }
     }
 }
