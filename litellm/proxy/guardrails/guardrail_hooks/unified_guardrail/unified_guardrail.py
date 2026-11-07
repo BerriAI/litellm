@@ -1165,12 +1165,9 @@ class UnifiedLLMGuardrails(CustomLogger):
         # _run_incremental_transform_stream).
         streaming_transform_mode: Final = _streaming_setting("streaming_transform_mode", "block_only")
         # Withhold every chunk until end-of-stream moderation passes, then
-        # release the original chunks (clean) or only the block message
-        # (blocked) -- moderating the whole response *before* any content
-        # reaches the client. Only safe for allow/block guardrails: on
-        # release the original chunks are replayed as-is, so a
-        # content-rewriting guardrail (e.g. PII masking) would leak
-        # unredacted content. Guarded below via mask_response_content.
+        # release the moderated chunks (clean) or only the block message
+        # (blocked) before any content reaches the client. Guardrails using
+        # mask_response_content keep the non-buffered path below.
         buffer_until_moderated: object = _streaming_setting(
             "streaming_buffer_until_moderated", buffer_until_moderated_default
         )
@@ -1491,10 +1488,13 @@ class UnifiedLLMGuardrails(CustomLogger):
                             litellm_logging_obj=request_data.get("litellm_logging_obj"),
                             user_api_key_dict=user_api_key_dict,
                             request_data=request_data,
+                            deliver_ended_stream_rewrites=True,
                         )
-                    # Moderation passed: release the withheld original chunks.
-                    if buffered_items is not None:
-                        for buffered_item in buffered_items:
+                    items_to_release: Final = (
+                        responses_so_far if buffered_items is not None and end_of_stream_only else buffered_items
+                    )
+                    if items_to_release is not None:
+                        for buffered_item in items_to_release:
                             yield buffered_item
                     for pending_item in pending_end_of_stream_items:
                         responses_yielded.append(pending_item)
