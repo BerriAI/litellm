@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from pydantic import ValidationError
 
-from litellm.proxy._types import ConfigGeneralSettings, LiteLLM_AccessGroupTable, UserAPIKeyAuth
+from litellm.proxy._types import ConfigGeneralSettings, LiteLLM_AccessGroupTable, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.access_group_rules import AccessGroupRule, access_group_ids_for_identity
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 
@@ -56,14 +56,11 @@ def test_invalid_rule_fails_general_settings_validation(rule: Mapping[str, str])
         )
 
 
-def test_caller_editable_metadata_is_rejected_as_a_grant_attribute() -> None:
+@pytest.mark.parametrize("attribute", ("metadata.department", "user_email", "user_email.domain", "team_id", "org_id"))
+def test_caller_editable_attributes_are_rejected_as_grant_sources(attribute: str) -> None:
     with pytest.raises(ValidationError, match="administrator- or IdP-controlled"):
         ConfigGeneralSettings.model_validate(
-            {
-                "access_group_rules": [
-                    {"attribute": "metadata.department", "equals": "science", "access_group": "science"}
-                ]
-            }
+            {"access_group_rules": [{"attribute": attribute, "equals": "science", "access_group": "science"}]}
         )
 
 
@@ -99,8 +96,8 @@ async def test_database_failure_does_not_turn_into_an_unrestricted_grant() -> No
 
 
 @pytest.mark.asyncio
-async def test_virtual_key_team_grants_are_additive_and_do_not_mutate_cached_identity() -> None:
-    identity: Final = UserAPIKeyAuth(models=["explicit"], team_id="science", access_group_ids=["existing"])
+async def test_virtual_key_user_grants_are_additive_and_do_not_mutate_cached_identity() -> None:
+    identity: Final = UserAPIKeyAuth(models=["explicit"], user_id="science", access_group_ids=["existing"])
     group: Final = LiteLLM_AccessGroupTable(
         access_group_id="science-id", access_group_name="science", access_model_names=["group-model"]
     )
@@ -109,7 +106,7 @@ async def test_virtual_key_team_grants_are_additive_and_do_not_mutate_cached_ide
     cache.set_cache("access_group_id:science-id", group, model_type=LiteLLM_AccessGroupTable)
     ids: Final = await access_group_ids_for_identity(
         identity,
-        rules=(AccessGroupRule(attribute="team_id", equals="science", access_group="science"),),
+        rules=(AccessGroupRule(attribute="user_id", equals="science", access_group="science"),),
         cache=cache,
         prisma_client=_Database(object()),
     )
@@ -125,6 +122,36 @@ async def test_null_equals_does_not_match_an_absent_claim() -> None:
     rules: Final = (AccessGroupRule(attribute="jwt_claims.absent", equals=None, access_group="science"),)
     assert (
         await access_group_ids_for_identity(UserAPIKeyAuth(jwt_claims={}), rules=rules, cache=UserApiKeyCache()) == ()
+    )
+
+
+@pytest.mark.parametrize(
+    "claims,local_email,expected",
+    (
+        ({"email": "science@example.com"}, "other@example.com", ("science-id",)),
+        ({"email": "other@example.com"}, "science@example.com", ()),
+        ({}, "science@example.com", ()),
+        ({"email": ["science@example.com"]}, "science@example.com", ()),
+    ),
+)
+@pytest.mark.asyncio
+async def test_email_grants_read_verified_claims_not_the_locally_editable_email(
+    claims: Mapping[str, object], local_email: str, expected: tuple[str, ...]
+) -> None:
+    group: Final = LiteLLM_AccessGroupTable(access_group_id="science-id", access_group_name="science")
+    cache: Final = UserApiKeyCache()
+    cache.set_cache("access_group_rule_name:science", group, model_type=LiteLLM_AccessGroupTable)
+    cache.set_cache("access_group_id:science-id", group, model_type=LiteLLM_AccessGroupTable)
+    assert (
+        await access_group_ids_for_identity(
+            UserAPIKeyAuth(jwt_claims=dict(claims), user_email=local_email),
+            rules=(
+                AccessGroupRule(attribute="jwt_claims.email", equals="science@example.com", access_group="science"),
+            ),
+            cache=cache,
+            prisma_client=_Database(object()),
+        )
+        == expected
     )
 
 
@@ -149,14 +176,14 @@ async def test_authenticated_identity_fields_and_claims_are_available_without_me
     table: Final = MagicMock()
     table.find_unique = AsyncMock(return_value={"access_group_id": "science-id", "access_group_name": "science"})
     identity: Final = UserAPIKeyAuth(
-        user_id="verified-user", team_id="science-team", jwt_claims={"groups": ["science"]}
+        user_id="verified-user", user_role=LitellmUserRoles.INTERNAL_USER, jwt_claims={"groups": ["science"]}
     )
     rules: Final = tuple(
         AccessGroupRule.model_validate({"attribute": attribute, operator: value, "access_group": "science"})
         for attribute, operator, value in (
             ("user_id", "equals", "verified-user"),
             ("jwt_claims.groups", "contains", "science"),
-            ("team_id", "equals", "science-team"),
+            ("user_role", "equals", "internal_user"),
         )
     )
     database: Final = _Database(MagicMock(litellm_accessgrouptable=table))

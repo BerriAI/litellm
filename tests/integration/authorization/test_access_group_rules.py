@@ -40,8 +40,8 @@ def test_rules_add_models_to_jwt_and_scoped_virtual_key_without_opening_other_mo
         assert created.status_code == 201, created.text
         group_id: Final = string_value(created.json()["access_group_id"])
         scenario.cleanups.callback(gateway.request, "DELETE", f"/v1/access_group/{group_id}")
-        team_id: Final = scenario.team(models=[])
-        virtual_key: Final = scenario.key(models=[explicit], team_id=team_id)
+        virtual_user: Final = scenario.user()
+        virtual_key: Final = scenario.key(models=[explicit], user_id=virtual_user)
         config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
         config["general_settings"] = {
             **config["general_settings"],
@@ -55,7 +55,7 @@ def test_rules_add_models_to_jwt_and_scoped_virtual_key_without_opening_other_mo
                 {
                     "access_group_rules": [
                         {"attribute": "jwt_claims.groups", "contains": "science", "access_group": group_name},
-                        {"attribute": "team_id", "equals": team_id, "access_group": group_name},
+                        {"attribute": "user_id", "equals": virtual_user, "access_group": group_name},
                     ]
                 }
                 if enabled

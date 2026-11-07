@@ -12,7 +12,7 @@ from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import AUTH_OBJECTS_TARGET
 
-_TRUSTED_ATTRIBUTES: Final = frozenset(("jwt_claims", "user_id", "user_email", "user_role", "team_id", "org_id"))
+_TRUSTED_ATTRIBUTES: Final = frozenset(("jwt_claims", "user_id", "user_role"))
 
 if TYPE_CHECKING:
     from litellm.proxy._types import UserAPIKeyAuth
