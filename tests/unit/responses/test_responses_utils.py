@@ -312,6 +312,51 @@ class TestResponsesAPIRequestUtils:
         assert data["extra_body"] == {"service_tier": "default"}
         assert caller_extra == {"input": "overridden input", "service_tier": "default"}
 
+    @pytest.mark.parametrize(
+        "invalid_extra_body",
+        [
+            [["input", "blocked"]],
+            [("input", "blocked")],
+            "not-a-mapping",
+            123,
+            True,
+            ["item1", "item2"],
+        ],
+    )
+    def test_normalize_responses_input_and_extra_body_rejects_non_mapping(self, invalid_extra_body: object):
+        with pytest.raises(litellm.BadRequestError, match="extra_body must be a mapping"):
+            ResponsesAPIRequestUtils.normalize_responses_input_and_extra_body(
+                input="initial input",
+                extra_body=invalid_extra_body,
+            )
+
+    def test_normalize_responses_input_and_extra_body_empty_mapping(self):
+        caller_extra: Final = {}
+        normalized_input, remaining_extra = ResponsesAPIRequestUtils.normalize_responses_input_and_extra_body(
+            input="initial input",
+            extra_body=caller_extra,
+        )
+        assert normalized_input == "initial input"
+        assert remaining_extra == {}
+
+    @pytest.mark.parametrize(
+        "invalid_extra_body",
+        [
+            [["input", "blocked"]],
+            [("input", "blocked")],
+            "not-a-mapping",
+            42,
+        ],
+    )
+    def test_normalize_responses_request_data_rejects_non_mapping_extra_body(self, invalid_extra_body: object):
+        data: Final = {
+            "model": "gpt-4o",
+            "input": "initial input",
+            "extra_body": invalid_extra_body,
+        }
+        with pytest.raises(litellm.BadRequestError, match="extra_body must be a mapping"):
+            ResponsesAPIRequestUtils.normalize_responses_request_data(data)
+
 
 
 class TestResponseAPILoggingUtils:

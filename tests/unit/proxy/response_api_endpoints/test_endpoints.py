@@ -2716,6 +2716,43 @@ class TestResponsesWSFirstFrameModelAuth:
         assert frame_payload["input"] == "overridden [guarded]"
         assert frame_payload["extra_body"] == {"stream": False}
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "invalid_extra_body",
+        [
+            [["input", "blocked"]],
+            [("input", "blocked")],
+            "not-a-mapping",
+            123,
+        ],
+    )
+    async def test_frame_guard_rejects_non_mapping_extra_body(self, invalid_extra_body: object):
+        from litellm.proxy.response_api_endpoints.endpoints import _responses_ws_frame_guard
+        from litellm.responses.streaming_iterator import ResponsesWsFrameRejection
+
+        proxy_logging_obj: Final = MagicMock(during_call_hook=AsyncMock())
+        proxy_logging_obj.pre_call_hook = AsyncMock()
+        admitted: Final = {
+            "model": "gpt-4o-mini",
+            "litellm_metadata": {
+                "user_api_key_hash": "hash",
+            },
+        }
+        guard: Final = _responses_ws_frame_guard(admitted, MagicMock(), proxy_logging_obj, MagicMock())
+
+        with pytest.raises(ResponsesWsFrameRejection, match="extra_body must be a mapping"):
+            await guard(
+                json.dumps(
+                    {
+                        "type": "response.create",
+                        "input": "allowed",
+                        "extra_body": invalid_extra_body,
+                    }
+                )
+            )
+
+        proxy_logging_obj.pre_call_hook.assert_not_called()
+
 
     @pytest.mark.asyncio
     async def test_frame_guard_bills_a_rejected_frame_as_a_failed_request(self):
