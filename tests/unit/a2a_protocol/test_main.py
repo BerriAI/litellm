@@ -159,6 +159,8 @@ def test_streaming_logging_obj_carries_call_type_into_model_call_details():
         request=request,
         agent_name="some-agent",
         agent_id=None,
+        litellm_call_id="litellm-call-id",
+        litellm_trace_id="litellm-trace-id",
         litellm_params=None,
         metadata=None,
         proxy_server_request=None,
@@ -166,6 +168,8 @@ def test_streaming_logging_obj_carries_call_type_into_model_call_details():
     )
 
     assert logging_obj.model_call_details["call_type"] == "asend_message_streaming"
+    assert logging_obj.litellm_call_id == "litellm-call-id"
+    assert logging_obj.litellm_trace_id == "litellm-trace-id"
 
 
 _AGENT_CARD = {
@@ -780,6 +784,8 @@ def test_streaming_logging_obj_keeps_agent_credentials_out_of_logging_params():
         request=request,
         agent_name="foundry-agent",
         agent_id="agent-1",
+        litellm_call_id="litellm-call-id",
+        litellm_trace_id="litellm-trace-id",
         litellm_params={
             "client_secret": "sp-secret",
             "azure_ad_token": "entra-token",

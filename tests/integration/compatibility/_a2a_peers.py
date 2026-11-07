@@ -277,7 +277,8 @@ def sse_frames(text: str) -> tuple[dict[str, JsonValue], ...]:
     )
 
 
-def spend_rows(request_id: str) -> list[dict[str, JsonValue]]:
+def spend_rows(agent_id: str) -> list[dict[str, JsonValue]]:
     return read_rows(
-        'SELECT request_id, model, call_type, status FROM "LiteLLM_SpendLogs" WHERE request_id=%s', (request_id,)
+        'SELECT request_id, model, call_type, status FROM "LiteLLM_SpendLogs" WHERE agent_id=%s',
+        (agent_id,),
     )

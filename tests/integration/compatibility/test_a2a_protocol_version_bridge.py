@@ -53,7 +53,7 @@ def test_completion_bridge_drops_protocol_version_before_the_provider(gateway: G
         assert sent["model"] == "gpt-4o-mini" and sent["messages"] == [{"role": "user", "content": text}], sent
         assert sent.get("stream", False) is (method == "message/stream"), sent
         if method == "message/send":
-            rows: Final = eventually(lambda: spend_rows(marker), lambda values: len(values) == 1, seconds=70)
+            rows: Final = eventually(lambda: spend_rows(identity), lambda values: len(values) == 1, seconds=70)
             assert rows[0]["call_type"] == "asend_message" and rows[0]["status"] == "success", rows
 
 
