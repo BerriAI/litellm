@@ -144,6 +144,10 @@
     },
     "supported_endpoints": ["/v1/chat/completions", "/v1/responses"]
   },
+  "teapot-router": {
+    "base_url": "https://api.teapotrouter.com/v1",
+    "api_key_env": "TEAPOT_ROUTER_API_KEY"
+  },
   "tensormesh": {
     "base_url": "https://serverless.tensormesh.ai/v1",
     "api_key_env": "TENSORMESH_INFERENCE_API_KEY",
