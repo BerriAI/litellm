@@ -1711,8 +1711,8 @@ class TestBedrockBatchNonChatEndpointRecords:
         assert model_input["system"] == [{"type": "text", "text": "be terse"}]
         assert [message["role"] for message in model_input["messages"]] == ["user"]
 
-    def test_anthropic_chat_record_drops_a_developer_cache_mark(self):
-        model_input = self._transform(
+    def test_anthropic_chat_record_drops_a_developer_cache_mark(self) -> None:
+        model_input: Final = self._transform(
             {
                 "custom_id": "4d",
                 "method": "POST",

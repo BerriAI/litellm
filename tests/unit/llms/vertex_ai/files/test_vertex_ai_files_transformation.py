@@ -2096,7 +2096,9 @@ class TestVertexClaudeBatch:
         assert row["request"]["system"] == [{"type": "text", "text": "be brief"}]
         assert [message["role"] for message in row["request"]["messages"]] == ["user"]
 
-    def test_claude_developer_message_becomes_the_anthropic_system_field_without_its_cache_mark(self, config):
+    def test_claude_developer_message_becomes_the_anthropic_system_field_without_its_cache_mark(
+        self, config: VertexAIFilesConfig
+    ) -> None:
         entry: Final = _claude_chat_entry(
             "r1",
             "unused",
