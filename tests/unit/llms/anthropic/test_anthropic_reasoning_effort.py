@@ -21,7 +21,7 @@ from litellm.llms.anthropic.chat.transformation import AnthropicConfig
         ("claude-opus-5", {"type": "disabled"}),
         ("claude-haiku-5-5", {"type": "disabled"}),
         ("claude-haiku-4-5", None),
-        ("claude-sonnet-5-5", None),
+        ("claude-sonnet-5-5", {"type": "between_tools"}),
         ("claude-opus-5-5", None),
         ("claude-fable-5", None),
         ("claude-mythos-5", None),
@@ -47,6 +47,38 @@ def test_always_on_none_requires_drop_params(provider: str, drop_params: bool) -
 def test_global_drop_params_omits_always_on_thinking(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "drop_params", True)
     assert AnthropicConfig.map_reasoning_effort("none", "claude-fable-5-1", "anthropic") is None
+
+
+@pytest.mark.parametrize("drop_params", [False, True])
+@pytest.mark.parametrize("provider", ["anthropic", "bedrock", "vertex_ai", "azure_ai", "databricks"])
+def test_none_uses_between_tools_without_adaptive_effort(provider: str, drop_params: bool) -> None:
+    assert AnthropicConfig.map_reasoning_effort("none", "claude-sonnet-5-5", provider, drop_params=drop_params) == {
+        "type": "between_tools"
+    }
+    mapped: Final = AnthropicConfig().map_openai_params(
+        {"reasoning_effort": "none"},
+        {"thinking": {"type": "adaptive"}, "output_config": {"effort": "high"}},
+        "claude-sonnet-5-5",
+        drop_params,
+    )
+    assert mapped == {"thinking": {"type": "between_tools"}}
+
+
+@pytest.mark.parametrize("drop_params", [False, True])
+def test_provider_can_disable_between_tools_capability(monkeypatch: pytest.MonkeyPatch, drop_params: bool) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "azure_ai/claude-sonnet-5-5",
+        {
+            **litellm.model_cost["azure_ai/claude-sonnet-5-5"],
+            "supports_between_tools_thinking": False,
+        },
+    )
+    if drop_params:
+        assert AnthropicConfig.map_reasoning_effort("none", "claude-sonnet-5-5", "azure_ai", drop_params=True) is None
+    else:
+        with pytest.raises(BadRequestError, match="cannot disable thinking"):
+            AnthropicConfig.map_reasoning_effort("none", "claude-sonnet-5-5", "azure_ai")
 
 
 @pytest.mark.parametrize("effort", [None, "bogus"])

@@ -170,6 +170,20 @@ fn translate_reasoning_effort(
         output_effort(effort),
         budget_for_effort(&context.budgets, effort),
     ) else {
+        if context.capabilities.thinking_always_on
+            && context.capabilities.supports_between_tools_thinking
+        {
+            return Ok(MessagesRequest {
+                params: MessagesOptionalParams {
+                    thinking: Some(Recognized::Known(ThinkingConfig::BetweenTools(
+                        DisabledThinking::default(),
+                    ))),
+                    output_config: None,
+                    ..request.params
+                },
+                ..request
+            });
+        }
         if context.capabilities.thinking_always_on && !context.drop_params {
             return Err(Error::InvalidRequest(
                 crate::ErrorDetail::UnsupportedParameter {
@@ -815,6 +829,34 @@ mod tests {
                 ))
             ));
         }
+    }
+
+    #[rstest]
+    #[case::without_dropping(false)]
+    #[case::with_dropping(true)]
+    fn none_uses_between_tools_without_effort(#[case] drop_params: bool) {
+        let context = ThinkingContext {
+            drop_params,
+            capabilities: MessagesModelCapabilities {
+                thinking_always_on: true,
+                supports_between_tools_thinking: true,
+                ..opus_4_7()
+            },
+            ..ThinkingContext::default()
+        };
+        let result = translate_thinking(
+            request(
+                serde_json::json!({"max_tokens": 64, "reasoning_effort": "none",
+                "thinking": {"type": "adaptive"}, "output_config": {"effort": "high"}}),
+            ),
+            &context,
+        );
+        assert_eq!(
+            result,
+            Ok(request(
+                serde_json::json!({"max_tokens": 64, "thinking": {"type": "between_tools"}})
+            ))
+        );
     }
 
     #[rstest]

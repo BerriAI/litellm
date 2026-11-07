@@ -3228,11 +3228,12 @@ def test_databricks_claude_cache_control_cap_keeps_room_for_a_top_level_cache_co
     [
         ("databricks-claude-sonnet-5", {"type": "disabled"}),
         ("databricks-claude-haiku-4-5", None),
-        ("databricks-claude-sonnet-5-5", None),
+        ("databricks-claude-sonnet-5-5", {"type": "between_tools"}),
     ],
 )
-def test_none_disables_only_optional_default_thinking(model: str, expected: dict[str, str] | None) -> None:
-    params: Final = DatabricksConfig().map_openai_params({"reasoning_effort": "none"}, {}, model, True)
+@pytest.mark.parametrize("drop_params", [False, True])
+def test_none_disables_only_optional_default_thinking(model: str, expected: dict[str, str] | None, drop_params: bool) -> None:
+    params: Final = DatabricksConfig().map_openai_params({"reasoning_effort": "none"}, {}, model, drop_params)
     assert params.get("thinking") == expected
     assert "output_config" not in params
     assert "reasoning_effort" not in params

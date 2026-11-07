@@ -299,6 +299,8 @@ pub enum ThinkingConfig {
     Enabled(EnabledThinking),
     Adaptive(AdaptiveThinking),
     Disabled(DisabledThinking),
+    #[serde(rename = "between_tools")]
+    BetweenTools(DisabledThinking),
 }
 
 impl ThinkingConfig {

@@ -27,6 +27,7 @@ def anthropic_model_capabilities(model: str, custom_llm_provider: str | None) ->
         "supports_reasoning": supports("supports_reasoning"),
         "supports_adaptive_thinking": supports("supports_adaptive_thinking"),
         "thinking_always_on": supports("thinking_always_on"),
+        "supports_between_tools_thinking": supports("supports_between_tools_thinking"),
         "thinking_on_by_default": AnthropicModelInfo.thinks_by_default(model, provider),
         "supports_legacy_thinking": supports("supports_legacy_thinking"),
         "supports_output_config": supports("supports_output_config"),

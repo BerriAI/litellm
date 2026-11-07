@@ -278,9 +278,9 @@ fn uses_thinking_block_binding(params: &MessagesOptionalParams) -> bool {
         Some(Recognized::Known(ThinkingConfig::Adaptive(thinking))) => {
             thinking.extra.contains_key("block_binding")
         }
-        Some(Recognized::Known(ThinkingConfig::Disabled(thinking))) => {
-            thinking.extra.contains_key("block_binding")
-        }
+        Some(Recognized::Known(
+            ThinkingConfig::Disabled(thinking) | ThinkingConfig::BetweenTools(thinking),
+        )) => thinking.extra.contains_key("block_binding"),
         Some(Recognized::Unrecognized(Value::Object(thinking))) => {
             thinking.contains_key("block_binding")
         }

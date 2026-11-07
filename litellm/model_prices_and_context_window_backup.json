@@ -16633,6 +16633,7 @@
         "source": "https://platform.claude.com/docs/en/about-claude/pricing"
     },
     "claude-sonnet-5-5": {
+        "supports_between_tools_thinking": true,
         "supports_anthropic_compaction": true,
         "cache_creation_input_token_cost": 2.5e-06,
         "cache_creation_input_token_cost_above_1hr": 4e-06,
@@ -76152,6 +76153,7 @@
         "source": "https://azure.microsoft.com/en-us/pricing/details/ai-foundry-models/mistral-ai/"
     },
     "anthropic.claude-sonnet-5-5": {
+        "supports_between_tools_thinking": true,
         "bedrock_converse_supports_strict_tools": false,
         "cache_creation_input_token_cost": 2.5e-06,
         "cache_creation_input_token_cost_above_1hr": 4e-06,
@@ -76198,6 +76200,7 @@
         "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
     },
     "apac.anthropic.claude-sonnet-5-5": {
+        "supports_between_tools_thinking": true,
         "bedrock_converse_supports_strict_tools": false,
         "litellm_provider": "bedrock_converse",
         "supports_tool_search": true,
@@ -76234,6 +76237,7 @@
         "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
     },
     "au.anthropic.claude-sonnet-5-5": {
+        "supports_between_tools_thinking": true,
         "token_count_model": {
             "model": "au.anthropic.claude-opus-5-5",
             "litellm_provider": "bedrock_mantle",
@@ -76280,6 +76284,7 @@
         "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
     },
     "azure_ai/claude-sonnet-5-5": {
+        "supports_between_tools_thinking": true,
         "supports_mid_conversation_system": true,
         "cache_creation_input_token_cost": 2.5e-06,
         "cache_creation_input_token_cost_above_1hr": 4e-06,
@@ -76318,6 +76323,7 @@
         "alias_of": "azure_ai/claude-sonnet-5-5"
     },
     "bedrock/us-gov-east-1/anthropic.claude-sonnet-5-5": {
+        "supports_between_tools_thinking": true,
         "bedrock_converse_supports_strict_tools": false,
         "bedrock_output_config_effort_ceiling": "xhigh",
         "cache_creation_input_token_cost": 3e-06,
@@ -76354,6 +76360,7 @@
         "supports_xhigh_reasoning_effort": true
     },
     "bedrock/us-gov-west-1/anthropic.claude-sonnet-5-5": {
+        "supports_between_tools_thinking": true,
         "bedrock_converse_supports_strict_tools": false,
         "bedrock_output_config_effort_ceiling": "xhigh",
         "cache_creation_input_token_cost": 3e-06,
@@ -76395,6 +76402,7 @@
         }
     },
     "eu.anthropic.claude-sonnet-5-5": {
+        "supports_between_tools_thinking": true,
         "bedrock_converse_supports_strict_tools": false,
         "cache_creation_input_token_cost": 2.75e-06,
         "cache_creation_input_token_cost_above_1hr": 4.4e-06,
@@ -76436,6 +76444,7 @@
         "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
     },
     "global.anthropic.claude-sonnet-5-5": {
+        "supports_between_tools_thinking": true,
         "bedrock_converse_supports_strict_tools": false,
         "cache_creation_input_token_cost": 2.5e-06,
         "cache_creation_input_token_cost_above_1hr": 4e-06,
@@ -76485,6 +76494,7 @@
         "alias_of": "global.anthropic.claude-sonnet-5-5"
     },
     "jp.anthropic.claude-sonnet-5-5": {
+        "supports_between_tools_thinking": true,
         "bedrock_converse_supports_strict_tools": false,
         "cache_creation_input_token_cost": 2.75e-06,
         "cache_creation_input_token_cost_above_1hr": 4.4e-06,
@@ -76618,6 +76628,7 @@
         "source": "https://docs.perplexity.ai/docs/agent-api/models"
     },
     "us-gov.anthropic.claude-sonnet-5-5": {
+        "supports_between_tools_thinking": true,
         "bedrock_converse_supports_strict_tools": false,
         "bedrock_output_config_effort_ceiling": "xhigh",
         "cache_creation_input_token_cost": 3e-06,
@@ -76659,6 +76670,7 @@
         }
     },
     "us.anthropic.claude-sonnet-5-5": {
+        "supports_between_tools_thinking": true,
         "bedrock_converse_supports_strict_tools": false,
         "cache_creation_input_token_cost": 2.75e-06,
         "cache_creation_input_token_cost_above_1hr": 4.4e-06,
@@ -76705,6 +76717,7 @@
         "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
     },
     "vertex_ai/claude-sonnet-5-5": {
+        "supports_between_tools_thinking": true,
         "regional_endpoint_uplift_multiplier": 1.1,
         "supports_mid_conversation_system": true,
         "cache_creation_input_token_cost": 2.5e-06,
@@ -76747,6 +76760,7 @@
         "alias_of": "vertex_ai/claude-sonnet-5-5"
     },
     "vertex_ai/claude-sonnet-5-5@default": {
+        "supports_between_tools_thinking": true,
         "regional_endpoint_uplift_multiplier": 1.1,
         "supports_mid_conversation_system": true,
         "cache_creation_input_token_cost": 2.5e-06,
@@ -80487,6 +80501,7 @@
         "source": "https://platform.claude.com/docs/en/about-claude/pricing#claude-platform-on-aws-pricing"
     },
     "bedrock/claude_platform/claude-sonnet-5-5": {
+        "supports_between_tools_thinking": true,
         "supports_anthropic_compaction": true,
         "cache_creation_input_token_cost": 2.5e-06,
         "cache_creation_input_token_cost_above_1hr": 4e-06,
@@ -82477,6 +82492,7 @@
         "alias_of": "databricks/databricks-claude-haiku-5-5"
     },
     "databricks/databricks-claude-sonnet-5-5": {
+        "supports_between_tools_thinking": true,
         "cache_creation_input_token_cost": 2.49998e-06,
         "cache_creation_input_token_cost_above_1hr": 4.00001e-06,
         "cache_read_input_token_cost": 1.0003e-07,

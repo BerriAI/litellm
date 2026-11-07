@@ -32,6 +32,8 @@ pub struct MessagesModelCapabilities {
     #[serde(default)]
     pub thinking_always_on: bool,
     #[serde(default)]
+    pub supports_between_tools_thinking: bool,
+    #[serde(default)]
     pub thinking_on_by_default: bool,
     #[serde(default)]
     pub supports_legacy_thinking: bool,
@@ -57,6 +59,7 @@ impl Default for MessagesModelCapabilities {
             supports_reasoning: false,
             supports_adaptive_thinking: false,
             thinking_always_on: false,
+            supports_between_tools_thinking: false,
             thinking_on_by_default: false,
             supports_legacy_thinking: false,
             supports_output_config: false,

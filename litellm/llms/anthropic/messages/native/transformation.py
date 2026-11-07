@@ -508,9 +508,10 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             return
 
         optional_params.setdefault("thinking", fitted_thinking)
-        if fitted_thinking.get("type") != "disabled" and AnthropicModelInfo.is_adaptive_thinking_model(
-            model, custom_llm_provider
-        ):
+        if fitted_thinking.get("type") not in (
+            "disabled",
+            "between_tools",
+        ) and AnthropicModelInfo.is_adaptive_thinking_model(model, custom_llm_provider):
             mapped_effort: Final = REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT.get(reasoning_effort)
             if mapped_effort is None:
                 raise AnthropicError(

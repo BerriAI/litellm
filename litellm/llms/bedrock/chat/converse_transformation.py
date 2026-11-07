@@ -586,14 +586,15 @@ class AmazonConverseConfig(BaseConfig):
                 llm_provider="bedrock_converse",
                 drop_params=drop_params,
             )
-            if mapped_thinking is None or mapped_thinking.get("type") == "disabled":
+            if mapped_thinking is None or mapped_thinking.get("type") in ("disabled", "between_tools"):
                 optional_params.pop("thinking", None)
                 optional_params.pop("output_config", None)
             if mapped_thinking is not None:
                 optional_params["thinking"] = mapped_thinking
-                if mapped_thinking.get("type") != "disabled" and AnthropicConfig.is_adaptive_thinking_model(
-                    model, "bedrock"
-                ):
+                if mapped_thinking.get("type") not in (
+                    "disabled",
+                    "between_tools",
+                ) and AnthropicConfig.is_adaptive_thinking_model(model, "bedrock"):
                     mapped_effort = REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT.get(reasoning_effort)
                     if mapped_effort is None:
                         AnthropicConfig.raise_invalid_reasoning_effort(
