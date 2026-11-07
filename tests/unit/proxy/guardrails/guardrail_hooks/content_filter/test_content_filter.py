@@ -1069,6 +1069,27 @@ class TestContentFilterGuardrail:
         assert [d["keyword"] for d in entry["guardrail_response"]] == [phrase]
 
     @pytest.mark.asyncio
+    async def test_streaming_hook_masks_whole_provider_key_split_across_chunks(self):
+        guardrail: Final = ContentFilterGuardrail(
+            guardrail_name="test-streaming-provider-key",
+            patterns=[
+                ContentFilterPattern(
+                    pattern_type="prebuilt",
+                    pattern_name="openai_api_key",
+                    action=ContentFilterAction.MASK,
+                )
+            ],
+            event_hook=GuardrailEventHooks.post_call,
+        )
+        key: Final = "sk-proj-" + "a" * 74 + "T3BlbkFJ" + "b" * 74
+        text: Final = f"Use {key} to call the API."
+        chunks: Final = [text[i : i + 4] for i in range(0, len(text), 4)]
+
+        streamed: Final = await self._collect_streamed_text(guardrail, chunks, {})
+
+        assert streamed == "Use [OPENAI_API_KEY_REDACTED] to call the API."
+
+    @pytest.mark.asyncio
     async def test_streaming_hook_blocks_keyword_longer_than_scan_context(self):
         """
         A blocked keyword longer than the default retained context arrives after

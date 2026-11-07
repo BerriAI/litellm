@@ -4,6 +4,7 @@ Tests for content filter pattern loading from JSON
 
 import json
 import os
+import time
 from typing import Final
 
 import pytest
@@ -230,7 +231,7 @@ def test_credential_pattern_matches_whole_key(pattern_name: str, key: str) -> No
     assert match.group(0) == key
 
 
-@pytest.mark.parametrize("separator", ["\\n", "\\t", "Bearer%20", "?key%3D"])
+@pytest.mark.parametrize("separator", ["\\n", "\\t", "\\u003c", "Bearer%20", "?key%3D", "?key%253D", "GOOGLE_KEY_"])
 @pytest.mark.parametrize(
     ("pattern_name", "key"),
     [
@@ -298,7 +299,27 @@ def test_credential_pattern_matches_key_after_escaped_separator(pattern_name: st
         pytest.param("gemini_api_key", "The AQ. was reported at 42 ppm today.", id="gemini-aq-acronym"),
         pytest.param("gemini_api_key", "Is the question AQ. Maybe it is BQ.", id="gemini-aq-sentence-end"),
         pytest.param("gemini_api_key", "plain text with no google key", id="gemini-plain-text"),
+        pytest.param(
+            "gemini_api_key",
+            "https://example.com/blog/aizawa-takeshi-interview-2024-tokyo-01",
+            id="gemini-lowercase-legacy-prefix",
+        ),
+        pytest.param(
+            "gemini_api_key",
+            "ssh aq.internal-observability-metrics-collector-eu-west-01",
+            id="gemini-lowercase-auth-prefix",
+        ),
     ],
 )
 def test_credential_pattern_ignores_non_keys(pattern_name: str, text: str) -> None:
     assert get_compiled_pattern(pattern_name).search(text) is None
+
+
+@pytest.mark.parametrize("prefix", ["sk-proj-", "sk-svcacct-", "sk-admin-", "sk-None-"])
+def test_openai_key_pattern_scans_repeated_prefixes_without_stalling(prefix: str) -> None:
+    prompt: Final = prefix * (128_000 // len(prefix))
+    started: Final = time.perf_counter()
+    match: Final = get_compiled_pattern("openai_api_key").search(prompt)
+    elapsed: Final = time.perf_counter() - started
+    assert match is None
+    assert elapsed < 1.0

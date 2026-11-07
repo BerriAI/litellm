@@ -116,6 +116,8 @@ for pattern_data in _PATTERNS_DATA["patterns"]:
         PATTERN_CATEGORIES[category] = []
     PATTERN_CATEGORIES[category].append(pattern_data["name"])
 
+CREDENTIAL_PATTERN_NAMES: Final = frozenset(PATTERN_CATEGORIES.get("Credential Patterns", ()))
+
 
 # Build display names mapping from JSON
 PATTERN_DISPLAY_NAMES: Final[dict[str, str]] = {
