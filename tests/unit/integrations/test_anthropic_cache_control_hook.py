@@ -5863,3 +5863,168 @@ def test_cache_control_hook_reads_a_non_string_answer_id_as_answering_no_tool_ca
     assert _cache_marks_after_injection(_search_conversation_with(malformed)) == _cache_marks_after_injection(
         _search_conversation_with(well_formed)
     )
+
+
+_DEVELOPER_PREFIX: Final = "Policy handbook rule 8.3: record every backup decision in the tracker within 4 business days."
+_CLAUDE_ON_CONVERSE: Final = "bedrock/converse/us.anthropic.claude-haiku-5-5"
+_OFFLINE_AWS_CREDENTIALS: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "aws_access_key_id": "AKIADEVELOPERPREFIX",
+        "aws_secret_access_key": "developer-prefix-secret",
+        "aws_region_name": "us-east-1",
+    }
+)
+_CONVERSE_REPLY: Final = MappingProxyType(
+    {
+        "output": {"message": {"role": "assistant", "content": [{"text": "Rule 8.3."}]}},
+        "stopReason": "end_turn",
+        "usage": {"inputTokens": 30, "outputTokens": 4, "totalTokens": 34},
+    }
+)
+
+
+def _converse_route(respx_mock: respx.MockRouter) -> respx.Route:
+    return respx_mock.post(host="bedrock-runtime.us-east-1.amazonaws.com").mock(
+        return_value=Response(200, json=dict(_CONVERSE_REPLY))
+    )
+
+
+def _sent_converse_body(route: respx.Route) -> _ConverseBody:
+    return _ConverseBody.model_validate_json(route.calls.last.request.content)
+
+
+@pytest.mark.parametrize(
+    "developer_content",
+    [
+        pytest.param(_DEVELOPER_PREFIX, id="string_content"),
+        pytest.param([{"type": "text", "text": _DEVELOPER_PREFIX}], id="text_parts"),
+    ],
+)
+def test_system_injection_point_caches_a_developer_prompt_on_bedrock_converse(
+    developer_content: str | list[dict[str, str]], respx_mock: respx.MockRouter
+) -> None:
+    route: Final = _converse_route(respx_mock)
+
+    litellm.completion(
+        model=_CLAUDE_ON_CONVERSE,
+        messages=[
+            {"role": "developer", "content": developer_content},
+            {"role": "user", "content": "Which rule covers backups?"},
+        ],
+        cache_control_injection_points=[{"location": "message", "role": "system"}],
+        **_OFFLINE_AWS_CREDENTIALS,
+    )
+
+    sent: Final = _sent_converse_body(route)
+    assert sent.system == ({"text": _DEVELOPER_PREFIX}, {"cachePoint": {"type": "default"}})
+    assert _count_converse_cache_points(sent) == 1
+
+
+@pytest.mark.parametrize(
+    "developer_content",
+    [
+        pytest.param(_DEVELOPER_PREFIX, id="string_content"),
+        pytest.param([{"type": "input_text", "text": _DEVELOPER_PREFIX}], id="input_text_parts"),
+    ],
+)
+def test_system_injection_point_caches_a_developer_input_item_on_the_responses_route(
+    developer_content: str | list[dict[str, str]], respx_mock: respx.MockRouter
+) -> None:
+    route: Final = _converse_route(respx_mock)
+
+    litellm.responses(
+        model=_CLAUDE_ON_CONVERSE,
+        input=[
+            {"role": "developer", "content": developer_content},
+            {"role": "user", "content": "Which rule covers backups?"},
+        ],
+        store=False,
+        cache_control_injection_points=[{"location": "message", "role": "system"}],
+        **_OFFLINE_AWS_CREDENTIALS,
+    )
+
+    sent: Final = _sent_converse_body(route)
+    assert sent.system == ({"text": _DEVELOPER_PREFIX}, {"cachePoint": {"type": "default"}})
+    assert _count_converse_cache_points(sent) == 1
+
+
+def test_system_injection_point_caches_both_a_system_and_a_developer_prompt(respx_mock: respx.MockRouter) -> None:
+    route: Final = _converse_route(respx_mock)
+
+    litellm.completion(
+        model=_CLAUDE_ON_CONVERSE,
+        messages=[
+            {"role": "system", "content": "You answer policy questions."},
+            {"role": "developer", "content": _DEVELOPER_PREFIX},
+            {"role": "user", "content": "Which rule covers backups?"},
+        ],
+        cache_control_injection_points=[{"location": "message", "role": "system"}],
+        **_OFFLINE_AWS_CREDENTIALS,
+    )
+
+    assert _sent_converse_body(route).system == (
+        {"text": "You answer policy questions."},
+        {"cachePoint": {"type": "default"}},
+        {"text": _DEVELOPER_PREFIX},
+        {"cachePoint": {"type": "default"}},
+    )
+
+
+def test_developer_prompts_only_take_the_breakpoints_configured_points_leave_over(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = _converse_route(respx_mock)
+
+    litellm.completion(
+        model=_CLAUDE_ON_CONVERSE,
+        messages=[
+            {"role": "system", "content": "You answer policy questions."},
+            *({"role": "developer", "content": f"{_DEVELOPER_PREFIX} Note {note}."} for note in range(3)),
+            {"role": "user", "content": "Which rule covers backups?"},
+        ],
+        cache_control_injection_points=[
+            {"location": "message", "role": "system"},
+            {"location": "message", "index": -1},
+        ],
+        **_OFFLINE_AWS_CREDENTIALS,
+    )
+
+    sent: Final = _sent_converse_body(route)
+    assert sent.messages[-1].content[-1] == {"cachePoint": {"type": "default"}}
+    assert _count_converse_cache_points(sent) == 4
+
+
+def test_system_injection_point_marks_a_developer_prompt_for_openai_prompt_cache_breakpoints(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=Response(
+            200,
+            json={
+                "id": "chatcmpl-developer-prefix",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "gpt-5.6",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "Rule 8.3."}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 30, "completion_tokens": 4, "total_tokens": 34},
+            },
+        )
+    )
+
+    litellm.completion(
+        model="gpt-5.6",
+        messages=[
+            {"role": "developer", "content": _DEVELOPER_PREFIX},
+            {"role": "user", "content": "Which rule covers backups?"},
+        ],
+        cache_control_injection_points=[{"location": "message", "role": "system"}],
+        api_key="sk-offline",
+    )
+
+    assert json.loads(route.calls.last.request.content)["messages"] == [
+        {
+            "role": "system",
+            "content": [{"type": "text", "text": _DEVELOPER_PREFIX, "prompt_cache_breakpoint": {"mode": "explicit"}}],
+        },
+        {"role": "user", "content": "Which rule covers backups?"},
+    ]
