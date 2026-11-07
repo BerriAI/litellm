@@ -102,7 +102,9 @@ function WeightGroup({ accessToken, teamId, group, groupWeights, onWeightChange,
             min={0}
             step="any"
             className="w-28"
-            aria-label={t("routerWeights.weightFor", { deployment: row.label ?? row.deploymentId })}
+            aria-label={t("routerWeights.weightFor", {
+              deployment: row.label ? `${row.label} (${row.deploymentId})` : row.deploymentId,
+            })}
             value={row.weight ?? ""}
             onChange={(event) => {
               const weight = parseWeightInput(event.target.value);

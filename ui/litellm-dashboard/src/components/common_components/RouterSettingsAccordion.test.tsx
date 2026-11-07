@@ -35,6 +35,7 @@ vi.mock("../router_settings/RouterSettingsForm", () => ({
     onChange: (value: RouterSettingsFormValue) => void;
   }) => (
     <div>
+      <div data-testid="reliability-fields">{Object.keys(value.routerSettings).join(",")}</div>
       <button onClick={() => onChange({ ...value, selectedStrategy: "least-busy" })}>set-least-busy</button>
       <button onClick={() => onChange({ ...value, selectedStrategy: "usage-based-routing" })}>set-usage-based</button>
     </div>
@@ -158,7 +159,7 @@ describe("RouterSettingsAccordion", () => {
         />,
       );
 
-      fireEvent.change(await screen.findByLabelText("Weight for azure/gpt-5"), { target: { value: "1" } });
+      fireEvent.change(await screen.findByLabelText("Weight for azure/gpt-5 (dep-azure)"), { target: { value: "1" } });
 
       expect(await screen.findByText("90% of traffic")).toBeInTheDocument();
       expect(screen.getByText("10% of traffic")).toBeInTheDocument();
@@ -179,7 +180,7 @@ describe("RouterSettingsAccordion", () => {
         />,
       );
 
-      fireEvent.change(await screen.findByLabelText("Weight for openai/gpt-5"), { target: { value: "" } });
+      fireEvent.change(await screen.findByLabelText("Weight for openai/gpt-5 (dep-openai)"), { target: { value: "" } });
 
       await waitFor(() => expect(ref.current?.getValue().router_settings.weights).toBeNull());
     });
@@ -193,12 +194,12 @@ describe("RouterSettingsAccordion", () => {
       };
       renderWithQueryClient(<EchoingParent />);
 
-      fireEvent.change(await screen.findByLabelText("Weight for openai/gpt-5"), { target: { value: "" } });
+      fireEvent.change(await screen.findByLabelText("Weight for openai/gpt-5 (dep-openai)"), { target: { value: "" } });
       await act(async () => {
         vi.advanceTimersByTime(200);
       });
 
-      expect(screen.getByLabelText("Weight for openai/gpt-5")).toHaveValue(null);
+      expect(screen.getByLabelText("Weight for openai/gpt-5 (dep-openai)")).toHaveValue(null);
       expect(screen.getByRole("button", { name: "Remove weights for gpt-5" })).toBeInTheDocument();
     });
 
@@ -234,6 +235,21 @@ describe("RouterSettingsAccordion", () => {
       expect(
         await screen.findByText("Weights are ignored with latency-based-routing. Select simple-shuffle to use them."),
       ).toBeInTheDocument();
+    });
+
+    it("should keep the reliability fields on a create form whose parent echoes the value back", async () => {
+      const EchoingCreateForm = () => {
+        const [value, setValue] = useState<RouterSettingsAccordionValue | undefined>(undefined);
+        return <RouterSettingsAccordion accessToken="test-token" value={value} onChange={setValue} />;
+      };
+      renderWithQueryClient(<EchoingCreateForm />);
+      await act(async () => {
+        vi.advanceTimersByTime(200);
+      });
+
+      expect(screen.getByTestId("reliability-fields")).toHaveTextContent(
+        "allowed_fails,cooldown_time,num_retries,timeout,retry_after,model_group_alias",
+      );
     });
 
     it("should flag a group whose weights are all zero", async () => {

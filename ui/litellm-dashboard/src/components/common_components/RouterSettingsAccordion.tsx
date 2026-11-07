@@ -44,19 +44,25 @@ export interface RouterSettingsAccordionRef {
 
 const PROPAGATE_WAIT_MS = 100;
 
-const valueKeyOf = (settings: RouterSettingsAccordionValue["router_settings"]): string =>
-  JSON.stringify({
-    routing_strategy: settings.routing_strategy,
-    fallbacks: settings.fallbacks,
-    enable_tag_filtering: settings.enable_tag_filtering,
-    weights: settings.weights,
-  });
+const EMPTY_RELIABILITY_SETTINGS = {
+  allowed_fails: null,
+  cooldown_time: null,
+  num_retries: null,
+  timeout: null,
+  retry_after: null,
+  model_group_alias: null,
+};
+
+const valueKeyOf = (settings: RouterSettingsAccordionValue["router_settings"]): string => {
+  const { routing_strategy, fallbacks, enable_tag_filtering, weights } = settings;
+  return JSON.stringify({ routing_strategy, fallbacks, enable_tag_filtering, weights });
+};
 
 const RouterSettingsAccordion = forwardRef<RouterSettingsAccordionRef, RouterSettingsAccordionProps>(
   ({ accessToken, value, onChange, modelData, teamId }, ref) => {
     const { t } = useTranslation();
     const [formValue, setFormValue] = useState<RouterSettingsFormValue>({
-      routerSettings: {},
+      routerSettings: EMPTY_RELIABILITY_SETTINGS,
       selectedStrategy: null,
       enableTagFiltering: false,
     });
@@ -138,7 +144,7 @@ const RouterSettingsAccordion = forwardRef<RouterSettingsAccordionRef, RouterSet
       } else {
         // Initialize with empty defaults if no value provided
         setFormValue({
-          routerSettings: {},
+          routerSettings: EMPTY_RELIABILITY_SETTINGS,
           selectedStrategy: null,
           enableTagFiltering: false,
         });
