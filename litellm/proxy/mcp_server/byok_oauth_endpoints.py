@@ -15,6 +15,7 @@ Endpoints implemented here:
 import base64
 import hashlib
 import html as _html_module
+import json
 import time
 import uuid
 from typing import Final, cast
@@ -38,15 +39,27 @@ from litellm.proxy.mcp_server.oauth_utils import (
 from litellm.proxy.middleware.per_request_root_path_middleware import get_server_root_paths
 
 # ---------------------------------------------------------------------------
-# In-memory store for pending authorization codes.
+# Pending authorization codes.
 # Each entry: {code: {api_key, server_id, code_challenge, redirect_uri, user_id, expires_at}}
+#
+# The authorize POST and the token request are two separate HTTP requests and can
+# land on different workers or replicas, so with a shared Redis (redis_usage_cache)
+# the record lives there, encrypted with the proxy salt key because it carries the
+# user's API key. Without Redis (a single process) it stays in this dict.
 # ---------------------------------------------------------------------------
 _byok_auth_codes: Final[dict[str, dict]] = {}
+_AUTH_CODE_CACHE_PREFIX: Final = "mcp_byok_auth_code:"
+_AUTH_CODE_CLAIM_PREFIX: Final = "mcp_byok_auth_code_claim:"
+# Codes issued in the current TTL window, counted in the shared store; bounds pending codes
+# there the way len(_byok_auth_codes) bounds them in memory.
+_AUTH_CODE_WINDOW_KEY: Final = "mcp_byok_auth_code_window"
 
 # Authorization codes expire after 5 minutes.
 _AUTH_CODE_TTL_SECONDS: Final = 300
 # Hard cap to prevent memory exhaustion from incomplete OAuth flows.
 _AUTH_CODES_MAX_SIZE: Final = 1000
+# Upper bound for a submitted API key, so a pending code cannot carry an arbitrarily large value.
+_MAX_API_KEY_LENGTH: Final = 8192
 
 router: Final = APIRouter(tags=["mcp"])
 
@@ -73,6 +86,84 @@ def _purge_expired_codes() -> None:
     expired: Final = [k for k, v in _byok_auth_codes.items() if v["expires_at"] < now]
     for k in expired:
         del _byok_auth_codes[k]
+
+
+def _shared_code_store():
+    """The cross-worker store for authorization codes, or None on a single-process proxy."""
+    from litellm.proxy.proxy_server import redis_usage_cache
+
+    return redis_usage_cache
+
+
+async def _store_auth_code(code: str, record: dict) -> None:
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
+
+    shared: Final = _shared_code_store()
+    if shared is None:
+        _byok_auth_codes[code] = record
+        return
+    await shared.async_set_cache(
+        _AUTH_CODE_CACHE_PREFIX + code,
+        encrypt_value_helper(json.dumps(record)),
+        ttl=_AUTH_CODE_TTL_SECONDS,
+    )
+
+
+async def _load_auth_code(code: str) -> dict | None:
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
+
+    local: Final = _byok_auth_codes.get(code)
+    if local is not None:
+        return local
+    shared: Final = _shared_code_store()
+    if shared is None:
+        return None
+    sealed: Final = await shared.async_get_cache(_AUTH_CODE_CACHE_PREFIX + code)
+    if not isinstance(sealed, str):
+        return None
+    plain: Final = decrypt_value_helper(sealed, "mcp_byok_auth_code", exception_type="debug")
+    if not isinstance(plain, str):
+        return None
+    try:
+        record: Final = json.loads(plain)
+    except ValueError:
+        return None
+    return record if isinstance(record, dict) else None
+
+
+async def _discard_auth_code(code: str) -> None:
+    _byok_auth_codes.pop(code, None)
+    shared: Final = _shared_code_store()
+    if shared is not None:
+        await shared.async_delete_cache(_AUTH_CODE_CACHE_PREFIX + code)
+
+
+async def _reserve_auth_code_slot() -> bool:
+    """Whether another pending code may be issued. In memory this is the dict size; with the
+    shared store it is an atomic per-window counter, since the dict stays empty there. A shared
+    store that cannot count refuses (fail closed)."""
+    shared: Final = _shared_code_store()
+    if shared is None:
+        return len(_byok_auth_codes) < _AUTH_CODES_MAX_SIZE
+    try:
+        issued: Final = await shared.async_increment(_AUTH_CODE_WINDOW_KEY, 1, ttl=_AUTH_CODE_TTL_SECONDS)
+    except Exception as e:  # noqa: BLE001  # any shared-store fault refuses the new code
+        verbose_proxy_logger.warning("byok authorize: pending-code counter unavailable: %s", e)
+        return False
+    return issued <= _AUTH_CODES_MAX_SIZE
+
+
+async def _claim_auth_code(code: str) -> bool:
+    """Atomic one-time use across workers (RFC 6749 section 4.1.2): of two concurrent
+    redemptions of the same code only the first claim succeeds, and a claim that cannot be
+    recorded in the shared backend fails closed."""
+    from litellm.proxy.mcp_server.gateway_dcr_flow import _SingleUseGuard
+    from litellm.proxy.proxy_server import user_api_key_cache
+
+    outcome: Final = await _SingleUseGuard(user_api_key_cache).claim(
+        _AUTH_CODE_CLAIM_PREFIX + code, _AUTH_CODE_TTL_SECONDS
+    )
+    return outcome == "first"
 
 
 def _oauth_token_error(code: str, status: int = 400) -> JSONResponse:
@@ -833,7 +924,9 @@ async def byok_authorize_post(
 
     # Reject new codes if the store is at capacity (prevents memory exhaustion
     # from a burst of abandoned OAuth flows).
-    if len(_byok_auth_codes) >= _AUTH_CODES_MAX_SIZE:
+    if len(api_key) > _MAX_API_KEY_LENGTH:
+        raise HTTPException(status_code=400, detail="api_key is too long")
+    if not await _reserve_auth_code_slot():
         raise HTTPException(status_code=503, detail="Too many pending authorization flows")
 
     if code_challenge_method != "S256":
@@ -848,18 +941,21 @@ async def byok_authorize_post(
         raise HTTPException(status_code=401, detail="login_required")
 
     auth_code: Final = str(uuid.uuid4())
-    _byok_auth_codes[auth_code] = {
-        "api_key": api_key,
-        "server_id": server_id,
-        "code_challenge": code_challenge,
-        "redirect_uri": redirect_uri,
-        # RFC 6749 §4.1.3 defense-in-depth: if the authorization request
-        # declared a client_id, the token request must submit the same
-        # value. Stored even though we don't pre-register clients.
-        "client_id": client_id,
-        "user_id": user_id,
-        "expires_at": time.time() + _AUTH_CODE_TTL_SECONDS,
-    }
+    await _store_auth_code(
+        auth_code,
+        {
+            "api_key": api_key,
+            "server_id": server_id,
+            "code_challenge": code_challenge,
+            "redirect_uri": redirect_uri,
+            # RFC 6749 §4.1.3 defense-in-depth: if the authorization request
+            # declared a client_id, the token request must submit the same
+            # value. Stored even though we don't pre-register clients.
+            "client_id": client_id,
+            "user_id": user_id,
+            "expires_at": time.time() + _AUTH_CODE_TTL_SECONDS,
+        },
+    )
 
     params: Final = urlencode({"code": auth_code, "state": state})
     separator: Final = "&" if "?" in redirect_uri else "?"
@@ -895,12 +991,12 @@ async def byok_token(
     if grant_type != "authorization_code":
         return _oauth_token_error("unsupported_grant_type")
 
-    record: Final = _byok_auth_codes.get(code)
+    record: Final = await _load_auth_code(code)
     if record is None:
         return _oauth_token_error("invalid_grant")
 
     if time.time() > record["expires_at"]:
-        del _byok_auth_codes[code]
+        await _discard_auth_code(code)
         return _oauth_token_error("invalid_grant")
 
     # PKCE verification
@@ -941,8 +1037,10 @@ async def byok_token(
     if master_key is None:
         return _oauth_token_error("server_error", status=500)
 
-    # Consume the code (one-time use)
-    del _byok_auth_codes[code]
+    # Consume the code (one-time use, atomic across workers)
+    if not await _claim_auth_code(code):
+        return _oauth_token_error("invalid_grant")
+    await _discard_auth_code(code)
 
     # Persist the BYOK credential
     if prisma_client is not None:
