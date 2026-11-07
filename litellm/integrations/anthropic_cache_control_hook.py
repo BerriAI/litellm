@@ -280,6 +280,23 @@ def _builds_anthropic_messages(model: str, custom_llm_provider: str | None) -> b
     return isinstance(chat_config, AnthropicConfig) and not isinstance(chat_config, OpenAIGPTConfig)
 
 
+def _builds_gemini_contents(model: str, custom_llm_provider: str | None) -> bool:
+    from litellm.exceptions import BadRequestError
+    from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
+    from litellm.types.utils import LlmProviders
+    from litellm.utils import ProviderConfigManager
+
+    try:
+        served_model, provider, _, _ = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider)
+        chat_config: Final = ProviderConfigManager.get_provider_chat_config(
+            model=served_model, provider=LlmProviders(provider)
+        )
+    except (BadRequestError, ValueError):
+        return False
+    return isinstance(chat_config, VertexGeminiConfig)
+
+
 def _custom_llm_provider(non_default_params: Mapping[str, object], point: Mapping[str, object]) -> str | None:
     provider: Final = non_default_params.get("custom_llm_provider") or point.get(CUSTOM_LLM_PROVIDER_STAMP)
     return provider if isinstance(provider, str) else None
@@ -333,14 +350,17 @@ def _may_carry_prompt_cache_breakpoint(message: Mapping[str, object]) -> bool:
 
 
 def _points_with_their_target_roles(
-    points: Sequence[CacheControlMessageInjectionPoint],
+    points: Sequence[CacheControlMessageInjectionPoint], covers_developer: bool
 ) -> tuple[tuple[CacheControlMessageInjectionPoint, str | None], ...]:
     """A developer message is the system prompt in the OpenAI shapes, so a ``role: system`` point
-    covers it too, but only with the breakpoints left after every configured point is placed."""
-    return (
-        *((point, point.get("role")) for point in points),
-        *((point, "developer") for point in points if point.get("role") == "system" and point.get("index") is None),
+    covers it too, but only with the breakpoints left after every configured point is placed. Gemini
+    is left out, since a mark there opens a context cache that bills storage by the hour."""
+    developer_points: Final = (
+        tuple((point, "developer") for point in points if point.get("role") == "system" and point.get("index") is None)
+        if covers_developer
+        else ()
     )
+    return (*((point, point.get("role")) for point in points), *developer_points)
 
 
 # Set by a caller whose message list is not the one that goes upstream -- today the
@@ -466,6 +486,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
             max_blocks=MAX_CACHE_CONTROL_BLOCKS - reserved_blocks,
             openai_dialect=openai_dialect,
             answered_tool_ids=answered_tool_ids,
+            covers_developer=not _builds_gemini_contents(model, custom_llm_provider),
         )
         if (
             openai_dialect
@@ -612,6 +633,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         max_blocks: int,
         openai_dialect: bool = False,
         answered_tool_ids: frozenset[str] | None = None,
+        covers_developer: bool = True,
     ) -> list[AllMessageValues]:
         """Apply message-level cache control injection points in order.
 
@@ -632,7 +654,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         )
 
         limit_reached = False
-        for point, targeted_role in _points_with_their_target_roles(points):
+        for point, targeted_role in _points_with_their_target_roles(points, covers_developer):
             if used_blocks >= max_blocks:
                 limit_reached = True
                 break

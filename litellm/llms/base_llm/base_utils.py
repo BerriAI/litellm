@@ -6,7 +6,7 @@ import copy
 import itertools
 import json
 from abc import ABC, abstractmethod
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Final
 
@@ -15,7 +15,12 @@ from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
-from litellm.types.llms.openai import AllMessageValues, ChatCompletionSystemMessage, ChatCompletionToolCallChunk
+from litellm.types.llms.openai import (
+    AllMessageValues,
+    ChatCompletionCachedContent,
+    ChatCompletionSystemMessage,
+    ChatCompletionToolCallChunk,
+)
 from litellm.types.utils import (
     CountContextManagement,
     Message,
@@ -443,21 +448,63 @@ def type_to_response_format_param(
     }
 
 
-def _developer_message_as_system_message(message: AllMessageValues) -> AllMessageValues:
+_CACHE_CONTROL: Final = TypeAdapter(ChatCompletionCachedContent)
+_OBJECTS: Final = TypeAdapter(list[object])
+
+
+def _valid_cache_control(value: object) -> ChatCompletionCachedContent | None:
+    try:
+        return _CACHE_CONTROL.validate_python(value)
+    except ValidationError:
+        return None
+
+
+def _cache_control_values(value: object) -> tuple[object, ...]:
+    fields: Final = as_str_mapping(value)
+    if fields is not None:
+        own: Final = () if fields.get("cache_control") is None else (fields["cache_control"],)
+        return own + _nested_cache_control_values(field for key, field in fields.items() if key != "cache_control")
+    if isinstance(value, (list, tuple)):
+        return _nested_cache_control_values(_OBJECTS.validate_python(value))
+    return ()
+
+
+def _nested_cache_control_values(values: Iterable[object]) -> tuple[object, ...]:
+    return tuple(itertools.chain.from_iterable(map(_cache_control_values, values)))
+
+
+def _ttl(cache_control: object) -> object:
+    fields: Final = as_str_mapping(cache_control)
+    return None if fields is None else fields.get("ttl") or "5m"
+
+
+def _request_keeps_developer_cache_control(
+    messages: Sequence[AllMessageValues], other_request_fields: Mapping[str, object] | None
+) -> bool:
+    from litellm.integrations.anthropic_cache_control_hook import MAX_CACHE_CONTROL_BLOCKS
+
+    marks: Final = _cache_control_values(messages) + _cache_control_values(other_request_fields)
+    return len(marks) <= MAX_CACHE_CONTROL_BLOCKS and all(_ttl(mark) == _ttl(marks[0]) for mark in marks)
+
+
+def _developer_message_as_system_message(message: AllMessageValues, keep_cache_control: bool) -> AllMessageValues:
     if message["role"] != "developer":
         return message
     verbose_logger.debug("Translating developer role to system role for non-OpenAI providers.")
-    if "cache_control" not in message:
-        return ChatCompletionSystemMessage(role="system", content=message["content"])
-    return ChatCompletionSystemMessage(
-        role="system", content=message["content"], cache_control=message["cache_control"]
+    cache_control: Final = (
+        _valid_cache_control(message["cache_control"]) if keep_cache_control and "cache_control" in message else None
     )
+    if cache_control is None:
+        return ChatCompletionSystemMessage(role="system", content=message["content"])
+    return ChatCompletionSystemMessage(role="system", content=message["content"], cache_control=cache_control)
 
 
 def map_developer_role_to_system_role(
     messages: list[AllMessageValues],
+    other_request_fields: Mapping[str, object] | None = None,
 ) -> list[AllMessageValues]:
     """
     Translate `developer` role to `system` role for non-OpenAI providers.
     """
-    return [_developer_message_as_system_message(message) for message in messages]
+    keep_cache_control: Final = _request_keeps_developer_cache_control(messages, other_request_fields)
+    return [_developer_message_as_system_message(message, keep_cache_control) for message in messages]

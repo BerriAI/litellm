@@ -11,7 +11,7 @@ Translations handled by LiteLLM:
 - Logprobs => drop param (if user opts in to dropping param)
 """
 
-from collections.abc import Coroutine
+from collections.abc import Coroutine, Mapping
 from typing import Final, Literal, cast, overload
 
 import litellm
@@ -37,7 +37,9 @@ class OpenAIOSeriesConfig(OpenAIGPTConfig):
     def get_config(cls):
         return super().get_config()
 
-    def translate_developer_role_to_system_role(self, messages: list[AllMessageValues]) -> list[AllMessageValues]:
+    def translate_developer_role_to_system_role(
+        self, messages: list[AllMessageValues], other_request_fields: Mapping[str, object] | None = None
+    ) -> list[AllMessageValues]:
         """
         O-series models support `developer` role.
         """

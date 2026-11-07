@@ -770,8 +770,9 @@ def test_developer_role_translation(case: _Case, respx_mock: MockRouter) -> None
         ),
     ],
 )
+@pytest.mark.parametrize("drop_params", [False, True], ids=["strict", "drop_params"])
 def test_developer_message_cache_control_survives_the_system_role_translation(
-    case: _Case, expected_system: list[JsonValue], respx_mock: MockRouter
+    case: _Case, expected_system: list[JsonValue], drop_params: bool, respx_mock: MockRouter
 ) -> None:
     route: Final = _register(case, respx_mock, f"canned-{case['id']}")
     _complete(
@@ -780,10 +781,171 @@ def test_developer_message_cache_control_survives_the_system_role_translation(
             "messages": [
                 {"role": "developer", "content": "Be a good bot!", "cache_control": {"type": "ephemeral"}},
                 {"role": "user", "content": "Hello, how are you?"},
-            ]
+            ],
+            "drop_params": drop_params,
         },
     )
     assert _request_body(route)["system"] == expected_system
+
+
+@pytest.mark.parametrize(
+    ("case", "unmarked_system"),
+    [
+        pytest.param(_BY_ID["anthropic_sonnet45"], [{"type": "text", "text": "Be a good bot!"}], id="anthropic_sonnet45"),
+        pytest.param(
+            _BY_ID["bedrock_invoke_haiku"], [{"type": "text", "text": "Be a good bot!"}], id="bedrock_invoke_haiku"
+        ),
+        pytest.param(_BY_ID["bedrock_converse_haiku"], [{"text": "Be a good bot!"}], id="bedrock_converse_haiku"),
+    ],
+)
+@pytest.mark.parametrize(
+    "malformed_mark",
+    [{"type": "ephemeral", "ttl": "2h"}, {"type": "persistent"}],
+    ids=["unknown_ttl", "unknown_type"],
+)
+@pytest.mark.parametrize("drop_params", [False, True], ids=["strict", "drop_params"])
+def test_a_malformed_developer_cache_control_is_dropped(
+    case: _Case,
+    unmarked_system: list[JsonValue],
+    malformed_mark: dict[str, str],
+    drop_params: bool,
+    respx_mock: MockRouter,
+) -> None:
+    route: Final = _register(case, respx_mock, f"canned-{case['id']}")
+    _complete(
+        case,
+        {
+            "messages": [
+                {"role": "developer", "content": "Be a good bot!", "cache_control": malformed_mark},
+                {"role": "user", "content": "Hello, how are you?"},
+            ],
+            "drop_params": drop_params,
+        },
+    )
+    assert _request_body(route)["system"] == unmarked_system
+
+
+def _user_message_with_marked_parts(marks: int) -> dict[str, object]:
+    return {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": f"Question part {part}.", "cache_control": {"type": "ephemeral"}}
+            for part in range(marks)
+        ],
+    }
+
+
+_ANTHROPIC_SYSTEMS: Final = pytest.param(
+    _BY_ID["anthropic_sonnet45"],
+    [{"type": "text", "text": "Be a good bot!", "cache_control": {"type": "ephemeral"}}],
+    [{"type": "text", "text": "Be a good bot!"}],
+    id="anthropic_sonnet45",
+)
+_BEDROCK_CONVERSE_SYSTEMS: Final = pytest.param(
+    _BY_ID["bedrock_converse_haiku"],
+    [{"text": "Be a good bot!"}, {"cachePoint": {"type": "default"}}],
+    [{"text": "Be a good bot!"}],
+    id="bedrock_converse_haiku",
+)
+
+
+@pytest.mark.parametrize(
+    ("case", "marked_system", "unmarked_system"), [_ANTHROPIC_SYSTEMS, _BEDROCK_CONVERSE_SYSTEMS]
+)
+@pytest.mark.parametrize(("user_marks", "keeps_developer_mark"), [(3, True), (4, False)], ids=["at_limit", "over_limit"])
+def test_a_developer_cache_control_is_kept_only_within_the_four_mark_limit(
+    case: _Case,
+    marked_system: list[JsonValue],
+    unmarked_system: list[JsonValue],
+    user_marks: int,
+    keeps_developer_mark: bool,
+    respx_mock: MockRouter,
+) -> None:
+    route: Final = _register(case, respx_mock, f"canned-{case['id']}")
+    _complete(
+        case,
+        {
+            "messages": [
+                {"role": "developer", "content": "Be a good bot!", "cache_control": {"type": "ephemeral"}},
+                _user_message_with_marked_parts(user_marks),
+            ],
+        },
+    )
+    assert _request_body(route)["system"] == (marked_system if keeps_developer_mark else unmarked_system)
+
+
+def _marked_tool(cache_control: dict[str, str]) -> dict[str, JsonValue]:
+    return {
+        "type": "function",
+        "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {}}},
+        "cache_control": cache_control,
+    }
+
+
+@pytest.mark.parametrize(
+    ("case", "marked_system", "unmarked_system"), [_ANTHROPIC_SYSTEMS, _BEDROCK_CONVERSE_SYSTEMS]
+)
+@pytest.mark.parametrize(
+    ("user_marks", "developer_mark", "tool_mark", "keeps_developer_mark"),
+    [
+        (2, {"type": "ephemeral"}, {"type": "ephemeral"}, True),
+        (3, {"type": "ephemeral"}, {"type": "ephemeral"}, False),
+        (0, {"type": "ephemeral"}, {"type": "ephemeral", "ttl": "5m"}, True),
+        (0, {"type": "ephemeral", "ttl": "1h"}, {"type": "ephemeral", "ttl": "5m"}, False),
+    ],
+    ids=["tool_mark_at_limit", "tool_mark_over_limit", "same_default_ttl", "one_hour_after_five_minutes"],
+)
+def test_a_developer_cache_control_counts_tool_marks_and_their_ttl(
+    case: _Case,
+    marked_system: list[JsonValue],
+    unmarked_system: list[JsonValue],
+    user_marks: int,
+    developer_mark: dict[str, str],
+    tool_mark: dict[str, str],
+    keeps_developer_mark: bool,
+    respx_mock: MockRouter,
+) -> None:
+    route: Final = _register(case, respx_mock, f"canned-{case['id']}")
+    _complete(
+        case,
+        {
+            "messages": [
+                {"role": "developer", "content": "Be a good bot!", "cache_control": developer_mark},
+                _user_message_with_marked_parts(user_marks) if user_marks else {"role": "user", "content": "Hi"},
+            ],
+            "tools": [_marked_tool(tool_mark)],
+        },
+    )
+    assert _request_body(route)["system"] == (marked_system if keeps_developer_mark else unmarked_system)
+
+
+@pytest.mark.parametrize(
+    ("request_fields", "keeps_developer_mark"),
+    [
+        ({"cache_control": {"type": "ephemeral"}}, False),
+        ({"extra_body": {"cache_control": {"type": "ephemeral"}}}, False),
+        ({}, True),
+    ],
+    ids=["top_level_cache_control", "extra_body_cache_control", "no_outside_mark"],
+)
+def test_a_developer_cache_control_counts_marks_outside_messages_and_tools(
+    request_fields: dict[str, JsonValue], keeps_developer_mark: bool, respx_mock: MockRouter
+) -> None:
+    case: Final = _BY_ID["anthropic_sonnet45"]
+    route: Final = _register(case, respx_mock, f"canned-{case['id']}")
+    _complete(
+        case,
+        {
+            "messages": [
+                {"role": "developer", "content": "Be a good bot!", "cache_control": {"type": "ephemeral"}},
+                _user_message_with_marked_parts(3),
+            ],
+            **request_fields,
+        },
+    )
+    marked_system: Final = [{"type": "text", "text": "Be a good bot!", "cache_control": {"type": "ephemeral"}}]
+    unmarked_system: Final = [{"type": "text", "text": "Be a good bot!"}]
+    assert _request_body(route)["system"] == (marked_system if keeps_developer_mark else unmarked_system)
 
 
 @pytest.mark.parametrize(

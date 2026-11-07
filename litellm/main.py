@@ -5679,7 +5679,16 @@ def completion(
             )
 
         if provider_config is not None:
-            translated_messages: Final = provider_config.translate_developer_role_to_system_role(messages=messages)
+            translated_messages: Final = provider_config.translate_developer_role_to_system_role(
+                messages=messages,
+                other_request_fields=MappingProxyType(
+                    {
+                        "tools": cast(list[object] | None, tools),  # cast-ok: completion types tools as a bare List
+                        "cache_control": non_default_params.get("cache_control"),
+                        "extra_body": non_default_params.get("extra_body"),
+                    }
+                ),
+            )
             history_for_route: Final = _history_without_unanswered_tool_search_calls(
                 translated_messages, custom_llm_provider, provider_config
             )
