@@ -405,5 +405,14 @@ def test_a_month_starting_now_matches_duration_in_seconds():
         assert duration_in_seconds("1mo") == duration_in_seconds_from(now, "1mo")
 
 
+def test_duration_in_seconds_units_exact_values():
+    assert duration_in_seconds("45s") == 45
+    assert duration_in_seconds("30m") == 1800
+    assert duration_in_seconds("1h") == 3600
+    assert duration_in_seconds("1d") == 86400
+    assert duration_in_seconds("1w") == 604800
+    assert duration_in_seconds("7d") == 604800
+
+
 if __name__ == "__main__":
     unittest.main()
