@@ -30,6 +30,11 @@
     "base_url": "https://api.scaleway.ai/v1",
     "api_key_env": "SCW_SECRET_KEY"
   },
+  "septor": {
+    "base_url": "https://api.septorlabs.com/v1",
+    "api_key_env": "SEPTOR_API_KEY",
+    "api_base_env": "SEPTOR_API_BASE"
+  },
   "synthetic": {
     "base_url": "https://api.synthetic.new/openai/v1",
     "api_key_env": "SYNTHETIC_API_KEY",
