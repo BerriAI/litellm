@@ -6,6 +6,18 @@ from litellm.litellm_core_utils.llm_response_utils.get_formatted_prompt import (
     get_formatted_prompt,
 )
 
+CallType = Literal[
+    "transcription",
+    "atranscription",
+    "audio_transcription",
+    "aembedding",
+    "embedding",
+    "embeddings",
+    "amoderation",
+    "aimage_generation",
+    "atext_completion",
+]
+
 
 @pytest.mark.parametrize("call_type", ["acompletion", "completion"])
 def test_null_tool_calls_are_skipped(call_type: Literal["acompletion", "completion"]) -> None:
@@ -22,3 +34,22 @@ def test_null_tool_calls_are_skipped(call_type: Literal["acompletion", "completi
     }
 
     assert get_formatted_prompt(data=data, call_type=call_type) == 'pingpong{"x":1}'
+
+
+@pytest.mark.parametrize(
+    ("data", "call_type", "expected"),
+    [
+        ({"prompt": "transcribe speech"}, "transcription", "transcribe speech"),
+        ({"prompt": "async speech"}, "atranscription", "async speech"),
+        ({"prompt": "audio legacy"}, "audio_transcription", "audio legacy"),
+        ({"input": "embed async"}, "aembedding", "embed async"),
+        ({"input": ["embed", "dings"]}, "embeddings", "embeddings"),
+        ({"input": [0.1, 0.2]}, "aembedding", ""),
+        ({"input": [101, 2054]}, "embedding", ""),
+        ({"input": "mod async"}, "amoderation", "mod async"),
+        ({"prompt": "gen image async"}, "aimage_generation", "gen image async"),
+        ({"prompt": "complete async"}, "atext_completion", "complete async"),
+    ],
+)
+def test_get_formatted_prompt_call_types(data: dict[str, object], call_type: CallType, expected: str) -> None:
+    assert get_formatted_prompt(data=data, call_type=call_type) == expected
