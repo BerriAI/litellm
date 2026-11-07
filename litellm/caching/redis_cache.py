@@ -40,8 +40,9 @@ from litellm.constants import (
     REDIS_CIRCUIT_BREAKER_TIMEOUT_MIN_DURATION,
     REDIS_TIMEOUT_LOG_INTERVAL,
 )
-from litellm.litellm_core_utils.core_helpers import get_parent_otel_span_from_kwargs
+from litellm.litellm_core_utils.core_helpers import get_parent_otel_span_from_kwargs, has_attributes
 from litellm.litellm_core_utils.coroutine_checker import coroutine_checker
+from litellm.redis.store_settings import RedisStoreSettings, breaker_settings
 from litellm.types.caching import (
     RedisPipelineIncrementOperation,
     RedisPipelineLpopOperation,
@@ -94,6 +95,22 @@ class _AsyncRedisCommands(Protocol):
     def pipeline(self, transaction: bool = True) -> "Pipeline[bytes]": ...
 
     def eval(self, script: str, numkeys: int, *keys_and_args: str | bytes | float) -> Awaitable[object]: ...
+
+
+class _AsyncLuaScript(Protocol):
+    def __call__(
+        self, keys: Sequence[str], args: Sequence[str | bytes | int | float], client: object
+    ) -> Awaitable[object]: ...
+
+
+class _SupportsRegisterScript(Protocol):
+    def register_script(self, script: str, /) -> _AsyncLuaScript: ...
+
+
+class _SupportsScriptLoad(Protocol):
+    def script_load(self, script: str, /) -> object: ...
+
+    def evalsha(self, sha: object, numkeys: int, /, *keys_and_args: str | bytes | float) -> Awaitable[object]: ...
 
 
 _GENERIC_CALLER_MODULES: Final = frozenset(
@@ -472,15 +489,21 @@ _LIVE_BREAKERS: Final[weakref.WeakSet[RedisCircuitBreaker]] = weakref.WeakSet()
 
 
 def redis_breaker_state_counts() -> Mapping[str, int]:
-    """How many live Redis circuit breakers sit in each state, for the Prometheus services logger."""
-    return MappingProxyType(dict(Counter(breaker.state for breaker in _LIVE_BREAKERS)))
+    """How many live Redis circuit breakers sit in each state, for the Prometheus services logger.
+
+    Counts the Python breakers of every live ``RedisCache`` and the breaker of every native Redis
+    client the router stores built, since each opens and closes on its own."""
+    from litellm.rust_bridge._native import native_redis_breaker_states
+
+    python_states: Final = Counter(breaker.state for breaker in _LIVE_BREAKERS)
+    return MappingProxyType(dict(python_states + Counter(native_redis_breaker_states())))
 
 
 class RedisCircuitBreakerOpenError(Exception):
     pass
 
 
-class _RedisTimeoutLogThrottle:
+class RedisTimeoutLogThrottle:
     """Admits one Redis timeout log line per interval and counts the timeouts it suppressed in between."""
 
     def __init__(self, interval: float, clock: Callable[[], float] = time.monotonic) -> None:
@@ -503,7 +526,7 @@ class _RedisTimeoutLogThrottle:
             return suppressed
 
 
-_redis_timeout_log_throttle: Final = _RedisTimeoutLogThrottle(REDIS_TIMEOUT_LOG_INTERVAL)
+redis_timeout_log_throttle: Final = RedisTimeoutLogThrottle(REDIS_TIMEOUT_LOG_INTERVAL)
 
 
 def log_redis_failure(
@@ -516,7 +539,7 @@ def log_redis_failure(
     if not is_redis_timeout_failure(exc):
         logger.log(level, "%s: %s", message, exc, exc_info=exc_info, stacklevel=2)
         return
-    suppressed: Final = _redis_timeout_log_throttle.admit()
+    suppressed: Final = redis_timeout_log_throttle.admit()
     if suppressed is None:
         logger.debug("%s: %s", message, exc, stacklevel=2)
         return
@@ -639,6 +662,8 @@ def _redis_circuit_breaker_guard_sync(method: Callable[..., _RedisCallResult]) -
 class RedisCache(BaseCache):
     # if users don't provider one, use the default litellm cache
 
+    store_settings: RedisStoreSettings | None = None
+
     def __init__(
         self,
         host=None,
@@ -652,7 +677,7 @@ class RedisCache(BaseCache):
     ):
         from litellm._service_logger import ServiceLogging
 
-        from .._redis import get_redis_client, get_redis_connection_pool
+        from .._redis import get_redis_client, get_redis_connection_pool, merge_redis_kwargs
 
         redis_kwargs: Final = {}
         if host is not None:
@@ -705,6 +730,12 @@ class RedisCache(BaseCache):
             super().__init__(default_ttl=int(litellm.default_redis_ttl))
         else:
             super().__init__()  # defaults to 60s
+        self.store_settings = RedisStoreSettings(
+            redis_kwargs=MappingProxyType(merge_redis_kwargs(redis_kwargs)),
+            namespace=namespace,
+            default_ttl=self.default_ttl,
+            breaker=breaker_settings(),
+        )
 
     def _admit_async_call(self, call: Callable[[], Awaitable[_RedisCallResult]]) -> Awaitable[_RedisCallResult]:
         return call()
@@ -827,6 +858,9 @@ class RedisCache(BaseCache):
         return pubsub_client  # pyright: ignore[reportUnknownVariableType]  # redis generics
 
     def _async_commands(self) -> _AsyncRedisCommands:
+        return self.init_async_client()
+
+    def _async_client_object(self) -> object:
         return self.init_async_client()
 
     def check_and_fix_namespace(self, key: str) -> str:
@@ -1102,8 +1136,8 @@ class RedisCache(BaseCache):
         Kept separate from async_register_script so each loop caches its own
         executor; see that method for why the binding must be per loop.
         """
-        _redis_client: Final[Any] = self.init_async_client()
-        if hasattr(_redis_client, "register_script"):
+        _redis_client: Final = self._async_client_object()
+        if has_attributes(_redis_client, _SupportsRegisterScript, "register_script"):
             registered_script: Final = _redis_client.register_script(script)
 
             async def standalone_executor(
@@ -1116,7 +1150,7 @@ class RedisCache(BaseCache):
 
             return standalone_executor
 
-        if hasattr(_redis_client, "script_load"):
+        if has_attributes(_redis_client, _SupportsScriptLoad, "script_load"):
             script_sha: Final = _redis_client.script_load(script)
 
             async def cluster_executor(

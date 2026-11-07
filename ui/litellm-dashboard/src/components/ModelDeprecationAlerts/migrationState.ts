@@ -1,3 +1,4 @@
+import type { ParseKeys } from "i18next";
 import type { DeprecationAlert } from "./deprecationAlerts";
 
 export enum AlertStatus {
@@ -5,6 +6,12 @@ export enum AlertStatus {
   Resolved = "resolved",
   Dismissed = "dismissed",
 }
+
+export const ALERT_STATUS_LABEL_KEYS = {
+  [AlertStatus.Open]: "alerts.status.open",
+  [AlertStatus.Resolved]: "alerts.status.resolved",
+  [AlertStatus.Dismissed]: "alerts.status.dismissed",
+} as const satisfies Record<AlertStatus, ParseKeys>;
 
 export function effectiveAlertStatus(alert: DeprecationAlert): AlertStatus {
   const state = alert.state;

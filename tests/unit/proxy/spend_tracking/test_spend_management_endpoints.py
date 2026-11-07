@@ -3886,7 +3886,10 @@ class TestSpendLogsPayload:
             await _wait_for_mock_call(mock_client)
 
             kwargs = mock_client.call_args.kwargs
-            payload: SpendLogsPayload = kwargs["payload"]
+            payload: SpendLogsPayload = {
+                key: value for key, value in kwargs["payload"].items() if not key.startswith("accounting_")
+            }
+            assert kwargs["payload"]["accounting_payload"]["spend"] == kwargs["payload"]["spend"]
             expected_payload = SpendLogsPayload(
                 **{
                     "request_id": "chatcmpl-34df56d5-4807-45c1-bb99-61e52586b802",

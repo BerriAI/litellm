@@ -35,16 +35,16 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     NO_TEAM_MEMBERSHIP_SENTINEL,
     UserApiKeyCache,
     model_access_group_registry_cache_key,
-    model_access_group_spend_counter_key,
     team_membership_reservation_cache_key,
 )
 from litellm.proxy.utils import ProxyLogging
+from litellm.redis.stores.spend_counters import model_access_group_counter
 
 TEAM_ID = "team-1"
 USER_ID = "user-1"
 ORG_ID = "org-1"
 BUDGETED_GROUPS = ("tier-a", "tier-b", "claude-tier")
-MODEL_ACCESS_GROUP_COUNTER_KEY = model_access_group_spend_counter_key("tier-a")
+MODEL_ACCESS_GROUP_COUNTER_KEY = model_access_group_counter("tier-a")
 
 MODEL_LIST = [
     {
@@ -222,11 +222,15 @@ async def test_group_without_a_budget_is_not_attributed():
 
 
 @pytest.mark.asyncio
-@pytest.mark.usefixtures("python_router_core")  # the Rust core keeps this lookup on its host registry
 async def test_empty_registry_skips_the_access_group_matching_entirely(monkeypatch: pytest.MonkeyPatch):
     router = Router(model_list=MODEL_LIST)
-    access_group_lookups = MagicMock(wraps=router._core_get_model_access_groups)
-    monkeypatch.setattr(router, "_core_get_model_access_groups", access_group_lookups)
+    registry_type = type(router.registry())
+    access_group_lookups = MagicMock(wraps=registry_type.access_groups)
+    monkeypatch.setattr(
+        registry_type,
+        "access_groups",
+        lambda registry, *args, **kwargs: access_group_lookups(registry, *args, **kwargs),
+    )
 
     assert await _matched(key_models=["tier-a"], cache=await _cache(budgeted_groups=()), llm_router=router) == ()
     assert access_group_lookups.call_count == 0
@@ -259,12 +263,11 @@ def _broken_access_group_lookup(*args: object, **kwargs: object) -> NoReturn:
 
 
 @pytest.mark.asyncio
-@pytest.mark.usefixtures("python_router_core")  # the Rust core keeps this lookup on its host registry
 async def test_stamp_does_not_break_auth_when_the_access_group_lookup_fails(monkeypatch: pytest.MonkeyPatch):
     cache = await _cache()
     valid_token = UserAPIKeyAuth(api_key="hashed", models=["tier-a"], team_id=TEAM_ID, user_id=USER_ID)
     router = Router(model_list=MODEL_LIST)
-    monkeypatch.setattr(router, "_core_get_model_access_groups", _broken_access_group_lookup)
+    monkeypatch.setattr(type(router.registry()), "access_groups", _broken_access_group_lookup)
 
     await stamp_matched_model_access_groups(
         model="gpt-4o",
@@ -456,7 +459,7 @@ async def test_an_over_budget_group_blocks_even_when_another_matched_group_is_fi
             _MagBudgetRow("tier-b", max_budget=1.0),
             spend_by_counter_key={
                 MODEL_ACCESS_GROUP_COUNTER_KEY: 1.0,
-                model_access_group_spend_counter_key("tier-b"): 5.0,
+                model_access_group_counter("tier-b"): 5.0,
             },
         )
 
