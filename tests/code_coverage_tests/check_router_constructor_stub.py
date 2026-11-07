@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail unless mypy reads the Router constructor stub in litellm/router.py.
+"""Fail unless mypy reads the Router constructor stub in litellm/router.py through `from litellm import Router`.
 
 litellm ships py.typed, so a stub that mypy reads as Any accepts every argument name in SDK users' code,
 while basedpyright, which `make lint-e2e-basedpyright` runs, can still read it.
@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Final
 
 PROBE: Final = """\
-from litellm.router import Router
+from litellm import Router
 
 Router(model_list=[], num_retries=2)
 Router(model_list=[], redis_host="localhost", redis_port="6379")
@@ -31,6 +31,7 @@ def mypy_errors(probe: Path) -> tuple[str, ...]:
             "--config-file=",
             "--follow-imports=skip",
             "--ignore-missing-imports",
+            "litellm/__init__.py",
             "litellm/router.py",
             str(probe),
         ),

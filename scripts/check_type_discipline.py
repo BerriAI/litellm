@@ -54,11 +54,11 @@ LIT010  Variable assignment without a `Final` declaration. Every local and modul
         that namespace is the SDK's runtime-settable config surface (users follow
         the documented `litellm.api_key = ...` pattern and the proxy rebinds these
         via setattr), and the package ships py.typed, so a Final there turns every
-        documented downstream assignment into a mypy error. Type variables are the
-        reverse: a `TypeVar`, `ParamSpec`, or `TypeVarTuple` stays bare, and a Final one
-        trips, since mypy reads it as a plain variable and every signature using it as
-        Any. Suppress a deliberately rebindable name with `# rebind-ok: <reason>` on
-        each offending line.
+        documented downstream assignment into a mypy error. Type variables and type
+        aliases are the reverse: a `TypeVar`, `ParamSpec`, `TypeVarTuple`, or
+        `TypeAliasType` stays bare, and a Final one trips, since mypy reads it as a
+        plain variable instead of a type. Suppress a deliberately rebindable name
+        with `# rebind-ok: <reason>` on each offending line.
 LIT011  Function-argument mutation: a parameter that is re-bound (`param = ...`,
         `param += ...`, a `for`/`with`/unpacking/walrus target, `del param`, or a
         re-bind in a nested function under `nonlocal param`) or mutated in place

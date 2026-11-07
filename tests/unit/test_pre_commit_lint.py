@@ -454,7 +454,9 @@ def test_an_e2e_type_check_input_alone_runs_the_e2e_basedpyright_step(tmp_path: 
     assert "ran:     tests/e2e basedpyright" in proc.stdout
 
 
-@pytest.mark.parametrize(("changed", "runs"), (("litellm/router.py", True), ("litellm/foo.py", False)))
+@pytest.mark.parametrize(
+    ("changed", "runs"), (("litellm/router.py", True), ("litellm/__init__.py", True), ("litellm/foo.py", False))
+)
 def test_the_router_stub_guard_runs_only_when_the_router_changes(tmp_path: Path, changed: str, runs: bool) -> None:
     repo, bin_dir = _sandbox(tmp_path)
     _commit_all(repo, "base")

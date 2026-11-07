@@ -15,7 +15,7 @@
 #                      -> `make lint-e2e-basedpyright` (test-linting.yml's e2e type-check step)
 #   - tests/e2e and tests/e2e_harness Python
 #                      -> raw HTTP client ban (test-linting.yml's check_e2e_no_raw_requests)
-#   - litellm/router.py, uv.lock
+#   - litellm/router.py, litellm/__init__.py, uv.lock
 #                      -> mypy Router stub guard (test-linting.yml's check_router_constructor_stub)
 #   - tests/ Python, ruff-tests.toml, scripts/check_test_quality.py,
 #     scripts/test_quality_gate.py
@@ -112,7 +112,7 @@ litellm_py_files=$(scope_match "$litellm_py_pattern")
 if [ -n "$(scope_match '^(litellm/proxy/mcp_server/|scripts/check_mcp_operation_boundary\.py)')" ]; then
     uv run --no-sync python scripts/check_mcp_operation_boundary.py || exit 1
 fi
-if [ -n "$(scope_match '^(litellm/router\.py|tests/code_coverage_tests/check_router_constructor_stub\.py|uv\.lock)$')" ]; then
+if [ -n "$(scope_match '^(litellm/(router|__init__)\.py|tests/code_coverage_tests/check_router_constructor_stub\.py|uv\.lock)$')" ]; then
     uv run --no-sync python tests/code_coverage_tests/check_router_constructor_stub.py || exit 1
 fi
 e2e_py_files=$(scope_match "$e2e_py_pattern")
