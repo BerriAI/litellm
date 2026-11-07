@@ -9,6 +9,8 @@ import { Fallbacks } from "../Settings/RouterSettings/Fallbacks/AddFallbacks";
 import { FallbackSelectionForm } from "../Settings/RouterSettings/Fallbacks/FallbackSelectionForm";
 import { FallbackGroup } from "../Settings/RouterSettings/Fallbacks/FallbackGroupConfig";
 import { fetchAvailableModels, fetchAvailableModelsForTeam, ModelGroup } from "@/components/llm_calls/fetch_models";
+import RouterWeightsSection from "./RouterWeightsSection";
+import { RouterWeights, routerWeightsFrom, savedRouterWeights } from "./routerWeights";
 
 export interface RouterSettingsAccordionValue {
   router_settings: {
@@ -24,6 +26,7 @@ export interface RouterSettingsAccordionValue {
     model_group_alias?: { [key: string]: any } | null;
     enable_tag_filtering?: boolean;
     routing_strategy_args?: { [key: string]: any } | null;
+    weights?: RouterWeights | null;
   };
 }
 
@@ -41,6 +44,14 @@ export interface RouterSettingsAccordionRef {
 
 const PROPAGATE_WAIT_MS = 100;
 
+const valueKeyOf = (settings: RouterSettingsAccordionValue["router_settings"]): string =>
+  JSON.stringify({
+    routing_strategy: settings.routing_strategy,
+    fallbacks: settings.fallbacks,
+    enable_tag_filtering: settings.enable_tag_filtering,
+    weights: settings.weights,
+  });
+
 const RouterSettingsAccordion = forwardRef<RouterSettingsAccordionRef, RouterSettingsAccordionProps>(
   ({ accessToken, value, onChange, modelData, teamId }, ref) => {
     const { t } = useTranslation();
@@ -51,6 +62,7 @@ const RouterSettingsAccordion = forwardRef<RouterSettingsAccordionRef, RouterSet
     });
     const [fallbacks, setFallbacks] = useState<Fallbacks>([]);
     const [fallbackGroups, setFallbackGroups] = useState<FallbackGroup[]>([]);
+    const [weights, setWeights] = useState<RouterWeights>({});
     const [availableRoutingStrategies, setAvailableRoutingStrategies] = useState<string[]>([]);
     const [routerFieldsMetadata, setRouterFieldsMetadata] = useState<{ [key: string]: any }>({});
     const [routingStrategyDescriptions, setRoutingStrategyDescriptions] = useState<{ [key: string]: string }>({});
@@ -90,13 +102,7 @@ const RouterSettingsAccordion = forwardRef<RouterSettingsAccordionRef, RouterSet
     // Initialize from value prop if provided (only when value actually changes externally)
     useEffect(() => {
       // Create a stable key from the value to detect actual external changes
-      const valueKey = value?.router_settings
-        ? JSON.stringify({
-            routing_strategy: value.router_settings.routing_strategy,
-            fallbacks: value.router_settings.fallbacks,
-            enable_tag_filtering: value.router_settings.enable_tag_filtering,
-          })
-        : null;
+      const valueKey = value?.router_settings ? valueKeyOf(value.router_settings) : null;
 
       // Skip if this is an internal update (from our own onChange) and the value hasn't actually changed
       if (isInternalUpdateRef.current && valueKey === lastInitializedValueRef.current) {
@@ -118,7 +124,7 @@ const RouterSettingsAccordion = forwardRef<RouterSettingsAccordionRef, RouterSet
 
       if (value?.router_settings) {
         const rs = value.router_settings;
-        const { fallbacks: _, ...routerSettingsWithoutFallbacks } = rs;
+        const { fallbacks: _, weights: storedWeights, ...routerSettingsWithoutFallbacks } = rs;
         setFormValue({
           routerSettings: routerSettingsWithoutFallbacks as { [key: string]: any },
           selectedStrategy: rs.routing_strategy || null,
@@ -127,6 +133,7 @@ const RouterSettingsAccordion = forwardRef<RouterSettingsAccordionRef, RouterSet
         const initialFallbacks = rs.fallbacks || [];
         setFallbacks(initialFallbacks);
         setFallbackGroups(fallbacksToGroups(initialFallbacks));
+        setWeights(routerWeightsFrom(storedWeights));
       } else {
         // Initialize with empty defaults if no value provided
         setFormValue({
@@ -142,6 +149,7 @@ const RouterSettingsAccordion = forwardRef<RouterSettingsAccordionRef, RouterSet
             fallbackModels: [],
           },
         ]);
+        setWeights({});
       }
     }, [value]);
 
@@ -297,6 +305,7 @@ const RouterSettingsAccordion = forwardRef<RouterSettingsAccordionRef, RouterSet
         model_group_alias: normalizeValue(updatedVariables.model_group_alias),
         enable_tag_filtering: formValue.enableTagFiltering,
         routing_strategy_args: normalizeValue(updatedVariables.routing_strategy_args),
+        weights: savedRouterWeights(weights),
       };
     };
 
@@ -307,6 +316,7 @@ const RouterSettingsAccordion = forwardRef<RouterSettingsAccordionRef, RouterSet
         }
         isInternalUpdateRef.current = true;
         const finalRouterSettings = buildRouterSettings();
+        lastInitializedValueRef.current = valueKeyOf(finalRouterSettings);
         onChange({
           router_settings: finalRouterSettings,
         });
@@ -321,7 +331,7 @@ const RouterSettingsAccordion = forwardRef<RouterSettingsAccordionRef, RouterSet
       }
       debouncedPropagate();
       // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [formValue, fallbacks]);
+    }, [formValue, fallbacks, weights]);
 
     const handleFallbackGroupsChange = (newGroups: FallbackGroup[]): void => {
       setFallbackGroups(newGroups);
@@ -360,6 +370,16 @@ const RouterSettingsAccordion = forwardRef<RouterSettingsAccordionRef, RouterSet
                 availableRoutingStrategies={availableRoutingStrategies}
                 routingStrategyDescriptions={routingStrategyDescriptions}
               />
+              <div className="mt-8 border-t border-border pt-8">
+                <RouterWeightsSection
+                  accessToken={accessToken}
+                  teamId={teamId}
+                  availableModels={availableModels}
+                  selectedStrategy={formValue.selectedStrategy}
+                  weights={weights}
+                  onChange={setWeights}
+                />
+              </div>
             </TabsContent>
             <TabsContent value="2" keepMounted>
               <FallbackSelectionForm
