@@ -94,8 +94,11 @@ export const weightRows = (
   return [...current, ...stale];
 };
 
+const WEIGHT_DRAFT = /^(\d+\.?\d*|\.\d+)?$/;
+
 export const parseWeightInput = (raw: string): number | null | undefined => {
   const trimmed = raw.trim();
+  if (!WEIGHT_DRAFT.test(trimmed)) return undefined;
   if (trimmed === "") return null;
   const weight = Number(trimmed);
   return isWeight(weight) ? weight : undefined;

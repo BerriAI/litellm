@@ -257,6 +257,24 @@ describe("RouterSettingsAccordion", () => {
       });
     });
 
+    it("should ignore keystrokes that would not save as a weight, so the field always shows the saved value", async () => {
+      const ref = createRef<RouterSettingsAccordionRef>();
+      renderWithQueryClient(
+        <RouterSettingsAccordion
+          ref={ref}
+          accessToken="test-token"
+          value={{ router_settings: { weights: { "gpt-5": { "dep-openai": 9 } } } }}
+        />,
+      );
+      const input = await screen.findByLabelText("Weight for openai/gpt-5 (dep-openai)");
+
+      fireEvent.change(input, { target: { value: "9x" } });
+      fireEvent.change(input, { target: { value: "-1" } });
+
+      expect(input).toHaveValue("9");
+      expect(ref.current?.getValue().router_settings.weights).toStrictEqual({ "gpt-5": { "dep-openai": 9 } });
+    });
+
     it("should not call saved weights stale while the deployments are still loading", async () => {
       vi.mocked(modelInfoCall).mockReturnValue(new Promise(() => {}));
       renderWithQueryClient(

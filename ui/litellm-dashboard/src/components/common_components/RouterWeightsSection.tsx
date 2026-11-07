@@ -56,21 +56,14 @@ function WeightInput({ label, weight, onChange }: WeightInputProps) {
   }
 
   const handleChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    setDraft(event.target.value);
     const parsed = parseWeightInput(event.target.value);
-    if (parsed !== undefined) onChange(parsed);
+    if (parsed === undefined) return;
+    setDraft(event.target.value);
+    onChange(parsed);
   };
 
   return (
-    <Input
-      type="text"
-      inputMode="decimal"
-      className="w-28"
-      aria-label={label}
-      aria-invalid={parseWeightInput(draft) === undefined}
-      value={draft}
-      onChange={handleChange}
-    />
+    <Input type="text" inputMode="decimal" className="w-28" aria-label={label} value={draft} onChange={handleChange} />
   );
 }
 

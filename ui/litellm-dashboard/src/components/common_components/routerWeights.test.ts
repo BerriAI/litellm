@@ -144,5 +144,9 @@ describe("parseWeightInput", () => {
     expect(parseWeightInput("  ")).toBeNull();
     expect(parseWeightInput("-1")).toBeUndefined();
     expect(parseWeightInput("abc")).toBeUndefined();
+    expect(parseWeightInput("1.")).toBe(1);
+    expect(parseWeightInput(".")).toBeUndefined();
+    expect(parseWeightInput("1e3")).toBeUndefined();
+    expect(parseWeightInput("0x10")).toBeUndefined();
   });
 });
