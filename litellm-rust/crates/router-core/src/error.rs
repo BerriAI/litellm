@@ -40,7 +40,13 @@ pub enum Error {
     #[error("no deployment serves model `{model}`")]
     UnknownModel { model: String },
     #[error("no deployment of `{model}` is available")]
-    NoHealthyDeployments { model: String },
+    NoHealthyDeployments {
+        model: String,
+        /// The ids of the deployments the request could route to before the cooldown filter
+        /// (`request_deployments`), when the candidate list came up empty; `None` when the
+        /// strategy refused every candidate.
+        request_ids: Option<Vec<String>>,
+    },
     #[error("the attempt failed")]
     Attempt(#[from] AttemptError),
     #[error("the routing cache failed")]
@@ -201,8 +207,9 @@ impl Error {
             Self::UnknownModel { model } => Self::UnknownModel {
                 model: model.clone(),
             },
-            Self::NoHealthyDeployments { model } => Self::NoHealthyDeployments {
+            Self::NoHealthyDeployments { model, request_ids } => Self::NoHealthyDeployments {
                 model: model.clone(),
+                request_ids: request_ids.clone(),
             },
             Self::Paused { model } => Self::Paused {
                 model: model.clone(),
@@ -277,6 +284,7 @@ impl Error {
     strum::EnumString,
     strum::IntoStaticStr,
     strum::VariantArray,
+    serde_with::SerializeDisplay,
 )]
 pub enum FailureKind {
     #[strum(serialize = "RateLimitError")]
@@ -462,6 +470,17 @@ mod tests {
     fn failure_kind_round_trips_its_exception_name(#[case] wire: &str, #[case] kind: FailureKind) {
         assert_eq!(wire.parse::<FailureKind>().unwrap(), kind);
         assert_eq!(<&'static str>::from(kind), wire);
+    }
+
+    #[rstest]
+    #[case::rate_limit(FailureKind::RateLimit, "RateLimitError")]
+    #[case::timeout(FailureKind::Timeout, "Timeout")]
+    #[case::api_connection(FailureKind::ApiConnection, "APIConnectionError")]
+    fn failure_kind_serializes_as_its_exception_name(
+        #[case] kind: FailureKind,
+        #[case] wire: &str,
+    ) {
+        assert_eq!(serde_json::to_value(kind).unwrap(), serde_json::json!(wire));
     }
 
     #[rstest]

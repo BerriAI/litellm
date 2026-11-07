@@ -87,7 +87,16 @@ describe("ClaudeCodePluginsPanel loading state", () => {
 
     resolveFetch({ skills: [], count: 0, next_offset: null });
     expect(await screen.findByText("table-loaded")).toBeInTheDocument();
-    expect(mockListSkillHubSkills).toHaveBeenCalledWith("sk-test", { limit: 50, offset: 0 });
+    const expectedQuery = {
+      limit: 50,
+      offset: 0,
+      query: "",
+      tag: "",
+      security_scan_passed: undefined,
+      sort_by: "name",
+      sort_order: "asc",
+    };
+    expect(mockListSkillHubSkills).toHaveBeenCalledWith("sk-test", expectedQuery);
   });
 });
 

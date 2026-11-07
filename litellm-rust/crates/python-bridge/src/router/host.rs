@@ -20,10 +20,10 @@ use std::{
 
 use async_trait::async_trait;
 use litellm_router_core::{
-    Attempt, AttemptError, Blocked, BuildAsk, BuildPath, Built, Deployment, Error, Host, Output,
-    Payload, PreRoute, PreRouted, Provided, Randomness, RouterCache, RouterEvent, RouterRequest,
-    RouterResponse, RoutingContext, SecretRef, SelectStage, ThreadRandomness,
-    build::BuiltDeployment, host::ModelInfoLookup, model_info::MergedModelInfo,
+    Attempt, AttemptError, Blocked, BuildAsk, BuildPath, Built, CallbackFiltered, Deployment,
+    Error, Host, Output, Payload, PreRoute, PreRouted, Provided, Randomness, RouterCache,
+    RouterEvent, RouterRequest, RouterResponse, RoutingContext, SecretRef, SelectStage,
+    ThreadRandomness, build::BuiltDeployment, host::ModelInfoLookup, model_info::MergedModelInfo,
     precall::PreCallFacts,
 };
 use pyo3::{PyResult, Python, types::PyAnyMethods};
@@ -68,7 +68,12 @@ pub(crate) enum Stage {
     /// Pre-call checks and sub-routers: return the deployments that remain.
     Plugins,
     /// A strategy router-core does not implement: return the candidates with the pick first.
-    Strategy(String),
+    /// When candidates share an id, `records` holds each candidate's deployment, in order, and the
+    /// host answers with the pick's position, so a pick splits over every entry as Python's does.
+    Strategy {
+        strategy: String,
+        records: Vec<Value>,
+    },
     /// Tag routing: return the deployments that remain.
     Tags,
     /// `enable_pre_call_checks`: return the facts the filter decides by.
@@ -79,6 +84,10 @@ pub(crate) enum Stage {
     RouteIncapable { handler: String },
     /// `_decisions_deployment_refuses_media`: return the candidates that refuse the call's media.
     MediaRefusing,
+    /// `deployments_admitting_embedding_batch`: return the candidates the embedding pick keeps.
+    EmbeddingBatch,
+    /// The override strategy's pre-call check on a deployment named by id.
+    OverrideCheck(String),
     /// The routing plugins: run them when `run`, then return the candidate models they left.
     RoutingPlugins { run: bool },
     /// The host's `CustomLogger` deployment filters: return the ids that remain, or a failure.
@@ -163,6 +172,8 @@ pub(crate) enum HostCall {
         /// The name the attempt resolved: the requested name or the fallback target.
         model: String,
         model_group: String,
+        /// The group a pre-routing hook selected for `model`, when it differs.
+        routed: Option<String>,
         /// The `order` level of a same-group order fallback.
         target_order: Option<i64>,
         /// Every deployment `model` resolved to for this caller, the picked one included.
@@ -279,14 +290,17 @@ pub(crate) enum HostCallResponse {
     RefuseFallbacks(bool),
     /// The candidate ids that remain, pick first.
     Select(Vec<String>),
+    /// A strategy's pick among candidates sharing an id: positions in the candidates, pick first.
+    Positions(Vec<usize>),
     /// The model group to resolve instead, a custom strategy's deployment, or `None`.
     PreRoute(Option<PreRouted>),
     /// The facts a `pre_call` select step asked for.
     PreCall(PreCallFacts),
     /// The candidate models a `routing_plugins` select step reported.
     Models(Option<Vec<String>>),
-    /// The ids a `callback_filters` select step left, or the error a filter raised.
-    Filtered(Result<Vec<String>, AttemptError>),
+    /// The ids a `callback_filters` select step left with the one a filter prefers, or the error
+    /// a filter raised.
+    Filtered(Result<(Vec<String>, Option<String>), AttemptError>),
     /// What a pick's select or pre-route step, or a fallback check, raised on the host instead of
     /// answering: the walk takes it as the try's failure.
     Raised(AttemptError),
@@ -309,9 +323,11 @@ impl HostCallResponse {
             Self::Slept => StepKind::Sleep,
             Self::AllowFallback(_) => StepKind::AllowFallback,
             Self::RefuseFallbacks(_) => StepKind::RefuseFallbacks,
-            Self::Select(_) | Self::PreCall(_) | Self::Models(_) | Self::Filtered(_) => {
-                StepKind::Select
-            }
+            Self::Select(_)
+            | Self::Positions(_)
+            | Self::PreCall(_)
+            | Self::Models(_)
+            | Self::Filtered(_) => StepKind::Select,
             Self::PreRoute(_) => StepKind::PreRoute,
             Self::Cache(_) => StepKind::Cache,
             Self::Secrets(_) => StepKind::Secrets,
@@ -337,11 +353,20 @@ impl HostCallResponse {
                 got: self.kind(),
             });
         }
-        if let (Self::Select(ids) | Self::Filtered(Ok(ids)), HostCall::Select { candidates, .. }) =
-            (self, call)
+        if let (
+            Self::Select(ids) | Self::Filtered(Ok((ids, _))),
+            HostCall::Select { candidates, .. },
+        ) = (self, call)
             && let Some(id) = ids.iter().find(|id| !candidates.contains(id))
         {
             return Err(DriveError::UnknownCandidate { id: id.clone() });
+        }
+        if let (Self::Positions(positions), HostCall::Select { candidates, .. }) = (self, call)
+            && let Some(position) = positions.iter().find(|p| **p >= candidates.len())
+        {
+            return Err(DriveError::UnknownCandidate {
+                id: format!("#{position}"),
+            });
         }
         if let (Self::Secrets(values), HostCall::Secrets { refs, .. }) = (self, call)
             && values.len() != refs.len()
@@ -654,6 +679,28 @@ impl RouterCache for StepCache {
 }
 
 /// A deployment as Python spells a `model_list` entry, with its id in `model_info`.
+/// Whether two candidates share an id, which a pick answered by id can't tell apart.
+fn shares_ids(candidates: &[Arc<Deployment>]) -> bool {
+    let mut seen = std::collections::HashSet::new();
+    !candidates.iter().all(|d| seen.insert(d.id.as_str()))
+}
+
+/// The candidates a host answer names, in its order. An id names every candidate that carries
+/// it, so deployments sharing an id stay together through a filter, as Python's list keeps them.
+fn answered_by_id(candidates: &[Arc<Deployment>], ids: &[String]) -> Vec<Arc<Deployment>> {
+    let mut taken = vec![false; candidates.len()];
+    let mut kept = Vec::new();
+    for id in ids {
+        for (position, deployment) in candidates.iter().enumerate() {
+            if !taken[position] && deployment.id == *id {
+                taken[position] = true;
+                kept.push(deployment.clone());
+            }
+        }
+    }
+    kept
+}
+
 pub(crate) fn deployment_record(deployment: &Deployment) -> Value {
     deployment.record()
 }
@@ -693,6 +740,7 @@ impl Host for StepHost {
             deployment: deployment_record(&attempt.deployment),
             model: attempt.name.clone(),
             model_group: attempt.model_group.clone(),
+            routed: attempt.routed.clone(),
             target_order: attempt.target_order,
             candidate_ids: attempt.candidate_ids.clone(),
             retry: attempt.retry,
@@ -736,13 +784,22 @@ impl Host for StepHost {
         let call = HostCall::Select {
             stage: match stage {
                 SelectStage::Plugins => Stage::Plugins,
-                SelectStage::Strategy(strategy) => Stage::Strategy(strategy.to_string()),
+                SelectStage::Strategy(strategy) => Stage::Strategy {
+                    strategy: strategy.to_string(),
+                    records: if shares_ids(&candidates) {
+                        candidates.iter().map(|d| deployment_record(d)).collect()
+                    } else {
+                        Vec::new()
+                    },
+                },
                 SelectStage::Tags => Stage::Tags,
                 SelectStage::TextOnly => Stage::TextOnly,
                 SelectStage::RouteIncapable { handler } => Stage::RouteIncapable {
                     handler: handler.clone(),
                 },
                 SelectStage::MediaRefusing => Stage::MediaRefusing,
+                SelectStage::EmbeddingBatch => Stage::EmbeddingBatch,
+                SelectStage::OverrideCheck(strategy) => Stage::OverrideCheck(strategy.to_string()),
             },
             pool: ctx.pool.iter().map(|d| d.id.clone()).collect(),
             model_group: ctx.model_group.to_owned(),
@@ -751,13 +808,14 @@ impl Host for StepHost {
             group: group.map(str::to_owned),
             candidates: candidates.iter().map(|d| d.id.clone()).collect(),
         };
-        let HostCallResponse::Select(ids) = answered(call_host(call).await)? else {
-            unreachable!("{CHECKED}");
-        };
-        Ok(ids
-            .iter()
-            .filter_map(|id| candidates.iter().find(|d| d.id == *id).cloned())
-            .collect())
+        match answered(call_host(call).await)? {
+            HostCallResponse::Select(ids) => Ok(answered_by_id(&candidates, &ids)),
+            HostCallResponse::Positions(positions) => Ok(positions
+                .iter()
+                .map(|position| candidates[*position].clone())
+                .collect()),
+            _ => unreachable!("{CHECKED}"),
+        }
     }
 
     async fn pre_route(&self, pre: &PreRoute<'_>) -> Result<Option<PreRouted>, Error> {
@@ -835,7 +893,7 @@ impl Host for StepHost {
         &self,
         ctx: &RoutingContext<'_>,
         candidates: Vec<Arc<Deployment>>,
-    ) -> Result<Vec<Arc<Deployment>>, Error> {
+    ) -> Result<CallbackFiltered, Error> {
         let (scope, group) = ctx.scope.wire();
         let joined = |own: &[String], walked: &[String]| [own, walked].concat();
         let call = HostCall::Select {
@@ -854,11 +912,11 @@ impl Host for StepHost {
         let HostCallResponse::Filtered(result) = call_host(call).await else {
             unreachable!("{CHECKED}");
         };
-        let ids = result.map_err(Error::Attempt)?;
-        Ok(ids
-            .iter()
-            .filter_map(|id| candidates.iter().find(|d| d.id == *id).cloned())
-            .collect())
+        let (ids, preferred) = result.map_err(Error::Attempt)?;
+        Ok(CallbackFiltered {
+            kept: answered_by_id(&candidates, &ids),
+            preferred,
+        })
     }
 
     async fn allow_fallback(
@@ -922,6 +980,7 @@ impl Host for StepHost {
                 | RouterEvent::Blocked { .. }
                 | RouterEvent::CooldownSet { .. }
                 | RouterEvent::Selected { .. }
+                | RouterEvent::PickStarted { .. }
         ) {
             return;
         }
@@ -1461,7 +1520,7 @@ mod tests {
         let mut driver = start(&router, "primary");
         let step = store.resume(&mut driver, None);
         let Step::HostCall(HostCall::Select {
-            stage: Stage::Strategy(strategy),
+            stage: Stage::Strategy { strategy, records },
             candidates,
             ..
         }) = step
@@ -1470,6 +1529,7 @@ mod tests {
         };
         assert_eq!(strategy, "least-busy");
         assert_eq!(candidates, ["a1", "a2"]);
+        assert!(records.is_empty(), "distinct ids send no records");
         let step = store.resume(
             &mut driver,
             Some(HostCallResponse::Select(vec!["a2".to_owned()])),
@@ -1477,6 +1537,40 @@ mod tests {
         assert!(
             matches!(&step, Step::HostCall(HostCall::Attempt { deployment_id, .. }) if deployment_id == "a2"),
             "expected the picked deployment, got {step:?}"
+        );
+    }
+
+    #[rstest]
+    fn a_pick_among_deployments_sharing_an_id_is_answered_by_position() {
+        let mut second = deployment("primary", "a1");
+        second["litellm_params"]["api_base"] = json!("https://second.example");
+        let router = router(
+            json!({
+                "model_list": [deployment("primary", "a1"), second],
+                "routing_strategy": "least-busy",
+            }),
+            json!({}),
+        );
+        let mut store = Store::default();
+        let mut driver = start(&router, "primary");
+        let step = store.resume(&mut driver, None);
+        let Step::HostCall(HostCall::Select {
+            stage: Stage::Strategy { records, .. },
+            ..
+        }) = step
+        else {
+            panic!("a host strategy should ask for a selection, got {step:?}");
+        };
+        assert_eq!(
+            records.len(),
+            2,
+            "each candidate sharing an id sends its record"
+        );
+        let step = store.resume(&mut driver, Some(HostCallResponse::Positions(vec![1])));
+        assert!(
+            matches!(&step, Step::HostCall(HostCall::Attempt { deployment, .. })
+                if deployment["litellm_params"]["api_base"] == "https://second.example"),
+            "expected the second entry, got {step:?}"
         );
     }
 
