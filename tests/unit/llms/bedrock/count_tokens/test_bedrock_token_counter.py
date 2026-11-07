@@ -625,6 +625,7 @@ _CALLER_BETAS: Final = (ANTHROPIC_BETA_HEADER_VALUES.PER_TURN_CONTROL_2026_07_01
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("local_beta_headers_config")
 async def test_runtime_count_sends_the_caller_betas_invoke_inference_keeps_for_the_model() -> None:
     deployment_model: Final = "bedrock/invoke/us.anthropic.claude-opus-4-5-20251101-v1:0"
     model_info: Final[dict[str, JsonValue]] = {"supports_per_turn_control": True}
