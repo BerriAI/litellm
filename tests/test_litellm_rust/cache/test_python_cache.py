@@ -23,6 +23,8 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelReq
 from litellm.proxy.utils import InternalUsageCache
 from litellm.redis.stores.rate_limits import RateLimitScope
 from litellm.rust_bridge.catalog import Route
+from litellm.types.llms.anthropic import AnthropicResponseContentBlockText
+from litellm.types.utils import CallTypes, LLMResponseTypes
 from tests.test_litellm_rust.cache.support import cache_key, collect, invoke, payload
 from tests.test_litellm_rust.messages.data import MESSAGES, MESSAGES_EVENTS, MESSAGES_MODEL, MESSAGES_RESPONSE
 from tests.test_litellm_rust.support.callback_recorder import RecordingLogger, drain_logging, request_body
@@ -358,15 +360,15 @@ async def test_messages_cache_stores_the_response_a_yielding_deployment_hook_ret
     from litellm.caching.in_memory_cache import InMemoryCache
     from litellm.integrations.custom_logger import CustomLogger
 
-    redacted: Final = [{"type": "text", "text": "redacted"}]
+    blocks: Final = TypeAdapter(list[AnthropicResponseContentBlockText])
 
     class Redact(CustomLogger):
         async def async_post_call_success_deployment_hook(
-            self, request_data: dict[str, object], response: object, call_type: object
-        ) -> object:
+            self, request_data: dict[str, object], response: LLMResponseTypes, call_type: CallTypes | None
+        ) -> LLMResponseTypes | None:
             await asyncio.sleep(0.05)
             assert isinstance(response, dict)
-            return {**response, "content": redacted}
+            return {**response, "content": [{"type": "text", "text": "redacted"}]}  # pyright: ignore[reportReturnType]  # messages hooks see and return the plain dict the route serves
 
     monkeypatch.setenv("LITELLM_RUST", "1" if native else "0")
     storage: Final = InMemoryCache()
@@ -374,11 +376,11 @@ async def test_messages_cache_stores_the_response_a_yielding_deployment_hook_ret
     monkeypatch.setattr(litellm, "callbacks", [Redact()])
     first: Final = await invoke("messages", recording_server, {}, native=native)
     assert isinstance(first, dict)
-    assert first["content"] == redacted
+    assert [block.text for block in blocks.validate_python(first["content"])] == ["redacted"]
     await asyncio.gather(*tuple(_PENDING_CACHE_WRITES))
     hit: Final = await invoke("messages", recording_server, {}, native=native)
     assert isinstance(hit, dict)
-    assert hit["content"] == redacted
+    assert [block.text for block in blocks.validate_python(hit["content"])] == ["redacted"]
     assert len(recording_server.requests) == 1
 
 
