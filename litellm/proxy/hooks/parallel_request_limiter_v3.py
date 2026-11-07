@@ -694,6 +694,22 @@ def _tpm_limited_tags(call_stash: RequestRateLimiterStash | None, kwargs: Mappin
     return connection_stash.tpm_limited_tags
 
 
+_GOOGLE_GENAI_CONFIG_FIELDS: Final = ("config", "generationConfig", "generation_config")
+
+
+def _google_genai_config_field(data: object) -> str | None:
+    if not isinstance(data, Mapping):
+        return None
+    return next((field for field in _GOOGLE_GENAI_CONFIG_FIELDS if data.get(field)), None)
+
+
+def _google_genai_request_config(data: object) -> object:
+    config_field: Final = _google_genai_config_field(data)
+    if config_field is None or not isinstance(data, Mapping):
+        return None
+    return data[config_field]
+
+
 def _parse_output_cap_value(raw_value: object) -> int | None:
     if isinstance(raw_value, bool) or not isinstance(raw_value, (int, float, str)):
         return None
@@ -815,6 +831,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         data: object,
         call_type: str | None,
     ) -> Mapping[str, object] | None:
+        config: Final = _google_genai_request_config(data)
         contents: Final = data.get("contents") if isinstance(data, dict) else None
         if (
             not isinstance(data, dict)
@@ -824,7 +841,6 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             return None
         from litellm.google_genai.adapters.transformation import GoogleGenAIAdapter
 
-        config: Final = data.get("config") if "config" in data else data.get("generationConfig")
         return GoogleGenAIAdapter().translate_generate_content_to_completion(
             model=data.get("model") if isinstance(data.get("model"), str) else "",
             contents=contents,
@@ -838,10 +854,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
     @staticmethod
     def _get_explicit_output_cap(data: object, call_type: str | None) -> int | None:
-        if not isinstance(data, dict):
-            return None
         if call_type in GOOGLE_GENAI_NATIVE_CALL_TYPES:
-            config: Final = data.get("config") if "config" in data else data.get("generationConfig")
+            config: Final = _google_genai_request_config(data)
             google_cap_values: Final = tuple(
                 parsed
                 for field in ("maxOutputTokens", "max_output_tokens")
@@ -850,6 +864,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 if parsed is not None
             )
             return max(google_cap_values, default=None)
+        if not isinstance(data, dict):
+            return None
         if call_type in RESPONSES_API_CALL_TYPES:
             responses_cap: Final = _parse_output_cap_value(data.get("max_output_tokens"))
             if responses_cap is None:
@@ -878,13 +894,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
     @staticmethod
     def get_output_candidate_count(data: object, call_type: str | None = None) -> int:
+        config: Final = _google_genai_request_config(data) if call_type in GOOGLE_GENAI_NATIVE_CALL_TYPES else None
         if not isinstance(data, Mapping):
             return 1
-        config: Final = (
-            (data.get("config") if "config" in data else data.get("generationConfig"))
-            if call_type in GOOGLE_GENAI_NATIVE_CALL_TYPES
-            else None
-        )
         candidate_values: Final = (
             data.get("n"),
             data.get("best_of"),
@@ -920,6 +932,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         estimate; when it exceeds the safety floor, the cap is raised to that
         value instead of clamping every tenant to the same floor.
         """
+        google_config_field: Final = _google_genai_config_field(data) or "config"
         if not isinstance(data, dict):
             return
         base_capped_floor: Final = PROXY_MaxParallelRequestsHandler_v3.no_max_tokens_output_floor(min_configured_limit)
@@ -940,10 +953,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             return
         effective_cap: Final = max(capped_floor, configured_output_tokens or 0)
         if call_type in GOOGLE_GENAI_NATIVE_CALL_TYPES:
-            config_field: Final = "config" if "config" in data or "generationConfig" not in data else "generationConfig"
-            config: Final = data.get(config_field)
+            config: Final = data.get(google_config_field)
             if config is None or isinstance(config, dict):
-                data[config_field] = {  # rebind-ok: routed request needs cap
+                data[google_config_field] = {  # rebind-ok: routed request needs cap
                     **(config or {}),
                     "maxOutputTokens": effective_cap,
                 }

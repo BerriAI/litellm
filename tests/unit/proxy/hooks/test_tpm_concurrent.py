@@ -1243,7 +1243,7 @@ async def test_project_otpm_reserves_largest_conflicting_output_cap(rate_limiter
     "call_type",
     ["agenerate_content", "agenerate_content_stream"],
 )
-@pytest.mark.parametrize("config_field", ["config", "generationConfig"])
+@pytest.mark.parametrize("config_field", ["config", "generationConfig", "generation_config"])
 async def test_project_otpm_rejects_google_genai_native_output_cap(
     rate_limiter,
     call_type,
@@ -1278,10 +1278,12 @@ async def test_project_otpm_rejects_google_genai_native_output_cap(
     ["agenerate_content", "agenerate_content_stream"],
 )
 @pytest.mark.parametrize("candidate_count_field", ["candidateCount", "candidate_count"])
+@pytest.mark.parametrize("config_field", ["config", "generationConfig", "generation_config"])
 async def test_project_otpm_rejects_google_genai_native_candidate_count(
     rate_limiter,
     call_type,
     candidate_count_field,
+    config_field,
 ):
     handler, cache = rate_limiter
     model = "gemini/gemini-3-flash-preview"
@@ -1298,7 +1300,7 @@ async def test_project_otpm_rejects_google_genai_native_candidate_count(
             data={
                 "model": model,
                 "contents": [{"role": "user", "parts": [{"text": "Hello"}]}],
-                "config": {
+                config_field: {
                     "maxOutputTokens": 50,
                     candidate_count_field: 4,
                 },
@@ -1314,7 +1316,7 @@ async def test_project_otpm_rejects_google_genai_native_candidate_count(
     "call_type",
     ["agenerate_content", "agenerate_content_stream"],
 )
-@pytest.mark.parametrize("config_field", [None, "config", "generationConfig"])
+@pytest.mark.parametrize("config_field", [None, "config", "generationConfig", "generation_config"])
 async def test_project_otpm_injects_google_genai_native_output_cap(
     rate_limiter,
     call_type,
@@ -1346,6 +1348,9 @@ async def test_project_otpm_injects_google_genai_native_output_cap(
     assert stash.otpm_reserved_tokens == 10
     expected_config_field = config_field or "config"
     assert data[expected_config_field]["maxOutputTokens"] == 10
+    assert [field for field in ("config", "generationConfig", "generation_config") if field in data] == [
+        expected_config_field
+    ]
     assert "max_tokens" not in data
 
 

@@ -199,7 +199,7 @@ def test_stream_generate_content_relays_gemini_sse_frames(
 @pytest.mark.parametrize("prefix", ["/v1beta/models", "/models"])
 def test_generate_content_accepts_snake_case_top_level_fields(gateway: Gateway, prefix: str) -> None:
     pytest.skip(
-        "BUG: top-level snake_case generation_config, tool_config and safety_settings are dropped before reaching Gemini"
+        "BUG: top-level snake_case tool_config and safety_settings are dropped before reaching Gemini"
     )
 
     def respond(request: Request) -> Reply:
