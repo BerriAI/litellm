@@ -586,16 +586,18 @@ async def test_search_sends_aws_native_filters_with_a_type_key_unchanged(
         pytest.param("department=hr", id="string"),
     ],
 )
+@pytest.mark.parametrize("drop_params_source", ["off", "request", "global"])
 @pytest.mark.asyncio
-async def test_search_without_drop_params_ignores_non_object_filters(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, filters: object
+async def test_search_ignores_non_object_filters(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, filters: object, drop_params_source: str
 ):
     import litellm
 
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    monkeypatch.setattr(litellm, "drop_params", False)
+    monkeypatch.setattr(litellm, "drop_params", drop_params_source == "global")
+    request_kwargs: Final = {"drop_params": True} if drop_params_source == "request" else {}
 
-    retrieve_route: Final = await _search_with_filters(respx_mock, filters)
+    retrieve_route: Final = await _search_with_filters(respx_mock, filters, **request_kwargs)
 
     assert retrieve_route.call_count == 1
     assert _sent_filter(retrieve_route) is None
