@@ -135,7 +135,9 @@ def test_alias_of_rows_are_served_as_their_target_and_dangling_ones_are_dropped(
 ) -> None:
     raw: Final = {
         "real": {"litellm_provider": "openai", "mode": "chat", "input_cost_per_token": 1e-6},
+        "other": {"litellm_provider": "openai", "mode": "chat", "aliases": ["twin-latest"]},
         "real-latest": {"alias_of": "real"},
+        "twin-latest": {"alias_of": "real"},
         "ghost-latest": {"alias_of": "ghost"},
         "chain-latest": {"alias_of": "real-latest"},
         "listed-latest": {"alias_of": "missing", "aliases": ["extra"]},
@@ -144,9 +146,10 @@ def test_alias_of_rows_are_served_as_their_target_and_dangling_ones_are_dropped(
         finalized: Final = _finalize_model_cost_map(raw)
     assert finalized["real-latest"] == finalized["real"]
     assert "alias_of" not in finalized["real"]
-    assert set(finalized) == {"real", "real-latest"}
+    assert set(finalized) == {"real", "other", "real-latest", "twin-latest"}
     assert finalized["real-latest"]["litellm_provider"] == "openai"
-    assert {"ghost-latest", "chain-latest", "listed-latest"} == {
+    assert finalized["twin-latest"] == finalized["other"]
+    assert {"ghost-latest", "chain-latest", "listed-latest", "twin-latest"} == {
         record.getMessage().split("'")[1] for record in caplog.records
     }
 

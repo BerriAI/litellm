@@ -452,6 +452,19 @@ fn a_dangling_alias_of_row_is_rejected_and_dropped_from_the_written_document() {
 }
 
 #[rstest]
+fn an_alias_of_row_with_other_fields_is_never_served() {
+    let parsed = loaded(json!({
+        "Real": {"litellm_provider": "t"},
+        "real-latest": {"alias_of": "Real", "mode": "chat"}
+    }));
+    assert!(parsed.value.lookup("real-latest").is_none());
+    let (catalog, removed) = parsed.value.without_rejected(&parsed.errors);
+    assert_eq!(removed.len(), 1);
+    assert!(catalog.lookup("real-latest").is_none());
+    assert_eq!(written(&catalog), r#"{"Real":{"litellm_provider":"t"}}"#);
+}
+
+#[rstest]
 fn a_pointer_row_that_repeats_a_listed_alias_is_dropped_and_the_model_is_kept() {
     let parsed = loaded(json!({
         "Real": {"litellm_provider": "t", "aliases": ["real-latest"]},
