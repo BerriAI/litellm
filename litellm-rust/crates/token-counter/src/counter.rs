@@ -124,7 +124,31 @@ impl TokenCounter {
                 .sum::<Result<usize, _>>()?,
             None => 0,
         };
-        Ok(TOKENS_PER_MESSAGE + role_tokens + name_tokens + content_tokens)
+        // Python counts only each tool call's `arguments` string
+        // (`_count_function_call_tokens`); names ride with the tool
+        // definitions and `tool_choice`.
+        let tool_call_tokens = match &message.tool_calls {
+            Some(calls) => calls
+                .iter()
+                .map(|call| self.count_text(call.function.arguments.as_deref().unwrap_or("")))
+                .sum::<Result<usize, _>>()?,
+            None => 0,
+        };
+        let tool_call_id_tokens = match &message.tool_call_id {
+            Some(id) => self.count_text(id)?,
+            None => 0,
+        };
+        let legacy_call_tokens = match &message.function_call {
+            Some(call) => self.count_text(call.arguments.as_deref().unwrap_or(""))?,
+            None => 0,
+        };
+        Ok(TOKENS_PER_MESSAGE
+            + role_tokens
+            + name_tokens
+            + content_tokens
+            + tool_call_tokens
+            + tool_call_id_tokens
+            + legacy_call_tokens)
     }
 
     fn count_content_item(&self, item: &ContentItem) -> Result<usize, Error> {
