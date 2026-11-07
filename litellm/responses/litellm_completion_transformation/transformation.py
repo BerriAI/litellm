@@ -71,7 +71,11 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     is_present_non_string,
     is_unhashable_value_behind,
 )
-from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field, parts_of
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import (
+    is_anthropic_tool_search_use,
+    message_field,
+    parts_of,
+)
 from litellm.llms.anthropic.common_utils import (
     anthropic_server_tool_call_params,
     anthropic_server_tool_calls,
@@ -617,14 +621,56 @@ def _replayed_assistant_without_tool_search_uses(message: Mapping[str, object]) 
     )
 
 
-def _without_stored_tool_search_uses(message: SessionMessage, search_call_ids: frozenset[str]) -> SessionMessage | None:
+def _server_tool_search_ids(message: object) -> frozenset[str]:
+    return frozenset(
+        tool_id
+        for call in anthropic_server_tool_call_params(message)
+        if is_anthropic_tool_search_use(tool_id := call["id"] or "", call["function"].get("name") or "")
+    )
+
+
+def _holds_stored_tool_search(message: object) -> bool:
+    return holds_tool_search_use(message) or bool(_server_tool_search_ids(message))
+
+
+def _provider_fields_without_tool_searches(message: object, search_ids: frozenset[str]) -> Mapping[object, object]:
+    fields: Final = validated_object_mapping(message_field(message, "provider_specific_fields")) or {}
+    return {
+        **fields,
+        "server_tool_calls": [
+            call for call in anthropic_server_tool_call_params(message) if (call["id"] or "") not in search_ids
+        ],
+        "tool_results": [
+            result
+            for result in parts_of(fields.get("tool_results"))
+            if message_field(result, "tool_use_id") not in search_ids
+        ],
+    }
+
+
+def _without_server_tool_searches(message: SessionMessage) -> SessionMessage:
+    search_ids: Final = _server_tool_search_ids(message)
+    if not search_ids:
+        return message
+    fields: Final = _provider_fields_without_tool_searches(message, search_ids)
     if isinstance(message, Message):
-        return without_tool_search_uses(message)
-    if answers_tool_search(message, search_call_ids):
-        return None
-    if isinstance(message, Mapping) and holds_tool_search_use(message):
-        return _replayed_assistant_without_tool_search_uses(message)
+        return message.model_copy(update={"provider_specific_fields": fields})
+    if isinstance(message, Mapping):
+        return cast(  # cast-ok: the stored assistant message minus its search keeps every other field as stored
+            SessionMessage, {**message, "provider_specific_fields": fields}
+        )
     return message
+
+
+def _without_stored_tool_search_uses(message: SessionMessage, search_call_ids: frozenset[str]) -> SessionMessage | None:
+    kept: Final = _without_server_tool_searches(message)
+    if isinstance(kept, Message):
+        return without_tool_search_uses(kept)
+    if answers_tool_search(kept, search_call_ids):
+        return None
+    if isinstance(kept, Mapping) and holds_tool_search_use(kept):
+        return _replayed_assistant_without_tool_search_uses(kept)
+    return kept
 
 
 def _instruction_messages(messages: Sequence[SessionMessage]) -> tuple[SessionMessage, ...]:
@@ -1548,7 +1594,7 @@ class LiteLLMCompletionResponsesConfig:
             LiteLLMCompletionResponsesConfig._without_tool_search_uses_the_request_cannot_run(
                 stored_messages, route, _OBJECT_LIST_ADAPTER.validate_python(request_fields.get("tools") or [])
             )
-            if any(holds_tool_search_use(message) for message in stored_messages)
+            if any(_holds_stored_tool_search(message) for message in stored_messages)
             else stored_messages
         )
         session_messages: Final = (

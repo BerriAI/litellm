@@ -1875,6 +1875,73 @@ async def test_previous_response_id_drops_a_stored_search_when_the_follow_up_sen
     assert next(message["content"] for message in messages if message["role"] == "assistant") == [_WEATHER_USE]
 
 
+_SERVER_HELD_SEARCH_TURN: Final = {
+    **_search_turn([]),
+    "proxy_server_request": {"model": _MODEL, "input": list(_WEATHER_QUESTION)},
+    "response": {
+        "id": "chatcmpl-search-turn",
+        "object": "chat.completion",
+        "created": 0,
+        "model": _MODEL,
+        "choices": [
+            {
+                "index": 0,
+                "finish_reason": "tool_calls",
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "toolu_01Weather",
+                            "type": "function",
+                            "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+                        }
+                    ],
+                    "provider_specific_fields": {
+                        "server_tool_calls": [
+                            {
+                                "id": "srvtoolu_01Search",
+                                "type": "function",
+                                "function": {"name": "tool_search_tool_regex", "arguments": '{"pattern": "weather"}'},
+                            }
+                        ],
+                        "tool_results": [_SEARCH_RESULT],
+                    },
+                },
+            }
+        ],
+    },
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("tools", "assistant_content"),
+    [
+        (list(_SEARCHABLE_TOOLS), [_SEARCH_USE, _SEARCH_RESULT, _WEATHER_USE]),
+        ([{key: value for key, value in _WEATHER_TOOL.items() if key != "defer_loading"}], [_WEATHER_USE]),
+    ],
+    ids=["follow_up_sends_the_search_tool", "follow_up_sends_no_search_tool"],
+)
+async def test_previous_response_id_replays_a_search_claude_ran_only_while_the_follow_up_sends_a_search_tool(
+    tools: list[Mapping[str, object]], assistant_content: list[Mapping[str, object]]
+) -> None:
+    anthropic: Final = _RecordingRawAnthropicMessages()
+
+    with patch("litellm.proxy.proxy_server.prisma_client", _FakePrismaClient([_SERVER_HELD_SEARCH_TURN])):
+        await litellm.aresponses(
+            model=_MODEL,
+            previous_response_id="chatcmpl-search-turn",
+            input=[_WEATHER_ANSWER, {"role": "user", "content": "And in Osaka?"}],
+            tools=tools,
+            api_key="sk-ant-fake",
+            client=AsyncHTTPHandler(transport=httpx.MockTransport(anthropic)),
+        )
+
+    messages: Final = json.loads(anthropic.body)["messages"]
+    assert next(message["content"] for message in messages if message["role"] == "assistant") == assistant_content
+
+
 @pytest.mark.asyncio
 async def test_previous_response_id_drops_a_search_the_stored_turn_got_as_input_items_off_anthropic() -> None:
     messages: Final = await _follow_up_messages_after(_STATELESS_SEARCH_TURN, "mistral/mistral-small-latest", "mistral")
