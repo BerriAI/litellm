@@ -393,7 +393,9 @@ async fn an_s3_body_that_stalls_after_the_headers_times_out() {
     .expect("the attempt timeout bounds the body read")
     .unwrap_err();
     assert!(
-        failed.reason.starts_with(&format!("S3 error fetching {url}: ")),
+        failed
+            .reason
+            .starts_with(&format!("S3 error fetching {url}: ")),
         "{}",
         failed.reason
     );
