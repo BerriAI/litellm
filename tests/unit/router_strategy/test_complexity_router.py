@@ -7636,7 +7636,8 @@ class TestChildSessionTierPins:
 
     @staticmethod
     def _normalized_request(
-        surface: str, session_id: str | None, caller: str = "caller-a", child: bool = True
+        surface: str, session_id: str | None, caller: str = "caller-a", child: bool = True,
+        headers: Mapping[str, str] | None = None,
     ) -> tuple[dict[str, object], str]:
         from litellm.proxy.litellm_pre_call_utils import (
             LiteLLMProxyRequestSetup,
@@ -7647,12 +7648,16 @@ class TestChildSessionTierPins:
             "chat": "/v1/chat/completions", "responses": "/v1/responses", "messages": "/v1/messages"
         }[surface]
         bucket: Final = metadata_variable_name_for_route(route)
-        data: Final[dict[str, object]] = {bucket: {"user_api_key_hash": caller, "user_api_key_request_route": route}}
+        request_headers: Final = dict(headers) if headers is not None else {
+            **({"X-Session-Id": session_id} if session_id is not None else {}),
+            **({"x-parent-session-id": "parent-session"} if child else {}),
+        }
+        data: Final[dict[str, object]] = {
+            bucket: {"user_api_key_hash": caller, "user_api_key_request_route": route},
+            "proxy_server_request": {"headers": request_headers},
+        }
         LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
-            headers={
-                **({"X-Session-Id": session_id} if session_id is not None else {}),
-                **({"x-parent-session-id": "parent-session"} if child else {}),
-            },
+            headers=request_headers,
             data=data,
             _metadata_variable_name=bucket,
         )
@@ -7661,11 +7666,12 @@ class TestChildSessionTierPins:
     async def _route(
         self, router: Router, surface: str, session_id: str | None, prompt: str | None,
         expected_tier: str, expected_cause: str, caller: str = "caller-a", child: bool = True,
-        expected_deployment: str | None = None,
+        expected_deployment: str | None = None, headers: Mapping[str, str] | None = None,
+        model: str = "child-tier-router",
     ) -> str:
         from litellm.router_utils.pre_call_checks.deployment_affinity_check import DeploymentAffinityCheck
 
-        data, bucket = self._normalized_request(surface, session_id, caller, child)
+        data, bucket = self._normalized_request(surface, session_id, caller, child, headers)
         turn: Final[dict[str, object]] = (
             {"role": "user", "content": prompt} if prompt is not None else
             {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "call_1", "content": "done"}]}
@@ -7684,7 +7690,7 @@ class TestChildSessionTierPins:
         if surface == "responses":
             data["input"] = turns
         selected: Final = await router.async_get_available_deployment(
-            model="child-tier-router", request_kwargs=data,
+            model=model, request_kwargs=data,
             messages=None if surface == "responses" else turns,
             input=turns if surface == "responses" else None,
         )
@@ -7754,6 +7760,101 @@ class TestChildSessionTierPins:
             assert await self._route(
                 router, "chat", "child-session-a", "Hello!", "REASONING", "session_affinity_pin",
                 expected_deployment=parent,
+            ) == parent
+        finally:
+            router.discard()
+
+    @staticmethod
+    def _claude_code_headers(agent_id: str | None = None) -> Mapping[str, str]:
+        return {
+            "x-claude-code-session-id": "parent-session",
+            "x-app": "cli",
+            **({"x-claude-code-agent-id": agent_id} if agent_id is not None else {}),
+        }
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("surface", ["chat", "responses", "messages"])
+    async def test_claude_code_subagents_keep_their_tier_without_replacing_the_parent(self, surface: str) -> None:
+        router: Final = self._router()
+        parent_headers: Final = self._claude_code_headers()
+        try:
+            parent: Final = await self._route(
+                router, surface, None, "reason carefully", "REASONING", "literal_keyword_match",
+                headers=parent_headers,
+            )
+            for agent, prompt, tier, cause, model in (
+                ("agent-a-0001", "Hello!", "SIMPLE", "heuristic_scorer", "simple"),
+                ("agent-a-0001", None, "SIMPLE", "user_turn_continuation", "child-tier-router"),
+                (None, None, "REASONING", "user_turn_continuation", "child-tier-router"),
+                ("agent-b-0001", None, "SIMPLE", "heuristic_scorer", "child-tier-router"),
+                ("agent-b-0001", "reason carefully", "REASONING", "literal_keyword_match", "simple"),
+                ("agent-a-0001", None, "SIMPLE", "user_turn_continuation", "child-tier-router"),
+            ):
+                await self._route(
+                    router, surface, None, prompt, tier, cause, headers=self._claude_code_headers(agent),
+                    model=model, expected_deployment=parent if tier == "REASONING" else None,
+                )
+            assert await self._route(
+                router, surface, None, None, "REASONING", "user_turn_continuation",
+                headers=parent_headers, expected_deployment=parent,
+            ) == parent
+        finally:
+            router.discard()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("surface", ["chat", "responses", "messages"])
+    async def test_claude_code_subagent_background_request_does_not_overwrite_pin(self, surface: str) -> None:
+        router: Final = self._router()
+        agent_headers: Final = self._claude_code_headers("subagent-01")
+        parent_headers: Final = self._claude_code_headers()
+        try:
+            # Subagent starts with a reasoning task and pins REASONING
+            subagent_deployment: Final = await self._route(
+                router, surface, None, "reason carefully", "REASONING", "literal_keyword_match",
+                headers=agent_headers, model="child-tier-router",
+            )
+            await self._route(
+                router, surface, None, None, "REASONING", "user_turn_continuation",
+                headers=agent_headers, model="child-tier-router", expected_deployment=subagent_deployment,
+            )
+            # Background request shares the subagent ID and classifies as SIMPLE, but must not overwrite the subagent's pin
+            await self._route(
+                router, surface, None, "Hello!", "SIMPLE", "heuristic_scorer",
+                headers=agent_headers, model="child-tier-router",
+            )
+            # Next subagent tool continuation stays on REASONING
+            await self._route(
+                router, surface, None, None, "REASONING", "user_turn_continuation",
+                headers=agent_headers, model="child-tier-router", expected_deployment=subagent_deployment,
+            )
+
+            # In contrast, the parent session without a subagent ID updates its pin normally on new asks
+            await self._route(
+                router, surface, None, "reason carefully", "REASONING", "literal_keyword_match",
+                headers=parent_headers, model="child-tier-router",
+            )
+            await self._route(
+                router, surface, None, "Hello!", "SIMPLE", "heuristic_scorer",
+                headers=parent_headers, model="child-tier-router",
+            )
+            await self._route(
+                router, surface, None, None, "SIMPLE", "user_turn_continuation",
+                headers=parent_headers, model="child-tier-router",
+            )
+        finally:
+            router.discard()
+
+    @pytest.mark.asyncio
+    async def test_session_affinity_still_shares_the_parent_tier_with_claude_code_subagents(self) -> None:
+        router: Final = self._router(session_affinity=True)
+        try:
+            parent: Final = await self._route(
+                router, "messages", None, "reason carefully", "REASONING", "literal_keyword_match",
+                headers=self._claude_code_headers(),
+            )
+            assert await self._route(
+                router, "messages", None, "Hello!", "REASONING", "session_affinity_pin",
+                headers=self._claude_code_headers("agent-a-0001"), expected_deployment=parent,
             ) == parent
         finally:
             router.discard()

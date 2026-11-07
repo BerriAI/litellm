@@ -4437,6 +4437,21 @@ class ComplexityRouter(CustomLogger):
                 return str(session_id)
         return None
 
+    def _is_child_tier_session(self, request_kwargs: Mapping[str, object]) -> bool:
+        if self.config.classification_mode == "user_turn" and not self.config.session_affinity:
+            child_metadata: Final = next(
+                (
+                    metadata
+                    for metadata in self._iter_metadata_dicts(request_kwargs)
+                    if COMPLEXITY_ROUTER_CHILD_SESSION_ID_METADATA_KEY in metadata
+                ),
+                None,
+            )
+            if child_metadata is not None:
+                child_session: Final = child_metadata[COMPLEXITY_ROUTER_CHILD_SESSION_ID_METADATA_KEY]
+                return bool(isinstance(child_session, str) and child_session)
+        return False
+
     def _get_tier_pin_session_id(self, request_kwargs: Mapping[str, object]) -> str | None:
         if self.config.classification_mode == "user_turn" and not self.config.session_affinity:
             child_metadata: Final = next(
@@ -4746,9 +4761,23 @@ class ComplexityRouter(CustomLogger):
         # classified at or above the floor keeps its ordinary cause, yet on an adaptive router
         # the hard floor constrained its pick, so pinning it would carry a plan-mode-shaped
         # choice past plan mode's exit. No sentinel turn writes the pin, whatever its cause.
+        #
+        # A child/subagent tier pin is established by the subagent's initial task. Background requests
+        # (e.g. from Claude Code) share the subagent ID and may classify as simple queries, but must
+        # not overwrite the subagent's held tier pin (#50444).
+        child_pin_held: Final = (
+            _parse_session_affinity_pin(
+                await read_affinity_pin(self.ctx.health().store, cache_key, self.config.session_affinity_ttl_seconds),
+                self.config.tier_names(),
+            )
+            is not None
+            if cache_key is not None and self._is_child_tier_session(request_kwargs)
+            else False
+        )
         pinnable: Final = (
             cache_key is not None
             and response is not None
+            and not child_pin_held
             and _decision_is_pinnable(response.routing_decision)
             and self._matched_plan_mode_signal(request_kwargs, resolved_messages) is None
         )

@@ -483,6 +483,12 @@ without replacing the parent's tier. Existing trace grouping, per-tier model aff
 affinity retain their session identities. A child without a distinct, usable session ID classifies
 without storing a tier pin. `session_affinity: true` retains precedence and the existing shared-pin behavior
 
+Claude Code subagents send the parent's `x-claude-code-session-id` plus `x-claude-code-agent-id`. When both
+values are valid session IDs, the subagent's tier pin is stored under that session and agent pair, so each
+subagent keeps its own tier and the parent's continuations keep the parent's tier. Once established by the
+subagent's initial ask, background requests sharing that subagent ID cannot overwrite the held pin. The session ID,
+trace grouping, deployment affinity and the Claude Code session router binding still use the parent's session
+
 `session_affinity_ttl_seconds` is the idle window for both the model pin selected by session affinity and the deployment pin. Every request that reuses a pin refreshes its TTL, so a session actively sending requests stays pinned. After the window passes with no pin reuse, the next request classifies again and creates a fresh pin. Omit the setting to track the default of 3600 seconds.
 
 ### Mid-task stall escalation

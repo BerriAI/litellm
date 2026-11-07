@@ -3858,6 +3858,87 @@ async def test_non_child_requests_cannot_forge_a_child_tier_identity(surface: st
     assert updated[get_metadata_variable_name(request)]["session_id"] == "child-01"
 
 
+_CLAUDE_CODE_SESSION: Final = "11111111-2222-3333-4444-555555555555"
+_CLAUDE_CODE_AGENT: Final = "a01ef07d8c218e9cb"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "surface,headers,child_id",
+    [
+        (
+            "messages",
+            {"X-Claude-Code-Session-Id": _CLAUDE_CODE_SESSION, "X-Claude-Code-Agent-Id": _CLAUDE_CODE_AGENT},
+            f"{_CLAUDE_CODE_SESSION}:{_CLAUDE_CODE_AGENT}",
+        ),
+        (
+            "chat/completions",
+            {"x-claude-code-session-id": _CLAUDE_CODE_SESSION, "x-claude-code-agent-id": "agent-b-0001"},
+            f"{_CLAUDE_CODE_SESSION}:agent-b-0001",
+        ),
+        (
+            "responses",
+            {
+                "x-litellm-trace-id": "trace-01",
+                "x-claude-code-session-id": _CLAUDE_CODE_SESSION,
+                "x-claude-code-agent-id": _CLAUDE_CODE_AGENT,
+            },
+            f"{_CLAUDE_CODE_SESSION}:{_CLAUDE_CODE_AGENT}",
+        ),
+    ],
+)
+async def test_claude_code_subagent_gets_its_own_tier_identity_under_the_parent_session(
+    surface: str, headers: dict[str, str], child_id: str
+) -> None:
+    request: Final = _make_request_mock(f"/v1/{surface}", headers)
+    updated: Final = await add_litellm_data_to_request(
+        data={
+            "model": "test-router",
+            "messages": [],
+            "metadata": {COMPLEXITY_ROUTER_CHILD_SESSION_ID_METADATA_KEY: "forged-1"},
+            "litellm_metadata": {COMPLEXITY_ROUTER_CHILD_SESSION_ID_METADATA_KEY: "forged-2"},
+        },
+        request=request,
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=MagicMock(),
+        general_settings={},
+    )
+    metadata: Final = updated[get_metadata_variable_name(request)]
+    assert metadata[COMPLEXITY_ROUTER_CHILD_SESSION_ID_METADATA_KEY] == child_id
+    expected_session: Final = headers.get("x-litellm-trace-id", _CLAUDE_CODE_SESSION)
+    assert metadata["session_id"] == updated["litellm_session_id"] == expected_session
+    assert COMPLEXITY_ROUTER_CHILD_SESSION_ID_METADATA_KEY not in metadata.get("requester_metadata", {})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "headers",
+    [
+        {"x-claude-code-session-id": _CLAUDE_CODE_SESSION},
+        {"x-claude-code-agent-id": _CLAUDE_CODE_AGENT},
+        {"x-claude-code-agent-id": _CLAUDE_CODE_AGENT, "x-session-id": _CLAUDE_CODE_SESSION},
+        {"x-claude-code-session-id": _CLAUDE_CODE_SESSION, "x-claude-code-agent-id": "short"},
+        {"x-claude-code-session-id": _CLAUDE_CODE_SESSION, "x-claude-code-agent-id": "agent id with spaces"},
+        {"x-claude-code-session-id": _CLAUDE_CODE_SESSION, "x-claude-code-agent-id": f"{_CLAUDE_CODE_AGENT}\n"},
+        {"x-claude-code-session-id": "bad", "x-claude-code-agent-id": _CLAUDE_CODE_AGENT},
+    ],
+)
+async def test_claude_code_requests_without_a_valid_subagent_identity_keep_the_session_tier_pin(
+    headers: dict[str, str],
+) -> None:
+    request: Final = _make_request_mock("/v1/messages", headers)
+    updated: Final = await add_litellm_data_to_request(
+        data={"model": "test-router", "messages": [], "litellm_metadata": {
+            COMPLEXITY_ROUTER_CHILD_SESSION_ID_METADATA_KEY: "forged-1"
+        }},
+        request=request,
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=MagicMock(),
+        general_settings={},
+    )
+    assert COMPLEXITY_ROUTER_CHILD_SESSION_ID_METADATA_KEY not in updated[get_metadata_variable_name(request)]
+
+
 def test_add_litellm_metadata_from_request_headers_x_litellm_session_id_sets_chain_id():
     """x-litellm-session-id sets both metadata and top-level litellm_session_id/litellm_trace_id for call chaining."""
     headers = {"x-litellm-session-id": "bar"}
