@@ -139,7 +139,7 @@ def initialize_callbacks_on_proxy(
     premium_user: bool,
     config_file_path: str,
     litellm_settings: dict,
-    callback_specific_params: dict | None = None,
+    callback_specific_params: Mapping[str, object] | None = None,
 ):
     if not isinstance(callback_specific_params, dict):
         callback_specific_params = {}
@@ -370,6 +370,14 @@ def initialize_callbacks_on_proxy(
                     callback_specific_params=callback_specific_params,
                 )
                 imported_list.append(websearch_interception_obj)
+            elif isinstance(callback, str) and callback == "image_description_interception":
+                from litellm.integrations.image_description_interception.handler import (
+                    ImageDescriptionInterceptionLogger,
+                )
+
+                imported_list.append(
+                    ImageDescriptionInterceptionLogger.initialize_from_proxy_config(callback_specific_params)
+                )
             elif isinstance(callback, str) and callback == "datadog_cost_management":
                 from litellm.integrations.datadog.datadog_cost_management import (
                     DatadogCostManagementLogger,
