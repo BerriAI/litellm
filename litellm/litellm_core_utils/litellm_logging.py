@@ -4593,6 +4593,7 @@ class Logging(LiteLLMLoggingBaseClass):
         from litellm.completion_extras.litellm_responses_transformation.transformation import (
             LiteLLMResponsesTransformationHandler,
             responses_provider_metadata,
+            serves_anthropic_messages,
         )
 
         served_id: Final = _provider_response_id(result)
@@ -4607,6 +4608,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 optional_params={},
                 litellm_params={},
                 encoding=litellm.encoding,
+                keeps_every_reasoning_item=serves_anthropic_messages(self),
             )
             translated.id = served_id or translated.id
             return translated

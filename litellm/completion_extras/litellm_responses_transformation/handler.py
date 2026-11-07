@@ -182,6 +182,9 @@ class ResponsesToCompletionBridgeHandler:
         model_response: Final = validated_kwargs["model_response"]
         logging_obj: Final = validated_kwargs["logging_obj"]
         custom_llm_provider: Final = validated_kwargs["custom_llm_provider"]
+        from .transformation import serves_anthropic_messages
+
+        serves_messages_client: Final = serves_anthropic_messages(logging_obj)
         if kwargs.get("stream") is True and "stream" not in optional_params:
             optional_params = {**optional_params, "stream": True}
 
@@ -222,6 +225,7 @@ class ResponsesToCompletionBridgeHandler:
                 encoding=validated_kwargs["encoding"],
                 api_key=kwargs.get("api_key"),
                 json_mode=kwargs.get("json_mode"),
+                keeps_every_reasoning_item=serves_messages_client,
             )
         elif isinstance(result, ModelResponse):
             if not stream:
@@ -247,6 +251,7 @@ class ResponsesToCompletionBridgeHandler:
                 encoding=validated_kwargs["encoding"],
                 api_key=kwargs.get("api_key"),
                 json_mode=kwargs.get("json_mode"),
+                keeps_every_reasoning_item=serves_messages_client,
             )
         else:
             if self._is_preformatted_cached_chat_stream(result):
@@ -260,6 +265,7 @@ class ResponsesToCompletionBridgeHandler:
                 structured_output=is_structured_output_request(
                     cast("Mapping[str, object]", optional_params)  # cast-ok: optional_params is an untyped dict
                 ),
+                streams_reasoning_signatures=serves_messages_client,
             )
             streamwrapper: Final = CustomStreamWrapper(
                 completion_stream=completion_stream,
@@ -282,6 +288,9 @@ class ResponsesToCompletionBridgeHandler:
         model_response: Final = validated_kwargs["model_response"]
         logging_obj: Final = validated_kwargs["logging_obj"]
         custom_llm_provider: Final = validated_kwargs["custom_llm_provider"]
+        from .transformation import serves_anthropic_messages
+
+        serves_messages_client: Final = serves_anthropic_messages(logging_obj)
         if kwargs.get("stream") is True and "stream" not in optional_params:
             optional_params = {**optional_params, "stream": True}
 
@@ -325,6 +334,7 @@ class ResponsesToCompletionBridgeHandler:
                 encoding=validated_kwargs["encoding"],
                 api_key=kwargs.get("api_key"),
                 json_mode=kwargs.get("json_mode"),
+                keeps_every_reasoning_item=serves_messages_client,
             )
         elif isinstance(result, ModelResponse):
             if not stream:
@@ -350,6 +360,7 @@ class ResponsesToCompletionBridgeHandler:
                 encoding=validated_kwargs["encoding"],
                 api_key=kwargs.get("api_key"),
                 json_mode=kwargs.get("json_mode"),
+                keeps_every_reasoning_item=serves_messages_client,
             )
         else:
             if self._is_preformatted_cached_chat_stream(result):
@@ -363,6 +374,7 @@ class ResponsesToCompletionBridgeHandler:
                 structured_output=is_structured_output_request(
                     cast("Mapping[str, object]", optional_params)  # cast-ok: optional_params is an untyped dict
                 ),
+                streams_reasoning_signatures=serves_messages_client,
             )
             streamwrapper: Final = CustomStreamWrapper(
                 completion_stream=completion_stream,

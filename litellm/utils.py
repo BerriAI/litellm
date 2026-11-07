@@ -51,7 +51,7 @@ import litellm.litellm_core_utils
 
 # audio_utils.utils is lazy-loaded - only imported when needed for transcription calls
 import litellm.litellm_core_utils.json_validation_rule
-from litellm._internal_context import is_internal_call
+from litellm._internal_context import is_internal_call, is_resent_failure
 from litellm._lazy_imports import (
     _get_modified_max_tokens,
     get_default_encoding,
@@ -1980,12 +1980,13 @@ def client(original_function):
                         retry_policy=kwargs.get("retry_policy"),
                     )
                     kwargs["retry_policy"] = reset_retry_policy()  # prevent infinite loops
-                litellm.num_retries = None  # set retries to None to prevent infinite loops
+                if not is_resent_failure(e):
+                    litellm.num_retries = None  # set retries to None to prevent infinite loops
                 context_window_fallback_dict: Final = kwargs.get("context_window_fallback_dict", {})
 
                 is_completion_litellm_router_call: Final = _is_litellm_router_call(kwargs, is_async=False)
                 if (
-                    num_retries and not is_completion_litellm_router_call
+                    num_retries and not is_completion_litellm_router_call and not is_resent_failure(e)
                 ):  # only enter this if call is not from litellm router/proxy. router has it's own logic for retrying
                     if (
                         isinstance(e, openai.APIError)
@@ -2015,11 +2016,12 @@ def client(original_function):
                         retry_policy=kwargs.get("retry_policy"),
                     )
                     kwargs["retry_policy"] = reset_retry_policy()  # prevent infinite loops
-                litellm.num_retries = None  # set retries to None to prevent infinite loops
+                if not is_resent_failure(e):
+                    litellm.num_retries = None  # set retries to None to prevent infinite loops
 
                 is_responses_litellm_router_call: Final = _is_litellm_router_call(kwargs, is_async=False)
                 if (
-                    num_retries and not is_responses_litellm_router_call
+                    num_retries and not is_responses_litellm_router_call and not is_resent_failure(e)
                 ):  # only enter this if call is not from litellm router/proxy. router has it's own logic for retrying
                     if (
                         isinstance(e, openai.APIError)
@@ -2032,7 +2034,7 @@ def client(original_function):
             end_time = datetime.datetime.now()
 
             # LOG FAILURE - handle streaming failure logging in the _next_ object, remove `handle_failure` once it's deprecated
-            if logging_obj:
+            if logging_obj and not is_resent_failure(e):
                 logging_obj.failure_handler(
                     e, traceback_exception, start_time, end_time
                 )  # DO NOT MAKE THREADED - router retry fallback relies on this!
@@ -2279,7 +2281,7 @@ def client(original_function):
             # Reuse the timestamp taken right when the deployment call itself failed, before
             # the failure hook ran, so a slow callback doesn't inflate the reported duration.
             end_time = _deployment_call_end_time if _deployment_call_end_time is not None else datetime.datetime.now()  # noqa: DTZ005  # matches the naive datetimes this whole function already times start_time/end_time with
-            if logging_obj and not _is_litellm_internal_call:
+            if logging_obj and not _is_litellm_internal_call and not is_resent_failure(e):
                 unbind_budget_reservation_from_callbacks(logging_obj.litellm_params)
                 try:
                     logging_obj.failure_handler(
@@ -2300,7 +2302,10 @@ def client(original_function):
                 is_acompletion_litellm_router_call: Final = _is_litellm_router_call(kwargs, is_async=True)
 
                 if (
-                    num_retries and not is_acompletion_litellm_router_call and not isinstance(e, ImportError)
+                    num_retries
+                    and not is_acompletion_litellm_router_call
+                    and not isinstance(e, ImportError)
+                    and not is_resent_failure(e)
                 ):  # only enter this if call is not from litellm router/proxy. router has it's own logic for retrying
                     try:
                         litellm.num_retries = None  # set retries to None to prevent infinite loops
@@ -2311,8 +2316,9 @@ def client(original_function):
                         elif isinstance(e, openai.APIError):  # generic api error
                             kwargs["retry_strategy"] = "constant_retry"
                         result = await litellm.acompletion_with_retries(*args, **kwargs)
-                    except Exception:
-                        pass
+                    except Exception as retry_error:
+                        if is_resent_failure(retry_error):
+                            raise
                     else:
                         return result
                 elif (
@@ -2331,7 +2337,10 @@ def client(original_function):
                 is_aresponses_litellm_router_call: Final = _is_litellm_router_call(kwargs, is_async=True)
 
                 if (
-                    num_retries and not is_aresponses_litellm_router_call and not isinstance(e, ImportError)
+                    num_retries
+                    and not is_aresponses_litellm_router_call
+                    and not isinstance(e, ImportError)
+                    and not is_resent_failure(e)
                 ):  # only enter this if call is not from litellm router/proxy. router has it's own logic for retrying
                     try:
                         litellm.num_retries = None  # set retries to None to prevent infinite loops
@@ -2342,8 +2351,9 @@ def client(original_function):
                         elif isinstance(e, openai.APIError):  # generic api error
                             kwargs["retry_strategy"] = "constant_retry"
                         result = await litellm.aresponses_with_retries(*args, **kwargs)
-                    except Exception:
-                        pass
+                    except Exception as retry_error:
+                        if is_resent_failure(retry_error):
+                            raise
                     else:
                         return result
 

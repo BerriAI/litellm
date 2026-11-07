@@ -27,6 +27,7 @@ from functools import partial
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, Union, cast, get_args
 
+from litellm._internal_context import is_resent_failure
 from litellm._logging import redact_string
 from litellm._uuid import uuid
 
@@ -6242,6 +6243,10 @@ def completion(
         )
 
 
+def _is_not_resent_failure(error: BaseException) -> bool:
+    return isinstance(error, Exception) and not is_resent_failure(error)
+
+
 def completion_with_retries(*args, **kwargs):
     """
     Executes a litellm.completion() with 3 retries
@@ -6261,10 +6266,15 @@ def completion_with_retries(*args, **kwargs):
         retryer = tenacity.Retrying(
             wait=tenacity.wait_exponential(multiplier=1, max=10),
             stop=tenacity.stop_after_attempt(num_retries),
+            retry=tenacity.retry_if_exception(_is_not_resent_failure),
             reraise=True,
         )
     else:
-        retryer = tenacity.Retrying(stop=tenacity.stop_after_attempt(num_retries), reraise=True)
+        retryer = tenacity.Retrying(
+            stop=tenacity.stop_after_attempt(num_retries),
+            retry=tenacity.retry_if_exception(_is_not_resent_failure),
+            reraise=True,
+        )
     return retryer(original_function, *args, **kwargs)
 
 
@@ -6287,10 +6297,15 @@ async def acompletion_with_retries(*args, **kwargs):
         retryer = tenacity.AsyncRetrying(
             wait=tenacity.wait_exponential(multiplier=1, max=10),
             stop=tenacity.stop_after_attempt(num_retries),
+            retry=tenacity.retry_if_exception(_is_not_resent_failure),
             reraise=True,
         )
     else:
-        retryer = tenacity.AsyncRetrying(stop=tenacity.stop_after_attempt(num_retries), reraise=True)
+        retryer = tenacity.AsyncRetrying(
+            stop=tenacity.stop_after_attempt(num_retries),
+            retry=tenacity.retry_if_exception(_is_not_resent_failure),
+            reraise=True,
+        )
     return await retryer(original_function, *args, **kwargs)
 
 
@@ -6315,10 +6330,15 @@ def responses_with_retries(*args, **kwargs):
         retryer = tenacity.Retrying(
             wait=tenacity.wait_exponential(multiplier=1, max=10),
             stop=tenacity.stop_after_attempt(num_retries),
+            retry=tenacity.retry_if_exception(_is_not_resent_failure),
             reraise=True,
         )
     else:
-        retryer = tenacity.Retrying(stop=tenacity.stop_after_attempt(num_retries), reraise=True)
+        retryer = tenacity.Retrying(
+            stop=tenacity.stop_after_attempt(num_retries),
+            retry=tenacity.retry_if_exception(_is_not_resent_failure),
+            reraise=True,
+        )
     return retryer(original_function, *args, **kwargs)
 
 
@@ -6342,10 +6362,15 @@ async def aresponses_with_retries(*args, **kwargs):
         retryer = tenacity.AsyncRetrying(
             wait=tenacity.wait_exponential(multiplier=1, max=10),
             stop=tenacity.stop_after_attempt(num_retries),
+            retry=tenacity.retry_if_exception(_is_not_resent_failure),
             reraise=True,
         )
     else:
-        retryer = tenacity.AsyncRetrying(stop=tenacity.stop_after_attempt(num_retries), reraise=True)
+        retryer = tenacity.AsyncRetrying(
+            stop=tenacity.stop_after_attempt(num_retries),
+            retry=tenacity.retry_if_exception(_is_not_resent_failure),
+            reraise=True,
+        )
     return await retryer(original_function, *args, **kwargs)
 
 
