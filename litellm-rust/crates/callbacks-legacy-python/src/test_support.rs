@@ -86,6 +86,7 @@ FAKES = {
     )(error, ''.join(traceback.format_exception(error)), start, end),
     'submit_success': lambda logger, response, start, end: logger.record('submit', (response, start, end)),
     'async_success_handler': lambda logger, response, start, end: logger.async_success_handler(response, start, end),
+    'mark_async_success_enqueued': lambda logger: logger.record('mark_async_success_enqueued', None),
     'enqueue_logging': lambda coroutine: coroutine.enqueue(),
     'restore_context': lambda logger: logger.record('restore', None),
     'custom_pricing_fields': lambda: ('ocr_cost_per_page',),

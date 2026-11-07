@@ -213,8 +213,10 @@ async def test_deferred_logging_requires_release_and_runs_at_most_once(server: R
     assert "async_log_success_event" not in recorder.names
     assert logger.deferred_success_result is not None
     assert logger.deferred_success_result[0] is response
+    assert not logger.async_success_log_enqueued
     ProxyBaseLLMRequestProcessing._flush_deferred_async_logging(logger, blocked)
     ProxyBaseLLMRequestProcessing._flush_deferred_async_logging(logger, blocked)
+    assert logger.async_success_log_enqueued is not blocked
     await drain_logging()
     events: Final = tuple(event for event in recorder.events if event.name == "async_log_success_event")
     assert len(events) == int(not blocked)

@@ -54,6 +54,9 @@
   "claim_async_success_log": [
     "logger"
   ],
+  "mark_async_success_enqueued": [
+    "logger"
+  ],
   "defer_success": [
     "logger",
     "pending",
