@@ -249,10 +249,9 @@ def _with_builtin_as(
 def allowed_tools_tool_choice_with_builtin_as_function(
     tool_choice: object, is_builtin: Callable[[Mapping[str, object]], bool], function_name: str
 ) -> object:
-    try:
-        parsed: Final = _ALLOWED_TOOLS_TOOL_CHOICE.validate_python(tool_choice)
-    except ValidationError:
+    if parse_allowed_tools_tool_choice(tool_choice) is None:
         return tool_choice
+    parsed: Final = _ALLOWED_TOOLS_TOOL_CHOICE.validate_python(tool_choice)
     match parsed:
         case ChatAllowedToolsToolChoice():
             nested: Final = {"type": "function", "function": {"name": function_name}}

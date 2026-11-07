@@ -375,6 +375,16 @@ def test_a_function_or_mcp_entry_is_never_taken_for_a_builtin():
     assert parse_allowed_tools_tool_choice(rewritten) == parse_allowed_tools_tool_choice(tool_choice)
 
 
-@pytest.mark.parametrize("tool_choice", ["auto", None, {"type": "allowed_tools", "mode": "auto", "tools": []}])
+@pytest.mark.parametrize(
+    "tool_choice",
+    [
+        "auto",
+        None,
+        {"type": "allowed_tools", "mode": "auto", "tools": []},
+        {"type": "allowed_tools", "mode": "auto", "tools": [{"type": "web_search", "name": []}]},
+        {"type": "allowed_tools", "mode": "auto", "tools": [{"type": "web_search"}, {"type": "function", "name": 3}]},
+        {"type": "allowed_tools", "allowed_tools": {"mode": "auto", "tools": [{"type": "web_search", "name": {}}]}},
+    ],
+)
 def test_any_other_or_malformed_choice_is_left_as_sent(tool_choice: object):
     assert allowed_tools_tool_choice_with_builtin_as_function(tool_choice, _is_web_search, "litellm_web_search") is tool_choice
