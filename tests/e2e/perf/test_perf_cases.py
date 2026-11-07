@@ -32,7 +32,7 @@ from setup.podcpu import gateway_cpu_sampler
 from setup.provision import MOCK_PROVIDERS, build_setup, guardrail_url, mock_url
 from setup.run import run_plan
 
-pytestmark = [pytest.mark.perf, pytest.mark.quiet_stack]
+pytestmark = pytest.mark.perf
 _SPEND_SAMPLE: Final = 40
 
 
