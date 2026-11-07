@@ -711,7 +711,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             optional_params=anthropic_messages_optional_request_params,
             max_tokens=max_tokens,
             custom_llm_provider=self._resolved_provider,
-            drop_params=litellm_params.drop_params is True,
+            drop_params=getattr(litellm_params, "drop_params", None) is True,
         )
         if self._report_reasoning_drops:
             warn_non_string_reasoning_effort(requested_reasoning_effort, model)

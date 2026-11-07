@@ -7239,7 +7239,7 @@ def test_response_format_tool_is_forced_only_when_the_model_will_not_think(
         },
         optional_params={},
         model=model,
-        drop_params=False,
+        drop_params=True,
     )
 
     request: Final = config.transform_request(
