@@ -186,23 +186,23 @@ def test_eu_patterns_have_category():
         ), f"Pattern {pattern_name} not in EU PII Patterns category"
 
 
-@pytest.mark.parametrize("pattern_name", ["openai_api_key", "anthropic_api_key", "gemini_api_key"])
-def test_credential_patterns_have_category(pattern_name: str) -> None:
-    assert pattern_name in PATTERN_CATEGORIES.get("Credential Patterns", [])
+def test_provider_key_patterns_are_offered_in_the_ui_as_credential_patterns() -> None:
+    ui_categories: Final = {pattern["name"]: pattern["category"] for pattern in get_pattern_metadata()}
+    assert [ui_categories.get(name) for name in ("openai_api_key", "anthropic_api_key", "gemini_api_key")] == [
+        "Credential Patterns"
+    ] * 3
 
 
 @pytest.mark.parametrize(
     ("pattern_name", "key"),
     [
         pytest.param("openai_api_key", "sk-" + "a" * 20 + "T3BlbkFJ" + "b" * 20, id="openai-legacy"),
-        pytest.param("openai_api_key", "sk-proj-abcdefghijklmnopqrstuvwxyzABCDEF1234567890abcdef", id="openai-project"),
-        pytest.param("openai_api_key", "sk-proj-" + "a" * 20, id="openai-project-shortest"),
-        pytest.param(
-            "openai_api_key", "sk-svcacct-abcdefghijklmnopqrstuvwxyzABCDEF123456", id="openai-service-account"
-        ),
-        pytest.param("openai_api_key", "sk-admin-abcdefghijklmnopqrstuvwxyzABCDEF123456", id="openai-admin"),
-        pytest.param("openai_api_key", "sk-None-abcdefghijklmnopqrstuvwxyz0123456789", id="openai-user-key"),
-        pytest.param("openai_api_key", "sk-proj-abcdefghijklmnopqrstuvwxyz0123456789-", id="openai-trailing-hyphen"),
+        pytest.param("openai_api_key", "sk-proj-" + "a" * 74 + "T3BlbkFJ" + "b" * 74, id="openai-project"),
+        pytest.param("openai_api_key", "sk-proj-" + "a" * 20 + "T3BlbkFJ" + "b" * 20, id="openai-project-shortest"),
+        pytest.param("openai_api_key", "sk-svcacct-" + "a_b-" * 15 + "T3BlbkFJ" + "c-d_" * 15, id="openai-service-account"),
+        pytest.param("openai_api_key", "sk-admin-" + "a" * 58 + "T3BlbkFJ" + "b" * 58, id="openai-admin"),
+        pytest.param("openai_api_key", "sk-None-" + "a" * 20 + "T3BlbkFJ" + "b" * 20, id="openai-user-key"),
+        pytest.param("openai_api_key", "sk-proj-" + "a" * 20 + "T3BlbkFJ" + "b" * 19 + "-", id="openai-trailing-hyphen"),
         pytest.param(
             "anthropic_api_key", "sk-ant-api03-abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOP", id="anthropic-versioned"
         ),
@@ -210,6 +210,7 @@ def test_credential_patterns_have_category(pattern_name: str) -> None:
             "anthropic_api_key", "sk-ant-abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTU", id="anthropic-unversioned"
         ),
         pytest.param("anthropic_api_key", "sk-ant-" + "a" * 20, id="anthropic-shortest"),
+        pytest.param("anthropic_api_key", "sk-ant-api03-" + "a_b-" * 23 + "AA", id="anthropic-urlsafe"),
         pytest.param(
             "anthropic_api_key", "sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789-", id="anthropic-trailing-hyphen"
         ),
@@ -229,12 +230,32 @@ def test_credential_pattern_matches_whole_key(pattern_name: str, key: str) -> No
     assert match.group(0) == key
 
 
+@pytest.mark.parametrize("separator", ["\\n", "\\t", "Bearer%20", "?key%3D"])
+@pytest.mark.parametrize(
+    ("pattern_name", "key"),
+    [
+        pytest.param("openai_api_key", "sk-proj-" + "a" * 20 + "T3BlbkFJ" + "b" * 20, id="openai"),
+        pytest.param("anthropic_api_key", "sk-ant-api03-" + "a" * 20, id="anthropic"),
+        pytest.param("gemini_api_key", "AIza" + "a" * 35, id="gemini-legacy"),
+        pytest.param("gemini_api_key", "AQ." + "a" * 50, id="gemini-auth-key"),
+    ],
+)
+def test_credential_pattern_matches_key_after_escaped_separator(pattern_name: str, key: str, separator: str) -> None:
+    match: Final = get_compiled_pattern(pattern_name).search(f'{{"log": "retrying with{separator}{key} failed"}}')
+    assert match is not None
+    assert match.group(0) == key
+
+
 @pytest.mark.parametrize(
     ("pattern_name", "text"),
     [
         pytest.param("openai_api_key", "sk-short", id="openai-too-short"),
         pytest.param("openai_api_key", "sk-proj-" + "a" * 19, id="openai-project-too-short"),
         pytest.param("openai_api_key", "sk-" + "a" * 20 + "T3BlbkFJ" + "b" * 21, id="openai-legacy-too-long"),
+        pytest.param("openai_api_key", "sk-proj-" + "a" * 48, id="openai-project-without-marker"),
+        pytest.param("openai_api_key", "sk-proj-" + "a" * 19 + "T3BlbkFJ" + "b" * 20, id="openai-project-marker-too-early"),
+        pytest.param("openai_api_key", "sk-proj-" + "a" * 20 + "T3BlbkFJ" + "b" * 19, id="openai-project-marker-too-late"),
+        pytest.param("openai_api_key", "SK-ADMIN-dashboard-redesign-phase-two", id="openai-prefixed-slug"),
         pytest.param("openai_api_key", "desk-proj-management-dashboard-v2", id="openai-inside-longer-word"),
         pytest.param(
             "openai_api_key", "sk-abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRST", id="openai-legacy-without-marker"
