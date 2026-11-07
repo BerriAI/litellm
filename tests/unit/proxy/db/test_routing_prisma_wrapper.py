@@ -102,6 +102,29 @@ def test_per_model_reads_route_to_reader_writes_to_writer():
     assert actions.delete_many is writer_inner.litellm_usertable.delete_many
 
 
+def test_reads_route_to_the_writer_while_cache_refills_must_fail_closed() -> None:
+    from litellm.proxy.common_utils.strict_cache_refill import (
+        release_strict_cache_refill,
+        require_strict_cache_refill,
+    )
+    from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper
+
+    writer, writer_inner, reader, reader_inner = _make_wrappers()
+    writer_inner.litellm_usertable = _model_actions_mock("writer_users")
+    reader_inner.litellm_usertable = _model_actions_mock("reader_users")
+    routing: Final = RoutingPrismaWrapper(writer=writer, reader=reader)
+
+    strict: Final = require_strict_cache_refill()
+    try:
+        assert routing.query_raw is writer_inner.query_raw
+        assert routing.litellm_usertable.find_unique is writer_inner.litellm_usertable.find_unique
+    finally:
+        release_strict_cache_refill(strict)
+
+    assert routing.query_raw is reader_inner.query_raw
+    assert routing.litellm_usertable.find_unique is reader_inner.litellm_usertable.find_unique
+
+
 def test_writer_pinned_client_bypasses_reader_routing():
     """Regression for #38556: read-after-write reconciles must see the writer's
     just-committed rows, so WriterPinnedClient must resolve reads to the writer

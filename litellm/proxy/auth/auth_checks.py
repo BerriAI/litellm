@@ -119,6 +119,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # leg
     safe_get_request_query_params,
 )
 from litellm.proxy.common_utils.model_listing_utils import alias_map
+from litellm.proxy.common_utils.strict_cache_refill import strict_cache_refill
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.common_utils.user_api_key_cache import (
     AUTH_OBJECTS_TARGET,
@@ -2800,7 +2801,7 @@ async def get_team_membership(
         return l1_membership
 
     inflight: Final[object] = _team_membership_inflight.get(_key)
-    if isinstance(inflight, asyncio.Task):
+    if isinstance(inflight, asyncio.Task) and not strict_cache_refill():
         return _membership_from_shared_load(await asyncio.shield(inflight))
 
     if prisma_client is None:
@@ -3657,7 +3658,7 @@ async def _get_team_object_from_user_api_key_cache(
                 check_db_only=use_writer,
             )
         except Exception as e:
-            if use_writer:
+            if use_writer or strict_cache_refill():
                 raise
             verbose_proxy_logger.debug(
                 "Failed to load object_permission for team %s with object_permission_id=%s: %s",
@@ -4408,7 +4409,7 @@ async def get_key_object(
                 check_db_only=check_db_only,
             )
         except Exception as e:
-            if check_db_only:
+            if check_db_only or strict_cache_refill():
                 raise
             verbose_proxy_logger.debug(
                 "Failed to load object_permission for key with object_permission_id=%s: %s",
@@ -4482,7 +4483,7 @@ async def get_object_permission(
         ).find_unique(where={"object_permission_id": object_permission_id})
 
         if response is None:
-            if check_db_only:
+            if check_db_only or strict_cache_refill():
                 raise HTTPException(status_code=403, detail="Referenced object permission does not exist")
             return None
 
@@ -4496,7 +4497,7 @@ async def get_object_permission(
 
         return _perm_obj
     except Exception:
-        if check_db_only:
+        if check_db_only or strict_cache_refill():
             raise
         return None
 
