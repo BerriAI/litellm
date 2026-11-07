@@ -102,7 +102,7 @@ from litellm.router_api import deployment_usable_by_team
 from litellm.secret_managers.main import get_secret_bool
 from litellm.types.proxy.litellm_pre_call_utils import RedactedDict, SecretFields
 from litellm.types.router import reject_server_owned_wif_fields
-from litellm.types.utils import AdminApiKeySecretReference, admin_api_key_secret_reference
+from litellm.types.utils import AdminApiKeySecretReference, CustomPricingLiteLLMParams, admin_api_key_secret_reference
 
 #### Health ENDPOINTS ####
 
@@ -155,6 +155,15 @@ _CONFIG_CONNECTION_FIELDS: Final[frozenset[str]] = frozenset(
     )
 )
 
+# The banned request-body params that actually describe a CONNECTION — the
+# banned list minus the custom-pricing fields. Pricing fields are banned from a
+# request body because they poison the shared model-cost registry, not because
+# they retarget or re-authenticate the outbound call, so the full list would
+# treat `input_cost_per_token` as a credential.
+_CONNECTION_OVERRIDE_REQUEST_PARAMS: Final[tuple[str, ...]] = tuple(
+    param for param in _BANNED_REQUEST_BODY_PARAMS if param not in CustomPricingLiteLLMParams.model_fields
+)
+
 
 def _request_inherits_config_credentials(
     config_params: Mapping[str, object],
@@ -173,6 +182,14 @@ def _request_inherits_config_credentials(
     model name. A blank name or key is no name or key: ``load_credentials_from_list``
     resolves nothing from it, so it must not cost the request the credentials it
     would otherwise be probed with.
+
+    The trigger is ``_CONNECTION_OVERRIDE_REQUEST_PARAMS``, not the full banned
+    list: the custom-pricing fields are banned from a request body for a
+    different reason (they poison the shared model-cost registry) and say
+    nothing about which connection a test describes. Treating them as a
+    connection override empties the configuration under a request that only
+    named a model and its price, which reports a healthy deployment as
+    "Missing credentials".
     """
     requested_credential: Final = request_params.get("litellm_credential_name")
     if requested_credential and requested_credential != config_params.get("litellm_credential_name"):
@@ -181,7 +198,7 @@ def _request_inherits_config_credentials(
         return False
     if allow_client_side_credentials:
         return True
-    return not any(param in request_params for param in _BANNED_REQUEST_BODY_PARAMS)
+    return not any(param in request_params for param in _CONNECTION_OVERRIDE_REQUEST_PARAMS)
 
 
 def _admin_api_key_from_request(
@@ -2714,12 +2731,20 @@ async def test_model_connection(
             or _string_mode_or_bad_request(raw_params_mode)
             or resolve_health_check_mode(probe_model_info, _OBJECT_MAPPING.validate_python(litellm_params))
         )
+        # A connection test needs no prices, and ``completion`` registers any
+        # request pricing under the shared ``{provider}/{model}`` cost-map key
+        # (a probe carries no router deployment id), which would re-price every
+        # sibling deployment of the same backend model. Probe without them,
+        # whether they came from the request or from the configuration.
+        probe_params: Final = CustomPricingLiteLLMParams.strip_custom_pricing_fields(
+            dict(_OBJECT_MAPPING.validate_python(litellm_params))
+        )
 
         raw_headers: Final[dict[str, str]] = TypeAdapter(dict[str, str]).validate_python(
             http_parsing_utils.safe_get_request_headers(request)
         )
         health_check_params: Final = {
-            **_OBJECT_MAPPING.validate_python(litellm_params),
+            **probe_params,
             **_admin_api_key_from_request(
                 _OBJECT_MAPPING.validate_python(request_litellm_params),
                 _OBJECT_MAPPING.validate_python(litellm_params),
