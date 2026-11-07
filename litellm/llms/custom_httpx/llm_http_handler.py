@@ -898,7 +898,7 @@ class BaseLLMHTTPHandler:
         stream: bool | None = False,
         fake_stream: bool = False,
         api_key: str | None = None,
-        headers: dict[str, Any] | None = None,
+        headers: dict[str, object] | None = None,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         provider_config: BaseConfig | None = None,
         shared_session: Optional["ClientSession"] = None,
@@ -1399,7 +1399,7 @@ class BaseLLMHTTPHandler:
         api_key: str | None = None,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         aembedding: bool | None = False,
-        headers: dict[str, Any] | None = None,
+        headers: dict[str, object] | None = None,
     ) -> EmbeddingResponse:
         provider_config: Final = ProviderConfigManager.get_provider_embedding_config(
             model=model, provider=litellm.LlmProviders(custom_llm_provider)
@@ -6137,7 +6137,7 @@ class BaseLLMHTTPHandler:
         fingerprint: str,
         stream: bool = False,
         callback: Optional["CustomLogger"] = None,
-    ) -> AnthropicMessagesResponse | AsyncIterator[object]:
+    ) -> object:
         from litellm.anthropic_interface import messages as anthropic_messages
 
         patch: Final = plan.request_patch or AgenticLoopRequestPatch()
@@ -6178,7 +6178,7 @@ class BaseLLMHTTPHandler:
         kwargs_for_followup["max_agentic_loops"] = max_loops
         kwargs_for_followup["_agentic_loop_fingerprints"] = [*fingerprints, fingerprint]
 
-        response: AnthropicMessagesResponse | AsyncIterator[object] = await anthropic_messages.acreate(
+        response: Final[AnthropicMessagesResponse | AsyncIterator[object]] = await anthropic_messages.acreate(
             **{
                 "max_tokens": max_tokens,
                 "messages": patch.messages,
@@ -6191,9 +6191,7 @@ class BaseLLMHTTPHandler:
 
         if callback is not None:
             try:
-                response = await callback.async_post_agentic_loop_response_hook(
-                    response=response, plan=plan, kwargs=kwargs
-                )
+                return await callback.async_post_agentic_loop_response_hook(response=response, plan=plan, kwargs=kwargs)
             except Exception as e:
                 _call_id: Final = getattr(logging_obj, "litellm_call_id", "unknown")
                 verbose_logger.exception(
@@ -6218,7 +6216,7 @@ class BaseLLMHTTPHandler:
         fingerprints: Sequence[str],
         fingerprint: str,
         callback: Optional["CustomLogger"] = None,
-    ) -> ResponsesAPIResponse | BaseResponsesAPIStreamingIterator:
+    ) -> object:
         patch: Final = plan.request_patch or AgenticLoopRequestPatch()
         if patch.messages is None:
             raise ValueError("Agentic loop plan missing patched responses input")
@@ -6254,7 +6252,7 @@ class BaseLLMHTTPHandler:
 
         try:
             with internal_sub_call(logging_obj.litellm_call_id):
-                response: ResponsesAPIResponse | BaseResponsesAPIStreamingIterator = await litellm.aresponses(
+                response: Final[ResponsesAPIResponse | BaseResponsesAPIStreamingIterator] = await litellm.aresponses(
                     model=patch.model or model,
                     input=patch.messages,  # pyright: ignore[reportArgumentType]  # pre-existing mismatch surfaced by the Router import; patch messages are valid response input at runtime
                     **optional_params,
@@ -6263,7 +6261,7 @@ class BaseLLMHTTPHandler:
 
             if callback is not None:
                 try:
-                    response = await callback.async_post_agentic_loop_response_hook(
+                    return await callback.async_post_agentic_loop_response_hook(
                         response=response, plan=plan, kwargs=kwargs
                     )
                 except Exception as e:
@@ -12380,10 +12378,10 @@ class BaseLLMHTTPHandler:
     def generate_content_handler(
         self,
         model: str,
-        contents: Any,
+        contents: object,
         generate_content_provider_config: BaseGoogleGenAIGenerateContentConfig,
         generate_content_config_dict: dict,
-        tools: Any,
+        tools: object,
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
@@ -12501,10 +12499,10 @@ class BaseLLMHTTPHandler:
     async def async_generate_content_handler(
         self,
         model: str,
-        contents: Any,
+        contents: object,
         generate_content_provider_config: BaseGoogleGenAIGenerateContentConfig,
         generate_content_config_dict: dict,
-        tools: Any,
+        tools: object,
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,

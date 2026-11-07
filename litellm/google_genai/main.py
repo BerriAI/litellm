@@ -40,6 +40,7 @@ else:
 # Initialize any necessary instances or variables here
 base_llm_http_handler = BaseLLMHTTPHandler()
 _GENERATE_CONTENT_RESULT: Final = TypeAdapter(object)
+_GENERATE_CONTENT_PAYLOAD: Final = TypeAdapter(object)
 #################################################
 
 
@@ -368,8 +369,8 @@ def generate_content(
         response: Final = _GENERATE_CONTENT_RESULT.validate_python(
             base_llm_http_handler.generate_content_handler(
                 model=setup_result.model,
-                contents=contents,
-                tools=tools,
+                contents=_GENERATE_CONTENT_PAYLOAD.validate_python(contents),
+                tools=_GENERATE_CONTENT_PAYLOAD.validate_python(tools),
                 generate_content_provider_config=setup_result.generate_content_provider_config,
                 generate_content_config_dict=setup_result.generate_content_config_dict,
                 custom_llm_provider=setup_result.custom_llm_provider,
@@ -465,10 +466,10 @@ async def agenerate_content_stream(
         return _GENERATE_CONTENT_RESULT.validate_python(
             await base_llm_http_handler.generate_content_handler(
                 model=setup_result.model,
-                contents=contents,
+                contents=_GENERATE_CONTENT_PAYLOAD.validate_python(contents),
                 generate_content_provider_config=setup_result.generate_content_provider_config,
                 generate_content_config_dict=setup_result.generate_content_config_dict,
-                tools=tools,
+                tools=_GENERATE_CONTENT_PAYLOAD.validate_python(tools),
                 custom_llm_provider=setup_result.custom_llm_provider,
                 litellm_params=setup_result.litellm_params,
                 logging_obj=setup_result.litellm_logging_obj,
@@ -556,10 +557,10 @@ def generate_content_stream(
         return _GENERATE_CONTENT_RESULT.validate_python(
             base_llm_http_handler.generate_content_handler(
                 model=setup_result.model,
-                contents=contents,
+                contents=_GENERATE_CONTENT_PAYLOAD.validate_python(contents),
                 generate_content_provider_config=setup_result.generate_content_provider_config,
                 generate_content_config_dict=setup_result.generate_content_config_dict,
-                tools=tools,
+                tools=_GENERATE_CONTENT_PAYLOAD.validate_python(tools),
                 custom_llm_provider=setup_result.custom_llm_provider,
                 litellm_params=setup_result.litellm_params,
                 logging_obj=setup_result.litellm_logging_obj,

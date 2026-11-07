@@ -97,7 +97,7 @@ class GitLabTemplateManager:
 
     def __init__(
         self,
-        gitlab_config: dict[str, Any],
+        gitlab_config: Mapping[str, Any],
         prompt_id: str | None = None,
         ref: str | None = None,
         gitlab_client: GitLabClient | None = None,
@@ -310,7 +310,7 @@ class GitLabPromptManager(CustomPromptManagement):
 
     def __init__(
         self,
-        gitlab_config: dict[str, object],
+        gitlab_config: Mapping[str, object],
         prompt_id: str | None = None,
         ref: str | None = None,  # tag/branch/SHA override
         gitlab_client: GitLabClient | None = None,

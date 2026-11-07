@@ -107,6 +107,7 @@ from litellm.litellm_core_utils.core_helpers import (
     require_attributes,
     set_response_cost_in_hidden_params,
     single_log_line,
+    subscript,
 )
 from litellm.litellm_core_utils.error_normalization import normalize_error
 from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
@@ -707,6 +708,14 @@ class _MetadataDefaults(Protocol):
 
 class _MetadataSlot(Protocol):
     __setitem__: Callable[[str, object], None]
+
+
+class _MetadataUpdate(Protocol):
+    update: Callable[[Mapping[str, object]], None]
+
+
+class _ExceptionHeaders(Protocol):
+    headers: object
 
 
 def _callback_control_params(litellm_params: object) -> dict[str, object]:
@@ -1700,8 +1709,10 @@ class Logging(LiteLLMLoggingBaseClass):
             )
             # log raw request to provider (like LangFuse) -- if opted in.
             if self.log_raw_request_response is True or litellm.log_raw_request_response is True:
-                _litellm_params: Final = self.model_call_details.get("litellm_params", {})
-                _metadata: Final = _litellm_params.get("metadata", {}) or {}
+                _litellm_params: Final = require_attributes(
+                    self._model_call_details_view.get("litellm_params", dict[str, object]()), _ParamsLookup, "get"
+                )
+                _metadata: Final = _litellm_params.get("metadata", dict[str, object]()) or dict[str, object]()
                 try:
                     self.model_call_details["raw_request_typed_dict"] = RawRequestTypedDict(
                         raw_request_api_base=self._get_masked_api_base(str(additional_args.get("api_base") or "")),
@@ -1715,6 +1726,8 @@ class Logging(LiteLLMLoggingBaseClass):
                         error=None,
                     )
                     if should_redact_message_logging(self.model_call_details):
+                        if not has_attributes(_metadata, _MetadataSlot, "__setitem__"):
+                            raise TypeError(f"'{type(_metadata).__name__}' object does not support item assignment")
                         _metadata["raw_request"] = REDACTED_BY_LITELLM
                     else:
                         curl_command: Final = self._get_request_curl_command(
@@ -1723,15 +1736,21 @@ class Logging(LiteLLMLoggingBaseClass):
                             additional_args=additional_args,
                             data=additional_args.get("complete_input_dict", {}),
                         )
-                        _metadata["raw_request"] = redact_string(str(curl_command))
+                        redacted_curl_command: Final = redact_string(str(curl_command))
+                        if not has_attributes(_metadata, _MetadataSlot, "__setitem__"):
+                            raise TypeError(f"'{type(_metadata).__name__}' object does not support item assignment")
+                        _metadata["raw_request"] = redacted_curl_command
                 except Exception as e:
                     self.model_call_details["raw_request_typed_dict"] = RawRequestTypedDict(
                         error=str(e),
                     )
-                    _metadata["raw_request"] = redact_string(
+                    unlogged_raw_request: Final = redact_string(
                         f"Unable to Log \
                         raw request: {e}"
                     )
+                    if not has_attributes(_metadata, _MetadataSlot, "__setitem__"):
+                        raise TypeError(f"'{type(_metadata).__name__}' object does not support item assignment")
+                    _metadata["raw_request"] = unlogged_raw_request
             if getattr(self, "logger_fn", None) and callable(self.logger_fn):
                 try:
                     self.logger_fn(
@@ -2362,7 +2381,7 @@ class Logging(LiteLLMLoggingBaseClass):
     def _record_zero_cost_diagnostic(
         self,
         result: object,
-        response_cost: float | None,
+        response_cost: object,
         *,
         calculation_failed: bool = False,
         litellm_model_name: str | None = None,
@@ -2393,7 +2412,7 @@ class Logging(LiteLLMLoggingBaseClass):
     def _zero_cost_finding(
         self,
         result: object,
-        response_cost: float | None,
+        response_cost: object,
         *,
         calculation_failed: bool,
         litellm_model_name: str | None,
@@ -3049,19 +3068,21 @@ class Logging(LiteLLMLoggingBaseClass):
         elif self.relays_llm_passthrough and isinstance(result, Response):
             from litellm.utils import ProviderConfigManager
 
-            provider_config: Final = ProviderConfigManager.get_provider_passthrough_config(
-                provider=self.model_call_details.get("custom_llm_provider", ""),
-                model=self.model,
-            )
-            if provider_config is not None:
-                logging_result = provider_config.logging_non_streaming_response(
+            passthrough_provider: Final = self._model_call_details_view.get("custom_llm_provider", "")
+            if isinstance(passthrough_provider, str):
+                provider_config: Final = ProviderConfigManager.get_provider_passthrough_config(
+                    provider=passthrough_provider,
                     model=self.model,
-                    custom_llm_provider=self.model_call_details.get("custom_llm_provider", ""),
-                    httpx_response=result,
-                    request_data=self.model_call_details.get("request_data", {}),
-                    logging_obj=self,
-                    endpoint=self.model_call_details.get("endpoint", ""),
                 )
+                if provider_config is not None:
+                    logging_result = provider_config.logging_non_streaming_response(
+                        model=self.model,
+                        custom_llm_provider=passthrough_provider,
+                        httpx_response=result,
+                        request_data=self.model_call_details.get("request_data", {}),
+                        logging_obj=self,
+                        endpoint=self.model_call_details.get("endpoint", ""),
+                    )
         return logging_result
 
     def _surface_response_headers_from_result(self, logging_result: object) -> None:
@@ -3157,8 +3178,9 @@ class Logging(LiteLLMLoggingBaseClass):
             self.model_call_details["response_cost"] = 0.0
             self._add_failed_attempts_spend(get_usage_object(completion_response=logging_result))
         elif "response_cost" in hidden_params:
-            self.model_call_details["response_cost"] = hidden_params["response_cost"]
-            self._record_zero_cost_diagnostic(logging_result, hidden_params["response_cost"])
+            hidden_response_cost: Final = subscript(hidden_params, "response_cost")
+            self.model_call_details["response_cost"] = hidden_response_cost
+            self._record_zero_cost_diagnostic(logging_result, hidden_response_cost)
             self._add_failed_attempts_spend(get_usage_object(completion_response=logging_result))
         elif (existing_cost := self.model_call_details.get("response_cost")) is not None and (
             existing_cost != 0 or self.call_type == CallTypes.pass_through.value  # pyright: ignore[reportUnknownMemberType]  # Logging.call_type is untyped
@@ -4637,10 +4659,23 @@ class Logging(LiteLLMLoggingBaseClass):
         elif self.model_call_details.get("combined_usage_object") is None:
             self.model_call_details["response_cost"] = 0
 
-        if hasattr(exception, "headers") and isinstance(exception.headers, dict):
+        raised_exception: Final[object] = exception
+        exception_headers: Final = (
+            as_str_mapping(raised_exception.headers)
+            if has_attributes(raised_exception, _ExceptionHeaders, "headers")
+            else None
+        )
+        if isinstance(exception_headers, dict):
             self.model_call_details.setdefault("litellm_params", {})
-            metadata: Final = self.model_call_details["litellm_params"].get("metadata", {}) or {}
-            metadata.update(exception.headers)
+            metadata: Final = require_attributes(
+                require_attributes(self._model_call_details_view["litellm_params"], _ParamsLookup, "get").get(
+                    "metadata", dict[str, object]()
+                )
+                or dict[str, object](),
+                _MetadataUpdate,
+                "update",
+            )
+            metadata.update(exception_headers)
 
         ## STANDARDIZED LOGGING PAYLOAD
 
@@ -6390,7 +6425,7 @@ def build_custom_logger_compatible_class(
                 return callback
 
         # Get global BitBucket config
-        gitlab_config: Final = getattr(litellm, "global_gitlab_config", None)
+        gitlab_config: Final = litellm.global_gitlab_config if hasattr(litellm, "global_gitlab_config") else None
         if gitlab_config is None:
             raise ValueError("Gitlab configuration not found. Please set litellm.global_gitlab_config first.")
 

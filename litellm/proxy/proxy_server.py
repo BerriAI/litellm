@@ -387,6 +387,7 @@ from litellm.litellm_core_utils.audio_utils.transcription_streaming import (
 from litellm.litellm_core_utils.audio_utils.utils import resolve_speech_media_type
 from litellm.litellm_core_utils.core_helpers import (
     as_str_mapping,
+    decoded_json_object,
     drop_params_flag,
     get_litellm_metadata_from_kwargs,
     get_parent_otel_span_from_kwargs,
@@ -16819,8 +16820,8 @@ async def get_all_team_and_direct_access_models(
 
 
 def _enrich_model_info_with_litellm_data(
-    model: dict[str, Any], debug: bool = False, llm_router: Router | None = None
-) -> dict[str, Any]:
+    model: dict[str, object], debug: bool = False, llm_router: Router | None = None
+) -> dict[str, object]:
     """
     Enrich a model dictionary with litellm model info (pricing, context window, etc.)
     and remove sensitive information.
@@ -16851,33 +16852,44 @@ def _enrich_model_info_with_litellm_data(
     # 2nd pass on the model, try seeing if we can find model in litellm model_cost map
     if litellm_model_info == {}:
         # use litellm_param model_name to get model_info
-        litellm_params = model.get("litellm_params", {})
-        litellm_model = litellm_params.get("model", None)
+        litellm_model: Final = _with_get(model.get("litellm_params", {})).get("model", None)
         try:
-            litellm_model_info = litellm.get_model_info(model=litellm_model)
+            litellm_model_info = (
+                litellm.get_model_info(model=litellm_model) if isinstance(litellm_model, str) else _EMPTY_MAPPING
+            )
         except Exception:
             litellm_model_info = {}
     # 3rd pass on the model, try seeing if we can find model but without the "/" in model cost map
     if litellm_model_info == {}:
         # use litellm_param model_name to get model_info
-        litellm_params = model.get("litellm_params", {})
-        litellm_model = litellm_params.get("model", None)
-        if litellm_model:
-            split_model: Final = litellm_model.split("/")
-            if len(split_model) > 0:
-                litellm_model = split_model[-1]
+        provider_qualified_model: Final = _with_get(model.get("litellm_params", {})).get("model", None)
+        if provider_qualified_model:
+            split_model: Final = require_attributes(provider_qualified_model, _SupportsSplit, "split").split("/", -1)
+            unqualified_model: Final = split_model[-1] if len(split_model) > 0 else provider_qualified_model
             try:
-                litellm_model_info = litellm.get_model_info(model=litellm_model, custom_llm_provider=split_model[0])
+                provider: Final = split_model[0]
+                litellm_model_info = (
+                    litellm.get_model_info(model=unqualified_model, custom_llm_provider=provider)
+                    if isinstance(unqualified_model, str) and isinstance(provider, str)
+                    else _EMPTY_MAPPING
+                )
             except Exception:
                 litellm_model_info = {}
+    model_info_fields: Final = decoded_json_object(model_info)
+    model_id: Final = model_info_fields.get("id")
     discovered_model_info: Final = (
-        llm_router.registry().discovered_model_info(model_info.get("id"))
+        llm_router.registry().discovered_model_info(model_id if isinstance(model_id, str) else None)
         if llm_router is not None
         else MappingProxyType({})
     )
-    unpriced: Final = cost_map_omits_token_price(model_info.get("id"), litellm_model_info.get("key"))
+    unpriced: Final = cost_map_omits_token_price(model_id, litellm_model_info.get("key"))
     stamped_model_info: Final = MappingProxyType(
-        {**model_info, **_pricing_override_stamps(model_info, model.get("litellm_params") or MappingProxyType({}))}
+        {
+            **model_info_fields,
+            **_pricing_override_stamps(
+                model_info_fields, decoded_json_object(model.get("litellm_params") or _EMPTY_MAPPING)
+            ),
+        }
     )
     merged_model_info: Final = {
         **stamped_model_info,

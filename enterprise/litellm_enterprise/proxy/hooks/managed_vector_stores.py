@@ -123,7 +123,7 @@ class _PROXY_LiteLLMManagedVectorStores(
         """
         # Use the router to create the vector store
         response: Final = await llm_router.avector_store_create(model=model, **request_data)
-        return cast(VectorStoreCreateResponse, response)
+        return response
 
     # ============================================================================
     #                     VECTOR STORE CRUD OPERATIONS

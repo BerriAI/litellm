@@ -6,7 +6,7 @@
 ##########################################################################
 
 import asyncio
-from typing import Final, cast
+from typing import Final
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import TypeAdapter
@@ -173,7 +173,7 @@ async def create_fine_tuning_job(
                     detail={"error": "LLM Router not initialized. Ensure models added to proxy."},
                 )
 
-            response = cast(LiteLLMFineTuningJob, await llm_router.acreate_fine_tuning_job(**data))
+            response = await llm_router.acreate_fine_tuning_job(**data)
             response.training_file = training_file
             response.validation_file = fine_tuning_request.validation_file
             set_hidden_param(response, "unified_file_id", unified_file_id)
@@ -311,11 +311,8 @@ async def retrieve_fine_tuning_job(
                     status_code=500,
                     detail={"error": "LLM Router not initialized. Ensure models added to proxy."},
                 )
-            response = cast(
-                LiteLLMFineTuningJob,
-                await llm_router.aretrieve_fine_tuning_job(
-                    **data,
-                ),
+            response = await llm_router.aretrieve_fine_tuning_job(
+                **data,
             )
             set_hidden_param(response, "unified_finetuning_job_id", unified_finetuning_job_id)
         elif requested_provider:
@@ -582,11 +579,8 @@ async def cancel_fine_tuning_job(
                     status_code=500,
                     detail={"error": "LLM Router not initialized. Ensure models added to proxy."},
                 )
-            response = cast(
-                LiteLLMFineTuningJob,
-                await llm_router.acancel_fine_tuning_job(
-                    **data,
-                ),
+            response = await llm_router.acancel_fine_tuning_job(
+                **data,
             )
             set_hidden_param(response, "unified_finetuning_job_id", unified_finetuning_job_id)
         else:

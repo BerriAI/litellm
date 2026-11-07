@@ -10869,7 +10869,7 @@ class ProviderConfigManager:
     @staticmethod
     def get_provider_passthrough_config(
         model: str,
-        provider: LlmProviders,
+        provider: LlmProviders | str,
     ) -> BasePassthroughConfig | None:
         if LlmProviders.BEDROCK == provider:
             from litellm.llms.bedrock.passthrough.transformation import (
