@@ -1477,6 +1477,7 @@ class TestBedrockFilesEmbeddingTransformation:
             BedrockFilesConfig._transform_batch_body_to_chat_body(
                 {"model": "bedrock/amazon.titan-embed-text-v2:0", "input": "hi"},
                 BedrockBatchRecordKind.EMBEDDING,
+                drop_params=False,
             )
 
     def test_explicit_chat_url_with_input_body_short_circuits_to_chat(self):
@@ -4522,26 +4523,45 @@ def test_passthrough_batch_row_without_drop_params_keeps_its_tools_and_never_sen
     assert "drop_params" not in model_input
 
 
+_RESPONSES_WEATHER_TOOL: Final = {
+    "type": "function",
+    "name": "get_weather",
+    "parameters": {"type": "object", "properties": {}},
+}
+
+
 @pytest.mark.parametrize("server_label", ["deepwiki", "unsent"])
-@pytest.mark.parametrize("model", _BATCH_MODELS)
+@pytest.mark.parametrize("model", (*_BATCH_MODELS, _PASSTHROUGH_BATCH_MODEL))
+@pytest.mark.parametrize(
+    ("row_drop_params", "deployment_drop_params"), [(None, True), (True, None)], ids=["deployment", "row"]
+)
+@pytest.mark.parametrize(
+    "tools",
+    [(_HOSTED_MCP_TOOL, _RESPONSES_WEATHER_TOOL), (_RESPONSES_WEATHER_TOOL,)],
+    ids=["with_mcp_tool", "without_mcp_tool"],
+)
 def test_batch_responses_row_drops_a_tool_choice_that_forces_the_dropped_hosted_mcp_server(
-    monkeypatch: pytest.MonkeyPatch, model: str, server_label: str
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    server_label: str,
+    row_drop_params: bool | None,
+    deployment_drop_params: bool | None,
+    tools: tuple[Mapping[str, object], ...],
 ) -> None:
     monkeypatch.setattr(litellm, "drop_params", False)
     body: Final = {
         "model": model,
         "input": "hi",
         "max_output_tokens": 10,
-        "tools": [
-            _HOSTED_MCP_TOOL,
-            {"type": "function", "name": "get_weather", "parameters": {"type": "object", "properties": {}}},
-        ],
+        "tools": list(tools),
         "tool_choice": {"type": "mcp", "server_label": server_label},
+        **({} if row_drop_params is None else {"drop_params": row_drop_params}),
     }
 
-    model_input: Final = json.dumps(_uploaded_row(model, "/v1/responses", body, deployment_drop_params=True))
+    model_input: Final = json.dumps(_uploaded_row(model, "/v1/responses", body, deployment_drop_params))
 
     assert "get_weather" in model_input
     assert server_label not in model_input
     assert "toolChoice" not in model_input
     assert "tool_choice" not in model_input
+    assert "drop_params" not in model_input

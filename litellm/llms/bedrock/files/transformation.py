@@ -937,7 +937,9 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         )
 
     @staticmethod
-    def _transform_responses_body_to_chat_body(openai_request_body: _OpenAIBatchRecordBody) -> Mapping[str, object]:
+    def _transform_responses_body_to_chat_body(
+        openai_request_body: _OpenAIBatchRecordBody, drop_params: bool
+    ) -> Mapping[str, object]:
         """
         Rewrite an OpenAI `/v1/responses` batch body as a Chat Completions body.
 
@@ -946,16 +948,17 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         model), so `input`, `instructions`, `max_output_tokens` and the tool
         params translate identically in batch and real time.
         """
-        chat_body: Final = responses_batch_body_to_chat_body(openai_request_body)
-        drop_params: Final = openai_request_body.get("drop_params")
-        if drop_params is None:
+        chat_body: Final = responses_batch_body_to_chat_body(openai_request_body, drop_params=drop_params)
+        row_drop_params: Final = openai_request_body.get("drop_params")
+        if row_drop_params is None:
             return chat_body
-        return _frozen_mapping(chain(chat_body.items(), (("drop_params", drop_params),)))
+        return _frozen_mapping(chain(chat_body.items(), (("drop_params", row_drop_params),)))
 
     @staticmethod
     def _transform_batch_body_to_chat_body(
         openai_request_body: _OpenAIBatchRecordBody,
         record_kind: BedrockBatchRecordKind,
+        drop_params: bool,
     ) -> Mapping[str, object]:
         """
         Normalize a non-embedding batch body to the Chat Completions shape the
@@ -965,7 +968,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             case BedrockBatchRecordKind.TEXT_COMPLETION:
                 return BedrockFilesConfig._transform_text_completion_body_to_chat_body(openai_request_body)
             case BedrockBatchRecordKind.RESPONSES:
-                return BedrockFilesConfig._transform_responses_body_to_chat_body(openai_request_body)
+                return BedrockFilesConfig._transform_responses_body_to_chat_body(openai_request_body, drop_params)
             case BedrockBatchRecordKind.CHAT:
                 return openai_request_body
             case BedrockBatchRecordKind.EMBEDDING:
@@ -1141,7 +1144,11 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
                 )
             else:
                 model_input = self._map_openai_to_bedrock_params(
-                    openai_request_body=self._transform_batch_body_to_chat_body(openai_body, record_kind),
+                    openai_request_body=self._transform_batch_body_to_chat_body(
+                        openai_body,
+                        record_kind,
+                        drops_unsupported_params(openai_body.get("drop_params", deployment_drop_params)),
+                    ),
                     model=model_for_transform,
                     provider=provider,
                     deployment_drop_params=deployment_drop_params,
