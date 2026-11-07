@@ -393,6 +393,19 @@ class _CacheHitFlags(CustomLogger):
         self.cache_hits.append(kwargs.get("cache_hit"))
 
 
+class _AsyncCacheHitFlags(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.cache_hits: list[object] = []
+
+    async def async_logging_hook(self, kwargs, result, call_type):
+        await asyncio.sleep(0.3)
+        return kwargs, result
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        self.cache_hits.append(kwargs.get("cache_hit"))
+
+
 class _SuccessPayloads(CustomLogger):
     def __init__(self) -> None:
         super().__init__()
@@ -672,7 +685,7 @@ def test_sync_generate_content_adapter_success_is_logged_once_on_the_request(
 def test_sync_generate_content_adapter_cache_hit_reaches_callbacks_as_a_cache_hit(
     _httpx_transport: None, monkeypatch: pytest.MonkeyPatch
 ):
-    logged = _CacheHitFlags()
+    logged: Final = _CacheHitFlags()
     monkeypatch.setattr(litellm, "callbacks", [logged])
     monkeypatch.setattr(litellm, "cache", litellm.Cache(type="local"))
     router: Final = _adapter_router()
@@ -687,7 +700,7 @@ def test_sync_generate_content_adapter_cache_hit_reaches_callbacks_as_a_cache_hi
         wait_until(lambda: len(logged.cache_hits) == logged_count, message="the call's success callback ran")
 
     with respx.mock() as upstream:
-        route = upstream.post("http://upstream.test/v1/chat/completions").mock(
+        route: Final = upstream.post("http://upstream.test/v1/chat/completions").mock(
             return_value=_upstream_reply(stream=False)
         )
         for index, prompt in enumerate(prompts):
@@ -696,6 +709,35 @@ def test_sync_generate_content_adapter_cache_hit_reaches_callbacks_as_a_cache_hi
 
     assert route.call_count == len(prompts)
     assert [hit is True for hit in logged.cache_hits] == [False, True] * len(prompts)
+
+
+@pytest.mark.asyncio
+async def test_async_generate_content_adapter_cache_hit_reaches_callbacks_as_a_cache_hit(
+    _httpx_transport: None, monkeypatch: pytest.MonkeyPatch, _litellm_errors: pytest.LogCaptureFixture
+):
+    logged: Final = _AsyncCacheHitFlags()
+    monkeypatch.setattr(litellm, "callbacks", [logged])
+    monkeypatch.setattr(litellm, "cache", litellm.Cache(type="local"))
+    router: Final = _adapter_router()
+    prompts: Final = ("first", "second", "third")
+
+    async def call(prompt: str, logged_count: int) -> None:
+        await router.agenerate_content(
+            model="grok-group", contents=[{"role": "user", "parts": [{"text": prompt}]}], caching=True
+        )
+        await await_until(lambda: len(logged.cache_hits) == logged_count, message="the call's success callback ran")
+
+    with respx.mock() as upstream:
+        route: Final = upstream.post("http://upstream.test/v1/chat/completions").mock(
+            return_value=_upstream_reply(stream=False)
+        )
+        for index, prompt in enumerate(prompts):
+            await call(prompt, 2 * index + 1)
+            await call(prompt, 2 * index + 2)
+
+    assert route.call_count == len(prompts)
+    assert [hit is True for hit in logged.cache_hits] == [False, True] * len(prompts)
+    assert _litellm_error_messages(_litellm_errors) == []
 
 
 @pytest.mark.parametrize(("entrypoint", "stream"), [("agenerate_content", False), ("agenerate_content_stream", True)])
