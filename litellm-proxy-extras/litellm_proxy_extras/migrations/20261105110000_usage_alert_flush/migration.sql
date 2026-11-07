@@ -1,3 +1,5 @@
+SET LOCAL lock_timeout = '10s';
+
 CREATE TABLE IF NOT EXISTS "LiteLLM_UsageAlertFlush" (
     source TEXT NOT NULL,
     hour TIMESTAMP(3) NOT NULL,
