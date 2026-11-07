@@ -1,4 +1,5 @@
 from typing import Final
+from unittest.mock import ANY
 
 from integration.translation.case import TranslationTestCase
 from integration.translation.messages.templates import MESSAGES_BRIDGE_RESPONSE, MESSAGES_REQUEST
@@ -98,6 +99,7 @@ GPT_5_4_TEST_CASE: Final = TranslationTestCase(
         "stop_details": None,
     },
 )
+
 
 
 GPT_5_6_SOL_TEST_CASE: Final = TranslationTestCase(
@@ -782,5 +784,245 @@ GPT_5_6_TERRA_TEST_CASE: Final = TranslationTestCase(
                 "input": {"path": "shop/validation.py", "start_line": 1, "end_line": 200},
             },
         ],
+    },
+)
+
+
+GPT_6_1_TERRA_MOCK_PROVIDER_RESPONSE: Final = {
+    'id': 'resp_0a3b11558c0819df006ae75c101de487d1812988a3147f6964',
+    'object': 'response',
+    'created_at': 1793547280,
+    'status': 'completed',
+    'access_programs': {
+        'cyber': 'standard',
+    },
+    'background': False,
+    'billing': {
+        'payer': 'developer',
+    },
+    'completed_at': 1793547282,
+    'error': None,
+    'frequency_penalty': 0.0,
+    'incomplete_details': None,
+    'instructions': (
+        'You help maintain a synthetic Python project. Read the relevant files before suggesting '
+        'a fix. Explain which file you need next, then call a read-only tool. Never change files.'
+        ' Use the messages client for this project review. Consider zero, negative and non-intege'
+        'r quantities before choosing the next file to inspect.'
+    ),
+    'max_output_tokens': 1024,
+    'max_tool_calls': None,
+    'model': 'gpt-6.1-terra',
+    'moderation': None,
+    'output': [
+        {
+            'id': 'rs_0a3b11558c0819df006ae75c10fde087d192db4aa5ea7cf7be',
+            'type': 'reasoning',
+            'content': [],
+            'encrypted_content': (
+                'gAAAAABq51wSSVCQB1815HYz5pLz1k32-dUjO-X-4b7LQG23OQZx_gqLXLuuL4xBCieTrvYatU55pFIxiQFXgtqG'
+                '6U1VtkToUospW-zTvH4roGicTQdWAovuoGt_w7rIFKNd0DUt8XB82WtVnogSd-ZQi4yJ3fjJLrR8nGTG596tQoGX'
+                '5TIFWeprIbpd99K1-bmu7dupFVg55x8zWfUx2e7wyYRFJ4JZLdIy1_2AwPaf5AjiZn5hnYXdGL3p7X_Bv_nkoRa4'
+                '1EE592bGS0K_GAxxVxH2sAdzQIOQf_G_E4fvnHRegGK61AgZQ9PVn2dXhGCXa-O0j1aYEx5pECMSfHaqExkx5-Nk'
+                'z3l6Y7RmkoUKduquneXcZSRX-COeDTcts0hRFMTnlNQ5obc3tY_IEST-JDpKdsjL-6YEHhtJNrdED_DIj0vVrQgg'
+                '_3g0LfnDGSqtunsHs-KU4He_jYBJwXHNB2xbe5DMVAyNcqm7TOKRDejB_ym6cA_8j-oTXIumSnAao6I-l3WYU2yk'
+                'tprvhby5FPnPhspqCYVu6nn5LxO7wyQOm_bOK4LcCojyp5OGRgCjtZ7AhAytPSryHt_gSMeEmQ11REFYh3PTrPt5'
+                'ZqYYHW-miQ4Kgg80tn2I66EydrVEEaqZp8sQ7XgbFr7CG_6DOVGIGB819hLpA6clAZxNuUc8bVTwvT_o-wOLOePr'
+                'Fa28kMGuucFWgLKW3fxQBh5MVHfMca-T8shc9aK8JLq7H74xfBaNWdXyNpMlNYr_kPC8LHqh2mKXMyG_17yShf-f'
+                'h4MIY7dHrHr15X-aw8tAFBUZAkTTQF9Da4Cn09oX-yGGs1vW75HAPAdaBqVvAu_MAHXn_C3ACA4mKe7N4ihQWcVD'
+                'zw9e0K6tKWwOYybCLenWnlJ64ooPajGtQvdUfYx4SGmcxTPd18q1_djz-J5k7T8gdqwiD5MEdJU3Trsrw7eULiFE'
+                'qJu9oYrgsiVO-lsjIub5MPLCfKb8_L703ls2WBQ64BT-MZw2qgjKdHXk3f9KjRFaWM_HIJgaMrG6x9H2KE5Sqku9'
+                'o1dANEH0ZpxyBb4lIofWnTrrXALN763TCQe0BC0IwmaoJBfAFThzhLbCuQBLsNZj4vi8rC7W6xSBxQ1UYCgSrZPh'
+                'm8JUoGs4RWYgq7-mD3sB2jcRedcoG9RqxpF0h7_DIzHqk3UVnSpNiRnh_wGp4x_-lO2Ms6qp48QpSYOMJmG_KcRI'
+                '6qhcxTg2B3tU4965f2Iz0ghSzRiSctki1CPvWcRBtLv6LqLLoBK0NTgoByR66rUB7s6yYe6coP_OSkR0GFUCqH_X'
+                'w-kcd-VckGJxKUm5tkejTjjrEXq3LiClTn9NUUgmtaWPEmZoHdNElyu1xiIK-0CTCb07zN_EK2_Nls5SRsWZBRFt'
+                '3YCGcw9vK2jSyx28cRwdBmb1fWXAQ3FYAl1uISH5kdcajQvWv1rhHPMW828OYZTZxG1whGwNPxOTWwj2sHuxvMwG'
+                'MmOnhdTnIX-5qoNafrWraIv8jBC4Y4Z_hlCaB89Ba4Y_-B5-0ClNLGOx6q9fzj3wY4H3RAymTbi9pqqUpuX7wWBG'
+                'uL9KggI6a5A09tmTIpucIsHY7dH6c12Xrls7vkrxlQh_7iix67VUj9UmspFvnCSVmX0W3IdPszNZpVHNpm_KOD-v'
+                'Y5fSNhkTk_hTjjlSMhSe6Ki7BarnMzPo8j7EHVZcgmoAOMoNDHvIEPjbCSXphGr9qYfQ4ajffaloJLh-51e0C8mJ'
+                '1daJ2xs7ZT7uJI0syeeKVRnqxDYlvoAEKl1KrUrX9SKceoVANOla-DMWs3TSsUL6-ccPqzJFDdPn6aVoIxS4IMGa'
+                'nn5oWXVRxLUS01d19mVPn_XoNXrLwi2GCW0r8GfowHyeEgW535xwNt5uEGmmmV17baclC6x1GUo3xPkKpnPaVgf7'
+                'jIjBP7P8-FOcHoIFB9MfUL_Ot2UdK26tc7vL7CgUuch08WPZOklx8Vsv7N0OIzWiczrA09il52Z_QyyTB5VmfiYS'
+                'X6cLsnFCTh7fTSDs4p80vEfBWqKCW3M0isAWLTEaQ7kwpmHulUI_fvxJg2Bn-lV48aKaLeZT0FAS_WRP-cGBIb79'
+                's8TlmnRcyBJhR0LbMEyMHqo4Y7hwJAyTZkBtejuCyyE3b-2QKq2w-GtcgD5MI9b6EOt7ET6EbFFS'
+            ),
+            'summary': [],
+        },
+        {
+            'id': 'msg_0a3b11558c0819df006ae75c11a3c087d18ee211f7533e565f',
+            'type': 'message',
+            'status': 'completed',
+            'content': [
+                {
+                    'type': 'output_text',
+                    'annotations': [],
+                    'logprobs': [],
+                    'text': (
+                        'I’ll read `shop/validation.py` first, checking how it handles zero, negative, and non-in'
+                        'teger quantities.'
+                    ),
+                },
+            ],
+            'phase': 'commentary',
+            'role': 'assistant',
+        },
+        {
+            'id': 'fc_0a3b11558c0819df006ae75c12142887d18b71a86e0c02ae8c',
+            'type': 'function_call',
+            'status': 'completed',
+            'arguments': '{"path":"shop/validation.py","start_line":1,"end_line":150}',
+            'call_id': 'call_Fnk0hANehtgpqZaZieVoZUYK',
+            'name': 'read_file',
+        },
+    ],
+    'parallel_tool_calls': True,
+    'presence_penalty': 0.0,
+    'previous_response_id': None,
+    'prompt_cache_key': None,
+    'prompt_cache_retention': '24h',
+    'reasoning': {
+        'context': 'all_turns',
+        'effort': 'high',
+        'mode': 'standard',
+        'summary': None,
+    },
+    'safety_identifier': None,
+    'service_tier': 'default',
+    'store': True,
+    'temperature': 1.0,
+    'text': {
+        'format': {
+            'type': 'text',
+        },
+        'verbosity': 'medium',
+    },
+    'tool_choice': 'auto',
+    'tool_usage': {
+        'image_gen': {
+            'input_tokens': 0,
+            'input_tokens_details': {
+                'image_tokens': 0,
+                'text_tokens': 0,
+            },
+            'output_tokens': 0,
+            'output_tokens_details': {
+                'image_tokens': 0,
+                'text_tokens': 0,
+            },
+            'total_tokens': 0,
+        },
+        'web_search': {
+            'num_requests': 0,
+        },
+    },
+    'tools': [
+        {
+            'type': 'function',
+            'description': 'Search source and test files for a literal term.',
+            'name': 'search_files',
+            'output_schema': None,
+            'parameters': {
+                'type': 'object',
+                'properties': {
+                    'query': {
+                        'type': 'string',
+                    },
+                    'paths': {
+                        'type': 'array',
+                        'items': {
+                            'type': 'string',
+                        },
+                    },
+                },
+                'required': [
+                    'query',
+                    'paths',
+                ],
+                'additionalProperties': False,
+            },
+            'strict': False,
+        },
+        {
+            'type': 'function',
+            'description': 'Read a range of lines from a project file.',
+            'name': 'read_file',
+            'output_schema': None,
+            'parameters': {
+                'type': 'object',
+                'properties': {
+                    'path': {
+                        'type': 'string',
+                    },
+                    'start_line': {
+                        'type': 'integer',
+                        'minimum': 1,
+                    },
+                    'end_line': {
+                        'type': 'integer',
+                        'minimum': 1,
+                    },
+                },
+                'required': [
+                    'path',
+                    'start_line',
+                    'end_line',
+                ],
+                'additionalProperties': False,
+            },
+            'strict': False,
+        },
+    ],
+    'top_logprobs': 0,
+    'top_p': 0.98,
+    'truncation': 'disabled',
+    'usage': {
+        'input_tokens': 309,
+        'input_tokens_details': {
+            'cache_write_tokens': 0,
+            'cached_tokens': 0,
+        },
+        'output_tokens': 121,
+        'output_tokens_details': {
+            'reasoning_tokens': 56,
+        },
+        'total_tokens': 430,
+    },
+    'user': None,
+    'metadata': {},
+}
+
+GPT_6_1_TERRA_TEST_CASE: Final = TranslationTestCase(
+    scenario="basic",
+    litellm_endpoint="/v1/messages",
+    litellm_request={**MESSAGES_REQUEST, "model": "openai/gpt-6.1-terra"},
+    expected_provider_endpoint="/responses",
+    expected_provider_headers=GPT_5_6_TERRA_TEST_CASE.expected_provider_headers,
+    expected_provider_request={
+        **OPENAI_RESPONSES_REQUEST_FROM_MESSAGES,
+        "model": "gpt-6.1-terra",
+    },
+    mock_provider_response=GPT_6_1_TERRA_MOCK_PROVIDER_RESPONSE,
+    expected_litellm_response={
+        **GPT_5_6_TERRA_TEST_CASE.expected_litellm_response,
+        "id": ANY,
+        "content": [
+            {
+                "type": "redacted_thinking",
+                "data": "litellm_encrypted_reasoning:"
+                + GPT_6_1_TERRA_MOCK_PROVIDER_RESPONSE["output"][0]["encrypted_content"],
+            },
+            {
+                "type": "text",
+                "text": "I’ll read `shop/validation.py` first, checking how it handles zero, negative, and non-integer quantities.",
+            },
+            {
+                "type": "tool_use",
+                "id": "call_Fnk0hANehtgpqZaZieVoZUYK",
+                "name": "read_file",
+                "input": {"path": "shop/validation.py", "start_line": 1, "end_line": 150},
+            },
+        ],
+        "usage": {"input_tokens": 309, "output_tokens": 121},
+        "model": "openai/gpt-6.1-terra",
     },
 )
