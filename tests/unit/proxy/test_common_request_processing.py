@@ -5284,9 +5284,7 @@ class TestHandleLLMApiExceptionProviderOverload:
         assert proxy_exc.type == "internal_server_error"
         assert proxy_exc.to_dict()["code"] == "500"
 
-    async def test_openai_route_answers_wrapped_provider_overload_as_503(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_openai_route_answers_wrapped_provider_overload_as_503(self, monkeypatch: pytest.MonkeyPatch) -> None:
         original: Final = InternalServerError(
             message="Overloaded",
             llm_provider="anthropic",
@@ -5514,6 +5512,55 @@ class TestAsyncStreamingDataGeneratorFastPath:
 
         assert len(out) == 1
         hook_spy.assert_awaited_once()
+
+        ProxyLogging._callback_capabilities_cache.clear()
+
+    @pytest.mark.asyncio
+    async def test_slow_path_records_per_chunk_work_on_the_logging_object(self, monkeypatch: pytest.MonkeyPatch):
+        """The overhead header is stamped before any chunk is read, so the time the proxy spends in
+        the per-chunk hook has to be recorded on the logging object for the success callback to add."""
+
+        class _StreamingCb(CustomLogger):
+            async def async_post_call_streaming_hook(
+                self, user_api_key_dict: UserAPIKeyAuth, response: object
+            ) -> object:
+                return response
+
+        monkeypatch.setattr(litellm, "callbacks", [_StreamingCb()])
+        ProxyLogging._callback_capabilities_cache.clear()
+
+        proxy_logging_obj = ProxyLogging(user_api_key_cache=MagicMock())
+
+        async def slow_hook(**kw: object) -> object:
+            await asyncio.sleep(0.02)
+            return kw["response"]
+
+        monkeypatch.setattr(proxy_logging_obj, "async_post_call_streaming_hook", slow_hook)
+        logging_obj = Logging(
+            model="claude-x",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            call_type="completion",
+            start_time=datetime.datetime.now(),
+            litellm_call_id="call-stream",
+            function_id="fn",
+        )
+        chunks = [{"type": "content_block_delta"}, {"type": "content_block_delta"}, {"type": "message_stop"}]
+
+        out = [
+            c
+            async for c in ProxyBaseLLMRequestProcessing.async_streaming_data_generator(
+                response=self._aiter(chunks),
+                user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
+                request_data={"model": "claude-x", "litellm_logging_obj": logging_obj},
+                proxy_logging_obj=proxy_logging_obj,
+                serialize_chunk=ProxyBaseLLMRequestProcessing.return_sse_chunk,
+                serialize_error=lambda e: "data: error\n\n",
+            )
+        ]
+
+        assert len(out) == len(chunks)
+        assert logging_obj.streaming_overhead_ms >= 50
 
         ProxyLogging._callback_capabilities_cache.clear()
 
