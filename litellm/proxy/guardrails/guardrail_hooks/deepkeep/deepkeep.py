@@ -321,6 +321,9 @@ class DeepKeepGuardrail(CustomGuardrail):
             return_inputs["structured_messages"] = structured_messages
         return return_inputs
 
+    def supports_image_inputs(self, input_type: Literal["request", "response"] = "request") -> bool:
+        return True
+
     @log_guardrail_information
     async def apply_guardrail(
         self,

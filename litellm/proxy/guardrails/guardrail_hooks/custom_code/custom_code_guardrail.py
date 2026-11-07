@@ -234,6 +234,9 @@ class CustomCodeGuardrail(CustomGuardrail):
                 self._compile_error = f"Failed to compile custom code: {e}"
                 raise CustomCodeCompilationError(self._compile_error) from e
 
+    def supports_image_inputs(self, input_type: Literal["request", "response"] = "request") -> bool:
+        return True
+
     @log_guardrail_information
     async def apply_guardrail(
         self,

@@ -173,6 +173,9 @@ class PromptSecurityGuardrail(CustomGuardrail):
     def supports_structured_messages(self) -> bool:
         return False
 
+    def supports_image_inputs(self, input_type: Literal["request", "response"] = "request") -> bool:
+        return input_type == "request"
+
     @log_guardrail_information
     async def apply_guardrail(
         self,

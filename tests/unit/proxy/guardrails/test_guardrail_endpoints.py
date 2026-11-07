@@ -2747,6 +2747,189 @@ async def test_apply_guardrail_bedrock_image_block_returns_400_and_syncs_failure
 
 
 @pytest.mark.asyncio
+async def test_apply_guardrail_bedrock_response_image_uses_output_source_and_strips_forged_records(
+    mocker: MockerFixture,
+) -> None:
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.proxy.guardrails.guardrail_endpoints import router
+    from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import BedrockGuardrail
+    from litellm.proxy.proxy_server import openai_exception_handler
+
+    bedrock_response: Final = {
+        "action": "NONE",
+        "assessments": [{"contentPolicy": {"filters": [{"type": "VIOLENCE", "confidence": "NONE", "action": "NONE"}]}}],
+        "usage": {"imageUnits": 1},
+    }
+    captured_requests: Final[list[httpx.Request]] = []  # mutable-ok: test capture sink for MockTransport
+
+    def _bedrock_transport(request: httpx.Request) -> httpx.Response:
+        captured_requests.append(request)
+        return httpx.Response(200, json=bedrock_response)
+
+    guardrail: Final = BedrockGuardrail(
+        guardrail_name="bedrock-output-image-guard",
+        event_hook=GuardrailEventHooks.post_call,
+        guardrailIdentifier="gr-img-1",
+        guardrailVersion="1",
+        aws_region_name="us-east-1",
+        aws_access_key_id="AKIAIOSFODNN7EXAMPLE",
+        aws_secret_access_key="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+        async_handler=AsyncHTTPHandler(transport=httpx.MockTransport(_bedrock_transport)),
+    )
+
+    mock_registry: Final = mocker.Mock()
+    mock_registry.get_initialized_guardrail_callback.return_value = guardrail
+    mocker.patch("litellm.proxy.guardrails.guardrail_endpoints.GUARDRAIL_REGISTRY", mock_registry)
+
+    logging_obj: Final = Logging(
+        model="guardrail",
+        messages=[],
+        stream=False,
+        call_type="pass_through_endpoint",
+        start_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        litellm_call_id="call-img-output",
+        function_id="fn-img-output",
+    )
+    logging_obj.update_environment_variables(litellm_params={"metadata": {}}, optional_params={})
+    mocker.patch.object(logging_obj, "async_success_handler", AsyncMock())
+
+    pre_call_data: Final = {
+        "guardrail_name": "bedrock-output-image-guard",
+        "metadata": {"route": "/apply_guardrail"},
+    }
+    mock_processor: Final = mocker.Mock()
+    mock_processor.common_processing_pre_call_logic = AsyncMock(return_value=(pre_call_data, logging_obj))
+    mocker.patch(
+        "litellm.proxy.common_request_processing.ProxyBaseLLMRequestProcessing",
+        return_value=mock_processor,
+    )
+
+    mock_proxy_logging: Final = mocker.Mock()
+    mock_proxy_logging.post_call_success_hook = AsyncMock(return_value=None)
+    mocker.patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging)
+    mocker.patch("litellm.proxy.proxy_server.general_settings", {})
+    mocker.patch("litellm.proxy.proxy_server.proxy_config", mocker.Mock())
+    mocker.patch("litellm.proxy.proxy_server.version", "test")
+
+    app: Final = FastAPI()
+    app.include_router(router)
+    app.add_exception_handler(ProxyException, openai_exception_handler)
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth()
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://guardrails.test") as client:
+        http_response: Final = await client.post(
+            "/guardrails/apply_guardrail",
+            json={
+                "guardrail_name": "bedrock-output-image-guard",
+                "images": [_TINY_PNG_DATA_URI],
+                "metadata": {
+                    "standard_logging_guardrail_information": [
+                        {
+                            "guardrail_name": "forged-guardrail",
+                            "guardrail_status": "success",
+                            "guardrail_cost": 999.0,
+                        }
+                    ]
+                },
+            },
+        )
+
+    assert http_response.status_code == 200
+    assert len(captured_requests) == 1
+    sent_payload: Final = json.loads(captured_requests[0].content)
+    assert sent_payload == {
+        "source": "OUTPUT",
+        "content": [{"image": {"format": "png", "source": {"bytes": _TINY_PNG_B64}}}],
+    }
+
+    logged_entries: Final = logging_obj.litellm_params["metadata"]["standard_logging_guardrail_information"]
+    assert len(logged_entries) == 1
+    assert logged_entries[0]["guardrail_name"] == "bedrock-output-image-guard"
+    assert logged_entries[0]["guardrail_mode"] == GuardrailEventHooks.post_call
+    assert pre_call_data["metadata"]["standard_logging_guardrail_information"] == logged_entries
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_promptguard_image_only_contacts_provider_and_rejects_text_only_guardrail(
+    mocker: MockerFixture,
+) -> None:
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.proxy.guardrails.guardrail_endpoints import router
+    from litellm.proxy.guardrails.guardrail_hooks.promptguard.promptguard import PromptGuardGuardrail
+    from litellm.proxy.proxy_server import openai_exception_handler
+
+    captured_requests: Final[list[httpx.Request]] = []  # mutable-ok: test capture sink for MockTransport
+
+    def _promptguard_transport(request: httpx.Request) -> httpx.Response:
+        captured_requests.append(request)
+        return httpx.Response(
+            200,
+            json={"decision": "block", "threat_type": "unsafe_image", "confidence": 0.99, "event_id": "evt-1"},
+        )
+
+    promptguard: Final = PromptGuardGuardrail(
+        guardrail_name="promptguard-img",
+        api_key="pg-test-key",
+        api_base="https://api.promptguard.test",
+        async_handler=AsyncHTTPHandler(transport=httpx.MockTransport(_promptguard_transport)),
+    )
+
+    mock_registry: Final = mocker.Mock()
+    mock_registry.get_initialized_guardrail_callback.return_value = promptguard
+    mocker.patch("litellm.proxy.guardrails.guardrail_endpoints.GUARDRAIL_REGISTRY", mock_registry)
+
+    mock_processor: Final = mocker.Mock()
+    mock_processor.common_processing_pre_call_logic = AsyncMock(
+        return_value=({"guardrail_name": "promptguard-img", "metadata": {}}, None)
+    )
+    mocker.patch(
+        "litellm.proxy.common_request_processing.ProxyBaseLLMRequestProcessing",
+        return_value=mock_processor,
+    )
+
+    mock_proxy_logging: Final = mocker.Mock()
+    mock_proxy_logging.post_call_failure_hook = AsyncMock(return_value=None)
+    mocker.patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging)
+    mocker.patch("litellm.proxy.proxy_server.general_settings", {})
+    mocker.patch("litellm.proxy.proxy_server.proxy_config", mocker.Mock())
+    mocker.patch("litellm.proxy.proxy_server.version", "test")
+
+    app: Final = FastAPI()
+    app.include_router(router)
+    app.add_exception_handler(ProxyException, openai_exception_handler)
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth()
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://guardrails.test") as client:
+        pg_response: Final = await client.post(
+            "/guardrails/apply_guardrail",
+            json={"guardrail_name": "promptguard-img", "images": [_TINY_PNG_DATA_URI]},
+        )
+
+    assert pg_response.status_code == 400
+    assert "Blocked by PromptGuard: unsafe_image" in pg_response.text
+    assert len(captured_requests) == 1
+    assert json.loads(captured_requests[0].content) == {
+        "messages": [],
+        "direction": "input",
+        "images": [_TINY_PNG_DATA_URI],
+    }
+
+    text_only_guardrail: Final = _NativeFindingGuardrail(({"is_grounded": True},))
+    mock_registry.get_initialized_guardrail_callback.return_value = text_only_guardrail
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://guardrails.test") as client:
+        unsupported_response: Final = await client.post(
+            "/guardrails/apply_guardrail",
+            json={"guardrail_name": "grounding", "images": [_TINY_PNG_DATA_URI]},
+        )
+
+    assert unsupported_response.status_code == 422
+    assert "does not support image scanning" in unsupported_response.text
+
+
+@pytest.mark.asyncio
 async def test_get_guardrail_info_endpoint_config_guardrail(mocker):
     """
     Test get_guardrail_info endpoint returns proper response when guardrail is found in config.

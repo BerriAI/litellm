@@ -2416,26 +2416,59 @@ async def _run_endpoint_guardrail(
     request_data: Mapping[str, object],
     input_type: Literal["request", "response"],
 ) -> GenericGuardrailAPIInputs:
+    if "text" not in request.model_fields_set and not request.messages and not request.images:
+        raise HTTPException(
+            status_code=422,
+            detail="At least one of 'text', 'messages', or 'images' must be provided.",
+        )
+    if request.images and not active_guardrail.supports_image_inputs(input_type):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Guardrail '{request.guardrail_name}' does not support image scanning "
+                f"for input_type='{input_type}'."
+            ),
+        )
     scan_messages: Final = _attachment_scan_messages(request)
     if (
         scan_messages
         and isinstance(active_guardrail, RequestAttachmentScanner)
         and hasattr(type(active_guardrail), "async_scan_request_attachments")
     ):
+        scan_event_type: Final = (
+            GuardrailEventHooks.post_call if input_type == "response" else GuardrailEventHooks.pre_call
+        )
+        existing_metadata: Final = request_data.get("metadata")
+        clean_metadata: Final = (
+            {
+                key: value
+                for key, value in existing_metadata.items()
+                if key != "standard_logging_guardrail_information"
+            }
+            if isinstance(existing_metadata, Mapping)
+            else None
+        )
         attachment_scan_data: Final[Mapping[str, object]] = {
             **request_data,
+            **({"metadata": clean_metadata} if clean_metadata is not None else {}),
             "messages": scan_messages,
         }
         try:
             await active_guardrail.async_scan_request_attachments(
                 data=attachment_scan_data,  # pyright: ignore[reportArgumentType]  # scanner mutates fresh per-call copy
                 call_type="acompletion",
+                event_type=scan_event_type,
             )
         finally:
             scanned_entries: Final = _extract_guardrail_entries(attachment_scan_data)
             if scanned_entries:
                 _append_slg_to_litellm_params(request_data, list(scanned_entries))
-        if not request.text and _extract_guardrail_entries(request_data):
+        if request.images and not scanned_entries:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Guardrail '{request.guardrail_name}' did not scan the provided images.",
+            )
+        if not request.text and scanned_entries:
             return {"texts": [], "images": list(request.images)} if request.images else {"texts": []}
 
     inputs: Final[GenericGuardrailAPIInputs] = (

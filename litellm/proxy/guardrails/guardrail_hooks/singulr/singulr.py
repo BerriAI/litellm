@@ -2,7 +2,7 @@ import json
 import os
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType
-from typing import Any, Final
+from typing import Any, Final, Literal
 from urllib.parse import urlparse
 
 import httpx
@@ -404,6 +404,9 @@ class SingulrGuardrail(CustomGuardrail):
 
     def supports_structured_messages(self) -> bool:
         return False
+
+    def supports_image_inputs(self, input_type: Literal["request", "response"] = "request") -> bool:
+        return True
 
     @log_guardrail_information
     async def apply_guardrail(

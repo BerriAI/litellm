@@ -1269,6 +1269,10 @@ class CustomGuardrail(CustomLogger):
         """
         return True
 
+    def supports_image_inputs(self, input_type: Literal["request", "response"] = "request") -> bool:
+        """Whether this guardrail scans ``images`` in ``GenericGuardrailAPIInputs`` for ``input_type``."""
+        return False
+
     def _suppressed_by_auto_router_compression(self) -> bool:
         """True when an auto router's own compression policy suppresses this guardrail.
 

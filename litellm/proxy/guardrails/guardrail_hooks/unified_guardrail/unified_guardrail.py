@@ -63,6 +63,7 @@ class RequestAttachmentScanner(Protocol):
         self,
         data: _RequestData,
         call_type: CallTypesLiteral,
+        event_type: GuardrailEventHooks = GuardrailEventHooks.pre_call,
     ) -> None: ...
 
 
