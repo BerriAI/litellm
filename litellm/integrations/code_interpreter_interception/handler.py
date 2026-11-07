@@ -17,6 +17,7 @@ from pydantic import ValidationError
 import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.allowed_tools_tool_choice import allowed_tools_tool_choice_with_builtin_as_function
 from litellm.llms.base_llm.sandbox.transformation import (
     CodeExecutionResult,
     ContainerHandle,
@@ -139,6 +140,10 @@ class _SupportsOutput(Protocol):
 
 
 _CachedContainer: TypeAlias = tuple[ContainerHandle, SandboxToolParams | None, float, str | None]
+
+
+def _is_code_interpreter_tool(tool: Mapping[str, object]) -> bool:
+    return tool.get("type") == "code_interpreter"
 
 
 def _output_item_type(item: object) -> object:
@@ -301,8 +306,8 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
             (function_tool if isinstance(tool, dict) and tool.get("type") == "code_interpreter" else tool)
             for tool in tools
         ]
-        if self._tool_choice_targets_code_interpreter(kwargs.get("tool_choice")):
-            kwargs["tool_choice"] = self._get_function_tool_choice(call_type=call_type)
+        if "tool_choice" in kwargs:
+            kwargs["tool_choice"] = self._intercepted_tool_choice(kwargs["tool_choice"], call_type)
         return kwargs
 
     @staticmethod
@@ -384,6 +389,14 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
             or choice.get("name") == "code_interpreter"
             or choice.get("name") == LITELLM_CODE_EXECUTION_TOOL_NAME
             or (isinstance(function, dict) and function.get("name") == LITELLM_CODE_EXECUTION_TOOL_NAME)
+        )
+
+    @classmethod
+    def _intercepted_tool_choice(cls, tool_choice: object, call_type: CallTypes | None) -> object:
+        if cls._tool_choice_targets_code_interpreter(tool_choice):
+            return cls._get_function_tool_choice(call_type=call_type)
+        return allowed_tools_tool_choice_with_builtin_as_function(
+            tool_choice, _is_code_interpreter_tool, LITELLM_CODE_EXECUTION_TOOL_NAME
         )
 
     def _resolve_provider(self, kwargs: dict[str, object]) -> str | None:

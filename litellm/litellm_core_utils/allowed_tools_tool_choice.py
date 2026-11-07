@@ -1,4 +1,4 @@
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from types import MappingProxyType
 from typing import Final, Literal
 
@@ -176,7 +176,7 @@ def _allowed_tool_names(tool_choice: object) -> frozenset[object]:
     if parsed is None:
         return frozenset()
     flattened: Final = tuple(_responses_allowed_tool(tool) for tool in parsed.allowed_tools.tools)
-    return frozenset(tool.get("name") for tool in flattened if tool is not None)
+    return frozenset(tool.get("name") for tool in flattened if tool is not None and _server_entry(tool) is None)
 
 
 def refuse_a_malformed_allowed_tools_tool_choice(tool_choice: object, model: str) -> None:
@@ -191,15 +191,22 @@ def refuse_a_malformed_allowed_tools_tool_choice(tool_choice: object, model: str
         )
 
 
-def _whole_server_label(tool: Mapping[str, object]) -> str | None:
+def _server_entry(tool: Mapping[str, object]) -> tuple[str, str | None] | None:
     label: Final = tool.get("server_label")
-    return label if tool.get("type") == "mcp" and tool.get("name") is None and isinstance(label, str) else None
+    name: Final = tool.get("name")
+    if tool.get("type") != "mcp" or not isinstance(label, str):
+        return None
+    return label, name if isinstance(name, str) else None
 
 
-def _whole_server_labels(tool_choice: object) -> frozenset[str]:
+def _server_entries(tool_choice: object) -> frozenset[tuple[str, str | None]]:
     parsed: Final = parse_allowed_tools_tool_choice(tool_choice)
-    labels: Final = () if parsed is None else tuple(map(_whole_server_label, parsed.allowed_tools.tools))
-    return frozenset(label for label in labels if label is not None)
+    entries: Final = () if parsed is None else tuple(map(_server_entry, parsed.allowed_tools.tools))
+    return frozenset(entry for entry in entries if entry is not None)
+
+
+def _a_server_entry_allows(entries: frozenset[tuple[str, str | None]], name: str, labels: frozenset[str]) -> bool:
+    return any(label in labels and entry_name in (None, name) for label, entry_name in entries)
 
 
 def tool_calls_the_choice_excludes(
@@ -210,11 +217,12 @@ def tool_calls_the_choice_excludes(
     if not is_allowed_tools_tool_choice(tool_choice):
         return ()
     allowed: Final = _allowed_tool_names(tool_choice)
-    whole_servers: Final = _whole_server_labels(tool_choice)
+    server_entries: Final = _server_entries(tool_choice)
     return tuple(
         name
         for name in tool_names
-        if name not in allowed and whole_servers.isdisjoint(server_labels_by_tool.get(name, frozenset()))
+        if name not in allowed
+        and not _a_server_entry_allows(server_entries, name, server_labels_by_tool.get(name, frozenset()))
     )
 
 
@@ -230,6 +238,38 @@ def refuse_tool_calls_the_choice_excludes(tool_choice: object, tool_names: Itera
             model=model,
             llm_provider="",
         )
+
+
+def _with_builtin_as(
+    tool: Mapping[str, object], is_builtin: Callable[[Mapping[str, object]], bool], function_entry: Mapping[str, object]
+) -> Mapping[str, object]:
+    return function_entry if tool.get("type") not in ("function", "custom", "mcp") and is_builtin(tool) else tool
+
+
+def allowed_tools_tool_choice_with_builtin_as_function(
+    tool_choice: object, is_builtin: Callable[[Mapping[str, object]], bool], function_name: str
+) -> object:
+    try:
+        parsed: Final = _ALLOWED_TOOLS_TOOL_CHOICE.validate_python(tool_choice)
+    except ValidationError:
+        return tool_choice
+    match parsed:
+        case ChatAllowedToolsToolChoice():
+            nested: Final = {"type": "function", "function": {"name": function_name}}
+            return {
+                "type": "allowed_tools",
+                "allowed_tools": {
+                    "mode": parsed.allowed_tools.mode,
+                    "tools": [dict(_with_builtin_as(tool, is_builtin, nested)) for tool in parsed.allowed_tools.tools],
+                },
+            }
+        case ResponsesAllowedToolsToolChoice():
+            flat: Final = {"type": "function", "name": function_name}
+            return {
+                "type": "allowed_tools",
+                "mode": parsed.mode,
+                "tools": [dict(_with_builtin_as(tool, is_builtin, flat)) for tool in parsed.tools],
+            }
 
 
 def chat_allowed_tools_tool_choice(choice: ChatAllowedToolsToolChoice) -> ChatCompletionAllowedToolChoiceParam:

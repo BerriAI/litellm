@@ -8,6 +8,7 @@ import litellm
 from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.allowed_tools_tool_choice import (
     ChatAllowedToolsToolChoice,
+    allowed_tools_tool_choice_with_builtin_as_function,
     drops_unsupported_allowed_tools_tool_choice,
     is_allowed_tools_tool_choice,
     chat_allowed_tools_tool_choice,
@@ -297,6 +298,17 @@ def test_an_mcp_entry_with_a_null_name_is_a_valid_choice(tool_choice: object):
     assert refuse_a_malformed_allowed_tools_tool_choice(tool_choice, "the-model") is None
 
 
+_DOCS_SEARCH: Final = {
+    "type": "allowed_tools",
+    "mode": "auto",
+    "tools": [{"type": "mcp", "server_label": "docs", "name": "search"}],
+}
+
+
+def test_a_named_mcp_entry_allows_its_call_on_a_server_its_label_serves():
+    assert tool_calls_the_choice_excludes(_DOCS_SEARCH, ("search",), {"search": frozenset({"docs", "other"})}) == ()
+
+
 def test_an_mcp_entry_without_a_name_allows_every_call_its_server_serves():
     assert tool_calls_the_choice_excludes(_WHOLE_DOCS_SERVER, ("search",), {"search": frozenset({"docs"})}) == ()
 
@@ -310,9 +322,59 @@ def test_an_mcp_entry_without_a_name_allows_every_call_its_server_serves():
             {"type": "allowed_tools", "mode": "auto", "tools": [{"type": "mcp", "server_label": "docs", "name": "read"}]},
             frozenset({"docs"}),
         ),
+        (_DOCS_SEARCH, frozenset({"other"})),
+        (_DOCS_SEARCH, frozenset()),
     ],
 )
 def test_an_mcp_entry_allows_no_call_outside_its_server_or_its_name(
     tool_choice: object, server_labels: frozenset[str]
 ):
     assert tool_calls_the_choice_excludes(tool_choice, ("search",), {"search": server_labels}) == ("search",)
+
+
+def _is_web_search(tool: Mapping[str, object]) -> bool:
+    return tool.get("type") == "web_search"
+
+
+@pytest.mark.parametrize(
+    "tool_choice",
+    [
+        {"type": "allowed_tools", "mode": "auto", "tools": [{"type": "web_search"}, {"type": "function", "name": "get_time"}]},
+        {
+            "type": "allowed_tools",
+            "allowed_tools": {
+                "mode": "auto",
+                "tools": [{"type": "web_search"}, {"type": "function", "function": {"name": "get_time"}}],
+            },
+        },
+    ],
+)
+def test_a_builtin_entry_allows_the_function_that_replaces_it_in_the_same_layout(tool_choice: dict[str, object]):
+    rewritten: Final = allowed_tools_tool_choice_with_builtin_as_function(
+        tool_choice, _is_web_search, "litellm_web_search"
+    )
+
+    assert tool_calls_the_choice_excludes(tool_choice, ("litellm_web_search", "get_time")) == ("litellm_web_search",)
+    assert tool_calls_the_choice_excludes(rewritten, ("litellm_web_search", "get_time", "get_weather")) == (
+        "get_weather",
+    )
+    assert isinstance(rewritten, dict) and rewritten.keys() == tool_choice.keys()
+
+
+def test_a_function_or_mcp_entry_is_never_taken_for_a_builtin():
+    tool_choice: Final = {
+        "type": "allowed_tools",
+        "mode": "auto",
+        "tools": [{"type": "function", "name": "web_search"}, {"type": "mcp", "server_label": "docs", "name": "web_search"}],
+    }
+
+    rewritten: Final = allowed_tools_tool_choice_with_builtin_as_function(
+        tool_choice, lambda tool: tool.get("name") == "web_search", "litellm_web_search"
+    )
+
+    assert parse_allowed_tools_tool_choice(rewritten) == parse_allowed_tools_tool_choice(tool_choice)
+
+
+@pytest.mark.parametrize("tool_choice", ["auto", None, {"type": "allowed_tools", "mode": "auto", "tools": []}])
+def test_any_other_or_malformed_choice_is_left_as_sent(tool_choice: object):
+    assert allowed_tools_tool_choice_with_builtin_as_function(tool_choice, _is_web_search, "litellm_web_search") is tool_choice
