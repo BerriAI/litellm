@@ -17,6 +17,7 @@ from pydantic import ValidationError as PydanticValidationError
 from starlette.datastructures import Headers
 
 import litellm
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 from litellm.constants import (
     CALLER_SESSION_ID_METADATA_KEY,
@@ -4321,6 +4322,186 @@ def test_add_litellm_metadata_from_request_headers_traceparent_and_baggage_toget
     )
     assert data["litellm_trace_id"] == "4bf92f3577b34da6a3ce929d0e0e4736"
     assert data["litellm_session_id"] == "baggage-session-42"
+
+
+def _bedrock_passthrough_data(
+    client_body: dict[str, object], custom_llm_provider: str = "bedrock"
+) -> dict[str, object]:
+    return {
+        "method": "POST",
+        "endpoint": "model/us.anthropic.claude-haiku-4-5-20251001-v1:0/converse",
+        "custom_llm_provider": custom_llm_provider,
+        "data": client_body,
+        "litellm_metadata": {},
+    }
+
+
+@pytest.mark.parametrize(
+    ("headers", "client_body"),
+    [
+        pytest.param({}, {"messages": [], "requestMetadata": {"threadId": "thread-abc-123"}}, id="converse_body"),
+        pytest.param(
+            {"X-Amzn-Bedrock-Request-Metadata": '{"threadId": "thread-abc-123", "team": "search"}'},
+            {"messages": []},
+            id="invoke_header",
+        ),
+    ],
+)
+def test_bedrock_request_metadata_thread_id_becomes_session_id(
+    headers: dict[str, str], client_body: dict[str, object]
+):
+    sent_body: Final = copy.deepcopy(client_body)
+    data: Final = _bedrock_passthrough_data(client_body)
+
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers=headers, data=data, _metadata_variable_name="litellm_metadata"
+    )
+
+    assert data["litellm_session_id"] == "thread-abc-123"
+    assert data["litellm_metadata"] == {"session_id": "thread-abc-123"}
+    assert "litellm_trace_id" not in data, "a conversation tag must not merge the turns into one trace"
+    assert data["data"] == sent_body, "the tags must still reach Bedrock unchanged"
+
+
+@pytest.mark.parametrize(
+    ("tags", "expected"),
+    [
+        ({"threadId": "thread-abc-123", "sessionId": "session-xyz-789"}, "session-xyz-789"),
+        ({"conversationId": "conversation-42", "threadId": "thread-abc-123"}, "thread-abc-123"),
+        ({"conversationId": "conversation-42", "user": "shrey-1234"}, "conversation-42"),
+        ({"sessionId": "", "threadId": "thread-abc-123"}, "thread-abc-123"),
+        ({"sessionId": "conv-42"}, "conv-42"),
+        ({"sessionId": "user:123 / thread.7"}, "user:123 / thread.7"),
+    ],
+)
+def test_bedrock_request_metadata_session_key_priority(tags: dict[str, str], expected: str):
+    data: Final = _bedrock_passthrough_data({"messages": [], "requestMetadata": tags})
+
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers={}, data=data, _metadata_variable_name="litellm_metadata"
+    )
+
+    assert data["litellm_session_id"] == expected
+
+
+@pytest.mark.parametrize(
+    ("headers", "data"),
+    [
+        pytest.param(
+            {"x-amzn-bedrock-request-metadata": '{"threadId": "thread-abc-123"'},
+            _bedrock_passthrough_data({"messages": []}),
+            id="malformed_header_json",
+        ),
+        pytest.param(
+            {"x-amzn-bedrock-request-metadata": '["thread-abc-123"]'},
+            _bedrock_passthrough_data({"messages": []}),
+            id="header_json_not_an_object",
+        ),
+        pytest.param(
+            {}, _bedrock_passthrough_data({"requestMetadata": {"threadId": 1234567890}}), id="non_string_value"
+        ),
+        pytest.param({}, _bedrock_passthrough_data({"requestMetadata": {"threadId": ""}}), id="empty"),
+        pytest.param({}, _bedrock_passthrough_data({"requestMetadata": {"user": "shrey-1234"}}), id="no_session_key"),
+        pytest.param(
+            {"x-amzn-bedrock-request-metadata": '{"threadId": "thread-abc-123"}'},
+            {"model": "claude", "custom_llm_provider": "bedrock", "litellm_metadata": {}},
+            id="not_a_passthrough_body",
+        ),
+        pytest.param(
+            {},
+            _bedrock_passthrough_data(
+                {"requestMetadata": {"threadId": "thread-abc-123"}}, custom_llm_provider="vertex_ai"
+            ),
+            id="not_bedrock",
+        ),
+    ],
+)
+def test_bedrock_request_metadata_without_usable_session_id_sets_no_session(
+    headers: dict[str, str], data: dict[str, object]
+):
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers=headers, data=data, _metadata_variable_name="litellm_metadata"
+    )
+
+    assert "litellm_session_id" not in data
+
+
+@pytest.mark.parametrize(
+    ("body_tags", "header_tags", "expected"),
+    [
+        pytest.param({"team": "search"}, {"threadId": "thread-abc-123"}, "thread-abc-123", id="body_without_session_key"),
+        pytest.param({"sessionId": "body-session"}, {"sessionId": "header-session"}, "body-session", id="body_wins"),
+    ],
+)
+def test_bedrock_request_metadata_reads_body_tags_then_header_tags(
+    body_tags: dict[str, str], header_tags: dict[str, str], expected: str
+):
+    data: Final = _bedrock_passthrough_data({"messages": [], "requestMetadata": body_tags})
+
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers={"x-amzn-bedrock-request-metadata": json.dumps(header_tags)},
+        data=data,
+        _metadata_variable_name="litellm_metadata",
+    )
+
+    assert data["litellm_session_id"] == expected
+
+
+@pytest.mark.parametrize("metadata_bucket", ["litellm_metadata", "metadata"])
+def test_bedrock_request_metadata_never_replaces_a_caller_metadata_session(metadata_bucket: str):
+    data: Final = {
+        **_bedrock_passthrough_data({"messages": [], "requestMetadata": {"threadId": "thread-B"}}),
+        metadata_bucket: {"session_id": "conversation-A"},
+    }
+
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers={}, data=data, _metadata_variable_name="litellm_metadata"
+    )
+
+    assert "litellm_session_id" not in data
+    assert data[metadata_bucket]["session_id"] == "conversation-A"
+
+
+def test_bedrock_request_metadata_stamps_a_tag_equal_to_the_caller_metadata_session():
+    data: Final = _bedrock_passthrough_data({"messages": [], "requestMetadata": {"threadId": "thread-abc-123"}})
+    data["litellm_metadata"] = {"session_id": "thread-abc-123"}
+
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers={}, data=data, _metadata_variable_name="litellm_metadata"
+    )
+
+    assert data["litellm_session_id"] == "thread-abc-123"
+
+
+def test_bedrock_request_metadata_header_leaves_non_passthrough_caller_session_alone():
+    data: Final = {"model": "claude", "custom_llm_provider": "bedrock", "metadata": {"session_id": "caller-session-1"}}
+
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers={"x-amzn-bedrock-request-metadata": '{"threadId": "thread-abc-123"}'},
+        data=data,
+        _metadata_variable_name="metadata",
+    )
+
+    assert data["metadata"] == {"session_id": "caller-session-1"}
+    assert "litellm_session_id" not in data
+
+
+@pytest.mark.parametrize(
+    ("headers", "expected"),
+    [
+        pytest.param({"x-litellm-session-id": "explicit-session-1"}, "explicit-session-1", id="explicit_header_wins"),
+        pytest.param({"baggage": "session.id=baggage-session-42"}, "thread-abc-123", id="beats_baggage"),
+    ],
+)
+def test_bedrock_request_metadata_session_precedence(headers: dict[str, str], expected: str):
+    data: Final = _bedrock_passthrough_data({"messages": [], "requestMetadata": {"threadId": "thread-abc-123"}})
+
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers=headers, data=data, _metadata_variable_name="litellm_metadata"
+    )
+
+    assert data["litellm_session_id"] == expected
+    assert data["litellm_metadata"]["session_id"] == expected
 
 
 def test_add_litellm_metadata_from_request_headers_explicit_trace_id_beats_traceparent():
@@ -9033,7 +9214,9 @@ async def test_add_litellm_data_to_request_strips_router_reserved_stamps_on_resp
 
 
 @pytest.mark.asyncio
-async def test_router_keeps_proxy_metadata_bucket_identity_after_reserved_stamp_strip():
+async def test_router_keeps_proxy_metadata_bucket_identity_after_reserved_stamp_strip(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """Regression for the #38586 break: a client that planted a reserved key in
     litellm_metadata made the router hand downstream a scrubbed copy, so the proxy's
     post_call write-backs (guardrail telemetry, applied guardrails) landed in a dict the
@@ -9067,13 +9250,13 @@ async def test_router_keeps_proxy_metadata_bucket_identity_after_reserved_stamp_
         ]
     )
     forwarded_buckets = []
-    original_acompletion = router._acompletion
+    original_acompletion = litellm.acompletion
 
     async def _spy(*args, **spy_kwargs):
         forwarded_buckets.append(spy_kwargs["metadata"])
         return await original_acompletion(*args, **spy_kwargs)
 
-    router._acompletion = _spy
+    monkeypatch.setattr(litellm, "acompletion", _spy)
 
     await router.acompletion(**request_data)
 
@@ -9599,6 +9782,19 @@ async def test_missing_session_id_reject_accepts_body_metadata_session_id():
 
 
 @pytest.mark.asyncio
+async def test_missing_session_id_reject_accepts_bedrock_request_metadata_session_id():
+    updated: Final = await add_litellm_data_to_request(
+        data=_bedrock_passthrough_data({"messages": [], "requestMetadata": {"threadId": "thread-abc-123"}}),
+        request=_request_for("/bedrock/model/us.anthropic.claude-haiku-4-5-20251001-v1:0/converse"),
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=MagicMock(),
+        general_settings={"missing_session_id": "reject"},
+    )
+
+    assert _spend_log_session_id(updated, "litellm_metadata") == "thread-abc-123"
+
+
+@pytest.mark.asyncio
 async def test_missing_session_id_reject_returns_400_without_session_id():
     with pytest.raises(ProxyException) as exc_info:
         await add_litellm_data_to_request(
@@ -10026,7 +10222,6 @@ class TestResolveUserProviderCredentials:
         )
 
     def _env(self, monkeypatch):
-        from litellm.caching.dual_cache import DualCache
 
         monkeypatch.setattr(
             litellm,
@@ -10046,7 +10241,7 @@ class TestResolveUserProviderCredentials:
         prisma_client.db.litellm_userprovidercredentials = table
         prisma_client.writer_db = prisma_client.db
         monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma_client)
-        monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", DualCache())
+        monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", UserApiKeyCache())
         return table
 
     @pytest.mark.asyncio
@@ -10864,7 +11059,6 @@ class TestResolveUserProviderCredentials:
 
 
 def _per_user_env(monkeypatch, credential_names=("copilot-cred",)):
-    from litellm.caching.dual_cache import DualCache
 
     monkeypatch.setattr(
         litellm,
@@ -10884,7 +11078,7 @@ def _per_user_env(monkeypatch, credential_names=("copilot-cred",)):
     prisma_client.db.litellm_userprovidercredentials = table
     prisma_client.writer_db = prisma_client.db
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma_client)
-    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", DualCache())
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", UserApiKeyCache())
     monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "sk-test-master")
     return table
 
@@ -11028,7 +11222,6 @@ async def test_header_mapped_user_id_cannot_load_another_users_connection(monkey
     request header. Per-user token resolution is bound to the key-authenticated identity,
     so a header naming user B still loads only user A's connections."""
     from litellm import Router
-    from litellm.caching.dual_cache import DualCache
     from litellm.proxy.credential_endpoints import user_provider_credentials as upc
     from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 
@@ -11049,7 +11242,7 @@ async def test_header_mapped_user_id_cannot_load_another_users_connection(monkey
         ]
     )
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
-    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", DualCache())
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", UserApiKeyCache())
 
     request_mock = MagicMock(spec=Request)
     request_mock.url = MagicMock()
@@ -11084,7 +11277,6 @@ async def test_header_mapped_user_id_cannot_load_another_users_connection(monkey
 async def test_per_user_token_resolution_uses_key_identity_without_header_mapping(monkeypatch):
     """Control: with no user_header_mappings configured the key's user_id is used as before."""
     from litellm import Router
-    from litellm.caching.dual_cache import DualCache
     from litellm.proxy.credential_endpoints import user_provider_credentials as upc
     from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 
@@ -11105,7 +11297,7 @@ async def test_per_user_token_resolution_uses_key_identity_without_header_mappin
         ]
     )
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
-    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", DualCache())
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", UserApiKeyCache())
 
     request_mock = MagicMock(spec=Request)
     request_mock.url = MagicMock()

@@ -27,6 +27,7 @@ from litellm.caching.caching import DualCache
 from litellm.constants import EMPTY_MAPPING
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.proxy_server import app
 from litellm.proxy.utils import ProxyLogging
 from litellm.responses.streaming_iterator import ResponsesAPIStreamingIterator
@@ -2326,6 +2327,74 @@ class TestResponsesWSFirstFrameModelAuth:
         assert authenticated_models == ["gpt-4o-mini"]
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "open_failure, refusal, close_reason, logged_traceback",
+        [
+            (
+                ProxyRateLimitError(detail="Rate limit exceeded for api_key: tokens"),
+                (429, "rate_limit_exceeded"),
+                "Rate limit exceeded",
+                False,
+            ),
+            (ValueError("bad metadata"), (None, "invalid_request_error"), "Pre-call error", True),
+        ],
+        ids=["rate-limited", "other-failure"],
+    )
+    async def test_endpoint_refuses_a_rate_limited_open_with_the_turn_refusal_frame(
+        self,
+        open_failure: Exception,
+        refusal: tuple[int | None, str],
+        close_reason: str,
+        logged_traceback: bool,
+    ):
+        import logging
+
+        from litellm._logging import verbose_proxy_logger
+        from litellm.proxy.response_api_endpoints.endpoints import responses_websocket_endpoint
+
+        class _Recorder(logging.Handler):
+            records: tuple[logging.LogRecord, ...] = ()
+
+            def emit(self, record: logging.LogRecord) -> None:
+                self.records = (*self.records, record)
+
+        ws = MagicMock()
+        ws.headers = {}
+        ws.query_params = {}
+        ws.scope = {"headers": []}
+        ws.url = "ws://testserver/v1/responses"
+        ws.accept = AsyncMock()
+        ws.receive_text = AsyncMock(return_value=json.dumps({"type": "response.create", "model": "gpt-5.4"}))
+        ws.send_text = AsyncMock()
+        ws.close = AsyncMock()
+        processor = MagicMock()
+        processor.common_processing_pre_call_logic = AsyncMock(side_effect=open_failure)
+        recorder: Final = _Recorder(level=logging.INFO)
+        previous_level: Final = verbose_proxy_logger.level
+        verbose_proxy_logger.addHandler(recorder)
+        verbose_proxy_logger.setLevel(logging.INFO)
+        try:
+            with (
+                patch(  # test-quality-ok: first-frame model auth needs a live router and has its own tests
+                    "litellm.proxy.response_api_endpoints.endpoints._enforce_responses_ws_first_frame_model_auth",
+                    new_callable=AsyncMock,
+                ),
+                patch(  # test-quality-ok: the pre-call processor's failure is the input under test
+                    "litellm.proxy.response_api_endpoints.endpoints.ProxyBaseLLMRequestProcessing",
+                    return_value=processor,
+                ),
+            ):
+                await responses_websocket_endpoint(websocket=ws, model="gpt-5.4", user_api_key_dict=MagicMock())
+        finally:
+            verbose_proxy_logger.removeHandler(recorder)
+            verbose_proxy_logger.setLevel(previous_level)
+
+        sent: Final = json.loads(ws.send_text.await_args.args[0])
+        assert (sent.get("status"), sent["error"]["type"]) == refusal
+        ws.close.assert_awaited_once_with(code=1008, reason=close_reason)
+        assert [record.exc_info is not None for record in recorder.records] == [logged_traceback]
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize("nested", [False, True])
     @pytest.mark.parametrize("query_model", [None, "gpt-4o-mini"])
     async def test_endpoint_routes_on_first_frame_input_and_previous_response_id(
@@ -2486,6 +2555,66 @@ class TestResponsesWSFirstFrameModelAuth:
             "type": "response.create",
             "response": {"input": "hi [guarded]", "tools": tools[:1]},
         }
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("nested", [True, False])
+    async def test_frame_guard_forwards_the_tool_choice_a_guardrail_rewrote(self, nested: bool):
+        from litellm.proxy.response_api_endpoints.endpoints import _responses_ws_frame_guard
+
+        async def pre_call_hook(user_api_key_dict, data, call_type, guardrails_only):
+            return {**data, "tools": [], "tool_choice": "none"}
+
+        proxy_logging_obj = MagicMock(during_call_hook=AsyncMock())
+        proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=pre_call_hook)
+        guard = _responses_ws_frame_guard(
+            {"model": "gpt-4o-mini", "litellm_metadata": {}}, MagicMock(), proxy_logging_obj, MagicMock()
+        )
+        body = {
+            "input": "hi",
+            "tools": [{"type": "function", "name": "a"}],
+            "tool_choice": {"type": "function", "name": "a"},
+        }
+        frame = {"type": "response.create", "response": body} if nested else {"type": "response.create", **body}
+
+        guarded = json.loads((await guard(json.dumps(frame))).frame)
+
+        sent = guarded["response"] if nested else guarded
+        assert (sent["tools"], sent["tool_choice"]) == ([], "none")
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("nested", [True, False])
+    async def test_frame_guard_forwards_the_extra_body_tools_a_rewrite_guardrail_stripped(self, nested: bool):
+        from litellm.proxy.guardrails.guardrail_hooks.tool_permission import ToolPermissionGuardrail
+        from litellm.proxy.response_api_endpoints.endpoints import _responses_ws_frame_guard
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        guardrail = ToolPermissionGuardrail(
+            guardrail_name="ws-rewrite",
+            rules=[{"id": "deny_shell", "tool_name": r"^shell$", "decision": "deny"}],
+            default_action="allow",
+            on_disallowed_action="rewrite",
+            event_hook=GuardrailEventHooks.pre_call,
+            default_on=True,
+        )
+
+        async def pre_call_hook(user_api_key_dict, data, call_type, guardrails_only):
+            return await guardrail.async_pre_call_hook(
+                user_api_key_dict=user_api_key_dict, cache=MagicMock(), data=data, call_type=call_type
+            )
+
+        proxy_logging_obj = MagicMock(during_call_hook=AsyncMock())
+        proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=pre_call_hook)
+        guard = _responses_ws_frame_guard(
+            {"model": "gpt-4o-mini", "litellm_metadata": {}}, MagicMock(), proxy_logging_obj, MagicMock()
+        )
+        weather = {"type": "function", "name": "get_weather"}
+        body = {"input": "hi", "extra_body": {"tools": [weather, {"type": "function", "name": "shell"}]}}
+        frame = {"type": "response.create", "response": body} if nested else {"type": "response.create", **body}
+
+        guarded = json.loads((await guard(json.dumps(frame))).frame)
+
+        sent = guarded["response"] if nested else guarded
+        assert sent["extra_body"] == {"tools": [weather]}
 
     @pytest.mark.asyncio
     async def test_frame_guard_strips_the_proxy_owned_metadata_keys_a_client_sends(self):
@@ -2922,7 +3051,7 @@ class TestResponsesWSFirstFrameModelAuth:
         assert dict(guarded.pii_tokens) == {"<EMAIL_ADDRESS_1>": "alice@example.com"}
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("field", ["input", "instructions", "tools"])
+    @pytest.mark.parametrize("field", ["input", "instructions", "tools", "tool_choice", "extra_body"])
     async def test_frame_guard_rejects_and_bills_a_guarded_field_beside_a_nested_response(self, field: str):
         from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
         from litellm.proxy.response_api_endpoints.endpoints import _responses_ws_frame_guard

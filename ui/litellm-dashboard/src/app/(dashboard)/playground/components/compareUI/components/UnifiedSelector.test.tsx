@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
+import i18n from "@/i18n/i18n";
 import { UnifiedSelector } from "./UnifiedSelector";
 import { EndpointId, ENDPOINT_CONFIGS } from "../endpoint_config";
 
@@ -32,19 +33,19 @@ describe("UnifiedSelector", () => {
   it("prompts with the endpoint's own selector copy", () => {
     render(<UnifiedSelector value="" options={[]} loading={false} config={CHAT} onChange={vi.fn()} />);
 
-    expect(promptIsVisible(CHAT.selectorPlaceholder)).toBe(true);
+    expect(promptIsVisible(i18n.t(CHAT.selectorPlaceholder))).toBe(true);
   });
 
   it("prompts with the agent endpoint's copy when configured for agents", () => {
     render(<UnifiedSelector value="" options={[]} loading={false} config={AGENTS} onChange={vi.fn()} />);
 
-    expect(promptIsVisible(AGENTS.selectorPlaceholder)).toBe(true);
+    expect(promptIsVisible(i18n.t(AGENTS.selectorPlaceholder))).toBe(true);
   });
 
   it("swaps the prompt for a loading message while options are in flight", () => {
     render(<UnifiedSelector value="" options={[]} loading config={CHAT} onChange={vi.fn()} />);
 
-    expect(promptIsVisible(`Loading ${CHAT.selectorLabel.toLowerCase()}s...`)).toBe(true);
+    expect(promptIsVisible(`Loading ${i18n.t(CHAT.selectorLabel).toLowerCase()}s...`)).toBe(true);
   });
 
   it("reports the chosen option's value, not its label", async () => {
@@ -116,6 +117,6 @@ describe("UnifiedSelector", () => {
 
     await openList(user);
 
-    expect(await screen.findByText(`No ${CHAT.selectorLabel.toLowerCase()}s available`)).toBeInTheDocument();
+    expect(await screen.findByText(`No ${i18n.t(CHAT.selectorLabel).toLowerCase()}s available`)).toBeInTheDocument();
   });
 });
