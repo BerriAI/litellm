@@ -1,4 +1,6 @@
+import functools
 import json
+import re
 from collections.abc import Mapping
 from datetime import datetime
 from typing import Annotated, Any, Final, Literal
@@ -93,6 +95,63 @@ def parse_pinned_tools(value: object) -> dict[str, PinnedMCPTool] | None:
     return _PINNED_TOOLS.validate_python(decoded or None)
 
 
+@functools.lru_cache(maxsize=512)
+def compile_tool_name_pattern(pattern: str) -> re.Pattern[str] | None:
+    try:
+        return re.compile(pattern, re.DOTALL)
+    except re.error:
+        return None
+
+
+_TOOL_NAME_PATTERNS_FIELDS: Final = TypeAdapter(dict[str, object])
+_TOOL_NAME_PATTERN_ENTRIES: Final = TypeAdapter(tuple[object, ...])
+
+
+class MCPToolNamePatterns(LiteLLMBaseModel):
+    """A regex tool-name rule from config, matched with fullmatch against the unprefixed tool name.
+
+    ``unusable`` records that the configured value was not a list or held an entry that does not
+    compile, so a broken rule keeps failing closed instead of reading as "no rule".
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    patterns: tuple[str, ...] = ()
+    unusable: bool = False
+
+    @model_validator(mode="before")
+    @classmethod
+    def _from_config_value(cls, value: object) -> object:
+        if isinstance(value, dict):
+            return _TOOL_NAME_PATTERNS_FIELDS.validate_python(value)
+        if not isinstance(value, (list, tuple)):
+            return {"unusable": True}
+        entries: Final = _TOOL_NAME_PATTERN_ENTRIES.validate_python(value)
+        usable: Final = tuple(
+            entry for entry in entries if isinstance(entry, str) and compile_tool_name_pattern(entry) is not None
+        )
+        return {"patterns": usable, "unusable": len(usable) != len(entries)}
+
+    @field_validator("patterns")
+    @classmethod
+    def _patterns_compile(cls, patterns: tuple[str, ...]) -> tuple[str, ...]:
+        invalid: Final = tuple(pattern for pattern in patterns if compile_tool_name_pattern(pattern) is None)
+        if invalid:
+            raise ValueError(f"tool name patterns do not compile: {invalid!r}")
+        return patterns
+
+    def fullmatches(self, tool_name: str) -> bool:
+        compiled: Final = (compile_tool_name_pattern(pattern) for pattern in self.patterns)
+        return any(pattern.fullmatch(tool_name) is not None for pattern in compiled if pattern is not None)
+
+
+_TOOL_NAME_PATTERNS_RULE: Final[TypeAdapter[MCPToolNamePatterns | None]] = TypeAdapter(MCPToolNamePatterns | None)
+
+
+def parse_tool_name_patterns(value: object) -> MCPToolNamePatterns | None:
+    return _TOOL_NAME_PATTERNS_RULE.validate_python(value)
+
+
 class MCPServer(LiteLLMBaseModel):
     server_id: str
     name: str
@@ -111,6 +170,8 @@ class MCPServer(LiteLLMBaseModel):
     )
     allowed_tools: list[str] | None = None
     disallowed_tools: list[str] | None = None
+    allowed_tools_regex: MCPToolNamePatterns | None = None
+    disallowed_tools_regex: MCPToolNamePatterns | None = None
     tool_name_to_display_name: dict[str, str] | None = None
     tool_name_to_description: dict[str, str] | None = None
     pinned_tools: dict[str, PinnedMCPTool] | None = None
