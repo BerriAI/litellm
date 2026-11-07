@@ -771,14 +771,20 @@ async def test_mantle_count_for_a_bedrock_deployment_keeps_and_drops_the_caller_
 _INTERLEAVED_THINKING: Final = "interleaved-thinking-2025-05-14"
 _CONTEXT_1M: Final = "context-1m-2025-08-07"
 _MANTLE_COUNT_MODEL: Final = "bedrock_mantle/anthropic.claude-opus-5-5"
+_CONVERSE_DEPLOYMENT: Final[Mapping[str, JsonValue]] = {
+    "litellm_params": {**DEPLOYMENT["litellm_params"], "model": "bedrock/converse/us.anthropic.claude-opus-5-5"}
+}
 
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("local_beta_headers_config", "aws_credentials_in_the_environment")
-async def test_runtime_count_without_a_deployment_sends_the_caller_betas_invoke_inference_sends() -> None:
-    caller_beta: Final = f"{_INTERLEAVED_THINKING},{_CONTEXT_1M}"
+@pytest.mark.parametrize("deployment", (None, _CONVERSE_DEPLOYMENT), ids=("no-deployment", "converse-deployment"))
+async def test_runtime_count_without_a_deployment_or_for_a_converse_one_sends_the_caller_betas_invoke_inference_sends(
+    deployment: Mapping[str, JsonValue] | None,
+) -> None:
+    caller_beta: Final = f"{_INTERLEAVED_THINKING},{_CONTEXT_1M},{ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER}"
     sent: Final = await _invoke_inference_betas(caller_beta, {})
-    bedrock: Final = await _count_with_caller_beta("us.anthropic.claude-opus-5-5", caller_beta, None)
+    bedrock: Final = await _count_with_caller_beta("us.anthropic.claude-opus-5-5", caller_beta, deployment)
 
     assert bedrock.posted_hosts() == (RUNTIME_HOST,)
     counted: Final = _betas_besides_effort(_invoke_body(bedrock.requests[0]))
@@ -912,9 +918,6 @@ async def test_mantle_count_for_a_converse_deployment_sends_the_format_and_betas
     assert _sent_betas(bedrock.requests[0]) == _sent_betas(inference.requests[0]) != ()
 
 
-_CONVERSE_DEPLOYMENT: Final = {
-    "litellm_params": {**DEPLOYMENT["litellm_params"], "model": "bedrock/converse/us.anthropic.claude-opus-5-5"}
-}
 _SYSTEM_OUTPUT_CONFIG_AFTER_A_USER_TURN: Final[tuple[Mapping[str, JsonValue], ...]] = (
     {"role": "user", "content": "Hi"},
     {"role": "system", "content": "Answer briefly", "output_config": _EFFORT["output_config"]},
@@ -940,15 +943,25 @@ _SYSTEM_OUTPUT_CONFIG_DIRECTIVE_ONLY: Final[tuple[Mapping[str, JsonValue], ...]]
     ),
     ids=("tool-input-examples", "system-output-config-after-a-user-turn", "system-output-config-directive-only"),
 )
-async def test_mantle_count_for_a_converse_deployment_keeps_the_caller_beta_its_body_fields_need(
+async def test_mantle_count_for_a_converse_deployment_sends_a_mantle_deployments_betas_with_the_one_its_body_needs(
     messages: Sequence[Mapping[str, JsonValue]], tools: Sequence[Mapping[str, JsonValue]] | None, caller_beta: str
 ) -> None:
-    bedrock: Final = await _count_with_caller_beta(
-        _MANTLE_COUNT_MODEL, caller_beta, _CONVERSE_DEPLOYMENT, messages=messages, tools=tools
+    caller_betas: Final = f"{caller_beta},{_CONTEXT_1M},{_INTERLEAVED_THINKING}"
+    converse: Final = await _count_with_caller_beta(
+        _MANTLE_COUNT_MODEL, caller_betas, _CONVERSE_DEPLOYMENT, messages=messages, tools=tools
+    )
+    mantle: Final = await _count_with_caller_beta(
+        _MANTLE_COUNT_MODEL,
+        caller_betas,
+        {"litellm_params": {**DEPLOYMENT["litellm_params"], "model": _MANTLE_COUNT_MODEL}},
+        messages=messages,
+        tools=tools,
     )
 
-    assert bedrock.posted_hosts() == (MANTLE_HOST,)
-    assert caller_beta in _sent_betas(bedrock.requests[0])
+    assert converse.posted_hosts() == mantle.posted_hosts() == (MANTLE_HOST,)
+    counted: Final = _sent_betas(converse.requests[0])
+    assert counted == _sent_betas(mantle.requests[0])
+    assert caller_beta in counted
 
 
 @pytest.mark.asyncio
