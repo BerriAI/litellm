@@ -1,6 +1,4 @@
-use std::sync::Arc;
-
-use indexmap::IndexMap;
+use std::{collections::HashMap, sync::Arc};
 
 use litellm_redis_store::{
     Send,
@@ -172,7 +170,7 @@ impl NativeRouterCooldowns {
         self.0.flush_local_counters().map_err(kind_error)
     }
 
-    fn snapshot(&self) -> PyResult<IndexMap<String, PyData<Cooldown>>> {
+    fn snapshot(&self) -> PyResult<HashMap<String, PyData<Cooldown>>> {
         Ok(self
             .0
             .snapshot()

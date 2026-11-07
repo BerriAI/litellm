@@ -1,7 +1,7 @@
-use std::{sync::Arc, time::Duration};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use litellm_redis_store::router_usage::{Counter, Kind, RouterUsage};
-use pyo3::{prelude::*, types::PyDict};
+use pyo3::prelude::*;
 
 use super::{
     PyNumber, Spelled, kind_error, policy::router_tier_policies, redis_async, redis_sync, remote,
@@ -170,11 +170,13 @@ impl NativeRouterUsage {
         self.0.flush_local_counters().map_err(kind_error)
     }
 
-    fn snapshot<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
-        let snapshot = PyDict::new(py);
-        for (key, count) in self.0.snapshot().map_err(kind_error)? {
-            snapshot.set_item(key, PyNumber(count))?;
-        }
-        Ok(snapshot)
+    fn snapshot(&self) -> PyResult<HashMap<String, PyNumber>> {
+        Ok(self
+            .0
+            .snapshot()
+            .map_err(kind_error)?
+            .into_iter()
+            .map(|(key, count)| (key, PyNumber(count)))
+            .collect())
     }
 }
