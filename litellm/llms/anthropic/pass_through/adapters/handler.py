@@ -14,9 +14,12 @@ from typing_extensions import TypedDict
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.asyncify import run_async_function
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, iter_items
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
-from litellm.litellm_core_utils.prompt_templates.common_utils import messages_carry_encrypted_reasoning
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    is_encrypted_reasoning_block,
+    thinking_blocks_with_encrypted_reasoning,
+)
 from litellm.litellm_core_utils.tool_fields import (
     ROUTES_WITHOUT_MCP_SERVERS,
     drops_mcp_servers,
@@ -106,6 +109,22 @@ def _completion_text(completion_kwargs: _CompletionKwargs, key: str) -> str:
     return value if isinstance(value, str) else ""
 
 
+def _message_carries_encrypted_reasoning(message: object) -> bool:
+    mapping: Final = as_str_mapping(message)
+    if mapping is None:
+        return False
+    blocks: Final = thinking_blocks_with_encrypted_reasoning(
+        mapping.get("thinking_blocks"), mapping.get("reasoning_items")
+    )
+    return any(is_encrypted_reasoning_block(block) for block in blocks)
+
+
+def _sends_encrypted_reasoning(completion_kwargs: _CompletionKwargs) -> bool:
+    messages: Final = completion_kwargs.get("messages")
+    sent: Final = iter_items(messages) if messages is not None else ()
+    return any(_message_carries_encrypted_reasoning(message) for message in sent)
+
+
 def _messages_without_rejected_reasoning(
     messages: _AnthropicMessages,
     error: litellm.BadRequestError,
@@ -113,7 +132,7 @@ def _messages_without_rejected_reasoning(
 ) -> "_AnthropicMessages | None":
     error_message: Final = str(error)
     rejected: Final = "invalid_encrypted_content" in error_message or "could not be verified" in error_message
-    if not rejected or not messages_carry_encrypted_reasoning(messages):
+    if not rejected or not _sends_encrypted_reasoning(completion_kwargs):
         return None
     verbose_logger.warning(
         "Backend rejected replayed encrypted reasoning, retrying once without it. "

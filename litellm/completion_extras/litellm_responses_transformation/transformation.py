@@ -1563,9 +1563,14 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         sync_stream: bool,
         json_mode: bool | None = False,
         structured_output: bool = False,
+        streams_reasoning_signatures: bool = False,
     ) -> BaseModelResponseIterator:
         return OpenAiResponsesToChatCompletionStreamIterator(
-            streaming_response, sync_stream, json_mode, structured_output=structured_output
+            streaming_response,
+            sync_stream,
+            json_mode,
+            structured_output=structured_output,
+            streams_reasoning_signatures=streams_reasoning_signatures,
         )
 
     def _convert_content_str_to_input_text(self, content: str, role: str) -> dict[str, object]:
@@ -1944,8 +1949,10 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         sync_stream: bool,
         json_mode: bool | None = False,
         structured_output: bool = False,
+        streams_reasoning_signatures: bool = False,
     ):
         super().__init__(streaming_response, sync_stream, json_mode)
+        self._streams_reasoning_signatures: Final = streams_reasoning_signatures
         self._chat_completion_id: str | None = None
         self._served_service_tier: str | None = None
         self._tool_call_index_map: dict[int, int] = {}  # mutable-ok: per-stream accumulator state
@@ -2266,7 +2273,11 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         """
         verbose_logger.debug("Chat provider: transform_streaming_response called with chunk: %s", chunk)
         self._remember_served_service_tier(chunk)
-        reasoning_chunk: Final = _reasoning_done_stream_chunk(chunk, self._summary_streamed_outputs)
+        reasoning_chunk: Final = (
+            _reasoning_done_stream_chunk(chunk, self._summary_streamed_outputs)
+            if self._streams_reasoning_signatures
+            else None
+        )
         translated: Final = (
             self._empty_content_chunk()
             if self._is_text_delta_after_structured_answer(chunk)
