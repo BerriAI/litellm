@@ -5480,3 +5480,165 @@ def test_get_session_iterator_reuses_one_session_per_background_loop(
     assert len(sessions) == 10
     assert all(session is sessions[0] for session in sessions)
     assert presidio_guardrail._http_session is None
+
+
+def _presidio_fake_server_detections(text: str) -> list[dict]:
+    detections: Final = []
+    for match in re.finditer(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+", text):
+        detections.append(
+            {
+                "entity_type": "EMAIL_ADDRESS",
+                "start": match.start(),
+                "end": match.end(),
+                "score": 0.9,
+            }
+        )
+    for match in re.finditer(r"GB\d{2}[A-Z]{4}\d{14}", text):
+        detections.append(
+            {
+                "entity_type": "IBAN_CODE",
+                "start": match.start(),
+                "end": match.end(),
+                "score": 0.9,
+            }
+        )
+    return detections
+
+
+def _presidio_fake_server_iterator():
+    """Presidio stand-in that masks only the analyzer_results it is handed."""
+
+    @asynccontextmanager
+    async def mock_iterator():
+        class MockResponse:
+            def __init__(self, payload):
+                self.payload = payload
+                self.status = 200
+                self.content_type = "application/json"
+                self.headers = {"Content-Type": "application/json"}
+
+            async def text(self):
+                return json.dumps(self.payload)
+
+            async def json(self):
+                return self.payload
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                pass
+
+        class MockSession:
+            closed = False
+
+            def post(self, url, json=None, **kwargs):
+                if url.endswith("analyze"):
+                    return MockResponse(_presidio_fake_server_detections(json["text"]))
+                text = json["text"]
+                for span in sorted(json.get("analyzer_results") or [], key=lambda i: i["start"], reverse=True):
+                    text = text[: span["start"]] + f"<{span['entity_type']}>" + text[span["end"] :]
+                return MockResponse({"text": text, "items": json.get("analyzer_results") or []})
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                pass
+
+        yield MockSession()
+
+    return mock_iterator
+
+
+@pytest.mark.asyncio
+async def test_output_masking_does_not_remask_restored_values():
+    """
+    A response that echoes numbered input tokens must come back restored,
+    even when an output-masking callback runs after the restore step, while
+    PII the model generated itself must still be masked.
+    """
+    from litellm.types.utils import ModelResponseStream
+
+    restore_guardrail = OPTIONAL_PresidioPIIMasking(
+        output_parse_pii=True,
+        presidio_analyzer_api_base="http://analyzer:3000/",
+        presidio_anonymizer_api_base="http://anonymizer:3000/",
+        pii_entities_config={
+            PiiEntityType.EMAIL_ADDRESS: PiiAction.MASK,
+            "IBAN_CODE": PiiAction.MASK,
+        },
+        _callback_role="restore",
+    )
+    mask_guardrail = OPTIONAL_PresidioPIIMasking(
+        apply_to_output=True,
+        presidio_analyzer_api_base="http://analyzer:3000/",
+        presidio_anonymizer_api_base="http://anonymizer:3000/",
+        pii_entities_config={
+            PiiEntityType.EMAIL_ADDRESS: PiiAction.MASK,
+            "IBAN_CODE": PiiAction.MASK,
+        },
+    )
+    user_api_key = UserAPIKeyAuth(api_key="test-key")
+    request_data: Final = {
+        "messages": [
+            {
+                "role": "user",
+                "content": "Repeat this line verbatim: Contact <EMAIL_ADDRESS_1>, account <IBAN_CODE_1>.",
+            }
+        ],
+        "model": "fake-model",
+        "metadata": {
+            "pii_tokens": {
+                "<EMAIL_ADDRESS_1>": "test.person@contoso-example.com",
+                "<IBAN_CODE_1>": "GB82WEST12345698765432",
+            }
+        },
+    }
+    echo = "Contact <EMAIL_ADDRESS_1>, account <IBAN_CODE_1>. New contact: other.person@example.org."
+    expected = "Contact test.person@contoso-example.com, account GB82WEST12345698765432. New contact: <EMAIL_ADDRESS>."
+
+    with (
+        patch.object(restore_guardrail, "_get_session_iterator", _presidio_fake_server_iterator()),
+        patch.object(mask_guardrail, "_get_session_iterator", _presidio_fake_server_iterator()),
+    ):
+        response = ModelResponse(
+            choices=[Choices(message=Message(role="assistant", content=echo), index=0, finish_reason="stop")]
+        )
+        await restore_guardrail.async_post_call_success_hook(
+            data=request_data,
+            user_api_key_dict=user_api_key,
+            response=response,
+        )
+        masked = await mask_guardrail.async_post_call_success_hook(
+            data=request_data,
+            user_api_key_dict=user_api_key,
+            response=response,
+        )
+        assert masked.choices[0].message.content == expected, masked.choices[0].message.content
+
+        async def _chunks():
+            yield ModelResponseStream(
+                choices=[StreamingChoices(delta=Delta(content=echo, role="assistant"), index=0, finish_reason=None)]
+            )
+            yield ModelResponseStream(
+                choices=[StreamingChoices(delta=Delta(content="", role="assistant"), index=0, finish_reason="stop")]
+            )
+
+        stream = restore_guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=user_api_key,
+            response=_chunks(),
+            request_data=request_data,
+        )
+        stream = mask_guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=user_api_key,
+            response=stream,
+            request_data=request_data,
+        )
+        collected = ""
+        async for chunk in stream:
+            if isinstance(chunk, ModelResponseStream):
+                for choice in chunk.choices:
+                    if choice.delta and choice.delta.content:
+                        collected += choice.delta.content
+        assert collected == expected, collected
