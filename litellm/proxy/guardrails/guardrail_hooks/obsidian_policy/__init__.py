@@ -1,6 +1,5 @@
-from typing import TYPE_CHECKING, Final
-
-from pydantic import TypeAdapter
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, Final, TypeAlias
 
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.guardrails import GuardrailEventHooks, Mode, SupportedGuardrailIntegrations
@@ -15,7 +14,7 @@ from .client import (
 )
 from .obsidian_policy import ObsidianPolicyGuardrail
 
-_EVENT_HOOK: Final = TypeAdapter(GuardrailEventHooks | list[GuardrailEventHooks] | Mode)
+_EventHook: TypeAlias = GuardrailEventHooks | list[GuardrailEventHooks] | Mode
 
 if TYPE_CHECKING:
     from litellm.types.guardrails import Guardrail, LitellmParams
@@ -28,7 +27,7 @@ def resolve_settings(litellm_params: "LitellmParams") -> ObsidianSettings:
 
     client_platform: Final = (
         litellm_params.client_platform or get_secret_str("OBSIDIAN_CLIENT_PLATFORM") or DEFAULT_CLIENT_PLATFORM
-    )
+    ).strip()
     platform_error: Final = validate_client_platform(client_platform)
     if platform_error:
         raise ValueError(f"Obsidian policy guardrail: {platform_error}")
@@ -42,15 +41,28 @@ def resolve_settings(litellm_params: "LitellmParams") -> ObsidianSettings:
     )
 
 
+def _event_hook(mode: str | Sequence[str] | Mode) -> _EventHook:
+    match mode:
+        case Mode():
+            return mode
+        case str():
+            return GuardrailEventHooks(mode)
+        case _:
+            return [GuardrailEventHooks(name) for name in mode]
+
+
 def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail") -> ObsidianPolicyGuardrail:
     import litellm
-    from litellm.llms.custom_httpx.http_handler import get_async_httpx_client, httpxSpecialProvider
+    from litellm.llms.custom_httpx.http_handler import (
+        get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]  # helper is untyped in http_handler
+        httpxSpecialProvider,
+    )
 
     http: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback).client
     callback: Final = ObsidianPolicyGuardrail(
         client=ObsidianClient(resolve_settings(litellm_params), http),
         guardrail_name=guardrail["guardrail_name"],
-        event_hook=_EVENT_HOOK.validate_python(litellm_params.mode),
+        event_hook=_event_hook(litellm_params.mode),
         default_on=litellm_params.default_on or False,
     )
     litellm.logging_callback_manager.add_litellm_callback(callback)

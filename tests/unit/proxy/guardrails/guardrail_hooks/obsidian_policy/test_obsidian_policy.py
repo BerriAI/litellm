@@ -4,7 +4,9 @@ from collections.abc import Callable
 import httpx
 import pytest
 from fastapi import HTTPException
-from mcp.types import TextContent
+from types import SimpleNamespace
+
+from mcp.types import CallToolResult, ImageContent, TextContent
 
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.obsidian_policy import (
@@ -22,19 +24,32 @@ Handler = Callable[[httpx.Request], httpx.Response]
 
 
 def _guardrail(
-    handler: Handler, event_hook=(GuardrailEventHooks.pre_mcp_call, GuardrailEventHooks.post_mcp_call)
+    handler: Handler,
+    event_hook=(GuardrailEventHooks.pre_mcp_call, GuardrailEventHooks.post_mcp_call),
+    fail_open: bool = False,
+    default_on: bool = True,
 ) -> ObsidianPolicyGuardrail:
     settings = ObsidianSettings(
         endpoint="https://obsidian.example.test/enforcement",
         gateway_token="gw-token",
         client_platform="acme_gateway",
         timeout_seconds=1.0,
-        fail_open=False,
+        fail_open=fail_open,
     )
     client = ObsidianClient(settings, httpx.AsyncClient(transport=httpx.MockTransport(handler)))
     return ObsidianPolicyGuardrail(
-        client=client, guardrail_name="obsidian", event_hook=list(event_hook), default_on=True
+        client=client, guardrail_name="obsidian", event_hook=list(event_hook), default_on=default_on
     )
+
+
+def _recorder(verdict: httpx.Response) -> tuple[list[httpx.Request], Handler]:
+    captured: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        return verdict
+
+    return captured, handler
 
 
 def _verdict(decision: str, **extra) -> httpx.Response:
@@ -262,3 +277,96 @@ def test_unreachable_fallback_maps_to_fail_open(fallback, fail_open):
 
 def test_fails_closed_by_default():
     assert resolve_settings(_params(api_key="t")).fail_open is False
+
+
+async def test_pre_call_without_an_auth_object_still_evaluates_and_omits_the_user():
+    captured, handler = _recorder(_verdict("pass"))
+    data = _pre_data()
+    assert await _guardrail(handler).async_pre_call_hook(None, None, data, "call_mcp_tool") is data
+    assert "user" not in json.loads(captured[0].content)
+
+
+def _recorded_call(**overrides) -> dict:
+    return {"name": "get_secret", "arguments": {"key": "db"}, "mcp_session_id": "sess-9", **overrides}
+
+
+@pytest.mark.parametrize(
+    "recorded, expected_service",
+    [
+        (_recorded_call(mcp_server_name="vault"), "vault"),
+        (_recorded_call(namespaced_tool_name="gh/get_secret"), "gh"),
+    ],
+)
+async def test_both_stages_report_the_same_session_and_service(recorded, expected_service):
+    captured, handler = _recorder(_verdict("pass"))
+    guardrail = _guardrail(handler)
+    logging_obj = SimpleNamespace(litellm_call_id="call-1", model_call_details={"mcp_tool_call_metadata": recorded})
+
+    pre = {**_pre_data(), "mcp_server_name": "gh-alias", "litellm_logging_obj": logging_obj}
+    await guardrail.async_pre_call_hook(_auth(), None, pre, "call_mcp_tool")
+    post = {**_post_kwargs(), "mcp_tool_call_metadata": recorded}
+    await guardrail.async_post_mcp_tool_call_hook(post, _post_response(), None, None)
+
+    pre_body, post_body = (json.loads(request.content) for request in captured)
+    assert pre_body["session_id"] == post_body["session_id"] == "sess-9"
+    assert pre_body["target_service"] == post_body["target_service"] == expected_service
+
+
+async def test_post_call_denies_on_a_block_even_when_the_recorded_call_is_malformed():
+    kwargs = {**_post_kwargs(), "mcp_tool_call_metadata": {"name": 42, "arguments": ["not", "a", "mapping"]}}
+    replacement = await _guardrail(lambda request: _verdict("block")).async_post_mcp_tool_call_hook(
+        kwargs, _post_response(), None, None
+    )
+    assert replacement is not None
+    assert "hunter2" not in replacement.mcp_tool_call_response[0].text
+
+
+@pytest.mark.parametrize("fail_open", [False, True])
+async def test_post_call_turns_an_internal_error_into_a_fail_mode_decision(fail_open):
+    guardrail = _guardrail(lambda request: _verdict("pass"), fail_open=fail_open)
+    replacement = await guardrail.async_post_mcp_tool_call_hook(_post_kwargs(), object(), None, None)
+    if fail_open:
+        assert replacement is None
+    else:
+        assert replacement is not None
+        assert "guardrail raised" in replacement.mcp_tool_call_response[0].text
+
+
+async def test_post_call_strips_binary_content_before_sending_it_to_obsidian():
+    captured, handler = _recorder(_verdict("pass"))
+    response = MCPPostCallResponseObject(
+        mcp_tool_call_response=[ImageContent(type="image", data="A" * 400, mimeType="image/png")],
+        hidden_params=HiddenParams(),
+    )
+    await _guardrail(handler).async_post_mcp_tool_call_hook(_post_kwargs(), response, None, None)
+    item = json.loads(captured[0].content)["action_param"]["tool_response"]["content"][0]
+    assert "data" not in item
+    assert item["data_bytes"] == 400
+    assert item["mimeType"] == "image/png"
+
+
+@pytest.mark.parametrize("decision, is_error", [("block", True), ("pass", False)])
+async def test_post_call_block_marks_the_real_tool_result_as_an_error(decision, is_error):
+    original = CallToolResult(content=[TextContent(type="text", text="hunter2")])
+    kwargs = {**_post_kwargs(), "original_response": original}
+    await _guardrail(lambda request: _verdict(decision)).async_post_mcp_tool_call_hook(
+        kwargs, _post_response(), None, None
+    )
+    assert original.is_error is is_error
+
+
+@pytest.mark.parametrize(
+    "metadata, runs",
+    [
+        ({"user_api_key_metadata": {"guardrails": ["obsidian"]}}, True),
+        ({"user_api_key_team_metadata": {"guardrails": ["obsidian"]}}, True),
+        ({"guardrails": ["obsidian"]}, True),
+        ({"user_api_key_metadata": {"guardrails": ["other"]}}, False),
+        ({}, False),
+    ],
+)
+async def test_post_call_honours_key_and_team_attached_guardrails_when_not_default_on(metadata, runs):
+    captured, handler = _recorder(_verdict("pass"))
+    kwargs = {**_post_kwargs(), "litellm_params": {"metadata": metadata}}
+    await _guardrail(handler, default_on=False).async_post_mcp_tool_call_hook(kwargs, _post_response(), None, None)
+    assert bool(captured) is runs

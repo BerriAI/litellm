@@ -1,9 +1,11 @@
 from pydantic import Field
 
+from litellm.types.llms.base import LiteLLMBaseModel
+
 from .base import GuardrailConfigModel
 
 
-class ObsidianPolicyGuardrailConfigModel(GuardrailConfigModel):
+class ObsidianPolicyGuardrailConfigModel(GuardrailConfigModel[LiteLLMBaseModel]):
     api_key: str | None = Field(
         default=None,
         description="Obsidian gateway token. If not provided, the `OBSIDIAN_GATEWAY_TOKEN` environment variable is used.",

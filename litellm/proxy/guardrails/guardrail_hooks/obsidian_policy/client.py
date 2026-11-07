@@ -27,7 +27,7 @@ DecisionKind: TypeAlias = Literal["pass", "warn", "block", "not_evaluated", "err
 
 def validate_client_platform(name: str) -> str | None:
     """Return an error message if `name` is not usable as a client platform, else None."""
-    if not CLIENT_PLATFORM_PATTERN.match(name):
+    if not CLIENT_PLATFORM_PATTERN.fullmatch(name):
         return 'client_platform must be 1-64 letters, digits, ".", "_" or "-"'
     if name.lower().replace("-", "_") in RESERVED_CLIENT_PLATFORMS:
         return f'client_platform "{name}" is reserved by Obsidian'
@@ -134,13 +134,17 @@ class ObsidianClient:
         self._settings: Final = settings
         self._http: Final = http
 
+    @property
+    def fail_open(self) -> bool:
+        return self._settings.fail_open
+
     async def evaluate(self, event: ToolEvent) -> PolicyDecision:
         """Ask Obsidian for a verdict on one tool event. Never raises."""
         body: Final = build_event(event, self._settings.client_platform)
         outcome: Final = await self._send(body)
         match outcome:
             case _Failure(message=message):
-                return self._failure("error", message)
+                return self.failure("error", message)
             case httpx.Response():
                 return await self._decide(outcome)
 
@@ -169,15 +173,15 @@ class ObsidianClient:
 
     async def _decide(self, response: httpx.Response) -> PolicyDecision:
         if not response.is_success:
-            return self._failure("error", f"Obsidian returned HTTP {response.status_code}{_error_detail(response)}")
+            return self.failure("error", f"Obsidian returned HTTP {response.status_code}{_error_detail(response)}")
         try:
             verdict: Final = _Verdict.model_validate_json(response.content)
         except ValidationError:
-            return self._failure("error", "Obsidian returned a response that is not a valid verdict")
+            return self.failure("error", "Obsidian returned a response that is not a valid verdict")
 
         if verdict.decision in ("pass", "warn"):
             if not verdict.evaluation_id:
-                return self._failure(
+                return self.failure(
                     "not_evaluated",
                     verdict.message or "Obsidian did not evaluate the event",
                     matched_policies=verdict.matched_policies,
@@ -203,7 +207,7 @@ class ObsidianClient:
             matched_policies=verdict.matched_policies,
         )
 
-    def _failure(
+    def failure(
         self,
         kind: Literal["error", "not_evaluated"],
         message: str,

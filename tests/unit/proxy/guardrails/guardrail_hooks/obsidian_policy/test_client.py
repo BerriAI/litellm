@@ -215,7 +215,7 @@ def test_reserved_client_platforms_are_rejected_regardless_of_case_and_dashes(na
     assert validate_client_platform(name) is not None
 
 
-@pytest.mark.parametrize("name", ["", "has space", "x" * 65, "semi;colon"])
+@pytest.mark.parametrize("name", ["", "has space", "x" * 65, "semi;colon", "acme_gateway\n"])
 def test_malformed_client_platforms_are_rejected(name):
     assert validate_client_platform(name) is not None
 
