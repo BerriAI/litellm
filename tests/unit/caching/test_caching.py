@@ -21,7 +21,7 @@ from litellm.caching.caching import Cache, CacheMode, response_cache_phase
 from litellm.caching.caching_handler import _PENDING_CACHE_WRITES
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
-from litellm.caching.redis_cache import RedisCache, _RedisTimeoutLogThrottle
+from litellm.caching.redis_cache import RedisCache, RedisTimeoutLogThrottle
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.types.caching import EMBEDDING_CACHE_FORMAT_VERSION, LiteLLMCacheType, SemanticCacheScope
 from litellm.types.utils import Embedding, EmbeddingResponse, Usage
@@ -94,9 +94,9 @@ def test_cache_key_debug_log_does_not_include_prompt_material(caplog):
     ],
 )
 def test_add_cache_timeout_only_joins_redis_throttle_for_redis_backends(backend, expected_level, caplog, monkeypatch):
-    throttle = _RedisTimeoutLogThrottle(interval=5.0, clock=MagicMock(return_value=1_000.0))
+    throttle = RedisTimeoutLogThrottle(interval=5.0, clock=MagicMock(return_value=1_000.0))
     assert throttle.admit() == 0
-    monkeypatch.setattr(redis_cache_module, "_redis_timeout_log_throttle", throttle)
+    monkeypatch.setattr(redis_cache_module, "redis_timeout_log_throttle", throttle)
 
     cache = Cache(type=LiteLLMCacheType.LOCAL)
     backend.set_cache.side_effect = TimeoutError("lit7520 backend timed out")
@@ -257,6 +257,29 @@ def test_cache_rejects_unsupported_type() -> None:
     ) as raised:
         Cache(**cache_params)
     assert str(raised.value).split("Supported types: ")[1].split(", ") == [member.value for member in LiteLLMCacheType]
+
+
+class _PingableInMemoryCache(InMemoryCache):
+    async def ping(self) -> bool:
+        return True
+
+    async def delete_cache_keys(self, keys: list[str]) -> None:
+        for key in keys:
+            self.delete_cache(key)
+
+
+@pytest.mark.asyncio
+async def test_cache_ping_and_delete_cache_keys_reach_a_backend_that_supports_them() -> None:
+    backend: Final = _PingableInMemoryCache()
+    cache: Final = Cache(type="local", _backend=backend)
+    backend.set_cache("kept", "kept value")
+    backend.set_cache("dropped", "dropped value")
+
+    assert await cache.ping() is True
+    await cache.delete_cache_keys(["dropped"])
+
+    assert backend.get_cache("dropped") is None
+    assert backend.get_cache("kept") == "kept value"
 
 
 def test_semantic_cache_scope_rejects_unknown_value():
