@@ -5925,17 +5925,21 @@ class _FailureLog(CustomLogger):
         super().__init__()
         self.rejections: tuple[str, ...] = ()
 
-    def _record(self, kwargs) -> None:
+    def _record(self, kwargs: Mapping[str, object]) -> None:
         error: Final = str(kwargs.get("exception"))
         self.rejections = (
             *self.rejections,
             next((phrase for phrase in _UPSTREAM_REJECTION_PHRASES if phrase in error), error),
         )
 
-    def log_failure_event(self, kwargs, response_obj, start_time, end_time) -> None:
+    def log_failure_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
         self._record(kwargs)
 
-    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time) -> None:
+    async def async_log_failure_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
         self._record(kwargs)
 
 
