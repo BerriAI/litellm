@@ -2559,7 +2559,7 @@ class LiteLLMCompletionResponsesConfig:
         """
         ChatCompletionToolMessage is used to indicate the output from a tool call
         """
-        call_id: Final = tool_call_output.get("call_id")
+        call_id: Final = tool_call_output.get("call_id") or tool_call_output.get("id")
         # If call_id is missing or empty, skip this message
         # Empty call_id means we can't create a valid tool message
         if not call_id:

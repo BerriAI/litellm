@@ -561,7 +561,10 @@ def _tool_output_part_text(part: object) -> str | None:
 
 
 def tool_output_texts(item: object) -> tuple[tuple[int | None, str], ...]:
-    if not stream_item_field(item, "call_id") or stream_item_field(item, "type") == "computer_call_output":
+    if (
+        not (stream_item_field(item, "call_id") or stream_item_field(item, "id"))
+        or stream_item_field(item, "type") == "computer_call_output"
+    ):
         return ()
     parts: Final = stream_item_items(item, "output")
     part_texts: Final = tuple(
@@ -593,7 +596,10 @@ def _texts_by_tool_row(
     if isinstance(input_data, str):
         return MappingProxyType({})
     output_texts_by_call_id: Final = _grouped_by_call_id(
-        (str(stream_item_field(item, "call_id")), tuple(text for _, text in tool_output_texts(item)))
+        (
+            str(stream_item_field(item, "call_id") or stream_item_field(item, "id")),
+            tuple(text for _, text in tool_output_texts(item)),
+        )
         for item in input_data
         if stream_item_field(item, "type") in TOOL_CALL_OUTPUT_ITEM_TYPES
     )

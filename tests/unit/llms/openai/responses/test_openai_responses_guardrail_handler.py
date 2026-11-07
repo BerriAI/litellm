@@ -1117,7 +1117,7 @@ class TestToolResultItemsReachTextsGuardrails:
             "input": [
                 {
                     "type": "local_shell_call_output",
-                    "call_id": "call_1",
+                    "id": "lso_1",
                     "output": "long output 1",
                 },
                 {
@@ -1131,7 +1131,7 @@ class TestToolResultItemsReachTextsGuardrails:
             200,
             json={
                 "messages": [
-                    {"role": "tool", "content": "short output 1", "tool_call_id": "call_1"},
+                    {"role": "tool", "content": "short output 1", "tool_call_id": "lso_1"},
                     {"role": "tool", "content": "short output 2", "tool_call_id": "call_2"},
                 ]
             },
@@ -1147,9 +1147,40 @@ class TestToolResultItemsReachTextsGuardrails:
         assert result.get("previous_response_id") == "resp_previous"
         assert result.get("custom_metadata") == {"source": "terminal", "session": "abc123"}
         assert result["input"] == [
-            {"type": "local_shell_call_output", "call_id": "call_1", "output": "short output 1"},
+            {"type": "local_shell_call_output", "id": "lso_1", "output": "short output 1"},
             {"type": "shell_call_output", "call_id": "call_2", "output": "short output 2"},
         ]
+
+    @pytest.mark.asyncio
+    async def test_local_shell_call_output_spec_shape_without_call_id_is_scanned_and_rewritten(self) -> None:
+        guardrail: Final = RecordingMaskingGuardrail(guardrail_name="test")
+        request: Final[dict[str, object]] = {
+            "model": "gpt-5.4-mini",
+            "input": [
+                {
+                    "type": "local_shell_call_output",
+                    "id": "lso_1",
+                    "output": "SECRET shell output",
+                }
+            ],
+        }
+
+        result: Final = await OpenAIResponsesHandler().process_input_messages(request, guardrail)
+
+        assert guardrail.seen_texts == [["SECRET shell output"]]
+        assert result["input"] == [
+            {"type": "local_shell_call_output", "id": "lso_1", "output": "SECRET shell output [GUARDRAILED]"},
+        ]
+
+    def test_panw_responses_input_item_counts_local_shell_call_output_with_id_spec_shape(self) -> None:
+        from litellm.proxy.guardrails.guardrail_hooks.panw_prisma_airs.panw_prisma_airs import _ResponsesInputItem
+
+        item: Final = _ResponsesInputItem(
+            type="local_shell_call_output",
+            id="lso_1",
+            output="test output",
+        )
+        assert item.text_count(skip_system=False, skip_tool=False) == 1
 
     @pytest.mark.asyncio
     async def test_headroom_fail_open_forwards_tool_output_uncompressed_on_error(self) -> None:
