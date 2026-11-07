@@ -17,6 +17,7 @@ from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.caching.redis_cache import log_redis_failure
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.batch_utils import is_batch_retrieve_call_type
+from litellm.redis.stores.router_usage import ROUTER_USAGE_TARGET
 from litellm.types.utils import CallTypes
 
 IN_FLIGHT_COUNT_TTL_SECONDS: Final = 60 * 60
@@ -335,7 +336,7 @@ class LeastBusyLoggingHandler(CustomLogger):
                 self._take_reservation(ref[1], call_id, self._clock())
         return bool(started)
 
-    @with_service_target("router_usage")
+    @with_service_target(ROUTER_USAGE_TARGET)
     def log_pre_api_call(self, model: str, messages: object, kwargs: Mapping[str, object]) -> None:
         ref: Final = _deployment_ref(kwargs)
         if ref is None:
@@ -343,7 +344,7 @@ class LeastBusyLoggingHandler(CustomLogger):
         self._start_attempt(ref, call_id_of(kwargs))
         self._count_shared(_request_count_key(*ref), 1)
 
-    @with_service_target("router_usage")
+    @with_service_target(ROUTER_USAGE_TARGET)
     def log_success_event(
         self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
     ) -> None:
@@ -351,7 +352,7 @@ class LeastBusyLoggingHandler(CustomLogger):
         if self.test_flag:
             self.logged_success += 1
 
-    @with_service_target("router_usage")
+    @with_service_target(ROUTER_USAGE_TARGET)
     def log_failure_event(
         self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
     ) -> None:
@@ -359,7 +360,7 @@ class LeastBusyLoggingHandler(CustomLogger):
         if self.test_flag:
             self.logged_failure += 1
 
-    @with_service_target("router_usage")
+    @with_service_target(ROUTER_USAGE_TARGET)
     async def async_log_success_event(
         self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
     ) -> None:
@@ -367,7 +368,7 @@ class LeastBusyLoggingHandler(CustomLogger):
         if self.test_flag:
             self.logged_success += 1
 
-    @with_service_target("router_usage")
+    @with_service_target(ROUTER_USAGE_TARGET)
     async def async_log_failure_event(
         self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
     ) -> None:
@@ -375,7 +376,7 @@ class LeastBusyLoggingHandler(CustomLogger):
         if self.test_flag:
             self.logged_failure += 1
 
-    @with_service_target("router_usage")
+    @with_service_target(ROUTER_USAGE_TARGET)
     def get_available_deployments(
         self,
         model_group: str,
@@ -395,7 +396,7 @@ class LeastBusyLoggingHandler(CustomLogger):
                 return self._select(healthy_deployments, deployment_ids, keys, shared, reserve, call_id)
         return self._select(healthy_deployments, deployment_ids, keys, None, reserve, call_id)
 
-    @with_service_target("router_usage")
+    @with_service_target(ROUTER_USAGE_TARGET)
     async def async_get_available_deployments(
         self,
         model_group: str,

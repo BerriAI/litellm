@@ -112,6 +112,7 @@ from litellm.types.proxy.management_endpoints.key_management_endpoints import (
     BulkUpdateKeyResponse,
     CustomKeyPolicyRequest,
 )
+from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
 
 client = TestClient(app)
 
@@ -388,12 +389,9 @@ async def test_budget_reset_and_expires_at_first_of_month(monkeypatch):
 
     from datetime import datetime, timedelta, timezone
 
-    import pytest
-
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         generate_key_helper_fn,
     )
-    from litellm.proxy.proxy_server import prisma_client
 
     # Use monkeypatch to set the prisma_client
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
@@ -470,9 +468,12 @@ async def test_key_expiration_exact_duration_hours(monkeypatch):
 
     from datetime import datetime, timedelta, timezone
 
+    import pytest
+
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         generate_key_helper_fn,
     )
+    from litellm.proxy.proxy_server import prisma_client
 
     # Use monkeypatch to set the prisma_client
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
@@ -8647,6 +8648,8 @@ async def test_reset_key_spend_success(monkeypatch):
             "litellm.proxy.proxy_server.spend_counter_cache",
             mock_spend_counter_cache,
         )
+        spend = FakeSpendCounters(redis=None)
+        monkeypatch.setattr("litellm.proxy.proxy_server.spend_counter_store", spend.store())
 
         user_api_key_dict = UserAPIKeyAuth(
             user_role=LitellmUserRoles.PROXY_ADMIN,
@@ -8667,9 +8670,7 @@ async def test_reset_key_spend_success(monkeypatch):
         assert response["max_budget"] == 200.0
         mock_prisma_client.db.litellm_verificationtoken.update.assert_called_once()
         mock_delete_cache.assert_awaited_once()
-        mock_spend_counter_cache.in_memory_cache.set_cache.assert_any_call(
-            key=f"spend:key:{hashed_key}", value=50.0, ttl=60
-        )
+        assert spend.memory[f"spend:key:{hashed_key}"] == 50.0
         # spend_db_floor marker is also set to the reset value (LIT-3803 pattern),
         # so a request landing on a pod with a warm pre-reset floor marker cannot
         # re-derive and re-apply the stale spend.
@@ -8746,6 +8747,10 @@ async def test_reset_key_spend_resets_budget_windows(monkeypatch):
         mock_spend_counter_cache,
     )
 
+    spend = FakeSpendCounters()
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.spend_counter_store", spend.store())
+
     with (
         patch("litellm.proxy.proxy_server.hash_token") as mock_hash_token,  # test-quality-ok: no HTTP boundary; same pattern as test_reset_key_spend_success
         patch(  # test-quality-ok: no HTTP boundary; same pattern as test_reset_key_spend_success
@@ -8777,12 +8782,8 @@ async def test_reset_key_spend_resets_budget_windows(monkeypatch):
     assert response["spend"] == 0.0
 
     window_counter_key = f"spend:key:{hashed_key}:window:1d"
-    mock_spend_counter_cache.in_memory_cache.set_cache.assert_any_call(
-        key=window_counter_key, value=0.0, ttl=60
-    )
-    mock_spend_counter_cache.redis_cache.async_set_cache.assert_any_call(
-        key=window_counter_key, value=0.0, ttl=60
-    )
+    assert spend.memory[window_counter_key] == 0.0
+    assert f"SET {window_counter_key} 0.0 60" in spend.commands
     mock_spend_counter_cache.in_memory_cache.set_cache.assert_any_call(
         key=f"spend_db_floor:{window_counter_key}", value=0.0, ttl=5
     )
@@ -8854,6 +8855,10 @@ async def test_reset_key_spend_no_budget_limits_skips_window_reset(monkeypatch):
         "litellm.proxy.proxy_server.spend_counter_cache",
         mock_spend_counter_cache,
     )
+
+    spend = FakeSpendCounters(redis=None)
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.spend_counter_store", spend.store())
 
     with (
         patch("litellm.proxy.proxy_server.hash_token") as mock_hash_token,  # test-quality-ok: no HTTP boundary; same pattern as test_reset_key_spend_success
@@ -8966,6 +8971,8 @@ async def test_update_key_spend_updates_counter(monkeypatch):
         "litellm.proxy.proxy_server.spend_counter_cache",
         mock_spend_counter_cache,
     )
+    spend = FakeSpendCounters()
+    monkeypatch.setattr("litellm.proxy.proxy_server.spend_counter_store", spend.store())
 
     with patch(
         "litellm.proxy.management_endpoints.key_management_endpoints.delete_cache_key_object"
@@ -8989,12 +8996,8 @@ async def test_update_key_spend_updates_counter(monkeypatch):
         )
 
         mock_delete_cache.assert_awaited_once()
-        mock_spend_counter_cache.in_memory_cache.set_cache.assert_called_once_with(
-            key=f"spend:key:{hashed_key}", value=0.0, ttl=60
-        )
-        mock_spend_counter_cache.redis_cache.async_set_cache.assert_awaited_once_with(
-            key=f"spend:key:{hashed_key}", value=0.0, ttl=60
-        )
+        assert spend.memory == {f"spend:key:{hashed_key}": 0.0}
+        assert spend.commands == [f"SET spend:key:{hashed_key} 0.0 60"]
 
 
 @pytest.mark.asyncio

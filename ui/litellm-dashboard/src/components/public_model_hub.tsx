@@ -56,6 +56,7 @@ import { displayMode, isDecisionMode } from "@/lib/decisionModels";
 import { modelUsageExample } from "@/components/AIHub/modelUsageExample";
 import { filterBySearchTerm, rankBySearchRelevance } from "@/utils/searchUtils";
 import { ModelCustomMetadata } from "@/components/AIHub/ModelCustomMetadata";
+import { DeploymentPricingBreakdown } from "@/components/molecules/models/DeploymentPricingBreakdown";
 import ModelHubProviders, { formatModelModeLabel } from "@/components/AIHub/ModelHubProviders";
 
 interface PublicModelHubProps {
@@ -954,6 +955,13 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                         </p>
                       </div>
                     </div>
+                    <DeploymentPricingBreakdown
+                      className="mt-4"
+                      deployments={selectedModel.deployment_pricing}
+                      heading={
+                        <p className="font-medium">{t("aiHub.publicModelHub.modelDialog.pricingByDeployment")}</p>
+                      }
+                    />
                   </div>
 
                   {/* Capabilities */}

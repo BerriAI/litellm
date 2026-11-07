@@ -2370,6 +2370,32 @@ def test_bedrock_invoke_transform_hoists_only_leading_system_run(local_model_cos
     ]
 
 
+def test_bedrock_invoke_transform_forwards_per_turn_control_beta_with_message_output_config(
+    local_model_cost_map: None, local_beta_headers_config: None
+) -> None:
+    """A live InvokeModel call on 2026-11-05 answered 200 with per-turn-control-2026-07-01 next to a message
+    ``output_config`` on Opus 5.5, so the client's beta and that message must both reach Bedrock."""
+    from litellm.types.router import GenericLiteLLMParams
+
+    messages: Final = [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": "hello"},
+        {"role": "system", "content": [], "output_config": {"effort": "low"}},
+        {"role": "user", "content": "continue"},
+    ]
+
+    result: Final = AmazonAnthropicClaudeMessagesConfig().transform_anthropic_messages_request(
+        model="us.anthropic.claude-opus-5-5",
+        messages=copy.deepcopy(messages),
+        anthropic_messages_optional_request_params={"max_tokens": 256, "stream": False},
+        litellm_params=GenericLiteLLMParams(),
+        headers={"anthropic-beta": "per-turn-control-2026-07-01"},
+    )
+
+    assert result["messages"] == messages
+    assert result["anthropic_beta"].count("per-turn-control-2026-07-01") == 1
+
+
 def test_bedrock_invoke_transform_converts_mid_conversation_system_for_older_claude(local_model_cost_map):
     """Invoke rejects ``role: "system"`` in every position on Opus 4.7, Sonnet
     4.6, Haiku 4.5, etc. ("role 'system' is not supported on this model"), but
@@ -4016,7 +4042,10 @@ _NATIVE_OUTPUT_REJECTION: Final = {
     "message": "The model returned the following errors: compilation exceeded limits: Schema is too complex."
 }
 _STALE_SIGNATURE_ERROR: Final = {"message": "messages.1.content.0: Invalid `signature` in `thinking` block"}
-_OPTED_OUT: Final = {"supports_bedrock_native_structured_output": False}
+_OPTED_OUT: Final = {
+    "supports_native_structured_output": False,
+    "supports_bedrock_native_structured_output": False,
+}
 _CONSTRAINED_SCHEMA: Final = {
     "type": "object",
     "properties": {
@@ -4090,6 +4119,96 @@ async def _send_bedrock_messages(
     return bedrock, None
 
 
+@pytest.mark.usefixtures("local_model_cost_map", "local_beta_headers_config")
+@pytest.mark.parametrize(
+    ("model", "headers", "forwarded"),
+    [
+        ("anthropic.claude-3-haiku-20240307-v1:0", {"anthropic-beta": "per-turn-control-2026-07-01"}, False),
+        ("us.anthropic.claude-opus-4-1-20250805-v1:0", {"anthropic-beta": "per-turn-control-2026-07-01"}, False),
+        ("us.anthropic.claude-sonnet-4-5-20250929-v1:0", {"anthropic-beta": "per-turn-control-2026-07-01"}, True),
+        ("jp.anthropic.claude-opus-4-6-v1", {"anthropic-beta": "per-turn-control-2026-07-01"}, True),
+        ("au.anthropic.claude-opus-4-8", {"anthropic-beta": "per-turn-control-2026-07-01"}, True),
+        ("eu.anthropic.claude-opus-5-5", {"anthropic-beta": "per-turn-control-2026-07-01"}, True),
+        ("global.anthropic.claude-sonnet-5-5", {"anthropic-beta": "per-turn-control-2026-07-01"}, True),
+        ("us.anthropic.claude-newfamily-6", {"anthropic-beta": "per-turn-control-2026-07-01"}, True),
+        ("us.anthropic.claude-sonnet-5-5", {}, False),
+    ],
+)
+async def test_bedrock_invoke_messages_forward_per_turn_control_beta_only_where_the_model_map_flags_it(
+    model: str, headers: dict[str, str], forwarded: bool
+) -> None:
+    """On 2026-11-05 Bedrock InvokeModel answered 400 ``invalid beta flag`` to per-turn-control-2026-07-01 on Claude 3
+    Haiku and 200 on every Claude 4.5 and newer model a QA account reached in 13 regions and in the jp., au. and in.
+    profiles."""
+    bedrock: Final = ScriptedBedrockInvoke(replies=((200, _ANTHROPIC_MESSAGE),))
+
+    await litellm.anthropic_messages(
+        model=f"bedrock/invoke/{model}",
+        messages=[{"role": "user", "content": "hi"}],
+        max_tokens=16,
+        extra_headers=headers,
+        aws_access_key_id="test-access-key",
+        aws_secret_access_key="test-secret-key",
+        aws_region_name="us-east-1",
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(bedrock)),
+    )
+
+    (sent,) = bedrock.bodies
+    sent_betas: Final = TypeAdapter(tuple[str, ...]).validate_python(sent.get("anthropic_beta", ()))
+    assert ("per-turn-control-2026-07-01" in sent_betas) is forwarded
+
+
+@pytest.mark.parametrize(
+    ("model", "flag", "expected"),
+    [
+        ("us.anthropic.claude-opus-5-5", False, (False, True)),
+        ("anthropic.claude-3-haiku-20240307-v1:0", True, (True, False)),
+    ],
+    ids=["opt_out", "opt_in"],
+)
+@pytest.mark.usefixtures("local_model_cost_map", "local_beta_headers_config")
+async def test_bedrock_invoke_messages_per_turn_control_flag_stays_on_its_own_deployment(
+    respx_mock: respx.Router,
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    flag: bool,
+    expected: tuple[bool, bool],
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    bedrock: Final = ScriptedBedrockInvoke(replies=((200, _ANTHROPIC_MESSAGE), (200, _ANTHROPIC_MESSAGE)))
+    respx_mock.post(url__regex=r"https://bedrock-runtime\..*").mock(side_effect=bedrock)
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": model_name,
+                "litellm_params": {
+                    "model": f"bedrock/invoke/{model}",
+                    "aws_access_key_id": "test-access-key",
+                    "aws_secret_access_key": "test-secret-key",
+                    "aws_region_name": "us-east-1",
+                },
+                "model_info": model_info,
+            }
+            for model_name, model_info in (("flagged", {"supports_per_turn_control": flag}), ("default", {}))
+        ],
+        num_retries=0,
+    )
+
+    for model_name in ("flagged", "default"):
+        await router.aanthropic_messages(
+            model=model_name,
+            messages=[{"role": "user", "content": "hi"}],
+            max_tokens=16,
+            extra_headers={"anthropic-beta": "per-turn-control-2026-07-01"},
+        )
+
+    forwarded: Final = tuple(
+        "per-turn-control-2026-07-01" in TypeAdapter(tuple[str, ...]).validate_python(sent.get("anthropic_beta", ()))
+        for sent in bedrock.bodies
+    )
+    assert forwarded == expected
+
+
 _OPT_IN_DEPLOYMENTS: Final = pytest.mark.parametrize(
     ("model", "model_info"),
     [
@@ -4158,21 +4277,21 @@ async def test_bedrock_messages_native_output_rejection_and_signature_400_each_g
 
 @pytest.mark.usefixtures("local_model_cost_map")
 @pytest.mark.parametrize(
-    ("model", "model_info", "error"),
+    ("model", "model_info", "error", "should_retry"),
     [
-        ("us.anthropic.claude-opus-4-8", None, {"message": "messages.0.content: Field required"}),
-        ("us.anthropic.claude-sonnet-4-6", None, _NATIVE_OUTPUT_REJECTION),
-        ("us.anthropic.claude-opus-4-8", _OPTED_OUT, _NATIVE_OUTPUT_REJECTION),
+        ("us.anthropic.claude-opus-4-8", None, {"message": "messages.0.content: Field required"}, False),
+        ("us.anthropic.claude-sonnet-4-6", None, _NATIVE_OUTPUT_REJECTION, True),
+        ("us.anthropic.claude-opus-4-8", _OPTED_OUT, _NATIVE_OUTPUT_REJECTION, False),
     ],
-    ids=["other_400", "native_model", "deployment_opt_out"],
+    ids=["other_400", "native_rejection", "deployment_opt_out"],
 )
-async def test_bedrock_messages_400_is_not_retried_unless_it_rejects_opt_in_native_output(
-    model: str, model_info: Mapping[str, object] | None, error: Mapping[str, object]
+async def test_bedrock_messages_retries_only_native_output_rejections(
+    model: str, model_info: Mapping[str, object] | None, error: Mapping[str, object], should_retry: bool
 ) -> None:
     bedrock, raised = await _send_bedrock_messages(model, model_info, [(400, error), (200, _ANTHROPIC_MESSAGE)])
 
-    assert isinstance(raised, litellm.BadRequestError)
-    assert len(bedrock.bodies) == 1
+    assert (raised is None) is should_retry
+    assert len(bedrock.bodies) == (2 if should_retry else 1)
 
 
 @pytest.mark.usefixtures("local_model_cost_map")

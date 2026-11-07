@@ -108,11 +108,16 @@ class StreamAttempt:
     deployment_id: str | None
     attempted_retries: int
     committed_budget: int | None = None
+    # The group a pre-routing hook selected for ``group``, which a fallback lookup keys on first.
+    routed: str | None = None
     # The deployment's max_parallel_requests slot the attempt holds; an open chat stream takes it.
     slot: contextlib.ExitStack | None = None
     # Set by the wrapper that reports the stream's outcome when it ends; the attempt's answer is then
     # deferred and counts only the request and the tokens read so far (``counted_tokens``).
     reports_outcome: bool = False
+    # Whether the logging object had logged a failure when the wrapper took the stream: an earlier
+    # attempt's failure blocks this one's report, the stream's own log of its failure does not.
+    failure_logged_before: frozenset[str] = frozenset()
     counted_tokens: int = 0
     outcome_reported: bool = False
     # The background recording of the stream's failure, which a same-group retry waits for so it
@@ -132,6 +137,7 @@ class StreamAttempt:
             "deployment_id": self.deployment_id,
             "attempted_retries": self.attempted_retries,
             "committed_budget": self.committed_budget,
+            "routed": self.routed,
         }
 
     def policy(self, trigger: BaseException | None = None) -> Mapping[str, object]:
@@ -192,6 +198,13 @@ class StreamAttempt:
         """The outcome callbacks that run for this attempt when its stream ends."""
         return self.core.outcome_callbacks(self.kwargs, sync=sync)
 
+    def take_outcome(self) -> None:
+        """The wrapper reports this attempt's outcome when its stream ends."""
+        self.reports_outcome = True
+        self.failure_logged_before = frozenset(
+            event for event in ("async_failure", "sync_failure") if failure_already_logged(self.kwargs, event)
+        )
+
     def _claim(self) -> bool:
         if not self.reports_outcome or self.outcome_reported:
             return False
@@ -209,9 +222,9 @@ class StreamAttempt:
     def report_failure(self, error: BaseException) -> None:
         """The stream failed after it opened: count the failure, cool down by the rules and count one
         more request (``async_deployment_callback_on_failure``), in the background. A logging object
-        shared with an earlier failure blocks it: the stream logs through ``attempt_scoped_copy``, read
-        here, when the stream fails."""
-        if self._claim() and not failure_already_logged(self.kwargs, "async_failure"):
+        shared with an earlier failure blocks it, read when the wrapper took the stream: the stream's own
+        failure log marks the same object before this runs."""
+        if self._claim() and "async_failure" not in self.failure_logged_before:
             self.failure_recording = _record_in_background(
                 self.core.report_stream_failure(self._failure_logged(error), self._callbacks(sync=False))
             )
@@ -235,7 +248,7 @@ class StreamAttempt:
 
     def report_failure_sync(self, error: BaseException) -> None:
         """A sync stream failed after it opened: counted and cooled down, with no request counted."""
-        if self._claim() and not failure_already_logged(self.kwargs, "sync_failure"):
+        if self._claim() and "sync_failure" not in self.failure_logged_before:
             logged: Final = self._failure_logged(error)
             _record_now(lambda: self.core.report_stream_failure_sync(logged, self._callbacks(sync=True)))
 
@@ -284,20 +297,28 @@ async def _areported(
     items: AsyncIterable[_ItemT],
     total_tokens: Callable[[object], int],
     observe: Callable[[object], None] | None = None,
+    *,
+    fails_before_first_item: bool = True,
 ) -> AsyncGenerator[_ItemT, None]:
     """``items``, reporting the attempt's stream once they end: a success with the tokens
-    ``total_tokens`` reads off the last item, or the failure they raise. Closed early, nothing is
-    reported. The wrapper marks the attempt (``reports_outcome``) when it wraps the stream, before
-    the attempt answers."""
+    ``total_tokens`` reads off the last item, or the failure they raise, unless they raise it before
+    their first item and ``fails_before_first_item`` is off. Closed early, nothing is reported. The
+    wrapper marks the attempt (``reports_outcome``) when it wraps the stream, before the attempt
+    answers."""
     last: object = None  # rebind-ok: the newest item
+    started = False  # rebind-ok: whether an item came
     try:
         async for item in items:
             last = item
+            started = True
             if observe is not None:
                 observe(item)
             yield item
     except Exception as error:
-        attempt.report_failure(error)
+        if started or fails_before_first_item:
+            attempt.report_failure(error)
+        else:
+            attempt.outcome_reported = True  # rebind-ok: a stream that never opened counts nothing
         raise
     attempt.report_success(total_tokens(last), last)
 
@@ -918,7 +939,7 @@ def wrap_chat_stream(  # noqa: C901  # one function per Python wrapper it ports
     after content, the provider's error is raised. ``held_slot`` (the deployment's max_parallel_requests
     slot) is released when the stream is exhausted, closed, or falls back."""
     slot: Final = held_slot if held_slot is not None else contextlib.ExitStack()
-    attempt.reports_outcome = True  # rebind-ok: the wrapper reports this attempt's outcome
+    attempt.take_outcome()
 
     async def close_model_response() -> None:
         if not hasattr(model_response, "aclose"):
@@ -1013,7 +1034,7 @@ def wrap_chat_stream_sync(
     attempt: StreamAttempt, model_response: CustomStreamWrapper, first_chunk: _FirstChunk[Iterator[object]]
 ) -> FallbackAwareStreamWrapper:
     """``_completion_streaming_iterator``: the sync twin, which never continues after content."""
-    attempt.reports_outcome = True  # rebind-ok: the wrapper reports this attempt's outcome
+    attempt.take_outcome()
 
     def stream_with_fallbacks() -> Generator[object, None, None]:
         fallback_response: object = None  # rebind-ok: tracked for cleanup
@@ -1253,7 +1274,7 @@ def wrap_anthropic_stream(
     replays_a_finished_agentic_turn: Final = isinstance(source_iterator, FakeAnthropicMessagesStreamIterator)
     model: Final = attempt.group
     usage: Final = _AnthropicStreamUsage()
-    attempt.reports_outcome = True  # rebind-ok: the wrapper reports this attempt's outcome
+    attempt.take_outcome()
 
     async def close_source() -> None:
         with anyio.CancelScope(shield=True), contextlib.suppress(BaseException):
@@ -1527,7 +1548,7 @@ def wrap_responses_stream(  # noqa: C901  # one function per Python wrapper it p
     from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator, get_openai_response_types
 
     source_iterator: Final = response
-    attempt.reports_outcome = True  # rebind-ok: the wrapper reports this attempt's outcome
+    attempt.take_outcome()
     openai_types: Final = get_openai_response_types()
     terminal_event_types: Final = (
         openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
@@ -1664,7 +1685,7 @@ def wrap_responses_stream(  # noqa: C901  # one function per Python wrapper it p
                 else cast("MidStreamFallbackError", stream_error)  # cast-ok: not a context window error
             )
             if response_id_exposed:
-                _raise_original_mid_stream_error(e)
+                _raise_released_stream_error(attempt, e)
             async with contextlib.aclosing(
                 _responses_fallback_attempt(attempt, e, source_iterator, wrapper.adopt_fallback_headers, held)
             ) as fallback_stream:
@@ -1684,6 +1705,33 @@ def wrap_responses_stream(  # noqa: C901  # one function per Python wrapper it p
 
     wrapper: Final = FallbackResponsesStreamWrapper(stream_with_fallbacks())
     return wrapper
+
+
+def _raise_released_stream_error(attempt: StreamAttempt, e: MidStreamFallbackError) -> NoReturn:
+    """A background stream whose response id is already out raises its provider error as is; a content
+    policy refusal before output reads as the router's error would after the walk found no fallback."""
+    from litellm.litellm_core_utils.routing_common_utils import format_content_policy_no_fallback_note
+    from litellm.router_utils.fallback_event_handlers import fallback_lookup_groups, fallbacks_disabled_for_request
+
+    original: Final = e.original_exception
+    request: Final = attempt.request
+    model_group: Final = request.get("model")
+    if (
+        attempt.core._host.dynamic().expose_router_debug_in_errors  # pyright: ignore[reportPrivateUsage]  # the attempt's own core
+        and isinstance(original, litellm_exceptions.ContentPolicyViolationError)
+        and isinstance(model_group, str)
+        and not fallbacks_disabled_for_request(request)
+        and _mid_stream_error_before_output(e)
+    ):
+        walked: Final = attempt.core._walked_fallbacks  # pyright: ignore[reportPrivateUsage]  # the attempt's own core
+        original.message += format_content_policy_no_fallback_note(
+            model_group,
+            fallback_lookup_groups(request, model_group),
+            request.get("content_policy_fallbacks", walked.get("content_policy_fallbacks")),
+            request.get("fallbacks", walked.get("fallbacks")),
+            attempt.depth > 0,
+        )
+    _raise_original_mid_stream_error(e)
 
 
 def _responses_continuation_request(
@@ -1782,6 +1830,18 @@ async def _responses_fallback_attempt(
                     verbose_router_logger.debug("stream_with_fallbacks(aresponses): error closing fallback: %s", exc)
 
 
+def _reported_transcription_stream(attempt: StreamAttempt, response: object) -> object:
+    """A transcription stream reports its attempt's outcome when it ends: a stream that fails after it
+    opened cools its deployment down by the rules, as the router's failure callback does."""
+    from litellm.litellm_core_utils.audio_utils.transcription_streaming import LoggingAsyncTranscriptionStream
+
+    if not isinstance(response, LoggingAsyncTranscriptionStream):
+        return response
+    attempt.take_outcome()
+    response._iterator = _areported(attempt, response._iterator, lambda _last: 0)  # pyright: ignore[reportPrivateUsage, reportAttributeAccessIssue]  # the stream's own iterator, wrapped
+    return response
+
+
 # --- the attempt hook ---------------------------------------------------------------------------
 
 
@@ -1798,10 +1858,34 @@ async def open_attempt_stream(attempt: StreamAttempt, response: object) -> objec
         return wrap_chat_stream(attempt, response, first_chunk, held_slot)
     if not attempt.kwargs.get("stream"):
         return response
+    if attempt.op == "atranscription":
+        return _reported_transcription_stream(attempt, response)
+    if attempt.op == "atext_completion":
+        return _reported_text_completion_stream(attempt, response)
     if attempt.op == "aresponses" and isinstance(response, BaseResponsesAPIStreamingIterator):
+        # `_aresponses_streaming_iterator` wraps a call that asked for a stream, not one the
+        # deployment's own `stream` setting forced.
+        if not attempt.request.get("stream"):
+            return response
         return wrap_responses_stream(attempt, response)
     if attempt.op in ("aanthropic_messages", "anthropic_messages") and hasattr(response, "__aiter__"):
         return wrap_anthropic_stream(attempt, cast("AsyncIterator[bytes]", response))  # cast-ok: a byte stream
+    return response
+
+
+def _reported_text_completion_stream(attempt: StreamAttempt, response: object) -> object:
+    """A text-completion stream reports its attempt's outcome when it ends, as litellm's logging
+    does for it: a success with the stream's tokens, or a failure after the first chunk. One that
+    fails before its first chunk counts nothing, as its logging carries no deployment then."""
+    from litellm.text_completions.streaming_iterator import TextCompletionStreamWrapper
+
+    if not isinstance(response, TextCompletionStreamWrapper):
+        return response
+    attempt.take_outcome()
+    chunks: Final = cast("AsyncIterable[object]", response.completion_stream)  # cast-ok: an untyped attribute
+    response.completion_stream = _areported(  # rebind-ok: the stream's own iterator, wrapped
+        attempt, chunks, _chat_total_tokens, fails_before_first_item=False
+    )
     return response
 
 

@@ -65,7 +65,7 @@ export default function UpdateModelCredentialsModal({
       onCancel();
     } catch (error) {
       console.error("Error updating API key:", error);
-      toast.fromError(t("updateModelCredentialsModal.updateFailed"));
+      toast.fromError(error);
     } finally {
       setIsSaving(false);
     }

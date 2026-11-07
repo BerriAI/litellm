@@ -33,6 +33,9 @@ pub struct PreRoute<'a> {
 pub enum PreRouted {
     /// Resolve this model group instead of the requested name.
     Model(String),
+    /// Resolve `model`, served as `group`: the group a session binding stamped on the request,
+    /// which the level's fallbacks also look up.
+    Bound { model: String, group: String },
     /// A custom strategy's pick: serve this deployment, without resolving or filtering.
     Deployment(Arc<Deployment>),
 }
