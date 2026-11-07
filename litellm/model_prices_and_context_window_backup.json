@@ -78335,7 +78335,7 @@
         "litellm_provider": "nvidia_nim",
         "max_output_tokens": 4096,
         "mode": "chat",
-        "source": "https://integrate.api.nvidia.com/v1/models",
+        "source": "https://build.nvidia.com/nvidia/cosmos-reason2-8b/modelcard",
         "supported_endpoints": [
             "/v1/chat/completions"
         ]
