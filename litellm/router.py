@@ -15,6 +15,8 @@ from collections.abc import Callable, Mapping, Sequence
 from types import FunctionType, MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal
 
+from pydantic import TypeAdapter
+
 from litellm.router_config import RouterConfig, build_router_config
 from litellm.router_core import RouterCore, make_core
 from litellm.router_deprecated import DeprecatedRouterMembers
@@ -203,6 +205,7 @@ def _router_init(
 
 
 _CORE_SIGNATURE: Final = inspect.signature(_router_init)
+_PASSED_VALUE: Final = TypeAdapter(object)
 
 
 def router_arguments(
@@ -214,7 +217,13 @@ def router_arguments(
         bound: Final = _CORE_SIGNATURE.bind_partial(None, *args, **kwargs).arguments
     except TypeError as error:
         raise TypeError(f"Router.__init__() {error}") from None
-    return MappingProxyType({name: value for name, value in bound.items() if name != "self"})
+    return MappingProxyType(
+        {
+            name: value
+            for name, value in zip(bound, map(_PASSED_VALUE.validate_python, bound.values()))
+            if name != "self"
+        }
+    )
 
 
 def _class_descriptor(cls: type, name: str) -> bool:
@@ -228,18 +237,16 @@ if TYPE_CHECKING:
     from litellm.types.llms.openai import AllMessageValues, OpenAIFileObject
     from litellm.types.utils import EmbeddingResponse, LiteLLMBatch, ModelResponse
 
-    _InitParams: Final = ParamSpec("_InitParams")
+    _P: Final = ParamSpec("_P")
 
-    def _signature_of(
-        source: Callable[_InitParams, None],
-    ) -> Callable[[Callable[..., None]], Callable[_InitParams, None]]: ...
+    def _takes_parameters_of(source: Callable[_P, None]) -> Callable[[Callable[..., None]], Callable[_P, None]]: ...
 
     class Router(RustCore, DeprecatedRouterMembers):
         """What type checkers see: the constructor's parameters and the endpoints' return types. The
         endpoints are served by the core at run time (litellm/router_rust/invoke/endpoints.py)."""
 
-        @_signature_of(_router_init)  # pyright: ignore[reportUnknownArgumentType]  # _router_init keeps untyped dict and list params
-        def __init__(self) -> None: ...  # pyright: ignore[reportMissingSuperCall, reportIncompatibleMethodOverride]  # Router(...)'s parameters
+        @_takes_parameters_of(_router_init)
+        def __init__(self) -> None: ...  # pyright: ignore[reportMissingSuperCall]  # a type-checking stub
 
         @classmethod
         def from_config(cls, config: RouterConfig, host: PythonHost = python_host) -> "Router": ...

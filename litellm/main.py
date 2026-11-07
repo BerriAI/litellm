@@ -28,6 +28,7 @@ from functools import partial
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, Union, cast, get_args
 
+from litellm._internal_context import is_resent_failure
 from litellm._logging import redact_string
 from litellm._uuid import uuid
 
@@ -40,6 +41,7 @@ import openai
 from openai import AsyncStream, Stream
 from openai.types.audio import TranscriptionStreamEvent
 from pydantic import BaseModel, TypeAdapter, ValidationError
+from typing_extensions import TypedDict as ExtraItemsTypedDict
 from typing_extensions import assert_never, overload
 
 import litellm
@@ -143,7 +145,7 @@ from litellm.llms.bedrock.common_utils import (
     bedrock_route_for_request,
     bedrock_strict_tools_fallback,
     deployment_model_info,
-    without_bedrock_native_output_opt_in,
+    for_bedrock_json_tool_retry,
     without_bedrock_route_prefix,
 )
 from litellm.llms.bedrock_mantle.chat.claude_transformation import bedrock_mantle_chat_config
@@ -405,6 +407,10 @@ def _resolve_control_options(kwargs: Mapping[str, object], model: str) -> Contro
             raise litellm.BadRequestError(message=message, model=model, llm_provider=None, body={"param": param})
         case _:
             return assert_never(control)
+
+
+class _ForwardedCompletionParams(ExtraItemsTypedDict, total=False, extra_items=object):
+    pass
 
 
 @dataclass(frozen=True, slots=True)
@@ -4369,7 +4375,7 @@ def _native_output_fallback(
     first_attempt_params: Mapping[str, object],
     first_attempt_litellm_params: Mapping[str, object],
 ) -> NativeOutputFallback:
-    litellm_params: Final = without_bedrock_native_output_opt_in(first_attempt_litellm_params)
+    litellm_params: Final = for_bedrock_json_tool_retry(first_attempt_litellm_params)
     remapped_params: Final = ctx.optional_params_for_model_info(deployment_model_info(litellm_params))
     return NativeOutputFallback(
         optional_params={
@@ -4391,6 +4397,14 @@ def _converse_native_output_fallback(
 ) -> NativeOutputFallback | None:
     fallback: Final = _native_output_fallback(ctx, first_attempt_params, first_attempt_litellm_params)
     return None if AmazonConverseConfig.sends_native_text_format(fallback.optional_params) else fallback
+
+
+def _buffered_stream_fallback(
+    first_attempt_params: Mapping[str, object], first_attempt_litellm_params: Mapping[str, object]
+) -> NativeOutputFallback:
+    return NativeOutputFallback(
+        optional_params={**first_attempt_params, "fake_stream": True}, litellm_params=first_attempt_litellm_params
+    )
 
 
 def _native_output_attempt_timeout(
@@ -4496,17 +4510,25 @@ def _complete_bedrock(ctx: CompletionDispatchContext) -> _CompletionDispatchResu
             )
 
         converse_params: Final = _OPTIONAL_PARAMS_ADAPTER.validate_python(optional_params)
+        converse_uses_native_output: Final = AmazonConverseConfig().uses_native_output(
+            converse_model, converse_params, litellm_params
+        )
         response = call_with_native_output_fallback(
             converse_attempt,
             (
                 partial(_converse_native_output_fallback, ctx, converse_params, dict(litellm_params))
-                if AmazonConverseConfig().uses_opt_in_native_output(converse_model, converse_params, litellm_params)
+                if converse_uses_native_output
                 else None
             ),
             converse_model,
             strict_tools_fallback=(
                 partial(bedrock_strict_tools_fallback, converse_model, converse_params, dict(litellm_params))
                 if drops_unsupported_params(litellm_params.get("drop_params"))
+                else None
+            ),
+            buffered_stream_fallback=(
+                partial(_buffered_stream_fallback, converse_params, dict(litellm_params))
+                if converse_uses_native_output
                 else None
             ),
         )
@@ -4551,15 +4573,20 @@ def _complete_bedrock(ctx: CompletionDispatchContext) -> _CompletionDispatchResu
             )
 
         invoke_params: Final = _OPTIONAL_PARAMS_ADAPTER.validate_python(optional_params)
+        invoke_uses_native_output: Final = isinstance(
+            provider_config, AmazonAnthropicClaudeConfig
+        ) and provider_config.uses_native_output(model, invoke_params, litellm_params)
         response = call_with_native_output_fallback(
             invoke_attempt,
-            (
-                partial(_native_output_fallback, ctx, invoke_params, dict(litellm_params))
-                if isinstance(provider_config, AmazonAnthropicClaudeConfig)
-                and provider_config.uses_opt_in_native_output(model, invoke_params, litellm_params)
+            partial(_native_output_fallback, ctx, invoke_params, dict(litellm_params))
+            if invoke_uses_native_output
+            else None,
+            model,
+            buffered_stream_fallback=(
+                partial(_buffered_stream_fallback, invoke_params, dict(litellm_params))
+                if invoke_uses_native_output
                 else None
             ),
-            model,
         )
 
     return response
@@ -6608,6 +6635,10 @@ def completion(
         )
 
 
+def _is_not_resent_failure(error: BaseException) -> bool:
+    return isinstance(error, Exception) and not is_resent_failure(error)
+
+
 def completion_with_retries(*args, **kwargs):
     """
     Executes a litellm.completion() with 3 retries
@@ -6627,10 +6658,15 @@ def completion_with_retries(*args, **kwargs):
         retryer = tenacity.Retrying(
             wait=tenacity.wait_exponential(multiplier=1, max=10),
             stop=tenacity.stop_after_attempt(num_retries),
+            retry=tenacity.retry_if_exception(_is_not_resent_failure),
             reraise=True,
         )
     else:
-        retryer = tenacity.Retrying(stop=tenacity.stop_after_attempt(num_retries), reraise=True)
+        retryer = tenacity.Retrying(
+            stop=tenacity.stop_after_attempt(num_retries),
+            retry=tenacity.retry_if_exception(_is_not_resent_failure),
+            reraise=True,
+        )
     return retryer(original_function, *args, **kwargs)
 
 
@@ -6653,10 +6689,15 @@ async def acompletion_with_retries(*args, **kwargs):
         retryer = tenacity.AsyncRetrying(
             wait=tenacity.wait_exponential(multiplier=1, max=10),
             stop=tenacity.stop_after_attempt(num_retries),
+            retry=tenacity.retry_if_exception(_is_not_resent_failure),
             reraise=True,
         )
     else:
-        retryer = tenacity.AsyncRetrying(stop=tenacity.stop_after_attempt(num_retries), reraise=True)
+        retryer = tenacity.AsyncRetrying(
+            stop=tenacity.stop_after_attempt(num_retries),
+            retry=tenacity.retry_if_exception(_is_not_resent_failure),
+            reraise=True,
+        )
     return await retryer(original_function, *args, **kwargs)
 
 
@@ -6681,10 +6722,15 @@ def responses_with_retries(*args, **kwargs):
         retryer = tenacity.Retrying(
             wait=tenacity.wait_exponential(multiplier=1, max=10),
             stop=tenacity.stop_after_attempt(num_retries),
+            retry=tenacity.retry_if_exception(_is_not_resent_failure),
             reraise=True,
         )
     else:
-        retryer = tenacity.Retrying(stop=tenacity.stop_after_attempt(num_retries), reraise=True)
+        retryer = tenacity.Retrying(
+            stop=tenacity.stop_after_attempt(num_retries),
+            retry=tenacity.retry_if_exception(_is_not_resent_failure),
+            reraise=True,
+        )
     return retryer(original_function, *args, **kwargs)
 
 
@@ -6708,10 +6754,15 @@ async def aresponses_with_retries(*args, **kwargs):
         retryer = tenacity.AsyncRetrying(
             wait=tenacity.wait_exponential(multiplier=1, max=10),
             stop=tenacity.stop_after_attempt(num_retries),
+            retry=tenacity.retry_if_exception(_is_not_resent_failure),
             reraise=True,
         )
     else:
-        retryer = tenacity.AsyncRetrying(stop=tenacity.stop_after_attempt(num_retries), reraise=True)
+        retryer = tenacity.AsyncRetrying(
+            stop=tenacity.stop_after_attempt(num_retries),
+            retry=tenacity.retry_if_exception(_is_not_resent_failure),
+            reraise=True,
+        )
     return await retryer(original_function, *args, **kwargs)
 
 
@@ -8060,7 +8111,7 @@ def text_completion(
 
     text_completion_response = TextCompletionResponse()
 
-    optional_params: Final[dict[str, Any]] = {}
+    optional_params: Final[dict[str, object]] = {}
     # default values for all optional params are none, litellm only passes them to the llm when they are set to non None values
     if best_of is not None:
         optional_params["best_of"] = best_of
@@ -8127,7 +8178,7 @@ def text_completion(
 
                 def process_prompt(i, individual_prompt):
                     decoded_prompt: Final = tokenizer.decode(individual_prompt)
-                    all_params: Final = {**kwargs, **optional_params}
+                    all_params: Final = _ForwardedCompletionParams(**{**kwargs, **optional_params})
                     response: Final[TextCompletionResponse] = text_completion(
                         model=model,
                         prompt=decoded_prompt,
@@ -8201,7 +8252,7 @@ def text_completion(
         messages=messages,
         *args,
         **kwargs,
-        **optional_params,
+        **_ForwardedCompletionParams(**optional_params),
     )
     if kwargs.get("acompletion", False) is True:
         return response
@@ -8545,7 +8596,7 @@ def transcription(
 ) -> (
     TranscriptionResponse
     | Stream[TranscriptionStreamEvent]
-    | Coroutine[Any, Any, TranscriptionResponse | AsyncStream[TranscriptionStreamEvent]]
+    | Coroutine[object, object, TranscriptionResponse | AsyncStream[TranscriptionStreamEvent]]
 ):
     """
     Calls openai + azure whisper endpoints.
@@ -8634,7 +8685,7 @@ def transcription(
         TranscriptionResponse
         | Stream[TranscriptionStreamEvent]
         | AsyncStream[TranscriptionStreamEvent]
-        | Coroutine[Any, Any, TranscriptionResponse | AsyncStream[TranscriptionStreamEvent]]
+        | Coroutine[object, object, TranscriptionResponse | AsyncStream[TranscriptionStreamEvent]]
     )
 
     provider_config: Final = ProviderConfigManager.get_provider_audio_transcription_config(

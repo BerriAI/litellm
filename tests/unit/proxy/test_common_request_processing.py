@@ -4,7 +4,7 @@ import copy
 import datetime
 import gzip
 import json
-from collections.abc import AsyncIterable, Mapping
+from collections.abc import AsyncIterable, Awaitable, Mapping
 from types import MappingProxyType, SimpleNamespace
 from typing import AsyncGenerator, Callable, Final, Iterator, Literal, Optional, Sequence
 from urllib.parse import unquote_plus
@@ -41,6 +41,7 @@ from litellm.constants import (
     STREAM_SSE_KEEPALIVE_PING_BYTES,
 )
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.custom_guardrail import ModifyResponseException
 from litellm.integrations.opentelemetry import UserAPIKeyAuth
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.common_request_processing import (
@@ -53,11 +54,15 @@ from litellm.proxy.common_request_processing import (
     _ClientDisconnectedBeforeFirstChunk,
     attach_guardrail_information,
     _extract_error_from_sse_chunk,
+    FirstChunkSseFraming,
     _get_cost_breakdown_from_logging_obj,
     CostBreakdownHeaderValues,
     _has_attribute_error_in_chain,
+    OPENAI_FIRST_CHUNK_FRAMING,
+    RESPONSES_FIRST_CHUNK_FRAMING,
     include_guardrail_response_requested,
     is_azure_model_router_request,
+    RESPONSES_LATE_SSE_FRAMING,
     open_sse_before_first_byte,
     resolve_litellm_call_id,
     ttft_keepalive_interval,
@@ -90,6 +95,7 @@ from litellm.router import Router
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.utils import ModelResponseListIterator
 from litellm.litellm_core_utils.add_retry_fallback_headers import prepare_response_for_header_attachment
+from tests._support.clock_loops import AutojumpClockLoop
 
 
 def test_attach_guardrail_information_copies_recorded_entries_onto_model_response():
@@ -2258,6 +2264,14 @@ class TestProxyBaseLLMRequestProcessing:
         )
 
 
+def _fail_stream_setup() -> str:
+    raise RuntimeError("stream setup failed")
+
+
+async def _stream_failing_before_its_first_chunk() -> AsyncGenerator[str, None]:
+    yield _fail_stream_setup()
+
+
 @pytest.mark.asyncio
 class TestCommonRequestProcessingHelpers:
     async def consume_stream(self, streaming_response: StreamingResponse) -> list:
@@ -2335,6 +2349,74 @@ class TestCommonRequestProcessingHelpers:
         assert "error" in body
         assert body["error"]["code"] == 403
         assert body["error"]["message"] == "forbidden"
+
+    @pytest.mark.parametrize("newline", ["\n", "\r\n", "\r"])
+    async def test_a_responses_stream_whose_first_event_is_a_named_error_answers_as_json(self, newline: str):
+        error: Final = {"type": "guardrail_error", "code": "400", "message": "blocked", "param": None}
+        event: Final = json.dumps({"type": "error", "sequence_number": 0, "error": error})
+
+        async def responses_stream():
+            yield f"event: error{newline}data: {event}{newline}{newline}"
+
+        response: Final = await create_response(
+            responses_stream(), "text/event-stream", {}, framing=RESPONSES_FIRST_CHUNK_FRAMING
+        )
+
+        assert isinstance(response, JSONResponse)
+        assert response.status_code == 400
+        assert json.loads(response.body) == {"error": error}
+
+    async def test_a_first_event_error_with_a_unicode_line_separator_in_its_message_answers_as_json(self):
+        error: Final = {"type": "guardrail_error", "code": "400", "message": "blocked\u2028by policy", "param": None}
+
+        async def responses_stream():
+            event: Final = json.dumps({"type": "error", "sequence_number": 0, "error": error}, ensure_ascii=False)
+            yield f"event: error\ndata: {event}\n\n"
+
+        response: Final = await create_response(
+            responses_stream(), "text/event-stream", {}, framing=RESPONSES_FIRST_CHUNK_FRAMING
+        )
+
+        assert isinstance(response, JSONResponse)
+        assert response.status_code == 400
+        assert json.loads(response.body) == {"error": error}
+
+    @pytest.mark.parametrize(
+        "framing,frame_starts",
+        [
+            (OPENAI_FIRST_CHUNK_FRAMING, ('data: {"error": ', "data: [DONE]")),
+            (RESPONSES_FIRST_CHUNK_FRAMING, ('event: error\ndata: {"type": "error", "code": "server_error"',)),
+        ],
+    )
+    async def test_a_stream_that_fails_before_its_first_chunk_ends_in_its_own_api_shape(
+        self, framing: FirstChunkSseFraming, frame_starts: tuple[str, ...]
+    ) -> None:
+        response: Final = await create_response(
+            _stream_failing_before_its_first_chunk(), "text/event-stream", {}, framing=framing
+        )
+        frames: Final = await self.consume_stream(response)
+
+        assert response.status_code == 500
+        assert len(frames) == len(frame_starts)
+        assert all(frame.startswith(start) for frame, start in zip(frames, frame_starts, strict=True))
+
+    async def test_a_responses_stream_whose_first_frame_names_a_success_code_streams_on(self):
+        frames: Final = (
+            'data: {"error": {"message": "note", "type": "guardrail_scan_error", "code": 200}}\n\n',
+            'event: response.completed\ndata: {"type": "response.completed", "sequence_number": 1}\n\n',
+        )
+
+        async def responses_stream():
+            for frame in frames:
+                yield frame
+
+        response: Final = await create_response(
+            responses_stream(), "text/event-stream", {}, framing=RESPONSES_FIRST_CHUNK_FRAMING
+        )
+
+        assert isinstance(response, StreamingResponse)
+        assert response.status_code == status.HTTP_200_OK
+        assert tuple(await self.consume_stream(response)) == frames
 
     async def test_create_streaming_response_first_chunk_not_error(self):
         async def mock_generator():
@@ -10905,6 +10987,104 @@ async def test_ttft_keepalive_relays_a_late_non_streaming_body_as_an_sse_frame()
     assert collected[-1] == b"data: [DONE]\n\n"
 
 
+async def _slow_rate_limit_failure() -> Response:
+    await asyncio.sleep(0.2)
+    raise HTTPException(status_code=429, detail="rate limited")
+
+
+async def _slow_guardrail_block_body() -> Response:
+    await asyncio.sleep(0.2)
+    return JSONResponse(
+        status_code=400, content={"error": {"message": "blocked", "type": "guardrail_error", "code": "400"}}
+    )
+
+
+_POLICY_BLOCK_DETAIL: Final = MappingProxyType(
+    {"error": {"message": "blocked by policy", "type": "guardrail_error"}, "guardrail": "content-filter"}
+)
+
+
+async def _slow_codeless_rate_limit_body() -> Response:
+    await asyncio.sleep(0.2)
+    return JSONResponse(status_code=429, content={"error": {"message": "slow down", "code": None}})
+
+
+async def _slow_dict_detail_failure() -> Response:
+    await asyncio.sleep(0.2)
+    raise HTTPException(status_code=400, detail=dict(_POLICY_BLOCK_DETAIL))
+
+
+@pytest.mark.parametrize(
+    "produce,expected_code,expected_error",
+    [
+        (_slow_rate_limit_failure, "rate_limit_exceeded", {"message": "rate limited", "code": "429"}),
+        (_slow_codeless_rate_limit_body, "rate_limit_exceeded", {"message": "slow down", "code": "429"}),
+        (
+            _slow_guardrail_block_body,
+            "invalid_request_error",
+            {"message": "blocked", "type": "guardrail_error", "code": "400"},
+        ),
+        (
+            _slow_dict_detail_failure,
+            "invalid_request_error",
+            {"message": "blocked by policy", "code": "400", "provider_specific_fields": dict(_POLICY_BLOCK_DETAIL)},
+        ),
+    ],
+)
+def test_ttft_keepalive_ends_a_late_responses_failure_with_an_error_event_and_no_done(
+    produce: Callable[[], Awaitable[Response]], expected_code: str, expected_error: Mapping[str, object]
+) -> None:
+    async def collect_and_check() -> None:
+        response: Final = await open_sse_before_first_byte(
+            produce(), ping_interval_seconds=0.05, late_framing=RESPONSES_LATE_SSE_FRAMING
+        )
+        collected: Final = await _drain(response)
+
+        assert collected[0] == TTFT_PING
+        assert b"data: [DONE]\n\n" not in collected
+        event_line, data_line = collected[-1].decode().strip().split("\n")
+        event: Final = json.loads(data_line.removeprefix("data: "))
+        assert event_line == "event: error"
+        assert event["type"] == "error"
+        assert (event["code"], event["message"]) == (expected_code, expected_error["message"])
+        assert {key: event["error"].get(key) for key in expected_error} == expected_error
+
+    loop: Final = AutojumpClockLoop()
+    try:
+        loop.run_until_complete(collect_and_check())
+    finally:
+        loop.run_until_complete(loop.shutdown_asyncgens())
+        loop.close()
+
+
+async def _slow_passthrough_block() -> Response:
+    await asyncio.sleep(0.2)
+    raise ModifyResponseException(message="blocked by policy", model="gpt-4o", request_data={})
+
+
+def test_ttft_keepalive_ends_a_late_responses_passthrough_block_with_the_block_response() -> None:
+    async def collect_and_check() -> None:
+        response: Final = await open_sse_before_first_byte(
+            _slow_passthrough_block(), ping_interval_seconds=0.05, late_framing=RESPONSES_LATE_SSE_FRAMING
+        )
+        collected: Final = await _drain(response)
+        frames: Final = tuple(chunk.decode() for chunk in collected if chunk != TTFT_PING)
+        names: Final = tuple(frame.split("\n", 1)[0] for frame in frames)
+        completed: Final = json.loads(frames[-1].split("\n", 1)[1].removeprefix("data: "))
+
+        assert collected[0] == TTFT_PING
+        assert (names[0], names[-1]) == ("event: response.created", "event: response.completed")
+        assert "event: error" not in names
+        assert completed["response"]["output"][0]["content"][0]["text"] == "blocked by policy"
+
+    loop: Final = AutojumpClockLoop()
+    try:
+        loop.run_until_complete(collect_and_check())
+    finally:
+        loop.run_until_complete(loop.shutdown_asyncgens())
+        loop.close()
+
+
 @pytest.mark.asyncio
 async def test_ttft_keepalive_closes_the_upstream_stream_it_relayed():
     """Starlette never calls the produced response, so its own cleanup never runs
@@ -12868,6 +13048,7 @@ async def test_completed_synthetic_stream_reuses_capacity_without_freeing_anothe
     from litellm.proxy.common_utils.sse_keepalive import SSE_COMMENT_PING_BYTES
     from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3
     from litellm.proxy.utils import InternalUsageCache, hash_token
+    from litellm.redis.stores.rate_limits import RateLimitScope
     from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
 
     def clock() -> datetime.datetime:
@@ -12880,7 +13061,7 @@ async def test_completed_synthetic_stream_reuses_capacity_without_freeing_anothe
     logger: Final = ProxyLogging(user_api_key_cache=cache)
     logger.proxy_hook_mapping["parallel_request_limiter"] = limiter
     auth: Final = ProxyUserAPIKeyAuth(api_key=hash_token("sk-synthetic-stream"), max_parallel_requests=2)
-    counter: Final = f"{{api_key:{auth.api_key}}}:max_parallel_requests"
+    gauge: Final = RateLimitScope("api_key", auth.api_key).gauge
     monkeypatch.setattr(litellm, "callbacks", [])
     monkeypatch.setattr(proxy_server, "proxy_logging_obj", logger)
 
@@ -12936,7 +13117,7 @@ async def test_completed_synthetic_stream_reuses_capacity_without_freeing_anothe
     await contextvars.Context().run(asyncio.create_task, admit("still-streaming"))
     for index in range(4):
         await contextvars.Context().run(asyncio.create_task, request(f"completed-{index}"))
-        occupied: Final = await cache.async_get_cache(counter)
+        occupied: Final = limiter.rate_limits.local((gauge,))[0]
         assert isinstance(occupied, dict) and len(occupied) == 1, occupied
 
 

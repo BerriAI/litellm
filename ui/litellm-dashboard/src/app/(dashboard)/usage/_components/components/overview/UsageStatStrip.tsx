@@ -1,14 +1,19 @@
 "use client";
 
 import React, { useMemo } from "react";
+import type { TFunction } from "i18next";
 import { Trans, useTranslation } from "react-i18next";
 import type { DailyData } from "@/components/UsagePage/types";
 import { cn } from "@/lib/cva.config";
 import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
-import { dailyTotals, formatCompact, formatLatency, formatUsd, type OverviewTotals } from "./overviewData";
+import { dailyTotals, type OverviewTotals } from "./overviewData";
 import { PANEL_INSET_X, Sparkline, Stat } from "./Primitives";
 
 const BRAND = "#2b3fd6";
+const ONE_DECIMAL = { minimumFractionDigits: 1, maximumFractionDigits: 1 } as const;
+const FOUR_DECIMALS = { minimumFractionDigits: 4, maximumFractionDigits: 4 } as const;
+const MILLISECONDS = { style: "unit", unit: "millisecond", unitDisplay: "narrow", maximumFractionDigits: 0 } as const;
+const SECONDS = { ...ONE_DECIMAL, style: "unit", unit: "second", unitDisplay: "narrow" } as const;
 
 interface UsageStatStripProps {
   results: readonly DailyData[];
@@ -33,15 +38,19 @@ export default function UsageStatStrip({
       <StatCell trend={<Sparkline data={daily} dataKey="spend" color={BRAND} className="h-14" />}>
         <Stat
           label={t("usage.statStrip.spend")}
-          value={formatUsd(totals.spend)}
+          value={t("format.usd", { val: totals.spend })}
           pending={loading}
-          hint={budget ? t("usage.statStrip.budgetHint", { budget: formatUsd(budget) }) : t("usage.statStrip.noBudget")}
+          hint={
+            budget
+              ? t("usage.statStrip.budgetHint", { budget: t("format.usd", { val: budget }) })
+              : t("usage.statStrip.noBudget")
+          }
         />
       </StatCell>
       <StatCell trend={<Sparkline data={daily} dataKey="requests" color={BRAND} className="h-14" />}>
         <Stat
           label={t("usage.statStrip.totalRequests")}
-          value={totals.requests.toLocaleString()}
+          value={t("format.number", { val: totals.requests })}
           pending={requestCountsPending}
         />
         {!requestCountsPending && (
@@ -50,7 +59,9 @@ export default function UsageStatStrip({
               <Trans
                 i18nKey="usage.statStrip.successfulCount"
                 components={{
-                  count: <span className="text-success tabular-nums">{totals.successful.toLocaleString()}</span>,
+                  count: (
+                    <span className="text-success tabular-nums">{t("format.number", { val: totals.successful })}</span>
+                  ),
                 }}
               />
             </span>
@@ -60,7 +71,7 @@ export default function UsageStatStrip({
                 components={{
                   count: (
                     <span className={totals.failed > 0 ? "text-destructive tabular-nums" : "tabular-nums"}>
-                      {totals.failed.toLocaleString()}
+                      {t("format.number", { val: totals.failed })}
                     </span>
                   ),
                 }}
@@ -72,11 +83,15 @@ export default function UsageStatStrip({
       <StatCell trend={<Sparkline data={daily} dataKey="tokens" color={BRAND} className="h-14" />}>
         <Stat
           label={t("usage.statStrip.totalTokens")}
-          value={loading ? null : formatCompact(totals.tokens)}
-          exact={t("usage.statStrip.exactTokens", { tokens: totals.tokens.toLocaleString() })}
+          value={loading ? null : t("format.compactNumber", { val: totals.tokens })}
+          exact={t("usage.statStrip.exactTokens", { tokens: t("format.number", { val: totals.tokens }) })}
           pending={loading}
           hint={
-            loading ? undefined : t("usage.statStrip.cacheReadHint", { tokens: formatCompact(totals.cacheReadTokens) })
+            loading
+              ? undefined
+              : t("usage.statStrip.cacheReadHint", {
+                  tokens: t("format.compactNumber", { val: totals.cacheReadTokens }),
+                })
           }
         />
         {!loading && (
@@ -89,23 +104,23 @@ export default function UsageStatStrip({
               <dl className="space-y-2 text-sm tabular-nums">
                 <div className="flex justify-between gap-4">
                   <dt>{t("usage.statStrip.tokenPopover.inputTokens")}</dt>
-                  <dd>{totals.inputTokens.toLocaleString()}</dd>
+                  <dd>{t("format.number", { val: totals.inputTokens })}</dd>
                 </div>
                 <div className="flex justify-between gap-4 pl-3 text-xs text-muted-foreground">
                   <dt>{t("usage.statStrip.tokenPopover.cacheReads")}</dt>
-                  <dd>{totals.cacheReadTokens.toLocaleString()}</dd>
+                  <dd>{t("format.number", { val: totals.cacheReadTokens })}</dd>
                 </div>
                 <div className="flex justify-between gap-4 pl-3 text-xs text-muted-foreground">
                   <dt>{t("usage.statStrip.tokenPopover.cacheWrites")}</dt>
-                  <dd>{totals.cacheWriteTokens.toLocaleString()}</dd>
+                  <dd>{t("format.number", { val: totals.cacheWriteTokens })}</dd>
                 </div>
                 <div className="flex justify-between gap-4">
                   <dt>{t("usage.statStrip.tokenPopover.outputTokens")}</dt>
-                  <dd>{totals.outputTokens.toLocaleString()}</dd>
+                  <dd>{t("format.number", { val: totals.outputTokens })}</dd>
                 </div>
                 <div className="flex justify-between gap-4 border-t pt-2 font-medium">
                   <dt>{t("usage.statStrip.tokenPopover.totalTokens")}</dt>
-                  <dd>{totals.tokens.toLocaleString()}</dd>
+                  <dd>{t("format.number", { val: totals.tokens })}</dd>
                 </div>
               </dl>
               <p className="text-xs leading-5 text-muted-foreground">{t("usage.statStrip.tokenPopover.pricingNote")}</p>
@@ -118,23 +133,31 @@ export default function UsageStatStrip({
         <div className="grid gap-3">
           <Stat
             label={t("usage.statStrip.avgCostPerRequest")}
-            value={formatUsd(totals.avgCostPerRequest, 4)}
+            value={t("format.usd", { val: totals.avgCostPerRequest, ...FOUR_DECIMALS })}
             pending={loading}
           />
           <Stat
             label={t("usage.statStrip.avgLatency")}
-            value={totals.avgLatencyMs === null ? "—" : formatLatency(totals.avgLatencyMs)}
+            value={totals.avgLatencyMs === null ? "—" : latency(totals.avgLatencyMs, t)}
             pending={loading}
             hint={
               totals.successRate === null
                 ? undefined
-                : t("usage.statStrip.successRateHint", { rate: totals.successRate.toFixed(1) })
+                : t("usage.statStrip.successRateHint", {
+                    rate: t("format.number", { val: totals.successRate, ...ONE_DECIMAL }),
+                  })
             }
           />
         </div>
       </StatCell>
     </div>
   );
+}
+
+function latency(ms: number, t: TFunction): string {
+  return ms < 1000
+    ? t("format.number", { val: ms, ...MILLISECONDS })
+    : t("format.number", { val: ms / 1000, ...SECONDS });
 }
 
 function StatCell({ children, trend }: { children: React.ReactNode; trend?: React.ReactNode }) {
