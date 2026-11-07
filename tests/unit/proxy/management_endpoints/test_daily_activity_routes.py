@@ -424,6 +424,8 @@ def _user_spend_row(user_id: str, rows: Sequence[_Activity]) -> UserSpendRow:
         api_requests=sum(row.api_requests for row in matching),
         successful_requests=sum(row.successful_requests for row in matching),
         failed_requests=sum(row.failed_requests for row in matching),
+        total_response_time_ms=sum(row.total_response_time_ms for row in matching),
+        timed_requests=sum(row.timed_requests for row in matching),
     )
 
 
@@ -448,6 +450,8 @@ def _key_spend_row(api_key: str, rows: Sequence[_Activity]) -> KeySpendRow:
         api_requests=sum(row.api_requests for row in matching),
         successful_requests=sum(row.successful_requests for row in matching),
         failed_requests=sum(row.failed_requests for row in matching),
+        total_response_time_ms=sum(row.total_response_time_ms for row in matching),
+        timed_requests=sum(row.timed_requests for row in matching),
         cache_read_input_tokens=sum(row.cache_read_input_tokens for row in matching),
         cache_creation_input_tokens=sum(row.cache_creation_input_tokens for row in matching),
     )
@@ -873,6 +877,8 @@ def test_key_page_routes_map_ranked_rows_and_totals(
                     "api_requests": 1,
                     "successful_requests": 1,
                     "failed_requests": 0,
+                    "total_response_time_ms": 100,
+                    "timed_requests": 1,
                     "cache_read_input_tokens": 0,
                     "cache_creation_input_tokens": 1,
                 },
@@ -894,6 +900,8 @@ def test_key_page_routes_map_ranked_rows_and_totals(
                     "api_requests": 2,
                     "successful_requests": 2,
                     "failed_requests": 0,
+                    "total_response_time_ms": 200,
+                    "timed_requests": 2,
                     "cache_read_input_tokens": 0,
                     "cache_creation_input_tokens": 2,
                 },
@@ -1008,6 +1016,8 @@ def test_user_page_route_ranks_users_by_spend_and_attaches_metadata(
                 "api_requests": 1,
                 "successful_requests": 1,
                 "failed_requests": 0,
+                "total_response_time_ms": 100,
+                "timed_requests": 1,
             },
             {
                 "user_id": "user-a",
@@ -1020,6 +1030,8 @@ def test_user_page_route_ranks_users_by_spend_and_attaches_metadata(
                 "api_requests": 6,
                 "successful_requests": 6,
                 "failed_requests": 0,
+                "total_response_time_ms": 600,
+                "timed_requests": 6,
             },
         ],
         "total_users": 2,
@@ -1380,6 +1392,8 @@ def test_model_top_routes_rank_keys_and_include_metadata(
         api_requests=1,
         successful_requests=1,
         failed_requests=0,
+        total_response_time_ms=100,
+        timed_requests=1,
         cache_read_input_tokens=0,
         cache_creation_input_tokens=1,
     )
@@ -1675,6 +1689,8 @@ def test_user_cache_leakage_route_returns_cache_keys_and_metadata(
         api_requests=1,
         successful_requests=1,
         failed_requests=0,
+        total_response_time_ms=100,
+        timed_requests=1,
         cache_read_input_tokens=20,
         cache_creation_input_tokens=1,
     )
