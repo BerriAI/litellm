@@ -397,6 +397,9 @@ async def responses_api(
         # instead of a polling ID that immediately fails in the background task.
         processor = ProxyBaseLLMRequestProcessing(data=data)
         try:
+            # A background request runs after its polling id is returned, so a total_timeout it
+            # cannot apply is refused (or a header one dropped) before the id is handed out.
+            _ = processor.total_timeout_for(request, "aresponses", is_streaming_request=None)
             data, _logging_obj = await processor.common_processing_pre_call_logic(
                 request=request,
                 general_settings=general_settings,

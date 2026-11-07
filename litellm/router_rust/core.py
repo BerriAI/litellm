@@ -69,6 +69,11 @@ from litellm.litellm_core_utils.routing_common_utils import (
 )
 from litellm.litellm_core_utils.routing_groups import validate_routing_strategy
 from litellm.litellm_core_utils.secret_redaction import redact_string
+from litellm.litellm_core_utils.total_deadline import (
+    TotalTimeoutNotApplicable,
+    current_total_deadline,
+    enforce_total_timeout_scope,
+)
 from litellm.redis.stores.connection import connect
 from litellm.redis.stores.router_cooldowns import ROUTER_COOLDOWNS_TARGET, RouterCooldownStore
 from litellm.redis.stores.router_usage import ROUTER_USAGE_TARGET, RouterUsage
@@ -2915,6 +2920,9 @@ class RustCore(
                 case "attempt":
                     outcome = await driver.attempt(step)
                 case "sleep":
+                    if (outlasted := _error_outlasting_total_timeout(driver, _sleep_seconds(step))) is not None:
+                        driver.close_route_phase()
+                        raise outlasted
                     await self._host.sleep(_sleep_seconds(step))
                     outcome = None
                 case "allow_fallback":
@@ -3871,6 +3879,15 @@ def _lookup_error(kind: object, model: str, default_deployment: object) -> BaseE
 def _origin_level(origin: Mapping[str, object]) -> int:
     level: Final = origin.get("level")
     return level if isinstance(level, int) else 0
+
+
+def _error_outlasting_total_timeout(driver: "_Driver", seconds: float) -> BaseException | None:
+    """The error a retry would have answered when its backoff outlasts the request's total_timeout: the
+    call ends with it now, rather than with a timeout after waiting out the rest of the budget."""
+    deadline: Final = current_total_deadline()
+    if deadline is None or deadline.allows_wait(seconds):
+        return None
+    return driver.last_error
 
 
 def _sleep_seconds(step: Mapping[str, object]) -> float:
@@ -5169,6 +5186,7 @@ class _Driver:
             return {**self._failed(step, self._default_copy(step), None, refused_call), "recorded": True}
         try:
             deployment, call = self._call(step)  # rebind-ok: rebound as the Python router rebinds it
+            enforce_total_timeout_scope(call.kwargs)
             if call.refused is not None:
                 await log_refused_call(call, call.refused)
                 raise call.refused
@@ -5223,6 +5241,8 @@ class _Driver:
                     self._release(call, attempt, refund_io_tokens=not attempt.answered),
                     ATTEMPT_SETTLEMENT_GRACE_SECONDS,
                 )
+            raise
+        except TotalTimeoutNotApplicable:
             raise
         except Exception as error:  # noqa: BLE001  # every attempt failure is classified and handed to the Rust call loop
             if call is not None:
