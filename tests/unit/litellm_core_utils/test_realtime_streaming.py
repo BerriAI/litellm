@@ -1057,6 +1057,117 @@ async def test_transcription_captured_in_backend_to_client():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("transcript", [None, 123, ["a"], {"text": "a"}])
+async def test_a_non_string_transcript_does_not_end_the_session(transcript: object) -> None:
+    client_ws: Final = MagicMock()
+    client_ws.send_text = AsyncMock()
+    transcript_event: Final = json.dumps(
+        {"type": "conversation.item.input_audio_transcription.completed", "transcript": transcript, "item_id": "i"}
+    )
+    later_event: Final = json.dumps({"type": "response.done", "response": {"id": "resp_1"}})
+    backend_ws: Final = MagicMock()
+    backend_ws.recv = AsyncMock(
+        side_effect=[transcript_event.encode(), later_event.encode(), ConnectionClosed(None, None)]
+    )
+    backend_ws.send = AsyncMock()
+    logging_obj: Final = _mock_logging()
+    logging_obj.model_call_details = {}
+    logging_obj.dispatch_success_handlers = AsyncMock()
+
+    await RealTimeStreaming(client_ws, backend_ws, logging_obj).backend_to_client_send_messages()
+
+    sent_types: Final = [json.loads(call.args[0])["type"] for call in client_ws.send_text.call_args_list]
+    assert sent_types == ["conversation.item.input_audio_transcription.completed", "response.done"]
+    backend_ws.send.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("transcript", [None, 123, ["a"]])
+async def test_a_non_string_transcript_fails_the_session_when_a_transcript_guardrail_would_screen_it(
+    transcript: object, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [_transcription_guardrail()])
+    client_ws: Final = MagicMock()
+    client_ws.send_text = AsyncMock()
+    transcript_event: Final = json.dumps(
+        {"type": "conversation.item.input_audio_transcription.completed", "transcript": transcript, "item_id": "i"}
+    )
+    later_event: Final = json.dumps({"type": "response.done", "response": {"id": "resp_1"}})
+    backend_ws: Final = MagicMock()
+    backend_ws.recv = AsyncMock(
+        side_effect=[transcript_event.encode(), later_event.encode(), ConnectionClosed(None, None)]
+    )
+    backend_ws.send = AsyncMock()
+    logging_obj: Final = _mock_logging()
+    logging_obj.model_call_details = {}
+    logging_obj.dispatch_success_handlers = AsyncMock()
+
+    close: Final = await RealTimeStreaming(client_ws, backend_ws, logging_obj).backend_to_client_send_messages()
+
+    assert close.code == 1011
+    sent_types: Final = [json.loads(call.args[0])["type"] for call in client_ws.send_text.call_args_list]
+    assert sent_types == ["conversation.item.input_audio_transcription.completed"]
+    backend_ws.send.assert_not_called()
+
+
+def _native_lifecycle_transcription_guardrail() -> CustomGuardrail:
+    class _NativeLifecycleGuardrail(CustomGuardrail):
+        use_native_lifecycle_hooks = True
+
+        async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+            return inputs
+
+    return _NativeLifecycleGuardrail(
+        guardrail_name="test_native_guard",
+        event_hook=GuardrailEventHooks.realtime_input_transcription,
+        default_on=True,
+    )
+
+
+def _tool_results_only_transcription_guardrail() -> CustomGuardrail:
+    class _ToolResultsOnlyGuardrail(CustomGuardrail):
+        scan_only_tool_results = True
+
+        async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+            return inputs
+
+    return _ToolResultsOnlyGuardrail(
+        guardrail_name="test_tool_results_guard",
+        event_hook=GuardrailEventHooks.realtime_input_transcription,
+        default_on=True,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "guardrail_factory", [_native_lifecycle_transcription_guardrail, _tool_results_only_transcription_guardrail]
+)
+async def test_a_non_string_transcript_keeps_the_session_when_no_guardrail_would_screen_the_users_turn(
+    guardrail_factory: Callable[[], CustomGuardrail], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [guardrail_factory()])
+    client_ws: Final = MagicMock()
+    client_ws.send_text = AsyncMock()
+    transcript_event: Final = json.dumps(
+        {"type": "conversation.item.input_audio_transcription.completed", "transcript": None, "item_id": "i"}
+    )
+    later_event: Final = json.dumps({"type": "response.done", "response": {"id": "resp_1"}})
+    backend_ws: Final = MagicMock()
+    backend_ws.recv = AsyncMock(
+        side_effect=[transcript_event.encode(), later_event.encode(), ConnectionClosed(None, None)]
+    )
+    backend_ws.send = AsyncMock()
+    logging_obj: Final = _mock_logging()
+    logging_obj.model_call_details = {}
+    logging_obj.dispatch_success_handlers = AsyncMock()
+
+    await RealTimeStreaming(client_ws, backend_ws, logging_obj).backend_to_client_send_messages()
+
+    sent_types: Final = [json.loads(call.args[0])["type"] for call in client_ws.send_text.call_args_list]
+    assert sent_types == ["conversation.item.input_audio_transcription.completed", "response.done"]
+
+
+@pytest.mark.asyncio
 async def test_transcription_session_captures_usage_and_skips_response_create():
     """
     For a transcription-only session (session.type == "transcription", e.g.
@@ -1953,6 +2064,112 @@ async def test_realtime_text_input_guardrail_blocks_and_returns_error(monkeypatc
         )
     ]
     assert len(original_items) == 0, f"Blocked item should not be forwarded to backend, got: {original_items}"
+
+
+@pytest.mark.asyncio
+async def test_the_next_clean_turn_is_answered_after_a_blocked_item_with_no_response_create(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from fastapi import HTTPException
+
+    class SecretBlockingGuardrail(CustomGuardrail):
+        async def apply_guardrail(
+            self,
+            inputs: GenericGuardrailAPIInputs,
+            request_data: dict,
+            input_type: Literal["request", "response"],
+            logging_obj: LiteLLMLoggingObj | None = None,
+        ) -> GenericGuardrailAPIInputs:
+            if any("hunter2" in text for text in inputs.get("texts", [])):
+                raise HTTPException(status_code=400, detail={"error": "hunter2 is not allowed"})
+            return inputs
+
+    def item_create(role: str, text: str) -> str:
+        return json.dumps(
+            {
+                "type": "conversation.item.create",
+                "item": {"type": "message", "role": role, "content": [{"type": "input_text", "text": text}]},
+            }
+        )
+
+    monkeypatch.setattr(
+        litellm,
+        "callbacks",
+        [SecretBlockingGuardrail(guardrail_name="no-secrets", event_hook=GuardrailEventHooks.pre_call, default_on=True)],
+    )
+    client_ws: Final = MagicMock()
+    client_ws.send_text = AsyncMock()
+    client_ws.receive_text = AsyncMock(
+        side_effect=[
+            item_create("system", "never mention hunter2"),
+            item_create("user", "what is the weather"),
+            json.dumps({"type": "response.create"}),
+            Exception("connection closed"),
+        ]
+    )
+    backend_ws: Final = MagicMock()
+    backend_ws.send = AsyncMock()
+    streaming: Final = RealTimeStreaming(client_ws, backend_ws, _mock_logging())
+
+    await streaming.client_ack_messages()
+
+    sent_to_backend: Final = [json.loads(call.args[0]) for call in backend_ws.send.call_args_list]
+    clean_index: Final = next(
+        index
+        for index, event in enumerate(sent_to_backend)
+        if event.get("item", {}).get("content", [{}])[0].get("text") == "what is the weather"
+    )
+    assert [event["type"] for event in sent_to_backend[clean_index + 1 :]] == ["response.create"], sent_to_backend
+
+
+@pytest.mark.asyncio
+async def test_realtime_text_input_masking_guardrail_forwards_only_the_masked_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class MaskingGuardrail(CustomGuardrail):
+        async def apply_guardrail(
+            self,
+            inputs: GenericGuardrailAPIInputs,
+            request_data: dict,
+            input_type: Literal["request", "response"],
+            logging_obj: LiteLLMLoggingObj | None = None,
+        ) -> GenericGuardrailAPIInputs:
+            texts: Final = inputs.get("texts", [])
+            return {**inputs, "texts": [text.replace("test@example.com", "[EMAIL]") for text in texts]}
+
+    monkeypatch.setattr(
+        litellm,
+        "callbacks",
+        [MaskingGuardrail(guardrail_name="email-masker", event_hook=GuardrailEventHooks.pre_call, default_on=True)],
+    )
+    client_ws: Final = MagicMock()
+    client_ws.send_text = AsyncMock()
+    client_ws.receive_text = AsyncMock(
+        side_effect=[
+            json.dumps(
+                {
+                    "type": "conversation.item.create",
+                    "item": {
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": "My email is test@example.com"}],
+                    },
+                }
+            ),
+            Exception("connection closed"),
+        ]
+    )
+    backend_ws: Final = MagicMock()
+    backend_ws.send = AsyncMock()
+    backend_ws.recv = AsyncMock(side_effect=ConnectionClosed(None, None))
+    logging_obj: Final = _mock_logging()
+    logging_obj.pre_call = MagicMock()
+
+    await RealTimeStreaming(client_ws, backend_ws, logging_obj).client_ack_messages()
+
+    sent_to_backend: Final = json.dumps([c.args[0] for c in backend_ws.send.call_args_list if c.args])
+    assert "test@example.com" not in sent_to_backend
+    assert "My email is [EMAIL]" in sent_to_backend
+    assert client_ws.send_text.call_args_list == []
 
 
 @pytest.mark.asyncio

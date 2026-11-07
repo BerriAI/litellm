@@ -13,6 +13,8 @@ pub(crate) enum PythonSettings {
     UrlPolicy,
     #[strum(serialize = "provider_defaults")]
     ProviderDefaults,
+    #[strum(serialize = "router_tiers")]
+    RouterTiers,
     #[strum(serialize = "secret_manager")]
     SecretManager,
     #[strum(serialize = "secret_manager_binding")]

@@ -4,6 +4,7 @@ import { ChevronDown } from "lucide-react";
 import * as React from "react";
 import { Trans, useTranslation } from "react-i18next";
 
+import { DeploymentPricingBreakdown } from "@/components/molecules/models/DeploymentPricingBreakdown";
 import type { ModelGroupInfo } from "@/components/PublicModelHubTableColumns";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -17,6 +18,7 @@ import {
   modeLabel,
   modelCapabilities,
   providerName,
+  SECTION_TITLE,
   wildcardExample,
 } from "./hubFormat";
 import { Badges, CodeBlock, type Fact, Facts, PaneSection, ProviderAvatar, ProviderName } from "./HubParts";
@@ -175,6 +177,10 @@ export function ModelInspector({ model }: { model: ModelGroupInfo }) {
         </Alert>
       )}
       <Facts groups={modelFacts(model)} />
+      <DeploymentPricingBreakdown
+        deployments={model.deployment_pricing}
+        heading={<h3 className={SECTION_TITLE}>{t("publicModelHub.modelInspector.pricingByDeployment")}</h3>}
+      />
       {capabilities.length > 0 && (
         <PaneSection title={t("publicModelHub.modelInspector.capabilities")}>
           <Badges items={capabilities} />
