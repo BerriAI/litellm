@@ -19,6 +19,11 @@ from typing import TYPE_CHECKING, Final, Protocol, TypeVar
 from pydantic import TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.pending_operations import (
+    PendingOperations,
+    finish_pending_operation,
+    register_pending_operation,
+)
 from litellm.proxy.db.db_span import db_span
 from litellm.proxy.db.db_url_settings import add_missing_query_params, token_refresh_params_from_url
 from litellm.proxy.db.log_db_metrics import db_io_claimed, record_db_io
@@ -151,33 +156,45 @@ class _TrackedPrismaEngine:
     ) -> _EngineResponseT:
         self.tracker.begin_operation()
         task: Final = asyncio.ensure_future(request)
+        pending: Final = register_pending_operation()
         try:
-            return await asyncio.shield(task)
+            response: Final = await asyncio.shield(task)
         except asyncio.CancelledError:
             self._detached = self._detached.union((task,))
-            task.add_done_callback(lambda done: self._detached_request_finished(done, abandoned))
+            task.add_done_callback(lambda done: self._detached_request_finished(done, abandoned, pending))
             raise
+        except BaseException:
+            finish_pending_operation(pending)
+            raise
+        else:
+            finish_pending_operation(pending)
+            return response
 
     def _detached_request_finished(
         self,
         done: "asyncio.Task[_EngineResponseT]",
         abandoned: Callable[[_EngineResponseT], Awaitable[None]] | None,
+        pending: PendingOperations | None,
     ) -> None:
         self._detached = self._detached.difference((done,))
         if done.cancelled():
+            finish_pending_operation(pending)
             return
         failure: Final = done.exception()
         if failure is not None:
             verbose_proxy_logger.debug("Prisma request abandoned by a cancelled caller failed: %s", failure)
+            finish_pending_operation(pending)
             return
         if abandoned is None:
+            finish_pending_operation(pending)
             return
         settle: Final = asyncio.ensure_future(abandoned(done.result()))
         self._detached = self._detached.union((settle,))
-        settle.add_done_callback(self._abandoned_transaction_settled)
+        settle.add_done_callback(lambda done: self._abandoned_transaction_settled(done, pending))
 
-    def _abandoned_transaction_settled(self, settle: "asyncio.Task[object]") -> None:
+    def _abandoned_transaction_settled(self, settle: "asyncio.Task[object]", pending: PendingOperations | None) -> None:
         self._detached = self._detached.difference((settle,))
+        finish_pending_operation(pending)
         if settle.cancelled() or settle.exception() is None:
             return
         verbose_proxy_logger.debug(

@@ -1383,7 +1383,7 @@ const dailyActivityQuery = (
     ...(excludeParam
       ? { [excludeParam]: excludeEntityIds && excludeEntityIds.length > 0 ? excludeEntityIds.join(",") : undefined }
       : {}),
-    timezone: new Date().getTimezoneOffset().toString(),
+    timezone: (req.timezoneOffsetMinutes ?? new Date().getTimezoneOffset()).toString(),
     include_current_utc_day: entity === "user" && req.includeCurrentUtcDay ? "true" : undefined,
     ...extra,
   };
@@ -1395,7 +1395,12 @@ export const dailyActivityAggregatedCall = (
 ): Promise<DailyActivityAggregatedResponse> =>
   apiClient.get<DailyActivityAggregatedResponse>(`/${entity}/daily/activity/aggregated`, {
     accessToken: req.accessToken,
-    query: dailyActivityQuery(entity, req, req.apiKeyLimit === undefined ? {} : { api_key_limit: req.apiKeyLimit }),
+    query: dailyActivityQuery(entity, req, {
+      api_key_limit: req.apiKeyLimit,
+      bounded: req.bounded || undefined,
+      include_model_breakdown: (req.bounded && req.includeModelBreakdown) || undefined,
+      model_limit: req.bounded ? req.modelLimit : undefined,
+    }),
   });
 
 export const subscriptionUsageCall = (

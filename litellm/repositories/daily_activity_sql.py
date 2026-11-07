@@ -1,6 +1,6 @@
 from collections.abc import Mapping
-from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from dataclasses import dataclass, replace
+from datetime import date, datetime, timedelta, timezone
 from itertools import count, islice
 from types import MappingProxyType
 from typing import Final
@@ -157,6 +157,83 @@ def _top_api_keys_sql(pg_table: str, where_clause: str, *, sentinel_param: int, 
             ORDER BY SUM(spend::numeric) DESC, {_API_KEY_EXPR}
             LIMIT ${limit_param}
         """
+
+
+def _bounded_metrics_json(alias: str) -> str:
+    return f"""(jsonb_strip_nulls(to_jsonb({alias}) - ARRAY[
+        'date','model','group_level','model_count','total_api_keys','ptu_flat_cost'
+    ]) || jsonb_build_object(
+        'flat_cost',COALESCE({alias}.ptu_flat_cost,0),
+        'total_tokens',COALESCE({alias}.prompt_tokens,0)+COALESCE({alias}.completion_tokens,0)
+    ))"""
+
+
+def build_bounded_daily_activity_sql(
+    scope: DailyActivityScope, *, model_limit: int | None, utc_now: datetime | None = None
+) -> SqlQuery:
+    start, end = adjust_dates_for_timezone(
+        scope.start_date, scope.end_date, scope.timezone_offset_minutes, scope.include_current_utc_day, utc_now
+    )
+    days: Final = (date.fromisoformat(end) - date.fromisoformat(start)).days
+    if not 0 <= days <= 365:
+        raise ValueError("Choose an ordered date range of at most 366 days")
+    if model_limit is not None and not 1 <= model_limit <= 100:
+        raise ValueError("model_limit must be between 1 and 100")
+    where, params = build_where_clause(replace(scope, start_date=start, end_date=end, include_current_utc_day=False))
+    sentinel: Final = len(params) + 1
+    limit_param: Final = len(params) + 2
+    metrics: Final = _rollup_metric_select(scope.table)
+    grouping: Final = (
+        f"GROUPING SETS ((date),({_MODEL_EXPR}),())" if model_limit is not None else "GROUPING SETS ((date),())"
+    )
+    model: Final = _MODEL_EXPR if model_limit is not None else "NULL::text"
+    level: Final = f"GROUPING(date,{_MODEL_EXPR})" if model_limit is not None else "GROUPING(date)"
+    total_level: Final = 3 if model_limit is not None else 1
+    day_level: Final = 1 if model_limit is not None else 0
+    model_count: Final = "(SELECT count(*) FROM rollups WHERE group_level=2)" if model_limit is not None else "0"
+    model_ctes: Final = (
+        f""", top_models AS MATERIALIZED (
+            SELECT * FROM rollups WHERE group_level=2 AND length(model)<=1024
+            ORDER BY spend DESC NULLS LAST,model LIMIT ${limit_param}
+        ), other_models AS (
+            SELECT count(*)::bigint AS model_count,{metrics}
+            FROM rollups r WHERE group_level=2
+                AND NOT EXISTS(SELECT 1 FROM top_models t WHERE t.model=r.model)
+            HAVING count(*)>0
+        )"""
+        if model_limit is not None
+        else ""
+    )
+    model_rows: Final = (
+        f"""UNION ALL SELECT 'model',NULL::text,r.model,1::bigint,r.total_api_keys,{_bounded_metrics_json("r")}
+            FROM top_models r
+        UNION ALL SELECT 'other',NULL::text,NULL::text,r.model_count,NULL::bigint,{_bounded_metrics_json("r")}
+            FROM other_models r"""
+        if model_limit is not None
+        else ""
+    )
+    sql: Final = f"""WITH rollups AS MATERIALIZED (
+        SELECT date,{model} AS model,{level} AS group_level,
+            count(DISTINCT api_key) FILTER(WHERE api_key<>${sentinel})::bigint AS total_api_keys,
+            {metrics}
+        FROM "{PRISMA_TO_PG_TABLE[scope.table]}" WHERE {where}
+        GROUP BY {grouping}
+    ){model_ctes}
+    SELECT 'day' AS kind,date,NULL::text AS model,0::bigint AS model_count,total_api_keys,
+        {_bounded_metrics_json("r")} AS metrics FROM rollups r WHERE group_level={day_level}
+    UNION ALL SELECT 'total',NULL::text,NULL::text,{model_count},total_api_keys,{_bounded_metrics_json("r")}
+        FROM rollups r WHERE group_level={total_level}
+    {model_rows}
+    LIMIT ${limit_param + int(model_limit is not None)}"""
+    return SqlQuery(
+        sql=sql,
+        params=(
+            *params,
+            PTU_SENTINEL_API_KEY,
+            *((model_limit,) if model_limit is not None else ()),
+            367 if model_limit is None else 368 + model_limit,
+        ),
+    )
 
 
 def build_aggregated_sql(scope: DailyActivityScope, *, api_key_limit: int) -> SqlQuery:

@@ -18,7 +18,7 @@ from importlib.metadata import PackageNotFoundError, packages_distributions, req
 from itertools import chain
 from typing import Final
 
-EXTRAS_ONLY_MODULES = ("fastapi", "uvicorn", "keyring", "mcp", "mcp_types", "httpx2", "httpcore2")
+EXTRAS_ONLY_MODULES = ("fastapi", "uvicorn", "keyring", "mcp", "mcp_types", "httpx2", "httpcore2", "prisma")
 SDK_DISTRIBUTIONS: Final = frozenset({"litellm", "litellm-core"})
 REQUIREMENT_NAME: Final = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 EXTRA_MARKER: Final = re.compile(r";.*\bextra\s*==")
@@ -88,6 +88,7 @@ def check_import() -> str:
     distribution = distributions[0]
     _require(sdk_version == version(distribution), "SDK version does not match installed metadata")
     _require("litellm.proxy.proxy_cli" not in sys.modules, "SDK import loaded the proxy CLI")
+    _require("prisma" not in sys.modules, "SDK import loaded the optional Prisma database driver")
     return f"imported {distribution} {sdk_version}"
 
 

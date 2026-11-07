@@ -9,6 +9,7 @@ from litellm.repositories.daily_activity_sql import (
     ExportCursor,
     adjust_dates_for_timezone,
     build_aggregated_sql,
+    build_bounded_daily_activity_sql,
     build_cache_leakage_keys_sql,
     build_entity_rollup_sql,
     build_export_sql,
@@ -78,6 +79,35 @@ def test_where_clause_binds_each_filter_as_a_single_array_parameter() -> None:
         "gpt-test",
         ["key-1", "key-2"],
     )
+
+
+@pytest.mark.parametrize("model_limit", [None, 20, 100])
+def test_bounded_activity_rejects_timezone_expansion_beyond_366_days(model_limit: int | None) -> None:
+    scope: Final = _scope(
+        start_date="2025-08-05",
+        end_date="2026-08-05",
+        timezone_offset_minutes=420,
+        include_current_utc_day=True,
+    )
+    with pytest.raises(ValueError, match="at most 366 days"):
+        build_bounded_daily_activity_sql(
+            scope, model_limit=model_limit, utc_now=datetime(2026, 8, 6, 2, tzinfo=timezone.utc)
+        )
+
+
+@pytest.mark.parametrize("model_limit", [None, 20, 100])
+def test_bounded_activity_keeps_the_resolved_dates_when_they_fit(model_limit: int | None) -> None:
+    scope: Final = _scope(
+        start_date="2025-08-06",
+        end_date="2026-08-05",
+        timezone_offset_minutes=420,
+        include_current_utc_day=True,
+    )
+    query: Final = build_bounded_daily_activity_sql(
+        scope, model_limit=model_limit, utc_now=datetime(2026, 8, 6, 2, tzinfo=timezone.utc)
+    )
+    assert query.params[:2] == ("2025-08-06", "2026-08-06")
+    assert query.params[-1] == (367 if model_limit is None else 368 + model_limit)
 
 
 def test_where_clause_exclusion_keeps_null_entity_rows() -> None:

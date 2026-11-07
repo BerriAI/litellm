@@ -2,7 +2,7 @@ from collections.abc import Mapping, Sequence
 from datetime import date
 from enum import Enum
 
-from pydantic import ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field
 from typing_extensions import TypedDict
 
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -264,3 +264,31 @@ class LiteLLM_DailyUserSpend(LiteLLMBaseModel):
 class GroupedData(TypedDict):
     metrics: SpendMetrics
     breakdown: BreakdownMetrics
+
+
+class DailyActivityModelContribution(BaseModel, frozen=True):
+    model: str = Field(max_length=1024)
+    metrics: SpendMetrics
+
+
+class DailyActivityOtherModels(BaseModel, frozen=True):
+    model_count: int = Field(ge=1)
+    metrics: SpendMetrics
+
+
+class DailyActivityModelBreakdown(BaseModel, frozen=True):
+    limit: int = Field(ge=1, le=100)
+    total_models: int = Field(ge=0)
+    models: tuple[DailyActivityModelContribution, ...] = Field(max_length=100)
+    other: DailyActivityOtherModels | None = None
+
+
+class BoundedDailyActivityResponse(BaseModel, frozen=True):
+    results: tuple[DailySpendData, ...] = Field(max_length=366)
+    metadata: DailySpendMetadata
+    model_breakdown: DailyActivityModelBreakdown | None = Field(
+        default=None,
+        description="When requested, includes the highest-spend models across the full date range and an explicit "
+        "aggregate of all remaining models. Daily totals always cover the complete activity scope. "
+        "Other per-day dimension breakdowns are omitted.",
+    )

@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import React, { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { NuqsTestingAdapter } from "nuqs/adapters/testing";
 import ModelInfoView from "./model_info_view";
 import { toast } from "@/lib/toast";
 import * as networking from "./networking";
@@ -196,7 +197,11 @@ describe("ModelInfoView", () => {
   });
 
   const wrapper = ({ children }: { children: ReactNode }) =>
-    React.createElement(QueryClientProvider, { client: queryClient }, children);
+    React.createElement(
+      NuqsTestingAdapter,
+      { hasMemory: true },
+      React.createElement(QueryClientProvider, { client: queryClient }, children),
+    );
 
   it("should render", async () => {
     render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
@@ -2429,3 +2434,5 @@ describe("ModelInfoView", () => {
     );
   });
 });
+
+vi.mock("@/lib/telemetry/uiEvents", () => ({ recordUiEvent: vi.fn() }));

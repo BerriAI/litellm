@@ -504,6 +504,7 @@ describe("TeamVirtualKeysTable", () => {
 
     await screen.findByText("Key Info View");
     expect(vi.mocked(KeyInfoView).mock.lastCall?.[0].keyData).toMatchObject({ organization_id: null });
+    expect(vi.mocked(KeyInfoView).mock.lastCall?.[0].tabQueryKey).toBe("key_detail_tab");
   });
 
   describe("entity links out of the key rows", () => {

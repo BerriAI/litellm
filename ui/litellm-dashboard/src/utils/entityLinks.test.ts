@@ -2,7 +2,14 @@ import { describe, expect, it, vi } from "vitest";
 
 vi.mock("@/components/networking", () => ({ serverRootPath: "" }));
 
-import { accessGroupHref, modelGroupHref, modelOrAccessGroupHref, teamDetailHref, userDetailHref } from "./entityLinks";
+import {
+  entityActivityHref,
+  accessGroupHref,
+  modelGroupHref,
+  modelOrAccessGroupHref,
+  teamDetailHref,
+  userDetailHref,
+} from "./entityLinks";
 
 describe("userDetailHref", () => {
   it("targets the users page filtered to the encoded user id", () => {
@@ -64,5 +71,30 @@ describe("modelOrAccessGroupHref", () => {
   it("keeps model names unlinked until access group names are available", () => {
     expect(modelOrAccessGroupHref("repro-access-group", undefined)).toBeUndefined();
     expect(modelOrAccessGroupHref("gpt-4.1", undefined)).toBeUndefined();
+  });
+});
+
+describe("entityActivityHref", () => {
+  const context = { from: "2026-10-01", to: "2026-10-07", alert: "incident-1" };
+  it.each([
+    ["key", "key-hash", "/api-keys", "key"],
+    ["team", "a b/c", "/teams", "team"],
+    ["user", "user@example.com", "/users", "user"],
+    ["model", "provider/model-1", "/models-and-endpoints", "activity_model"],
+  ] as const)("links %s activity with its scope and incident dates", (scope, id, path, query) => {
+    const url = new URL(entityActivityHref(scope, id, context)!, "http://example.com");
+    expect(url.pathname).toMatch(new RegExp(`${path}$`));
+    expect(url.searchParams.get(query)).toBe(id);
+    expect(url.searchParams.get("detail_tab")).toBe("activity");
+    expect(url.searchParams.get("activity_from")).toBe(context.from);
+    expect(url.searchParams.get("activity_to")).toBe(context.to);
+    expect(url.searchParams.get("alert")).toBe(context.alert);
+  });
+  it("does not link credentials, empty entities, or synthetic entities", () => {
+    expect(entityActivityHref("key", "sk-test-placeholder", context)).toBeUndefined();
+    expect(entityActivityHref("key", "unattributed", context)).toBeUndefined();
+    expect(entityActivityHref("team", "litellm-dashboard", context)).toBeUndefined();
+    expect(entityActivityHref("user", "default_user_id", context)).toBeUndefined();
+    expect(entityActivityHref("model", " ", context)).toBeUndefined();
   });
 });

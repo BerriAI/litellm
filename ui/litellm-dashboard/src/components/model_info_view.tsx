@@ -1,3 +1,5 @@
+import EntityActivity from "@/components/UsagePage/EntityActivity";
+import { useUrlTab } from "@/hooks/useUrlTab";
 import { useModelCostMap } from "@/app/(dashboard)/hooks/models/useModelCostMap";
 import { useModelHub, useModelsInfo } from "@/app/(dashboard)/hooks/models/useModels";
 import { useQueryClient } from "@tanstack/react-query";
@@ -10,7 +12,7 @@ import { SimpleTooltip } from "@/components/ui/tooltip";
 import { UserReference } from "@/components/shared/UserReference";
 import { applyPtuModelInfo } from "../utils/ptuModelInfo";
 import { usePtuCostAttributionEnabled } from "@/app/(dashboard)/hooks/uiSettings/usePtuCostAttributionEnabled";
-import { ArrowLeft, CheckIcon, CopyIcon, Info } from "lucide-react";
+import { ArrowLeft, CheckIcon, Clock, CopyIcon, Info } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { copyToClipboard as utilCopyToClipboard } from "../utils/dataUtils";
@@ -76,6 +78,7 @@ export default function ModelInfoView({
   modelAccessGroups,
 }: ModelInfoViewProps) {
   const { t } = useTranslation();
+  const [activeTab, setActiveTab] = useUrlTab(["overview", "activity", "raw"], "overview", "detail_tab");
   const queryClient = useQueryClient();
   const [localModelData, setLocalModelData] = useState<any>(null);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
@@ -609,10 +612,13 @@ export default function ModelInfoView({
         </div>
       </div>
 
-      <Tabs defaultValue="overview">
-        <TabsList variant="line" className="mb-6 h-auto w-full justify-start rounded-none border-b p-0">
+      <Tabs value={activeTab} onValueChange={(value) => setActiveTab(String(value) as typeof activeTab)}>
+        <TabsList variant="line" className="mb-6 h-auto w-full justify-start overflow-x-auto rounded-none border-b p-0">
           <TabsTrigger value="overview" className="flex-none rounded-none px-4 py-2">
             {t("modelInfoView.tabs.overview")}
+          </TabsTrigger>
+          <TabsTrigger value="activity" className="flex-none rounded-none px-4 py-2">
+            {t("entityActivity.title")}
           </TabsTrigger>
           <TabsTrigger value="raw" className="flex-none rounded-none px-4 py-2">
             {t("modelInfoView.tabs.rawJson")}
@@ -620,6 +626,9 @@ export default function ModelInfoView({
         </TabsList>
 
         <div>
+          <TabsContent value="activity">
+            {activeTab === "activity" && <EntityActivity scope="model" id={modelData.litellm_model_name} />}
+          </TabsContent>
           <TabsContent value="overview" keepMounted>
             {/* Overview Grid */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 mb-6">
@@ -658,14 +667,7 @@ export default function ModelInfoView({
             {/* Audit info shown as a subtle banner below the overview */}
             <div className="mb-6 text-sm text-muted-foreground flex items-center gap-x-6">
               <div className="flex items-center gap-x-2">
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth="2"
-                    d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
-                  />
-                </svg>
+                <Clock className="w-4 h-4" aria-hidden="true" />
                 {t("modelInfoView.audit.createdAt")}{" "}
                 {modelData.model_info.created_at
                   ? new Date(modelData.model_info.created_at).toLocaleDateString("en-US", {
