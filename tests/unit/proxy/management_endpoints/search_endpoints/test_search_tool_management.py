@@ -6,10 +6,12 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+import respx
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 # Import proxy_server module first to ensure it's initialized
+import litellm
 import litellm.proxy.proxy_server as ps
 from litellm.proxy._types import (
     LiteLLM_ObjectPermissionTable,
@@ -1641,3 +1643,28 @@ async def test_a_proxy_search_tool_created_through_the_api_keeps_its_downstream_
         (tool["search_tool_name"], tool["litellm_params"].get("search_tool_name"))
         for tool in router.search_tools
     ] == [("proxy-alias", "remote-tavily")]
+
+
+def test_test_connection_on_a_proxy_search_tool_calls_the_downstream_tool_it_names(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route = respx_mock.post("https://proxy.example.com/search/remote-tavily").respond(
+        json={"object": "search", "results": [{"title": "t", "url": "https://result.invalid", "snippet": "s"}]}
+    )
+    with _override_auth(UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user")):
+        response = TestClient(app).post(
+            "/search_tools/test_connection",
+            json={
+                "litellm_params": {
+                    "search_provider": "litellm_proxy",
+                    "api_base": "https://proxy.example.com",
+                    "api_key": "sk-downstream",
+                    "search_tool_name": "remote-tavily",
+                }
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    assert (response.json()["status"], response.json()["results_count"]) == ("success", 1)
+    assert route.call_count == 1
