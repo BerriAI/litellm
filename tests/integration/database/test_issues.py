@@ -1067,7 +1067,15 @@ async def test_provider_recovery_pages_saved_cohorts_and_rejects_stale_observati
         assert first[0].id == inputs[0].id and second[0].id == inputs[1].id
         assert await store.set_status(inputs[0].id, "dismissed", "open") is not None
         assert await store.recover_issue_ids((inputs[0].id,), template.observed_at - timedelta(seconds=1)) == 0
-        assert await store.recover_issue_ids((inputs[0].id, inputs[1].id), template.observed_at) == 2
+        assert await store.recover_issue_ids((inputs[0].id, inputs[1].id), template.observed_at) == 0, (
+            "A recovery at the last observed timestamp must not close the alert"
+        )
+        assert (
+            await store.recover_issue_ids(
+                (inputs[0].id, inputs[1].id), template.observed_at + timedelta(milliseconds=1)
+            )
+            == 2
+        )
         dismissed: Final = await store.get_issue(inputs[0].id)
         resolved: Final = await store.get_issue(inputs[1].id)
         assert dismissed is not None and not dismissed.active and dismissed.status == "dismissed"

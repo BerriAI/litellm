@@ -1,3 +1,5 @@
+SET LOCAL lock_timeout = '10s';
+
 CREATE TABLE IF NOT EXISTS "LiteLLM_Issue" (
   "id" TEXT NOT NULL,
   "cohort_key" TEXT NOT NULL,

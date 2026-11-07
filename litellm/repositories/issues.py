@@ -529,7 +529,7 @@ class IssuesRepository:
                 """WITH changed AS (
                 UPDATE "LiteLLM_Issue" SET active=false,
                     status=CASE WHEN status='open' THEN 'resolved' ELSE status END,updated_at=CURRENT_TIMESTAMP
-                WHERE id=ANY($1::text[]) AND kind='performance' AND active AND last_seen<=$2::timestamp(3)
+                WHERE id=ANY($1::text[]) AND kind='performance' AND active AND last_seen<$2::timestamp(3)
                 RETURNING id
             ) SELECT count(*)::int AS count FROM changed""",
                 list(ids),
