@@ -5,7 +5,7 @@ from typing import Final
 
 import httpx
 import pytest
-from integration._support.client import Gateway
+from integration._support.client import Gateway, object_value, string_value
 from integration._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue
 
@@ -164,3 +164,105 @@ def test_a2a_completion_through_proxy(
 
         requests: Final = wire.drain()
         assert len(tuple(item for item in requests if item.method == "POST")) == 1
+
+
+def test_registered_a2a_agent_routes_before_wildcard_model(gateway: Gateway) -> None:
+    agent_name: Final = "translation-a2a-" + uuid.uuid4().hex
+
+    def upstream(request: Request) -> Reply:
+        if request.method == "GET":
+            assert request.target in ("/.well-known/agent-card.json", "/.well-known/agent.json")
+            return Reply(
+                body=json.dumps(
+                    {
+                        "protocolVersion": "0.3",
+                        "name": agent_name,
+                        "description": "Scripted A2A peer",
+                        "version": "1.0.0",
+                        "url": wire.url + "/",
+                        "capabilities": {"streaming": True},
+                        "defaultInputModes": ["text"],
+                        "defaultOutputModes": ["text"],
+                        "skills": [],
+                    }
+                ).encode()
+            )
+
+        assert request.method == "POST" and request.target == "/"
+        outbound: Final = json.loads(request.body)
+        request_id: Final = outbound["id"]
+        return Reply(
+            body=json.dumps(
+                {
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "result": {
+                        "kind": "message",
+                        "role": "agent",
+                        "messageId": agent_name,
+                        "parts": [{"kind": "text", "text": "A2A wildcard response"}],
+                    },
+                }
+            ).encode()
+        )
+
+    with wire_server(upstream) as wire, gateway.scenario() as scenario:
+        wildcard_prefix: Final = "integration-" + uuid.uuid4().hex
+        wildcard_created: Final = gateway.request(
+            "POST",
+            "/model/new",
+            {
+                "model_name": f"{wildcard_prefix}/*",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "integration-provider-key",
+                    "api_base": gateway.upstream_url,
+                },
+            },
+        )
+        assert wildcard_created.status_code == 200, wildcard_created.text
+        wildcard_id: Final = string_value(object_value(wildcard_created.json()["model_info"])["id"])
+        scenario.cleanups.callback(scenario.delete_model, wildcard_id)
+
+        missing_agent: Final = gateway.request(
+            "POST",
+            "/v1/chat/completions",
+            {
+                "model": f"a2a/{agent_name}-missing",
+                "messages": [{"role": "user", "content": "Hello"}],
+            },
+        )
+        assert missing_agent.status_code == 400, missing_agent.text
+
+        card: Final = {
+            "protocolVersion": "0.3",
+            "name": agent_name,
+            "description": "Scripted A2A peer",
+            "version": "1.0.0",
+            "url": wire.url + "/",
+            "capabilities": {"streaming": True},
+            "defaultInputModes": ["text"],
+            "defaultOutputModes": ["text"],
+            "skills": [],
+        }
+        created: Final = gateway.request(
+            "POST",
+            "/v1/agents",
+            {"agent_name": agent_name, "agent_card_params": card},
+        )
+        assert created.status_code == 200, created.text
+        agent_id: Final = string_value(created.json()["agent_id"])
+        scenario.cleanups.callback(
+            lambda: gateway.request("DELETE", f"/v1/agents/{agent_id}")
+        )
+
+        response: Final = gateway.request(
+            "POST",
+            "/v1/chat/completions",
+            {
+                "model": f"a2a/{agent_name}",
+                "messages": [{"role": "user", "content": "Hello"}],
+            },
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["choices"][0]["message"]["content"] == "A2A wildcard response"
