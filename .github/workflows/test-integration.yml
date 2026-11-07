@@ -43,6 +43,9 @@ jobs:
     name: integration ${{ matrix.suite }}
     if: github.event_name != 'pull_request' || github.event.label.name == 'run-ci'
     environment: integration-license
+    permissions:
+      contents: read
+      id-token: write
     runs-on: ${{ fromJSON('{"providers":"ubuntu-latest-64-cores","extensions":"ubuntu-latest-64-cores","accounting":"ubuntu-latest-32-cores","management":"ubuntu-latest-32-cores","management-replica":"ubuntu-latest-32-cores"}')[matrix.suite] || 'ubuntu-latest-16-cores' }}
     timeout-minutes: 60
     strategy:
@@ -188,6 +191,19 @@ jobs:
         env:
           SCANNED_SECRET: ${{ secrets.LITELLM_LICENSE }}
         run: python .github/scripts/assert_secret_absent.py test-results
+
+      - name: Upload database coverage to Codecov
+        if: ${{ !cancelled() && steps.secret-scan.outcome == 'success' && (matrix.suite == 'database' || matrix.suite == 'database-replica') }}
+        timeout-minutes: 5
+        continue-on-error: true
+        uses: codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac # v5.5.5
+        with:
+          use_oidc: true
+          files: test-results/integration-${{ matrix.suite }}/coverage.xml
+          disable_search: true
+          root_dir: ${{ github.workspace }}
+          flags: integration-${{ matrix.suite }}
+          fail_ci_if_error: false
 
       - name: Upload results
         if: ${{ !cancelled() && steps.secret-scan.outcome == 'success' }}
