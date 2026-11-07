@@ -10,6 +10,7 @@ This test validates:
 
 import json
 import os
+from collections.abc import Mapping
 from queue import SimpleQueue
 from typing import Dict, Final, List, get_args
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -798,8 +799,8 @@ async def test_direct_anthropic_deployment_sends_the_caller_betas_its_row_marks_
 
     monkeypatch.delenv("ANTHROPIC_API_BASE", raising=False)
     monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
-    row: Final[dict[str, str | None]] = GetAnthropicBetaHeadersConfig.load_local_beta_headers_config()["anthropic"]
-    unsupported: Final = min(beta for beta, mapped in row.items() if mapped is None and "-" in beta)
+    row: Final[Mapping[str, str | None]] = GetAnthropicBetaHeadersConfig.load_local_beta_headers_config()["anthropic"]
+    unsupported: Final = min(beta for beta, mapped in row.items() if mapped is None)
     sent: Final[SimpleQueue[httpx.Request]] = SimpleQueue()
 
     def reply(request: httpx.Request) -> httpx.Response:

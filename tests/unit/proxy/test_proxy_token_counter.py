@@ -1967,16 +1967,19 @@ _BEDROCK_CLAUDE_DEPLOYMENT: Final[dict[str, str]] = {
     "aws_secret_access_key": "test-secret",
     "aws_region_name": "us-east-1",
 }
-_THINKING_BODY: Final[dict[str, JsonValue]] = {"thinking": {"type": "enabled", "budget_tokens": 2000}}
-_EFFORT_BODY: Final[dict[str, JsonValue]] = {"output_config": {"effort": "low"}}
-_DROPS_THE_EFFORT: Final[dict[str, JsonValue]] = {"additional_drop_params": ["output_config.effort"]}
-_ANTHROPIC_DEPLOYMENT: Final[dict[str, JsonValue]] = {"model": "anthropic/claude-haiku-5-5", "api_key": "sk-ant-test"}
-_AZURE_AI_DEPLOYMENT: Final[dict[str, JsonValue]] = {
+_THINKING_BODY: Final[Mapping[str, JsonValue]] = {"thinking": {"type": "enabled", "budget_tokens": 2000}}
+_EFFORT_BODY: Final[Mapping[str, JsonValue]] = {"output_config": {"effort": "low"}}
+_DROPS_THE_EFFORT: Final[Mapping[str, JsonValue]] = {"additional_drop_params": ["output_config.effort"]}
+_ANTHROPIC_HOST: Final = "api.anthropic.com"
+_ANTHROPIC_DEPLOYMENT: Final[Mapping[str, str]] = {"model": "anthropic/claude-haiku-5-5", "api_key": "sk-ant-test"}
+_AZURE_AI_HOST: Final = "my-resource.services.ai.azure.com"
+_AZURE_AI_DEPLOYMENT: Final[Mapping[str, str]] = {
     "model": "azure_ai/claude-haiku-5-5",
-    "api_base": "https://my-resource.services.ai.azure.com/anthropic",
+    "api_base": f"https://{_AZURE_AI_HOST}/anthropic",
     "api_key": "sk-azure-test",
 }
-_VERTEX_DEPLOYMENT: Final[dict[str, JsonValue]] = {
+_VERTEX_HOST: Final = "us-east5-aiplatform.googleapis.com"
+_VERTEX_DEPLOYMENT: Final[Mapping[str, str]] = {
     "model": "vertex_ai/claude-haiku-5-5",
     "vertex_project": "test-project",
     "vertex_location": "us-east5",
@@ -1985,17 +1988,32 @@ _VERTEX_DEPLOYMENT: Final[dict[str, JsonValue]] = {
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("deployment_params", "body", "caller_beta", "provider_calls"),
+    ("deployment_params", "body", "caller_beta", "counted_hosts"),
     (
-        ({"model": "gemini/gemini-3.8-flash", "api_key": "sk-gemini-test"}, _THINKING_BODY, None, 1),
-        (_ANTHROPIC_DEPLOYMENT, _THINKING_BODY, None, 2),
-        ({**_ANTHROPIC_DEPLOYMENT, **_DROPS_THE_EFFORT}, _EFFORT_BODY, None, 1),
-        ({**_ANTHROPIC_DEPLOYMENT, **_DROPS_THE_EFFORT}, _EFFORT_BODY, _CALLER_BETA, 2),
-        (_AZURE_AI_DEPLOYMENT, _THINKING_BODY, None, 2),
-        ({**_AZURE_AI_DEPLOYMENT, **_DROPS_THE_EFFORT}, _EFFORT_BODY, None, 1),
-        (_VERTEX_DEPLOYMENT, _THINKING_BODY, None, 2),
-        ({**_VERTEX_DEPLOYMENT, **_DROPS_THE_EFFORT}, _EFFORT_BODY, None, 1),
-        ({**_BEDROCK_CLAUDE_DEPLOYMENT, **_DROPS_THE_EFFORT}, _EFFORT_BODY, None, 2),
+        (
+            {"model": "gemini/gemini-3.8-flash", "api_key": "sk-gemini-test"},
+            _THINKING_BODY,
+            None,
+            ("generativelanguage.googleapis.com",),
+        ),
+        (_ANTHROPIC_DEPLOYMENT, _THINKING_BODY, None, (_ANTHROPIC_HOST, _ANTHROPIC_HOST)),
+        ({**_ANTHROPIC_DEPLOYMENT, **_DROPS_THE_EFFORT}, _EFFORT_BODY, None, (_ANTHROPIC_HOST,)),
+        (
+            {**_ANTHROPIC_DEPLOYMENT, **_DROPS_THE_EFFORT},
+            _EFFORT_BODY,
+            _CALLER_BETA,
+            (_ANTHROPIC_HOST, _ANTHROPIC_HOST),
+        ),
+        (_AZURE_AI_DEPLOYMENT, _THINKING_BODY, None, (_AZURE_AI_HOST, _AZURE_AI_HOST)),
+        ({**_AZURE_AI_DEPLOYMENT, **_DROPS_THE_EFFORT}, _EFFORT_BODY, None, (_AZURE_AI_HOST,)),
+        (_VERTEX_DEPLOYMENT, _THINKING_BODY, None, (_VERTEX_HOST, _VERTEX_HOST)),
+        ({**_VERTEX_DEPLOYMENT, **_DROPS_THE_EFFORT}, _EFFORT_BODY, None, (_VERTEX_HOST,)),
+        (
+            {**_BEDROCK_CLAUDE_DEPLOYMENT, **_DROPS_THE_EFFORT},
+            _EFFORT_BODY,
+            None,
+            (_BEDROCK_RUNTIME_HOST, _BEDROCK_MANTLE_HOST),
+        ),
     ),
     ids=(
         "counter-without-claude-options",
@@ -2011,10 +2029,10 @@ _VERTEX_DEPLOYMENT: Final[dict[str, JsonValue]] = {
 )
 async def test_anthropic_count_tokens_counts_again_without_the_options_only_when_the_counter_forwarded_them(
     monkeypatch: pytest.MonkeyPatch,
-    deployment_params: dict[str, JsonValue],
-    body: dict[str, JsonValue],
+    deployment_params: Mapping[str, JsonValue],
+    body: Mapping[str, JsonValue],
     caller_beta: str | None,
-    provider_calls: int,
+    counted_hosts: tuple[str, ...],
 ) -> None:
     from litellm.proxy import proxy_server
 
@@ -2028,7 +2046,7 @@ async def test_anthropic_count_tokens_counts_again_without_the_options_only_when
         "python-httpx/0.28.1",
         {} if caller_beta is None else {"anthropic-beta": caller_beta},
     )
-    router: Final = Router(model_list=[{"model_name": "claude-agent", "litellm_params": deployment_params}])
+    router: Final = Router(model_list=[{"model_name": "claude-agent", "litellm_params": dict(deployment_params)}])
     monkeypatch.setattr(proxy_server, "llm_router", router)
     monkeypatch.setattr(proxy_server, "proxy_config", proxy_server.ProxyConfig())
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
@@ -2048,7 +2066,7 @@ async def test_anthropic_count_tokens_counts_again_without_the_options_only_when
 
     assert isinstance(response, JSONResponse)
     assert response.status_code == 400
-    assert route.call_count == provider_calls
+    assert tuple(call.request.url.host for call in route.calls) == counted_hosts
 
 
 async def _count_on_a_bedrock_claude_deployment(

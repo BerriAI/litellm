@@ -12,6 +12,7 @@ from typing_extensions import assert_never
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.anthropic.common_utils import context_management_betas, context_management_with_edits
 from litellm.llms.anthropic.count_tokens.transformation import (
@@ -79,8 +80,11 @@ def _deployment_route(litellm_params: Mapping[str, object]) -> tuple[str, str] |
     return model, provider
 
 
-def _claude_count_translator(litellm_params: Mapping[str, object]) -> AnthropicConfig:
-    route: Final = _deployment_route(litellm_params)
+def _deployment_litellm_params(deployment: Mapping[str, object] | None) -> Mapping[str, object]:
+    return as_str_mapping((deployment or {}).get("litellm_params")) or MappingProxyType({})
+
+
+def _claude_count_translator(route: tuple[str, str] | None) -> AnthropicConfig:
     if route is None:
         return AnthropicConfig()
     model, provider = route
@@ -88,12 +92,14 @@ def _claude_count_translator(litellm_params: Mapping[str, object]) -> AnthropicC
     return chat_config if isinstance(chat_config, AnthropicConfig) else AnthropicConfig()
 
 
-def _claude_options_provider(litellm_params: Mapping[str, object], use_mantle: bool) -> LlmProviders:
+def _claude_options_provider(route: tuple[str, str] | None, use_mantle: bool) -> LlmProviders:
     if not use_mantle:
         return LlmProviders.BEDROCK
-    route: Final = _deployment_route(litellm_params)
-    deployment_provider: Final = None if route is None else route[1]
-    return LlmProviders.BEDROCK if deployment_provider == LlmProviders.BEDROCK.value else LlmProviders.BEDROCK_MANTLE
+    if route is None:
+        return LlmProviders.BEDROCK_MANTLE
+    model, provider = route
+    runs_on_invoke: Final = provider == LlmProviders.BEDROCK.value and not _runs_on_converse(model)
+    return LlmProviders.BEDROCK if runs_on_invoke else LlmProviders.BEDROCK_MANTLE
 
 
 def _runtime_rejected_claude_model(outcome: CountTokensOutcome, resolved_model: str) -> bool:
@@ -259,7 +265,8 @@ class BedrockTokenCounter(BaseTokenCounter):
         counted_model: Final = model_to_use.removeprefix("bedrock_mantle/")
         resolved_model: Final = get_bedrock_base_model(counted_model)
         primary_tokenizer: Final = MANTLE_TOKENIZER_TYPE if use_mantle else RUNTIME_TOKENIZER_TYPE
-        litellm_params: Final = (deployment or {}).get("litellm_params", {})
+        litellm_params: Final = _deployment_litellm_params(deployment)
+        route: Final = _deployment_route(litellm_params) if is_mantle_claude_model(resolved_model) else None
         translated: Final = (
             await anthropic_count_fields(
                 counted_model,
@@ -267,7 +274,7 @@ class BedrockTokenCounter(BaseTokenCounter):
                 system,
                 tools,
                 messages_format,
-                _claude_count_translator(litellm_params),
+                _claude_count_translator(route),
                 chat_params,
             )
             if is_mantle_claude_model(resolved_model)
@@ -280,7 +287,7 @@ class BedrockTokenCounter(BaseTokenCounter):
         claude_options: Final = (
             claude_count_options(
                 counted_model,
-                _claude_options_provider(litellm_params, use_mantle),
+                _claude_options_provider(route, use_mantle),
                 sent_messages,
                 sent_tools,
                 _options_converse_sends(request_options, deployment_inference_model(deployment)),
@@ -322,7 +329,7 @@ class BedrockTokenCounter(BaseTokenCounter):
             else await self._count_with(
                 self._runtime_handler.handle_count_tokens_request(
                     request_data=dict(runtime_request),
-                    litellm_params=litellm_params,
+                    litellm_params=dict(litellm_params),
                     resolved_model=resolved_model,
                     client=self._client,
                     input_type="invokeModel" if runtime_fields else None,
