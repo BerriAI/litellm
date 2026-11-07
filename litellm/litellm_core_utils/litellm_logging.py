@@ -3123,7 +3123,7 @@ class Logging(LiteLLMLoggingBaseClass):
         elif self.model_call_details.get("cache_hit") is True:
             self.model_call_details["response_cost"] = 0.0
             self._add_failed_attempts_spend(get_usage_object(completion_response=logging_result))
-        elif "response_cost" in hidden_params:
+        elif hidden_params.get("response_cost") is not None:
             self.model_call_details["response_cost"] = hidden_params["response_cost"]
             self._record_zero_cost_diagnostic(logging_result, hidden_params["response_cost"])
             self._add_failed_attempts_spend(get_usage_object(completion_response=logging_result))
@@ -3135,7 +3135,16 @@ class Logging(LiteLLMLoggingBaseClass):
             # Do not preserve 0 from failure_handler on intermediate router retries.
             pass
         else:
-            self.model_call_details["response_cost"] = self.response_cost_calculator(result=logging_result)
+            if "response_cost" in hidden_params:
+                warned = self.zero_cost_warned
+                self.zero_cost_warned = True
+                try:
+                    self.model_call_details["response_cost"] = self.response_cost_calculator(result=logging_result)
+                finally:
+                    self.model_call_details["zero_cost_diagnostic"] = None
+                    self.zero_cost_warned = warned
+            else:
+                self.model_call_details["response_cost"] = self.response_cost_calculator(result=logging_result)
             self._add_failed_attempts_spend(get_usage_object(completion_response=logging_result))
 
         if not build_logging_payload:
