@@ -48,6 +48,7 @@ const CONFIG_KEY_BY_ROUTER_TYPE: Record<string, keyof NonNullable<AutoRouterDepl
   quality: "quality_router_config",
   auto_router: "auto_router_config",
   adaptive: "adaptive_router_config",
+  cascade: "cascade_router_config",
 };
 
 const deploymentFor = (

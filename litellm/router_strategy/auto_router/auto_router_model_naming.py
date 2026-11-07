@@ -26,7 +26,7 @@ from litellm.router_strategy.complexity_router.config import (
 
 AUTO_ROUTER_MODEL_PREFIX: Final = "auto_router/"
 
-StrategyRouterKind: TypeAlias = Literal["semantic", "complexity", "adaptive", "quality", "switchyard"]
+StrategyRouterKind: TypeAlias = Literal["semantic", "complexity", "adaptive", "quality", "switchyard", "cascade"]
 
 StrategyRouterDependencyRole: TypeAlias = Literal[
     "tier", "default", "classifier", "embedding", "evaluation", "compactor"
@@ -54,6 +54,7 @@ STRATEGY_ROUTER_PARAM_FIELDS: Final[frozenset[str]] = frozenset(
         "adaptive_router_config",
         "quality_router_config",
         "quality_router_default_model",
+        "cascade_router_config",
     }
 )
 
@@ -67,6 +68,7 @@ _REQUIRED_FIELD_GROUPS: Final[Mapping[StrategyRouterKind, tuple[tuple[str, ...],
     "complexity": (("complexity_router_config", "complexity_router_default_model"),),
     "adaptive": (("adaptive_router_config",),),
     "quality": (("quality_router_config", "quality_router_default_model"),),
+    "cascade": (("cascade_router_config",),),
 }
 
 
@@ -88,6 +90,8 @@ def classify_strategy_router_model(model: str) -> StrategyRouterKind | None:
         return "adaptive"
     if remainder.startswith("quality_router"):
         return "quality"
+    if remainder.startswith("cascade_router"):
+        return "cascade"
     return "semantic"
 
 
@@ -154,6 +158,15 @@ def strategy_router_dependencies(
         )
     if kind == "adaptive":
         return _pool(_mapping(litellm_params.get("adaptive_router_config")).get("available_models"), "tier")
+    if kind == "cascade":
+        cascade: Final = _mapping(litellm_params.get("cascade_router_config"))
+        return tuple(
+            dict.fromkeys(
+                _named(cascade.get("cheap_model"), "tier")
+                + _named(cascade.get("strong_model"), "tier")
+                + _named(cascade.get("verifier_model"), "classifier")
+            )
+        )
     if kind == "quality":
         quality: Final = _mapping(litellm_params.get("quality_router_config"))
         return tuple(

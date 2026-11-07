@@ -221,6 +221,7 @@ class SpecializedRouterOptions:
     adaptive_router_default_model: str | None = None
     quality_router_config: Mapping[str, object] | None = None
     quality_router_default_model: str | None = None
+    cascade_router_config: Mapping[str, object] | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

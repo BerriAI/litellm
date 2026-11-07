@@ -181,11 +181,34 @@ describe("autoRouterRows", () => {
     expect(row.targets).toEqual(["gpt-4o"]);
   });
 
+  it("classifies a cascade router and lists its cheap, strong and verifier groups as targets", () => {
+    const row = toAutoRouterRow(
+      {
+        model_name: "support-cascade",
+        litellm_params: {
+          model: "auto_router/cascade_router/support",
+          cascade_router_config: { cheap_model: "small", strong_model: "strong", verifier_model: "judge" },
+        },
+        model_info: { id: "c-1" },
+      },
+      0,
+      ADMIN,
+      null,
+    );
+
+    expect(row.kind).toBe("cascade");
+    expect(row.typeLabel).toBe("Cascade");
+    expect(row.targets).toEqual(["small", "strong", "judge"]);
+    // escalations go to the strong group inside the config; there is no separate default model
+    expect(row.defaultModel).toBeNull();
+  });
+
   it("mirrors the backend prefix ordering, so a named strategy never reads as semantic", () => {
     const kindOf = (model: string) => autoRouterStrategy({ model }).kind;
     expect(kindOf("auto_router/complexity_router")).toBe("complexity");
     expect(kindOf("auto_router/adaptive_router")).toBe("adaptive");
     expect(kindOf("auto_router/quality_router")).toBe("quality");
+    expect(kindOf("auto_router/cascade_router")).toBe("cascade");
     expect(kindOf("auto_router/my-own-router")).toBe("semantic");
   });
 

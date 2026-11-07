@@ -680,6 +680,8 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     # quality-router params
     quality_router_config: dict | None = None
     quality_router_default_model: str | None = None
+    # cascade-router params
+    cascade_router_config: dict[str, object] | None = None  # mutable-ok: raw config, like its siblings
 
     # Vector Store Params
     vector_store_id: str | None = None

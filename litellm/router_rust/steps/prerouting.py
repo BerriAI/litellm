@@ -69,6 +69,7 @@ if TYPE_CHECKING:
     from litellm.router_python_host import PythonHost
     from litellm.router_rust.surface.registry import HostRegistry
     from litellm.router_strategy.auto_router.auto_router import PreRoutingHookResponse
+    from litellm.router_strategy.cascade_router.cascade_router import CascadeRouter
 
 # The live registry dicts: model_name -> the strategies registered under it, one per tag set.
 StrategyRegistry: TypeAlias = "dict[str, list[TaggedPreRoutingStrategy[Any]]]"
@@ -145,6 +146,11 @@ def _unregister(registry: StrategyRegistry, model_name: str, tags: tuple[str, ..
     return True
 
 
+def _cascade_legs(cascade_router: "CascadeRouter") -> tuple[str, ...]:
+    config: Final = cascade_router.config
+    return tuple(leg for leg in (config.cheap_model, config.strong_model, config.verifier_model) if leg is not None)
+
+
 def is_strategy_marker(deployment: Mapping[str, object]) -> bool:
     params: Final = deployment.get("litellm_params")
     if not isinstance(params, Mapping):
@@ -201,9 +207,13 @@ class PreRoutingStrategies:
     def switchyard(self) -> StrategyRegistry:
         return self._hosted._core_switchyard_routers  # pyright: ignore[reportPrivateUsage]  # see above
 
+    @property
+    def cascade(self) -> StrategyRegistry:
+        return self._hosted._core_cascade_routers  # pyright: ignore[reportPrivateUsage]  # see above
+
     def all(self) -> tuple[StrategyRegistry, ...]:
         """In the order ``_select_pre_routing_strategy`` searches them."""
-        return (self.switchyard, self.auto, self.complexity, self.adaptive, self.quality)
+        return (self.switchyard, self.auto, self.complexity, self.adaptive, self.quality, self.cascade)
 
     def any_registered(self) -> bool:
         return any(self.all())
@@ -211,15 +221,16 @@ class PreRoutingStrategies:
     # -- registry hooks (HostRegistry calls these) -----------------------------------------------
 
     def reset(self) -> None:
-        """``set_model_list`` drops the auto, complexity and quality routers (never the adaptive ones)."""
+        """``set_model_list`` drops the auto, complexity, quality and cascade routers (never the adaptive ones)."""
         self._hosted._core_quality_routers = {}  # pyright: ignore[reportPrivateUsage]  # see above
+        self._hosted._core_cascade_routers = {}  # pyright: ignore[reportPrivateUsage]  # see above
         self._hosted._core_complexity_routers = {}  # pyright: ignore[reportPrivateUsage]  # see above
         self._hosted._core_auto_routers = {}  # pyright: ignore[reportPrivateUsage]  # see above
         self._hosted._core_switchyard_routers = {}  # pyright: ignore[reportPrivateUsage]  # see above
 
     def register(self, deployment: Deployment) -> None:
-        """The end of ``_add_deployment``: an auto, complexity or quality marker registers its router
-        (adaptive ones wait for ``finalize``)."""
+        """The end of ``_add_deployment``: an auto, complexity, quality or cascade marker registers its
+        router (adaptive ones wait for ``finalize``)."""
         match classify_strategy_router_model(deployment.litellm_params.model):
             case "semantic":
                 self._init_auto_router(deployment)
@@ -229,6 +240,8 @@ class PreRoutingStrategies:
                 self._init_quality_router(deployment)
             case "switchyard":
                 self._init_switchyard_router(deployment)
+            case "cascade":
+                self._init_cascade_router(deployment)
             case _:
                 pass
 
@@ -238,7 +251,7 @@ class PreRoutingStrategies:
             return
         model_name: Final = deployment.model_name
         tags: Final = _deployment_tags(deployment)
-        for registry in (self.auto, self.complexity, self.quality, self.switchyard):
+        for registry in (self.auto, self.complexity, self.quality, self.switchyard, self.cascade):
             _ = _unregister(registry, model_name, tags)
         if _unregister(self.adaptive, model_name, tags):
             self._sync_adaptive_router_hooks()
@@ -495,6 +508,91 @@ class PreRoutingStrategies:
 
         router: Final = SwitchyardRouter(deployment.model_name, config, build_algorithm(config), complete_judge, decide)
         self._register(self.switchyard, deployment, router, "Switchyard")
+
+    def _init_cascade_router(self, deployment: Deployment) -> None:
+        """A cascade marker: cheap group first, verify, escalate to the strong group. The marker never serves
+        traffic itself; the hook routes to the cheap group and the attempt judges the answer (``steps/cascade``)."""
+        from litellm.router_strategy.cascade_router.cascade_router import CascadeRouter
+
+        config: Final = deployment.litellm_params.cascade_router_config
+        if not config:
+            raise ValueError(
+                "cascade_router_config is required for cascade-router deployments "
+                "(cheap_model and strong_model at minimum). Please configure it in the litellm_params"
+            )
+        router: Final = CascadeRouter(
+            model_name=deployment.model_name,
+            ctx=self._ctx,  # pyright: ignore[reportArgumentType]  # the core's RoutingContext
+            cascade_router_config=config,
+        )
+        self._reject_nested_cascade(deployment, router)
+        self._register(self.cascade, deployment, router, "Cascade-router")
+
+    def _reject_nested_cascade(self, deployment: Deployment, cascade_router: "CascadeRouter") -> None:
+        """Cascades do not nest: a cascade's legs run on the request's own logging object and settle their usage,
+        spend and reservation against their deployments as one request; an inner cascade would share that object
+        and its bookkeeping with the outer one (a failed inner escalation would discard the outer's parked log).
+        Rejected at registration, in both directions and through ``model_group_alias`` and team public names, as
+        far as the configuration registered so far shows; the attempt refuses at request time what registration
+        could not see (an alias added at runtime)."""
+        from litellm.router_strategy.cascade_router.cascade_router import CascadeRouter
+
+        model_name: Final = deployment.model_name
+        new_names: Final = self._cascade_marker_names(model_name, deployment.model_info.team_public_model_name)
+        for leg in _cascade_legs(cascade_router):
+            inner = self._cascade_leg_targets(leg) & frozenset(self.cascade)
+            if inner:
+                raise ValueError(
+                    f"cascade_router_config: {model_name!r} uses another cascade ({', '.join(sorted(inner))}) as a "
+                    "model group; cascades do not nest"
+                )
+        for outer_name, tagged in self.cascade.items():
+            for registered in tagged:
+                strategy: object = registered.strategy
+                if not isinstance(strategy, CascadeRouter):
+                    continue
+                for leg in _cascade_legs(strategy):
+                    if self._cascade_leg_targets(leg) & new_names:
+                        raise ValueError(
+                            f"cascade_router_config: {outer_name!r} uses the cascade {model_name!r} as a model group; "
+                            "cascades do not nest"
+                        )
+
+    def _registered_team_public_names(self) -> tuple[tuple[str, str], ...]:
+        """(model_name, team_public_model_name) for every registered deployment that has a team public name."""
+        pairs: Final[list[tuple[str, str]]] = []  # mutable-ok: collected below
+        for entry in self._hosted._core_model_list or []:  # pyright: ignore[reportPrivateUsage]  # the host registry's live list
+            if not isinstance(entry, Mapping):
+                continue
+            model_info: object = entry.get("model_info")
+            public: object = model_info.get("team_public_model_name") if isinstance(model_info, Mapping) else None
+            if isinstance(public, str):
+                pairs.append((str(entry.get("model_name")), public))
+        return tuple(pairs)
+
+    def _cascade_leg_targets(self, leg: str) -> frozenset[str]:
+        """The registered model names a config leg can reach: itself, its ``model_group_alias`` target, and the
+        deployments for which it is the team's public model name."""
+        alias_target: Final = self._hosted._core_get_model_from_alias(leg)  # pyright: ignore[reportPrivateUsage]  # the host registry's alias lookup
+        team_targets: Final = frozenset(name for name, public in self._registered_team_public_names() if public == leg)
+        return frozenset({leg, *([alias_target] if alias_target else ())}) | team_targets
+
+    def _cascade_marker_names(self, model_name: str, own_team_public_name: object) -> frozenset[str]:
+        """Every name under which a marker can be reached: its own, the aliases that resolve to it, and its team
+        public name (the marker being registered is not in the model list yet, so its own is passed in)."""
+        hosted: Final = self._hosted
+        aliases: Final = frozenset(
+            alias
+            for alias in (hosted._core_model_group_alias or {})  # pyright: ignore[reportPrivateUsage]  # the host registry's alias map
+            if hosted._core_get_model_from_alias(alias) == model_name  # pyright: ignore[reportPrivateUsage]  # see above
+        )
+        team_names: Final = frozenset(
+            public for name, public in self._registered_team_public_names() if name == model_name
+        )
+        own: Final[frozenset[str]] = (
+            frozenset([own_team_public_name]) if isinstance(own_team_public_name, str) else frozenset()
+        )
+        return frozenset({model_name}) | aliases | team_names | own
 
     def _init_adaptive_router(self, deployment: Deployment) -> None:
         from litellm.router_strategy.adaptive_router.adaptive_router import AdaptiveRouter

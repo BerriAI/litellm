@@ -295,6 +295,7 @@ class DeprecatedRouterMembers:
     complexity_routers = _attr("registry().plugins('complexity')", lambda r: r.registry().plugins("complexity"))
     quality_routers = _attr("registry().plugins('quality')", lambda r: r.registry().plugins("quality"))
     adaptive_routers = _attr("registry().plugins('adaptive')", lambda r: r.registry().plugins("adaptive"))
+    cascade_routers = _attr("registry().plugins('cascade')", lambda r: r.registry().plugins("cascade"))
     routing_plugins = _attr("registry().plugins('routing')", lambda r: r.registry().plugins("routing"))
     prompt_caching_pin_cache = _attr(
         "registry().plugins('prompt_caching_pins')", lambda r: r.registry().plugins("prompt_caching_pins")
