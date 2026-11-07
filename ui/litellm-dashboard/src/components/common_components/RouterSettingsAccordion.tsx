@@ -55,7 +55,8 @@ const EMPTY_RELIABILITY_SETTINGS = {
 
 const valueKeyOf = (settings: RouterSettingsAccordionValue["router_settings"]): string => {
   const { routing_strategy, fallbacks, enable_tag_filtering, weights } = settings;
-  return JSON.stringify({ routing_strategy, fallbacks, enable_tag_filtering, weights });
+  const identity = { routing_strategy, fallbacks, enable_tag_filtering, weights };
+  return JSON.stringify(identity);
 };
 
 const RouterSettingsAccordion = forwardRef<RouterSettingsAccordionRef, RouterSettingsAccordionProps>(
