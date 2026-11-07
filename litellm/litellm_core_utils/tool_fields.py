@@ -338,6 +338,30 @@ def _cleared_tool_selection_params(kept_tools: Sequence[object], functions: obje
     return frozenset({"tools"}) if functions else _TOOL_SELECTION_PARAMS
 
 
+def _allowed_tool_entries(tool_choice: Mapping[str, object]) -> Sequence[object]:
+    if tool_choice.get("type") != "allowed_tools":
+        return ()
+    entries: Final = (as_str_mapping(tool_choice.get("allowed_tools")) or tool_choice).get("tools")
+    return _TOOLS.validate_python(entries) if isinstance(entries, list) else ()
+
+
+def _allowed_tools_choice(tool_choice: Mapping[str, object], entries: Sequence[object]) -> Mapping[str, object]:
+    nested: Final = as_str_mapping(tool_choice.get("allowed_tools"))
+    if nested is None:
+        return {**tool_choice, "tools": list(entries)}
+    return {**tool_choice, "allowed_tools": {**nested, "tools": list(entries)}}
+
+
+def _tool_params_narrowed_to_allowed_tools(
+    params: _ParamsT, kept_tools: Sequence[object], tool_choice: Mapping[str, object], allowed: Sequence[object]
+) -> _ParamsT:
+    if not allowed or not kept_tools:
+        return type(params)({key: value for key, value in params.items() if key not in _TOOL_SELECTION_PARAMS})
+    return type(params)(
+        {**params, "tools": list(kept_tools), "tool_choice": _allowed_tools_choice(tool_choice, allowed)}
+    )
+
+
 def tool_params_without_hosted_mcp(
     params: _ParamsT,
     model: str,
@@ -359,6 +383,11 @@ def tool_params_without_hosted_mcp(
     )
     if len(kept_tools) == len(sent_tools):
         return params
+    tool_choice: Final = as_str_mapping(params.get("tool_choice")) or {}
+    allowed_entries: Final = _allowed_tool_entries(tool_choice)
+    still_allowed: Final = tuple(entry for entry in allowed_entries if _hosted_mcp_server_label(entry) is None)
+    if len(still_allowed) < len(allowed_entries):
+        return _tool_params_narrowed_to_allowed_tools(params, kept_tools, tool_choice, still_allowed)
     functions: Final = params.get("functions")
     cleared: Final = _cleared_tool_selection_params(kept_tools, functions)
     removed: Final = (

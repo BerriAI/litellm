@@ -37,7 +37,6 @@ from litellm.litellm_core_utils.cloud_storage_security import (
     split_configured_cloud_bucket_name,
     validate_managed_cloud_file_id,
 )
-from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     extract_file_data,
     text_completion_prompt_to_messages,
@@ -45,7 +44,10 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 from litellm.litellm_core_utils.tool_fields import HOSTED_MCP_BATCH_ROW_REMEDY, tool_params_without_hosted_mcp
 from litellm.llms.base_llm.base_utils import map_developer_role_to_system_role
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
-from litellm.llms.base_llm.files.batch_records import responses_batch_body_to_chat_body
+from litellm.llms.base_llm.files.batch_records import (
+    responses_batch_body_to_chat_body,
+    row_or_deployment_drop_params,
+)
 from litellm.llms.base_llm.files.transformation import (
     BaseFilesConfig,
     LiteLLMLoggingObj,
@@ -993,7 +995,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
 
         messages: Final = map_developer_role_to_system_role(openai_request_body.get("messages", []))
         optional_params: Final = {k: v for k, v in openai_request_body.items() if k not in ["model", "messages"]}
-        drop_params: Final = drops_unsupported_params(openai_request_body.get("drop_params", deployment_drop_params))
+        drop_params: Final = row_or_deployment_drop_params(openai_request_body, deployment_drop_params)
 
         # --- Anthropic: use existing AmazonAnthropicClaudeConfig ---
         if provider == LlmProviders.ANTHROPIC:
@@ -1147,7 +1149,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
                     openai_request_body=self._transform_batch_body_to_chat_body(
                         openai_body,
                         record_kind,
-                        drops_unsupported_params(openai_body.get("drop_params", deployment_drop_params)),
+                        row_or_deployment_drop_params(openai_body, deployment_drop_params),
                     ),
                     model=model_for_transform,
                     provider=provider,

@@ -363,3 +363,67 @@ def test_a_drop_warning_stays_on_one_log_line(drop: Callable[[str], object]) -> 
     assert len(records.messages) == 1
     assert "\n" not in records.messages[0] and "\r" not in records.messages[0]
     assert "FORGED level=CRITICAL" in records.messages[0]
+
+
+_ALLOWED_DEEPWIKI: Final = {"type": "mcp", "server_label": "deepwiki"}
+_ALLOWED_WEATHER: Final = {
+    "responses": {"type": "function", "name": "get_weather"},
+    "chat": {"type": "function", "function": {"name": "get_weather"}},
+}
+
+
+def _allowed_tools_choice(layout: str, entries: list[Mapping[str, object]]) -> Mapping[str, object]:
+    if layout == "responses":
+        return {"type": "allowed_tools", "mode": "required", "tools": entries}
+    return {"type": "allowed_tools", "allowed_tools": {"mode": "required", "tools": entries}}
+
+
+@pytest.mark.parametrize("layout", ["responses", "chat"])
+def test_dropping_a_hosted_mcp_tool_removes_it_from_an_allowed_tools_choice(layout: str) -> None:
+    weather: Final = _ALLOWED_WEATHER[layout]
+    params: Final = tool_params_without_hosted_mcp(
+        {
+            "tools": [_HOSTED_MCP_TOOL, _GOOD_TOOL],
+            "tool_choice": _allowed_tools_choice(layout, [_ALLOWED_DEEPWIKI, weather]),
+            "parallel_tool_calls": False,
+        },
+        model="deepseek-v4-flash",
+        route="deepseek",
+        drop_params=True,
+    )
+
+    assert params == {
+        "tools": [_GOOD_TOOL],
+        "tool_choice": _allowed_tools_choice(layout, [weather]),
+        "parallel_tool_calls": False,
+    }
+
+
+@pytest.mark.parametrize("layout", ["responses", "chat"])
+def test_an_allowed_tools_choice_naming_only_dropped_mcp_tools_leaves_the_model_no_tool_to_call(layout: str) -> None:
+    params: Final = tool_params_without_hosted_mcp(
+        {
+            "tools": [_HOSTED_MCP_TOOL, _GOOD_TOOL],
+            "tool_choice": _allowed_tools_choice(layout, [_ALLOWED_DEEPWIKI]),
+            "parallel_tool_calls": False,
+            "temperature": 0.2,
+        },
+        model="deepseek-v4-flash",
+        route="deepseek",
+        drop_params=True,
+    )
+
+    assert params == {"temperature": 0.2}
+
+
+@pytest.mark.parametrize("layout", ["responses", "chat"])
+def test_an_allowed_tools_choice_without_mcp_entries_survives_a_dropped_mcp_tool(layout: str) -> None:
+    tool_choice: Final = _allowed_tools_choice(layout, [_ALLOWED_WEATHER[layout]])
+    params: Final = tool_params_without_hosted_mcp(
+        {"tools": [_HOSTED_MCP_TOOL, _GOOD_TOOL], "tool_choice": tool_choice},
+        model="deepseek-v4-flash",
+        route="deepseek",
+        drop_params=True,
+    )
+
+    assert params == {"tools": [_GOOD_TOOL], "tool_choice": tool_choice}

@@ -4565,3 +4565,40 @@ def test_batch_responses_row_drops_a_tool_choice_that_forces_the_dropped_hosted_
     assert "toolChoice" not in model_input
     assert "tool_choice" not in model_input
     assert "drop_params" not in model_input
+
+
+@pytest.mark.parametrize("model", (*_BATCH_MODELS, _PASSTHROUGH_BATCH_MODEL))
+@pytest.mark.parametrize(
+    ("url", "body"),
+    [
+        (
+            "/v1/chat/completions",
+            {
+                "messages": [{"role": "user", "content": "hi"}],
+                "max_tokens": 10,
+                "tools": [_HOSTED_MCP_TOOL, _WEATHER_TOOL],
+                "tool_choice": {"type": "function", "function": {"name": "deepwiki"}},
+            },
+        ),
+        (
+            "/v1/responses",
+            {
+                "input": "hi",
+                "max_output_tokens": 10,
+                "tools": [_HOSTED_MCP_TOOL, _RESPONSES_WEATHER_TOOL],
+                "tool_choice": {"type": "mcp", "server_label": "deepwiki"},
+            },
+        ),
+    ],
+    ids=["chat", "responses"],
+)
+def test_batch_row_with_a_null_drop_params_takes_its_deployments_drop_params(
+    monkeypatch: pytest.MonkeyPatch, model: str, url: str, body: Mapping[str, object]
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    model_input: Final = json.dumps(_uploaded_row(model, url, {"model": model, **body, "drop_params": None}, True))
+
+    assert "get_weather" in model_input
+    assert "deepwiki" not in model_input
+    assert "drop_params" not in model_input
