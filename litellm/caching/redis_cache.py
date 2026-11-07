@@ -444,17 +444,19 @@ def _enter_circuit_breaker(health: RedisHealth | None, name: str) -> _BreakerAdm
 
 
 @functools.lru_cache(maxsize=1)
-def _redis_reply_error_types() -> tuple[type, ...]:
-    from redis.exceptions import ResponseError
+def _redis_reply_error_types() -> tuple[type[Exception], type[Exception]]:
+    from redis.exceptions import ReadOnlyError, ResponseError
 
-    return (ResponseError,)
+    return ResponseError, ReadOnlyError
 
 
 def _is_redis_reply(exc: BaseException) -> bool:
+    """A reply that proves Redis answers. A replica refusing a write is the old primary mid-failover, so it does not."""
     try:
-        return isinstance(exc, _redis_reply_error_types())
+        reply, failover = _redis_reply_error_types()
     except ImportError:
         return False
+    return isinstance(exc, reply) and not isinstance(exc, failover)
 
 
 def _fail_circuit_breaker(health: RedisHealth | None, admission: _BreakerAdmission | None, exc: BaseException) -> None:
@@ -617,6 +619,8 @@ class RedisCache(BaseCache):
             if breaker_config is None
             else RedisHealth(NativeRedisBreaker.shared(store_kwargs, breaker_config), self.service_logger_obj)
         )
+        if self._health is not None:
+            self._health.service_logger.redis_breaker_hook(transitions_to=None, failure_class=None)
 
         self._setup_health_pings()
 

@@ -2,6 +2,7 @@ import asyncio
 import gc
 import time
 import types
+import uuid
 from collections.abc import Callable, Iterator
 from datetime import timedelta
 from typing import Final, cast
@@ -886,6 +887,49 @@ async def test_a_recovery_probe_redis_rejects_still_closes_the_breaker():
         await _run_under_circuit_breaker(health, "op", lambda: failing(ResponseError("WRONGTYPE")))
 
     assert health.breaker.state == "closed"
+
+
+@pytest.mark.asyncio
+async def test_a_replica_refusing_a_write_does_not_reset_a_run_of_failures():
+    """During a failover the old primary answers writes with READONLY between connection failures.
+
+    Counting that reply as a success reset the streak, so the breaker never opened and every
+    other call kept waiting out its socket timeout.
+    """
+    from redis.exceptions import ConnectionError as RedisConnectionError
+    from redis.exceptions import ReadOnlyError
+
+    from litellm.caching.redis_cache import _run_under_circuit_breaker
+
+    health = _health()
+
+    async def failing(error: Exception) -> None:
+        raise error
+
+    for _ in range(_THRESHOLD - 1):
+        with pytest.raises(RedisConnectionError):
+            await _run_under_circuit_breaker(health, "op", lambda: failing(RedisConnectionError("refused")))
+    with pytest.raises(ReadOnlyError):
+        await _run_under_circuit_breaker(health, "op", lambda: failing(ReadOnlyError("READONLY")))
+    with pytest.raises(RedisConnectionError):
+        await _run_under_circuit_breaker(health, "op", lambda: failing(RedisConnectionError("refused")))
+
+    assert health.breaker.state == "open"
+
+
+def test_a_new_redis_cache_shows_its_breaker_in_the_state_gauge(monkeypatch: pytest.MonkeyPatch):
+    from prometheus_client import REGISTRY
+
+    from litellm.caching.redis_cache import redis_breaker_state_counts
+
+    monkeypatch.setattr(litellm, "service_callback", ["prometheus_system"])
+
+    cache = RedisCache(host=f"gauge-{uuid.uuid4().hex}.invalid", port=6379)
+
+    assert cache.store_settings.breaker is not None
+    assert REGISTRY.get_sample_value("litellm_redis_circuit_breaker_state", {"state": "closed"}) == (
+        redis_breaker_state_counts().get("closed", 0)
+    )
 
 
 @pytest.mark.asyncio

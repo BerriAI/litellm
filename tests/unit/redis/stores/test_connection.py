@@ -1,11 +1,16 @@
 import gc
+import logging
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from typing import Final
+
+import pytest
 
 from litellm.caching.redis_cache import RedisCache
 from litellm.redis.store_settings import RedisBreakerSettings, RedisStoreSettings
-from litellm.redis.stores.connection import connect
+from litellm.redis.stores.connection import RedisStores, connect
+from litellm.redis.stores.sensitive_route_pins import SensitiveRoutePinStore
 from litellm.rust_bridge._native import NativeRedisBreaker, NativeRedisClient, native_redis_breaker_states
 
 _BREAKER: Final = RedisBreakerSettings(failure_threshold=5, recovery_timeout=60.0, timeout_min_duration=5.0)
@@ -89,3 +94,33 @@ def test_a_redis_cache_stand_in_that_skips_the_constructor_connects_nothing() ->
 
 def test_no_redis_cache_connects_nothing() -> None:
     assert connect(None).client is None
+
+
+def test_caches_on_one_server_share_a_breaker_whatever_their_db_or_url() -> None:
+    host: Final = f"one-server-{uuid.uuid4()}.invalid"
+    by_host: Final = NativeRedisBreaker.shared({"host": host, "port": 6379, "db": 0}, _BREAKER)
+    by_url: Final = NativeRedisBreaker.shared({"url": f"redis://:pw@{host.upper()}:6379/1"}, _BREAKER)
+    other_port: Final = NativeRedisBreaker.shared({"host": host, "port": 6380}, _BREAKER)
+
+    for _ in range(_BREAKER.failure_threshold):
+        by_host.failed(False)
+
+    assert (by_url.state, other_port.state) == ("open", "closed")
+
+
+@pytest.mark.asyncio
+async def test_a_client_admits_through_the_breaker_it_was_given(caplog: pytest.LogCaptureFixture) -> None:
+    settings: Final = _settings(f"own-breaker-{uuid.uuid4()}")
+    unguarded: Final = NativeRedisClient.connect(settings)
+    tripped: Final = NativeRedisBreaker(
+        RedisBreakerSettings(failure_threshold=1, recovery_timeout=60.0, timeout_min_duration=5.0)
+    )
+    tripped.failed(False)
+    guarded: Final = NativeRedisClient.connect(replace(settings, breaker=tripped))
+    pins: Final = SensitiveRoutePinStore(RedisStores(guarded).sensitive_route_pins())
+
+    with caplog.at_level(logging.DEBUG, logger="LiteLLM"):
+        await pins.set("tenant", "session", "model", 60.0)
+
+    assert unguarded is not None
+    assert any("circuit breaker is open" in record.getMessage() for record in caplog.records)

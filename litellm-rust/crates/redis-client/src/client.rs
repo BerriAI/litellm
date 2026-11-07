@@ -6,7 +6,7 @@ use std::{
 
 use futures_util::stream::BoxStream;
 use litellm_circuit_breaker::{Admission, Breaker, Failure, State};
-use redis::{Cmd, ErrorKind, RedisError, Value};
+use redis::{Cmd, ErrorKind, RedisError, ServerErrorKind, Value};
 
 use crate::{
     CallEvent, Command, ConnectError, Error, FailureKind, Namespace, Operation, Outcome, Pipeline,
@@ -74,6 +74,15 @@ impl RedisClient {
 
     pub fn downgrade(&self) -> WeakRedisClient {
         WeakRedisClient(Arc::downgrade(&self.0))
+    }
+
+    /// Whether this client admits its calls through `breaker` itself.
+    pub fn guarded_by(&self, breaker: Option<&Breaker>) -> bool {
+        match (&self.0.breaker, breaker) {
+            (Some(own), Some(other)) => own.same(other),
+            (None, None) => true,
+            _ => false,
+        }
     }
 
     /// The breaker's current state, or none when the breaker is disabled.
@@ -297,9 +306,15 @@ fn settle(admission: Option<Admission>, error: Option<&Error>) {
             admission.failed(Failure::Timeout, Instant::now())
         }
         Some(Error::Transport(_)) => admission.failed(Failure::Hard, Instant::now()),
-        Some(Error::Server(error)) if error.kind() != ErrorKind::InvalidClientConfig => {
-            admission.succeeded()
-        }
+        Some(Error::Server(error)) if proves_redis_answers(error) => admission.succeeded(),
         Some(Error::Server(_) | Error::Decode(_) | Error::BreakerOpen) => drop(admission),
     }
+}
+
+// A replica refusing a write is the old primary mid-failover, which must not reset a run of failures
+fn proves_redis_answers(error: &RedisError) -> bool {
+    !matches!(
+        error.kind(),
+        ErrorKind::InvalidClientConfig | ErrorKind::Server(ServerErrorKind::ReadOnly)
+    )
 }

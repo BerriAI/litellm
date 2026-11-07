@@ -866,6 +866,41 @@ async fn a_probe_redis_rejects_still_proves_redis_answers_and_closes_the_breaker
 
 #[rstest]
 #[tokio::test]
+async fn a_replica_refusing_a_write_does_not_reset_a_run_of_failures() {
+    let server = RedisDeployment::start(Topology::Standalone).await.unwrap();
+    let breaker = breaker(2);
+    let client = connect_guarded(
+        &server,
+        "",
+        Duration::from_millis(300),
+        Some(breaker.clone()),
+    );
+    client.send(commands::get::<String>("k")).await.unwrap();
+    server.freeze().await.unwrap();
+    let _ = client.send(commands::get::<String>("k")).await;
+    server.thaw().await.unwrap();
+    server
+        .cli_on_every_node(&["REPLICAOF", "127.0.0.1", "1"])
+        .await
+        .unwrap();
+
+    let refused = client
+        .send(commands::set("k", "v", Duration::from_secs(60)))
+        .await;
+    server.freeze().await.unwrap();
+    let _ = client.send(commands::get::<String>("k")).await;
+    server.thaw().await.unwrap();
+
+    assert!(matches!(refused, Err(Error::Server(_))), "{refused:?}");
+    assert!(
+        matches!(breaker.state(), State::Open { .. }),
+        "{:?}",
+        breaker.state()
+    );
+}
+
+#[rstest]
+#[tokio::test]
 async fn an_open_breaker_fails_every_pipeline_op_without_sending(
     #[values(Topology::Standalone, Topology::Cluster)] topology: Topology,
 ) {

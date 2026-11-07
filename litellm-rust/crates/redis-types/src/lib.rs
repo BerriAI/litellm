@@ -2,6 +2,10 @@ use std::{path::PathBuf, time::Duration};
 
 use litellm_secret_value::SecretValue;
 
+mod endpoint;
+
+pub use endpoint::Endpoint;
+
 /// One Redis connection with every setting, environment value and secret already applied. Each
 /// client library builds its client from this one value, so they cannot read a setting differently.
 #[derive(Clone, Debug, PartialEq)]

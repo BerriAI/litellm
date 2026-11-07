@@ -5,11 +5,11 @@ use std::{
 
 use litellm_circuit_breaker::{Admission, Breaker, Config, Failure, WeakBreaker};
 use litellm_redis_client::RedisEvents;
-use litellm_redis_types::Target;
+use litellm_redis_types::Endpoint;
 use pyo3::{exceptions::PyValueError, prelude::*, sync::MutexExt};
 
 use crate::redis::{
-    client::{RedisSpec, resolved_target},
+    client::{RedisSpec, resolved_endpoint},
     events::{ServiceLoggingEvents, state_label},
 };
 
@@ -40,7 +40,7 @@ impl BreakerSettings {
 
 /// A breaker this process built, held weakly so the state gauge stops counting it once every cache and client on it is gone.
 struct Registered {
-    target: Option<Target>,
+    endpoint: Option<Endpoint>,
     breaker: WeakBreaker,
 }
 
@@ -77,34 +77,34 @@ impl NativeRedisBreaker {
     fn new(py: Python<'_>, settings: BreakerSettings) -> PyResult<Self> {
         let breaker = Self::build(py, &settings)?;
         live_breakers(py).push(Registered {
-            target: None,
+            endpoint: None,
             breaker: breaker.downgrade(),
         });
         Ok(Self(breaker))
     }
 
-    /// The breaker of the Redis `redis_kwargs` name, which every cache and client on that Redis shares whatever
-    /// its namespace. The first caller's settings win.
+    /// The breaker of the Redis server `redis_kwargs` names, which every cache and client on that server shares
+    /// whatever its db, credentials or namespace. The first caller's settings win.
     #[staticmethod]
     fn shared(
         py: Python<'_>,
         redis_kwargs: RedisSpec,
         settings: BreakerSettings,
     ) -> PyResult<Self> {
-        let Some(target) = resolved_target(py, &redis_kwargs)? else {
+        let Some(endpoint) = resolved_endpoint(py, &redis_kwargs)? else {
             return Self::new(py, settings);
         };
         let candidate = Self::build(py, &settings)?;
         let mut breakers = live_breakers(py);
         if let Some(breaker) = breakers
             .iter()
-            .filter(|registered| registered.target.as_ref() == Some(&target))
+            .filter(|registered| registered.endpoint.as_ref() == Some(&endpoint))
             .find_map(|registered| registered.breaker.upgrade())
         {
             return Ok(Self(breaker));
         }
         breakers.push(Registered {
-            target: Some(target),
+            endpoint: Some(endpoint),
             breaker: candidate.downgrade(),
         });
         Ok(Self(candidate))

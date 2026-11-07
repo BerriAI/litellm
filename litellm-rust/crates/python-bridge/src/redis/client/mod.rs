@@ -13,7 +13,7 @@ use litellm_python_compat::number::{self, SecondsError};
 use litellm_redis_client::{RedisClient, RedisEvents, WeakRedisClient};
 use litellm_redis_connect::{CredentialSource, HostServices, SharedEnvironment};
 use litellm_redis_resolve::{Kwargs, PythonException};
-use litellm_redis_types::{ProviderHandle, Resolution, Target};
+use litellm_redis_types::{Endpoint, ProviderHandle, Resolution};
 use pyo3::{
     exceptions::{PyOverflowError, PyTypeError, PyValueError},
     prelude::*,
@@ -156,7 +156,8 @@ fn shared_client(
     if let Some(client) = clients
         .iter()
         .filter(|shared| shared.resolved == resolved)
-        .find_map(|shared| shared.client.upgrade())
+        .filter_map(|shared| shared.client.upgrade())
+        .find(|client| client.guarded_by(breaker.as_ref()))
     {
         return Ok(Some(client));
     }
@@ -214,11 +215,11 @@ impl NativeRedisClient {
     }
 }
 
-/// The Redis `spec` names, whatever its namespace, or none when the Rust client cannot reach it.
-pub(crate) fn resolved_target(py: Python<'_>, spec: &RedisSpec) -> PyResult<Option<Target>> {
+/// The Redis server `spec` names, whatever its db, credentials or namespace, or none when the Rust client cannot reach it.
+pub(crate) fn resolved_endpoint(py: Python<'_>, spec: &RedisSpec) -> PyResult<Option<Endpoint>> {
     Ok(resolve_spec(py, spec)?
         .ok()
-        .map(|resolution| resolution.target))
+        .and_then(|resolution| resolution.target.endpoint()))
 }
 
 // A live registry entry's client keeps its provider alive, so no live entry shares its address
