@@ -768,13 +768,29 @@ def _message_dropping_created_cache_controls_between(
 
 
 # Set by a caller whose message list is not the one that goes upstream -- today the
-# Responses API layer, whose `instructions` only becomes a system message further down.
-# Tells this hook to hand role-targeted points to the pass holding the final messages
-# rather than spending them on a list that is still missing some of their targets.
+# Responses API layer, whose `instructions` only becomes a system message further down
+# and whose tool calls and results only become messages there. Tells this hook to hand
+# role-targeted and end-relative points to the pass holding the final messages rather
+# than spending them on a list that is still missing some of their targets.
 CARRY_UNMATCHED_MESSAGE_POINTS: Final = "_litellm_carry_unmatched_cache_control_points"
 
 EXTERNAL_BREAKPOINTS_STAMP: Final = "_litellm_external_breakpoints"
 CUSTOM_LLM_PROVIDER_STAMP: Final = "_litellm_custom_llm_provider"
+
+
+def _message_point_ordinal(point: CacheControlMessageInjectionPoint) -> int | None:
+    index: Final = point.get("index")
+    if not isinstance(index, str):
+        return index
+    try:
+        return int(index)
+    except ValueError:
+        return None
+
+
+def _placed_on_the_final_message_list(point: CacheControlMessageInjectionPoint) -> bool:
+    ordinal: Final = _message_point_ordinal(point)
+    return point.get("index") is None or (ordinal is not None and ordinal < 0)
 
 
 def _accepts_cache_control(part: object) -> bool:
@@ -882,13 +898,17 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         # A provisional message list defers every role-targeted point to the pass holding
         # the final one: a role with no message here may have one there, and settling all
         # of them in one pass is what lets config order decide the shared breakpoint
-        # budget. An ordinal names a different message once a later layer builds its own
-        # list, so it is placed here or not at all.
+        # budget. A negative ordinal is deferred too, since the final list only grows at
+        # the front and its tail holds the tool calls and results missing here. A
+        # non-negative ordinal names a different message once a later layer prepends one,
+        # so it is placed here or not at all.
         carried_message_points: Final[Sequence[CacheControlMessageInjectionPoint]] = (
-            tuple(point for point in message_points if point.get("index") is None) if carry_unmatched else ()
+            tuple(point for point in message_points if _placed_on_the_final_message_list(point))
+            if carry_unmatched
+            else ()
         )
         applied_message_points: Final[Sequence[CacheControlMessageInjectionPoint]] = (
-            tuple(point for point in message_points if point.get("index") is not None)
+            tuple(point for point in message_points if not _placed_on_the_final_message_list(point))
             if carry_unmatched
             else tuple(message_points)
         )
@@ -1143,15 +1163,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         point: CacheControlMessageInjectionPoint, messages: list[AllMessageValues]
     ) -> list[int]:
         """Resolve which message indices an injection point targets."""
-        _targetted_index: Final[int | str | None] = point.get("index", None)
-        targetted_index: int | None = None
-        if isinstance(_targetted_index, str):
-            try:
-                targetted_index = int(_targetted_index)
-            except ValueError:
-                pass
-        else:
-            targetted_index = _targetted_index
+        targetted_index: int | None = _message_point_ordinal(point)
 
         # Case 1: Target by specific index
         if targetted_index is not None:

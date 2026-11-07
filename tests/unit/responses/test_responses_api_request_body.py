@@ -1159,6 +1159,44 @@ async def test_out_of_bounds_positional_points_are_not_revived_by_a_longer_list(
     assert "cache_control" not in json.dumps(body["messages"])
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("index", [-1, "-1"], ids=["int", "str"])
+async def test_end_relative_points_mark_the_tool_results_that_follow_the_last_message(index):
+    mock_post = AsyncMock(return_value=MockResponse(_ANTHROPIC_MESSAGES_PAYLOAD, 200))
+    body = await _bridged_body(
+        mock_post,
+        points=[{"location": "message", "index": index}],
+        input=[
+            {"role": "user", "content": [{"type": "input_text", "text": "Read a.txt and b.txt."}]},
+            {"type": "function_call", "call_id": "call_a", "name": "read_file", "arguments": '{"path": "a.txt"}'},
+            {"type": "function_call", "call_id": "call_b", "name": "read_file", "arguments": '{"path": "b.txt"}'},
+            {"type": "function_call_output", "call_id": "call_a", "output": "contents of a"},
+            {"type": "function_call_output", "call_id": "call_b", "output": "contents of b"},
+        ],
+    )
+
+    marked_blocks = [
+        block.get("tool_use_id") or block.get("id") or block.get("text")
+        for message in body["messages"]
+        for block in message["content"]
+        if "cache_control" in json.dumps(block)
+    ]
+    assert marked_blocks == ["call_b"]
+
+
+@pytest.mark.asyncio
+async def test_a_non_numeric_index_marks_nothing_and_the_request_still_goes_out():
+    mock_post = AsyncMock(return_value=MockResponse(_ANTHROPIC_MESSAGES_PAYLOAD, 200))
+    body = await _bridged_body(
+        mock_post,
+        points=[{"location": "message", "index": "last"}],
+        input=[{"role": "user", "content": [{"type": "input_text", "text": "only item"}]}],
+    )
+
+    assert "cache_control" not in json.dumps(body["system"])
+    assert "cache_control" not in json.dumps(body["messages"])
+
+
 def _four_user_turns() -> list:
     return [
         item
