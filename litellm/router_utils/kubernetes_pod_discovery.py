@@ -41,7 +41,7 @@ _SyncLookup: TypeAlias = Future[list[_AddressInfo]]
 _AsyncLookup: TypeAlias = asyncio.Future[list[_AddressInfo]]
 _CacheKey: TypeAlias = tuple[str, int | None]
 _PodSelection: TypeAlias = tuple[str, int, Literal["round_robin", "session_affinity", "session_affinity_retry"]]
-_DeploymentT: Final = TypeVar("_DeploymentT")
+_DeploymentT = TypeVar("_DeploymentT")
 
 
 @dataclass(frozen=True, slots=True)
@@ -564,9 +564,9 @@ class _HasPodDiscovery(Protocol):
     kubernetes_pod_discovery: KubernetesPodDiscovery
 
 
-_P: Final = ParamSpec("_P")
-_R: Final = TypeVar("_R")
-_S: Final = TypeVar("_S", bound=_HasPodDiscovery)
+_P = ParamSpec("_P")
+_R = TypeVar("_R")
+_S = TypeVar("_S", bound=_HasPodDiscovery)
 
 
 def _request_kwargs_from_call(

@@ -611,7 +611,7 @@ def estimate_image_tokens(
 
 
 _MEDIA_FILE_CHARS_PER_TOKEN: Final = 4
-_EmbeddingInputT: Final = TypeVar("_EmbeddingInputT")
+_EmbeddingInputT = TypeVar("_EmbeddingInputT")
 
 
 def _max_input_tokens(model: str) -> int | None:
@@ -766,7 +766,7 @@ class _PdfReader(Protocol):
 
 
 EXTRAPOLATION_SAMPLES: Final = 16
-T_ParamSpec: Final = ParamSpec("T_ParamSpec")
+T_ParamSpec = ParamSpec("T_ParamSpec")
 T_Retval = TypeVar("T_Retval")
 _COUNT_OFFLOAD_LIMITER: Final = anyio.lowlevel.RunVar[anyio.CapacityLimiter]("litellm_count_offload_limiter")
 _ANTHROPIC_TOOL_KEYS_MAPPED_BY_BRIDGE: Final = frozenset(

@@ -42,7 +42,7 @@ _FILE_SOURCE_FIELDS: Final = frozenset(("file_data", "file_id"))
 _ATTACHMENT_BLOCK_TYPES: Final = frozenset(_FILE_CHECKED_FIELDS)
 _OBJECT_MAPPING: Final[TypeAdapter[dict[str, object]]] = TypeAdapter(dict[str, object])
 
-_T: Final = TypeVar("_T")
+_T = TypeVar("_T")
 
 
 @dataclass(frozen=True, slots=True)

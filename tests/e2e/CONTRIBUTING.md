@@ -224,7 +224,7 @@ Mark live tests with `@pytest.mark.e2e` (on the class or the module). Pure cover
 
 Before you push
 
-1. Run `make lint-e2e-basedpyright` (or `make check` with your changes staged); the harness is fully typed and the gate allows zero basedpyright errors, enforced in CI on any PR touching `tests/e2e/**/*.py` or `tests/e2e_harness/**/*.py`
+1. Run `make lint-e2e-basedpyright` (or `make check` with your changes staged); the harness is fully typed and the gate allows zero basedpyright errors, enforced in CI on any PR touching `tests/e2e/**/*.py`, `tests/e2e_harness/**/*.py`, `litellm/**/*.py`, `litellm-proxy-extras/**/*.py`, `pyrightconfig.json`, `pyproject.toml`, or `uv.lock`
 
 2. Add the models your test needs to the config your local proxy loads
 

@@ -16,7 +16,7 @@ _TRACE_PAGE: Final = TypeAdapter(TracePage)
 _TRACE: Final[TypeAdapter[Trace | None]] = TypeAdapter(Trace | None)
 _SPAN_DETAIL: Final[TypeAdapter[SpanDetail | None]] = TypeAdapter(SpanDetail | None)
 _SPAN_ERROR_PAGE: Final[TypeAdapter[SpanErrorPage | None]] = TypeAdapter(SpanErrorPage | None)
-_ResponseT: Final = TypeVar("_ResponseT")
+_ResponseT = TypeVar("_ResponseT")
 
 
 def _decode_query_response(adapter: TypeAdapter[_ResponseT], body: str) -> _ResponseT:

@@ -80,7 +80,7 @@ _DECODED_ARGUMENTS: Final = TypeAdapter(object)
 _REQUEST_DATA: Final = TypeAdapter(object)
 _ToolTarget: TypeAlias = tuple[str | None, str | None]
 _JudgedCalls: TypeAlias = Mapping[str, tuple[tuple[str, str], ...]]
-_GroupedT: Final = TypeVar("_GroupedT")
+_GroupedT = TypeVar("_GroupedT")
 
 
 def _snake_case(name: str) -> str:

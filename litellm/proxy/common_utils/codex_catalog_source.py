@@ -50,7 +50,7 @@ class CodexStock:
     instructions: str
 
 
-_Value: Final = TypeVar("_Value")
+_Value = TypeVar("_Value")
 
 
 class CodexReleaseClient(Protocol):

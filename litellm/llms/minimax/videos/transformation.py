@@ -177,7 +177,7 @@ _CREATE_REQUEST_PARAMS: Final = frozenset({*_CREATE_BODY_KEYS, "content", "input
 
 _TASK_NOT_FOUND_MESSAGE: Final = "record not found"
 
-_ParsedT: Final = TypeVar("_ParsedT")
+_ParsedT = TypeVar("_ParsedT")
 
 
 def _minimax_error(status_code: int, message: str) -> MinimaxVideoError:

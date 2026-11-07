@@ -7,7 +7,7 @@ from litellm.types.llms.openai import AllMessageValues, ChatCompletionUserMessag
 from litellm.types.utils import ModelResponse
 from litellm.types.vector_stores import VectorStoreSearchResponse
 
-_ItemT: Final = TypeVar("_ItemT")
+_ItemT = TypeVar("_ItemT")
 
 
 class _ResultContentView(TypedDict):

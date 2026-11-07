@@ -54,8 +54,11 @@ LIT010  Variable assignment without a `Final` declaration. Every local and modul
         that namespace is the SDK's runtime-settable config surface (users follow
         the documented `litellm.api_key = ...` pattern and the proxy rebinds these
         via setattr), and the package ships py.typed, so a Final there turns every
-        documented downstream assignment into a mypy error. Suppress a deliberately
-        rebindable name with `# rebind-ok: <reason>` on each offending line.
+        documented downstream assignment into a mypy error. Type variables and type
+        aliases are the reverse: a `TypeVar`, `ParamSpec`, `TypeVarTuple`, or
+        `TypeAliasType` stays bare, and a Final one trips, since mypy reads it as a
+        plain variable instead of a type. Suppress a deliberately rebindable name
+        with `# rebind-ok: <reason>` on each offending line.
 LIT011  Function-argument mutation: a parameter that is re-bound (`param = ...`,
         `param += ...`, a `for`/`with`/unpacking/walrus target, `del param`, or a
         re-bind in a nested function under `nonlocal param`) or mutated in place
@@ -458,6 +461,7 @@ def iter_guard_violations(path: Path, tree: ast.AST) -> Iterator[Violation]:
 # --------------------------------------------------------------------------- #
 
 CONSTANT_DECLARATIONS = frozenset(("Final", "TypeAlias"))
+TYPE_VARIABLE_FACTORIES = frozenset(("TypeVar", "ParamSpec", "TypeVarTuple", "TypeAliasType"))
 CONFIG_SURFACE_PARTS = ("litellm", "__init__.py")
 SELF_PARAMS = frozenset(("self", "cls"))
 NESTED_SCOPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)
@@ -478,6 +482,14 @@ def _declares_constant(annotation: ast.expr) -> bool:
     if isinstance(root, ast.Name):
         return root.id in CONSTANT_DECLARATIONS
     return isinstance(root, ast.Attribute) and root.attr in CONSTANT_DECLARATIONS
+
+
+def _creates_type_variable(value: ast.expr | None) -> bool:
+    match value:
+        case ast.Call(func=ast.Name(id=name) | ast.Attribute(attr=name)):
+            return name in TYPE_VARIABLE_FACTORIES
+        case _:
+            return False
 
 
 def _defaults(args: ast.arguments) -> tuple[ast.expr, ...]:
@@ -561,6 +573,8 @@ def _bound_names(target: ast.expr) -> Iterator[tuple[str, int]]:
 
 def _node_bindings(node: ast.AST, in_loop: bool) -> Iterator[Binding]:
     match node:
+        case ast.Assign(targets=[ast.Name(id=name, lineno=line)], value=value) if _creates_type_variable(value):
+            yield Binding(name, line, "other", in_loop)
         case ast.Assign(targets=targets):
             for target in targets:
                 if isinstance(target, ast.Name):
@@ -671,6 +685,23 @@ def iter_final_violations(path: Path, tree: ast.AST) -> Iterator[Violation]:
                     f"walrus targets cannot carry Final, so their names are implicitly final; "
                     f"bind a fresh name instead, or suppress with `# rebind-ok: <reason>`",
                 )
+
+
+def iter_final_type_variable_violations(path: Path, tree: ast.AST) -> Iterator[Violation]:
+    for node in ast.walk(tree):
+        match node:
+            case ast.AnnAssign(target=ast.Name(id=name, lineno=line), annotation=annotation, value=value) if (
+                _declares_constant(annotation) and _creates_type_variable(value)
+            ):
+                yield Violation(
+                    path,
+                    line,
+                    "LIT010",
+                    f"`{name}` is a type variable or type alias declared Final: mypy then reads it as a plain "
+                    f"variable instead of a type, so remove the Final",
+                )
+            case _:
+                pass
 
 
 def _mutation_sites(scope: ast.AST) -> Iterator[tuple[str, int]]:
@@ -1144,6 +1175,7 @@ def check_file(path: Path) -> tuple[Violation, ...]:
                 *iter_cast_violations(path, tree),
                 *iter_guard_violations(path, tree),
                 *iter_final_violations(path, tree),
+                *iter_final_type_variable_violations(path, tree),
                 *iter_param_violations(path, tree),
                 *iter_typeddict_violations(path, tree),
                 *iter_pydantic_violations(path, tree),

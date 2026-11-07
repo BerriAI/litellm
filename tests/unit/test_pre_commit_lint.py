@@ -85,6 +85,10 @@ case "$*" in
         [ -n "${STUB_ARGS_DIR:-}" ] && echo "$*" >> "$STUB_ARGS_DIR/ruff_tests.args"
         [ "${STUB_FAIL:-}" = "tests-ruff" ] && exit 1
         ;;
+    "run --no-sync python tests/code_coverage_tests/check_router_constructor_stub.py")
+        [ -n "${STUB_ARGS_DIR:-}" ] && echo "$*" >> "$STUB_ARGS_DIR/router_stub.args"
+        [ "${STUB_FAIL:-}" = "router-stub" ] && exit 1
+        ;;
 esac
 exit 0
 """
@@ -421,10 +425,55 @@ def test_run_ends_with_a_summary_of_ran_and_skipped_blocks(tmp_path: Path) -> No
     assert "ran:     Python lint (make lint)" in proc.stdout
     assert "ran:     dashboard lint (prettier + eslint + lint budgets)" in proc.stdout
     assert "ran:     dashboard API-type sync (npm run gen:api)" in proc.stdout
-    assert "skipped: tests/e2e checks (basedpyright + raw HTTP client ban) (no tests/e2e Python files in scope)" in proc.stdout
+    assert "ran:     tests/e2e basedpyright" in proc.stdout
+    assert "skipped: tests/e2e raw HTTP client ban (no tests/e2e Python files in scope)" in proc.stdout
     assert TEST_TREE_SKIPPED in proc.stdout
     assert "check: PASS" in proc.stdout
     assert "check: FAIL" not in proc.stdout
+
+
+@pytest.mark.parametrize(
+    "type_input",
+    (
+        "tests/e2e_harness/collector.py",
+        "litellm-proxy-extras/litellm_proxy_extras/utils.py",
+        "pyrightconfig.json",
+        "pyproject.toml",
+        "uv.lock",
+    ),
+)
+def test_an_e2e_type_check_input_alone_runs_the_e2e_basedpyright_step(tmp_path: Path, type_input: str) -> None:
+    repo, bin_dir = _sandbox(tmp_path)
+    _commit_all(repo, "base")
+    args_dir = tmp_path / "args"
+    args_dir.mkdir()
+    _stage_file(repo, type_input, "x = 1\n")
+    proc = _run(repo, bin_dir, {"STUB_ARGS_DIR": str(args_dir)})
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "lint-e2e-basedpyright" in _recorded(args_dir, "make.args")
+    assert "ran:     tests/e2e basedpyright" in proc.stdout
+
+
+@pytest.mark.parametrize(
+    ("changed", "runs"), (("litellm/router.py", True), ("litellm/__init__.py", True), ("litellm/foo.py", False))
+)
+def test_the_router_stub_guard_runs_only_when_the_router_changes(tmp_path: Path, changed: str, runs: bool) -> None:
+    repo, bin_dir = _sandbox(tmp_path)
+    _commit_all(repo, "base")
+    args_dir = tmp_path / "args"
+    args_dir.mkdir()
+    _stage_file(repo, changed, "x = 3\n")
+    proc = _run(repo, bin_dir, {"STUB_ARGS_DIR": str(args_dir)})
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert (args_dir / "router_stub.args").exists() is runs
+
+
+def test_a_failing_router_stub_guard_fails_the_run(tmp_path: Path) -> None:
+    repo, bin_dir = _sandbox(tmp_path)
+    _commit_all(repo, "base")
+    _stage_file(repo, "litellm/router.py", "x = 3\n")
+    proc = _run(repo, bin_dir, {"STUB_FAIL": "router-stub"})
+    assert proc.returncode == 1
 
 
 @pytest.mark.parametrize(

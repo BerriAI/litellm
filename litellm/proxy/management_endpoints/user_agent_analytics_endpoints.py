@@ -139,7 +139,7 @@ _DISTINCT_TAG_ROWS: Final = TypeAdapter(list[_DistinctTagRow])
 _ACTIVE_USERS_ROWS: Final = TypeAdapter(list[_ActiveUsersRow])
 _TAG_SUMMARY_ROWS: Final = TypeAdapter(list[_TagSummaryRow])
 
-_RowT_co: Final = TypeVar("_RowT_co", covariant=True)
+_RowT_co = TypeVar("_RowT_co", covariant=True)
 
 if TYPE_CHECKING:
 
