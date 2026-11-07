@@ -2,22 +2,33 @@
 Tests for RAG proxy endpoints.
 """
 
+import base64
 import io
 import json
 from collections.abc import Iterator, Mapping, Sequence
+from dataclasses import dataclass
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 import respx
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 import litellm
 from litellm import Router
+from litellm.llms.custom_httpx.http_handler import HTTPResponseLimitError
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.proxy_server import app
+from litellm.proxy.rag_endpoints.upload_security import (
+    MAX_UPLOAD_SIZE_BYTES,
+    EicarTestMalwareScanner,
+    RagIngestControls,
+    ScanResult,
+    ScanVerdict,
+)
 from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
 from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
 
@@ -229,7 +240,9 @@ class TestRagIngestSSRFBlocked:
         error_text = detail.get("error", "") if isinstance(detail, dict) else str(detail)
         assert field in error_text, f"Error should name the offending field: {error_text}"
 
-    def test_clean_bedrock_ingest_options_not_rejected(self, client_internal_user):
+    def test_clean_bedrock_ingest_options_not_rejected(self, client_internal_user, monkeypatch):
+        fetch_url, _seen = _fetcher_answering(200, b"%PDF-1.7\n1 0 obj<<>>endobj\n", content_type="application/pdf")
+        monkeypatch.setattr("litellm.proxy.rag_endpoints.endpoints.fetch_file_url", fetch_url)
         with patch(
             "litellm.proxy.rag_endpoints.endpoints.litellm.aingest",
             new_callable=AsyncMock,
@@ -486,7 +499,12 @@ def test_rag_ingest_uses_the_forwarded_provider_key_over_team_provider_credentia
 
 
 @pytest.mark.parametrize("ingest_request", [_ingest_form, _ingest_json])
-def test_rag_ingest_drop_params_drops_a_forwarded_key_that_cannot_be_an_http_header(client_team_a, ingest_request):
+def test_rag_ingest_drop_params_drops_a_forwarded_key_that_cannot_be_an_http_header(
+    client_team_a, ingest_request, monkeypatch
+):
+    monkeypatch.setattr(
+        "litellm.proxy.rag_endpoints.endpoints.fetch_file_url", _fetcher_answering(200, b"test content")[0]
+    )
     aingest_patch, registry_patch = _patched_ingest_boundary(
         None,
         {"status": "completed", "vector_store_id": "vs_new", "file_id": "file_123"},
@@ -512,7 +530,12 @@ def test_rag_ingest_drop_params_drops_a_forwarded_key_that_cannot_be_an_http_hea
 
 
 @pytest.mark.parametrize("unread_request_field", ["not json", json.dumps({"drop_params": False})])
-def test_rag_ingest_json_body_ignores_a_request_field_it_does_not_read(client_team_a, unread_request_field):
+def test_rag_ingest_json_body_ignores_a_request_field_it_does_not_read(
+    client_team_a, unread_request_field, monkeypatch
+):
+    monkeypatch.setattr(
+        "litellm.proxy.rag_endpoints.endpoints.fetch_file_url", _fetcher_answering(200, b"test content")[0]
+    )
     aingest_patch, registry_patch = _patched_ingest_boundary(
         None,
         {"status": "completed", "vector_store_id": "vs_new", "file_id": "file_123"},
@@ -1764,6 +1787,156 @@ def _multipart_ingest_request(*, filename: str, content: bytes, content_type: st
     return Request(scope, receive)
 
 
+async def _never_fetch(url: str):
+    raise AssertionError(f"no fetch expected, got {url}")
+
+
+@dataclass(frozen=True)
+class _FixedScanner:
+    verdict: ScanVerdict
+
+    def scan(self, content: bytes) -> ScanResult:
+        return ScanResult(verdict=self.verdict, signature="Custom.Sig")
+
+
+def _fetcher_answering(status_code: int, content: bytes, content_type: str = "text/plain"):
+    seen: list[str] = []
+
+    async def fetch_url(url: str) -> httpx.Response:
+        seen.append(url)
+        return httpx.Response(status_code, content=content, headers={"content-type": content_type})
+
+    return fetch_url, seen
+
+
+FILE_URL_BODY = {
+    "file_url": "https://docs.example.com/reports/q3.txt",
+    "ingest_options": json.loads(INGEST_REQUEST)["ingest_options"],
+}
+
+
+class TestFileUrlUploadControls:
+    """A ``file_url`` is fetched by the proxy and goes through the same controls as an inline upload."""
+
+    async def _fetch(self, fetch_url, scanner=None):
+        from litellm.proxy.rag_endpoints.endpoints import fetch_and_secure_file_url
+
+        return await fetch_and_secure_file_url(
+            FILE_URL_BODY["file_url"],
+            scanner=scanner or EicarTestMalwareScanner(),
+            fetch_url=fetch_url,
+        )
+
+    async def _expect_rejection(self, fetch_url, reason: str | None, scanner=None) -> dict:
+        with pytest.raises(HTTPException) as excinfo:
+            await self._fetch(fetch_url, scanner=scanner)
+        assert excinfo.value.status_code == 400
+        detail = excinfo.value.detail
+        assert detail.get("reason") == reason, detail
+        return detail
+
+    async def test_eicar_behind_a_url_is_blocked(self):
+        fetch_url, seen = _fetcher_answering(200, EICAR.encode())
+        await self._expect_rejection(fetch_url, "malware_detected")
+        assert seen == [FILE_URL_BODY["file_url"]]
+
+    async def test_shebang_behind_a_url_is_blocked(self):
+        fetch_url, _seen = _fetcher_answering(200, b"#!/bin/sh\nrm -rf /\n")
+        await self._expect_rejection(fetch_url, "executable_not_allowed")
+
+    async def test_oversize_url_is_blocked_before_it_is_buffered(self):
+        async def fetch_url(url: str) -> httpx.Response:
+            raise HTTPResponseLimitError(f"Response exceeded {MAX_UPLOAD_SIZE_BYTES} bytes")
+
+        detail = await self._expect_rejection(fetch_url, "file_too_large")
+        assert str(MAX_UPLOAD_SIZE_BYTES) in detail["error"]
+
+    @pytest.mark.parametrize("status_code", [301, 403, 404, 500])
+    async def test_non_2xx_fetch_is_a_client_error_naming_the_status(self, status_code):
+        fetch_url, _seen = _fetcher_answering(status_code, b"benign document text")
+        detail = await self._expect_rejection(fetch_url, None)
+        assert f"HTTP {status_code}" in detail["error"]
+
+    async def test_ssrf_or_transport_failure_is_a_client_error(self):
+        async def fetch_url(url: str) -> httpx.Response:
+            raise ValueError("Blocked private address")
+
+        detail = await self._expect_rejection(fetch_url, None)
+        assert "Blocked private address" in detail["error"]
+
+    async def test_clean_text_behind_a_url_is_handed_on_as_bytes(self):
+        fetch_url, _seen = _fetcher_answering(200, b"benign document text\n", content_type="text/x-whatever")
+        server_filename, content_bytes, content_type = await self._fetch(fetch_url)
+        assert content_bytes == b"benign document text\n"
+        assert server_filename.endswith(".txt") and "/" not in server_filename
+        assert content_type == "text/plain"
+
+    async def test_url_bytes_go_through_the_injected_scanner(self):
+        fetch_url, _seen = _fetcher_answering(200, b"benign document text\n")
+        await self._expect_rejection(fetch_url, "malware_detected", scanner=_FixedScanner(ScanVerdict.INFECTED))
+
+    def test_route_prefers_an_inline_file_and_never_fetches_the_url(self, client_internal_user, monkeypatch):
+        monkeypatch.setattr("litellm.proxy.rag_endpoints.endpoints.fetch_file_url", _never_fetch)
+        inline = {"filename": "inline.txt", "content": base64.b64encode(b"inline text").decode()}
+        with (
+            patch(  # test-quality-ok: aingest is the endpoint's downstream boundary; the test asserts the forwarded bytes
+                "litellm.proxy.rag_endpoints.endpoints.litellm.aingest",
+                new_callable=AsyncMock,
+                return_value={"vector_store_id": "vs_new", "file_id": "file_123"},
+            ) as mock_aingest
+        ):
+            response = client_internal_user.post("/v1/rag/ingest", json={**FILE_URL_BODY, "file": inline})
+        assert response.status_code == 200, response.text
+        assert mock_aingest.await_args.kwargs["file_data"][1] == b"inline text"
+
+    @pytest.mark.parametrize("field", [{"file_url": ["https://docs.example.com/q3.txt"]}, {"file_id": {"id": 1}}])
+    def test_route_rejects_a_non_string_file_reference(self, client_internal_user, monkeypatch, field):
+        monkeypatch.setattr("litellm.proxy.rag_endpoints.endpoints.fetch_file_url", _never_fetch)
+        body = {"ingest_options": FILE_URL_BODY["ingest_options"], **field}
+        response = client_internal_user.post("/v1/rag/ingest", json=body)
+        assert response.status_code == 400, response.text
+        assert f"'{next(iter(field))}' must be a string" in response.json()["detail"]["error"]
+
+    def test_route_validates_the_request_before_fetching_the_url(self, client_internal_user, monkeypatch):
+        monkeypatch.setattr("litellm.proxy.rag_endpoints.endpoints.fetch_file_url", _never_fetch)
+        vector_store = {"custom_llm_provider": "bedrock", "aws_sts_endpoint": "https://attacker.example/sts"}
+        body = {**FILE_URL_BODY, "ingest_options": {"vector_store": vector_store}}
+        response = client_internal_user.post("/v1/rag/ingest", json=body)
+        assert response.status_code == 400, response.text
+        assert "aws_sts_endpoint" in response.json()["detail"]["error"]
+
+    def test_route_hands_fetched_bytes_to_ingestion_and_never_the_url(self, client_internal_user, monkeypatch):
+        fetch_url, seen = _fetcher_answering(200, b"benign document text\n")
+        monkeypatch.setattr("litellm.proxy.rag_endpoints.endpoints.fetch_file_url", fetch_url)
+        with (
+            patch(  # test-quality-ok: aingest is the endpoint's downstream boundary; the test asserts the forwarded bytes
+                "litellm.proxy.rag_endpoints.endpoints.litellm.aingest",
+                new_callable=AsyncMock,
+                return_value={"vector_store_id": "vs_new", "file_id": "file_123"},
+            ) as mock_aingest
+        ):
+            response = client_internal_user.post("/v1/rag/ingest", json=FILE_URL_BODY)
+        assert response.status_code == 200, response.text
+        assert seen == [FILE_URL_BODY["file_url"]]
+        forwarded = mock_aingest.await_args.kwargs
+        assert forwarded["file_data"][1] == b"benign document text\n"
+        assert "file_url" not in forwarded
+
+    def test_route_rejects_eicar_behind_a_url(self, client_internal_user, monkeypatch):
+        fetch_url, _seen = _fetcher_answering(200, EICAR.encode())
+        monkeypatch.setattr("litellm.proxy.rag_endpoints.endpoints.fetch_file_url", fetch_url)
+        with (
+            patch(  # test-quality-ok: aingest is the endpoint's downstream boundary; the test asserts it is never reached
+                "litellm.proxy.rag_endpoints.endpoints.litellm.aingest",
+                new_callable=AsyncMock,
+            ) as mock_aingest
+        ):
+            response = client_internal_user.post("/v1/rag/ingest", json=FILE_URL_BODY)
+        assert response.status_code == 400, response.text
+        assert response.json()["detail"]["reason"] == "malware_detected"
+        mock_aingest.assert_not_awaited()
+
+
 class TestVectorStoreUploadControls:
     """End-to-end enforcement of pentest M4 upload controls on /v1/rag/ingest."""
 
@@ -1794,6 +1967,47 @@ class TestVectorStoreUploadControls:
         )
         assert response.status_code == 400, response.text
         assert response.json()["detail"]["reason"] == "archive_not_allowed"
+
+    def test_route_runs_the_configured_scanner(self, client_internal_user, monkeypatch):
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.proxy_config.rag_ingest_controls",
+            RagIngestControls(scanner=_FixedScanner(ScanVerdict.INFECTED)),
+        )
+        with (
+            patch(  # test-quality-ok: aingest is the endpoint's downstream boundary; the test asserts it is never reached
+                "litellm.proxy.rag_endpoints.endpoints.litellm.aingest",
+                new_callable=AsyncMock,
+            ) as mock_aingest
+        ):
+            response = client_internal_user.post(
+                "/v1/rag/ingest",
+                files={"file": ("doc.txt", io.BytesIO(b"benign document text"), "text/plain")},
+                data={"request": INGEST_REQUEST},
+            )
+        assert response.status_code == 400, response.text
+        assert response.json()["detail"]["reason"] == "malware_detected"
+        assert "Custom.Sig" in response.json()["detail"]["error"]
+        mock_aingest.assert_not_awaited()
+
+    def test_route_lets_a_clean_verdict_from_the_configured_scanner_through(self, client_internal_user, monkeypatch):
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.proxy_config.rag_ingest_controls",
+            RagIngestControls(scanner=_FixedScanner(ScanVerdict.CLEAN)),
+        )
+        with (
+            patch(  # test-quality-ok: aingest is the endpoint's downstream boundary; the test asserts the forwarded bytes
+                "litellm.proxy.rag_endpoints.endpoints.litellm.aingest",
+                new_callable=AsyncMock,
+                return_value={"vector_store_id": "vs_new", "file_id": "file_123"},
+            ) as mock_aingest
+        ):
+            response = client_internal_user.post(
+                "/v1/rag/ingest",
+                files={"file": ("clean_name.txt", io.BytesIO(EICAR.encode()), "text/plain")},
+                data={"request": INGEST_REQUEST},
+            )
+        assert response.status_code == 200, response.text
+        assert mock_aingest.await_args.kwargs["file_data"][1] == EICAR.encode()
 
     async def test_clean_text_upload_gets_server_generated_filename(self):
         from litellm.proxy.rag_endpoints.endpoints import parse_rag_ingest_request
