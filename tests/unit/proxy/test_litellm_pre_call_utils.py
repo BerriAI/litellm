@@ -6,6 +6,7 @@ import os
 import time
 from datetime import datetime, timezone
 from types import SimpleNamespace
+from collections.abc import Mapping
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -11606,3 +11607,64 @@ def test_a_reference_to_a_definition_removed_from_the_config_logs_nowhere(monkey
     auth: Final = UserAPIKeyAuth(api_key="hashed-key", metadata={"logging": [_REFERENCE_ENTRY]}, team_metadata={})
 
     assert get_dynamic_logging_metadata(user_api_key_dict=auth, proxy_config=MagicMock()) is None
+
+
+def _proxy_request() -> MagicMock:
+    request: Final = MagicMock(spec=Request)
+    request.url = MagicMock()
+    request.url.path = "/v1/chat/completions"
+    request.url.__str__.return_value = "http://localhost/v1/chat/completions"
+    request.method = "POST"
+    request.query_params = {}
+    request.headers = {"Content-Type": "application/json"}
+    request.client = MagicMock()
+    request.client.host = "127.0.0.1"
+    return request
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("slot", [None, "metadata", "litellm_metadata"])
+async def test_a_definition_owns_its_credential_family_over_request_supplied_values(
+    monkeypatch: pytest.MonkeyPatch, slot: str | None
+) -> None:
+    """With client-side credentials allowed, a request-level langfuse_host next to a definition that sets no host
+    would send the definition's keys to a host the client picked."""
+    from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
+        initialize_standard_callback_dynamic_params,
+    )
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+
+    monkeypatch.setattr(
+        litellm,
+        "callback_settings",
+        {"corp_lf": {"callback_type": "langfuse", "langfuse_public_key": "pk-corp", "langfuse_secret_key": "sk-corp"}},
+    )
+    client_vars: Final = {"langfuse_host": "https://attacker.example", "langfuse_secret_key": "sk-client"}
+    inline: Final = {
+        "callback_name": "langfuse",
+        "callback_type": "success",
+        "callback_vars": {"langfuse_public_key": "pk-own", "langfuse_secret_key": "sk-own"},
+    }
+
+    async def params_for(entry: Mapping[str, object]) -> Mapping[str, object]:
+        data: Final = {
+            "model": "gpt-4o",
+            "messages": [{"role": "user", "content": "hi"}],
+            **(client_vars if slot is None else {slot: dict(client_vars)}),
+        }
+        updated: Final = await add_litellm_data_to_request(
+            data=data,
+            request=_proxy_request(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key", metadata={"logging": [entry]}, team_metadata={}),
+            proxy_config=MagicMock(),
+            general_settings={"allow_client_side_credentials": True},
+            version="test-version",
+        )
+        return initialize_standard_callback_dynamic_params(updated)
+
+    referenced: Final = await params_for({"callback_settings_name": "corp_lf", "callback_type": "success"})
+    assert referenced.get("langfuse_secret_key") == "sk-corp"
+    assert referenced.get("langfuse_host") is None, referenced
+
+    inline_params: Final = await params_for(inline)
+    assert inline_params.get("langfuse_host") == "https://attacker.example"

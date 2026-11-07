@@ -68,6 +68,7 @@ from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
     publish_auth_cache_invalidation,
 )
 from litellm.proxy.common_utils.callback_config_validation import (
+    CALLBACK_REFERENCE_FIELD,
     holds_callback_reference,
     logging_entry_keys,
     logging_metadata_config_error,
@@ -8476,12 +8477,12 @@ async def test_key_logging(
     from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
     from litellm.proxy.proxy_server import general_settings, proxy_config
 
-    logging_callbacks: Final[list[str]] = []
-    for callback in key_logging:
-        if callback.get("callback_name") is not None:
-            logging_callbacks.append(callback["callback_name"])
-        else:
-            raise ValueError("callback_name is required in key_logging")
+    names: Final = tuple(
+        callback.get("callback_name") or callback.get(CALLBACK_REFERENCE_FIELD) for callback in key_logging
+    )
+    if None in names:
+        raise ValueError("callback_name is required in key_logging")
+    logging_callbacks: Final = [name for name in names if name is not None]
 
     log_capture_string: Final = StringIO()
     ch: Final = logging.StreamHandler(log_capture_string)

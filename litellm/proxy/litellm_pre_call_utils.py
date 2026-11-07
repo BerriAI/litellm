@@ -80,6 +80,8 @@ from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.common_utils.callback_config_validation import (
     CALLBACK_REFERENCE_FIELD,
     callback_definition,
+    definition_owned_families,
+    is_owned_credential_var,
     reference_conflicts,
 )
 from litellm.proxy.common_utils.callback_utils import (
@@ -1317,6 +1319,27 @@ def _validated_callbacks(logging_entries: Iterable[object], *, source: str) -> t
         )
         is not None
     )
+
+
+def _drop_definition_owned_request_vars(
+    data: MutableMapping[str, object],  # mutable-ok: the request body this module builds in place
+    families: frozenset[str],
+) -> None:
+    """A referenced definition owns its whole credential family, so no request-supplied value of it survives."""
+    if not families:
+        return
+    cleaned_metadata: Final = {
+        slot: _without_owned_vars(_STRING_KEYED_MAPPING.validate_python(value), families)
+        for slot in ("metadata", "litellm_metadata")
+        if isinstance(value := data.get(slot), Mapping)
+    }
+    for var in [var for var in data if is_owned_credential_var(var, families)]:
+        del data[var]  # rebind-ok: strips client values before the definition's vars are merged in
+    data.update(cleaned_metadata)
+
+
+def _without_owned_vars(values: Mapping[str, object], families: frozenset[str]) -> Mapping[str, object]:
+    return {key: value for key, value in values.items() if not is_owned_credential_var(key, families)}
 
 
 class KeyAndTeamLoggingSettings:
@@ -3147,6 +3170,10 @@ async def add_litellm_data_to_request(
         request=request, request_data=data, metadata_key=_metadata_variable_name
     )
 
+    _drop_definition_owned_request_vars(
+        data,  # pyright: ignore[reportUnknownArgumentType]  # add_litellm_data_to_request declares data as a bare dict
+        definition_owned_families(KeyAndTeamLoggingSettings.get_key_dynamic_logging_settings(user_api_key_dict)),
+    )
     data.update(key_and_team_logging_fields(user_api_key_dict=user_api_key_dict, proxy_config=proxy_config))
 
     # Guardrails from key/team metadata and policy engine

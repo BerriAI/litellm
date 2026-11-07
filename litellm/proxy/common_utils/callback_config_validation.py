@@ -405,6 +405,24 @@ def _family_of(var: str) -> str | None:
     return next((family for prefix, family in _VAR_FAMILIES.items() if var.startswith(prefix)), None)
 
 
+def definition_owned_families(logging_entries: object) -> frozenset[str]:
+    """The credential families the definitions a key's references resolve to own outright."""
+    definitions: Final = tuple(
+        definition
+        for entry in _object_sequence(logging_entries) or ()
+        if (definition := callback_definition(_entry_reference_name(entry))) is not None
+    )
+    return frozenset[str]().union(*(_variable_families(definition.callback_vars) for definition in definitions))
+
+
+def _variable_families(variables: Mapping[str, str]) -> frozenset[str]:
+    return frozenset(family for var in variables if (family := _family_of(var)) is not None)
+
+
+def is_owned_credential_var(var: str, families: frozenset[str]) -> bool:
+    return _family_of(var) in families
+
+
 def cross_entry_family_error(
     callback_vars: Mapping[str, str] | None,
     stored_vars_by_entry: Sequence[Mapping[str, str]],

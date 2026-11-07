@@ -24513,3 +24513,34 @@ def test_a_non_admin_entry_saved_before_its_name_is_defined_never_picks_up_the_d
 
     assert result is not None
     assert (result.success_callback, result.callback_vars) == (["corp_lf"], {})
+
+
+def test_key_health_tests_the_definition_a_logging_entry_references(monkeypatch: pytest.MonkeyPatch) -> None:
+    import litellm.proxy.proxy_server as ps
+
+    secret: Final = f"definition-secret-{uuid4().hex}"
+    monkeypatch.setattr(
+        litellm,
+        "callback_settings",
+        {
+            "corp_gcs": {
+                "callback_type": "gcs_bucket",
+                "gcs_bucket_name": "key-logging-project1",
+                "gcs_path_service_account": secret,
+            }
+        },
+    )
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        api_key="hashed-key",
+        metadata={"logging": [{"callback_settings_name": "corp_gcs", "callback_type": "success_and_failure"}]},
+    )
+    try:
+        response: Final = client.post("/key/health", headers={"Authorization": "Bearer sk-test"})
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+    assert response.status_code == 200, response.text
+    status: Final = response.json()["logging_callbacks"]
+    assert status["callbacks"] == ["corp_gcs"]
+    assert status["status"] == "unhealthy", status
+    assert secret not in response.text

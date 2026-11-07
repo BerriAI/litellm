@@ -47,6 +47,8 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (  # noq
     check_permissions_caller_permission,  # pyright: ignore[reportPrivateUsage]  # same permission check /user/new uses
     generate_key_helper_fn,  # pyright: ignore[reportUnknownVariableType]  # legacy untyped helper; result validated by _KEY_RESPONSE
     metadata_json_with_limits,
+    raise_on_invalid_key_logging_config,
+    raise_on_unauthorized_callback_reference,
 )
 from litellm.proxy.management_endpoints.organization_endpoints import organization_member_add
 from litellm.proxy.management_helpers.access_group_team_sync import TEAM_ADVISORY_LOCK_SQL
@@ -219,6 +221,8 @@ def _row_error(item: BulkNewUserItem, user_api_key_dict: UserAPIKeyAuth) -> str 
         check_permissions_caller_permission(data=item, user_api_key_dict=user_api_key_dict)
         if item.auto_create_key:
             enforce_batch_limits_are_admin_only(item, None, user_api_key_dict, "key")
+            raise_on_invalid_key_logging_config(item.metadata)
+            raise_on_unauthorized_callback_reference(item.metadata, user_api_key_dict)
     except Exception as exc:  # noqa: BLE001  # any validation failure is reported on this row only
         return _error_message(exc)
     return None

@@ -1,12 +1,14 @@
 import json
 from contextlib import asynccontextmanager
 from typing import Final
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
 from prisma.errors import UniqueViolationError
 from pydantic import BaseModel, ConfigDict, ValidationError
 
+import litellm
 from litellm.caching.caching import DualCache
 from litellm.proxy._types import LiteLLM_TeamTable, LitellmUserRoles, Member, UserAPIKeyAuth
 from litellm.proxy.list_api.common import ManagementProblem
@@ -432,6 +434,42 @@ async def test_only_proxy_admin_sets_batch_limits_on_a_created_key():
     assert [r.key for r in admin_response.data] == ["sk-u1"]
     assert calls[-1]["user_id"] == "u1"
     assert calls[-1]["metadata"] == limits
+
+
+@pytest.mark.asyncio
+async def test_a_created_key_gets_the_same_logging_checks_as_user_new(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        litellm,
+        "callback_settings",
+        {"corp_lf": {"callback_type": "langfuse", "langfuse_public_key": "pk", "langfuse_secret_key": "sk"}},
+    )
+    reference: Final = {"callback_settings_name": "corp_lf", "callback_type": "success"}
+    rows: Final = [
+        {
+            "user_id": "undefined",
+            "auto_create_key": True,
+            "metadata": {"logging": [{**reference, "callback_settings_name": "nope"}]},
+        },
+        {
+            "user_id": "upper",
+            "auto_create_key": True,
+            "metadata": {"logging": [{**reference, "callback_type": "SUCCESS"}]},
+        },
+        {"user_id": "ok", "auto_create_key": True, "metadata": {"logging": [reference]}},
+    ]
+    generate_key: Final = AsyncMock(return_value={"token": "sk-ok"})
+
+    admin_response: Final = await _run(_FakePrisma(), rows, caller=ADMIN, generate_key=generate_key)
+
+    assert [r.success for r in admin_response.data] == [False, False, True]
+    assert "not a callback_settings definition" in (admin_response.data[0].error or "")
+    assert "callback_type must be one of" in (admin_response.data[1].error or "")
+    assert [call.kwargs["user_id"] for call in generate_key.await_args_list] == ["ok"]
+
+    internal_response: Final = await _run(_FakePrisma(), rows[2:], caller=INTERNAL)
+
+    assert [r.success for r in internal_response.data] == [False]
+    assert "Only a proxy admin" in (internal_response.data[0].error or "")
 
 
 @pytest.mark.asyncio
