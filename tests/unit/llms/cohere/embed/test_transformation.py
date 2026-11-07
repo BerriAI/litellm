@@ -443,3 +443,41 @@ async def test_cohere_embed_v4_image_embedding(respx_mock: respx.MockRouter, syn
         "input_type": "image",
     }
     assert response.data == [{"object": "embedding", "index": 0, "embedding": [0.125, -0.375]}]
+
+
+# --------------------------------------------------------------------------------------
+# get_complete_url: COHERE_API_BASE routing semantics (#50248 follow-up)
+# --------------------------------------------------------------------------------------
+
+
+def test_get_complete_url_appends_the_route_to_a_bare_host() -> None:
+    url: Final = CohereEmbeddingConfig().get_complete_url(
+        api_base="https://gateway.example.com",
+        api_key=None,
+        model="embed-english-v3.0",
+        optional_params={},
+        litellm_params={},
+    )
+    assert url == "https://gateway.example.com/v2/embed"
+
+
+def test_get_complete_url_keeps_a_full_endpoint_verbatim() -> None:
+    url: Final = CohereEmbeddingConfig().get_complete_url(
+        api_base="https://gateway.example.com/v2/embed",
+        api_key=None,
+        model="embed-english-v3.0",
+        optional_params={},
+        litellm_params={},
+    )
+    assert url == "https://gateway.example.com/v2/embed"
+
+
+def test_get_complete_url_default_is_unchanged() -> None:
+    url: Final = CohereEmbeddingConfig().get_complete_url(
+        api_base=None,
+        api_key=None,
+        model="embed-english-v3.0",
+        optional_params={},
+        litellm_params={},
+    )
+    assert url == "https://api.cohere.ai/v2/embed"

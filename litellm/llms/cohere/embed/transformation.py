@@ -21,6 +21,7 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 import litellm
 from litellm import COHERE_DEFAULT_EMBEDDING_INPUT_TYPE
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.base_llm import BaseEmbeddingConfig
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.bedrock import (
@@ -205,7 +206,10 @@ class CohereEmbeddingConfig(BaseEmbeddingConfig):
         litellm_params: dict,
         stream: bool | None = None,
     ) -> str:
-        return api_base or "https://api.cohere.ai/v2/embed"
+        # ensure_api_route keeps the route-exists form working verbatim and
+        # joins the route onto a bare host, so a gateway host and a full
+        # endpoint are both usable as COHERE_API_BASE (see #50248).
+        return ensure_api_route(api_base or "https://api.cohere.ai/v2/embed", "v2/embed")
 
     def _transform_request(
         self, model: str, input: list[str], inference_params: dict
