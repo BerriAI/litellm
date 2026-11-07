@@ -596,14 +596,6 @@ def _expand_model_aliases(model_cost: dict[str, dict[str, object]]) -> dict[str,
     alias_owners: Final[dict[str, str]] = {}
     keys_with_aliases: Final[list[str]] = []
 
-    for alias, target in pointer_rows.items():
-        if target not in model_cost or target in pointer_rows:
-            verbose_logger.warning(
-                "LiteLLM model alias '%s' points at '%s', which is not a model entry, dropping it.", alias, target
-            )
-            continue
-        alias_owners[alias] = target
-
     for model_name, model_info in model_cost.items():
         aliases: object = model_info.get("aliases")
         if aliases is None or model_name in pointer_rows:
@@ -619,7 +611,7 @@ def _expand_model_aliases(model_cost: dict[str, dict[str, object]]) -> dict[str,
         if not aliases:
             continue
         for alias in aliases:
-            if alias in model_cost:
+            if alias in model_cost and alias not in pointer_rows:
                 verbose_logger.warning(
                     "LiteLLM model alias conflict: alias '%s' (from '%s') "
                     "already exists as a canonical entry — skipping.",
@@ -636,6 +628,21 @@ def _expand_model_aliases(model_cost: dict[str, dict[str, object]]) -> dict[str,
                 )
                 continue
             alias_owners[alias] = model_name
+
+    for alias, target in pointer_rows.items():
+        if target not in model_cost or target in pointer_rows:
+            verbose_logger.warning(
+                "LiteLLM model alias '%s' points at '%s', which is not a model entry, dropping it.", alias, target
+            )
+        elif alias in alias_owners:
+            verbose_logger.warning(
+                "LiteLLM model alias conflict: alias '%s' (pointing at '%s') "
+                "was already claimed by another entry — skipping.",
+                alias,
+                target,
+            )
+        else:
+            alias_owners[alias] = target
 
     # Remove the ``aliases`` key from entries so it doesn't pollute model info
     for key in keys_with_aliases:

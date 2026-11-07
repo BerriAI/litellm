@@ -159,13 +159,16 @@ impl Catalog {
                 }
             };
             let row = read_row(&fields);
+            let readable = row.problems.is_empty();
             problems.extend(
                 row.problems
                     .into_iter()
                     .map(|problem| problem.prepend(&name)),
             );
             if let Some(target) = row.alias_of {
-                pointer_rows.push((name.clone(), target));
+                if readable {
+                    pointer_rows.push((name.clone(), target));
+                }
                 sections.push(Section {
                     index,
                     key: name,
