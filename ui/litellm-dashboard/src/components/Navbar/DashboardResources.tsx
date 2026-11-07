@@ -3,7 +3,7 @@
 import type { ParseKeys } from "i18next";
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { Github, Slack } from "lucide-react";
+import { BookOpen, Github, Newspaper, ScrollText, Slack } from "lucide-react";
 import { useDisableBlogPosts } from "@/app/(dashboard)/hooks/useDisableBlogPosts";
 import { useDisableShowPrompts } from "@/app/(dashboard)/hooks/useDisableShowPrompts";
 import { useBlogPosts } from "@/app/(dashboard)/hooks/blogPosts/useBlogPosts";
@@ -40,13 +40,17 @@ const COMMUNITY = [
     Icon: Github,
   },
 ] as const;
-type ResourceLink = { href: string; label: ParseKeys };
+type ResourceLink = { href: string; label: ParseKeys; Icon: typeof BookOpen };
 
 const DOCS: readonly ResourceLink[] = [
-  { href: "https://docs.litellm.ai/docs/", label: "shell.dashboardResources.links.docs" },
-  { href: "https://docs.litellm.ai/release_notes", label: "shell.dashboardResources.links.releases" },
+  { href: "https://docs.litellm.ai/docs/", label: "shell.dashboardResources.links.docs", Icon: BookOpen },
+  { href: "https://docs.litellm.ai/release_notes", label: "shell.dashboardResources.links.releases", Icon: ScrollText },
 ];
-const BLOG: ResourceLink = { href: "https://docs.litellm.ai/blog", label: "shell.dashboardResources.links.blog" };
+const BLOG: ResourceLink = {
+  href: "https://docs.litellm.ai/blog",
+  label: "shell.dashboardResources.links.blog",
+  Icon: Newspaper,
+};
 
 export function DashboardCommunityLinks({ className }: { className?: string }) {
   const { t } = useTranslation();
@@ -119,16 +123,20 @@ export function DashboardResources({ children }: { children?: ReactNode }) {
     ...(hideCommunity ? [] : COMMUNITY),
   ];
   return (
-    <div className="shrink-0 border-t border-border bg-muted/25 px-4 py-2">
-      <nav aria-label={t("shell.dashboardResources.helpAndResources")} className="flex flex-wrap gap-x-3 gap-y-1">
-        {links.map(({ href, label }) => (
+    <div className="shrink-0 border-t border-border bg-muted/25 p-2">
+      <nav aria-label={t("shell.dashboardResources.helpAndResources")} className="grid grid-cols-3 gap-1">
+        {links.map(({ href, label, Icon }) => (
           <a
             key={label}
             href={href}
             target="_blank"
             rel="noopener noreferrer"
-            className="rounded-sm py-1 text-xs text-muted-foreground hover:text-foreground hover:underline focus-visible:outline-ring"
+            className={cn(
+              buttonVariants({ variant: "ghost", size: "sm" }),
+              "justify-start gap-2 text-xs font-normal text-muted-foreground",
+            )}
           >
+            <Icon />
             {label}
           </a>
         ))}
