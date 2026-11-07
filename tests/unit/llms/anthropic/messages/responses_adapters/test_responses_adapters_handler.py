@@ -279,6 +279,77 @@ def test_build_responses_kwargs_drops_an_effort_the_model_does_not_list_only_und
     assert responses_kwargs.get("reasoning") == ({"effort": effort} if listed or not drop_params else None)
 
 
+REASONS_WITHOUT_CONFIRMING_NONE: Final = {"supports_reasoning": True}
+TOOL_RESULT_TURN: Final = [
+    {"role": "user", "content": "multiply 6 by 7"},
+    {
+        "role": "assistant",
+        "content": [{"type": "tool_use", "id": "toolu_1", "name": "multiply", "input": {"a": 6, "b": 7}}],
+    },
+    {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": "42"}]},
+]
+
+
+@pytest.mark.parametrize("drop_params", [True, False], ids=["drop_params", "no-drop_params"])
+@pytest.mark.parametrize(
+    "thinking, messages",
+    [({"type": "adaptive"}, MESSAGES), ({"type": "between_tools"}, TOOL_RESULT_TURN)],
+    ids=["adaptive", "between_tools-after-a-tool-result"],
+)
+def test_build_responses_kwargs_drops_a_client_none_a_reasoning_deployment_never_confirmed_only_under_drop_params(
+    drop_params: bool, thinking: dict[str, object], messages: list[dict[str, object]]
+) -> None:
+    responses_kwargs: Final = _build_responses_kwargs(
+        max_tokens=1024,
+        messages=messages,
+        model="openai/reasoner-without-levels",
+        output_config=cast(AnthropicOutputConfig, {"effort": "none"}),
+        thinking=thinking,
+        extra_kwargs={
+            "custom_llm_provider": "openai",
+            "drop_params": drop_params,
+            "model_info": REASONS_WITHOUT_CONFIRMING_NONE,
+        },
+    )
+
+    assert responses_kwargs.get("reasoning") == (None if drop_params else {"effort": "none"})
+
+
+@pytest.mark.parametrize("drop_params", [True, False], ids=["drop_params", "no-drop_params"])
+def test_build_responses_kwargs_drops_a_bare_client_none_on_o3_only_under_drop_params(drop_params: bool) -> None:
+    responses_kwargs: Final = _build_responses_kwargs(
+        max_tokens=1024,
+        messages=MESSAGES,
+        model="openai/o3",
+        output_config=cast(AnthropicOutputConfig, {"effort": "none"}),
+        extra_kwargs={"custom_llm_provider": "openai", "drop_params": drop_params},
+    )
+
+    o3_row: Final = litellm.model_cost["o3"]
+    unconfirmed_none: Final = (
+        model_reasoning_efforts("o3", "openai") is None
+        and o3_row.get("supports_reasoning") is True
+        and o3_row.get("supports_none_reasoning_effort") is not True
+    )
+    assert responses_kwargs.get("reasoning") == (None if drop_params and unconfirmed_none else {"effort": "none"})
+
+
+def test_build_responses_kwargs_keeps_a_pinned_effort_out_when_drop_params_drops_the_client_effort() -> None:
+    responses_kwargs: Final = _build_responses_kwargs(
+        max_tokens=1024,
+        messages=MESSAGES,
+        model="openai/gpt-5-mini",
+        output_config=cast(AnthropicOutputConfig, {"effort": "none"}),
+        thinking={"type": "adaptive"},
+        extra_kwargs={"custom_llm_provider": "openai", "drop_params": True, "reasoning_effort": "low"},
+    )
+
+    listed_levels: Final = model_reasoning_efforts("gpt-5-mini", "openai") or ()
+    assert listed_levels and "none" not in listed_levels
+    assert "reasoning" not in responses_kwargs
+    assert "reasoning_effort" not in responses_kwargs
+
+
 def test_build_responses_kwargs_under_drop_params_leaves_an_unlisted_effort_to_a_deployment_that_rounds_it() -> None:
     responses_kwargs: Final = _build_responses_kwargs(
         max_tokens=1024,

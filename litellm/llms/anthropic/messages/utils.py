@@ -325,11 +325,7 @@ def reasoning_off_level(
     lowest_tier: Final = _lowest_tier_instead_of_off(levels, model_info)
     if lowest_tier is not None:
         return lowest_tier
-    if (
-        not drop_params
-        or not _declares(model_info, "supports_reasoning")
-        or _declares(model_info, "supports_none_reasoning_effort")
-    ):
+    if not drop_params or not _reasons_without_confirming_none(model_info):
         return REASONING_EFFORT_OFF
     verbose_logger.warning(
         "Dropping reasoning_effort=none for %s, its model cost map entry does not set "
@@ -337,6 +333,21 @@ def reasoning_off_level(
         model,
     )
     return None
+
+
+def _reasons_without_confirming_none(model_info: Mapping[str, object] | None) -> bool:
+    return _declares(model_info, "supports_reasoning") and not _declares(model_info, "supports_none_reasoning_effort")
+
+
+def is_unconfirmed_none(
+    effort: object, model: str, custom_llm_provider: str | None, *, deployment_model_info: object
+) -> bool:
+    if effort != REASONING_EFFORT_OFF:
+        return False
+    model_info: Final = _deployment_model_info(model, custom_llm_provider, deployment_model_info)
+    return _resolved_reasoning_efforts(
+        model_info, model, custom_llm_provider
+    ) is None and _reasons_without_confirming_none(model_info)
 
 
 def maps_bare_output_effort(model: str, custom_llm_provider: str | None, *, deployment_model_info: object) -> bool:

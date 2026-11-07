@@ -5,6 +5,7 @@ Used when the target model is an OpenAI or Azure model.
 """
 
 from collections.abc import AsyncIterator, Callable, Coroutine, Mapping, Sequence
+from enum import Enum
 from typing import Final, TypeAlias, get_args
 
 from pydantic import TypeAdapter, ValidationError
@@ -55,6 +56,7 @@ from ..utils import (
     REASONING_EFFORT_OFF,
     ThinkingOffSwitch,
     deployment_reasoning_efforts,
+    is_unconfirmed_none,
     litellm_logging_obj_from_kwargs,
     local_model_name,
     maps_bare_output_effort,
@@ -76,6 +78,10 @@ AnthropicContextManagementSpec: TypeAlias = dict[str, object] | list[dict[str, o
 _ADAPTER: Final = LiteLLMAnthropicToResponsesAPIAdapter()
 _KNOWN_REASONING_EFFORTS: Final = frozenset(get_args(REASONING_EFFORT))
 _UNVERIFIED_ORGANIZATION_SUMMARY_REFUSAL: Final = "must be verified to generate reasoning summaries"
+
+
+class _ClientEffort(Enum):
+    DROPPED = "dropped"
 
 
 def _split_context_management(
@@ -295,7 +301,7 @@ def _reasoning_for_target(
             effort,
             model,
         )
-        return None
+        return _ClientEffort.DROPPED
     normalized: Final = normalize_reasoning_effort_value(
         effort,
         model=model,
@@ -310,7 +316,7 @@ def _reasoning_for_target(
             normalized,
             model,
         )
-        return None
+        return _ClientEffort.DROPPED
     return reasoning if normalized == effort else {**reasoning_params, "effort": normalized}
 
 
@@ -326,7 +332,9 @@ def _model_excludes_effort(
     if deployment_rounds_reasoning_effort(deployment_model_info):
         return False
     levels: Final = deployment_reasoning_efforts(model, custom_llm_provider, deployment_model_info) or ()
-    return bool(levels) and effort not in levels
+    return (bool(levels) and effort not in levels) or is_unconfirmed_none(
+        effort, model, custom_llm_provider, deployment_model_info=deployment_model_info
+    )
 
 
 def _retry_without_refused_summary(
@@ -478,14 +486,19 @@ def _build_responses_kwargs(
         if _maps_reasoning(thinking, model, provider, forwarded_kwargs)
         else None
     )
-    if target_reasoning is not None:
+    client_effort_dropped: Final = target_reasoning is _ClientEffort.DROPPED
+    if target_reasoning is not None and not client_effort_dropped:
         responses_kwargs["reasoning"] = target_reasoning
 
     if stream:
         responses_kwargs["stream"] = True
 
     # Forward litellm-specific kwargs (api_key, api_base, logging obj, etc.)
-    excluded: Final = CONVERTED_STREAM_KEYS | {"anthropic_messages", "mcp_servers"}
+    excluded: Final = (
+        CONVERTED_STREAM_KEYS
+        | {"anthropic_messages", "mcp_servers"}
+        | (frozenset({"reasoning_effort"}) if client_effort_dropped else frozenset())
+    )
     for key, value in forwarded_kwargs.items():
         if key == "litellm_logging_obj" and value is not None:
             from litellm.litellm_core_utils.litellm_logging import (

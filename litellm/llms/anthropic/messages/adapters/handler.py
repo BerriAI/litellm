@@ -38,8 +38,10 @@ from litellm.llms.anthropic.messages.safeguards import (
 )
 from litellm.llms.anthropic.messages.utils import (
     REASONING_EFFORT_OFF,
+    RESPONSES_API_PROVIDERS,
     ProxySubCallLoggingKwargs,
     is_reasoning_auto_summary_enabled,
+    is_unconfirmed_none,
     litellm_logging_obj_from_kwargs,
     local_model_name,
     proxy_sub_call_logging_kwargs,
@@ -531,6 +533,25 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         return None if model_info.get("mode") == "responses" else _ChatTargetReasoning(effort=effort)
 
     @staticmethod
+    def _drop_unconfirmed_client_none(completion_kwargs: _CompletionKwargs) -> None:
+        reasoning_effort: Final = completion_kwargs.get("reasoning_effort")
+        effort: Final = reasoning_effort.get("effort") if isinstance(reasoning_effort, dict) else reasoning_effort
+        model: Final = completion_kwargs.get("model", "")
+        if not is_unconfirmed_none(
+            effort,
+            model,
+            completion_kwargs.get("custom_llm_provider"),
+            deployment_model_info=completion_kwargs.get("model_info"),
+        ):
+            return
+        verbose_logger.warning(
+            "Dropping reasoning_effort=none for %s, its model cost map entry does not set "
+            "supports_none_reasoning_effort, because drop_params is set",
+            model,
+        )
+        del completion_kwargs["reasoning_effort"]
+
+    @staticmethod
     def _normalize_reasoning_effort(
         completion_kwargs: _CompletionKwargs,
     ) -> None:
@@ -712,6 +733,9 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                 setattr(value, "stream_options", completion_kwargs.get("stream_options"))
             if key not in excluded_keys and key not in completion_kwargs and value is not None:
                 completion_kwargs[key] = value
+
+        if drop_params and target_provider in RESPONSES_API_PROVIDERS and "reasoning_effort" in openai_request:
+            LiteLLMMessagesToCompletionTransformationHandler._drop_unconfirmed_client_none(completion_kwargs)
 
         explicit_prompt_cache_key: Final = extra_kwargs.get("prompt_cache_key")
         if explicit_prompt_cache_key is not None:

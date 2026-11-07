@@ -745,6 +745,37 @@ class TestAnOpenAIChatRouteRequestGetsTheResponsesBridgeThinkingControls:
         assert "reasoning_effort" not in sent
 
 
+class TestAClientNoneOnAReasoningDeploymentThatNeverConfirmedIt:
+    @pytest.mark.parametrize("drop_params", [True, False], ids=["drop_params", "no-drop_params"])
+    @pytest.mark.parametrize(
+        "thinking, messages",
+        [({"type": "adaptive"}, MESSAGES), ({"type": "between_tools"}, TOOL_RESULT_TURN)],
+        ids=["adaptive", "between_tools-after-a-tool-result"],
+    )
+    def test_the_chat_route_drops_it_only_under_drop_params(
+        self,
+        local_model_cost_map: None,
+        drop_params: bool,
+        thinking: dict[str, object],
+        messages: list[dict[str, object]],
+    ) -> None:
+        completion_kwargs, _ = LiteLLMMessagesToCompletionTransformationHandler._prepare_completion_kwargs(
+            max_tokens=1024,
+            messages=messages,
+            model="openai/reasoner-without-levels",
+            thinking=thinking,
+            tools=[MULTIPLY_TOOL],
+            extra_kwargs={
+                "custom_llm_provider": "openai",
+                "output_config": {"effort": "none"},
+                "drop_params": drop_params,
+                "model_info": {"supports_reasoning": True},
+            },
+        )
+
+        assert completion_kwargs.get("reasoning_effort") == (None if drop_params else "none")
+
+
 _OFF_MAP_OPENAI_DEPLOYMENT: Final = {
     "model": "openai/off-map-hybrid-reasoner",
     "api_base": "https://compatible.example.test/v1",
