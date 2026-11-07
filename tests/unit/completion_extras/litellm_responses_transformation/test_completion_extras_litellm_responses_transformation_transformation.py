@@ -3570,6 +3570,72 @@ def test_transform_response_hands_encrypted_reasoning_to_messages_clients_only()
     assert content[0]["data"] == encrypted_reasoning_signature(encrypted)
 
 
+@pytest.mark.parametrize(
+    ("call_type", "kept_ids"),
+    [
+        pytest.param("anthropic_messages", ["rs_first", "rs_second"], id="messages_client_keeps_every_item"),
+        pytest.param("acompletion", ["rs_second"], id="chat_client_keeps_the_last_item"),
+    ],
+)
+def test_non_streamed_tool_turn_hands_messages_clients_every_reasoning_item(
+    call_type: str, kept_ids: list[str]
+) -> None:
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    from litellm.types.llms.openai import ResponsesAPIResponse
+    from litellm.types.utils import ModelResponse, Usage
+
+    def reasoning(item_id: str) -> ResponseReasoningItem:
+        return ResponseReasoningItem(
+            id=item_id, summary=[], type="reasoning", content=None, encrypted_content=f"gAAAA_{item_id}", status=None
+        )
+
+    def call(index: int, city: str) -> ResponseFunctionToolCall:
+        return ResponseFunctionToolCall(
+            id=f"fc_{index}",
+            type="function_call",
+            status="completed",
+            arguments=json.dumps({"city": city}),
+            call_id=f"call_{index}",
+            name="get_weather",
+        )
+
+    raw: Final = ResponsesAPIResponse.model_construct(
+        id="resp_two_reasoning",
+        created_at=1,
+        error=None,
+        incomplete_details=None,
+        model="gpt-5.4-nano",
+        output=[reasoning("rs_first"), call(1, "Oslo"), reasoning("rs_second"), call(2, "Lyon")],
+        status="completed",
+        usage=None,
+    )
+    result: Final = LiteLLMResponsesTransformationHandler().transform_response(
+        model="gpt-5.4-nano",
+        raw_response=raw,
+        model_response=ModelResponse(
+            id="chatcmpl-two-reasoning",
+            created=1,
+            model=None,
+            object="chat.completion",
+            system_fingerprint=None,
+            choices=[],
+            usage=Usage(completion_tokens=0, prompt_tokens=0, total_tokens=0),
+        ),
+        logging_obj=SimpleNamespace(call_type=call_type),
+        request_data={"model": "gpt-5.4-nano"},
+        messages=[{"role": "user", "content": "Oslo or Lyon?"}],
+        optional_params={},
+        litellm_params={"custom_llm_provider": "azure"},
+        encoding=Mock(),
+    )
+
+    message: Final = result.choices[0].message
+    assert [item["id"] for item in message.reasoning_items] == kept_ids
+    assert [tool_call.function.name for tool_call in message.tool_calls] == ["get_weather", "get_weather"]
+
+
 def test_streaming_function_call_tool_id_for_degenerate_call_id():
     """In streaming, Bedrock Mantle's function_call event carries a unique ``id``
     (``fc_...``) and a non-unique, index-based ``call_id`` (``call_0``). For that

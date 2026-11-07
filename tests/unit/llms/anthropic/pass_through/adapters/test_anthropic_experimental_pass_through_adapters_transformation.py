@@ -698,6 +698,34 @@ def test_encrypted_reasoning_is_kept_when_the_request_tools_route_it_to_response
     assert bool(assistant.get("thinking_blocks")) is kept
 
 
+@pytest.mark.parametrize(
+    ("deployment_params", "kept"),
+    [
+        pytest.param({"reasoning_summary": "auto"}, True, id="deployment_summary_bridges_to_responses"),
+        pytest.param({"extra_body": {"reasoningSummary": "auto"}}, True, id="extra_body_summary_bridges_to_responses"),
+        pytest.param({}, False, id="no_summary_stays_on_chat"),
+    ],
+)
+def test_encrypted_reasoning_is_kept_when_the_deployment_reasoning_summary_routes_it_to_responses(
+    deployment_params: dict[str, object], kept: bool
+) -> None:
+    from litellm.llms.anthropic.pass_through.adapters.handler import (
+        LiteLLMMessagesToCompletionTransformationHandler,
+    )
+
+    request: Final = _replayed_reasoning_request([])
+    completion_kwargs, _mapping = LiteLLMMessagesToCompletionTransformationHandler._prepare_completion_kwargs(
+        max_tokens=64,
+        messages=cast(list[dict[str, object]], request["messages"]),
+        model="azure/gpt-5.1",
+        thinking={"type": "enabled", "budget_tokens": 2048},
+        extra_kwargs={"api_base": "https://keep-check.openai.azure.com", **deployment_params},
+    )
+
+    assistant: Final = cast(list[Mapping[str, object]], completion_kwargs["messages"])[1]
+    assert bool(assistant.get("thinking_blocks")) is kept
+
+
 def test_translate_anthropic_messages_to_openai_sets_reasoning_content():
     """Reasoning-aware chat providers read reasoning_content, so thinking text must land there.
 

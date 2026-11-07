@@ -26,7 +26,7 @@ import litellm
 from litellm import ModelResponse
 from litellm._logging import verbose_logger
 from litellm.integrations.anthropic_cache_control_hook import supports_openai_prompt_cache_breakpoint
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or_none
 from litellm.litellm_core_utils.hidden_params import get_hidden_params, get_or_create_hidden_params
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     responses_reasoning_items_from_thinking_blocks,
@@ -58,7 +58,7 @@ from litellm.types.llms.openai import (
     ResponsesAPIResponse,
     ResponsesAPIStreamEvents,
 )
-from litellm.types.utils import Delta, GenericStreamingChunk, ModelResponseStream, StreamingChoices
+from litellm.types.utils import CallTypes, Delta, GenericStreamingChunk, ModelResponseStream, StreamingChoices
 
 if TYPE_CHECKING:
     from openai.types.responses import ResponseInputImageParam, ResponseOutputItem
@@ -225,6 +225,10 @@ class _BuiltReasoningItem(TypedDict):
     id: str
     encrypted_content: str | None
     summary: Sequence[_ReasoningSummaryText]
+
+
+def serves_anthropic_messages(logging_obj: object) -> bool:
+    return attribute_or_none(logging_obj, "call_type") == CallTypes.anthropic_messages.value
 
 
 def _get_reasoning_items(
@@ -549,7 +553,7 @@ def _fold_choices_into_one(
     choices: Sequence["Choices"],
     tool_calls: Sequence[Mapping[str, object]],
     trailing_reasoning_content: str | None,
-    trailing_reasoning_item: _BuiltReasoningItem | None,
+    trailing_reasoning_items: Sequence[_BuiltReasoningItem],
     tool_search_items: Sequence[Mapping[str, object]],
     structured_output: bool = False,
 ) -> "Choices":
@@ -568,7 +572,7 @@ def _fold_choices_into_one(
     reasoning_contents: Final = (*(_message_reasoning_content(m) for m in messages), trailing_reasoning_content)
     reasoning_items: Final = (
         *chain.from_iterable(_message_reasoning_items(m) for m in messages),
-        *(() if trailing_reasoning_item is None else (trailing_reasoning_item,)),
+        *trailing_reasoning_items,
     )
     return Choices(
         message=Message(
@@ -1222,6 +1226,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         output_items: Sequence[object],
         handle_raw_dict_callback: Callable[..., tuple["Choices | None", int]] | None = None,
         structured_output: bool = False,
+        keeps_every_reasoning_item: bool = False,
     ) -> list["Choices"]:
         """
         Convert Responses API output items to chat completion choices.
@@ -1231,6 +1236,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             handle_raw_dict_callback: Optional callback for handling raw dict items
             structured_output: The chat request carried a json response_format, so only the
                 first message item becomes content
+            keeps_every_reasoning_item: Keep each reasoning item before an answer, not only the last
 
         Returns:
             List of Choices objects
@@ -1253,7 +1259,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         choices: Final[list[Choices]] = []
         index = 0
         reasoning_content: str | None = None
-        pending_reasoning_item: _BuiltReasoningItem | None = None
+        pending_reasoning_items: tuple[_BuiltReasoningItem, ...] = ()
 
         # Collect all tool calls to put them in a single choice
         # (Chat Completions API expects all tool calls in one message)
@@ -1262,12 +1268,19 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
         for item in output_items:
             if isinstance(item, ResponseReasoningItem):
-                pending_reasoning_item = _build_reasoning_item(
-                    item_id=item.id,
-                    encrypted_content=getattr(item, "encrypted_content", None),
-                    summary_raw=item.summary,
+                pending_reasoning_items = (
+                    *(pending_reasoning_items if keeps_every_reasoning_item else ()),
+                    _build_reasoning_item(
+                        item_id=item.id,
+                        encrypted_content=getattr(item, "encrypted_content", None),
+                        summary_raw=item.summary,
+                    ),
                 )
-                reasoning_content = " ".join(s["text"] for s in pending_reasoning_item["summary"] if s.get("text"))
+                reasoning_content = " ".join(
+                    s["text"]
+                    for s in chain.from_iterable(built["summary"] for built in pending_reasoning_items)
+                    if s.get("text")
+                )
 
             elif isinstance(item, ResponseOutputMessage):
                 for content in item.content:
@@ -1284,7 +1297,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                         annotations=annotations,
                         reasoning_items=cast(
                             list[ChatCompletionReasoningItem] | None,
-                            ([pending_reasoning_item] if pending_reasoning_item is not None else None),
+                            (list(pending_reasoning_items) or None),
                         ),
                     )
 
@@ -1297,7 +1310,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     )
 
                     reasoning_content = None  # flush
-                    pending_reasoning_item = None  # flush
+                    pending_reasoning_items = ()  # flush
                     index += 1
 
             elif isinstance(item, ResponseFunctionToolCall):
@@ -1362,7 +1375,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 choices=choices,
                 tool_calls=accumulated_tool_calls,
                 trailing_reasoning_content=reasoning_content,
-                trailing_reasoning_item=pending_reasoning_item,
+                trailing_reasoning_items=pending_reasoning_items,
                 tool_search_items=tool_search_items,
                 structured_output=structured_output,
             )
@@ -1500,6 +1513,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             structured_output=is_structured_output_request(
                 cast("Mapping[str, object]", optional_params)  # cast-ok: optional_params is an untyped dict
             ),
+            keeps_every_reasoning_item=serves_anthropic_messages(logging_obj),
         )
 
         response_is_incomplete: Final = raw_response.status == "incomplete" or (

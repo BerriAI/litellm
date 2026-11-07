@@ -228,6 +228,7 @@ class ChatRouteInputs:
     reasoning_effort: str | Mapping[str, object] | None = None
     api_base: str | None = None
     thinking: Mapping[str, object] | None = None
+    reasoning_summary: object | None = None
 
 
 _NO_ROUTE_INPUTS: Final = ChatRouteInputs()
@@ -271,6 +272,7 @@ def _keeps_encrypted_reasoning_for_responses(
         custom_llm_provider,
         tools=route.tools,
         reasoning_effort=route.reasoning_effort,
+        reasoning_summary=route.reasoning_summary,
         api_base=route.api_base,
     )
 
@@ -313,7 +315,12 @@ class AnthropicAdapter:
         return result
 
     def translate_completion_input_params_with_tool_mapping(
-        self, kwargs, *, custom_llm_provider: str | None = None, api_base: str | None = None
+        self,
+        kwargs,
+        *,
+        custom_llm_provider: str | None = None,
+        api_base: str | None = None,
+        reasoning_summary: object | None = None,
     ) -> tuple[ChatCompletionRequest | None, dict[str, str]]:
         """
         Translate Anthropic request params to OpenAI format, returning tool name mapping.
@@ -348,6 +355,7 @@ class AnthropicAdapter:
             anthropic_message_request=request_body,
             custom_llm_provider=custom_llm_provider,
             api_base=api_base,
+            reasoning_summary=reasoning_summary,
         )
 
         return translated_body, tool_name_mapping
@@ -1295,6 +1303,7 @@ class LiteLLMAnthropicMessagesAdapter:
         *,
         custom_llm_provider: str | None = None,
         api_base: str | None = None,
+        reasoning_summary: object | None = None,
         preserve_midturn_system: bool = False,
     ) -> tuple[ChatCompletionRequest, dict[str, str]]:
         """
@@ -1349,6 +1358,7 @@ class LiteLLMAnthropicMessagesAdapter:
                 reasoning_effort=new_kwargs.get("reasoning_effort"),
                 api_base=api_base,
                 thinking=anthropic_message_request.get("thinking"),
+                reasoning_summary=reasoning_summary,
             ),
         )
         ## ADD SYSTEM MESSAGE TO MESSAGES

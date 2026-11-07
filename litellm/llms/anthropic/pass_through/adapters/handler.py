@@ -17,6 +17,7 @@ from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, iter_items
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
+from litellm.litellm_core_utils.model_param_helper import peek_reasoning_summary_aliases
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     is_encrypted_reasoning_block,
     thinking_blocks_with_encrypted_reasoning,
@@ -760,6 +761,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             request_data,
             custom_llm_provider=target_provider,
             api_base=api_base if isinstance(api_base, str) else None,
+            reasoning_summary=peek_reasoning_summary_aliases(provider_kwargs),
         )
 
         if openai_request is None:
