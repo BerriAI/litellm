@@ -239,6 +239,7 @@ from litellm.types.llms.openai import (
     ChatCompletionToolParamFunctionChunk,
     ChatCompletionToolReferenceObject,
     ChatCompletionUserMessage,
+    OpenAIWebSearchOptions,
     ToolMessageContentPart,
 )
 from litellm.types.utils import Choices, LlmProviders, ModelResponse, StreamingChoices, Usage
@@ -265,9 +266,35 @@ class ChatRouteInputs:
     tools: Sequence[Mapping[str, object]] | None = None
     reasoning_effort: str | Mapping[str, object] | None = None
     api_base: str | None = None
+    thinking: Mapping[str, object] | None = None
+    web_search: bool = False
 
 
 _NO_ROUTE_INPUTS: Final = ChatRouteInputs()
+
+
+def _inferred_provider(model: str) -> str | None:
+    try:
+        return litellm.utils.get_llm_provider(model=model)[1]
+    except Exception:
+        return None
+
+
+def openai_thinking_routes_to_responses(
+    model: str | None,
+    custom_llm_provider: str | None,
+    thinking: Mapping[str, object] | None,
+) -> bool:
+    if not model or thinking is None or thinking.get("type") != "enabled":
+        return False
+    provider: Final = custom_llm_provider if custom_llm_provider is not None else _inferred_provider(model)
+    if provider != "openai":
+        return False
+    try:
+        model_info: Final = litellm.get_model_info(model=model, custom_llm_provider=provider)
+    except Exception:
+        return True
+    return model_info.get("supports_reasoning") is not False
 
 
 def _keeps_encrypted_reasoning_for_responses(
@@ -278,13 +305,16 @@ def _keeps_encrypted_reasoning_for_responses(
 ) -> bool:
     from litellm.responses.bridge_check import chat_completion_ends_in_responses_api
 
-    return chat_completion_ends_in_responses_api(
+    return openai_thinking_routes_to_responses(
+        model, custom_llm_provider, route.thinking
+    ) or chat_completion_ends_in_responses_api(
         model,
         custom_llm_provider,
         deployment_model_info,
         tools=route.tools,
         reasoning_effort=route.reasoning_effort,
         api_base=route.api_base,
+        web_search_options=OpenAIWebSearchOptions() if route.web_search else None,
     )
 
 
@@ -1416,6 +1446,8 @@ class LiteLLMAnthropicMessagesAdapter:
                 tools=new_kwargs.get("tools"),
                 reasoning_effort=new_kwargs.get("reasoning_effort"),
                 api_base=api_base,
+                thinking=anthropic_message_request.get("thinking"),
+                web_search="web_search_options" in new_kwargs,
             ),
         )
         ## ADD SYSTEM MESSAGE TO MESSAGES

@@ -304,6 +304,7 @@ def chat_completion_ends_in_responses_api(
     tools: Sequence[Mapping[str, object]] | None = None,
     reasoning_effort: str | Mapping[str, object] | None = None,
     api_base: str | None = None,
+    web_search_options: OpenAIWebSearchOptions | None = None,
 ) -> bool:
     """Whether chat completion for this model is served by a Responses API.
 
@@ -322,6 +323,7 @@ def chat_completion_ends_in_responses_api(
     model_info, _resolved = responses_api_bridge_check(
         model=resolved_model,
         custom_llm_provider=provider,
+        web_search_options=web_search_options,
         tools=tools,
         reasoning_effort=reasoning_effort,
         api_base=api_base,

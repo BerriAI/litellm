@@ -3864,7 +3864,7 @@ def test_reasoning_output_item_done_emits_signed_thinking_blocks_the_stream_keep
         },
     }
     result: Final = OpenAiResponsesToChatCompletionStreamIterator(
-        streaming_response=None, sync_stream=True
+        streaming_response=None, sync_stream=True, streams_reasoning_signatures=True
     ).chunk_parser(done)
     blocks: Final = result.choices[0].delta.thinking_blocks
     assert blocks is not None
@@ -3888,6 +3888,80 @@ def test_reasoning_output_item_done_emits_signed_thinking_blocks_the_stream_keep
     assert start["data"] == encrypted_reasoning_signature(encrypted)
 
 
+_SIGNED_REASONING_STREAM_BODY: Final[Mapping[str, object]] = {
+    **_searched_responses_body("azure/gpt-6-sol"),
+    "output": [
+        {"type": "reasoning", "id": "rs_signed", "summary": [], "encrypted_content": "gAAAA_consumer"},
+        _PONG_MESSAGE,
+    ],
+}
+
+
+def _signed_reasoning_sse() -> str:
+    events: Final = (
+        {
+            "type": "response.created",
+            "response": {**_SIGNED_REASONING_STREAM_BODY, "status": "in_progress", "output": [], "usage": None},
+        },
+        {"type": "response.output_item.done", "output_index": 0, "item": _SIGNED_REASONING_STREAM_BODY["output"][0]},
+        {
+            "type": "response.output_text.delta",
+            "item_id": "msg_logged_call_type",
+            "output_index": 1,
+            "content_index": 0,
+            "delta": "pong",
+        },
+        {"type": "response.completed", "response": _SIGNED_REASONING_STREAM_BODY},
+    )
+    return "".join(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n" for event in events)
+
+
+_AZURE_BRIDGE_KWARGS: Final[Mapping[str, object]] = {
+    "api_base": "https://example.invalid",
+    "api_version": "2025-04-01-preview",
+    "api_key": "test-key",
+}
+
+
+@pytest.mark.asyncio
+async def test_streamed_reasoning_signature_reaches_messages_clients_and_never_chat_completions_deltas(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.litellm_core_utils.prompt_templates.common_utils import encrypted_reasoning_signature
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    with respx.mock(assert_all_called=True) as router:
+        router.post(url__startswith="https://example.invalid/openai/responses").mock(
+            side_effect=lambda _request: httpx.Response(
+                200, text=_signed_reasoning_sse(), headers={"content-type": "text/event-stream"}
+            )
+        )
+        chat_stream: Final = await litellm.acompletion(
+            model="azure/gpt-6-sol",
+            messages=[{"role": "user", "content": "ping"}],
+            tools=[_GET_WEATHER_TOOL],
+            stream=True,
+            **_AZURE_BRIDGE_KWARGS,
+        )
+        chat_deltas: Final = [chunk.choices[0].delta async for chunk in chat_stream if chunk.choices]
+        messages_stream: Final = await litellm.anthropic.messages.acreate(
+            model="azure/gpt-6-sol",
+            messages=[{"role": "user", "content": "ping"}],
+            tools=[{"name": "get_weather", "input_schema": {"type": "object", "properties": {}}}],
+            max_tokens=64,
+            stream=True,
+            **_AZURE_BRIDGE_KWARGS,
+        )
+        sse: Final = b"".join([chunk async for chunk in messages_stream]).decode()
+
+    assert [getattr(delta, "thinking_blocks", None) for delta in chat_deltas if getattr(delta, "thinking_blocks", None)] == []
+    assert "".join(delta.content or "" for delta in chat_deltas) == "pong"
+    messages_events: Final = [json.loads(line[len("data: ") :]) for line in sse.splitlines() if line.startswith("data: ")]
+    started: Final = [event["content_block"] for event in messages_events if event.get("type") == "content_block_start"]
+    assert [block["type"] for block in started] == ["redacted_thinking", "text"]
+    assert started[0]["data"] == encrypted_reasoning_signature("gAAAA_consumer")
+
+
 def test_reasoning_output_item_done_with_summary_signs_the_thinking_text():
     from litellm.completion_extras.litellm_responses_transformation.transformation import (
         OpenAiResponsesToChatCompletionStreamIterator,
@@ -3906,7 +3980,7 @@ def test_reasoning_output_item_done_with_summary_signs_the_thinking_text():
         },
     }
     result: Final = OpenAiResponsesToChatCompletionStreamIterator(
-        streaming_response=None, sync_stream=True
+        streaming_response=None, sync_stream=True, streams_reasoning_signatures=True
     ).chunk_parser(done)
     block: Final = result.choices[0].delta.thinking_blocks[0]
     assert block["type"] == "thinking"
@@ -3940,7 +4014,9 @@ def test_streamed_reasoning_summary_reaches_messages_clients_once_with_its_signa
         },
         {"type": "response.output_text.delta", "output_index": 1, "delta": "Oslo."},
     )
-    parser: Final = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
+    parser: Final = OpenAiResponsesToChatCompletionStreamIterator(
+        streaming_response=None, sync_stream=True, streams_reasoning_signatures=True
+    )
     chunks: Final = (
         *(parser.chunk_parser(event) for event in events),
         ModelResponseStream(choices=[StreamingChoices(index=0, delta=Delta(), finish_reason="stop")]),
@@ -3968,7 +4044,9 @@ def test_reasoning_item_repeated_at_stream_end_reaches_messages_clients_once():
         {"type": "response.output_item.done", "output_index": 0, "item": reasoning_item},
         {"type": "response.output_text.delta", "output_index": 1, "delta": "Oslo."},
     )
-    parser: Final = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
+    parser: Final = OpenAiResponsesToChatCompletionStreamIterator(
+        streaming_response=None, sync_stream=True, streams_reasoning_signatures=True
+    )
     chunks: Final = (
         *(parser.chunk_parser(event) for event in events),
         ModelResponseStream(
@@ -3998,7 +4076,7 @@ def test_reasoning_output_item_done_without_encrypted_content_stays_empty():
         },
     }
     result: Final = OpenAiResponsesToChatCompletionStreamIterator(
-        streaming_response=None, sync_stream=True
+        streaming_response=None, sync_stream=True, streams_reasoning_signatures=True
     ).chunk_parser(done)
     assert getattr(result.choices[0].delta, "thinking_blocks", None) in (None, [])
 
