@@ -4,12 +4,18 @@ from __future__ import annotations
 
 from typing import Final
 
+import httpx
+
 import litellm
 from litellm.anthropic_beta_headers_manager import is_foundry_api_base
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.llms.opencode.common_utils import is_opencode_api_base
 from litellm.rust_bridge.detectors import api_base, overridden, present, streaming
 from litellm.rust_bridge.public_call import NativeCall, optional_mapping, optional_sequence, optional_str
+
+
+def timeout_variants(request: NativeCall) -> bool:
+    return present(request, "request_timeout") or isinstance(request.resolved.get("timeout"), httpx.Timeout)
 
 
 def provider_affinity(request: NativeCall) -> bool:
