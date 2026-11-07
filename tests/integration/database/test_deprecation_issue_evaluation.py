@@ -253,7 +253,7 @@ async def test_retirement_scan_resumes_bounded_pages_without_premature_recovery(
         projector = DeprecationIssueProjector.from_prisma(db.prisma, source)
 
         async def interrupt_after_page(
-            projector: DeprecationIssueProjector, observed_at: datetime, revision: str
+            projector: DeprecationIssueProjector, observed_at: datetime, revision: str, after: int = 0
         ) -> _ProjectionCheckpoint:
             task = asyncio.create_task(projector.run(observed_at))
             try:
@@ -263,7 +263,7 @@ async def test_retirement_scan_resumes_bounded_pages_without_premature_recovery(
                         value = await config.get_param(checkpoint_name)
                         if value is not None:
                             state = _ProjectionCheckpoint.model_validate(value.param_value)
-                            if state.source_revision == revision and 0 < state.cursor.deployment < 600:
+                            if state.source_revision == revision and after < state.cursor.deployment < 600:
                                 return state
                         await asyncio.sleep(0)
                     pytest.fail("projector finished before observing a partial scan")
@@ -274,18 +274,24 @@ async def test_retirement_scan_resumes_bounded_pages_without_premature_recovery(
                 with suppress(asyncio.CancelledError):
                     await task
 
-        partial = await interrupt_after_page(projector, now, source.revision)
+        revision = await source.prepare_revision(now.date())
+        assert revision is not None
+        partial = await interrupt_after_page(projector, now, revision)
         assert partial.complete is False
         assert (await repository.get_issue(old.id)).active is True
-        # A different process/router generation cannot trust the same numeric registry version.
-        next_source = RouterDeprecationSource(lambda: router)
+        replica = Router(model_list=list(router.registry().all()))
+        next_source = RouterDeprecationSource(lambda: replica)
+        assert await next_source.prepare_revision(now.date()) == revision
         replacement = DeprecationIssueProjector.from_prisma(db.prisma, next_source)
-        restarted = await interrupt_after_page(replacement, now + timedelta(seconds=10), next_source.revision)
-        assert restarted.source_revision != partial.source_revision
-        assert restarted.complete is False
+        resumed = await interrupt_after_page(
+            replacement, now + timedelta(seconds=10), revision, partial.cursor.deployment
+        )
+        assert resumed.observed_at == partial.observed_at
+        assert resumed.cursor.deployment > partial.cursor.deployment
         assert (await repository.get_issue(old.id)).active is True
         for iteration in range(10):
-            await replacement.run(now + timedelta(seconds=20 + iteration))
+            current = replacement if iteration % 2 == 0 else projector
+            await current.run(now + timedelta(seconds=20 + iteration))
             complete = await config.get_param(checkpoint_name)
             if _ProjectionCheckpoint.model_validate(complete.param_value).complete:
                 break
