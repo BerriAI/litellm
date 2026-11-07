@@ -6,6 +6,7 @@ from threading import Event
 from typing import Final, Protocol
 
 from fastapi import Request
+from pydantic import BaseModel, ConfigDict
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
@@ -101,7 +102,7 @@ class LDAPSync:
         self.teams = TeamRepository(prisma_client, use_writer=True)
         self.users = UserRepository(prisma_client, use_writer=True)
 
-    async def sync_group(self, group: DirectoryGroup) -> None:
+    async def sync_group(self, group: DirectoryGroup, deadline: float) -> None:
         member_ids: Final = await resolve_user_ids(self.users, group, self.settings)
         if isinstance(member_ids, DirectoryError):
             verbose_proxy_logger.warning("LDAP sync skipped team_id=%s: %s", group.team_id, member_ids.reason)
@@ -128,6 +129,12 @@ class LDAPSync:
                 team is None,
                 sorted(member_ids - existing),
                 sorted(existing - member_ids),
+            )
+            return
+        # Like spend log cleanup, issue no write once the run budget is spent; the lock outlives the budget.
+        if asyncio.get_running_loop().time() >= deadline:
+            verbose_proxy_logger.warning(
+                "LDAP sync reached its time budget before updating team_id=%s; retrying next interval", group.team_id
             )
             return
         actor: Final = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
@@ -193,7 +200,7 @@ class LDAPSync:
                 verbose_proxy_logger.warning("LDAP sync skipped group_dn=%s: %s", group.group_dn, group.reason)
                 continue
             try:
-                await self.sync_group(group)
+                await self.sync_group(group, deadline)
             except Exception as exc:  # noqa: BLE001  # isolate failed groups so later groups can still synchronize
                 verbose_proxy_logger.warning(
                     "LDAP sync failed team_id=%s (%s); retrying next interval", group.team_id, type(exc).__name__
@@ -213,11 +220,18 @@ class LDAPSync:
         await self._sync()
 
 
+class _EnabledFlag(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    enabled: bool = False
+
+
 def ldap_sync_settings(general_settings: Mapping[str, object]) -> LDAPSyncSettings | None:
-    """The validated ``ldap_sync`` settings when the sync is enabled, otherwise ``None``."""
+    """The validated ``ldap_sync`` settings when the sync is enabled; a disabled block is not validated further."""
     raw: Final = general_settings.get("ldap_sync")
-    settings: Final = None if raw is None else LDAPSyncSettings.model_validate(raw)
-    return settings if settings is not None and settings.enabled else None
+    if raw is None or not _EnabledFlag.model_validate(raw).enabled:
+        return None
+    return LDAPSyncSettings.model_validate(raw)
 
 
 def initialize_ldap_sync(

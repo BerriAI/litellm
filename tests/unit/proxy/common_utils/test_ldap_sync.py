@@ -174,10 +174,10 @@ async def test_second_worker_cannot_sync_while_first_workers_run_holds_the_lock(
     release: Final = asyncio.Event()
     original: Final = first.sync_group
 
-    async def held_sync_group(group: DirectoryGroup) -> None:
+    async def held_sync_group(group: DirectoryGroup, deadline: float) -> None:
         entered.set()
         await release.wait()
-        await original(group)
+        await original(group, deadline)
 
     monkeypatch.setattr(first, "sync_group", held_sync_group)
     running: Final = asyncio.create_task(first.run())
@@ -279,26 +279,48 @@ async def test_failed_team_creation_does_not_block_later_groups(monkeypatch: pyt
 
 
 @pytest.mark.asyncio
-async def test_time_budget_stops_between_teams_without_interrupting_a_write(monkeypatch: pytest.MonkeyPatch):
+async def test_team_write_already_started_finishes_past_the_time_budget(monkeypatch: pytest.MonkeyPatch):
+    import litellm.proxy.common_utils.ldap_sync as ldap_sync_module
+
     prisma: Final = _FakePrisma(users=[_user("alice")], teams=[_team()])
     connection: Final = Connection(
         [group(TEAM, member=[ALICE]), group("later", member=[ALICE])], {ALICE: [user("alice")]}
     )
     job: Final = job_for(prisma, connection, SETTINGS.model_copy(update={"litellm_match_field": "user_id"}))
     job.time_budget_seconds = 0.5
-    original: Final = job.sync_group
-    started: list[str] = []  # mutable-ok: records which teams began syncing
+    original: Final = ldap_sync_module.sync_team_roster
+    started: list[str] = []  # mutable-ok: records which teams began writing
 
-    async def slow_sync_group(group: DirectoryGroup) -> None:
-        started.append(group.team_id)
+    async def slow_roster_write(*args: object, **kwargs: object) -> object:
+        started.append(str(args[1]))
         await asyncio.sleep(1)
-        await original(group)
+        return await original(*args, **kwargs)  # pyright: ignore[reportArgumentType]  # forwards the real arguments
 
-    monkeypatch.setattr(job, "sync_group", slow_sync_group)
+    monkeypatch.setattr(ldap_sync_module, "sync_team_roster", slow_roster_write)
     await job.run()
     assert started == [TEAM]
     assert [member.user_id for member in prisma.writer_db.litellm_teamtable.rows[TEAM].members_with_roles] == ["alice"]
     assert set(prisma.writer_db.litellm_teamtable.rows) == {TEAM}
+
+
+@pytest.mark.asyncio
+async def test_no_team_write_starts_once_the_time_budget_is_spent(monkeypatch: pytest.MonkeyPatch):
+    import litellm.proxy.common_utils.ldap_sync as ldap_sync_module
+
+    prisma: Final = _FakePrisma(users=[_user("alice")], teams=[_team()])
+    connection: Final = Connection([group(TEAM, member=[ALICE])], {ALICE: [user("alice")]})
+    job: Final = job_for(prisma, connection, SETTINGS.model_copy(update={"litellm_match_field": "user_id"}))
+    job.time_budget_seconds = 0.5
+    original: Final = ldap_sync_module.resolve_user_ids
+
+    async def slow_user_match(*args: object, **kwargs: object) -> object:
+        await asyncio.sleep(1)
+        return await original(*args, **kwargs)  # pyright: ignore[reportArgumentType]  # forwards the real arguments
+
+    monkeypatch.setattr(ldap_sync_module, "resolve_user_ids", slow_user_match)
+    await job.run()
+    assert prisma.transactions == 0
+    assert prisma.writer_db.litellm_teamtable.rows[TEAM].members_with_roles == []
 
 
 @pytest.mark.asyncio
@@ -370,8 +392,12 @@ async def test_nested_group_of_any_class_keeps_the_team_and_its_keys(object_clas
 
 @pytest.mark.parametrize(
     "general_settings",
-    [{}, {"ldap_sync": {"enabled": False}}],
-    ids=["absent", "disabled"],
+    [
+        {},
+        {"ldap_sync": {"enabled": False}},
+        {"ldap_sync": {"enabled": False, "server_url": "not-a-url", "bind_dn": "cn=admin", "interval_minutes": 1}},
+    ],
+    ids=["absent", "disabled", "disabled_with_invalid_fields"],
 )
 def test_absent_or_disabled_ldap_sync_has_no_settings(general_settings: Mapping[str, object]):
     assert ldap_sync_settings(general_settings) is None

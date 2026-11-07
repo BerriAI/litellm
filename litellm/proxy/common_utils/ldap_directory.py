@@ -279,7 +279,6 @@ def read_directory(
             )
             if len(group_ids) != len(frozenset(group_ids)):
                 return DirectoryError("LDAP group IDs are not unique within the selected groups")
-            # Users often belong to many groups; resolve each member value once per snapshot.
             members: Final[dict[str, str | DirectoryError]] = {}  # mutable-ok: per-snapshot member lookup cache
             groups: Final = tuple(_read_group(client, settings, entry, cancellation, members) for entry in entries)
             _check_cancelled(cancellation)
