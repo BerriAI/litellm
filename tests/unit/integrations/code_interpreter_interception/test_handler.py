@@ -9,6 +9,7 @@ import time
 from typing import Final
 
 import pytest
+from pydantic import TypeAdapter
 
 from litellm.integrations.code_interpreter_interception.handler import (
     _INTERCEPTION_ACTIVE_KEY as _ACTIVE_KEY,

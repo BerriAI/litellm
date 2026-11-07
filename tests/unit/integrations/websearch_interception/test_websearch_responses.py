@@ -7,10 +7,12 @@ builds a Responses-format follow-up request.
 """
 
 from types import SimpleNamespace
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from litellm.litellm_core_utils.allowed_tools_tool_choice import tool_calls_the_choice_excludes
 from litellm.integrations.websearch_interception.handler import (
     WebSearchInterceptionLogger,
 )

@@ -1,15 +1,23 @@
 import json
 import sys
 import types
+from collections.abc import Mapping, Sequence
+from contextlib import nullcontext
+from types import MappingProxyType, SimpleNamespace
+from typing import Final
 
 import pytest
 import respx
 from httpx import Response
 from mcp.types import CallToolResult, TextContent
-from unittest.mock import AsyncMock, patch
+from mcp.types import Tool as MCPTool
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import litellm
-from litellm.types.utils import ModelResponse
+from litellm.proxy._experimental.mcp_server.faults.list_outcomes import AggregateToolListing
+from litellm.types.mcp_server.mcp_server_manager import MCPServer
+from litellm.types.utils import ModelResponse, ModelResponseStream
+from litellm.utils import CustomStreamWrapper
 
 from litellm.responses.mcp import chat_completions_handler
 from litellm.responses.mcp.chat_completions_handler import (
@@ -1482,6 +1490,118 @@ async def test_request_selected_mcp_guardrail_blocks_before_upstream(monkeypatch
     assert ("request-selected MCP block" in tool_message["content"]) is selected
 
 
+_ECHO_ARGUMENTS: Final = '{"value": "PING"}'
+_CHAT_ROUND_ONE: Final = MappingProxyType(
+    {
+        "id": "chatcmpl-round-one",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "gpt-5.6",
+        "choices": (
+            MappingProxyType(
+                {
+                    "index": 0,
+                    "finish_reason": "tool_calls",
+                    "message": MappingProxyType(
+                        {
+                            "role": "assistant",
+                            "content": None,
+                            "tool_calls": (
+                                MappingProxyType(
+                                    {
+                                        "id": "call_echo",
+                                        "type": "function",
+                                        "function": MappingProxyType({"name": "echo", "arguments": _ECHO_ARGUMENTS}),
+                                    }
+                                ),
+                            ),
+                        }
+                    ),
+                }
+            ),
+        ),
+        "usage": MappingProxyType(
+            {
+                "prompt_tokens": 71,
+                "completion_tokens": 19,
+                "total_tokens": 90,
+                "prompt_tokens_details": MappingProxyType({"cached_tokens": 32}),
+            }
+        ),
+    }
+)
+_CHAT_ROUND_TWO: Final = MappingProxyType(
+    {
+        "id": "chatcmpl-round-two",
+        "object": "chat.completion",
+        "created": 2,
+        "model": "gpt-5.6",
+        "choices": (
+            MappingProxyType(
+                {
+                    "index": 0,
+                    "finish_reason": "stop",
+                    "message": MappingProxyType({"role": "assistant", "content": "PING"}),
+                }
+            ),
+        ),
+        "usage": MappingProxyType(
+            {
+                "prompt_tokens": 149,
+                "completion_tokens": 5,
+                "total_tokens": 154,
+                "prompt_tokens_details": MappingProxyType({"cached_tokens": 64}),
+            }
+        ),
+    }
+)
+
+
+def _serve_chat_rounds(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, rounds: Sequence[Response]
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    respx_mock.post("https://mcp-chat-rounds.example.com/v1/chat/completions").mock(side_effect=list(rounds))
+
+
+def _ok(body: Mapping[str, object]) -> Response:
+    return Response(200, content=json.dumps(body, default=dict))
+
+
+def _chat_stream_events(body: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
+    completed: Final = json.loads(json.dumps(body, default=dict))
+    choice: Final = completed["choices"][0]
+    message: Final = choice["message"]
+    calls: Final = message.get("tool_calls") or []
+    delta: Final = (
+        {**message, "tool_calls": [{**call, "index": index} for index, call in enumerate(calls)]} if calls else message
+    )
+    head: Final = {"id": completed["id"], "object": "chat.completion.chunk", "created": 1, "model": completed["model"]}
+    return (
+        {**head, "choices": [{"index": 0, "delta": delta, "finish_reason": None}]},
+        {**head, "choices": [{"index": 0, "delta": {}, "finish_reason": choice["finish_reason"]}]},
+        {**head, "choices": [], "usage": completed["usage"]},
+    )
+
+
+def _sse(events: Sequence[Mapping[str, object]]) -> bytes:
+    return b"".join(f"data: {json.dumps(event)}\n\n".encode() for event in events)
+
+
+def _streamed(body: Mapping[str, object]) -> Response:
+    return Response(
+        200,
+        content=_sse(_chat_stream_events(body)) + b"data: [DONE]\n\n",
+        headers={"content-type": "text/event-stream"},
+    )
+
+
+async def _read_all(stream: CustomStreamWrapper) -> tuple[ModelResponseStream, ...]:
+    return tuple([chunk async for chunk in stream])
+
+
 _MCP_ECHO_TOOL: Final = MCPTool.model_validate(
     {"name": "echo", "inputSchema": {"type": "object", "properties": {"value": {"type": "string"}}}},
     by_name=False,
@@ -1517,14 +1637,14 @@ def _served_by_a_recording_mcp_server(
     catalog: SimpleNamespace = SimpleNamespace(operation=nullcontext),
 ) -> None:
     monkeypatch.setattr(
-        "litellm.proxy.mcp_server.server._get_tools_from_mcp_servers",
+        "litellm.proxy._experimental.mcp_server.server._get_tools_from_mcp_servers",
         AsyncMock(return_value=AggregateToolListing(tools=[listed], outcomes={})),
     )
     monkeypatch.setitem(
         sys.modules, "litellm.proxy.proxy_server", SimpleNamespace(proxy_logging_obj=None, prisma_client=None)
     )
     monkeypatch.setattr(
-        "litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager",
+        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
         SimpleNamespace(
             catalog=catalog,
             get_registry=MagicMock(return_value={}),

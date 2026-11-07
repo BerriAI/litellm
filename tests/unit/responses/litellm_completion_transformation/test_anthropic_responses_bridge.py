@@ -19,6 +19,7 @@ from litellm.responses.litellm_completion_transformation.transformation import (
 )
 from litellm.types.llms.openai import ResponsesAPIStreamEvents
 from litellm.types.utils import Message, ModelResponse
+from tests.unit.proxy.conftest import httpx_transport
 
 
 def test_response_api_handler_merges_metadata_and_service_tier_without_error():
@@ -563,6 +564,25 @@ def _chat_answer() -> httpx.Response:
             "model": "the-model",
             "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "done"}}],
             "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        },
+    )
+
+
+_ANTHROPIC_MESSAGES_URL: Final = "https://api.anthropic.com/v1/messages"
+
+
+def _anthropic_message(*content: Mapping[str, object]) -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={
+            "id": "msg_allowed_tools",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-haiku-4-5",
+            "content": list(content),
+            "stop_reason": "end_turn",
+            "stop_sequence": None,
+            "usage": {"input_tokens": 1, "output_tokens": 1},
         },
     )
 

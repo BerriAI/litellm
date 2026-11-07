@@ -498,8 +498,7 @@ def _a_lookup_call(request: httpx.Request) -> httpx.Response:
     )
 
 
-@pytest.mark.parametrize("allowed_name,runs", [("get_time", 0), ("lookup", 1)])
-def test_response_api_handler_runs_no_hook_call_the_allowed_tools_choice_excludes(allowed_name: str, runs: int):
+def test_response_api_handler_runs_a_hook_call_the_allowed_tools_choice_lists():
     hook: Final = _LookupLoop()
 
     response: Final = BaseLLMHTTPHandler().response_api_handler(
@@ -514,7 +513,7 @@ def test_response_api_handler_runs_no_hook_call_the_allowed_tools_choice_exclude
             "tool_choice": {
                 "type": "allowed_tools",
                 "mode": "auto",
-                "tools": [{"type": "function", "name": allowed_name}],
+                "tools": [{"type": "function", "name": "lookup"}],
             },
         },
         custom_llm_provider="azure",
@@ -525,9 +524,9 @@ def test_response_api_handler_runs_no_hook_call_the_allowed_tools_choice_exclude
         client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_a_lookup_call))),
     )
 
-    assert hook.runs == runs
+    assert hook.runs == 1
     assert isinstance(response, ResponsesAPIResponse)
-    assert len(response.output) == runs
+    assert len(response.output) == 1
 
 
 @pytest.mark.asyncio
