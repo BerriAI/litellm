@@ -954,9 +954,8 @@ async def test_gateway_served_names_matches_alias_server_name_name_access_group_
     assert served == {"github", "github-server", "github-name", "deepwiki", "prod-group", "my-toolset"}
 
 
-
 @pytest.mark.asyncio
-async def test_gateway_served_names_leaves_out_a_name_whose_toolset_read_fails():
+async def test_gateway_served_names_leaves_out_a_name_whose_toolset_read_fails() -> None:
     from litellm.responses.mcp.litellm_proxy_mcp_handler import _gateway_served_names
 
     prisma: Final = MagicMock()
@@ -973,6 +972,7 @@ async def test_gateway_served_names_leaves_out_a_name_whose_toolset_read_fails()
         served: Final = await _gateway_served_names({"research"}, servers=lambda: ())
 
     assert served == frozenset()
+
 
 @pytest.mark.asyncio
 async def test_gateway_served_names_matches_server_id_short_prefix_and_alias_case_like_the_gateway():
