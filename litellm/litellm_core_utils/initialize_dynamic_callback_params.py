@@ -28,7 +28,7 @@ def inherit_message_logging_privacy(disabled: bool) -> Generator[None]:
 
 
 def iter_client_callback_metadata_dicts(
-    kwargs: dict[str, Any],
+    kwargs: Mapping[str, object],
 ) -> Iterator[tuple[str, dict[str, Any]]]:
     litellm_params: Final = kwargs.get("litellm_params")
     if isinstance(litellm_params, dict):
@@ -96,6 +96,18 @@ def validate_capture_message_content_value(value: str) -> None:
     if value not in CAPTURE_MESSAGE_CONTENT_VALUES:
         raise ValueError(
             f"Invalid capture_message_content {value!r}: must be one of {sorted(CAPTURE_MESSAGE_CONTENT_VALUES)}"
+        )
+
+
+def validate_excluded_services_value(value: str) -> None:
+    from litellm.integrations.otel.model.config import invalid_excluded_service_names
+
+    names: Final = tuple(name.strip().lower() for name in value.split(","))
+    invalid_names: Final = invalid_excluded_service_names(value)
+    allowed: Final = "redis, postgres, postgresql, batch_write_to_db, redis_-prefixed service names, or none"
+    if invalid_names or ("none" in names and len(names) != 1):
+        raise ValueError(
+            f"Invalid excluded_services {value!r}: use {allowed}; 'none' must be used alone and names cannot be empty"
         )
 
 

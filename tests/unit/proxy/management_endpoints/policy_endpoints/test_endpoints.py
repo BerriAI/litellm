@@ -5,14 +5,20 @@ Tests _test_guardrail_definitions and _compute_overall_action directly
 without needing a running proxy.
 """
 
+import json
+from pathlib import Path
+from unittest.mock import patch
+
 import pytest
 from fastapi import Request
 
+import litellm
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.management_endpoints.policy_endpoints.endpoints import (
     GuardrailTestResultEntry,
     _compute_overall_action,
     _test_guardrail_definitions,
+    get_policy_templates,
     list_policies,
 )
 from litellm.proxy.policy_engine.policy_registry import get_policy_registry
@@ -368,3 +374,19 @@ async def test_list_policies_reports_each_loaded_policy_with_its_resolved_guardr
 
     assert response == PolicyListResponse(policies=expected_policies, total_count=0)
     assert list(response.policies) == list(expected_policies)
+
+
+@pytest.mark.parametrize("flag", ["LITELLM_OFFLINE_MODE", "LITELLM_LOCAL_POLICY_TEMPLATES"])
+@pytest.mark.asyncio
+async def test_policy_templates_serve_the_bundled_copy_without_fetching(monkeypatch: pytest.MonkeyPatch, flag: str):
+    monkeypatch.setenv(flag, "true")
+    bundled = json.loads((Path(litellm.__file__).parent / "policy_templates_backup.json").read_text(encoding="utf-8"))
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.get_async_httpx_client",
+        side_effect=AssertionError("policy templates were fetched"),
+    ) as get_client:
+        response = await get_policy_templates(request=_policy_list_request(), user_api_key_dict=UserAPIKeyAuth())
+
+    get_client.assert_not_called()
+    assert response == bundled

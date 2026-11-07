@@ -62,12 +62,12 @@ def _body(request: Request) -> dict[str, JsonValue]:
 # ciphertext the caller received, because the spend row id is read from response_obj["id"] before the
 # ResponsesIDSecurity hook rewrites it in place; the row is looked up under both ids until that ordering is fixed on
 # main
-def _spend_row(client_id: str, issued_id: str) -> dict[str, JsonValue]:
+def _spend_row(*request_ids: str) -> dict[str, JsonValue]:
     rows: Final = eventually(
         lambda: read_rows(
             'SELECT model_group, status, prompt_tokens, completion_tokens FROM "LiteLLM_SpendLogs" '
             "WHERE request_id = ANY(%s)",
-            ([client_id, issued_id],),  # pyright: ignore[reportArgumentType]  # psycopg adapts the list to a text array
+            (list(request_ids),),  # pyright: ignore[reportArgumentType]  # psycopg adapts the list to a text array
         ),
         lambda found: len(found) == 1,
         seconds=70,
@@ -120,4 +120,29 @@ async def test_async_openai_sdk_responses_stream_is_served_by_the_native_respons
         assert issued.upstream == f"resp_upstream_{marker}", completed.response.id
         request: Final = _native_request(wire)
         assert _body(request) == {"model": GPT, "input": _prompt(marker), "stream": True}, request.body
-        assert _spend_row(completed.response.id, issued.issued) == _success_row(model)
+        assert _spend_row(completed.response.id) == _success_row(model)
+
+
+def test_codex_agent_message_with_encrypted_content_reaches_the_native_responses_route_intact(
+    gateway: Gateway,
+) -> None:
+    marker: Final = uuid.uuid4().hex
+    agent_message: Final[JsonValue] = {
+        "type": "agent_message",
+        "author": "/root/reviewer",
+        "recipient": "/root",
+        "content": [
+            {"type": "input_text", "text": "Worker message:\n"},
+            {"type": "encrypted_content", "encrypted_content": f"gAAAAABsynthetic-agent-ciphertext-{marker}=="},
+        ],
+    }
+    user_turn: Final[JsonValue] = {"type": "message", "role": "user", "content": _prompt(marker)}
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(scenario, wire)
+        response: Final = gateway.request(
+            "POST",
+            "/v1/responses",
+            {"model": model, "input": [agent_message, user_turn], "cache": {"no-cache": True}},
+        )
+        assert response.status_code == 200, response.text
+        assert _body(_native_request(wire))["input"] == [agent_message, user_turn]

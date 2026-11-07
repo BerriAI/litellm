@@ -5,13 +5,14 @@ use std::{
 
 use litellm_host::lifecycle::CallEvent;
 use litellm_host::lifecycle::ExecutionEvent;
-use litellm_llms::base_llm::ocr::settings::OcrSettings;
+use litellm_llms::base_llm::ocr::{error::PagesFault, settings::OcrSettings};
 
 use rstest::rstest;
 
 use super::*;
 
 const MODEL: &str = "azure_ai/doc-intelligence/prebuilt-read";
+const LAYOUT_MODEL: &str = "azure_ai/doc-intelligence/prebuilt-layout";
 
 fn read_request(base: &str, options: Value) -> LiteLLMOcrRequest {
     ocr_request(MODEL, base, options)
@@ -64,12 +65,13 @@ async fn pages_features_and_extra_options_map_to_the_analyze_call() {
 }
 
 #[rstest]
-#[case(json!({"pages": [true]}), Error::Pages("expected only integers or only strings".into()))]
-#[case(json!({"pages": [1, "2"]}), Error::Pages("expected only integers or only strings".into()))]
-#[case(json!({"pages": [-1]}), Error::Pages("negative page index".into()))]
-#[case(json!({"pages": "1&&features=bad"}), Error::Pages("invalid native page range".into()))]
+#[case(json!({"pages": [true]}), Error::Pages(PagesFault::Mixed))]
+#[case(json!({"pages": [1, "2"]}), Error::Pages(PagesFault::Mixed))]
+#[case(json!({"pages": [-1]}), Error::Pages(PagesFault::Negative))]
+#[case(json!({"pages": "1&&features=bad"}), Error::Pages(PagesFault::Range))]
 #[case(json!({"features": "languages&pages=1"}), Error::Features)]
 #[case(json!({"req_format": "azure"}), Error::RequestFormat)]
+#[case(json!({"outputContentFormat": "html"}), Error::OutputContentFormat)]
 #[tokio::test]
 async fn invalid_pages_features_and_format_are_rejected_before_sending(
     #[case] options: Value,
@@ -128,6 +130,137 @@ async fn an_inline_document_is_sent_as_base64_and_only_page_text_is_kept(#[case]
         assert_eq!(sent.query(field), None, "{field}");
     }
     assert_eq!(sent.json(), json!({"base64Source": "YWJj"}));
+}
+
+#[rstest]
+#[case::lower_case("markdown")]
+#[case::capitalized("Markdown")]
+#[tokio::test]
+async fn markdown_output_is_requested_on_the_analyze_call_and_split_into_pages(
+    #[case] output_content_format: &str,
+) {
+    let upstream = upstream([json_response(json!({
+        "status": "succeeded",
+        "analyzeResult": {
+            "content": "# Tïtle\n\n<!-- PageBreak -->\n\n| a |",
+            "contentFormat": "markdown",
+            "stringIndexType": "unicodeCodePoint",
+            "pages": [
+                {"pageNumber": 1, "spans": [{"offset": 0, "length": 29}], "lines": [{"content": "Tïtle"}]},
+                {"pageNumber": 2, "spans": [{"offset": 29, "length": 5}], "lines": [{"content": "a"}]}
+            ]
+        }
+    }))])
+    .await;
+
+    let response = perform(ocr_request(
+        LAYOUT_MODEL,
+        &upstream.uri(),
+        json!({"outputContentFormat": output_content_format, "pages": [0, 1]}),
+    ))
+    .await
+    .unwrap();
+
+    let sent = only_request(&upstream).await;
+    assert_eq!(
+        sent.query("outputContentFormat").as_deref(),
+        Some("markdown")
+    );
+    assert_eq!(
+        sent.query("stringIndexType").as_deref(),
+        Some("unicodeCodePoint")
+    );
+    assert_eq!(sent.query("pages").as_deref(), Some("1,2"));
+    assert_eq!(sent.json(), json!({"base64Source": "YWJj"}));
+    assert_eq!(
+        response.content.as_deref(),
+        Some("# Tïtle\n\n<!-- PageBreak -->\n\n| a |")
+    );
+    let pages = response
+        .pages
+        .iter()
+        .map(|page| page.markdown.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(pages, ["# Tïtle\n\n<!-- PageBreak -->\n\n", "| a |"]);
+    assert_eq!(
+        response.extra_fields.get("stringIndexType"),
+        Some(&json!("unicodeCodePoint"))
+    );
+    assert_eq!(
+        response.usage_info.as_ref().unwrap().pages_processed,
+        Some(2)
+    );
+}
+
+#[rstest]
+#[case::native_markdown(LAYOUT_MODEL, json!({"outputContentFormat": "markdown", "req_format": "native"}), Some("markdown"))]
+#[case::markdown_on_read(MODEL, json!({"outputContentFormat": "markdown"}), Some("markdown"))]
+#[case::text(LAYOUT_MODEL, json!({"outputContentFormat": "text"}), Some("text"))]
+#[case::omitted(LAYOUT_MODEL, json!({}), None)]
+#[tokio::test]
+async fn only_layout_markdown_in_litellm_format_asks_for_code_point_offsets(
+    #[case] model: &str,
+    #[case] options: Value,
+    #[case] output_content_format: Option<&str>,
+) {
+    let upstream = upstream([json_response(json!({
+        "status": "succeeded",
+        "analyzeResult": {
+            "contentFormat": "text",
+            "stringIndexType": "textElements",
+            "pages": [{"pageNumber": 1, "lines": [{"content": "hello"}]}]
+        }
+    }))])
+    .await;
+
+    let response = perform(ocr_request(model, &upstream.uri(), options))
+        .await
+        .unwrap();
+
+    let sent = only_request(&upstream).await;
+    assert_eq!(
+        sent.query("outputContentFormat").as_deref(),
+        output_content_format
+    );
+    assert_eq!(sent.query("stringIndexType"), None);
+    assert_eq!(sent.json(), json!({"base64Source": "YWJj"}));
+    assert_eq!(response.pages[0].markdown, "hello");
+    assert_eq!(response.extra_fields.get("stringIndexType"), None);
+}
+
+#[rstest]
+#[case::snake_case(json!({"output_content_format": "markdown"}), Some("markdown"))]
+#[case::padded(json!({"outputContentFormat": " markdown "}), Some("markdown"))]
+#[case::empty(json!({"outputContentFormat": ""}), None)]
+#[case::empty_camel_case_falls_back_to_snake_case(
+    json!({"outputContentFormat": "", "output_content_format": "markdown"}),
+    Some("markdown")
+)]
+#[case::dropped(json!({"outputContentFormat": "html", "drop_params": true}), None)]
+#[tokio::test]
+async fn the_requested_output_content_format_reaches_azure_in_its_query_spelling(
+    #[case] options: Value,
+    #[case] output_content_format: Option<&str>,
+) {
+    let upstream = upstream([json_response(json!({
+        "status": "succeeded",
+        "analyzeResult": {"pages": [{"pageNumber": 1, "lines": [{"content": "hello"}]}]}
+    }))])
+    .await;
+
+    let response = perform(ocr_request(MODEL, &upstream.uri(), options))
+        .await
+        .unwrap();
+
+    let sent = only_request(&upstream).await;
+    assert_eq!(
+        sent.query("outputContentFormat").as_deref(),
+        output_content_format
+    );
+    assert_eq!(sent.query("output_content_format"), None);
+    assert_eq!(sent.query("drop_params"), None);
+    assert_eq!(sent.json(), json!({"base64Source": "YWJj"}));
+    assert_eq!(response.pages[0].markdown, "hello");
 }
 
 #[tokio::test]
@@ -315,7 +448,11 @@ async fn polling_does_not_follow_redirects() {
         .await
         .unwrap_err();
 
-    assert!(error.to_string().contains("status 302"), "{error}");
+    assert_eq!(
+        error.upstream_response().map(|(status, ..)| status),
+        Some(302),
+        "{error}"
+    );
     assert_eq!(received(&upstream).await.len(), 2);
 }
 
@@ -389,12 +526,15 @@ async fn malformed_provider_pages_report_the_response_path(
 }
 
 #[rstest]
-#[case::missing(None)]
-#[case::relative(Some("/relative"))]
-#[case::cross_origin(Some("http://example.com/operation"))]
-#[case::with_userinfo(Some("http://user:password@127.0.0.1/operation"))]
+#[case::missing(None, false)]
+#[case::relative(Some("/relative"), true)]
+#[case::cross_origin(Some("http://example.com/operation"), false)]
+#[case::with_userinfo(Some("http://user:password@127.0.0.1/operation"), false)]
 #[tokio::test]
-async fn an_unusable_operation_location_is_rejected(#[case] location: Option<&str>) {
+async fn an_unusable_operation_location_is_rejected(
+    #[case] location: Option<&str>,
+    #[case] unparseable: bool,
+) {
     let response = location
         .into_iter()
         .fold(ResponseTemplate::new(202), |response, location| {
@@ -407,6 +547,11 @@ async fn an_unusable_operation_location_is_rejected(#[case] location: Option<&st
         .unwrap_err();
 
     assert!(error.to_string().contains("operation-location"), "{error}");
+    assert!(error.is_response());
+    assert_eq!(
+        litellm_error::find::<url::ParseError>(&error).is_some(),
+        unparseable
+    );
     assert_eq!(received(&upstream).await.len(), 1);
 }
 

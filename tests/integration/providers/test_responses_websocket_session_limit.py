@@ -9,6 +9,7 @@ import threading
 import time
 import uuid
 from collections.abc import Generator, Iterator, Mapping
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -53,7 +54,7 @@ JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 SESSION_LIMIT_FIELD: Final = "responses_websocket_session_limit_seconds"
 LIMIT_CLOSE_REASON: Final = "Session duration limit reached"
 RELOAD_INTERVAL_SECONDS: Final = 3
-WORKER_SYNC_SECONDS: Final = RELOAD_INTERVAL_SECONDS + 7
+WORKER_SYNC_DEADLINE_SECONDS: Final = 60
 CAP_SECONDS: Final = 60
 CAP_CLOSE_SLACK_SECONDS: Final = 15
 DEAF_CLOSE_SLACK_SECONDS: Final = 3
@@ -839,11 +840,28 @@ def _holding_worker(workers: frozenset[int], client_port: int) -> int | None:
     return next((pid for pid in sorted(workers) if holds(pid)), None)
 
 
-def _settled_on_every_worker(written_at: float) -> None:
+def _session_limit_on_a_worker(candidate: Gateway) -> tuple[int, JsonValue]:
+    response: Final = candidate.request(
+        "GET",
+        "/health/integration-general-setting",
+        params={"name": SESSION_LIMIT_FIELD},
+        headers={"connection": "close"},
+    )
+    assert response.status_code == 200, f"Session limit on a worker: {response.status_code} {response.text}"
+    return int(response.headers["x-integration-worker-pid"]), JSON_OBJECT.validate_json(response.content)["value"]
+
+
+def _session_limits_by_worker(candidate: Gateway) -> tuple[tuple[int, JsonValue], ...]:
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        probes: Final = tuple(pool.submit(_session_limit_on_a_worker, candidate) for _ in range(16))
+        return tuple(probe.result() for probe in probes)
+
+
+def _settled_on_every_worker(candidate: Gateway, workers: frozenset[int], limit: JsonValue) -> None:
     eventually(
-        lambda: time.monotonic() - written_at,
-        lambda elapsed: elapsed >= WORKER_SYNC_SECONDS,
-        seconds=WORKER_SYNC_SECONDS + 5,
+        lambda: _session_limits_by_worker(candidate),
+        lambda answers: frozenset(pid for pid, _ in answers) >= workers and all(value == limit for _, value in answers),
+        seconds=WORKER_SYNC_DEADLINE_SECONDS,
     )
 
 
@@ -939,16 +957,14 @@ async def _override_workload(owned: OwnedProxy, key: str, model: str, database_u
     ) as earlier:
         accepted_at: Final = time.monotonic()
         updates: Final = await _update_sequence(candidate, (7200, CAP_SECONDS, CAP_SECONDS))
-        written_at: Final = time.monotonic()
         stored_after_updates: Final = await asyncio.to_thread(_stored_limit, database_url)
-        await asyncio.to_thread(_settled_on_every_worker, written_at)
+        await asyncio.to_thread(_settled_on_every_worker, candidate, workers, CAP_SECONDS)
         opened: Final = await _sockets_on_every_worker(proxy, key, workers)
         capped: Final = await asyncio.gather(*tuple(_capped_close(socket) for socket in opened))
         earlier_result: Final = await _held_turn(earlier, model, accepted_at)
     delete: Final = await asyncio.to_thread(_delete_limit, candidate)
-    deleted_at: Final = time.monotonic()
     stored_after_delete: Final = await asyncio.to_thread(_general_settings_row, database_url)
-    await asyncio.to_thread(_settled_on_every_worker, deleted_at)
+    await asyncio.to_thread(_settled_on_every_worker, candidate, workers, None)
     restored: Final = await _idle_turn(
         proxy,
         key,

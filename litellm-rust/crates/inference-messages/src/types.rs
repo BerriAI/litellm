@@ -34,11 +34,11 @@ pub fn messages_body(body: Map<String, Value>) -> Result<MessagesRequest, Error>
 /// Python's `GenericLiteLLMParams(**kwargs)`.
 pub fn litellm_params(fields: Map<String, Value>) -> Result<LitellmParams, Error> {
     serde_json::from_value(Value::Object(fields))
-        .map_err(|err| Error::InvalidRequest(ErrorDetail::invalid("litellm params", err)))
+        .map_err(|err| Error::invalid_request(ErrorDetail::invalid("litellm params", err)))
 }
 
 pub(super) fn invalid_request(err: serde_json::Error) -> Error {
-    Error::InvalidRequest(ErrorDetail::invalid("Anthropic messages request", err))
+    Error::invalid_request(ErrorDetail::invalid("Anthropic messages request", err))
 }
 
 pub type MessagesCallResponse =
@@ -60,6 +60,16 @@ pub struct MessagesSettings {
     pub reasoning_auto_summary: bool,
     #[serde(default)]
     pub additional_drop_params: Vec<String>,
+    #[serde(default)]
+    pub request_timeout: Option<f64>,
+}
+
+impl MessagesSettings {
+    pub fn request_timeout(&self) -> Option<Duration> {
+        self.request_timeout
+            .and_then(|secs| Duration::try_from_secs_f64(secs).ok())
+            .filter(|timeout| !timeout.is_zero())
+    }
 }
 
 #[cfg(test)]
@@ -120,13 +130,15 @@ mod tests {
             },
             "drop_params": true,
             "reasoning_auto_summary": true,
-            "additional_drop_params": ["metadata.user_id", "thinking"]
+            "additional_drop_params": ["metadata.user_id", "thinking"],
+            "request_timeout": 1800.0
         }),
         MessagesShaping {
             settings: MessagesSettings {
                 drop_params: true,
                 reasoning_auto_summary: true,
                 additional_drop_params: vec!["metadata.user_id".to_string(), "thinking".to_string()],
+                request_timeout: Some(1800.0),
             },
             capabilities: MessagesModelCapabilities {
                 supports_reasoning: true,

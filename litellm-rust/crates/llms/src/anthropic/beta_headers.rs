@@ -76,7 +76,7 @@ mod tests {
     #[case::vertex_ai(BetaProvider::VertexAi, Some("tool-search-tool-2025-10-19"))]
     #[case::anthropic(BetaProvider::Anthropic, Some("advanced-tool-use-2025-11-20"))]
     #[case::azure_ai(BetaProvider::AzureAi, Some("advanced-tool-use-2025-11-20"))]
-    #[case::databricks(BetaProvider::Databricks, Some("advanced-tool-use-2025-11-20"))]
+    #[case::databricks(BetaProvider::Databricks, None)]
     #[case::bedrock_converse(BetaProvider::BedrockConverse, None)]
     fn filter_renames_per_host(
         #[case] provider: BetaProvider,
@@ -96,7 +96,10 @@ mod tests {
     }
 
     #[rstest]
-    #[case::azure_ai(BetaProvider::AzureAi, "fast-mode-2026-02-01,example-beta-2099-01-01")]
+    #[case::azure_ai(
+        BetaProvider::AzureAi,
+        "advisor-tool-2026-03-01,example-beta-2099-01-01"
+    )]
     #[case::anthropic(BetaProvider::Anthropic, "bash_20241022")]
     #[case::vertex_ai(BetaProvider::VertexAi, " , ")]
     fn filter_removes_header_when_nothing_survives(

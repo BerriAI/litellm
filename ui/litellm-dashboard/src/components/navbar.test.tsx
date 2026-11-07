@@ -1,7 +1,7 @@
 import userEvent from "@testing-library/user-event";
 import React from "react";
-import { describe, expect, it, vi } from "vitest";
-import { renderWithProviders, screen, waitFor } from "../../tests/test-utils";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { renderWithProviders, screen, waitFor, within } from "../../tests/test-utils";
 import Navbar from "./navbar";
 
 // Mock the hooks and utilities
@@ -11,6 +11,7 @@ vi.mock("@/components/networking", () => ({
     PROXY_BASE_URL: "",
     PROXY_LOGOUT_URL: "https://example.com/logout",
   }),
+  getUiPageUrl: (url: string) => url,
   serverRootPath: "",
 }));
 
@@ -89,7 +90,7 @@ vi.mock("./Navbar/CommunityEngagementButtons/CommunityEngagementButtons", () => 
 }));
 
 // Create mock functions that can be controlled in tests
-let mockUseThemeImpl = () => ({ logoUrl: null as string | null });
+let mockUseThemeImpl = (): { logoUrl: string | null; logoUrlDark?: string | null } => ({ logoUrl: null });
 let mockUseHealthReadinessDetailsImpl = () => ({ data: null as any });
 let mockGetLocalStorageItemImpl = (key: string) => null as string | null;
 const mockUseAuthorizedImpl = () => ({
@@ -135,6 +136,10 @@ Object.defineProperty(window, "location", {
 });
 
 describe("Navbar", () => {
+  afterEach(() => {
+    mockUseThemeImpl = () => ({ logoUrl: null });
+  });
+
   const defaultProps = {
     accessToken: "test-token",
     isPublicPage: false,
@@ -143,7 +148,7 @@ describe("Navbar", () => {
   it("should render without crashing", () => {
     renderWithProviders(<Navbar {...defaultProps} />);
 
-    expect(screen.getByRole("button", { name: /^notifications$/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^notifications/i })).toBeInTheDocument();
     expect(screen.getByText("Docs")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /open account menu/i })).toBeInTheDocument();
   });
@@ -249,24 +254,28 @@ describe("Navbar", () => {
     expect(useHealthReadinessDetailsSpy).toHaveBeenCalledWith(null);
   });
 
-  it("should use custom logo from theme context", () => {
-    mockUseThemeImpl = () => ({ logoUrl: "https://example.com/custom-logo.png" });
+  it.each(["https://example.com/dark-logo.png", null])(
+    "should use the configured dark logo %s with the light logo as fallback",
+    (logoUrlDark) => {
+      const logoUrl = "https://example.com/custom-logo.png";
+      mockUseThemeImpl = () => ({ logoUrl, logoUrlDark });
 
-    renderWithProviders(<Navbar {...defaultProps} />);
+      renderWithProviders(<Navbar {...defaultProps} />);
 
-    const logoImg = screen.getByAltText("LiteLLM Brand");
-    expect(logoImg).toHaveAttribute("src", "https://example.com/custom-logo.png");
-
-    // Reset mock
-    mockUseThemeImpl = () => ({ logoUrl: null });
-  });
+      const brand = within(screen.getByRole("link", { name: /litellm brand/i }));
+      const light = brand.getByAltText("LiteLLM Brand");
+      const dark = brand.getByAltText("");
+      expect(light).toHaveAttribute("src", logoUrl);
+      expect(dark).toHaveAttribute("src", logoUrlDark ?? logoUrl);
+    },
+  );
 
   it("should hide user dropdown and notifications on public pages", () => {
     const publicPageProps = { ...defaultProps, isPublicPage: true };
     renderWithProviders(<Navbar {...publicPageProps} />);
 
     expect(screen.queryByRole("button", { name: /open account menu/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /^notifications$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^notifications/i })).not.toBeInTheDocument();
   });
 
   it("should handle hide new feature indicators toggle", async () => {

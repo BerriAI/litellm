@@ -106,7 +106,21 @@ describe("ResponseView integration", () => {
     expect(screen.getByText("99% yes")).toBeInTheDocument();
     expect(screen.getByRole("meter", { name: "Yes probability" })).toHaveAttribute("aria-valuenow", "99");
     expect(screen.getByRole("meter", { name: "2: angry probability" })).toBeInTheDocument();
-    expect(screen.getByText("378 input / 63 output tokens")).toBeInTheDocument();
+    expect(screen.getByText("378 in / 63 out")).toBeInTheDocument();
+  });
+
+  it("leaves out the confidence badge when the provider reports no confidence", () => {
+    const withoutConfidence: SystemOneResponse = {
+      ...sampleResponse,
+      answers: {
+        dept: { type: "choice", choice: "technical", confidence: null, probabilities: { technical: 1 } },
+        frustration: { type: "score", score: 2, confidence: null, probabilities: { "2": 1 } },
+      },
+    };
+
+    render(<ResponseView response={withoutConfidence} isLoading={false} latencyMs={120} />);
+
+    expect(screen.queryByText(/% confidence/)).not.toBeInTheDocument();
   });
 
   it("selects the score level nearest a fractional calibrated score", () => {

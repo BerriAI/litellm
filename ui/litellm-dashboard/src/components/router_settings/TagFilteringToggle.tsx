@@ -1,13 +1,22 @@
 import React, { useId } from "react";
+import { useTranslation } from "react-i18next";
+import { CONFIG_OWNED_HINT, ConfigOwnedBadge } from "./ConfigOwned";
 import { Switch } from "@/components/ui/switch";
 
 interface TagFilteringToggleProps {
   enabled: boolean;
   routerFieldsMetadata: { [key: string]: any };
   onToggle: (enabled: boolean) => void;
+  ownedByConfig?: boolean;
 }
 
-const TagFilteringToggle: React.FC<TagFilteringToggleProps> = ({ enabled, routerFieldsMetadata, onToggle }) => {
+const TagFilteringToggle: React.FC<TagFilteringToggleProps> = ({
+  enabled,
+  routerFieldsMetadata,
+  onToggle,
+  ownedByConfig = false,
+}) => {
+  const { t } = useTranslation();
   const toggleId = useId();
 
   return (
@@ -15,8 +24,9 @@ const TagFilteringToggle: React.FC<TagFilteringToggleProps> = ({ enabled, router
       <div className="flex items-start justify-between">
         <div className="flex-1">
           <label htmlFor={toggleId} className="text-xs font-medium text-foreground uppercase tracking-wide">
-            {routerFieldsMetadata["enable_tag_filtering"]?.ui_field_name || "Enable Tag Filtering"}
+            {routerFieldsMetadata["enable_tag_filtering"]?.ui_field_name || t("routerSettingsForm.tagFiltering.label")}
           </label>
+          {ownedByConfig && <ConfigOwnedBadge />}
           <p className="text-xs text-muted-foreground mt-0.5">
             {routerFieldsMetadata["enable_tag_filtering"]?.field_description || ""}
             {routerFieldsMetadata["enable_tag_filtering"]?.link && (
@@ -28,13 +38,20 @@ const TagFilteringToggle: React.FC<TagFilteringToggleProps> = ({ enabled, router
                   rel="noopener noreferrer"
                   className="text-info hover:text-info/80 underline"
                 >
-                  Learn more
+                  {t("routerSettingsForm.tagFiltering.learnMore")}
                 </a>
               </>
             )}
           </p>
         </div>
-        <Switch id={toggleId} checked={enabled} onCheckedChange={onToggle} className="ml-4" />
+        <Switch
+          id={toggleId}
+          checked={enabled}
+          onCheckedChange={onToggle}
+          disabled={ownedByConfig}
+          title={ownedByConfig ? t(CONFIG_OWNED_HINT) : undefined}
+          className="ml-4"
+        />
       </div>
     </div>
   );

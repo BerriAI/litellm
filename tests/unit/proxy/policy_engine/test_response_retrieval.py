@@ -9,6 +9,7 @@ from litellm.proxy.policy_engine.policy_registry import get_policy_registry
 from litellm.proxy.policy_engine.response_retrieval import attach_post_call_pipelines_to_retrieval
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.router import Deployment, LiteLLM_Params
+from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 
 GOVERNED_MODEL_GROUP = "gpt-5.4-mini"
 GOVERNED_MODEL_ID = "deployment-governed"
@@ -36,13 +37,15 @@ def _deployment(model_group: str, model_id: str) -> Deployment:
 
 
 def _router(model_group_alias: dict[str, object] | None = None) -> FakeRouter:
-    return FakeRouter(
-        {
-            GOVERNED_MODEL_ID: _deployment(GOVERNED_MODEL_GROUP, GOVERNED_MODEL_ID),
-            UNGOVERNED_MODEL_ID: _deployment(UNGOVERNED_MODEL_GROUP, UNGOVERNED_MODEL_ID),
-            WILDCARD_MODEL_ID: _deployment(WILDCARD_MODEL_GROUP, WILDCARD_MODEL_ID),
-        },
-        model_group_alias,
+    return route_entry_points_to_stubs(
+        FakeRouter(
+            {
+                GOVERNED_MODEL_ID: _deployment(GOVERNED_MODEL_GROUP, GOVERNED_MODEL_ID),
+                UNGOVERNED_MODEL_ID: _deployment(UNGOVERNED_MODEL_GROUP, UNGOVERNED_MODEL_ID),
+                WILDCARD_MODEL_ID: _deployment(WILDCARD_MODEL_GROUP, WILDCARD_MODEL_ID),
+            },
+            model_group_alias,
+        )
     )
 
 

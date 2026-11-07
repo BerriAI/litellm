@@ -12,6 +12,8 @@ from integration._support.database import read_rows
 from integration._support.mcp import call_tool, mcp_peer, register_mcp, tool_names
 from integration._support.process import owned_proxy
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 
 @pytest.mark.covers("other.compatibility.mcp.persisted_tool_names_survive_candidate_startup")
 def test_existing_toolset_format_loads_before_start_and_keeps_sibling_denied(gateway: Gateway, tmp_path: Path) -> None:

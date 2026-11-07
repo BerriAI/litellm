@@ -22,14 +22,40 @@ describe("buildAccessGroupCreateBody", () => {
         description: " engineering access ",
         modelIds: ["gpt-5.2"],
         mcpServerIds: ["srv-1", "srv-2"],
+        mcpToolPermissions: { "srv-1": ["read_file"], "srv-2": [] },
         agentIds: ["agent-1"],
+        skillNames: ["private-plugin"],
       }),
     ).toStrictEqual({
       access_group_name: "g",
       description: "engineering access",
       access_model_names: ["gpt-5.2"],
       access_mcp_server_ids: ["srv-1", "srv-2"],
+      mcp_tool_permissions: { "srv-1": ["read_file"], "srv-2": [] },
       access_agent_ids: ["agent-1"],
+      access_skill_names: ["private-plugin"],
     });
+  });
+
+  it("omits access_skill_names when no skill is selected", () => {
+    expect(buildAccessGroupCreateBody({ ...emptyAccessGroupFormValues, name: "g", skillNames: [] })).toStrictEqual({
+      access_group_name: "g",
+    });
+  });
+
+  it("omits tool permissions when no server is selected", () => {
+    expect(
+      buildAccessGroupCreateBody({
+        ...emptyAccessGroupFormValues,
+        name: "g",
+        mcpToolPermissions: { "srv-1": ["read_file"] },
+      }),
+    ).toStrictEqual({ access_group_name: "g" });
+  });
+
+  it("omits an empty tool permission map so servers stay unrestricted", () => {
+    expect(
+      buildAccessGroupCreateBody({ ...emptyAccessGroupFormValues, name: "g", mcpServerIds: ["srv-1"] }),
+    ).toStrictEqual({ access_group_name: "g", access_mcp_server_ids: ["srv-1"] });
   });
 });

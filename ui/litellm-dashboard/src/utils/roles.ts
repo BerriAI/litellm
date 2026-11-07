@@ -1,4 +1,7 @@
+import type { ParseKeys } from "i18next";
+
 import { Member, Organization, Team } from "@/components/networking";
+import i18n from "@/i18n/i18n";
 
 const ORG_ADMIN_MEMBERSHIP_ROLE = "org_admin";
 
@@ -43,7 +46,10 @@ export const isUserTeamAdminForAnyTeam = (teams: Team[] | null, userID: string):
   return teams.some((team) => isUserTeamAdminForSingleTeam(team.members_with_roles, userID));
 };
 
-export const isUserTeamAdminForSingleTeam = (teamMemberWithRoles: Member[] | null, userID: string): boolean => {
+export const isUserTeamAdminForSingleTeam = (
+  teamMemberWithRoles: readonly Member[] | null,
+  userID: string,
+): boolean => {
   if (teamMemberWithRoles == null) {
     return false;
   }
@@ -100,6 +106,21 @@ export const formatUserRole = (userRole: string): string => {
       return "Unknown Role";
   }
 };
+
+const USER_ROLE_LABELS: Record<string, ParseKeys> = {
+  "Undefined Role": "utils.roles.undefinedRole",
+  "App Owner": "utils.roles.appOwner",
+  Admin: "utils.roles.admin",
+  "Admin Viewer": "utils.roles.adminViewer",
+  "Org Admin": "utils.roles.orgAdmin",
+  "Internal User": "utils.roles.internalUser",
+  "Internal Viewer": "utils.roles.internalViewer",
+  "App User": "utils.roles.appUser",
+  "Unknown Role": "utils.roles.unknownRole",
+};
+
+export const userRoleDisplayLabel = (formattedRole: string): string =>
+  Object.hasOwn(USER_ROLE_LABELS, formattedRole) ? i18n.t(USER_ROLE_LABELS[formattedRole]) : formattedRole;
 
 export const isOrgAdminSessionRole = (userRole?: string | null): boolean =>
   userRole === ORG_ADMIN_MEMBERSHIP_ROLE || userRole === formatUserRole(ORG_ADMIN_MEMBERSHIP_ROLE);

@@ -18,7 +18,9 @@ import json
 import logging
 import threading
 import time
-from collections.abc import Awaitable, Callable, Iterator, Sequence
+import weakref
+from collections import Counter
+from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import timedelta
@@ -38,8 +40,9 @@ from litellm.constants import (
     REDIS_CIRCUIT_BREAKER_TIMEOUT_MIN_DURATION,
     REDIS_TIMEOUT_LOG_INTERVAL,
 )
-from litellm.litellm_core_utils.core_helpers import get_parent_otel_span_from_kwargs
+from litellm.litellm_core_utils.core_helpers import get_parent_otel_span_from_kwargs, has_attributes
 from litellm.litellm_core_utils.coroutine_checker import coroutine_checker
+from litellm.redis.store_settings import RedisStoreSettings, breaker_settings
 from litellm.types.caching import (
     RedisPipelineIncrementOperation,
     RedisPipelineLpopOperation,
@@ -51,11 +54,11 @@ from .base_cache import BaseCache
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
-    from prometheus_client import Counter as _PromCounter
-    from prometheus_client import Gauge as _PromGauge
     from redis.asyncio import Redis, RedisCluster
     from redis.asyncio.client import Pipeline
     from redis.asyncio.cluster import ClusterPipeline
+
+    from litellm._service_logger import ServiceLogging
 
     pipeline = Pipeline
     cluster_pipeline = ClusterPipeline
@@ -94,14 +97,29 @@ class _AsyncRedisCommands(Protocol):
     def eval(self, script: str, numkeys: int, *keys_and_args: str | bytes | float) -> Awaitable[object]: ...
 
 
+class _AsyncLuaScript(Protocol):
+    def __call__(
+        self, keys: Sequence[str], args: Sequence[str | bytes | int | float], client: object
+    ) -> Awaitable[object]: ...
+
+
+class _SupportsRegisterScript(Protocol):
+    def register_script(self, script: str, /) -> _AsyncLuaScript: ...
+
+
+class _SupportsScriptLoad(Protocol):
+    def script_load(self, script: str, /) -> object: ...
+
+    def evalsha(self, sha: object, numkeys: int, /, *keys_and_args: str | bytes | float) -> Awaitable[object]: ...
+
+
 _GENERIC_CALLER_MODULES: Final = frozenset(
     {
         __name__,
         "litellm.caching.redis_batch",
         "litellm.caching.dual_cache",
         "litellm.caching.caching",
-        "litellm.rust_bridge.lifecycle",
-        "litellm.rust_bridge.streams",
+        "litellm.rust_bridge.execution",
         "contextlib",
     }
 )
@@ -133,7 +151,12 @@ _INCREMENT_WITH_FLOOR_LUA: Final = (
     "return count"
 )
 
+_INCREMENT_IF_PRESENT_LUA: Final = (
+    "if redis.call('EXISTS', KEYS[1]) == 0 then return false end return redis.call('INCRBYFLOAT', KEYS[1], ARGV[1])"
+)
+
 _LUA_COUNT: Final = TypeAdapter(int)
+_LUA_OPTIONAL_TOTAL: Final[TypeAdapter[float | None]] = TypeAdapter(float | None)
 _OPTIONAL_COUNTS: Final = TypeAdapter(tuple[int | None, ...])
 
 
@@ -243,7 +266,9 @@ class RedisCircuitBreaker:
         recovery_timeout: int,
         enabled: bool = True,
         timeout_min_duration: float = REDIS_CIRCUIT_BREAKER_TIMEOUT_MIN_DURATION,
+        service_logger: "ServiceLogging | None" = None,
     ) -> None:
+        self._service_logger = service_logger
         self.failure_threshold = failure_threshold
         self.recovery_timeout = recovery_timeout
         self.enabled = enabled
@@ -255,7 +280,12 @@ class RedisCircuitBreaker:
         self._opened_at: float | None = None
         self._state = self.CLOSED
         self._generation = 0
-        _breaker_metrics().record_state_change(None, self._state)
+        _LIVE_BREAKERS.add(self)
+        self._report(transitions_to=None, failure_class=None)
+
+    @property
+    def state(self) -> str:
+        return self._state
 
     @property
     def generation(self) -> int:
@@ -301,7 +331,7 @@ class RedisCircuitBreaker:
             self._timeout_count = 0
             self._timeout_streak_started_at = None
         self._opened_at = now
-        _breaker_metrics().record_failure("timeout" if is_timeout else "connectivity")
+        self._report(transitions_to=None, failure_class="timeout" if is_timeout else "connectivity")
         if self._should_open(now):
             if self._state != self.OPEN:
                 verbose_logger.warning(
@@ -327,10 +357,13 @@ class RedisCircuitBreaker:
     def _set_state(self, state: str) -> None:
         if state == self._state:
             return
-        _breaker_metrics().record_transition(state)
-        _breaker_metrics().record_state_change(self._state, state)
         self._state = state
         self._generation += 1
+        self._report(transitions_to=state, failure_class=None)
+
+    def _report(self, transitions_to: str | None, failure_class: str | None) -> None:
+        if self._service_logger is not None:
+            self._service_logger.redis_breaker_hook(transitions_to=transitions_to, failure_class=failure_class)
 
 
 _RedisCallResult = TypeVar("_RedisCallResult")
@@ -400,12 +433,19 @@ def _redis_timeout_error_types() -> tuple[type, ...]:
     ``builtins.TimeoutError`` covers ``socket.timeout`` (an alias since py3.10) and, from
     py3.11, ``asyncio.TimeoutError``; on py3.10 ``asyncio.TimeoutError`` is still its own
     class, so it is listed explicitly. ``redis.exceptions.TimeoutError`` subclasses neither.
+    ``MaxConnectionsError`` is the async cluster client's pool-exhausted signal (its nodes have
+    no blocking pool, so it is raised instantly instead of after a wait): a busy pool, not a
+    dead Redis, like the standalone pool's chained wait timeout.
     """
     try:
-        from redis.exceptions import TimeoutError as RedisTimeoutError
+        from redis import exceptions as redis_exceptions
     except ImportError:
         return (TimeoutError, asyncio.TimeoutError)
-    return (RedisTimeoutError, TimeoutError, asyncio.TimeoutError)
+    max_connections_error: Final = cast(  # cast-ok: types-redis 4.6 stubs predate MaxConnectionsError
+        "type[Exception]",
+        redis_exceptions.MaxConnectionsError,  # pyright: ignore[reportAttributeAccessIssue]  # types-redis 4.6 stubs predate it
+    )
+    return (redis_exceptions.TimeoutError, TimeoutError, asyncio.TimeoutError, max_connections_error)
 
 
 _MAX_EXCEPTION_CAUSE_DEPTH: Final = 20
@@ -430,59 +470,6 @@ def is_redis_timeout_failure(exc: BaseException) -> bool:
     return any(isinstance(link, timeout_types) for link in _explicit_causes(exc))
 
 
-class _BreakerMetrics:
-    """Prometheus metrics for the Redis circuit breaker; no-ops when the client is absent.
-
-    Registered lazily on the default registry (which /metrics serves) via the module-level
-    ``_breaker_metrics`` singleton so repeated RedisCache construction never re-registers.
-    """
-
-    def __init__(self) -> None:
-        self._state_gauge: _PromGauge | None = None
-        self._transitions: _PromCounter | None = None
-        self._failures: _PromCounter | None = None
-        try:
-            from prometheus_client import Counter as PromCounter
-            from prometheus_client import Gauge
-        except ImportError:
-            return
-        self._state_gauge = Gauge(
-            "litellm_redis_circuit_breaker_state",
-            "Number of Redis circuit breakers currently in each state",
-            labelnames=("state",),
-        )
-        self._transitions = PromCounter(
-            "litellm_redis_circuit_breaker_transitions",
-            "Redis circuit breaker state transitions",
-            labelnames=("state",),
-        )
-        self._failures = PromCounter(
-            "litellm_redis_circuit_breaker_failures",
-            "Redis health failures counted by the circuit breaker",
-            labelnames=("failure_class",),
-        )
-
-    def record_state_change(self, old_state: str | None, new_state: str) -> None:
-        if self._state_gauge is None:
-            return
-        if old_state is not None:
-            self._state_gauge.labels(old_state).dec()
-        self._state_gauge.labels(new_state).inc()
-
-    def record_transition(self, state: str) -> None:
-        if self._transitions is not None:
-            self._transitions.labels(state).inc()
-
-    def record_failure(self, failure_class: str) -> None:
-        if self._failures is not None:
-            self._failures.labels(failure_class).inc()
-
-
-@functools.lru_cache(maxsize=1)
-def _breaker_metrics() -> _BreakerMetrics:
-    return _BreakerMetrics()
-
-
 def _record_swallowed_redis_failure(breaker: RedisCircuitBreaker, exc: BaseException) -> None:
     """Record a Redis failure that the calling method is about to swallow.
 
@@ -498,11 +485,25 @@ def _record_swallowed_redis_failure(breaker: RedisCircuitBreaker, exc: BaseExcep
     _swallowed_redis_failures.set(_swallowed_redis_failures.get() + 1)
 
 
+_LIVE_BREAKERS: Final[weakref.WeakSet[RedisCircuitBreaker]] = weakref.WeakSet()
+
+
+def redis_breaker_state_counts() -> Mapping[str, int]:
+    """How many live Redis circuit breakers sit in each state, for the Prometheus services logger.
+
+    Counts the Python breakers of every live ``RedisCache`` and the breaker of every native Redis
+    client the router stores built, since each opens and closes on its own."""
+    from litellm.rust_bridge._native import native_redis_breaker_states
+
+    python_states: Final = Counter(breaker.state for breaker in _LIVE_BREAKERS)
+    return MappingProxyType(dict(python_states + Counter(native_redis_breaker_states())))
+
+
 class RedisCircuitBreakerOpenError(Exception):
     pass
 
 
-class _RedisTimeoutLogThrottle:
+class RedisTimeoutLogThrottle:
     """Admits one Redis timeout log line per interval and counts the timeouts it suppressed in between."""
 
     def __init__(self, interval: float, clock: Callable[[], float] = time.monotonic) -> None:
@@ -525,7 +526,7 @@ class _RedisTimeoutLogThrottle:
             return suppressed
 
 
-_redis_timeout_log_throttle: Final = _RedisTimeoutLogThrottle(REDIS_TIMEOUT_LOG_INTERVAL)
+redis_timeout_log_throttle: Final = RedisTimeoutLogThrottle(REDIS_TIMEOUT_LOG_INTERVAL)
 
 
 def log_redis_failure(
@@ -538,7 +539,7 @@ def log_redis_failure(
     if not is_redis_timeout_failure(exc):
         logger.log(level, "%s: %s", message, exc, exc_info=exc_info, stacklevel=2)
         return
-    suppressed: Final = _redis_timeout_log_throttle.admit()
+    suppressed: Final = redis_timeout_log_throttle.admit()
     if suppressed is None:
         logger.debug("%s: %s", message, exc, stacklevel=2)
         return
@@ -637,9 +638,14 @@ def _redis_circuit_breaker_guard(method):
     """
 
     @functools.wraps(method)
-    async def wrapper(self, *args, **kwargs):
+    async def wrapper(self: "RedisCache", *args, **kwargs):
+        async def guarded() -> object:
+            return await method(self, *args, **kwargs)
+
         return await _run_under_circuit_breaker(
-            self._circuit_breaker, method.__name__, lambda: method(self, *args, **kwargs)
+            self._circuit_breaker,  # pyright: ignore[reportPrivateUsage]  # the guard is RedisCache's own decorator
+            wrapper.__name__,
+            lambda: self._admit_async_call(guarded),  # pyright: ignore[reportPrivateUsage]  # same decorator
         )
 
     return wrapper
@@ -656,6 +662,8 @@ def _redis_circuit_breaker_guard_sync(method: Callable[..., _RedisCallResult]) -
 class RedisCache(BaseCache):
     # if users don't provider one, use the default litellm cache
 
+    store_settings: RedisStoreSettings | None = None
+
     def __init__(
         self,
         host=None,
@@ -669,7 +677,7 @@ class RedisCache(BaseCache):
     ):
         from litellm._service_logger import ServiceLogging
 
-        from .._redis import get_redis_client, get_redis_connection_pool
+        from .._redis import get_redis_client, get_redis_connection_pool, merge_redis_kwargs
 
         redis_kwargs: Final = {}
         if host is not None:
@@ -684,12 +692,9 @@ class RedisCache(BaseCache):
             redis_kwargs["socket_timeout"] = socket_timeout
 
         ### HEALTH MONITORING OBJECT ###
-        if kwargs.get("service_logger_obj", None) is not None and isinstance(
-            kwargs["service_logger_obj"], ServiceLogging
-        ):
+        self.service_logger_obj: ServiceLogging = ServiceLogging()
+        if isinstance(kwargs.get("service_logger_obj"), ServiceLogging):
             self.service_logger_obj = kwargs.pop("service_logger_obj")
-        else:
-            self.service_logger_obj = ServiceLogging()
 
         redis_kwargs.update(kwargs)
         self.redis_client = get_redis_client(**redis_kwargs)
@@ -700,7 +705,7 @@ class RedisCache(BaseCache):
         # redis namespaces
         self.namespace = namespace
         # for high traffic, we store the redis results in memory and then batch write to redis
-        self.redis_batch_writing_buffer: list = []
+        self.redis_batch_writing_buffer: list[tuple[str, object]] = []
         if redis_flush_size is None:
             self.redis_flush_size: int = 100
         else:
@@ -716,6 +721,7 @@ class RedisCache(BaseCache):
             failure_threshold=REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD,
             recovery_timeout=REDIS_CIRCUIT_BREAKER_RECOVERY_TIMEOUT,
             enabled=REDIS_CIRCUIT_BREAKER_ENABLED,
+            service_logger=self.service_logger_obj,
         )
 
         self._setup_health_pings()
@@ -724,6 +730,15 @@ class RedisCache(BaseCache):
             super().__init__(default_ttl=int(litellm.default_redis_ttl))
         else:
             super().__init__()  # defaults to 60s
+        self.store_settings = RedisStoreSettings(
+            redis_kwargs=MappingProxyType(merge_redis_kwargs(redis_kwargs)),
+            namespace=namespace,
+            default_ttl=self.default_ttl,
+            breaker=breaker_settings(),
+        )
+
+    def _admit_async_call(self, call: Callable[[], Awaitable[_RedisCallResult]]) -> Awaitable[_RedisCallResult]:
+        return call()
 
     def _setup_health_pings(self):
         """Setup async and sync health pings for Redis."""
@@ -843,6 +858,9 @@ class RedisCache(BaseCache):
         return pubsub_client  # pyright: ignore[reportUnknownVariableType]  # redis generics
 
     def _async_commands(self) -> _AsyncRedisCommands:
+        return self.init_async_client()
+
+    def _async_client_object(self) -> object:
         return self.init_async_client()
 
     def check_and_fix_namespace(self, key: str) -> str:
@@ -1105,7 +1123,9 @@ class RedisCache(BaseCache):
                     litellm.in_memory_llm_clients_cache.set_cache(key=script_cache_key, value=executor)
                 return await executor(keys=keys, args=args, client=client)
 
-            return await _run_under_circuit_breaker(self._circuit_breaker, "run_script", execute)
+            return await _run_under_circuit_breaker(
+                self._circuit_breaker, "run_script", lambda: self._admit_async_call(execute)
+            )
 
         return run_script
 
@@ -1116,8 +1136,8 @@ class RedisCache(BaseCache):
         Kept separate from async_register_script so each loop caches its own
         executor; see that method for why the binding must be per loop.
         """
-        _redis_client: Final[Any] = self.init_async_client()
-        if hasattr(_redis_client, "register_script"):
+        _redis_client: Final = self._async_client_object()
+        if has_attributes(_redis_client, _SupportsRegisterScript, "register_script"):
             registered_script: Final = _redis_client.register_script(script)
 
             async def standalone_executor(
@@ -1130,7 +1150,7 @@ class RedisCache(BaseCache):
 
             return standalone_executor
 
-        if hasattr(_redis_client, "script_load"):
+        if has_attributes(_redis_client, _SupportsScriptLoad, "script_load"):
             script_sha: Final = _redis_client.script_load(script)
 
             async def cluster_executor(
@@ -1587,6 +1607,46 @@ class RedisCache(BaseCache):
         count: Final = await _redis_client.eval(_INCREMENT_WITH_FLOOR_LUA, 1, namespaced_key, value, ttl)
         return _LUA_COUNT.validate_python(count)
 
+    @_redis_circuit_breaker_guard
+    async def async_increment_if_present(
+        self, key: str, value: float, parent_otel_span: Span | None = None
+    ) -> float | None:
+        _redis_client: Final = self._async_commands()
+        namespaced_key: Final = self.check_and_fix_namespace(key=key)
+        start_time: Final = time.time()
+        try:
+            total: Final = _LUA_OPTIONAL_TOTAL.validate_python(
+                await _redis_client.eval(_INCREMENT_IF_PRESENT_LUA, 1, namespaced_key, value)
+            )
+        except Exception as e:
+            failed_at: Final = time.time()
+            asyncio.create_task(
+                self.service_logger_obj.async_service_failure_hook(
+                    service=ServiceTypes.REDIS,
+                    duration=failed_at - start_time,
+                    error=e,
+                    call_type="async_increment_if_present",
+                    caller=_get_call_stack_info(),
+                    start_time=start_time,
+                    end_time=failed_at,
+                    parent_otel_span=parent_otel_span,
+                )
+            )
+            raise
+        end_time: Final = time.time()
+        asyncio.create_task(
+            self.service_logger_obj.async_service_success_hook(
+                service=ServiceTypes.REDIS,
+                duration=end_time - start_time,
+                call_type="async_increment_if_present",
+                caller=_get_call_stack_info(),
+                start_time=start_time,
+                end_time=end_time,
+                parent_otel_span=parent_otel_span,
+            )
+        )
+        return total
+
     async def flush_cache_buffer(self):
         print_verbose(f"flushing to redis....reached size of buffer {len(self.redis_batch_writing_buffer)}")
         await self.async_set_cache_pipeline(self.redis_batch_writing_buffer)
@@ -1712,7 +1772,9 @@ class RedisCache(BaseCache):
             return key_value_dict
 
     @_redis_circuit_breaker_guard
-    async def async_get_cache(self, key, parent_otel_span: Span | None = None, **kwargs):
+    async def async_get_cache(
+        self, key, parent_otel_span: Span | None = None, *, raise_on_error: bool = False, **kwargs
+    ):
         from redis.asyncio import Redis
 
         _redis_client: Final[Redis] = self.init_async_client()
@@ -1755,6 +1817,8 @@ class RedisCache(BaseCache):
                 )
             )
             print_verbose(f"litellm.caching.caching: async get() - Got exception from REDIS: {e}")
+            if raise_on_error:
+                raise
             _record_swallowed_redis_failure(self._circuit_breaker, e)
 
     @_redis_circuit_breaker_guard

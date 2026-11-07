@@ -12,7 +12,7 @@ def _chat(proxy: Gateway, model: str, key: str) -> httpx.Response:
 
 
 def _rejected(proxy: Gateway, model: str, key: str) -> httpx.Response:
-    return eventually(lambda: _chat(proxy, model, key), lambda response: response.status_code == 401, seconds=70)
+    return eventually(lambda: _chat(proxy, model, key), lambda response: response.status_code == 401, seconds=10)
 
 
 def _blocked_flag(proxy: Gateway, team_id: str) -> object:
@@ -27,6 +27,8 @@ def test_a_team_blocked_on_one_instance_is_rejected_on_both(gateway: Gateway, pe
         assert _blocked_flag(peer, team) is False
         allowed: Final = _chat(gateway, model, key)
         assert allowed.status_code == 200, allowed.text
+        peer_allowed: Final = _chat(peer, model, key)
+        assert peer_allowed.status_code == 200, peer_allowed.text
 
         peer.post("/team/update", {"team_id": team, "blocked": True})
 

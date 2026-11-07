@@ -72,7 +72,7 @@ impl AwsSecretsManagerV2 {
         }
         let client = self.client_for_context(context)?;
         let value = match Self::read_with_client(&client, name, ReadPolicy::Python).await {
-            Err(Error::Read(_) | Error::MissingString | Error::Timeout) => None,
+            Err(Error::Read(_) | Error::MissingString | Error::Timeout(_)) => None,
             result => result?,
         };
         Ok(PythonSecretRead::Value(value.map(Secret::String)))
@@ -124,9 +124,10 @@ impl AwsSecretsManagerV2 {
             Self::read_with_client(&self.client, name, policy).await,
             policy,
         ) {
-            (Err(Error::Read(_) | Error::MissingString | Error::Timeout), ReadPolicy::Python) => {
-                Ok(None)
-            }
+            (
+                Err(Error::Read(_) | Error::MissingString | Error::Timeout(_)),
+                ReadPolicy::Python,
+            ) => Ok(None),
             (result, _) => result,
         }
     }
@@ -173,7 +174,7 @@ impl AwsSecretsManagerV2 {
                     aws_sdk_secretsmanager::error::SdkError::TimeoutError(_)
                 ) || matches!(&error, aws_sdk_secretsmanager::error::SdkError::DispatchFailure(failure) if failure.is_timeout()) =>
             {
-                Err(Error::Timeout)
+                Err(Error::Timeout(Box::new(error)))
             }
             Err(error)
                 if error
@@ -216,9 +217,9 @@ fn resolve_payload(payload: PythonSecretRead, name: &str) -> Result<Option<Secre
     match payload {
         PythonSecretRead::Value(value) => Ok(value),
         PythonSecretRead::PrimaryJson(document) => {
-            let object: Value =
-                serde_json::from_str(document.expose()).map_err(|_| Error::PrimarySecret)?;
-            let object = object.as_object().ok_or(Error::PrimarySecret)?;
+            let object: Value = serde_json::from_str(document.expose())
+                .map_err(|error| Error::PrimarySecret(Some(error)))?;
+            let object = object.as_object().ok_or(Error::PrimarySecret(None))?;
             Ok(object.get(name).cloned().map(Secret::from_json))
         }
     }

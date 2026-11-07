@@ -17,8 +17,11 @@ import os
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
+from httpx._types import RequestFiles
+from pydantic import TypeAdapter
 
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.core_helpers import decoded_json_object, iter_items
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.types.images.main import ImageEditOptionalRequestParams
@@ -36,6 +39,8 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 def _nova_canvas_task_body(
@@ -319,7 +324,7 @@ class BedrockAmazonNovaCanvasImageEditConfig(BaseImageEditConfig):
         image_edit_optional_request_params: dict,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> tuple[dict, Any]:
+    ) -> tuple[dict, RequestFiles]:
         op: Final = dict(image_edit_optional_request_params)
         image_b64: Final = _file_types_to_b64(image)
 
@@ -400,7 +405,7 @@ class BedrockAmazonNovaCanvasImageEditConfig(BaseImageEditConfig):
         json_mode: bool | None = None,
     ) -> ImageResponse:
         try:
-            response_data: Final = raw_response.json()
+            response_data: Final = _DECODED_JSON.validate_python(raw_response.json())
         except Exception as e:
             raise self.get_error_class(
                 error_message=f"Error parsing Nova Canvas image edit response: {e}",
@@ -415,18 +420,19 @@ class BedrockAmazonNovaCanvasImageEditConfig(BaseImageEditConfig):
                 headers=raw_response.headers,
             )
 
-        images: Final[list[str]] = response_data.get("images") or []
+        response_object: Final = decoded_json_object(response_data)
+        images: Final[object] = response_object.get("images") or []
 
-        if "errors" in response_data and not images:
+        if "errors" in response_object and not images:
             raise self.get_error_class(
-                error_message=f"Nova Canvas image edit error: {response_data['errors']}",
+                error_message=f"Nova Canvas image edit error: {response_object['errors']}",
                 status_code=raw_response.status_code,
                 headers=raw_response.headers,
             )
 
         # Nova Canvas InvokeModel success body uses "images" and optional "error" (AWS docs);
         # it does not use Stability-style "finish_reasons".
-        error_msg = response_data.get("message") or response_data.get("error")
+        error_msg = response_object.get("message") or response_object.get("error")
         if error_msg and not images:
             if not isinstance(error_msg, str):
                 error_msg = str(error_msg)
@@ -438,7 +444,7 @@ class BedrockAmazonNovaCanvasImageEditConfig(BaseImageEditConfig):
 
         model_response: Final = ImageResponse()
         model_response.data = []
-        for image_b64 in images:
+        for image_b64 in iter_items(images):
             if image_b64:
                 model_response.data.append(
                     ImageObject(

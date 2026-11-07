@@ -42,7 +42,7 @@ class OtelDestination(LiteLLMBaseModel):
     success_sampling_rate: float | None = Field(
         default=None,
         description=(
-            "Share of the request trees forwarded, 0.0..1.0, drawn once per request when its root span ends; "
+            "Share of the request trees forwarded, 0.0..1.0, picked by a hash of the trace id; "
             "``None`` forwards every one."
         ),
     )
@@ -56,6 +56,10 @@ class OtelDestination(LiteLLMBaseModel):
             "An explicit mode overrides the global capture policy for this destination. "
             "Omitted follows the global setting."
         ),
+    )
+    excluded_db_systems: frozenset[str] | None = Field(
+        default=None,
+        description="An explicit set replaces the global database-span exclusions; ``None`` follows the global set.",
     )
 
     def captures_content(self, default: str) -> bool:
@@ -75,9 +79,10 @@ class OtelDestination(LiteLLMBaseModel):
     def cache_key(self) -> tuple[str, tuple[tuple[str, str], ...], tuple[tuple[str, str], ...], str | None]:
         """Identity for processor reuse, so one destination means one exporter.
 
-        ``span_scope``, the sampling rates and ``capture_message_content`` are left out on
-        purpose: they decide which spans reach the processor and what they carry, not how
-        the processor exports them, so two views of the same account share one exporter.
+        ``span_scope``, the sampling rates, ``capture_message_content`` and
+        ``excluded_db_systems`` are left out on purpose: they decide which spans reach
+        the processor and what they carry, not how the processor exports them, so two
+        views of the same account share one exporter.
         """
         return (
             self.endpoint,

@@ -22,6 +22,8 @@ from typing import (
     cast,  # noqa: TID251  # prisma types the condition/pipeline Json columns as str, but reads return decoded values
 )
 
+from typing_extensions import ReadOnly
+
 from litellm._logging import verbose_proxy_logger
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import PolicyRepository
@@ -158,6 +160,15 @@ def _row_to_policy_db_response(row: _PolicyRow) -> PolicyDBResponse:
         created_by=row.created_by,
         updated_by=row.updated_by,
     )
+
+
+class _AttributeView(TypedDict):
+    value: ReadOnly[object]
+
+
+def _attribute_of(source: object, name: str) -> object:
+    attribute: Final[_AttributeView] = {"value": getattr(source, name)}
+    return attribute["value"]
 
 
 class PolicyRegistry:
@@ -1020,8 +1031,8 @@ class PolicyRegistry:
             )
             field_diffs: Final[dict[str, dict[str, object]]] = {}
             for field in compare_fields:
-                val_a = getattr(resp_a, field)
-                val_b = getattr(resp_b, field)
+                val_a = _attribute_of(resp_a, field)
+                val_b = _attribute_of(resp_b, field)
                 if val_a != val_b:
                     field_diffs[field] = {"version_a": val_a, "version_b": val_b}
 

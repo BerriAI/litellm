@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { toast } from "@/lib/toast";
 import { makeInteractionsRequest } from "./interactions_api";
 
 vi.mock("@/components/networking", () => ({
   getProxyBaseUrl: vi.fn(() => "https://example.com"),
+  getGatewayBaseUrl: vi.fn(() => "https://gateway.example.com"),
   getGlobalLitellmHeaderName: vi.fn(() => "Authorization"),
 }));
 
@@ -49,7 +51,7 @@ describe("interactions_api", () => {
     await makeInteractionsRequest("hi", mockUpdateUI, "gemini-flash", "token");
 
     expect(mockFetch).toHaveBeenCalledTimes(1);
-    expect(mockFetch.mock.calls[0][0]).toBe("https://example.com/v1beta/interactions");
+    expect(mockFetch.mock.calls[0][0]).toBe("https://gateway.example.com/v1beta/interactions");
     expect(mockUpdateUI).toHaveBeenCalledTimes(2);
     expect(mockUpdateUI).toHaveBeenNthCalledWith(1, "Hello", "gemini-3-flash");
     expect(mockUpdateUI).toHaveBeenNthCalledWith(2, " world", "gemini-3-flash");
@@ -70,8 +72,28 @@ describe("interactions_api", () => {
     await makeInteractionsRequest("hi", mockUpdateUI, "gpt-mini", "token");
 
     expect(mockFetch).toHaveBeenCalledTimes(1);
-    expect(mockFetch.mock.calls[0][0]).toBe("https://example.com/v1beta/interactions");
+    expect(mockFetch.mock.calls[0][0]).toBe("https://gateway.example.com/v1beta/interactions");
     expect(mockUpdateUI).toHaveBeenCalledTimes(1);
     expect(mockUpdateUI).toHaveBeenCalledWith("Hi", "gpt-5.4");
+  });
+
+  it("rejects and toasts the message when the stream ends with an error event", async () => {
+    const sse = [
+      'data: {"event_type":"step.delta","index":0,"delta":{"type":"text","text":"Hi"}}',
+      'data: {"error":{"message":"blocked by guardrail","type":"None","code":"400"}}',
+      "data: [DONE]",
+      "",
+      "",
+    ].join("\n\n");
+
+    mockFetch.mockResolvedValue({ ok: true, body: sseBody(sse) } as Response);
+
+    await expect(makeInteractionsRequest("hi", mockUpdateUI, "gpt-mini", "token")).rejects.toThrow(
+      "blocked by guardrail",
+    );
+
+    expect(mockUpdateUI).toHaveBeenCalledTimes(1);
+    expect(mockUpdateUI).toHaveBeenCalledWith("Hi", "gpt-mini");
+    expect(toast.fromError).toHaveBeenCalledWith(expect.stringContaining("blocked by guardrail"));
   });
 });

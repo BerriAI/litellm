@@ -4,11 +4,14 @@ Calls DataForSEO SERP API to search the web.
 DataForSEO API Reference: https://docs.dataforseo.com/v3/serp/google/organic/live/advanced/?bash
 """
 
-from typing import Final, Literal
+from collections.abc import Iterable, Mapping, Sized
+from typing import Final, Literal, Protocol, runtime_checkable
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm.constants import DEFAULT_DATAFORSEO_LOCATION_CODE
+from litellm.litellm_core_utils.core_helpers import decoded_json_object, json_contains
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.search.transformation import (
     BaseSearchConfig,
@@ -16,6 +19,27 @@ from litellm.llms.base_llm.search.transformation import (
     SearchResult,
 )
 from litellm.secret_managers.main import get_secret_str
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_JSON_VALUES: Final = TypeAdapter(Iterable[object], config=ConfigDict(hide_input_in_errors=True))
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
+@runtime_checkable
+class _SupportsGetItem(Protocol):
+    def __getitem__(self, key: str | int, /) -> object: ...
+
+
+def _subscript(value: object, key: str | int) -> object:
+    if isinstance(value, _SupportsGetItem):
+        return value[key]
+    raise TypeError(f"'{type(value).__name__}' object is not subscriptable")
+
+
+def _json_len(value: object) -> int:
+    if isinstance(value, Sized):
+        return len(value)
+    raise TypeError(f"object of type '{type(value).__name__}' has no len()")
 
 
 class DataForSEOSearchConfig(BaseSearchConfig):
@@ -188,31 +212,34 @@ class DataForSEOSearchConfig(BaseSearchConfig):
         Returns:
             SearchResponse with standardized format
         """
-        response_json: Final = raw_response.json()
+        response_json: Final = _DECODED_JSON.validate_python(raw_response.json())
 
         # Transform results to SearchResult objects
         results: Final = []
 
         # DataForSEO wraps results in tasks array
-        if "tasks" in response_json and len(response_json["tasks"]) > 0:
-            task: Final = response_json["tasks"][0]
+        if json_contains(response_json, "tasks") and _json_len(_subscript(response_json, "tasks")) > 0:
+            task: Final = decoded_json_object(_subscript(_subscript(response_json, "tasks"), 0))
 
             # Check if task was successful
             if task.get("status_code") == 20000 and "result" in task:
                 # Result is an array, take first element
-                if len(task["result"]) > 0:
-                    result: Final = task["result"][0]
+                if _json_len(task["result"]) > 0:
+                    result: Final = _JSON_OBJECT.validate_python(_subscript(task["result"], 0))
 
                     # Items contain the actual search results
-                    for item in result.get("items", []):
+                    for raw_item in _JSON_VALUES.validate_python(result.get("items", [])):
+                        item = _JSON_OBJECT.validate_python(raw_item)
                         # Only process organic search results
                         if item.get("type") == "organic":
-                            search_result = SearchResult(
-                                title=item.get("title", ""),
-                                url=item.get("url", ""),
-                                snippet=item.get("description", ""),
-                                date=None,  # DataForSEO doesn't provide date in standard response
-                                last_updated=None,
+                            search_result = SearchResult.model_validate(
+                                {
+                                    "title": item.get("title", ""),
+                                    "url": item.get("url", ""),
+                                    "snippet": item.get("description", ""),
+                                    "date": None,  # DataForSEO doesn't provide date in standard response
+                                    "last_updated": None,
+                                }
                             )
                             results.append(search_result)
 

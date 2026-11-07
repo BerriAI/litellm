@@ -27,6 +27,7 @@ class TagNewRequest(TagBase):
 
 
 class TagUpdateRequest(TagBase):
+    spend: float | None = None
     budget_id: str | None = None
     # Budget fields - if provided, will update the budget
     max_budget: float | None = None
