@@ -9870,7 +9870,8 @@
     },
     "azure/chat-latest": {
         "cache_read_input_token_cost": 5e-07,
-        "deprecation_date": "2026-12-02",
+        "deprecation_date": "2027-05-18",
+        "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "input_cost_per_token": 5e-06,
         "litellm_provider": "azure",
         "max_input_tokens": 272000,
@@ -9880,7 +9881,7 @@
         "reasoning_effort_levels": [
             "medium"
         ],
-        "source": "https://azure.microsoft.com/en-us/pricing/details/cognitive-services/openai-service/",
+        "source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/responses"
@@ -13627,7 +13628,7 @@
     "azure_ai/cohere-rerank-v4.0-pro": {
         "deprecation_date": "2027-09-13",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/concepts/model-lifecycle-retirement",
-        "successor_model": "Cohere-rerank-v5-pro",
+        "successor_model": "azure_ai/cohere-rerank-v5-pro",
         "input_cost_per_query": 0.0025,
         "input_cost_per_token": 0.0,
         "litellm_provider": "azure_ai",
@@ -13640,7 +13641,7 @@
     "azure_ai/cohere-rerank-v4.0-fast": {
         "deprecation_date": "2027-09-13",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/concepts/model-lifecycle-retirement",
-        "successor_model": "Cohere-rerank-v5-fast",
+        "successor_model": "azure_ai/cohere-rerank-v5-fast",
         "input_cost_per_query": 0.002,
         "input_cost_per_token": 0.0,
         "litellm_provider": "azure_ai",
@@ -17601,6 +17602,8 @@
         "supports_reasoning": true
     },
     "codestral/codestral-2405": {
+        "deprecation_date": "2025-06-16",
+        "deprecation_source": "https://docs.mistral.ai/getting-started/models/",
         "input_cost_per_token": 0.0,
         "litellm_provider": "codestral",
         "max_input_tokens": 32000,
@@ -29430,7 +29433,7 @@
         "source": "https://api.friendli.ai/serverless/v1/models"
     },
     "ft:babbage-002": {
-        "deprecation_date": "2026-10-23",
+        "deprecation_date": "2026-09-28",
         "deprecation_source": "https://developers.openai.com/api/docs/deprecations",
         "successor_model": "gpt-5.6-terra",
         "input_cost_per_token": 1.6e-06,
@@ -29444,7 +29447,7 @@
         "source": "https://developers.openai.com/api/docs/pricing"
     },
     "ft:davinci-002": {
-        "deprecation_date": "2026-10-23",
+        "deprecation_date": "2026-09-28",
         "deprecation_source": "https://developers.openai.com/api/docs/deprecations",
         "successor_model": "gpt-5.6-terra",
         "input_cost_per_token": 1.2e-05,
@@ -29503,7 +29506,7 @@
         "supports_tool_choice": true
     },
     "ft:gpt-3.5-turbo-1106": {
-        "deprecation_date": "2026-10-23",
+        "deprecation_date": "2026-09-28",
         "deprecation_source": "https://developers.openai.com/api/docs/deprecations",
         "successor_model": "gpt-5.6-terra",
         "input_cost_per_token": 3e-06,
@@ -32446,6 +32449,7 @@
         "output_cost_per_token_flex": 5e-06,
         "supports_url_context": true,
         "cache_read_input_token_cost_above_200k_tokens_batches": 2.5e-07,
+        "cache_read_input_token_cost_above_200k_tokens_flex": 2.5e-07,
         "deprecation_date": "2026-12-01",
         "deprecation_source": "https://ai.google.dev/gemini-api/docs/deprecations",
         "successor_model": "gemini/gemini-3.8-flash",
@@ -49800,6 +49804,8 @@
         "mode": "search"
     },
     "text-completion-codestral/codestral-2405": {
+        "deprecation_date": "2025-06-16",
+        "deprecation_source": "https://docs.mistral.ai/getting-started/models/",
         "input_cost_per_token": 0.0,
         "litellm_provider": "text-completion-codestral",
         "max_input_tokens": 32000,
@@ -68213,7 +68219,9 @@
         "input_cost_per_image": 0.06,
         "litellm_provider": "xai",
         "mode": "image_generation",
-        "source": "https://docs.x.ai/docs/models",
+        "output_cost_per_image_1K": 0.04,
+        "output_cost_per_image_2K": 0.06,
+        "source": "https://docs.x.ai/developers/migration/imagine-image-quality-nov-2",
         "supported_endpoints": [
             "/v1/images/generations"
         ],
@@ -87173,5 +87181,145 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_vision": true
+    },
+    "azure_ai/cohere-rerank-v5-pro": {
+        "deprecation_date": "2027-02-12",
+        "deprecation_source": "https://management.azure.com/subscriptions/{subscriptionId}/providers/Microsoft.CognitiveServices/locations/eastus/models?api-version=2024-10-01",
+        "input_cost_per_token": 5e-08,
+        "litellm_provider": "azure_ai",
+        "max_input_tokens": 32768,
+        "max_output_tokens": 32768,
+        "mode": "rerank",
+        "output_cost_per_token": 0.0,
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
+    },
+    "azure_ai/cohere-rerank-v5-fast": {
+        "deprecation_date": "2027-02-12",
+        "deprecation_source": "https://management.azure.com/subscriptions/{subscriptionId}/providers/Microsoft.CognitiveServices/locations/eastus/models?api-version=2024-10-01",
+        "input_cost_per_token": 2e-08,
+        "litellm_provider": "azure_ai",
+        "max_input_tokens": 32768,
+        "max_output_tokens": 32768,
+        "mode": "rerank",
+        "output_cost_per_token": 0.0,
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
+    },
+    "azure/us/gpt-realtime-2.1": {
+        "cache_read_input_audio_token_cost": 4.4e-07,
+        "cache_read_input_image_token_cost": 5.5e-07,
+        "cache_read_input_token_cost": 4.4e-07,
+        "deprecation_date": "2027-06-25",
+        "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
+        "input_cost_per_audio_token": 3.52e-05,
+        "input_cost_per_image_token": 5.5e-06,
+        "input_cost_per_token": 4.4e-06,
+        "litellm_provider": "azure",
+        "max_input_tokens": 32000,
+        "max_output_tokens": 4096,
+        "mode": "realtime",
+        "output_cost_per_audio_token": 7.04e-05,
+        "output_cost_per_token": 2.64e-05,
+        "provider_specific_entry": {
+            "realtime_ga_only": 1
+        },
+        "source": "https://azure.microsoft.com/en-us/pricing/details/cognitive-services/openai-service/",
+        "supported_endpoints": [
+            "/v1/realtime"
+        ],
+        "supported_modalities": [
+            "text",
+            "image",
+            "audio"
+        ],
+        "supported_output_modalities": [
+            "text",
+            "audio"
+        ],
+        "supports_audio_input": true,
+        "supports_audio_output": true,
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true
+    },
+    "azure/us/gpt-realtime-2.1-mini": {
+        "cache_read_input_audio_token_cost": 3.3e-07,
+        "cache_read_input_image_token_cost": 8.8e-08,
+        "cache_read_input_token_cost": 6.6e-08,
+        "deprecation_date": "2027-06-25",
+        "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
+        "input_cost_per_audio_token": 1.1e-05,
+        "input_cost_per_image_token": 8.8e-07,
+        "input_cost_per_token": 6.6e-07,
+        "litellm_provider": "azure",
+        "max_input_tokens": 32000,
+        "max_output_tokens": 4096,
+        "mode": "realtime",
+        "output_cost_per_audio_token": 2.2e-05,
+        "output_cost_per_token": 2.64e-06,
+        "provider_specific_entry": {
+            "realtime_ga_only": 1
+        },
+        "source": "https://azure.microsoft.com/en-us/pricing/details/cognitive-services/openai-service/",
+        "supported_endpoints": [
+            "/v1/realtime"
+        ],
+        "supported_modalities": [
+            "text",
+            "image",
+            "audio"
+        ],
+        "supported_output_modalities": [
+            "text",
+            "audio"
+        ],
+        "supports_audio_input": true,
+        "supports_audio_output": true,
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true
+    },
+    "azure/us/gpt-realtime-1.5": {
+        "cache_read_input_audio_token_cost": 4.4e-07,
+        "cache_read_input_image_token_cost": 5.5e-07,
+        "cache_read_input_token_cost": 4.4e-07,
+        "deprecation_date": "2027-08-24",
+        "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
+        "input_cost_per_audio_token": 3.52e-05,
+        "input_cost_per_image_token": 5.5e-06,
+        "input_cost_per_token": 4.4e-06,
+        "litellm_provider": "azure",
+        "max_input_tokens": 32000,
+        "max_output_tokens": 4096,
+        "mode": "realtime",
+        "output_cost_per_audio_token": 7.04e-05,
+        "output_cost_per_token": 1.76e-05,
+        "provider_specific_entry": {
+            "realtime_ga_only": 1
+        },
+        "source": "https://azure.microsoft.com/en-us/pricing/details/cognitive-services/openai-service/",
+        "supported_endpoints": [
+            "/v1/realtime"
+        ],
+        "supported_modalities": [
+            "text",
+            "image",
+            "audio"
+        ],
+        "supported_output_modalities": [
+            "text",
+            "audio"
+        ],
+        "supports_audio_input": true,
+        "supports_audio_output": true,
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true
     }
 }

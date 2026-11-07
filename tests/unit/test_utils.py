@@ -18,6 +18,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from functools import partial
 from pathlib import Path, PurePath
+from types import MappingProxyType
 from typing import Final, SupportsIndex, cast
 from unittest import mock
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
@@ -1060,6 +1061,7 @@ _COST_MAP_ROW_SCHEMA: Final = {
             "cache_read_input_token_cost_balanced": {"type": "number"},
             "cache_read_input_token_cost_ultrafast": {"type": "number"},
             "cache_read_input_token_cost_above_200k_tokens_priority": {"type": "number"},
+            "cache_read_input_token_cost_above_200k_tokens_flex": {"type": "number"},
             "cache_read_input_token_cost_above_272k_tokens_priority": {"type": "number"},
             "input_cost_per_token_flex": {"type": "number"},
             "input_cost_per_token_priority": {"type": "number"},
@@ -3870,6 +3872,124 @@ class TestGetOptionalParamsSpeedGate:
             model=fast_mode_model, custom_llm_provider="anthropic", speed="fast", drop_params=True
         )
         assert result.get("speed") == "fast"
+
+
+class TestGetOptionalParamsOutputConfigGate:
+    """Regression for the issue 24549 follow-up (SLP-2948): Anthropic's ``output_config`` is not a named
+    OpenAI param, so it rode the provider-specific pass-through into ``extra_body`` and ``drop_params`` never
+    saw it."""
+
+    UNREAD_LEGS: Final = (
+        ("openai", "gpt-5.6"),
+        ("azure", "gpt-5.6"),
+        ("xiaomi_mimo", "mimo-v2.6-pro"),
+        ("hosted_vllm", "my-model"),
+        ("gemini", "gemini-3-pro-preview"),
+        ("bedrock", "us.amazon.nova-pro-v1:0"),
+    )
+    CLAUDE_LEGS: Final = (
+        ("anthropic", "claude-opus-4-8"),
+        ("vertex_ai", "claude-opus-4-8"),
+        ("azure_ai", "claude-opus-4-8"),
+        ("bedrock", "converse/anthropic.claude-opus-4-8-v1:0"),
+        ("bedrock", "invoke/anthropic.claude-opus-4-8-v1:0"),
+    )
+    OUTPUT_CONFIG: Final = MappingProxyType({"effort": "medium"})
+
+    @staticmethod
+    def _output_config_anywhere(optional_params: Mapping[str, object]) -> bool:
+        extra_body: Final = optional_params.get("extra_body")
+        return "output_config" in optional_params or (isinstance(extra_body, dict) and "output_config" in extra_body)
+
+    @pytest.mark.parametrize("global_drop_params", [True, False])
+    @pytest.mark.parametrize(("custom_llm_provider", "model"), UNREAD_LEGS)
+    def test_drop_params_strips_output_config_on_providers_that_do_not_read_it(
+        self, monkeypatch: pytest.MonkeyPatch, custom_llm_provider: str, model: str, global_drop_params: bool
+    ) -> None:
+        monkeypatch.setattr(litellm, "drop_params", global_drop_params)
+        result: Final = litellm.get_optional_params(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            output_config=dict(self.OUTPUT_CONFIG),
+            drop_params=not global_drop_params,
+        )
+        assert not self._output_config_anywhere(result), result
+
+    def test_drop_params_keeps_the_mapped_reasoning_effort_beside_the_dropped_output_config(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(litellm, "drop_params", False)
+        result: Final = litellm.get_optional_params(
+            model="gpt-5.6",
+            custom_llm_provider="openai",
+            output_config=dict(self.OUTPUT_CONFIG),
+            reasoning_effort="low",
+            drop_params=True,
+        )
+        assert result.get("reasoning_effort") == "low"
+        assert not self._output_config_anywhere(result), result
+
+    @pytest.mark.parametrize(("custom_llm_provider", "model"), [("openai", "gpt-5.6"), ("hosted_vllm", "my-model")])
+    def test_output_config_is_forwarded_untouched_without_drop_params(
+        self, monkeypatch: pytest.MonkeyPatch, custom_llm_provider: str, model: str
+    ) -> None:
+        monkeypatch.setattr(litellm, "drop_params", False)
+        result: Final = litellm.get_optional_params(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            output_config=dict(self.OUTPUT_CONFIG),
+            drop_params=False,
+        )
+        assert self._output_config_anywhere(result), result
+
+    @pytest.mark.parametrize(("custom_llm_provider", "model"), CLAUDE_LEGS)
+    def test_drop_params_keeps_output_config_for_claude_transformations(
+        self, monkeypatch: pytest.MonkeyPatch, custom_llm_provider: str, model: str
+    ) -> None:
+        monkeypatch.setattr(litellm, "drop_params", False)
+        result: Final = litellm.get_optional_params(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            output_config=dict(self.OUTPUT_CONFIG),
+            drop_params=True,
+        )
+        assert self._output_config_anywhere(result), result
+
+    def test_drop_params_keeps_output_config_for_a_downstream_litellm_proxy(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(litellm, "drop_params", False)
+        result: Final = litellm.get_optional_params(
+            model="claude-opus-4-8",
+            custom_llm_provider="litellm_proxy",
+            output_config=dict(self.OUTPUT_CONFIG),
+            drop_params=True,
+        )
+        assert self._output_config_anywhere(result), result
+
+    def test_drop_params_keeps_output_config_for_a_deployment_that_declares_reasoning_effort_levels(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(litellm, "drop_params", False)
+        result: Final = litellm.get_optional_params(
+            model="my-kimi",
+            custom_llm_provider="hosted_vllm",
+            output_config=dict(self.OUTPUT_CONFIG),
+            model_info={"id": "kimi-vllm-1", "reasoning_effort_levels": ["low", "medium", "high"]},
+            drop_params=True,
+        )
+        assert self._output_config_anywhere(result), result
+
+    def test_allowed_openai_params_overrides_the_drop(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(litellm, "drop_params", False)
+        result: Final = litellm.get_optional_params(
+            model="gpt-5.6",
+            custom_llm_provider="openai",
+            output_config=dict(self.OUTPUT_CONFIG),
+            allowed_openai_params=["output_config"],
+            drop_params=True,
+        )
+        assert self._output_config_anywhere(result), result
 
 
 class TestGetOptionalParamsDeepSeek:

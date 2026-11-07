@@ -5474,6 +5474,10 @@ def _declared_reasoning_efforts(model_info: Mapping[str, object] | None) -> tupl
 
 _DROPPED_REASONING_PARAMS: Final = ("reasoning_effort", "thinking")
 
+_DROP_UNREAD_OUTPUT_CONFIG_WARNING: Final = (
+    "Dropping `output_config` for model=%s (drop_params=True) because the %s chat transformation does not read it."
+)
+
 
 def _turns_reasoning_off(value: object) -> bool:
     match value:
@@ -6145,6 +6149,13 @@ def get_optional_params(
             drop_params=True,
             custom_llm_provider=custom_llm_provider or None,
         )
+        if (
+            "output_config" in passed_params
+            and not _declared_reasoning_efforts(model_info)
+            and not (isinstance(provider_config, litellm.AnthropicConfig) or "output_config" in supported_params)
+        ):
+            litellm.verbose_logger.warning(_DROP_UNREAD_OUTPUT_CONFIG_WARNING, model, custom_llm_provider)
+            passed_params.pop("output_config")
     # if user passed in non-default kwargs for specific providers/models, pass them along
     optional_params = add_provider_specific_params_to_optional_params(
         optional_params=optional_params,
@@ -7584,6 +7595,8 @@ def get_model_info_helper(
                 output_cost_per_second_4k=_model_info.get("output_cost_per_second_4k", None),
                 output_cost_per_video_per_second=_model_info.get("output_cost_per_video_per_second", None),
                 output_cost_per_image=_model_info.get("output_cost_per_image", None),
+                output_cost_per_image_1K=_model_info.get("output_cost_per_image_1K", None),
+                output_cost_per_image_2K=_model_info.get("output_cost_per_image_2K", None),
                 output_cost_per_pixel=_model_info.get("output_cost_per_pixel", None),
                 output_cost_per_image_token=_model_info.get("output_cost_per_image_token", None),
                 output_cost_per_image_token_batches=_model_info.get("output_cost_per_image_token_batches", None),
@@ -10707,8 +10720,8 @@ class ProviderConfigManager:
             # given model is on it; None keeps the chat-completions bridge.
             return litellm.BedrockOpenAIResponsesConfig.for_model(model)
         elif litellm.LlmProviders.BEDROCK_MANTLE == provider:
-            # Both decisions are data-driven from the model's price-map entry, with
-            # no model-name logic. Capability (can it serve Responses?) comes from
+            # Capability and wire path are data-driven from the model's price-map
+            # entry, with no model-name logic. Capability (can it serve Responses?) comes from
             # mantle_supports_responses (supported_endpoints / mode);
             # chat-only models (gpt-oss safeguard, nvidia, ...) return None and keep
             # the chat-completions emulation (responses/main.py "config is None").
@@ -10716,6 +10729,7 @@ class ProviderConfigManager:
             # use_openai_responses_path flag: gpt-5.x and gemma-4-* on
             # /openai/v1/responses, everything else (incl. gpt-oss) on
             # /v1/responses.
+            from litellm.llms.bedrock.common_utils import bedrock_model_encrypts_agent_messages
             from litellm.llms.bedrock_mantle.common_utils import (
                 mantle_base_segment,
                 mantle_supports_responses,
@@ -10724,7 +10738,8 @@ class ProviderConfigManager:
             if not model or not mantle_supports_responses(model, litellm.model_cost):
                 return None
             return litellm.BedrockMantleResponsesAPIConfig(
-                use_openai_path=mantle_base_segment(model, litellm.model_cost) == "openai/v1"
+                use_openai_path=mantle_base_segment(model, litellm.model_cost) == "openai/v1",
+                encrypted_agent_messages=bedrock_model_encrypts_agent_messages(model),
             )
         return None
 
@@ -12021,15 +12036,6 @@ def should_run_mock_completion(
 
 
 def __getattr__(name: str) -> Any:
-    """Lazy import handler for utils module with cached registry for improved performance."""
-    # Use cached registry from _lazy_imports instead of importing tuples every time
-    from litellm._lazy_imports import get_lazy_import_registry
+    from litellm._lazy_imports import resolve_lazy_attribute
 
-    registry: Final = get_lazy_import_registry()
-
-    # Check if name is in registry and call the cached handler function
-    if name in registry:
-        handler_func: Final = registry[name]
-        return handler_func(name)
-
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    return resolve_lazy_attribute(__name__, name)

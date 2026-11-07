@@ -30,13 +30,13 @@ def redis_cache_double() -> "MagicMock":
     from unittest.mock import MagicMock
 
     from litellm.caching.redis_cache import RedisCache
-    from litellm.redis.store_settings import RedisStoreSettings, breaker_settings
+    from litellm.redis.store_settings import RedisStoreSettings
 
     redis: Final = MagicMock(spec=RedisCache)
     redis.redis_kwargs = {"host": "127.0.0.1", "port": 1, "socket_timeout": 0.2}
     redis.namespace = None
     redis.store_settings = RedisStoreSettings(
-        redis_kwargs=redis.redis_kwargs, namespace=None, default_ttl=60, breaker=breaker_settings()
+        redis_kwargs=redis.redis_kwargs, namespace=None, default_ttl=60, breaker=None
     )
     return redis
 

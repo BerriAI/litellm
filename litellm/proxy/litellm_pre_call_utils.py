@@ -23,6 +23,7 @@ from fastapi import HTTPException, Request, status
 from pydantic import TypeAdapter
 from pydantic import ValidationError as PydanticValidationError
 from starlette.datastructures import Headers
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
@@ -1643,7 +1644,19 @@ def redact_credential_headers(headers: Mapping[str, str]) -> Mapping[str, str]:
     }
 
 
+class TenantLoggingMetadata(TypedDict):
+    user_api_key_metadata: ReadOnly[Mapping[str, object] | None]
+    user_api_key_team_metadata: ReadOnly[Mapping[str, object] | None]
+
+
 class LiteLLMProxyRequestSetup:
+    @staticmethod
+    def get_tenant_logging_metadata(user_api_key_dict: UserAPIKeyAuth) -> TenantLoggingMetadata:
+        return {
+            "user_api_key_metadata": strip_callback_config(user_api_key_dict.metadata),
+            "user_api_key_team_metadata": strip_callback_config(user_api_key_dict.team_metadata),
+        }
+
     @staticmethod
     def _get_timeout_from_request(headers: dict) -> float | None:
         """
