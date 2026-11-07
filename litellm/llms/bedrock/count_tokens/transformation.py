@@ -12,6 +12,7 @@ from typing import Final, Literal, TypeAlias
 from pydantic import JsonValue
 
 from litellm.litellm_core_utils.url_utils import join_api_base
+from litellm.llms.anthropic.common_utils import tools_without_custom_field
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.common_utils import get_bedrock_base_model
 
@@ -201,13 +202,21 @@ class BedrockCountTokensConfig(BaseAWSLLM):
 
         # For InvokeModel, we need to provide the raw body that would be sent to the model
         # Remove the 'model' field from the body as it's not part of the model input
-        body_data: Final = {k: v for k, v in request_data.items() if k != "model"}
+        tools: Final = request_data.get("tools")
+        body_data: Final = {
+            **{k: v for k, v in request_data.items() if k != "model"},
+            **(
+                {"tools": tools_without_custom_field(tools, hoist_defer_loading=True, drop_custom=True)}
+                if isinstance(tools, list)
+                else {}
+            ),
+        }
 
         if "messages" in body_data:
             # Bedrock validates the body against the model's InvokeModel schema;
             # Anthropic Messages bodies require these fields.
             body_data.setdefault("anthropic_version", "bedrock-2023-05-31")
-            body_data.setdefault("max_tokens", _invoke_model_max_tokens(body_data.get("thinking")))
+            body_data.setdefault("max_tokens", _invoke_model_max_tokens(request_data.get("thinking")))
 
         # The CountTokens API expects invokeModel.body as a base64-encoded blob
         encoded_body: Final = base64.b64encode(json.dumps(body_data).encode()).decode()
@@ -245,9 +254,7 @@ class BedrockCountTokensConfig(BaseAWSLLM):
         )
         return join_api_base(base_url, f"model/{encoded_model_id}/count-tokens")
 
-    def transform_bedrock_response_to_anthropic(
-        self, bedrock_response: Mapping[str, JsonValue]
-    ) -> dict[str, JsonValue]:
+    def transform_bedrock_response_to_anthropic(self, bedrock_response: Mapping[str, object]) -> dict[str, object]:
         """
         Transform Bedrock CountTokens response to Anthropic format.
 

@@ -27,9 +27,17 @@ from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import 
     split_leading_system_run,
 )
 from litellm.litellm_core_utils.url_utils import join_api_base
-from litellm.llms.anthropic.common_utils import merge_anthropic_beta_headers
+from litellm.llms.anthropic.common_utils import (
+    carries_signed_compaction_block,
+    context_management_betas,
+    context_management_with_edits,
+    is_claude_model_target,
+    merge_anthropic_beta_headers,
+    tools_without_custom_field,
+)
 from litellm.llms.anthropic.wif import resolve_anthropic_base
 from litellm.llms.base_llm.anthropic_messages.transformation import BaseAnthropicMessagesConfig
+from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionImageObject, ValidUserMessageContentTypes
 from litellm.types.utils import LlmProviders, TokenCountMessagesFormat, TokenCountResponse
 
@@ -39,14 +47,17 @@ if TYPE_CHECKING:
 _COUNT_REQUEST: Final = TypeAdapter(dict[str, JsonValue])
 _SYSTEM_BLOCKS: Final = TypeAdapter(list[JsonValue])
 _IMAGE_BLOCK: Final = TypeAdapter(ChatCompletionImageObject)
-COUNT_TOKEN_OPTION_NAMES: Final = ("thinking", "tool_choice", "output_config", "context_management")
+COUNT_TOKEN_OPTION_NAMES: Final = ("thinking", "tool_choice", "output_config")
 _PLAIN_MESSAGE_KEYS: Final = frozenset({"role", "content"})
 
 
 def _count_image(block: JsonValue) -> JsonValue:
     if not isinstance(block, dict) or block.get("type") != "image_url":
         return block
-    from litellm.litellm_core_utils.prompt_templates.factory import convert_to_anthropic_image_obj
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        anthropic_content_element_factory,
+        convert_to_anthropic_image_obj,
+    )
 
     image_block: Final = _IMAGE_BLOCK.validate_python(block)
     image_url: Final = image_block["image_url"]
@@ -54,7 +65,7 @@ def _count_image(block: JsonValue) -> JsonValue:
         openai_image_url=image_url if isinstance(image_url, str) else image_url["url"],
         format=image_url.get("format") if isinstance(image_url, dict) else None,
     )
-    image: Final = _COUNT_REQUEST.validate_python({"type": "image", "source": source})
+    image: Final = _COUNT_REQUEST.validate_python(anthropic_content_element_factory(source))
     return {**{key: value for key, value in block.items() if key not in {"type", "image_url"}}, **image}
 
 
@@ -118,19 +129,14 @@ class ChatCountTranslationError:
 
 
 @with_config(ConfigDict(extra="ignore"))
-class _CountedOptions(TypedDict):
+class _AnthropicChatRequest(TypedDict):
+    messages: ReadOnly[tuple[Mapping[str, JsonValue], ...]]
+    system: NotRequired[ReadOnly[JsonValue]]
+    tools: NotRequired[ReadOnly[tuple[Mapping[str, JsonValue], ...]]]
     thinking: NotRequired[ReadOnly[JsonValue]]
     tool_choice: NotRequired[ReadOnly[JsonValue]]
     output_config: NotRequired[ReadOnly[JsonValue]]
     output_format: NotRequired[ReadOnly[JsonValue]]
-    context_management: NotRequired[ReadOnly[JsonValue]]
-
-
-@with_config(ConfigDict(extra="ignore"))
-class _AnthropicChatRequest(_CountedOptions):
-    messages: ReadOnly[tuple[Mapping[str, JsonValue], ...]]
-    system: NotRequired[ReadOnly[JsonValue]]
-    tools: NotRequired[ReadOnly[tuple[Mapping[str, JsonValue], ...]]]
 
 
 _ANTHROPIC_CHAT_REQUEST: Final = TypeAdapter(_AnthropicChatRequest)
@@ -251,7 +257,7 @@ def _system_messages(system: object) -> tuple[Mapping[str, object], ...]:
     return (message,) if isinstance(system, (str, list)) and system else ()
 
 
-def _count_options(request: _CountedOptions) -> Mapping[str, JsonValue]:
+def _count_options(request: _AnthropicChatRequest) -> Mapping[str, JsonValue]:
     """Structured output reaches chat inference as the beta ``output_format``, which count_tokens
     refuses; its GA ``output_config.format`` form counts the same schema the same way."""
     output_config: Final = request.get("output_config")
@@ -267,7 +273,6 @@ def _count_options(request: _CountedOptions) -> Mapping[str, JsonValue]:
                 ("thinking", request.get("thinking")),
                 ("tool_choice", request.get("tool_choice")),
                 ("output_config", counted_config or None),
-                ("context_management", request.get("context_management")),
             )
             if value is not None
         }
@@ -516,6 +521,8 @@ class AnthropicCountTokensConfig:
         tools: list[dict[str, JsonValue]] | None = None,
         system: JsonValue = None,
         optional_params: Mapping[str, JsonValue] | None = None,
+        context_management: JsonValue = None,
+        drop_params: bool = False,
     ) -> dict[str, JsonValue]:  # mutable-ok: provider transport requires JSON dictionaries
         """
         Transform request to Anthropic CountTokens format.
@@ -535,7 +542,20 @@ class AnthropicCountTokensConfig:
                     **MappingProxyType(
                         {
                             key: value
-                            for key, value in (("system", counted_system), ("tools", tools))
+                            for key, value in (
+                                ("system", counted_system),
+                                (
+                                    "tools",
+                                    None
+                                    if tools is None
+                                    else tools_without_custom_field(
+                                        tools,
+                                        hoist_defer_loading=is_claude_model_target("anthropic", model),
+                                        drop_custom=drop_params,
+                                    ),
+                                ),
+                                ("context_management", context_management_with_edits(context_management)),
+                            )
                             if value is not None
                         }
                     ),
@@ -546,18 +566,35 @@ class AnthropicCountTokensConfig:
             )
         )
 
-    def get_count_tokens_headers(self, auth_header: Mapping[str, str], betas: Sequence[str] = ()) -> dict[str, str]:
+    def get_count_tokens_headers(
+        self,
+        auth_header: Mapping[str, str],
+        messages: Sequence[Mapping[str, JsonValue]],
+        context_management: JsonValue = None,
+        betas: Sequence[str] = (),
+    ) -> dict[str, str]:
         """The count-tokens headers around a resolved Anthropic auth header
         (``AnthropicModelInfo.get_auth_header``): x-api-key for a static key, an Authorization
         bearer for ``ANTHROPIC_AUTH_TOKEN`` and for sk-ant-oat tokens, whose mandatory oauth beta
-        merges with the token-counting beta instead of replacing it."""
+        merges with the token-counting beta instead of replacing it. A history that carries a
+        signed compaction block also needs the compaction beta, or Anthropic rejects the block
+        as an unknown content type, and ``context_management`` edits need the betas inference sends."""
+        compaction_betas: Final = (
+            (ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_09_04.value,)
+            if carries_signed_compaction_block(messages)
+            else ()
+        )
+        request_betas: Final = (
+            ANTHROPIC_TOKEN_COUNTING_BETA_VERSION,
+            *compaction_betas,
+            *context_management_betas(context_management),
+            *betas,
+        )
         return {
             "Content-Type": "application/json",
             "anthropic-version": "2023-06-01",
             **auth_header,
-            "anthropic-beta": merge_anthropic_beta_headers(
-                auth_header.get("anthropic-beta"), (ANTHROPIC_TOKEN_COUNTING_BETA_VERSION, *betas)
-            ),
+            "anthropic-beta": merge_anthropic_beta_headers(auth_header.get("anthropic-beta"), request_betas),
         }
 
     def validate_request(

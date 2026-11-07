@@ -41,7 +41,7 @@ from proxy_client import ProxyClient
 from pydantic import BaseModel
 from sdk_clients import NO_PROXY_CACHE, SdkClients
 
-pytestmark = pytest.mark.e2e
+pytestmark = [pytest.mark.e2e, pytest.mark.provider_live]
 
 FLAGGED_INVOKE_MODEL = "bedrock/invoke/us.anthropic.claude-sonnet-5"
 UNFLAGGED_INVOKE_MODEL = "bedrock/invoke/us.anthropic.claude-haiku-4-5-20251001-v1:0"

@@ -14,6 +14,7 @@ from litellm.types.llms.anthropic import (
     ANTHROPIC_EFFORT_BETA_HEADER,
     ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER,
 )
+from litellm.types.utils import CountContextManagement
 
 RUNTIME_HOST: Final = "bedrock-runtime.us-east-1.amazonaws.com"
 MANTLE_HOST: Final = "bedrock-mantle.us-east-1.api.aws"
@@ -147,6 +148,104 @@ async def test_mantle_failure_is_reported_with_its_status() -> None:
     assert result.tokenizer_type == "bedrock_mantle_api"
     assert "does not exist" in (result.error_message or "")
     assert bedrock.posted_hosts() == (RUNTIME_HOST, MANTLE_HOST)
+
+
+@pytest.mark.asyncio
+async def test_runtime_rejection_of_an_edit_stands_when_mantle_does_not_serve_the_model() -> None:
+    rejection: Final = "'claude-haiku-4-5-20251001' does not support the 'compact_20260112' context management strategy"
+    bedrock: Final = _Bedrock(
+        runtime=(400, {"message": rejection}),
+        mantle=(404, {"type": "error", "error": {"type": "not_found_error", "message": "does not exist"}}),
+    )
+
+    result: Final = await _counter(bedrock).count_tokens(
+        model_to_use="us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        messages=MESSAGES,
+        contents=None,
+        deployment=DEPLOYMENT,
+        request_model="claude-haiku-4-5",
+        context_management=CountContextManagement(
+            spec={"edits": [{"type": "compact_20260112"}]}, drop_invalid_edits=False
+        ),
+    )
+
+    assert result is not None
+    assert result.error is True
+    assert result.status_code == 400
+    assert result.tokenizer_type == "bedrock_api"
+    assert rejection in (result.error_message or "")
+    assert bedrock.posted_hosts() == (RUNTIME_HOST, MANTLE_HOST)
+
+
+@pytest.mark.asyncio
+async def test_runtime_400_without_an_edit_still_reports_the_mantle_failure() -> None:
+    bedrock: Final = _Bedrock(
+        runtime=(400, {"message": "The provided model identifier is invalid."}),
+        mantle=(404, {"type": "error", "error": {"type": "not_found_error", "message": "does not exist"}}),
+    )
+
+    result: Final = await _counter(bedrock).count_tokens(
+        model_to_use="us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        messages=MESSAGES,
+        contents=None,
+        deployment=DEPLOYMENT,
+        request_model="claude-haiku-4-5",
+    )
+
+    assert result is not None
+    assert result.status_code == 404
+    assert result.tokenizer_type == "bedrock_mantle_api"
+    assert "does not exist" in (result.error_message or "")
+    assert bedrock.posted_hosts() == (RUNTIME_HOST, MANTLE_HOST)
+
+
+@pytest.mark.asyncio
+async def test_plain_text_history_with_an_edit_is_counted_through_invoke_carrying_the_edit() -> None:
+    bedrock: Final = _Bedrock(runtime=(200, {"inputTokens": 57}), mantle=(200, {"input_tokens": 1}))
+    spec: Final[dict[str, JsonValue]] = {"edits": [{"type": "clear_tool_uses_20250919"}]}
+
+    result: Final = await _counter(bedrock).count_tokens(
+        model_to_use="global.anthropic.claude-opus-4-8",
+        messages=MESSAGES,
+        contents=None,
+        deployment=DEPLOYMENT,
+        request_model="claude-opus-4-8",
+        context_management=CountContextManagement(spec=spec, drop_invalid_edits=False),
+    )
+
+    assert result is not None
+    assert result.total_tokens == 57
+    assert bedrock.posted_hosts() == (RUNTIME_HOST,)
+    invoke_body: Final = _invoke_body(bedrock.requests[0])
+    assert invoke_body["context_management"] == spec
+    assert invoke_body["anthropic_beta"] == ["context-management-2025-06-27"]
+
+
+@pytest.mark.asyncio
+async def test_an_empty_string_turn_with_an_edit_is_sent_as_an_empty_string_not_an_empty_text_block() -> None:
+    bedrock: Final = _Bedrock(runtime=(200, {"inputTokens": 16}), mantle=(200, {"input_tokens": 1}))
+    spec: Final[dict[str, JsonValue]] = {"edits": [{"type": "clear_tool_uses_20250919"}]}
+
+    result: Final = await _counter(bedrock).count_tokens(
+        model_to_use="global.anthropic.claude-opus-4-8",
+        messages=[
+            {"role": "user", "content": "first"},
+            {"role": "assistant", "content": ""},
+            {"role": "user", "content": "third question here"},
+        ],
+        contents=None,
+        deployment=DEPLOYMENT,
+        request_model="claude-opus-4-8",
+        context_management=CountContextManagement(spec=spec, drop_invalid_edits=False),
+    )
+
+    assert result is not None
+    assert result.total_tokens == 16
+    assert _invoke_body(bedrock.requests[0])["messages"] == [
+        {"role": "user", "content": [{"type": "text", "text": "first"}]},
+        {"role": "assistant", "content": ""},
+        {"role": "user", "content": [{"type": "text", "text": "third question here"}]},
+    ]
 
 
 @pytest.mark.asyncio
@@ -391,6 +490,11 @@ async def _messages_inference_and_count(
         deployment={"litellm_params": {**credentials, "model": deployment_model}},
         request_model="claude",
         tools=[dict(tool)],
+        context_management=(
+            None
+            if request_options.get("context_management") is None
+            else CountContextManagement(spec=request_options["context_management"], drop_invalid_edits=False)
+        ),
         request_options=request_options,
     )
     assert result is not None
@@ -431,7 +535,7 @@ async def test_runtime_count_sends_the_options_and_context_edits_invoke_inferenc
 
 
 @pytest.mark.asyncio
-async def test_mantle_count_sends_the_options_context_edits_and_beta_mantle_inference_sends() -> None:
+async def test_mantle_count_sends_the_options_and_beta_mantle_inference_sends() -> None:
     inference, bedrock = await _messages_inference_and_count(
         "bedrock_mantle/us.anthropic.claude-opus-5-5", "bedrock_mantle/us.anthropic.claude-opus-5-5"
     )
@@ -439,7 +543,7 @@ async def test_mantle_count_sends_the_options_context_edits_and_beta_mantle_infe
     assert bedrock.posted_hosts() == (MANTLE_HOST,)
     counted: Final = _JSON_BODY.validate_json(bedrock.requests[0].content)
     sent: Final = _JSON_BODY.validate_json(inference.requests[0].content)
-    fields: Final = ("thinking", "tool_choice", "output_config", "context_management")
+    fields: Final = ("thinking", "tool_choice", "output_config")
     assert {name: counted.get(name) for name in fields} == {name: sent.get(name) for name in fields}
     assert "anthropic_beta" not in counted
     assert bedrock.requests[0].headers["anthropic-beta"] == inference.requests[0].headers["anthropic-beta"]

@@ -3,7 +3,11 @@ from typing import Final
 
 from litellm.exceptions import UnsupportedParamsError
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params, iter_items
-from litellm.llms.anthropic.common_utils import AnthropicModelInfo, context_management_betas
+from litellm.llms.anthropic.common_utils import (
+    AnthropicModelInfo,
+    context_management_betas,
+    requires_native_compaction_beta,
+)
 from litellm.llms.anthropic.messages.native.transformation import (
     AnthropicMessagesConfig,
     messages_carry_output_config,
@@ -11,6 +15,7 @@ from litellm.llms.anthropic.messages.native.transformation import (
 from litellm.types.llms.anthropic import (
     ANTHROPIC_BETA_HEADER_VALUES,
     ANTHROPIC_HOSTED_TOOLS,
+    ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER,
 )
 from litellm.types.llms.anthropic_tool_search import get_tool_search_beta_header
 from litellm.types.llms.vertex_ai import VertexPartnerProvider
@@ -177,6 +182,7 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
         tools: Final = tuple(
             tool for tool in map(as_str_mapping, iter_items(optional_params.get("tools") or ())) if tool is not None
         )
+        anthropic_model_info: Final = AnthropicModelInfo()
         existing_betas: Final = (headers.get("anthropic-beta") or "").split(",")
         beta_values: Final = frozenset(
             (
@@ -189,7 +195,7 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
                 ),
                 *(
                     (get_tool_search_beta_header("vertex_ai"),)
-                    if AnthropicModelInfo().is_tool_search_used(list(tools))
+                    if anthropic_model_info.is_tool_search_used(list(tools))
                     else ()
                 ),
                 *(
@@ -201,6 +207,19 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
                     (ANTHROPIC_BETA_HEADER_VALUES.PER_TURN_CONTROL_2026_07_01.value,)
                     if messages_carry_output_config(messages)
                     else ()
+                ),
+                *(
+                    (ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_09_04.value,)
+                    if requires_native_compaction_beta("vertex_ai", optional_params, messages)
+                    else ()
+                ),
+                *(
+                    (ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER,)
+                    if anthropic_model_info.is_mid_conversation_tool_change_used(messages)
+                    else ()
+                ),
+                *anthropic_model_info.thinking_betas(
+                    optional_params.get("thinking"),  # pyright: ignore[reportArgumentType]  # optional_params is the config contract's untyped request body
                 ),
             )
         )
@@ -237,7 +256,9 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
             headers=headers,
         )
 
-        self._normalize_system_role_messages(anthropic_messages_request, model=model)
+        self._normalize_system_role_messages(
+            anthropic_messages_request, model=model, drop_params=litellm_params.drop_params
+        )
 
         self._remove_scope_from_cache_control(anthropic_messages_request)
 

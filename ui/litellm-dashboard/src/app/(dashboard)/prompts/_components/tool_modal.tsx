@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
@@ -32,6 +33,7 @@ const defaultToolJson = `{
 }`;
 
 const ToolModal: React.FC<ToolModalProps> = ({ visible, initialJson, onSave, onClose }) => {
+  const { t } = useTranslation();
   const [json, setJson] = useState(initialJson || defaultToolJson);
   const [error, setError] = useState<string | null>(null);
 
@@ -41,7 +43,7 @@ const ToolModal: React.FC<ToolModalProps> = ({ visible, initialJson, onSave, onC
       setError(null);
       onSave(json);
     } catch (e) {
-      setError("Invalid JSON format. Please check your syntax.");
+      setError(t("prompts.toolModal.invalidJson"));
     }
   };
 
@@ -54,7 +56,7 @@ const ToolModal: React.FC<ToolModalProps> = ({ visible, initialJson, onSave, onC
     <Dialog open={visible} onOpenChange={(open) => !open && handleClose()}>
       <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-3xl">
         <DialogHeader>
-          <DialogTitle>Add Tool</DialogTitle>
+          <DialogTitle>{t("prompts.toolModal.title")}</DialogTitle>
         </DialogHeader>
         <div className="space-y-3">
           {error && (
@@ -66,18 +68,18 @@ const ToolModal: React.FC<ToolModalProps> = ({ visible, initialJson, onSave, onC
             </div>
           )}
           <textarea
-            aria-label="Tool JSON"
+            aria-label={t("prompts.toolModal.jsonLabel")}
             value={json}
             onChange={(e) => setJson(e.target.value)}
             className="w-full min-h-[400px] px-4 py-3 border border-input rounded-lg text-sm font-mono focus:outline-hidden focus:ring-2 focus:ring-ring resize-none"
-            placeholder="Paste your tool JSON here..."
+            placeholder={t("prompts.toolModal.jsonPlaceholder")}
           />
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={handleClose}>
-            Cancel
+            {t("prompts.toolModal.cancel")}
           </Button>
-          <Button onClick={handleSave}>Add</Button>
+          <Button onClick={handleSave}>{t("prompts.toolModal.add")}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

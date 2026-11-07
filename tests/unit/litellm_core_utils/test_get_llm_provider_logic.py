@@ -19,12 +19,45 @@ from litellm.litellm_core_utils.get_llm_provider_logic import (
 )
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.litellm_core_utils.model_latest_aliases import get_model_latest_aliases
 from litellm.types.router import LiteLLM_Params
 from litellm.utils import _invalidate_model_cost_lowercase_map
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 from unittest.mock import patch
 
 CUSTOM_PROVIDER: Final = "test-onprem-llm"
+
+
+@pytest.mark.parametrize(
+    ("model", "provider"),
+    (("openai/gpt-luna-latest", None), ("gpt-luna-latest", "openai")),
+)
+def test_latest_alias_resolves_to_the_bundled_target(model: str, provider: str | None) -> None:
+    target: Final = get_model_latest_aliases()["openai"]["gpt-luna-latest"]
+    resolved, resolved_provider, _, api_base = get_llm_provider(
+        model, custom_llm_provider=provider, api_base="https://api.openai.com/v1"
+    )
+    assert (resolved, resolved_provider, api_base) == (target, "openai", "https://api.openai.com/v1")
+
+
+@pytest.mark.parametrize(
+    "model",
+    ("gemini/gemini-pro-latest", "gemini/gemini-flash-latest", "dashscope/qwen-plus-latest", "mistral/mistral-large-latest"),
+)
+def test_provider_native_latest_alias_passes_through(model: str) -> None:
+    provider, name = model.split("/", 1)
+    assert get_llm_provider(model)[:2] == (name, provider)
+
+
+def test_latest_alias_completion_reports_and_prices_the_target() -> None:
+    target: Final = get_model_latest_aliases()["anthropic"]["claude-opus-latest"]
+    response: Final = litellm.completion(
+        model="anthropic/claude-opus-latest", messages=[{"role": "user", "content": "hi"}], mock_response="hi"
+    )
+    assert response.model == target
+    cost: Final = litellm.completion_cost(completion_response=response)
+    assert cost is not None and cost > 0
+    assert cost == litellm.completion_cost(completion_response=response, model=target, custom_llm_provider="anthropic")
 
 
 @pytest.fixture
@@ -796,7 +829,6 @@ def test_metadata_callers_never_log_in_for_a_declared_chatgpt_deployment(
     from litellm.litellm_core_utils.llm_response_utils.get_api_base import get_api_base
     from litellm.proxy.spend_tracking.savings import _resolve_model
     from litellm.router import Router
-    from litellm.types.router import LiteLLM_Params
     from litellm.utils import supports_native_streaming
 
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
@@ -805,4 +837,7 @@ def test_metadata_callers_never_log_in_for_a_declared_chatgpt_deployment(
     assert get_api_base("chatgpt/gpt-5.4", {"model": "chatgpt/gpt-5.4"}) == "https://chatgpt.com/backend-api/codex"
     identity = _resolve_model("chatgpt/gpt-5.4", None)
     assert identity is not None and identity.provider == "chatgpt"
-    assert Router._model_group_llm_provider(LiteLLM_Params(model="chatgpt/gpt-5.4")) == ("gpt-5.4", "chatgpt")
+    group = Router(model_list=[{"model_name": "codex", "litellm_params": {"model": "chatgpt/gpt-5.4"}}]).registry().group(
+        "codex"
+    )
+    assert group is not None and group.providers == ["chatgpt"]

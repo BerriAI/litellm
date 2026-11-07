@@ -2,6 +2,7 @@ import asyncio
 from typing import Any, AsyncIterator, Dict, Final, List
 
 import pytest
+import pytest_asyncio
 
 
 import datetime
@@ -67,7 +68,7 @@ async def _collect(stream: AsyncIterator[bytes]) -> List[bytes]:
     return [chunk async for chunk in stream]
 
 
-@pytest.fixture(autouse=True)
+@pytest_asyncio.fixture(autouse=True, loop_scope="function")
 async def _drain_logging_worker():
     yield
     await GLOBAL_LOGGING_WORKER.flush()
