@@ -1,4 +1,5 @@
 import datetime
+import json
 from typing import Final
 
 import httpx
@@ -10,6 +11,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.search.cost_calculator import search_provider_cost_per_query
 
 EXA_SEARCH_URL: Final = "https://api.exa.ai/search"
+TAVILY_SEARCH_URL: Final = "https://api.tavily.com/search"
 
 
 @pytest.fixture
@@ -90,3 +92,11 @@ def test_unpriced_fallback_search_tool_is_billed_at_its_own_price_not_the_failed
     )
 
     assert fallback._hidden_params["response_cost"] == pytest.approx(map_price)
+
+
+def test_search_tool_name_is_not_sent_to_a_provider_api(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(TAVILY_SEARCH_URL).respond(json={"results": []})
+
+    litellm.search(query="q", search_provider="tavily", api_key="test-tavily-key", search_tool_name="web-search")
+
+    assert "search_tool_name" not in json.loads(route.calls.last.request.content)

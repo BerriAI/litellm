@@ -1578,6 +1578,7 @@
         "image_generations": true,
         "audio_transcriptions": false,
         "audio_speech": false,
+        "search": true,
         "moderations": false,
         "batches": false,
         "rerank": false,

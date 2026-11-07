@@ -270,7 +270,14 @@ def search(
 
         # Filter out internal LiteLLM parameters from kwargs
         search_kwargs: Final = _SEARCH_KWARGS.validate_python(kwargs)
-        filtered_kwargs: Final = filter_out_litellm_params(kwargs=search_kwargs)
+        filtered_kwargs: Final = {
+            **filter_out_litellm_params(kwargs=search_kwargs),
+            **{
+                key: search_kwargs[key]
+                for key in search_provider_config.forwarded_litellm_params()
+                if key in search_kwargs
+            },
+        }
 
         # Add remaining kwargs to optional_params (for provider-specific params)
         for key, value in filtered_kwargs.items():
