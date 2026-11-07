@@ -5474,6 +5474,10 @@ def _declared_reasoning_efforts(model_info: Mapping[str, object] | None) -> tupl
 
 _DROPPED_REASONING_PARAMS: Final = ("reasoning_effort", "thinking")
 
+_DROP_UNREAD_OUTPUT_CONFIG_WARNING: Final = (
+    "Dropping `output_config` for model=%s (drop_params=True) because the %s chat transformation does not read it."
+)
+
 
 def _turns_reasoning_off(value: object) -> bool:
     match value:
@@ -6145,6 +6149,13 @@ def get_optional_params(
             drop_params=True,
             custom_llm_provider=custom_llm_provider or None,
         )
+        if (
+            "output_config" in passed_params
+            and not _declared_reasoning_efforts(model_info)
+            and not (isinstance(provider_config, litellm.AnthropicConfig) or "output_config" in supported_params)
+        ):
+            litellm.verbose_logger.warning(_DROP_UNREAD_OUTPUT_CONFIG_WARNING, model, custom_llm_provider)
+            passed_params.pop("output_config")
     # if user passed in non-default kwargs for specific providers/models, pass them along
     optional_params = add_provider_specific_params_to_optional_params(
         optional_params=optional_params,
