@@ -21900,3 +21900,82 @@ def test_id_jag_listed_tool_metadata_is_isolated_between_identity_assertions() -
     manager.record_listed_tools(server, (first,), callers[0])
     manager.record_listed_tools(server, (second,), callers[1])
     assert tuple(manager.get_listed_tool(server, "list_notes", caller) for caller in callers) == (first, second, None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("rejected_status", [401, 403])
+async def test_delegated_oauth_startup_defers_discovery_until_caller_token(
+    caplog: pytest.LogCaptureFixture,
+    rejected_status: int,
+) -> None:
+    upstream: Final = _DiscoveryUpstream()
+    upstream.tools = (LIST_NOTES.model_dump(by_alias=True),)
+
+    requests: Final[list[httpx2.Request]] = []
+
+    async def respond(request: httpx2.Request) -> httpx2.Response:
+        requests.append(request)
+        if request.headers.get("authorization") != "Bearer caller-token":
+            return httpx2.Response(rejected_status, headers={"WWW-Authenticate": "Bearer"})
+        return await upstream.respond(request)
+
+    manager: Final = MCPServerManager(upstream_transport=httpx2.MockTransport(respond))
+    server: Final = MCPServer(
+        server_id="deferred-oauth",
+        name="deferred_oauth",
+        url="https://upstream.example/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth_delegate,
+    )
+    manager.registry[server.server_id] = server
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        await manager._initialize_tool_name_to_mcp_server_name_mapping()
+    assert not requests
+    assert manager.tool_name_to_mcp_server_name_mapping == {}
+    assert not caplog.records
+    tools: Final = await manager.get_tools_from_server(server, mcp_auth_header="Bearer caller-token")
+    assert tuple(tool.name for tool in tools) == ("deferred-oauth-list_notes",)
+    assert upstream.requests
+    assert all(authorization == "Bearer caller-token" for _, authorization in upstream.requests)
+    with pytest.raises(MCPUpstreamAuthError) as error:
+        await manager.get_tools_from_server(server, mcp_auth_header="Bearer expired-token")
+    assert error.value.status_code == rejected_status
+    assert error.value.www_authenticate == "Bearer"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status_code", [200, 401, 500])
+async def test_static_auth_startup_still_discovers_tools_or_reports_failure(
+    caplog: pytest.LogCaptureFixture,
+    status_code: int,
+) -> None:
+    upstream: Final = _DiscoveryUpstream()
+    upstream.tools = (LIST_NOTES.model_dump(by_alias=True),)
+    requests: Final[list[httpx2.Request]] = []
+
+    async def respond(request: httpx2.Request) -> httpx2.Response:
+        requests.append(request)
+        if status_code != 200:
+            return httpx2.Response(status_code, headers={"WWW-Authenticate": "Bearer"})
+        return await upstream.respond(request)
+
+    manager: Final = MCPServerManager(upstream_transport=httpx2.MockTransport(respond))
+    server: Final = MCPServer(
+        server_id="static-auth",
+        name="static_auth",
+        url="https://upstream.example/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.bearer_token,
+        authentication_token="static-token",
+    )
+    manager.registry[server.server_id] = server
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        await manager._initialize_tool_name_to_mcp_server_name_mapping()
+    assert requests
+    assert all(request.headers.get("authorization") == "Bearer static-token" for request in requests)
+    if status_code == 200:
+        assert manager.get_mcp_server_from_tool_name("list_notes") is server
+        assert not caplog.records
+    else:
+        assert manager.tool_name_to_mcp_server_name_mapping == {}
+        assert any(record.levelno == logging.WARNING for record in caplog.records)
