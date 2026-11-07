@@ -2,6 +2,7 @@ import { useTranslation } from "react-i18next";
 import { Badge } from "@/components/ui/badge";
 import i18n from "@/i18n/i18n";
 import { hasRouterSettings } from "./routerSettingsPayload";
+import { routerWeightsFrom, savedRouterWeights } from "./routerWeights";
 
 interface RouterSettingsSummaryProps {
   routerSettings: Record<string, unknown> | null | undefined;
@@ -14,6 +15,28 @@ const fallbackEntries = (fallbacks: unknown): Array<[string, string[]]> => {
     entry && typeof entry === "object" ? (Object.entries(entry) as Array<[string, string[]]>) : [],
   );
 };
+
+export function RouterWeightsSummary({ weights }: { weights: unknown }) {
+  const { t } = useTranslation();
+  const saved = savedRouterWeights(routerWeightsFrom(weights));
+  if (!saved) return null;
+  return (
+    <div>
+      <div>{t("routerWeights.summary")}</div>
+      <div className="mt-1 space-y-1">
+        {Object.entries(saved).map(([group, groupWeights]) => (
+          <div key={group} className="text-xs text-muted-foreground">
+            <span className="font-medium">{group}</span>
+            <span className="mx-1 text-muted-foreground">-&gt;</span>
+            {Object.entries(groupWeights)
+              .map(([deploymentId, weight]) => `${deploymentId}: ${weight}`)
+              .join(", ")}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 export default function RouterSettingsSummary({
   routerSettings,
@@ -63,6 +86,7 @@ export default function RouterSettingsSummary({
           </div>
         </div>
       )}
+      <RouterWeightsSummary weights={settings.weights} />
     </div>
   );
 }

@@ -1784,6 +1784,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                               key={routerSettingsKey}
                               ref={routerSettingsRef}
                               accessToken={accessToken || ""}
+                              teamId={selectedCreateKeyTeam?.team_id}
                               value={routerSettings || undefined}
                               onChange={setRouterSettings}
                               modelData={
