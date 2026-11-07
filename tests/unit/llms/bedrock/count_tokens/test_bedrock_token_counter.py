@@ -1,4 +1,6 @@
 import base64
+import functools
+import itertools
 import json
 from collections.abc import Callable, Mapping
 from typing import Final
@@ -13,6 +15,7 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.types.llms.anthropic import (
     ANTHROPIC_BETA_HEADER_VALUES,
     ANTHROPIC_EFFORT_BETA_HEADER,
+    ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER,
     ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER,
 )
 
@@ -756,3 +759,171 @@ async def test_claude_count_refuses_options_bedrock_messages_inference_refuses_w
     assert result is not None
     assert (result.error, result.status_code, result.rejected_before_provider_call) == (True, 400, True)
     assert bedrock.posted_hosts() == ()
+
+
+_INTERLEAVED_THINKING: Final = "interleaved-thinking-2025-05-14"
+_PER_TURN_CONTROL: Final = ANTHROPIC_BETA_HEADER_VALUES.PER_TURN_CONTROL_2026_07_01.value
+_INVOKE_DEPLOYMENT_MODEL: Final = "bedrock/invoke/us.anthropic.claude-opus-5-5"
+_MANTLE_MODEL: Final = "bedrock_mantle/anthropic.claude-opus-5-5"
+
+
+async def _inference_betas(model: str, caller_beta: str, model_info: Mapping[str, JsonValue]) -> frozenset[JsonValue]:
+    inference: Final = _Bedrock(runtime=(200, _CLAUDE_REPLY), mantle=(200, _CLAUDE_REPLY))
+    await litellm.anthropic_messages(
+        model=model,
+        messages=MESSAGES,
+        max_tokens=4096,
+        extra_headers={"anthropic-beta": caller_beta},
+        model_info=dict(model_info),
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(inference)),
+        **_THINKING,
+        **DEPLOYMENT["litellm_params"],
+    )
+    request: Final = inference.requests[0]
+    if request.url.host == MANTLE_HOST:
+        return frozenset(_sent_betas(request))
+    return frozenset(_betas_besides_effort(_JSON_BODY.validate_json(request.content)))
+
+
+async def _counted_betas(
+    model_to_use: str, caller_beta: str, deployment: Mapping[str, JsonValue] | None
+) -> tuple[str, frozenset[JsonValue]]:
+    bedrock: Final = _Bedrock(runtime=(200, {"inputTokens": 412}), mantle=(200, {"input_tokens": 2177}))
+    result: Final = await _counter(bedrock).count_tokens(
+        model_to_use=model_to_use,
+        messages=MESSAGES,
+        contents=None,
+        deployment=None if deployment is None else dict(deployment),
+        request_model="claude",
+        request_options=_THINKING,
+        anthropic_beta=caller_beta,
+    )
+    assert result is not None and result.error is False
+    (request,) = bedrock.requests
+    if request.url.host == MANTLE_HOST:
+        return request.url.host, frozenset(_sent_betas(request))
+    return request.url.host, frozenset(_betas_besides_effort(_invoke_body(request)))
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("local_beta_headers_config")
+@pytest.mark.parametrize(
+    ("caller_beta", "model_info", "deployment_route", "kept"),
+    (
+        (_INTERLEAVED_THINKING, {}, {"model": _INVOKE_DEPLOYMENT_MODEL}, False),
+        (_PER_TURN_CONTROL, {"supports_per_turn_control": True}, {"model": _INVOKE_DEPLOYMENT_MODEL}, True),
+        (_PER_TURN_CONTROL, {"supports_per_turn_control": False}, {"model": _INVOKE_DEPLOYMENT_MODEL}, False),
+        (
+            _INTERLEAVED_THINKING,
+            {},
+            {"model": _INVOKE_DEPLOYMENT_MODEL.removeprefix("bedrock/"), "custom_llm_provider": "bedrock"},
+            False,
+        ),
+    ),
+    ids=(
+        "interleaved-thinking",
+        "deployment-supports-per-turn-control",
+        "deployment-lacks-per-turn-control",
+        "provider-set-by-custom-llm-provider",
+    ),
+)
+async def test_mantle_count_for_a_bedrock_deployment_sends_the_caller_betas_invoke_inference_sends(
+    caller_beta: str, model_info: Mapping[str, JsonValue], deployment_route: Mapping[str, str], kept: bool
+) -> None:
+    sent: Final = await _inference_betas(_INVOKE_DEPLOYMENT_MODEL, caller_beta, model_info)
+    deployment: Final[Mapping[str, JsonValue]] = {
+        "litellm_params": {**DEPLOYMENT["litellm_params"], **deployment_route},
+        "model_info": dict(model_info),
+    }
+    host, counted = await _counted_betas(_MANTLE_MODEL, caller_beta, deployment)
+
+    assert host == MANTLE_HOST
+    assert counted == sent
+    assert (caller_beta in counted) is kept
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("local_beta_headers_config")
+@pytest.mark.parametrize(
+    ("model_to_use", "inference_model", "count_host", "kept"),
+    (
+        ("us.anthropic.claude-opus-5-5", _INVOKE_DEPLOYMENT_MODEL, RUNTIME_HOST, False),
+        (_MANTLE_MODEL, _MANTLE_MODEL, MANTLE_HOST, True),
+    ),
+    ids=("runtime", "mantle"),
+)
+async def test_count_without_a_deployment_sends_the_caller_beta_inference_on_its_route_sends(
+    monkeypatch: pytest.MonkeyPatch, model_to_use: str, inference_model: str, count_host: str, kept: bool
+) -> None:
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIATESTACCESSKEY")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "test-secret")
+    monkeypatch.setenv("AWS_REGION_NAME", "us-east-1")
+    sent: Final = await _inference_betas(inference_model, _INTERLEAVED_THINKING, {})
+    host, counted = await _counted_betas(model_to_use, _INTERLEAVED_THINKING, None)
+
+    assert host == count_host
+    assert counted == sent
+    assert (_INTERLEAVED_THINKING in counted) is kept
+
+
+_CONVERSE_DEPLOYMENT_MODEL: Final = "bedrock/converse/us.anthropic.claude-opus-5-5"
+_NATIVE_OUTPUT_OPT_IN: Final[Mapping[str, JsonValue]] = {"supports_bedrock_native_structured_output": True}
+
+
+def _at(value: JsonValue, *path: str) -> JsonValue:
+    return functools.reduce(lambda node, key: node.get(key) if isinstance(node, dict) else None, path, value)
+
+
+def _content_texts(message: JsonValue) -> tuple[str, ...]:
+    content: Final = message.get("content") if isinstance(message, dict) else None
+    return (content,) if isinstance(content, str) else _texts(message)
+
+
+def _message_texts(body: Mapping[str, JsonValue]) -> tuple[str, ...]:
+    messages: Final = body.get("messages")
+    assert isinstance(messages, list)
+    return tuple(itertools.chain.from_iterable(map(_content_texts, messages)))
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("local_beta_headers_config")
+async def test_mantle_count_for_a_converse_deployment_sends_the_format_and_betas_converse_inference_sends() -> None:
+    caller_beta: Final = f"{ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER},context-1m-2025-08-07"
+    request_options: Final[Mapping[str, JsonValue]] = {**_CITY_FORMAT, **_THINKING}
+    inference: Final = _Bedrock(runtime=(200, _CONVERSE_REPLY), mantle=(200, _CONVERSE_REPLY))
+    await litellm.anthropic_messages(
+        model=_CONVERSE_DEPLOYMENT_MODEL,
+        messages=MESSAGES,
+        max_tokens=4096,
+        extra_headers={"anthropic-beta": caller_beta},
+        model_info=dict(_NATIVE_OUTPUT_OPT_IN),
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(inference)),
+        **request_options,
+        **DEPLOYMENT["litellm_params"],
+    )
+    bedrock: Final = _Bedrock(runtime=(200, {"inputTokens": 412}), mantle=(200, {"input_tokens": 2177}))
+    result: Final = await _counter(bedrock).count_tokens(
+        model_to_use=_MANTLE_MODEL,
+        messages=MESSAGES,
+        contents=None,
+        deployment={
+            "litellm_params": {**DEPLOYMENT["litellm_params"], "model": _CONVERSE_DEPLOYMENT_MODEL},
+            "model_info": dict(_NATIVE_OUTPUT_OPT_IN),
+        },
+        request_model="claude",
+        request_options=request_options,
+        anthropic_beta=caller_beta,
+    )
+
+    assert result is not None and result.error is False
+    assert (inference.posted_hosts(), bedrock.posted_hosts()) == ((RUNTIME_HOST,), (MANTLE_HOST,))
+    sent: Final = _JSON_BODY.validate_json(inference.requests[0].content)
+    counted: Final = _JSON_BODY.validate_json(bedrock.requests[0].content)
+    sent_schema: Final = _at(sent, "outputConfig", "textFormat", "structure", "jsonSchema", "schema")
+    assert isinstance(sent_schema, str)
+    assert _at(counted, "output_config", "format") == {
+        "type": _at(sent, "outputConfig", "textFormat", "type"),
+        "schema": json.loads(sent_schema),
+    }
+    assert _message_texts(counted) == _message_texts(sent)
+    assert _sent_betas(bedrock.requests[0]) == _sent_betas(inference.requests[0]) != ()
