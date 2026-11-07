@@ -343,6 +343,17 @@ class TestOpenAIChatCompletionStreamingHandler:
         assert excinfo.value.status_code == 400
         assert "not multimodal" in excinfo.value.message
 
+    def test_stream_ending_in_abort_raises_an_openai_error(self):
+        from litellm.llms.openai.common_utils import OpenAIError
+
+        line = "data: " + json.dumps({"choices": [{"index": 0, "delta": {}, "finish_reason": "abort"}]})
+        handler = OpenAIChatCompletionStreamingHandler(streaming_response=iter((line,)), sync_stream=True)
+
+        with pytest.raises(OpenAIError, match="finish_reason=abort") as excinfo:
+            list(handler)
+
+        assert excinfo.value.status_code == 500
+
     def test_chunk_parser_error_payload_without_usable_code_maps_to_500(self):
         """OpenAI-style error payloads may carry a string code (e.g.
         "invalid_api_key") or none at all; those must map to 500, not crash."""

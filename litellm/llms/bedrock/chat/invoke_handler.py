@@ -1004,7 +1004,9 @@ class AmazonOpenAICompatibleStreamDecoder(AWSEventStreamDecoder):
         )
 
     def _chunk_parser(self, chunk_data: dict[str, object]) -> ModelResponseStream:
-        base_model_iterator.raise_on_upstream_abort(chunk_data)
+        base_model_iterator.raise_on_upstream_abort(
+            chunk_data, self.openai_model_response_iterator.upstream_abort_error
+        )
         return self.openai_model_response_iterator.chunk_parser(chunk=chunk_data)
 
 
