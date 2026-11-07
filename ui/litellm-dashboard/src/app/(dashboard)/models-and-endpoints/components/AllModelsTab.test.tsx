@@ -287,6 +287,39 @@ describe("AllModelsTab", () => {
     expect(lastModelsInfoCall().page).toBe(1);
   });
 
+  it("drops the team filter and the page when switching to all proxy models", async () => {
+    // "All Proxy Models" promises every model the user can reach, so the team
+    // must stop narrowing the query -- and the page has to go back to 1 like it
+    // does for every other control that changes the result set.
+    const user = userEvent.setup();
+    setModelsInfo([makeRow()], 200);
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    renderWithProviders(<AllModelsTab {...defaultProps} />, {
+      searchParams: { page: "3", filter_team: "team-1" },
+      onUrlUpdate,
+    });
+
+    await waitFor(() => {
+      expect(lastModelsInfoCall().teamId).toBe("team-1");
+    });
+    expect(lastModelsInfoCall().page).toBe(3);
+
+    await user.click(screen.getByTestId("models-view-select"));
+    await user.click(await screen.findByRole("option", { name: "All Proxy Models" }));
+
+    await waitFor(() => {
+      expect(lastModelsInfoCall().teamId).toBeUndefined();
+    });
+    expect(lastUrlParams(onUrlUpdate)?.get("page")).toBeNull();
+
+    await user.click(screen.getByTestId("models-view-select"));
+    await user.click(await screen.findByRole("option", { name: "Current Team Models" }));
+
+    await waitFor(() => {
+      expect(lastModelsInfoCall().teamId).toBe("team-1");
+    });
+  });
+
   it("debounces the model name search into the server query", async () => {
     renderWithProviders(<AllModelsTab {...defaultProps} />);
 
