@@ -136,7 +136,7 @@ marker.set('release')
 pending()
 pending()
 assert observed == ['release'], observed
-assert logger.names() == ['sync_success_for_async_call', 'async_success_handler', 'enqueued'], logger.calls
+assert logger.names() == ['sync_success_for_async_call', 'async_success_handler', 'mark_async_success_enqueued', 'enqueued'], logger.calls
 assert logger.calls[0][1] is response
 assert logger.calls[1][1] is response
 ",
@@ -181,7 +181,7 @@ logger.on_enqueue = on_enqueue
                 &locals,
                 c"
 pending()
-assert logger.names() == ['sync_success_for_async_call', 'async_success_handler', 'enqueued', 'closed'], logger.calls
+assert logger.names() == ['sync_success_for_async_call', 'async_success_handler', 'mark_async_success_enqueued', 'enqueued', 'closed'], logger.calls
 assert unraisable_from(logger) == ([] if propagates else [failure])
 ",
             );
