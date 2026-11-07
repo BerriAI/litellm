@@ -135,10 +135,17 @@ async def test_worker_checks_storage_and_repeats_delay_alerts_once_per_interval(
 
     class _Alerts:
         def __init__(self) -> None:
-            self.messages: list[str] = []
+            self.messages: list[str] = []  # mutable-ok: alert sink the worker appends to
 
         async def alerting_handler(self, message: str, level: str, alert_type: object) -> None:
-            self.messages.append(message.split(".")[0])
+            self.messages.append(message)
+
+    class _Clock:
+        def __init__(self) -> None:
+            self.now = 0.0
+
+        def __call__(self) -> float:
+            return self.now
 
     monkeypatch.setenv("DATABASE_URL", parity_database)
     monkeypatch.setenv("LITELLM_ACCOUNTING_DELIVERY_ALERT_BYTES", "1")
@@ -150,23 +157,34 @@ async def test_worker_checks_storage_and_repeats_delay_alerts_once_per_interval(
             "VALUES ('stuck', 'stuck', '{}'::jsonb, false, 1, CURRENT_TIMESTAMP - INTERVAL '1 hour', "
             "CURRENT_TIMESTAMP + INTERVAL '1 hour')"
         )
-    client = PrismaClient(database_url=parity_database, proxy_logging_obj=proxy_server.proxy_logging_obj)
-    now = [0.0]
-    writer = DBSpendUpdateWriter(accounting_clock=lambda: now[0])
-    alerts = _Alerts()
-    observed = []
+    client: Final = PrismaClient(database_url=parity_database, proxy_logging_obj=proxy_server.proxy_logging_obj)
+    clock: Final = _Clock()
+    writer: Final = DBSpendUpdateWriter(accounting_clock=clock)
+    alerts: Final = _Alerts()
+
+    async def flush_at(moment: float) -> tuple[str, ...]:
+        clock.now = moment
+        before: Final = len(alerts.messages)
+        await flush_accounting_deliveries(writer, client, alerts)
+        return tuple(message.split(",")[0] for message in alerts.messages[before:])
+
     await client.db.connect()
     try:
-        for moment in (0.0, 10.0, 899.0, 900.0):
-            now[0] = moment
-            await flush_accounting_deliveries(writer, client, alerts)
-            observed.append(tuple(alerts.messages))
-            alerts.messages.clear()
+        first: Final = await flush_at(0.0)
+        with psycopg.connect(parity_database, autocommit=True) as connection:
+            connection.execute(
+                'INSERT INTO "LiteLLM_SpendLogDelivery" (delivery_id, request_id, accounting_payload, is_batch, state) '
+                "VALUES ('batch', 'batch', '{}'::jsonb, true, 'applied')"
+            )
+        within: Final = (await flush_at(10.0), await flush_at(899.0))
+        after: Final = await flush_at(900.0)
     finally:
         await client.db.disconnect()
 
-    both = ("Accounting delivery storage requires review", "Accounting deliveries are delayed")
-    assert observed == [both, (), (), both]
+    delayed: Final = "Accounting deliveries are delayed. Pending=1"
+    assert first == ("Accounting delivery storage requires review. Retained batches=0", delayed)
+    assert within == ((), ())
+    assert after == ("Accounting delivery storage requires review. Retained batches=1", delayed)
 
 
 @pytest.mark.parametrize("ledger", [False, True])
