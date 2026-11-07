@@ -12025,15 +12025,6 @@ def should_run_mock_completion(
 
 
 def __getattr__(name: str) -> Any:
-    """Lazy import handler for utils module with cached registry for improved performance."""
-    # Use cached registry from _lazy_imports instead of importing tuples every time
-    from litellm._lazy_imports import get_lazy_import_registry
+    from litellm._lazy_imports import resolve_lazy_attribute
 
-    registry: Final = get_lazy_import_registry()
-
-    # Check if name is in registry and call the cached handler function
-    if name in registry:
-        handler_func: Final = registry[name]
-        return handler_func(name)
-
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    return resolve_lazy_attribute(__name__, name)
