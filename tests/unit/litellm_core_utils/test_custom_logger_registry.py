@@ -26,6 +26,7 @@ for collector in collectors:
 
 
 expected_env_vars = {
+    "HEX_S3_BUCKET_NAME": "hex-analytics",
     "LAGO_API_KEY": "api_key",
     "LAGO_API_BASE": "mock_base",
     "LAGO_API_EVENT_CODE": "mock_event_code",
