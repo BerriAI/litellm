@@ -4575,6 +4575,7 @@ class LitellmDataForBackendLLMCall(TypedDict, total=False):
     # cooldown_handlers._trigger_cooldown_for_failed_deployment).
     client_side_timeout: bool
     keepalive_seconds: float | None
+    request_deadline: ReadOnly[float]
 
 
 class LitellmMetadataFromRequestHeaders(TypedDict, total=False):

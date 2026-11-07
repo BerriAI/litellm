@@ -6,7 +6,9 @@ inside ``[base, base + JITTER)`` rather than exactly.
 """
 
 from collections.abc import Callable, Mapping
+from time import monotonic
 from typing import Final
+from unittest.mock import patch
 
 import httpx
 import pytest
@@ -28,6 +30,7 @@ from tests.unit.test_router.core.scripted_host import (
     server_error,
     timeout,
 )
+from tests.unit.test_router.core.retries_health_helpers import attempt_sync
 
 MESSAGES: Final = [{"role": "user", "content": "hi"}]
 
@@ -830,3 +833,143 @@ async def test_health_record_failure_cools_down_past_allowed_fails(make_core: Ma
     assert (first, second) == (False, True)
     assert set(cooled_down(core, ["a", "b"])) == {"a"}
     assert core.health().failures_this_minute("a") == 2
+
+
+# --- request_deadline enforcement ---------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_expired_deadline_raises_timeout_without_sleeping(make_core: MakeCore, host: ScriptedHost) -> None:
+    core: Final = make_core(model_list=[deployment("g", "a")], num_retries=3)
+    host.answer("openai/a", lambda **_: rate_limited(retry_after="60"))
+
+    past_deadline: Final = monotonic() - 1.0
+    error: Final = await attempt(core, request_deadline=past_deadline)
+
+    assert isinstance(error, litellm.Timeout), f"expected Timeout, got {error!r}"
+    assert host.sleeps == [], f"no sleep should occur when deadline already passed: {host.sleeps}"
+
+
+@pytest.mark.asyncio
+async def test_retry_after_header_capped_to_remaining_budget(make_core: MakeCore, host: ScriptedHost) -> None:
+    core: Final = make_core(model_list=[deployment("g", "a")], num_retries=3)
+    host.answer("openai/a", lambda **_: rate_limited(retry_after="60"))
+
+    deadline: Final = monotonic() + 2.0
+    error: Final = await attempt(core, request_deadline=deadline)
+
+    assert isinstance(error, litellm.Timeout), f"expected Timeout, got {error!r}"
+    assert all(s <= 2.5 for s in host.sleeps), f"sleep exceeded 2-second budget: {host.sleeps}"
+
+
+@pytest.mark.asyncio
+async def test_retry_proceeds_when_budget_outlasts_backoff(make_core: MakeCore, host: ScriptedHost) -> None:
+    core: Final = make_core(model_list=[deployment("g", "a")], num_retries=1)
+    host.answer("openai/a", lambda **_: rate_limited(retry_after="0.001"), None)
+
+    deadline: Final = monotonic() + 30.0
+    response: Final = await attempt(core, request_deadline=deadline)
+
+    assert not isinstance(response, Exception), f"expected success, got {response!r}"
+    assert len(host.calls_to("acompletion")) == 2, "expected initial attempt + one retry"
+
+
+@pytest.mark.asyncio
+async def test_no_deadline_leaves_backoff_unchanged(make_core: MakeCore, host: ScriptedHost) -> None:
+    core: Final = make_core(model_list=[deployment("g", "a")], num_retries=2)
+    host.answer("openai/a", lambda **_: rate_limited(retry_after="3"))
+
+    await attempt(core)
+
+    assert len(host.sleeps) >= 2
+    assert all(3 <= slept < 3 + JITTER for slept in host.sleeps[:2])
+
+
+@pytest.mark.asyncio
+async def test_attempt_guarded_after_sleep_advances_clock_past_deadline_async(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    core: Final = make_core(model_list=[deployment("g", "a")], num_retries=3)
+    host.answer("openai/a", lambda **_: rate_limited(retry_after="0.001"))
+
+    t0: Final = 100.0
+    deadline: Final = t0 + 0.050
+    # First two monotonic() calls are the first-attempt check and the sleep remaining check.
+    # All subsequent calls simulate scheduler overrun, returning a time past the deadline.
+    call_n: Final[list[int]] = [0]  # mutable-ok: monotonic() call counter
+
+    def fake_monotonic() -> float:
+        call_n[0] += 1  # mutable-ok: incrementing counter
+        return t0 if call_n[0] <= 2 else t0 + 0.100
+
+    with patch("litellm.router_rust.core.monotonic", fake_monotonic):
+        error: Final = await attempt(core, request_deadline=deadline)
+
+    assert isinstance(error, litellm.Timeout), f"expected Timeout, got {error!r}"
+    assert len(host.calls_to("acompletion")) == 1, f"expected 1 provider call, got {len(host.calls_to('acompletion'))}"
+
+
+def test_attempt_guarded_after_sleep_advances_clock_past_deadline_sync(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    core: Final = make_core(model_list=[deployment("g", "a")], num_retries=3)
+    host.answer("openai/a", lambda **_: rate_limited(retry_after="0.001"))
+
+    t0: Final = 100.0
+    deadline: Final = t0 + 0.050
+    call_n: Final[list[int]] = [0]  # mutable-ok: monotonic() call counter
+
+    def fake_monotonic() -> float:
+        call_n[0] += 1  # mutable-ok: incrementing counter
+        return t0 if call_n[0] <= 2 else t0 + 0.100
+
+    with patch("litellm.router_rust.core.monotonic", fake_monotonic):
+        error: Final = attempt_sync(core, request_deadline=deadline)
+
+    assert isinstance(error, litellm.Timeout), f"expected Timeout, got {error!r}"
+    assert len(host.calls_to("completion")) == 1, f"expected 1 provider call, got {len(host.calls_to('completion'))}"
+
+
+@pytest.mark.asyncio
+async def test_attempt_allowed_when_budget_outlasts_backoff_fake_clock(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    core: Final = make_core(model_list=[deployment("g", "a")], num_retries=1)
+    host.answer("openai/a", lambda **_: rate_limited(retry_after="0.001"), None)
+
+    t0: Final = 100.0
+    deadline: Final = t0 + 0.050
+    call_n: Final[list[int]] = [0]  # mutable-ok: monotonic() call counter
+
+    def fake_monotonic() -> float:
+        call_n[0] += 1  # mutable-ok: incrementing counter
+        return t0 + 0.001 * call_n[0]  # advances 1ms per call, stays well within 50ms budget
+
+    with patch("litellm.router_rust.core.monotonic", fake_monotonic):
+        response: Final = await attempt(core, request_deadline=deadline)
+
+    assert not isinstance(response, Exception), f"expected success, got {response!r}"
+    assert len(host.calls_to("acompletion")) == 2, "expected initial attempt + one retry"
+
+
+@pytest.mark.asyncio
+async def test_attempt_guarded_on_fallback_without_sleep(make_core: MakeCore, host: ScriptedHost) -> None:
+    core: Final = make_core(model_list=two_deployments())
+    host.answer("openai/a", lambda **_: auth_error())
+
+    t0: Final = 100.0
+    deadline: Final = t0 + 0.050
+    # Clock before deadline on first attempt check, past deadline on any subsequent check.
+    call_n: Final[list[int]] = [0]  # mutable-ok: monotonic() call counter
+
+    def fake_monotonic() -> float:
+        call_n[0] += 1  # mutable-ok: incrementing counter
+        return t0 if call_n[0] <= 1 else t0 + 0.100
+
+    with patch("litellm.router_rust.core.monotonic", fake_monotonic):
+        error: Final = await attempt(core, request_deadline=deadline)
+
+    assert isinstance(error, litellm.Timeout), f"expected Timeout, got {error!r}"
+    assert len(host.calls_to("acompletion")) == 1, f"expected 1 provider call, got {len(host.calls_to('acompletion'))}"
+
+

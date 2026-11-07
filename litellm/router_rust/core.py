@@ -26,6 +26,7 @@ from collections.abc import Awaitable, Callable, Coroutine, Generator, Iterable,
 from contextvars import ContextVar
 from datetime import date, datetime, time
 from functools import partial
+from time import monotonic
 from time import perf_counter
 from time import time as unix_time
 from types import MappingProxyType
@@ -2900,9 +2901,34 @@ class RustCore(
                 await await_all(driver.outcomes.take_pending())
             match step["kind"]:
                 case "attempt":
+                    _raw_dl_at: Final = driver._request.get("request_deadline")  # pyright: ignore[reportPrivateUsage]  # same-module internal
+                    _dl_at: Final[float | None] = float(_raw_dl_at) if isinstance(_raw_dl_at, (int, float)) else None
+                    if _dl_at is not None and monotonic() >= _dl_at:
+                        from litellm.exceptions import Timeout
+
+                        raise Timeout(
+                            message="request deadline exceeded before retry attempt",
+                            model=str(driver._request.get("model", "")),  # pyright: ignore[reportPrivateUsage]  # same-module internal
+                            llm_provider="",
+                        )
                     outcome = await driver.attempt(step)
                 case "sleep":
-                    await self._host.sleep(_sleep_seconds(step))
+                    _secs: Final = _sleep_seconds(step)
+                    _raw_dl: Final = driver._request.get("request_deadline")  # pyright: ignore[reportPrivateUsage]  # same-module internal
+                    _dl: Final[float | None] = float(_raw_dl) if isinstance(_raw_dl, (int, float)) else None
+                    if _dl is not None:
+                        _remaining: Final = _dl - monotonic()
+                        if _remaining <= 0 or _secs >= _remaining:
+                            from litellm.exceptions import Timeout
+
+                            raise Timeout(
+                                message="request deadline exceeded during retry backoff",
+                                model=str(driver._request.get("model", "")),  # pyright: ignore[reportPrivateUsage]  # same-module internal
+                                llm_provider="",
+                            )
+                        await self._host.sleep(min(_secs, _remaining))
+                    else:
+                        await self._host.sleep(_secs)
                     outcome = None
                 case "allow_fallback":
                     outcome = await driver.allow_fallback(str(step["target"]))
@@ -2951,9 +2977,34 @@ class RustCore(
                 driver.log_outcomes_sync()
             match step["kind"]:
                 case "attempt":
+                    _raw_dl_ats: Final = driver._request.get("request_deadline")  # pyright: ignore[reportPrivateUsage]  # same-module internal
+                    _dl_ats: Final[float | None] = float(_raw_dl_ats) if isinstance(_raw_dl_ats, (int, float)) else None
+                    if _dl_ats is not None and monotonic() >= _dl_ats:
+                        from litellm.exceptions import Timeout
+
+                        raise Timeout(
+                            message="request deadline exceeded before retry attempt",
+                            model=str(driver._request.get("model", "")),  # pyright: ignore[reportPrivateUsage]  # same-module internal
+                            llm_provider="",
+                        )
                     outcome = driver.attempt_sync(step)
                 case "sleep":
-                    self._host.sleep_sync(_sleep_seconds(step))
+                    _secs_s: Final = _sleep_seconds(step)
+                    _raw_dl_s: Final = driver._request.get("request_deadline")  # pyright: ignore[reportPrivateUsage]  # same-module internal
+                    _dl_s: Final[float | None] = float(_raw_dl_s) if isinstance(_raw_dl_s, (int, float)) else None
+                    if _dl_s is not None:
+                        _remaining_s: Final = _dl_s - monotonic()
+                        if _remaining_s <= 0 or _secs_s >= _remaining_s:
+                            from litellm.exceptions import Timeout
+
+                            raise Timeout(
+                                message="request deadline exceeded during retry backoff",
+                                model=str(driver._request.get("model", "")),  # pyright: ignore[reportPrivateUsage]  # same-module internal
+                                llm_provider="",
+                            )
+                        self._host.sleep_sync(min(_secs_s, _remaining_s))
+                    else:
+                        self._host.sleep_sync(_secs_s)
                     outcome = None
                 case "allow_fallback":
                     from litellm.litellm_core_utils import asyncify
