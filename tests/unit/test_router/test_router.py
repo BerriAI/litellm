@@ -20331,3 +20331,40 @@ def test_router_warns_when_a_deployment_enforces_endpoints_without_a_list(caplog
 
     assert "Deployment 'embed-from-config' sets enforce_supported_endpoints without" in caplog.text
     assert "Deployment 'embed-from-api' sets enforce_supported_endpoints without" in caplog.text
+
+
+def test_sync_completion_tracks_router_metrics():
+    """
+    Regression: sync router.completion() must update router.total_calls /
+    router.success_calls / router.fail_calls, same as router.acompletion() does.
+    """
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-4o",
+                "litellm_params": {"model": "openai/gpt-4o", "num_retries": 0},
+            }
+        ],
+        num_retries=0,
+    )
+
+    ## success: total/success track the deployment model
+    router.completion(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "hi"}],
+        mock_response="Hello",
+    )
+    assert router.total_calls["openai/gpt-4o"] == 1
+    assert router.success_calls["openai/gpt-4o"] == 1
+    assert router.fail_calls.get("openai/gpt-4o", 0) == 0
+
+    ## failure: fail tracks the deployment model
+    with pytest.raises(Exception):
+        router.completion(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response="litellm.InternalServerError",
+        )
+    assert router.fail_calls["openai/gpt-4o"] == 1
+    assert router.total_calls["openai/gpt-4o"] == 2
+    assert router.success_calls["openai/gpt-4o"] == 1
