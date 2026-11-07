@@ -1058,6 +1058,7 @@ _COST_MAP_ROW_SCHEMA: Final = {
             "cache_read_input_token_cost_balanced": {"type": "number"},
             "cache_read_input_token_cost_ultrafast": {"type": "number"},
             "cache_read_input_token_cost_above_200k_tokens_priority": {"type": "number"},
+            "cache_read_input_token_cost_above_200k_tokens_flex": {"type": "number"},
             "cache_read_input_token_cost_above_272k_tokens_priority": {"type": "number"},
             "input_cost_per_token_flex": {"type": "number"},
             "input_cost_per_token_priority": {"type": "number"},
@@ -1354,6 +1355,7 @@ _COST_MAP_ROW_SCHEMA: Final = {
             "supports_image_size": {"type": "boolean"},
             "supports_native_structured_output": {"type": "boolean"},
             "supports_bedrock_native_structured_output": {"type": "boolean"},
+            "supports_bedrock_native_structured_output_by_default": {"type": "boolean"},
             "use_openai_responses_path": {"type": "boolean"},
             "off_peak_pricing": {
                 "type": "object",
@@ -11609,6 +11611,35 @@ async def test_success_enqueue_is_tracked_without_starting_callbacks_synchronous
     assert GLOBAL_LOGGING_WORKER.pending_count > 0, "Tracked enqueue must finish before worker draining starts"
     await GLOBAL_LOGGING_WORKER.flush()
     assert logging_obj.model_call_details["has_logged_async_success"] is True
+
+
+def test_get_response_string_joins_the_text_parts_of_a_completed_responses_event() -> None:
+    from litellm.types.llms.openai import ResponseCompletedEvent
+    from litellm.utils import get_response_string
+
+    response: Final = ResponsesAPIResponse(
+        id="resp_1",
+        created_at=1700000000,
+        model="gpt-5.6",
+        object="response",
+        status="completed",
+        output=[
+            {
+                "type": "message",
+                "id": "msg_1",
+                "role": "assistant",
+                "status": "completed",
+                "content": [
+                    {"type": "output_text", "text": "Hello ", "annotations": []},
+                    {"type": "refusal", "refusal": "not this part"},
+                    {"type": "output_text", "text": "world", "annotations": []},
+                ],
+            },
+            {"type": "function_call", "id": "fc_1", "call_id": "call_1", "name": "lookup", "arguments": "{}"},
+        ],
+    )
+
+    assert get_response_string(ResponseCompletedEvent(type="response.completed", response=response)) == "Hello world"
 
 
 class _RecordingPreCallDeploymentHook(CustomLogger):

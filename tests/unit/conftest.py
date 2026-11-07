@@ -4,7 +4,7 @@ import importlib
 import os
 import shutil
 import tempfile
-from collections.abc import AsyncIterator, Callable, Coroutine, Iterable, Iterator
+from collections.abc import AsyncIterator, Callable, Container, Coroutine, Iterable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
@@ -30,13 +30,13 @@ def redis_cache_double() -> "MagicMock":
     from unittest.mock import MagicMock
 
     from litellm.caching.redis_cache import RedisCache
-    from litellm.redis.store_settings import RedisStoreSettings, breaker_settings
+    from litellm.redis.store_settings import RedisStoreSettings
 
     redis: Final = MagicMock(spec=RedisCache)
     redis.redis_kwargs = {"host": "127.0.0.1", "port": 1, "socket_timeout": 0.2}
     redis.namespace = None
     redis.store_settings = RedisStoreSettings(
-        redis_kwargs=redis.redis_kwargs, namespace=None, default_ttl=60, breaker=breaker_settings()
+        redis_kwargs=redis.redis_kwargs, namespace=None, default_ttl=60, breaker=None
     )
     return redis
 
@@ -496,7 +496,7 @@ def declare_mid_conversation_system(monkeypatch: pytest.MonkeyPatch) -> Callable
     return declare
 
 
-NativeStructuredOutputKey: TypeAlias = Literal["legacy", "bedrock"] | None
+NativeStructuredOutputKey: TypeAlias = Literal["legacy", "bedrock", "default"] | None
 
 
 @pytest.fixture
@@ -506,7 +506,8 @@ def set_native_structured_output(
     def set_flags(model_cost_key: str, native_key: NativeStructuredOutputKey) -> None:
         entry: Final = litellm.model_cost[model_cost_key]
         monkeypatch.setitem(entry, "supports_native_structured_output", native_key == "legacy")
-        monkeypatch.setitem(entry, "supports_bedrock_native_structured_output", native_key == "bedrock")
+        monkeypatch.setitem(entry, "supports_bedrock_native_structured_output", native_key in ("bedrock", "default"))
+        monkeypatch.setitem(entry, "supports_bedrock_native_structured_output_by_default", native_key == "default")
         litellm.get_model_info.cache_clear()
 
     return set_flags
@@ -595,3 +596,9 @@ def pytest_sessionfinish() -> None:
         _close_handler_if_needed(getattr(litellm, name, None))
     _run_coroutine_if_needed(close_litellm_async_clients())
     enable_socket()
+
+
+def in_operator_error(value: Container[object]) -> str:
+    with pytest.raises(TypeError) as native:
+        _ = "key" in value
+    return str(native.value)

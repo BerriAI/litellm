@@ -18,7 +18,7 @@ from tests.integration._support.process import owned_proxy, owned_proxy_process
 
 pytestmark: Final = pytest.mark.shares_worker_state
 
-CLIENT_VERSION: Final = "0.159.3"
+CLIENT_VERSION: Final = "0.166.0"
 FRESH_CONNECTION: Final = {"Connection": "close"}
 CONSISTENT_READS: Final = 8
 CONVERGENCE_SECONDS: Final = 60
