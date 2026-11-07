@@ -62,7 +62,7 @@ function WeightGroup({ accessToken, teamId, group, groupWeights, onWeightChange,
       ).data ?? [],
     enabled: Boolean(accessToken),
   });
-  const rows = weightRows(group, groupWeights, deployments);
+  const rows = weightRows(group, groupWeights, deployments, teamId ?? null);
 
   return (
     <div className="rounded-md border border-border p-4 space-y-3">

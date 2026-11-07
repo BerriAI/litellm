@@ -10,10 +10,10 @@ import {
   withoutGroup,
 } from "./routerWeights";
 
-const deployment = (id: string, modelName: string, model: string, teamPublicName?: string) => ({
+const deployment = (id: string, modelName: string, model: string, team?: { id: string; publicName: string }) => ({
   model_name: modelName,
   litellm_params: { model },
-  model_info: { id, ...(teamPublicName ? { team_public_model_name: teamPublicName } : {}) },
+  model_info: { id, ...(team ? { team_id: team.id, team_public_model_name: team.publicName } : {}) },
 });
 
 describe("routerWeightsFrom", () => {
@@ -72,11 +72,16 @@ describe("hasNoPositiveWeight", () => {
 
 describe("weightRows", () => {
   it("should list the group's deployments with each one's share of traffic", () => {
-    const rows = weightRows("gpt-5", { a: 9, b: 1 }, [
-      deployment("a", "gpt-5", "openai/gpt-5"),
-      deployment("b", "gpt-5", "azure/gpt-5"),
-      deployment("c", "gpt-5", "bedrock/gpt-5"),
-    ]);
+    const rows = weightRows(
+      "gpt-5",
+      { a: 9, b: 1 },
+      [
+        deployment("a", "gpt-5", "openai/gpt-5"),
+        deployment("b", "gpt-5", "azure/gpt-5"),
+        deployment("c", "gpt-5", "bedrock/gpt-5"),
+      ],
+      null,
+    );
     expect(rows).toStrictEqual([
       { deploymentId: "a", label: "openai/gpt-5", weight: 9, sharePercent: 90 },
       { deploymentId: "b", label: "azure/gpt-5", weight: 1, sharePercent: 10 },
@@ -85,20 +90,38 @@ describe("weightRows", () => {
   });
 
   it("should match team deployments by their public model name, not their internal routing name", () => {
-    const rows = weightRows("gpt-5", {}, [
-      deployment("team-dep", "model_name_team-1_abc", "openai/gpt-5", "gpt-5"),
-      deployment("other-group", "gpt-5-mini", "openai/gpt-5-mini"),
-    ]);
+    const rows = weightRows(
+      "gpt-5",
+      {},
+      [
+        deployment("team-dep", "model_name_team-1_abc", "openai/gpt-5", { id: "team-1", publicName: "gpt-5" }),
+        deployment("other-group", "gpt-5-mini", "openai/gpt-5-mini"),
+      ],
+      "team-1",
+    );
     expect(rows.map((row) => row.deploymentId)).toStrictEqual(["team-dep"]);
   });
 
+  it("should leave out another team's deployments, which the proxy rejects", () => {
+    const deployments = [
+      deployment("global", "gpt-5", "openai/gpt-5"),
+      deployment("team-1-dep", "model_name_team-1_abc", "openai/gpt-5", { id: "team-1", publicName: "gpt-5" }),
+      deployment("team-2-dep", "model_name_team-2_def", "openai/gpt-5", { id: "team-2", publicName: "gpt-5" }),
+    ];
+    expect(weightRows("gpt-5", {}, deployments, "team-1").map((row) => row.deploymentId)).toStrictEqual([
+      "global",
+      "team-1-dep",
+    ]);
+    expect(weightRows("gpt-5", {}, deployments, null).map((row) => row.deploymentId)).toStrictEqual(["global"]);
+  });
+
   it("should show no share until some weight is set", () => {
-    const rows = weightRows("gpt-5", {}, [deployment("a", "gpt-5", "openai/gpt-5")]);
+    const rows = weightRows("gpt-5", {}, [deployment("a", "gpt-5", "openai/gpt-5")], null);
     expect(rows[0].sharePercent).toBeNull();
   });
 
   it("should keep a weighted id whose deployment is gone so it can still be cleared", () => {
-    const rows = weightRows("gpt-5", { a: 1, deleted: 1 }, [deployment("a", "gpt-5", "openai/gpt-5")]);
+    const rows = weightRows("gpt-5", { a: 1, deleted: 1 }, [deployment("a", "gpt-5", "openai/gpt-5")], null);
     const staleRow = { deploymentId: "deleted", label: null, weight: 1, sharePercent: 50 };
     expect(rows[1]).toStrictEqual(staleRow);
   });

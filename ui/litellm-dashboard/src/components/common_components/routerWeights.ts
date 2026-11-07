@@ -4,7 +4,7 @@ export type RouterWeights = Readonly<Record<string, GroupWeights>>;
 export interface WeightableDeployment {
   model_name?: string | null;
   litellm_params?: { model?: string | null } | null;
-  model_info?: { id?: string | null; team_public_model_name?: string | null } | null;
+  model_info?: { id?: string | null; team_id?: string | null; team_public_model_name?: string | null } | null;
 }
 
 export interface WeightRow {
@@ -19,7 +19,6 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 
 const isWeight = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value) && value >= 0;
 
-/** Reads the stored, untyped `router_settings.weights` blob, keeping only well-formed entries. */
 export const routerWeightsFrom = (stored: unknown): RouterWeights =>
   isRecord(stored)
     ? Object.fromEntries(
@@ -38,6 +37,13 @@ export const routerWeightsFrom = (stored: unknown): RouterWeights =>
 const deploymentGroup = (deployment: WeightableDeployment): string | null =>
   deployment.model_info?.team_public_model_name || deployment.model_name || null;
 
+/** Mirrors the proxy's ownership check: another team's deployment is never weightable. */
+const isWeightable = (deployment: WeightableDeployment, group: string, teamId: string | null): boolean => {
+  const ownerTeamId = deployment.model_info?.team_id ?? null;
+  const visibleToCaller = ownerTeamId === null || ownerTeamId === teamId;
+  return deploymentGroup(deployment) === group && Boolean(deployment.model_info?.id) && visibleToCaller;
+};
+
 export const withGroup = (weights: RouterWeights, group: string): RouterWeights =>
   group in weights ? weights : { ...weights, [group]: {} };
 
@@ -54,13 +60,11 @@ export const withDeploymentWeight = (
   return { ...weights, [group]: weight === null ? others : { ...others, [deploymentId]: weight } };
 };
 
-/** The value to save: groups without a weight are dropped, and no weights at all is null. */
 export const savedRouterWeights = (weights: RouterWeights): RouterWeights | null => {
   const nonEmpty = Object.entries(weights).filter(([, group]) => Object.keys(group).length > 0);
   return nonEmpty.length > 0 ? Object.fromEntries(nonEmpty) : null;
 };
 
-/** The proxy rejects a group that has weights but none of them positive. */
 export const hasNoPositiveWeight = (group: GroupWeights): boolean =>
   Object.keys(group).length > 0 && !Object.values(group).some((weight) => weight > 0);
 
@@ -72,6 +76,7 @@ export const weightRows = (
   group: string,
   groupWeights: GroupWeights,
   deployments: readonly WeightableDeployment[],
+  teamId: string | null,
 ): WeightRow[] => {
   const total = Object.values(groupWeights).reduce((sum, weight) => sum + weight, 0);
   const row = (deploymentId: string, label: string | null): WeightRow => {
@@ -84,7 +89,7 @@ export const weightRows = (
     };
   };
   const current = deployments
-    .filter((deployment) => deploymentGroup(deployment) === group && deployment.model_info?.id)
+    .filter((deployment) => isWeightable(deployment, group, teamId))
     .map((deployment) => row(deployment.model_info!.id!, deployment.litellm_params?.model ?? null));
   const currentIds = new Set(current.map(({ deploymentId }) => deploymentId));
   const stale = Object.keys(groupWeights)
@@ -93,7 +98,6 @@ export const weightRows = (
   return [...current, ...stale];
 };
 
-/** "" clears the weight, anything that is not a non-negative number is rejected as undefined. */
 export const parseWeightInput = (raw: string): number | null | undefined => {
   const trimmed = raw.trim();
   if (trimmed === "") return null;
