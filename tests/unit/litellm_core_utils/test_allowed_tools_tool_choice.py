@@ -12,8 +12,8 @@ from litellm.litellm_core_utils.allowed_tools_tool_choice import (
     is_allowed_tools_tool_choice,
     chat_allowed_tools_tool_choice,
     parse_allowed_tools_tool_choice,
+    refuse_a_malformed_allowed_tools_tool_choice,
     refuse_tool_calls_the_choice_excludes,
-    refuse_unenforced_allowed_tools_tool_choice,
     unenforced_allowed_tools_tool_choice,
     responses_allowed_tools_tool_choice,
 )
@@ -165,11 +165,8 @@ _FLAT_CHOICE: Final = {"type": "allowed_tools", "mode": "required", "tools": [{"
         ({"type": "allowed_tools", "tools": [{"type": "function", "name": "get_time"}]}, "azure"),
     ],
 )
-def test_a_tool_runner_refuses_a_choice_nothing_would_enforce(tool_choice: object, custom_llm_provider: str):
-    with pytest.raises(BadRequestError, match="drop_params does not drop it") as exc:
-        refuse_unenforced_allowed_tools_tool_choice(tool_choice, custom_llm_provider, "the-model")
-
-    assert exc.value.status_code == 400
+def test_a_choice_nothing_would_enforce_counts_as_unenforced(tool_choice: object, custom_llm_provider: str):
+    assert unenforced_allowed_tools_tool_choice(tool_choice, custom_llm_provider)
 
 
 @pytest.mark.parametrize(
@@ -183,7 +180,7 @@ def test_a_tool_runner_refuses_a_choice_nothing_would_enforce(tool_choice: objec
         (None, "anthropic"),
     ],
 )
-def test_a_tool_runner_keeps_a_choice_the_provider_enforces_or_any_other_choice(
+def test_a_choice_the_provider_enforces_or_any_other_choice_counts_as_enforced(
     tool_choice: object, custom_llm_provider: str
 ):
     assert not unenforced_allowed_tools_tool_choice(tool_choice, custom_llm_provider)
@@ -232,24 +229,31 @@ def test_azure_reads_the_same_api_version_fallback_as_the_request(monkeypatch: p
     assert unenforced_allowed_tools_tool_choice(_FLAT_CHOICE, "azure")
 
 
-_FUNCTION_TOOL: Final = {"type": "function", "function": {"name": "get_time"}}
+def test_drop_params_drops_a_choice_the_provider_cannot_take():
+    assert drops_unsupported_allowed_tools_tool_choice(_FLAT_CHOICE, "anthropic", "the-model", True)
+
+
+def test_a_choice_the_provider_cannot_take_answers_400_without_drop_params():
+    with pytest.raises(BadRequestError, match="only supported for") as exc:
+        drops_unsupported_allowed_tools_tool_choice(_FLAT_CHOICE, "anthropic", "the-model", False)
+
+    assert exc.value.status_code == 400
 
 
 @pytest.mark.parametrize(
-    "tools",
+    "tool_choice",
     [
-        [_FUNCTION_TOOL, {"type": "mcp", "server_label": "docs", "server_url": "https://mcp.example.com"}],
-        [{"type": "web_search_20250305", "name": "web_search"}],
-        [{"googleSearch": {}}],
-        [{"type": ["function"]}],
-        ["get_time"],
+        {"type": "allowed_tools", "mode": "required", "tools": []},
+        {"type": "allowed_tools", "tools": [{"type": "function", "name": "get_time"}]},
     ],
 )
-def test_drop_params_keeps_the_400_when_the_provider_could_run_a_tool(tools: list[object]):
-    with pytest.raises(BadRequestError, match="drop_params does not drop it"):
-        drops_unsupported_allowed_tools_tool_choice(_FLAT_CHOICE, "anthropic", "the-model", True, tools)
+def test_a_malformed_choice_is_refused(tool_choice: object):
+    with pytest.raises(BadRequestError, match="Invalid tool choice") as exc:
+        refuse_a_malformed_allowed_tools_tool_choice(tool_choice, "the-model")
+
+    assert exc.value.status_code == 400
 
 
-@pytest.mark.parametrize("tools", [None, [], [_FUNCTION_TOOL, {"type": "custom", "custom": {"name": "patch"}}]])
-def test_drop_params_drops_the_choice_when_the_caller_runs_every_tool(tools: list[object] | None):
-    assert drops_unsupported_allowed_tools_tool_choice(_FLAT_CHOICE, "anthropic", "the-model", True, tools)
+@pytest.mark.parametrize("tool_choice", [_FLAT_CHOICE, _CHAT_LAYOUT, "required", None])
+def test_a_valid_choice_or_any_other_choice_is_not_called_malformed(tool_choice: object):
+    assert refuse_a_malformed_allowed_tools_tool_choice(tool_choice, "the-model") is None

@@ -593,18 +593,22 @@ async def test_responses_reports_auto_for_an_allowed_tools_choice_it_dropped(
 
 @pytest.mark.usefixtures(httpx_transport.__name__)
 @pytest.mark.asyncio
-async def test_responses_keep_the_400_when_the_provider_would_run_an_mcp_tool(respx_mock: respx.MockRouter) -> None:
-    with pytest.raises(litellm.BadRequestError, match="drop_params does not drop it"):
-        await litellm.aresponses(
-            model="anthropic/claude-haiku-4-5",
-            input="What is the weather?",
-            tools=[{"type": "mcp", "server_label": "docs", "server_url": "https://mcp.example.com/sse"}],
-            tool_choice=_FLAT_ALLOWED_WEATHER,
-            drop_params=True,
-            api_key="sk-ant-fake",
-        )
+async def test_responses_drop_the_choice_beside_a_tool_the_provider_runs(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(
+        return_value=_anthropic_message({"type": "text", "text": "done"})
+    )
 
-    assert not respx_mock.calls
+    response: Final = await litellm.aresponses(
+        model="anthropic/claude-haiku-4-5",
+        input="What is the weather?",
+        tools=[{"type": "mcp", "server_label": "docs", "server_url": "https://mcp.example.com/sse"}],
+        tool_choice=_FLAT_ALLOWED_WEATHER,
+        drop_params=True,
+        api_key="sk-ant-fake",
+    )
+
+    assert "tool_choice" not in json.loads(route.calls[0].request.content)
+    assert response.tool_choice == "auto"
 
 
 @pytest.mark.usefixtures(httpx_transport.__name__)

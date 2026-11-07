@@ -745,10 +745,14 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
 
         try:
             # Extract tool calls from the response
-            if self.collected_response is not None:
-                tool_calls = LiteLLM_Proxy_MCP_Handler.extract_tool_calls_from_response(self.collected_response)
-            else:
-                tool_calls = []
+            tool_calls: Final = (
+                LiteLLM_Proxy_MCP_Handler.tool_calls_to_run(
+                    LiteLLM_Proxy_MCP_Handler.extract_tool_calls_from_response(self.collected_response),
+                    self.original_request_params.get("tool_choice"),
+                )
+                if self.collected_response is not None
+                else ()
+            )
             if not tool_calls:
                 return
             self.tool_call_round += 1
@@ -805,7 +809,6 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                 tool_server_map=self.tool_server_map,
                 served_tools=self.served_tools,
                 tool_calls=tool_calls,
-                tool_choice=self.original_request_params.get("tool_choice"),
                 user_api_key_auth=self.user_api_key_auth,
                 mcp_auth_header=self.mcp_auth_header,
                 mcp_server_auth_headers=self.mcp_server_auth_headers,

@@ -326,18 +326,29 @@ def test_a_tool_the_dropped_choice_lists_still_runs(respx_mock: respx.MockRouter
     )
 
 
-@pytest.mark.parametrize(
-    ("tool_choice", "completion_kwargs"),
-    [(_ALLOWED_WEATHER_ONLY, {}), (_EMPTY_ALLOWED_TOOLS, {"drop_params": True})],
-)
 def test_a_tool_the_choice_excludes_never_runs_when_the_model_ignored_the_choice(
-    respx_mock: respx.MockRouter, tool_choice: dict[str, object], completion_kwargs: dict[str, object]
+    respx_mock: respx.MockRouter,
 ) -> None:
     respx_mock.post(OPENAI_CHAT_COMPLETIONS_URL).mock(
         return_value=httpx.Response(200, json=_openai_response(None, [_TIME_CALL]))
     )
 
-    assert not _tools_run_before_the_refusal(tool_choice, model="openai/gpt-5-mini", **completion_kwargs)
+    assert not _tools_run_before_the_refusal(_ALLOWED_WEATHER_ONLY, model="openai/gpt-5-mini")
+
+
+def test_a_malformed_choice_is_refused_before_any_request(respx_mock: respx.MockRouter) -> None:
+    with pytest.raises(litellm.BadRequestError, match="Invalid tool choice"):
+        litellm.run_tool_loop(
+            model="openai/gpt-5-mini",
+            messages=[{"role": "user", "content": "hi"}],
+            tools=WEATHER_TOOLS,
+            execute_tool=_tool_result,
+            tool_choice=_EMPTY_ALLOWED_TOOLS,
+            drop_params=True,
+            api_key="sk-test",
+        )
+
+    assert not respx_mock.calls
 
 
 def test_a_choice_on_a_model_alias_reaches_the_loop(

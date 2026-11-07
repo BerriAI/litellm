@@ -15,6 +15,7 @@ from unittest.mock import AsyncMock, patch
 import litellm
 from litellm.responses.mcp.litellm_proxy_mcp_handler import LiteLLM_Proxy_MCP_Handler
 from litellm.types.llms.openai import (
+    ResponseCompletedEvent,
     ResponsesAPIResponse,
     ResponsesAPIStreamingResponse,
     OpenAIMcpServerTool,
