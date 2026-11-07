@@ -146,4 +146,4 @@ class VertexAIInteractionsConfig(VertexBase, GoogleAIStudioInteractionsConfig):
         litellm_params: GenericLiteLLMParams,
         headers: Mapping[str, str],
     ) -> tuple[str, dict]:  # mutable-ok: BaseInteractionsAPIConfig declares a plain-dict request body
-        return self._interaction_by_id_request(interaction_id, api_base, litellm_params, url_suffix=":cancel")
+        return self._interaction_by_id_request(interaction_id, api_base, litellm_params, url_suffix="/cancel")
