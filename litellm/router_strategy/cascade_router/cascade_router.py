@@ -874,9 +874,13 @@ class CascadeRouter:
             raise VerifierUnusable(f"cascade {self.model_name}: no verifier_model configured")
         router: Final = self._router()
         parent: Final = request_kwargs or {}
+        # The cheap deployment's itpm/otpm reservation stays with the request, whose legs settle it against the
+        # cheap usage; a copy on the verifier's call would be refunded at its deployment pick as a stale attempt's,
+        # and the settlement of the original would then take that refund a second time.
+        forwarded: Final = forwarded_internal_call_metadata(parent_metadata_of(parent), CASCADE_VERIFIER_CALL_ORIGIN)
         metadata: Final = {
-            **forwarded_internal_call_metadata(parent_metadata_of(parent), CASCADE_VERIFIER_CALL_ORIGIN),
-            INTERNAL_CALL_ORIGIN_METADATA_KEY: CASCADE_VERIFIER_CALL_ORIGIN,
+            **{key: value for key, value in forwarded.items() if key not in IO_TOKEN_RESERVATION_KEYS},
+            INTERNAL_CALL_ORIGIN_METADATA_KEY: CASCADE_VERIFIER_CALL_ORIGIN,  # stamped also when the request has none
             "cascade_router": self.model_name,
         }
         call_kwargs: Final[dict[str, Any]] = {  # mutable-ok: unpacked into the verifier call

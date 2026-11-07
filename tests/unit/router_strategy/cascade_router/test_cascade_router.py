@@ -1442,6 +1442,44 @@ async def test_io_token_reservations_are_settled_per_leg(monkeypatch):
     assert not any(key in buckets[0] for key in IO_TOKEN_RESERVATION_KEYS)
 
 
+async def test_the_verifier_call_carries_no_copy_of_the_cheap_legs_reservation(monkeypatch):
+    """The cheap deployment's itpm/otpm reservation is the request's, settled against the cheap usage by the legs
+    themselves. The verifier's call must not carry a copy: the Router refunds any reservation it finds on a call's
+    metadata at the deployment pick as a stale attempt's, and the settlement of the original would then count that
+    refund a second time, leaving the cheap deployment's counters below its real usage."""
+    import litellm as litellm_mod
+
+    original = litellm_mod.acompletion
+
+    async def capture(**kwargs):
+        if kwargs["metadata"].get("deployment_model_name") == "cheap":
+            kwargs["metadata"].update(_RESERVATION)  # stashed after the pick, as the pre-call check does
+        return await original(**kwargs)
+
+    monkeypatch.setattr(litellm_mod, "acompletion", capture)
+    router = _priced_router(
+        verifier_model="judge-no",
+        verifier_kind="chat",
+        min_chars=2,
+        extra_deployments=[
+            {
+                "model_name": "judge-no",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "x", "mock_response": "NO"},
+                "model_info": {"id": "judge-no"},
+            }
+        ],
+    )
+    # the counters as the pre-call check left them: the cheap leg's reservation (50 in, 100 out) is held
+    counters = router.health().store
+    counters.set_cache(_RESERVATION["_litellm_itpm_cache_key"], 50)
+    counters.set_cache(_RESERVATION["_litellm_otpm_cache_key"], 100)
+    response = await router.acompletion(model="cascade", messages=MESSAGES)
+    assert response._hidden_params["cascade"]["reason"] == "verifier_no"
+    # settled once, to the cheap answer's real usage (10 in, 20 out); a replayed refund would leave -40 / -80
+    assert counters.get_cache(_RESERVATION["_litellm_itpm_cache_key"]) == 10
+    assert counters.get_cache(_RESERVATION["_litellm_otpm_cache_key"]) == 20
+
+
 async def test_a_cheap_served_request_does_not_resurrect_the_settled_reservation(monkeypatch):
     """on_strong_error=cheap: putting the request back to the cheap call's state must not bring back the cheap
     deployment's already-settled reservation, or the success log would settle it a second time."""
