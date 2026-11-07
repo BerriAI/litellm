@@ -50,6 +50,7 @@ from litellm.litellm_core_utils.classifier_logging import (
     without_classifier_audit,
 )
 from litellm.litellm_core_utils.core_helpers import (
+    as_str_mapping,
     get_litellm_metadata_from_kwargs,
     proxy_stamped_kubernetes_pod_routing,
     proxy_stamped_used_client_oauth_token,
@@ -87,6 +88,7 @@ from litellm.responses.litellm_completion_transformation.compaction_items import
     summary_only_compaction_content,
     with_compaction_summary,
 )
+from litellm.secret_managers.main import str_to_bool
 from litellm.types.router import DeploymentTypedDict, LiteLLM_Params, SilentExperimentFlag
 from litellm.types.utils import (
     PROMPT_CARRYING_GUARDRAIL_FIELDS,
@@ -113,10 +115,10 @@ if TYPE_CHECKING:
     from litellm.router import Router
 
 
+_TENANT_PROMPT_STORAGE_FIELDS: Final = ("user_api_key_metadata", "user_api_key_team_metadata")
 _SPEND_LOGS_PRIVACY_METADATA_ADAPTER: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(
     Mapping[str, object] | None
 )
-_TENANT_SPEND_LOGS_METADATA_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 
 
 def _get_max_string_length_prompt_in_db() -> int:
@@ -2201,14 +2203,24 @@ def _get_response_for_spend_logs_payload(
     return "{}"
 
 
+def _disables_prompt_storage(tenant_metadata: object) -> bool:
+    settings: Final = as_str_mapping(tenant_metadata)
+    value: Final = settings.get("store_prompts_in_spend_logs") if settings is not None else None
+    return value is False or (isinstance(value, str) and str_to_bool(value) is False)
+
+
+def should_store_prompts_for_call(kwargs: Mapping[str, object]) -> bool:
+    return should_store_prompts_and_responses_in_spend_logs(
+        _SPEND_LOGS_PRIVACY_METADATA_ADAPTER.validate_python(get_litellm_metadata_from_kwargs(dict(kwargs)))
+    )
+
+
 def should_store_prompts_and_responses_in_spend_logs(metadata: Mapping[str, object] | None = None) -> bool:
     from litellm.proxy.proxy_server import general_settings
     from litellm.secret_managers.main import get_secret_bool
 
     if metadata is not None and any(
-        isinstance(settings := metadata.get(field), Mapping)
-        and _TENANT_SPEND_LOGS_METADATA_ADAPTER.validate_python(settings).get("store_prompts_in_spend_logs") is False
-        for field in ("user_api_key_metadata", "user_api_key_team_metadata")
+        _disables_prompt_storage(metadata.get(field)) for field in _TENANT_PROMPT_STORAGE_FIELDS
     ):
         return False
 

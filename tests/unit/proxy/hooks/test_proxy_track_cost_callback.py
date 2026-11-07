@@ -3398,6 +3398,43 @@ async def test_async_log_success_event_hands_the_sidecar_a_compact_event_and_ski
     assert event.response_cost == 0.0125
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("tenant_metadata", "stored"),
+    [
+        ({"user_api_key_metadata": {"store_prompts_in_spend_logs": False}}, False),
+        ({"user_api_key_team_metadata": {"store_prompts_in_spend_logs": False}}, False),
+        ({"user_api_key_team_metadata": {"store_prompts_in_spend_logs": "false"}}, False),
+        ({"user_api_key_metadata": {}, "user_api_key_team_metadata": {}}, True),
+    ],
+)
+async def test_spend_event_leaves_out_bodies_for_tenants_that_turned_off_prompt_storage(
+    socket_path: Path, monkeypatch: pytest.MonkeyPatch, tenant_metadata: dict[str, object], stored: bool
+):
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "general_settings", {"store_prompts_in_spend_logs": True})
+    handler = _RecordingHandler()
+    consumer = SpendEventConsumer(handler)
+    address = UnixAddress(path=str(socket_path))
+    server = await consumer.serve(address)
+    producer = SpendEventProducer(
+        address=address, on_unavailable="fallback", buffer_size=10, connect_timeout=1.0, fallback=_no_fallback
+    )
+    kwargs: dict[str, object] = _offload_kwargs()
+    kwargs["litellm_params"]["metadata"].update(tenant_metadata)
+
+    await ProxyDBLogger(producer).async_log_success_event(kwargs, _offload_response(), datetime.now(), datetime.now())
+    await producer.close(drain_timeout=5.0)
+    server.close()
+    assert await consumer.drain(timeout=5.0) == 0
+
+    event = decode_spend_event(handler.lines[0])
+    assert not isinstance(event, SpendEventDecodeError)
+    assert (event.litellm_params["proxy_server_request"] is not None) is stored
+    assert ("messages" in event.standard_logging_object) is stored
+
+
 def _completed_batch() -> LiteLLMBatch:
     return LiteLLMBatch(
         id="batch_abc",
