@@ -18,6 +18,7 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.asyncify import asyncify
+from litellm.litellm_core_utils.bridged_audio_output import cost_map_output_modalities
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params, has_attributes
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.prompt_templates.factory import (
@@ -1309,21 +1310,6 @@ def sync_transform_request_body(
     )
 
 
-class _CostMapOutputModalities(TypedDict):
-    supported_output_modalities: NotRequired[ReadOnly[tuple[str, ...]]]
-
-
-_COST_MAP_OUTPUT_MODALITIES: Final = TypeAdapter(_CostMapOutputModalities)
-
-
-def _answers_text(cost_map_key: str) -> bool:
-    try:
-        row: Final = _COST_MAP_OUTPUT_MODALITIES.validate_python(litellm.model_cost.get(cost_map_key))  # pyright: ignore[reportUnknownMemberType]  # cost map rows are untyped JSON
-    except ValidationError:
-        return False
-    return "text" in row.get("supported_output_modalities", ("text",))
-
-
 class _OutputLimit(TypedDict):
     max_output_tokens: NotRequired[ReadOnly[PositiveInt | None]]
 
@@ -1352,7 +1338,7 @@ def _text_chat_model_max_output_tokens(
     info: Final = litellm.utils.lookup_model_info_for_registration(model, custom_llm_provider)
     if isinstance(info, litellm.utils.ModelInfoLookupMiss) or info.get("mode") != "chat":
         return None
-    if not _answers_text(info["key"]):
+    if "text" not in (cost_map_output_modalities(info["key"]) or frozenset()):
         return None
     return _catalog_capped_output_limit(info["key"], deployment_model_info or info)
 
