@@ -165,7 +165,7 @@ _LateResponseT = TypeVar("_LateResponseT", bound=Response)
 _LlmCallT = TypeVar("_LlmCallT")
 _ResponseT: Final = TypeVar("_ResponseT")
 _ChunkT: Final = TypeVar("_ChunkT")
-_ProcessedT = TypeVar("_ProcessedT")
+_ProcessedT: Final = TypeVar("_ProcessedT")
 
 KNOWN_PROXY_ROUTES: Final = frozenset(
     route for member in LiteLLMRoutes for route in member.value if route.startswith("/")
@@ -281,10 +281,16 @@ if TYPE_CHECKING:
 else:
     ProxyConfig = Any
 from litellm.litellm_core_utils.total_deadline import (
+    TOTAL_TIMEOUT_FIELD,
+    TOTAL_TIMEOUT_HEADER,
+    InvalidTotalTimeout,
+    TotalTimeout,
     TotalTimeoutExpired,
     TotalTimeoutNotApplicable,
+    bounded_by_total_timeout,
     current_total_deadline,
     total_deadline,
+    total_timeout_from_request,
 )
 from litellm.proxy.anthropic_endpoints.answered_status import with_answered_status
 from litellm.proxy.anthropic_endpoints.streaming_model_restamp import (
@@ -293,16 +299,12 @@ from litellm.proxy.anthropic_endpoints.streaming_model_restamp import (
 from litellm.proxy.litellm_pre_call_utils import (
     ROUTER_SCHEDULED_ROUTE_TYPES,
     SCHEDULER_PRIORITY_HEADER,
-    TOTAL_TIMEOUT_FIELD,
-    InvalidTotalTimeout,
     LiteLLMProxyRequestSetup,
-    TotalTimeout,
     add_litellm_data_to_request,
     get_metadata_variable_name,
     refresh_proxy_server_request_body_snapshot,
     reject_url_valued_destination,
     sanitize_for_log,
-    total_timeout_from_request,
 )
 from litellm.proxy.policy_engine.response_retrieval import attach_post_call_pipelines_to_retrieval
 from litellm.types.litellm_params import STREAM_USAGE_INJECTED_FIELD
@@ -586,6 +588,10 @@ async def _dispatch_disconnect_billing_event(logging_obj: LiteLLMLoggingObj, par
 
 
 _TOTAL_TIMEOUT_ROUTE_TYPES: Final = frozenset({"acompletion", "aresponses", "anthropic_messages"})
+
+
+def _total_timeout_refused(message: str) -> ProxyException:
+    return ProxyException(message=message, type="invalid_request_error", param=TOTAL_TIMEOUT_FIELD, code=400)
 
 
 def _total_timeout_expired() -> bool:
@@ -3094,32 +3100,25 @@ class ProxyBaseLLMRequestProcessing:
     ) -> TotalTimeout | None:
         """The request's ``total_timeout`` when it bounds this request: a body one on a request it cannot
         bound is refused, a header one is ignored."""
-        body: Final = _REQUEST_FIELDS.validate_python(self.data)
-        parsed: Final = total_timeout_from_request(request.headers, body)
+        body: Final = _REQUEST_FIELDS.validate_python(self.data)  # pyright: ignore[reportUnknownMemberType]  # self.data is the untyped request dict
+        parsed: Final = total_timeout_from_request(request.headers.get(TOTAL_TIMEOUT_HEADER), body)
         self.data.pop(TOTAL_TIMEOUT_FIELD, None)  # pyright: ignore[reportUnknownMemberType]  # self.data is the untyped request dict
         if parsed is None:
             return None
         if isinstance(parsed, InvalidTotalTimeout):
-            raise ProxyException(
-                message=parsed.message, type="invalid_request_error", param=TOTAL_TIMEOUT_FIELD, code=400
-            )
-        bounded: Final = (
+            raise _total_timeout_refused(parsed.message)
+        if (
             route_type in _TOTAL_TIMEOUT_ROUTE_TYPES
             and is_streaming_request is not True
-            and body.get("stream") is not True
-            and body.get("background") is not True
-        )
-        if bounded:
+            and bounded_by_total_timeout(body)
+        ):
             return parsed
         if parsed.from_body:
-            raise ProxyException(
-                message=f"{TOTAL_TIMEOUT_FIELD} applies only to non-streaming, non-background "
-                "/v1/chat/completions, /v1/messages and /v1/responses requests",
-                type="invalid_request_error",
-                param=TOTAL_TIMEOUT_FIELD,
-                code=400,
+            raise _total_timeout_refused(
+                f"{TOTAL_TIMEOUT_FIELD} applies only to non-streaming, non-background "
+                "/v1/chat/completions, /v1/messages and /v1/responses requests"
             )
-        verbose_proxy_logger.debug("x-litellm-total-timeout ignored for this %s request", route_type)
+        verbose_proxy_logger.debug("%s ignored for this %s request", TOTAL_TIMEOUT_HEADER, route_type)
         return None
 
     async def _within_total_timeout(
@@ -3142,9 +3141,7 @@ class ProxyBaseLLMRequestProcessing:
         except TotalTimeoutExpired as expired:
             raise ProxyException(message=str(expired), type="timeout", param=TOTAL_TIMEOUT_FIELD, code=408) from expired
         except TotalTimeoutNotApplicable as refused:
-            raise ProxyException(
-                message=str(refused), type="invalid_request_error", param=TOTAL_TIMEOUT_FIELD, code=400
-            ) from refused
+            raise _total_timeout_refused(str(refused)) from refused
 
     async def _process_llm_request(
         self,

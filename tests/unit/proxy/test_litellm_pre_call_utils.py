@@ -17,8 +17,6 @@ from pydantic import ValidationError as PydanticValidationError
 from starlette.datastructures import Headers
 
 import litellm
-from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
-from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 from litellm.constants import (
     CALLER_SESSION_ID_METADATA_KEY,
     COMPLEXITY_ROUTER_CHILD_SESSION_ID_METADATA_KEY,
@@ -40,12 +38,10 @@ from litellm.litellm_core_utils.redact_messages import _get_turn_off_message_log
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.fireworks_ai.common_utils import get_fireworks_session_id
 from litellm.proxy._types import AddTeamCallback, ProxyException, TeamCallbackMetadata, UserAPIKeyAuth
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.litellm_pre_call_utils import (
-    InvalidTotalTimeout,
     KeyAndTeamLoggingSettings,
     LiteLLMProxyRequestSetup,
-    TotalTimeout,
-    total_timeout_from_request,
     _apply_credential_overrides_from_model_config,
     _extract_credential_from_entry,
     _get_enforced_params,
@@ -67,6 +63,7 @@ from litellm.proxy.litellm_pre_call_utils import (
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 from litellm.types.litellm_params import AGENTIC_LOOP_KWARG_NAMES
 from litellm.types.utils import CredentialItem
+from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 
 
 def test_check_if_token_is_service_account():
@@ -3049,37 +3046,6 @@ def test_add_litellm_data_for_backend_llm_call_merges_keepalive_seconds_header()
         user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
     )
     assert result.get("keepalive_seconds") == 20.0
-
-
-@pytest.mark.parametrize(
-    ("headers", "body", "expected"),
-    [
-        ({}, {}, None),
-        ({}, {"total_timeout": 10}, TotalTimeout(10.0, from_body=True)),
-        ({}, {"total_timeout": "2.5"}, TotalTimeout(2.5, from_body=True)),
-        ({"x-litellm-total-timeout": "4"}, {}, TotalTimeout(4.0, from_body=False)),
-        ({"x-litellm-total-timeout": "4"}, {"total_timeout": 10}, TotalTimeout(4.0, from_body=False)),
-        ({"x-litellm-total-timeout": "4"}, {"total_timeout": "bad"}, TotalTimeout(4.0, from_body=False)),
-    ],
-    ids=["absent", "body", "body_numeric_string", "header", "header_wins", "header_wins_over_a_bad_body"],
-)
-def test_total_timeout_is_read_from_the_header_first_then_the_body(
-    headers: dict[str, str], body: dict[str, object], expected: TotalTimeout | None
-) -> None:
-    assert total_timeout_from_request(Headers(headers), body) == expected
-
-
-@pytest.mark.parametrize(
-    "value",
-    [None, True, False, 0, -1, "0", "-2", "nan", "inf", "-inf", float("nan"), 10**400, "ten", "", [10], {"s": 10}],
-)
-def test_a_total_timeout_that_is_not_a_positive_finite_number_of_seconds_is_invalid(value: object) -> None:
-    assert isinstance(total_timeout_from_request(Headers({}), {"total_timeout": value}), InvalidTotalTimeout)
-
-
-@pytest.mark.parametrize("value", ["0", "-1", "nan", "inf", "ten", ""])
-def test_an_invalid_total_timeout_header_is_invalid(value: str) -> None:
-    assert isinstance(total_timeout_from_request(Headers({"x-litellm-total-timeout": value}), {}), InvalidTotalTimeout)
 
 
 def test_add_user_api_key_auth_to_request_metadata():

@@ -7,9 +7,11 @@ to stream or run in the background is not bounded: a body ``total_timeout`` refu
 
 import asyncio
 import contextlib
+import math
 import sys
 from collections.abc import AsyncGenerator, Callable, Mapping
 from contextvars import ContextVar
+from dataclasses import dataclass
 from typing import Final
 
 from litellm._logging import verbose_router_logger
@@ -18,7 +20,7 @@ if sys.version_info >= (3, 11):
     from asyncio import Timeout as _Scope
     from asyncio import timeout_at as _timeout_at
 
-    _ScopeTimeout = TimeoutError
+    _ScopeTimeout: Final = TimeoutError
 
     def _expired(scope: _Scope) -> bool:
         return scope.expired()
@@ -30,13 +32,62 @@ else:
     from async_timeout import Timeout as _Scope
     from async_timeout import timeout_at as _timeout_at
 
-    _ScopeTimeout = asyncio.TimeoutError
+    _ScopeTimeout: Final = asyncio.TimeoutError
 
     def _expired(scope: _Scope) -> bool:
         return scope.expired
 
     def _disarm(scope: _Scope) -> None:
         scope.reject()
+
+
+TOTAL_TIMEOUT_HEADER: Final = "x-litellm-total-timeout"
+TOTAL_TIMEOUT_FIELD: Final = "total_timeout"
+
+
+@dataclass(frozen=True, slots=True)
+class TotalTimeout:
+    seconds: float
+    from_body: bool
+
+
+@dataclass(frozen=True, slots=True)
+class InvalidTotalTimeout:
+    message: str
+
+
+def _positive_finite_seconds(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, int | float | str):
+        return None
+    try:
+        seconds: Final = float(value)
+    except (ValueError, OverflowError):
+        return None
+    return seconds if math.isfinite(seconds) and seconds > 0 else None
+
+
+def _total_timeout(value: object, *, from_body: bool) -> TotalTimeout | InvalidTotalTimeout:
+    seconds: Final = _positive_finite_seconds(value)
+    if seconds is None:
+        name: Final = TOTAL_TIMEOUT_FIELD if from_body else TOTAL_TIMEOUT_HEADER
+        return InvalidTotalTimeout(f"{name} must be a positive, finite number of seconds, got {value!r}")
+    return TotalTimeout(seconds, from_body)
+
+
+def total_timeout_from_request(
+    header: str | None, body: Mapping[str, object]
+) -> TotalTimeout | InvalidTotalTimeout | None:
+    """The request's ``total_timeout``: the header wins over the body field."""
+    if header is not None:
+        return _total_timeout(header, from_body=False)
+    if TOTAL_TIMEOUT_FIELD not in body:
+        return None
+    return _total_timeout(body[TOTAL_TIMEOUT_FIELD], from_body=True)
+
+
+def bounded_by_total_timeout(call: Mapping[str, object]) -> bool:
+    """Only a request that neither streams nor runs in the background can be bounded."""
+    return call.get("stream") is not True and call.get("background") is not True
 
 
 class TotalTimeoutNotApplicable(Exception):
@@ -76,15 +127,11 @@ def current_total_deadline() -> TotalDeadline | None:
     return _CURRENT.get()
 
 
-def _excluded(call: Mapping[str, object]) -> bool:
-    return call.get("stream") is True or call.get("background") is True
-
-
 def enforce_total_timeout_scope(call: Mapping[str, object]) -> None:
     """Raise ``TotalTimeoutNotApplicable`` for a body ``total_timeout`` on a streaming or background call,
     and stop bounding it for a header one."""
     deadline: Final = _CURRENT.get()
-    if deadline is None or deadline._released or not _excluded(call):  # pyright: ignore[reportPrivateUsage]  # same module
+    if deadline is None or deadline._released or bounded_by_total_timeout(call):  # pyright: ignore[reportPrivateUsage]  # same module
         return
     if deadline.from_body:
         raise TotalTimeoutNotApplicable(
