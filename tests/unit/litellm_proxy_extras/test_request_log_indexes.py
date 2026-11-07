@@ -1,4 +1,6 @@
+import builtins
 import re
+import sys
 from pathlib import Path
 from typing import Final
 
@@ -7,6 +9,7 @@ from litellm_proxy_extras.migration_recovery import is_inert_migration
 from litellm_proxy_extras.request_log_indexes import (
     REQUEST_LOG_INDEXES,
     RequestLogIndex,
+    ensure_request_log_indexes,
     filter_request_log_index_diff,
 )
 
@@ -147,3 +150,38 @@ class TestFilterRequestLogIndexDiff:
 
     def test_an_empty_script_stays_empty(self):
         assert filter_request_log_index_diff("") == ""
+
+
+class TestEnsureRequestLogIndexes:
+    def test_when_psycopg_import_fails_returns_false_and_logs_warning(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        orig_import = builtins.__import__
+
+        def fake_import(name, *args, **kwargs):
+            if name == "psycopg" or name.startswith("psycopg."):
+                raise ImportError("couldn't import requested psycopg 'python' implementation: libpq library not found")
+            return orig_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", fake_import)
+        for mod in list(sys.modules):
+            if mod == "psycopg" or mod.startswith("psycopg."):
+                monkeypatch.delitem(sys.modules, mod, raising=False)
+
+        with caplog.at_level("WARNING", logger="litellm_proxy_extras"):
+            result = ensure_request_log_indexes("postgresql://u:p@db:5432/db", "public")
+
+        assert result is False
+        assert "psycopg is not installed or could not be loaded; skipping the request-log index build" in caplog.text
+
+    def test_when_connect_raises_importerror_returns_false_and_logs_warning(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        def fake_connect(database_url: str):
+            raise ImportError("libpq library not found")
+
+        with caplog.at_level("WARNING", logger="litellm_proxy_extras"):
+            result = ensure_request_log_indexes("postgresql://u:p@db:5432/db", "public", connect=fake_connect)
+
+        assert result is False
+        assert "Could not build the request-log indexes, leaving them for the next index build" in caplog.text

@@ -1766,6 +1766,14 @@ class TestBuildRequestLogIndexes:
 
         assert builds == []
 
+    def test_when_disabled_via_env_var_nothing_is_built(self, monkeypatch, builds, build):
+        monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@primary:5432/db")
+        monkeypatch.setenv("LITELLM_DISABLE_REQUEST_LOG_INDEX_BUILD", "true")
+
+        assert ProxyExtrasDBManager.build_request_log_indexes(build=build) is True
+
+        assert builds == []
+
 
 class TestStartRequestLogIndexBuild:
     """A serving proxy that ran the migrations starts the index build on a daemon thread
