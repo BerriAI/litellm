@@ -71,6 +71,34 @@ def _prisma_returning(rows: Sequence[Mapping[str, str | int | None]] | None) -> 
     return client
 
 
+@pytest.fixture
+def gateway_daily_activity_client() -> TestClient:
+    buckets: Final = (("2025-12-31", 3), ("2026-01-01", 7))
+
+    async def query_raw(_query: str, start_date: str, end_date: str) -> tuple[Mapping[str, str | int | None], ...]:
+        return tuple(
+            {
+                "kind": "route",
+                "date": date,
+                "category": "llm",
+                "route": "/chat/completions",
+                "successful_requests": successful,
+                "failed_requests": 0,
+                "status_code": None,
+            }
+            for date, successful in buckets
+            if start_date <= date <= end_date
+        )
+
+    prisma: Final = MagicMock()
+    prisma.db.query_raw = AsyncMock(side_effect=query_raw)
+    app: Final = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[user_api_key_auth] = _admin
+    app.dependency_overrides[get_gateway_activity_repository] = lambda: GatewayActivityRepository(prisma)
+    return TestClient(app)
+
+
 class TestDefaultRange:
     def test_spans_the_documented_lookback(self):
         start, end = _default_range()
@@ -306,6 +334,58 @@ class TestGatewayDailyActivityRoute:
         response = TestClient(app).get("/gateway/daily/activity")
         assert response.status_code == 200
         assert prisma.db.query_raw.call_args_list[0].args[1:] == _FROZEN_RANGE
+
+    @pytest.mark.parametrize(
+        ("utc_hour", "timezone_offset_minutes", "include_current_utc_day", "expected_successful_requests"),
+        (
+            pytest.param(12, None, True, 3, id="historical-without-timezone"),
+            pytest.param(12, 0, True, 3, id="historical-utc"),
+            pytest.param(12, -330, True, 3, id="historical-east"),
+            pytest.param(12, 300, True, 3, id="historical-west"),
+            pytest.param(1, 300, True, 10, id="live-west-year-rollover"),
+            pytest.param(1, 300, None, 10, id="live-west-default"),
+            pytest.param(1, 300, False, 3, id="live-west-opt-out"),
+            pytest.param(1, None, True, 3, id="live-without-timezone"),
+            pytest.param(1, 0, True, 3, id="historical-utc-after-midnight"),
+            pytest.param(1, 840, True, 10, id="maximum-offset"),
+            pytest.param(12, -840, True, 3, id="minimum-offset"),
+        ),
+    )
+    def test_timezone_queries_only_include_the_live_utc_bucket_for_the_callers_current_day(
+        self,
+        gateway_daily_activity_client: TestClient,
+        utc_hour: int,
+        timezone_offset_minutes: int | None,
+        include_current_utc_day: bool | None,
+        expected_successful_requests: int,
+    ) -> None:
+        params: Final = {
+            "start_date": "2025-12-31",
+            "end_date": "2025-12-31",
+            **(
+                {"include_current_utc_day": str(include_current_utc_day).lower()}
+                if include_current_utc_day is not None
+                else {}
+            ),
+            **({"timezone": str(timezone_offset_minutes)} if timezone_offset_minutes is not None else {}),
+        }
+        with patch("litellm.proxy.management_endpoints.gateway_request_endpoints.datetime") as clock:
+            clock.now.return_value = datetime(2026, 1, 1, utc_hour, tzinfo=timezone.utc)
+            response: Final = gateway_daily_activity_client.get("/gateway/daily/activity", params=params)
+
+        assert response.status_code == 200, response.text
+        assert response.json()["total_successful_requests"] == expected_successful_requests
+
+    @pytest.mark.parametrize("timezone_offset_minutes", (-841, 841))
+    def test_timezone_outside_supported_offsets_is_rejected(
+        self, gateway_daily_activity_client: TestClient, timezone_offset_minutes: int
+    ) -> None:
+        response: Final = gateway_daily_activity_client.get(
+            "/gateway/daily/activity",
+            params={"start_date": "2025-12-31", "end_date": "2025-12-31", "timezone": timezone_offset_minutes},
+        )
+
+        assert response.status_code == 422, response.text
 
     def test_serialized_response_carries_the_documented_shape(self):
         prisma: Final = _prisma_returning(

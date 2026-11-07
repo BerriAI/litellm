@@ -263,6 +263,12 @@ def test_timezone_adjustment_live_end_handles_offset_and_opt_in_cases() -> None:
     assert adjust_dates_for_timezone(
         "2026-07-06", "2026-08-09", 420, include_current_utc_day=True, utc_now=pt_evening
     ) == ("2026-07-06", "2026-08-09")
+    assert adjust_dates_for_timezone(
+        "2026-07-06", "2026-08-05", 20000000, include_current_utc_day=True, utc_now=pt_evening
+    ) == ("2026-07-06", "2026-08-05")
+    assert adjust_dates_for_timezone(
+        "2026-07-06", "2026-08-05", -900, include_current_utc_day=True, utc_now=pt_evening
+    ) == ("2026-07-06", "2026-08-05")
 
 
 @pytest.mark.parametrize("offset_minutes", [None, 0, -330, 480])

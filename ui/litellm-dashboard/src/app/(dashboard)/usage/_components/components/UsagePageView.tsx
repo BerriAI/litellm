@@ -256,6 +256,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
             startTime,
             endTime,
             entityIds: effectiveUserId ? [effectiveUserId] : null,
+            includeCurrentUtcDay: true,
           }
         : null,
     [accessToken, startTime, endTime, effectiveUserId],
