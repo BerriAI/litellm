@@ -450,3 +450,170 @@ async fn the_request_context_carries_the_shaped_params_without_model_or_messages
         .unwrap_or_else(|seen| panic!("before_provider_request runs once, saw {}", seen.len()));
     assert_eq!(optional_params, json!({"max_tokens": 16}));
 }
+
+#[derive(Default)]
+struct GatedResult {
+    entered: tokio::sync::Notify,
+    release: tokio::sync::Notify,
+}
+
+impl litellm_host::interceptors::Interceptors<Error> for GatedResult {
+    async fn before_provider_request(
+        &self,
+        wire: WireRequest,
+        _: RequestContext,
+    ) -> Result<WireRequest, Error> {
+        Ok(wire)
+    }
+
+    async fn after_provider_response(
+        &self,
+        _: litellm_host::interceptors::RawResponse,
+    ) -> Result<(), Error> {
+        Ok(())
+    }
+
+    async fn result_ready(&self, _: ExecutionFacts) -> Result<(), Error> {
+        self.entered.notify_one();
+        self.release.notified().await;
+        Ok(())
+    }
+}
+
+#[rstest]
+#[case::complete_response(false, false)]
+#[case::complete_stream(true, false)]
+#[case::cancel_response(false, true)]
+#[case::cancel_stream(true, true)]
+#[tokio::test]
+async fn pending_result_acceptance_blocks_delivery_and_cache_storage(
+    call: MessagesCall,
+    #[case] streaming: bool,
+    #[case] cancel: bool,
+    #[values(false, true)] cached: bool,
+) {
+    use futures_util::TryStreamExt;
+    use litellm_cache_memory::InMemoryCache;
+    use litellm_cache_response::{CachePolicy, CacheScope, ResponseCache, ScopedCache};
+
+    let response = if streaming {
+        ResponseTemplate::new(200).set_body_raw(
+            "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+            "text/event-stream",
+        )
+    } else {
+        message_response()
+    };
+    let upstream = upstream([response.clone(), response.clone(), response]).await;
+    let route = messages_route(no_secrets()).with_cache(ScopedCache::new(
+        Arc::new(ResponseCache::new(Arc::new(InMemoryCache::default()))),
+        CacheScope::Shared,
+    ));
+    let request = || {
+        authenticated(
+            with_fields(
+                MessagesCall {
+                    body: call.body.clone(),
+                    ..super::call()
+                },
+                json!({"stream": streaming}),
+            ),
+            upstream.uri(),
+        )
+    };
+    if cached {
+        let output = route.execute(request(), &(), None).await.unwrap();
+        if let MessagesCallResponse::Stream { chunks, .. } = output {
+            chunks.try_collect::<Vec<_>>().await.unwrap();
+        }
+    }
+    let gate = GatedResult::default();
+    let observations = super::support::Observations::default();
+    let mut pending = Box::pin(route.execute(request(), &gate, Some(observations.sender.clone())));
+    tokio::time::timeout(Duration::from_secs(5), async {
+        tokio::select! {
+            _ = gate.entered.notified() => {},
+            _ = &mut pending => panic!("a result cannot be delivered before acceptance"),
+        }
+    })
+    .await
+    .unwrap();
+    assert!(futures_util::poll!(&mut pending).is_pending());
+
+    let probe = RecordingHost::passthrough(request());
+    let output = route
+        .execute(
+            request(),
+            &probe,
+            litellm_inference::CallOptions {
+                cache: Some(CachePolicy {
+                    no_store: true,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    if let MessagesCallResponse::Stream { chunks, .. } = output {
+        chunks.try_collect::<Vec<_>>().await.unwrap();
+    }
+    assert_eq!(
+        matches!(
+            probe.facts.lock().unwrap()[0].source,
+            ResultSource::Cache { .. }
+        ),
+        cached
+    );
+    assert_eq!(received(&upstream).await.len(), if cached { 1 } else { 2 });
+
+    if cancel {
+        drop(pending);
+        let events = observations.lock().unwrap();
+        assert!(matches!(events.last(), Some(CallEvent::Cancelled { .. })));
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(event, CallEvent::Cancelled { .. }))
+                .count(),
+            1
+        );
+        assert!(!events.iter().any(|event| matches!(
+            event,
+            CallEvent::Succeeded { .. } | CallEvent::Failed { .. }
+        )));
+    } else {
+        gate.release.notify_one();
+        let output = pending.await.unwrap();
+        if let MessagesCallResponse::Stream { chunks, .. } = output {
+            chunks.try_collect::<Vec<_>>().await.unwrap();
+        }
+        assert!(matches!(
+            observations.lock().unwrap().last(),
+            Some(CallEvent::Succeeded { .. })
+        ));
+    }
+
+    let retry = RecordingHost::passthrough(request());
+    let output = route.execute(request(), &retry, None).await.unwrap();
+    if let MessagesCallResponse::Stream { chunks, .. } = output {
+        chunks.try_collect::<Vec<_>>().await.unwrap();
+    }
+    assert_eq!(
+        matches!(
+            retry.facts.lock().unwrap()[0].source,
+            ResultSource::Cache { .. }
+        ),
+        cached || !cancel
+    );
+    assert_eq!(
+        received(&upstream).await.len(),
+        if cached {
+            1
+        } else if cancel {
+            3
+        } else {
+            2
+        }
+    );
+}

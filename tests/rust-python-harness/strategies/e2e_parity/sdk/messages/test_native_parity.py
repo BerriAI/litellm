@@ -769,7 +769,119 @@ FALLBACK_CASES: Final = (
     Case("stream_timeout_kwarg", _kw(stream=True, stream_timeout=30), upstream=(_stream(TEXT_STREAM),)),
 )
 
-CASES: Final = (*REQUEST_CASES, *RESPONSE_CASES, *FAILURE_CASES, *STREAM_CASES, *SYNC_CASES, *FALLBACK_CASES)
+CONTRACT_REGRESSION_CASES: Final = (
+    Case(
+        "tencent_filters_caller_and_feature_betas",
+        _kw(
+            extra_headers={"Anthropic-Beta": "structured-outputs-2025-11-13,caller-beta", "x-routing": "keep"},
+            output_config={"format": {"type": "json_schema", "schema": {"type": "object"}}},
+            tools=[{"type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex"}],
+        ),
+        model="tencent/claude-sonnet-4-5",
+    ),
+    Case(
+        "edenai_normalizes_replayed_tool_ids",
+        _kw(
+            messages=[
+                {"role": "user", "content": "Look it up"},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "text", "text": " \n "},
+                        {
+                            "type": "tool_use",
+                            "id": "functions.lookup:0",
+                            "name": "lookup",
+                            "input": {"id": "functions.lookup:0"},
+                        },
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [{"type": "tool_result", "tool_use_id": "functions.lookup:0", "content": "ok"}],
+                },
+            ]
+        ),
+        model="edenai/anthropic/claude-sonnet-4-5",
+    ),
+    Case(
+        "signature_only_thinking_replay",
+        _kw(
+            messages=[
+                {"role": "user", "content": "Look it up"},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "thinking", "thinking": "", "signature": "sig_abc"},
+                        {"type": "tool_use", "id": "t", "name": "lookup", "input": {}},
+                    ],
+                },
+                {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t", "content": "ok"}]},
+            ]
+        ),
+    ),
+    Case(
+        "converse_wrapped_redacted_replay",
+        _kw(
+            messages=[
+                {"role": "user", "content": "Solve it"},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "redacted_thinking",
+                            "data": "RW13S0FoZ0JFZ3kzdmEzcHppeC9MYWZQc240YURCSVQyWGx4aDBMNUw4ckxWeUl3eHRFM3JBRkJhOGNyM3FwUA==",
+                        },
+                        {"type": "text", "text": "answer"},
+                    ],
+                },
+                {"role": "user", "content": "Continue"},
+            ]
+        ),
+    ),
+    Case(
+        "compaction_threshold_exact_integer",
+        _kw(context_management=[{"type": "compaction", "compact_threshold": 9007199254740993}]),
+    ),
+    Case(
+        "compaction_boolean_threshold",
+        _kw(context_management=[{"type": "compaction", "compact_threshold": True}]),
+    ),
+    Case(
+        "unknown_content_familiar_null_fields",
+        _kw(
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "future_block",
+                            "text": None,
+                            "input": None,
+                            "source": {"data": "123"},
+                            "future": None,
+                        }
+                    ],
+                }
+            ]
+        ),
+    ),
+    Case(
+        "unicode_legacy_thinking_budget",
+        _kw(thinking={"type": "enabled", "budget_tokens": " +8_١92 "}, max_tokens=16000),
+        model=OPUS_ADAPTIVE,
+    ),
+)
+
+CASES: Final = (
+    *REQUEST_CASES,
+    *RESPONSE_CASES,
+    *FAILURE_CASES,
+    *STREAM_CASES,
+    *SYNC_CASES,
+    *FALLBACK_CASES,
+    *CONTRACT_REGRESSION_CASES,
+)
 
 
 @dataclass(frozen=True, slots=True)

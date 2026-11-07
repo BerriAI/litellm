@@ -225,7 +225,7 @@ fn filter_body(body: Value, strip_connection_fields: bool) -> Value {
                         || name.as_str() == UNSUPPORTED_OVERRIDE))
         })
         .map(|(name, value)| {
-            let value = if name == "model" {
+            let value = if strip_connection_fields && name == "model" {
                 value
                     .as_str()
                     .map(|model| {
@@ -386,6 +386,26 @@ mod tests {
     }
 
     #[rstest]
+    #[case::platform_route("claude_platform/claude-test")]
+    #[case::bare_model("claude-test")]
+    fn platform_billing_identity_is_retained_until_wire_serialization(#[case] model: &str) {
+        let request = serde_json::from_value(json!({
+            "model": model, "max_tokens": 16, "messages": [],
+        }))
+        .unwrap();
+        let transformed = BEDROCK_CLAUDE_PLATFORM_MESSAGES_CONFIG
+            .transform_anthropic_messages_request(request, &MessagesTransformContext::default())
+            .unwrap();
+        assert_eq!(transformed.model, model);
+        let wire = BEDROCK_CLAUDE_PLATFORM_MESSAGES_CONFIG
+            .wire_body(serde_json::to_value(transformed).unwrap());
+        assert_eq!(
+            wire,
+            json!({"model":"claude-test", "max_tokens":16, "messages":[]})
+        );
+    }
+
+    #[rstest]
     #[case::default(json!({}), false)]
     #[case::override_empty(json!({"claude_platform_unsupported_params": []}), true)]
     fn unsupported_fields_are_filtered_before_beta_selection(
@@ -420,5 +440,71 @@ mod tests {
         assert_eq!(wire.get("workspace_id"), None);
         assert_eq!(wire.get("aws_region_name"), None);
         assert_eq!(wire.get(UNSUPPORTED_OVERRIDE), None);
+    }
+
+    #[rstest]
+    #[case::request(json!({"workspace_id": "request"}), json!({"workspace_id": "deployment"}), "request")]
+    #[case::deployment(json!({}), json!({"workspace_id": "deployment"}), "deployment")]
+    #[case::blank_request(json!({"workspace_id": " "}), json!({"workspace_id": "deployment"}), "deployment")]
+    #[case::environment(json!({}), json!({}), "environment")]
+    fn workspace_sources_select_one_header_without_changing_unrelated_headers(
+        #[case] optional: Value,
+        #[case] deployment: Value,
+        #[case] expected: &str,
+    ) {
+        let optional_params = serde_json::from_value(optional).unwrap();
+        let params = LitellmParams {
+            extra: serde_json::from_value(deployment).unwrap(),
+            ..Default::default()
+        };
+        let environment = BEDROCK_CLAUDE_PLATFORM_MESSAGES_CONFIG
+            .validate_environment(
+                vec![("x-routing".into(), "keep".into())],
+                Some("key"),
+                "claude-test",
+                &optional_params,
+                &params,
+                &|name| (name == WORKSPACE_ENVS[0]).then(|| "environment".into()),
+            )
+            .unwrap();
+        assert_eq!(
+            environment.headers,
+            vec![
+                ("x-routing".into(), "keep".into()),
+                (WORKSPACE_HEADER.into(), expected.into()),
+            ]
+        );
+    }
+
+    #[rstest]
+    fn custom_unsupported_fields_do_not_remove_nested_tool_data_or_extensions() {
+        let input = json!({
+            "model": "claude_platform/claude-test", "max_tokens": 16, "messages": [],
+            "workspace_id": "workspace", "aws_region_name": "us-west-2",
+            "claude_platform_unsupported_params": ["temperature"],
+            "temperature": 0.5,
+            "context_management": {"edits": [{"type": "clear_thinking_20251015"}]},
+            "tools": [{"name": "lookup", "input_schema": {
+                "type": "object", "properties": {"workspace_id": {"type": "string"}},
+                "aws_region_name": "application-data", "temperature": 7
+            }}],
+            "future": null
+        });
+        let transformed = BEDROCK_CLAUDE_PLATFORM_MESSAGES_CONFIG
+            .transform_anthropic_messages_request(
+                serde_json::from_value(input.clone()).unwrap(),
+                &MessagesTransformContext::default(),
+            )
+            .unwrap();
+        let wire = BEDROCK_CLAUDE_PLATFORM_MESSAGES_CONFIG
+            .wire_body(serde_json::to_value(transformed).unwrap());
+        assert_eq!(
+            wire,
+            json!({
+                "model": "claude-test", "max_tokens": 16, "messages": [],
+                "context_management": input["context_management"],
+                "tools": input["tools"], "future": null
+            })
+        );
     }
 }

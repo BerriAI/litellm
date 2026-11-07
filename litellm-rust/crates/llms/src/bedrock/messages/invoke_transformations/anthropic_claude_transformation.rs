@@ -690,4 +690,59 @@ mod tests {
             (other, _) => panic!("unexpected auth {other:?}"),
         }
     }
+
+    #[rstest]
+    #[case::zero_stop_counts_override_nonzero_delta(
+        json!({"cache_read_input_tokens": 90, "cache_creation_input_tokens": 80}),
+        json!({"input_tokens": 7, "output_tokens": 5, "cache_read_input_tokens": 4, "cache_creation_input_tokens": 3}),
+        json!({"input_tokens": 0, "output_tokens": 99, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}),
+        json!({"input_tokens": 0, "output_tokens": 5, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0})
+    )]
+    #[case::delta_extensions_outrank_start_details(
+        json!({"cache_creation": {"ephemeral_5m_input_tokens": 8}, "start_only": 1}),
+        json!({"output_tokens": 5, "cache_creation": {"ephemeral_1h_input_tokens": 3}, "future": null}),
+        json!({"output_tokens": 99, "stop_only": 2}),
+        json!({"output_tokens": 5, "cache_creation": {"ephemeral_1h_input_tokens": 3}, "future": null})
+    )]
+    fn usage_precedence_preserves_explicit_zero_and_delta_extensions(
+        #[case] start: Value,
+        #[case] delta: Value,
+        #[case] stop: Value,
+        #[case] expected: Value,
+    ) {
+        let output = promote(vec![
+            message_start(start.clone()),
+            message_delta(delta),
+            message_stop(Some(stop.clone())),
+        ]);
+        assert_eq!(
+            output,
+            vec![
+                message_start(start),
+                message_delta(expected),
+                message_stop(Some(stop)),
+            ]
+        );
+    }
+
+    #[rstest]
+    fn only_the_last_pending_delta_receives_terminal_usage() {
+        let start = message_start(json!({"cache_read_input_tokens": 80}));
+        let first = message_delta(json!({"output_tokens": 1}));
+        let last = message_delta(json!({"output_tokens": 5}));
+        let stop = message_stop(Some(
+            json!({"input_tokens": 3, "cache_read_input_tokens": 100}),
+        ));
+        assert_eq!(
+            promote(vec![start.clone(), first.clone(), last, stop.clone()]),
+            vec![
+                start,
+                first,
+                message_delta(
+                    json!({"output_tokens": 5, "input_tokens": 3, "cache_read_input_tokens": 100})
+                ),
+                stop,
+            ]
+        );
+    }
 }

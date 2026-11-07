@@ -198,4 +198,65 @@ mod tests {
         assert_eq!(body["provider"], input["provider"]);
         assert_eq!(body["thinking"], input["thinking"]);
     }
+
+    #[rstest]
+    #[case::empty_bearer("Bearer ")]
+    #[case::basic_auth("Basic legacy")]
+    #[case::unrelated_scheme("Token legacy")]
+    fn an_invalid_forwarded_credential_is_replaced_without_leaking_an_api_key(
+        #[case] authorization: &str,
+    ) {
+        let environment = OPENROUTER_MESSAGES_CONFIG
+            .validate_environment(
+                vec![
+                    ("AuThOrIzAtIoN".into(), authorization.into()),
+                    ("X-Api-Key".into(), "wrong-provider-key".into()),
+                    ("x-routing".into(), "keep".into()),
+                ],
+                Some("deployment-key"),
+                "test-model",
+                &MessagesOptionalParams::default(),
+                &LitellmParams::default(),
+                &|name| (name == API_KEY_ENV).then(|| "environment-key".into()),
+            )
+            .unwrap();
+        assert_eq!(
+            environment.headers,
+            vec![("x-routing".into(), "keep".into())]
+        );
+        assert!(matches!(
+            environment.auth,
+            AuthScheme::Credential { placement: CredentialPlacement::Bearer, secret }
+                if secret.expose() == "deployment-key"
+        ));
+    }
+
+    #[rstest]
+    #[case::canonical("Bearer caller")]
+    #[case::case_and_whitespace("  bEaReR caller  ")]
+    fn a_forwarded_bearer_wins_but_foreign_api_keys_are_removed(#[case] bearer: &str) {
+        let environment = OPENROUTER_MESSAGES_CONFIG
+            .validate_environment(
+                vec![
+                    ("Authorization".into(), bearer.into()),
+                    ("x-api-key".into(), "foreign-key".into()),
+                    ("X-API-KEY".into(), "another-foreign-key".into()),
+                    ("x-routing".into(), "keep".into()),
+                ],
+                Some("deployment-key"),
+                "test-model",
+                &MessagesOptionalParams::default(),
+                &LitellmParams::default(),
+                &|name| (name == API_KEY_ENV).then(|| "environment-key".into()),
+            )
+            .unwrap();
+        assert_eq!(
+            environment.headers,
+            vec![
+                ("Authorization".into(), bearer.into()),
+                ("x-routing".into(), "keep".into()),
+            ]
+        );
+        assert!(matches!(environment.auth, AuthScheme::Forwarded));
+    }
 }

@@ -1,8 +1,9 @@
 import asyncio
-from collections.abc import Iterator
+import math
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from contextvars import ContextVar
 from datetime import datetime
-from typing import Final
+from typing import Final, Protocol, cast  # noqa: TID251  # narrows public exception attributes from the legacy mapper
 
 import pytest
 from pydantic import TypeAdapter
@@ -12,7 +13,7 @@ from litellm.integrations.argilla import ArgillaLogger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.integrations.argilla import ArgillaItem
 from litellm.types.utils import ModelResponse, StandardLoggingPayload
-from tests.test_litellm_rust.messages.data import BAD_REQUEST, MESSAGES_RESPONSE, RATE_LIMITED, call
+from tests.test_litellm_rust.messages.data import BAD_REQUEST, MESSAGES_EVENTS, MESSAGES_RESPONSE, RATE_LIMITED, call
 from tests.test_litellm_rust.support.callback_recorder import HookRecorder, RecordingLogger, request_body
 from tests.test_litellm_rust.support.isolation import rebound
 from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec, relaxed
@@ -424,3 +425,167 @@ async def test_sync_call_raises_like_python_without_logging(server: RecordingSer
 
     assert not server.requests
     assert not recorder.names
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("explicit_provider", (False, True))
+@pytest.mark.parametrize("status", (401, 429))
+async def test_inferred_provider_is_preserved_in_native_public_errors(
+    server: RecordingServer, explicit_provider: bool, status: int
+) -> None:
+    server.default_response = ResponseSpec(
+        body={"error": {"type": "provider_error", "message": "synthetic refusal"}}, status=status
+    )
+    error_type: Final = litellm.AuthenticationError if status == 401 else litellm.RateLimitError
+    with pytest.raises(error_type) as raised:
+        await call(
+            server, model="deepseek/deepseek-v4-flash", custom_llm_provider="deepseek" if explicit_provider else None
+        )
+    assert_served_natively(server)
+    public_error: Final = cast(
+        _ProviderError, raised.value
+    )  # cast-ok: the exception mapper supplies these public attributes
+    assert public_error.llm_provider == "deepseek"
+    assert public_error.model == "deepseek/deepseek-v4-flash"
+    assert "synthetic refusal" in str(raised.value)
+
+
+class _ProviderError(Protocol):
+    @property
+    def llm_provider(self) -> str: ...
+
+    @property
+    def model(self) -> str: ...
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("value", (2**64 - 1, -(2**63), "9" * 4096, 1e30))
+async def test_native_response_preserves_supported_numbers_and_numeric_strings(
+    server: RecordingServer, value: int | str | float
+) -> None:
+    server.default_response = ResponseSpec(body={**MESSAGES_RESPONSE, "future_extension": {"wide_integer": value}})
+    response: Final = await call(server)
+    assert_served_natively(server, response)
+    body: Final = _OBJECT.validate_python(response)
+    actual: Final = _OBJECT.validate_python(body["future_extension"])["wide_integer"]
+    assert actual == value
+    assert type(actual) is type(value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("value", (2**64 + 1, -(2**63) - 1))
+async def test_native_response_rejects_oversized_integers_instead_of_returning_rounded_success(
+    server: RecordingServer, value: int
+) -> None:
+    server.default_response = ResponseSpec(body={**MESSAGES_RESPONSE, "future_extension": {"wide_integer": value}})
+    with pytest.raises(litellm.APIError, match="response integer outside") as raised:
+        await call(server)
+    assert raised.value.status_code == 500
+    assert not isinstance(raised.value, litellm.APIConnectionError)
+    assert str(value) not in str(raised.value)
+    assert_served_natively(server)
+
+
+class _MessagesRouter(Protocol):
+    def aanthropic_messages(self, **kwargs: object) -> Awaitable[object]: ...
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("entry", ("provider_prefix", "explicit_provider", "router_alias"))
+@pytest.mark.parametrize("streaming", (False, True), ids=("unary", "stream"))
+async def test_platform_billing_identity_survives_wire_model_rewriting(
+    server: RecordingServer, monkeypatch: pytest.MonkeyPatch, entry: str, streaming: bool
+) -> None:
+    model: Final = "claude-billing-identity-test"
+    backend: Final = f"bedrock/claude_platform/{model}"
+    input_price: Final = 0.002
+    output_price: Final = 0.003
+    prices: Final = cast(
+        dict[str, object], getattr(litellm, "model_cost")
+    )  # cast-ok: model_cost is the mutable runtime registry
+    monkeypatch.setitem(
+        prices,
+        backend,
+        {
+            "litellm_provider": "bedrock",
+            "mode": "chat",
+            "input_cost_per_token": input_price,
+            "output_cost_per_token": output_price,
+            "max_input_tokens": 200000,
+            "max_output_tokens": 64000,
+        },
+    )
+    provider_response: Final = {**MESSAGES_RESPONSE, "model": model}
+    events: Final = (
+        (
+            "message_start",
+            {"type": "message_start", "message": {**provider_response, "content": [], "stop_reason": None}},
+        ),
+        *MESSAGES_EVENTS[1:],
+    )
+    server.default_response = ResponseSpec(body=provider_response, events=events if streaming else ())
+    recorder: Final = RecordingLogger()
+    metadata: Final = {"caller_marker": "cost-context", "model_group": "billing-alias"}
+
+    async def invoke() -> object:
+        if entry == "router_alias":
+            factory: Final = cast(
+                Callable[..., _MessagesRouter], litellm.Router
+            )  # cast-ok: Router exposes its public constructor and endpoint dynamically
+            router: Final = factory(
+                model_list=[
+                    {
+                        "model_name": "billing-alias",
+                        "litellm_params": {
+                            "model": backend,
+                            "api_base": server.base_url,
+                            "api_key": "synthetic",
+                            "workspace_id": "billing-workspace",
+                        },
+                    }
+                ],
+                num_retries=0,
+                disable_cooldowns=True,
+            )
+            return await router.aanthropic_messages(
+                model="billing-alias",
+                messages=[{"role": "user", "content": "hi"}],
+                max_tokens=16,
+                litellm_metadata=metadata,
+                stream=streaming,
+            )
+        return await call(
+            server,
+            model=f"claude_platform/{model}" if entry == "explicit_provider" else backend,
+            custom_llm_provider="bedrock" if entry == "explicit_provider" else None,
+            workspace_id="billing-workspace",
+            litellm_metadata=metadata,
+            stream=streaming,
+        )
+
+    with rebound(litellm, "callbacks", [recorder]):
+        response: Final = await invoke()
+        if streaming:
+            stream: Final = cast(AsyncIterator[bytes], response)  # cast-ok: native Messages streams yield bytes
+            chunks: Final = [chunk async for chunk in stream]
+            assert b"".join(chunks) == b"".join(server.default_response.payloads())
+        successes: Final = await recorder.wait_for_async("async_log_success_event")
+    if streaming:
+        assert_served_natively(server)
+    else:
+        assert_served_natively(server, response)
+        assert _OBJECT.validate_python(response)["model"] == model
+    usage: Final = _OBJECT.validate_python(provider_response["usage"])
+    expected: Final = (
+        TypeAdapter(int).validate_python(usage["input_tokens"]) * input_price
+        + TypeAdapter(int).validate_python(usage["output_tokens"]) * output_price
+    )
+    logged: Final = _OBJECT.validate_python(successes[0].kwargs)
+    standard: Final = _OBJECT.validate_python(logged["standard_logging_object"])
+    assert math.isclose(TypeAdapter(float).validate_python(logged["response_cost"]), expected)
+    assert math.isclose(TypeAdapter(float).validate_python(standard["response_cost"]), expected)
+    pre_call: Final = _OBJECT.validate_python(recorder.wait_for("log_pre_api_call")[0].kwargs)
+    assert pre_call["model"] == f"claude_platform/{model}"
+    assert _OBJECT.validate_python(server.requests[0].body)["model"] == model
+    params: Final = _OBJECT.validate_python(logged["litellm_params"])
+    assert _OBJECT.validate_python(params["metadata"])["caller_marker"] == "cost-context"

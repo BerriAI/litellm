@@ -23,6 +23,7 @@ from litellm.llms.anthropic.messages.native.handler import (
     _with_deployment_output_effort as _deployment_output_effort,  # pyright: ignore[reportPrivateUsage]  # the handler's own effort rounding
 )
 from litellm.llms.anthropic.messages.utils import is_reasoning_auto_summary_enabled
+from litellm.llms.bedrock.claude_platform.common_utils import CLAUDE_PLATFORM_ON_AWS_NON_REQUEST_PARAMS
 from litellm.rust_bridge import failures
 from litellm.rust_bridge.host import callbacks_legacy_python
 from litellm.rust_bridge.public_call import known_params, optional_str
@@ -84,8 +85,20 @@ def inferred_provider(model: str, api_base: str | None) -> str | None:
     return provider
 
 
+def request_provider(request: Mapping[str, object]) -> str:
+    return (
+        optional_str(request.get("custom_llm_provider"))
+        or inferred_provider(str(request["model"]), optional_str(request.get("api_base")))
+        or "anthropic"
+    )
+
+
 def body_params(request: Mapping[str, object]) -> Mapping[str, object]:
-    params: Final = known_params(_BODY_FIELDS, request)
+    platform: Final = request_provider(request) == "bedrock" and str(request["model"]).removeprefix(
+        "bedrock/"
+    ).startswith("claude_platform/")
+    fields: Final = _BODY_FIELDS | CLAUDE_PLATFORM_ON_AWS_NON_REQUEST_PARAMS if platform else _BODY_FIELDS
+    params: Final = known_params(fields, request)
     if deployment_reasoning_effort_levels(request.get("model_info")) is None:
         return params
     return _with_deployment_effort(params, request)
@@ -236,6 +249,15 @@ def map_failure(error: Exception, request: Mapping[str, object], request_provide
         _log_resolved_call(request, request_provider)
     if getattr(error, "messages_request_error", False):
         return _rejection(error, request, request_provider)
+    if getattr(error, "messages_response_error", False):
+        response_error: Final = litellm.APIError(
+            status_code=500,
+            message=str(error),
+            llm_provider=request_provider,
+            model=str(request["model"]).removeprefix(f"{request_provider}/"),
+        )
+        response_error.__context__ = error
+        return response_error
     if getattr(error, "messages_missing_credential", False):
         return litellm.AuthenticationError(
             message=_MISSING_KEY,

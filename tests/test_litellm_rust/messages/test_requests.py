@@ -146,3 +146,45 @@ async def test_optional_positional_body_parameters_reach_the_wire(server: Record
     assert response["id"] == MESSAGES_RESPONSE["id"]
     body, _ = sent(server)
     assert (body["metadata"], body["system"], body["temperature"]) == (args[3], args[6], args[7])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "workspace_field", ("workspace_id", "aws_workspace_id", "anthropic_workspace_id", "anthropic-workspace-id")
+)
+async def test_platform_workspace_and_unsupported_override_reach_the_native_adapter(
+    server: RecordingServer, monkeypatch: pytest.MonkeyPatch, workspace_field: str
+) -> None:
+    monkeypatch.delenv("ANTHROPIC_AWS_WORKSPACE_ID", raising=False)
+    monkeypatch.delenv("ANTHROPIC_WORKSPACE_ID", raising=False)
+    response: Final = await call(
+        server,
+        model="bedrock/claude_platform/claude-test",
+        asynchronous=True,
+        **{workspace_field: "deployment-workspace"},
+        claude_platform_unsupported_params=["temperature"],
+        temperature=0.3,
+        tools=[
+            {"name": "lookup", "input_schema": {"type": "object", "properties": {"temperature": {"type": "number"}}}}
+        ],
+    )
+    assert_served_natively(server, response)
+    body, headers = sent(server)
+    assert headers["anthropic-workspace-id"] == "deployment-workspace"
+    assert "temperature" not in body
+    assert "claude_platform_unsupported_params" not in body
+    assert workspace_field not in body
+    assert body["tools"] == [
+        {"name": "lookup", "input_schema": {"type": "object", "properties": {"temperature": {"type": "number"}}}}
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("max_tokens", (1.5, True, "16", None, [], {}))
+async def test_malformed_max_tokens_is_rejected_natively_before_io(server: RecordingServer, max_tokens: object) -> None:
+    server.expected_requests = 0
+    with pytest.raises(
+        litellm.BadRequestError, match=r"invalid Anthropic messages request|missing required field: max_tokens"
+    ):
+        await call(server, max_tokens=max_tokens)
+    assert_served_natively(server, count=0)

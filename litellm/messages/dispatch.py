@@ -69,8 +69,7 @@ def _public_request(
         return None
     model: Final = fields.get("model")
     messages: Final = optional_sequence(fields.get("messages"))
-    max_tokens: Final = fields.get("max_tokens")
-    if not isinstance(model, str) or messages is None or not isinstance(max_tokens, int):
+    if not isinstance(model, str) or messages is None:
         return None
     return native_call(legacy, args, _native_kwargs(fields, kwargs))
 

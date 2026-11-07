@@ -198,4 +198,70 @@ mod tests {
             json!({"type": "text", "text": "reminder"})
         );
     }
+
+    #[rstest]
+    #[case::tool_result_first(
+        json!({"role":"user","content":[{"type":"tool_result","tool_use_id":"t","content":"ok"},{"type":"text","text":"next"}],"future":null}),
+        1
+    )]
+    #[case::tool_result_after_text(
+        json!({"role":"user","content":[{"type":"text","text":"first"},{"type":"tool_result","tool_use_id":"t","content":"ok"}]}),
+        2
+    )]
+    #[case::non_user_tool_result(
+        json!({"role":"assistant","content":[{"type":"tool_result","tool_use_id":"t","content":"ok"}]}),
+        2
+    )]
+    #[case::empty_blocks(json!({"role":"user","content":[]}), 2)]
+    fn only_a_user_turn_starting_with_tool_results_moves_before_the_system_run(
+        #[case] follower: Value,
+        #[case] follower_index: usize,
+    ) {
+        let first = json!({"role":"assistant","content":[{"type":"tool_use","id":"t","name":"lookup","input":{}}]});
+        let converted = convert_mid_conversation_system_turns(messages(json!([
+            first,
+            {"role":"system","content":[{"type":"future","payload":{"keep":null}}]},
+            follower
+        ])));
+        let wire = serde_json::to_value(&converted).unwrap();
+        assert_eq!(wire[0], first);
+        assert_eq!(wire[follower_index], follower);
+        assert_eq!(
+            wire[3 - follower_index],
+            json!({"role":"user","content":[
+                {"type":"text","text":CONVERTED_SYSTEM_NOTE},
+                {"type":"future","payload":{"keep":null}}
+            ]})
+        );
+        assert_eq!(
+            convert_mid_conversation_system_turns(converted.clone()),
+            converted
+        );
+    }
+
+    #[rstest]
+    fn consecutive_system_runs_keep_their_order_across_multiple_tool_turns() {
+        let first = json!({"role":"assistant","content":"first"});
+        let result = json!({"role":"user","content":[{"type":"tool_result","tool_use_id":"t","content":"ok"}]});
+        let next = json!({"role":"assistant","content":"next"});
+        let converted = convert_mid_conversation_system_turns(messages(json!([
+            first,
+            {"role":"system","content":"one"},
+            {"role":"system","content":"two"},
+            result,
+            next,
+            {"role":"system","content":"tail"}
+        ])));
+        assert_eq!(
+            serde_json::to_value(converted).unwrap(),
+            json!([
+                first,
+                result,
+                {"role":"user","content":[{"type":"text","text":CONVERTED_SYSTEM_NOTE},{"type":"text","text":"one"}]},
+                {"role":"user","content":[{"type":"text","text":CONVERTED_SYSTEM_NOTE},{"type":"text","text":"two"}]},
+                next,
+                {"role":"user","content":[{"type":"text","text":CONVERTED_SYSTEM_NOTE},{"type":"text","text":"tail"}]}
+            ])
+        );
+    }
 }

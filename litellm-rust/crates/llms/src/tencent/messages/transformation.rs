@@ -2,9 +2,10 @@ use litellm_auth::CredentialPlacement;
 use litellm_secret_value::SecretValue;
 
 use litellm_core_utils::settings::resolve_non_empty;
+use litellm_http::request::without_headers;
 use litellm_llms_types::{
     formats::messages::{MessagesOptionalParams, MessagesRequest},
-    providers::anthropic::{DEFAULT_HEADERS, MESSAGES_PATH},
+    providers::anthropic::{BETA_HEADER, DEFAULT_HEADERS, MESSAGES_PATH},
 };
 use litellm_router_types::LitellmParams;
 
@@ -13,8 +14,7 @@ use crate::{
     anthropic::{
         common_utils::{filter_billing_headers_from_system, has_anthropic_credential},
         messages::{
-            handler::shape_anthropic_messages_request,
-            transformation::{transform_messages_request, update_headers_with_anthropic_beta},
+            handler::shape_anthropic_messages_request, transformation::transform_messages_request,
         },
     },
     base_llm::{
@@ -117,8 +117,8 @@ impl BaseMessagesConfig for TencentAnthropicMessagesConfig {
         DEFAULT_HEADERS
     }
 
-    fn request_headers(&self, headers: Headers, request: &MessagesRequest) -> Headers {
-        update_headers_with_anthropic_beta(headers, request)
+    fn request_headers(&self, headers: Headers, _request: &MessagesRequest) -> Headers {
+        without_headers(headers, &[BETA_HEADER])
     }
 }
 
@@ -130,6 +130,31 @@ mod tests {
 
     fn no_env(_: &str) -> Option<String> {
         None
+    }
+
+    #[rstest]
+    #[case::lowercase("anthropic-beta")]
+    #[case::mixed_case("Anthropic-Beta")]
+    fn request_headers_remove_caller_and_generated_anthropic_betas(#[case] name: &str) {
+        let request = serde_json::from_value(serde_json::json!({
+            "model": "test-model", "max_tokens": 64,
+            "messages": [{"role": "user", "content": "hi"}],
+            "output_config": {"format": {"type": "json_schema", "schema": {"type": "object"}}},
+            "tools": [{"type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex"}]
+        }))
+        .unwrap();
+        let retained = vec![("x-routing".into(), "keep".into())];
+        let headers = vec![
+            (
+                name.into(),
+                "caller-beta,structured-outputs-2025-11-13".into(),
+            ),
+            ("x-routing".into(), "keep".into()),
+        ];
+        assert_eq!(
+            TENCENT_MESSAGES_CONFIG.request_headers(headers, &request),
+            retained
+        );
     }
 
     #[rstest]
