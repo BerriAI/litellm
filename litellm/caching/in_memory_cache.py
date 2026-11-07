@@ -47,7 +47,7 @@ class InMemoryCache(BaseCache):
         self.max_size_per_item = max_size_per_item or MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB  # 1MB = 1024KB
 
         # in-memory cache
-        self.cache_dict: dict = {}
+        self.cache_dict: dict[object, Any] = {}
         self.ttl_dict: dict = {}
         self.expiration_heap: list[tuple[float, str]] = []
         self._increment_lock = threading.Lock()
@@ -100,17 +100,17 @@ class InMemoryCache(BaseCache):
         except KeyError:
             return False
 
-    def _cache_keys(self) -> tuple[str, ...]:
-        return tuple(self.cache_dict)  # pyright: ignore[reportUnknownVariableType]  # cache_dict is untyped legacy state
+    def _cache_keys(self) -> tuple[object, ...]:
+        return tuple(self.cache_dict)
 
-    def _remove_key(self, key: str) -> None:
+    def _remove_key(self, key: object) -> None:
         """
         Remove a key from both cache_dict and ttl_dict
         """
         self.cache_dict.pop(key, None)
         self.ttl_dict.pop(key, None)
 
-    def evict_cache(self):
+    def evict_cache(self, *, reserve_space: bool = True) -> None:
         """
         Eviction policy:
         1. First, remove expired items from ttl_dict and cache_dict
@@ -145,7 +145,7 @@ class InMemoryCache(BaseCache):
             heapq.heapify(self.expiration_heap)
 
         # Step 2: Evict if cache is still full
-        while self.expiration_heap and len(self.cache_dict) >= self.max_size_in_memory:
+        while self.expiration_heap and len(self.cache_dict) > self.max_size_in_memory - int(reserve_space):
             expiration_time, key = heapq.heappop(self.expiration_heap)
             # Skip if key was removed or updated
             if self.ttl_dict.get(key) == expiration_time:
@@ -153,7 +153,7 @@ class InMemoryCache(BaseCache):
 
         if not self.expiration_heap:
             untracked_keys: Final = self._cache_keys()
-            overflow: Final = len(untracked_keys) - self.max_size_in_memory + 1
+            overflow: Final = len(untracked_keys) - self.max_size_in_memory + int(reserve_space)
             for untracked_key in untracked_keys[: max(overflow, 0)]:
                 self._remove_key(untracked_key)
 
@@ -181,9 +181,12 @@ class InMemoryCache(BaseCache):
             # Always prune expired/outdated heap roots before inserting.
             # This keeps expiration_heap bounded even when the live cache stays
             # below max_size_in_memory and keys are reinserted after TTL expiry.
-            self.evict_cache()
+            self.evict_cache(reserve_space=key not in self.cache_dict)
             if not self.check_value_size(value):
                 return
+
+            if key not in self.cache_dict and len(self.cache_dict) >= self.max_size_in_memory:
+                self.evict_cache()
 
             self.cache_dict[key] = value
             if self.allow_ttl_override(key):  # if ttl is not set, set it to default ttl
