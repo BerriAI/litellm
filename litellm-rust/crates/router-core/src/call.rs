@@ -24,8 +24,9 @@ use crate::{
     lookup::Lookup,
     mock::MockFailure,
     outcome::{OutcomeCallbacks, OutcomeWrite},
+    precall::deployment_model,
     prerouting::{PreRoute, PreRouted},
-    registry::{ResolveKind, ResolveScope},
+    registry::{Deployment, ResolveKind, ResolveScope},
     retry::{RetryContext, resolve_retry_policy, should_retry},
     select::{Candidates, SelectInputs},
 };
@@ -281,6 +282,21 @@ fn retried_failure(error: &Error) -> Option<Cow<'_, AttemptError>> {
         Error::Attempt(failure) => Some(Cow::Borrowed(failure)),
         _ => error.pick_failure().map(Cow::Owned),
     }
+}
+
+fn serving_the_refused_model<'a>(
+    snapshot: &RouterStateSnapshot,
+    refused: &'a str,
+    healthy: &'a [Arc<Deployment>],
+) -> impl Iterator<Item = String> + 'a {
+    let model = snapshot
+        .registry
+        .deployment(refused)
+        .map(|deployment| deployment_model(&deployment));
+    healthy
+        .iter()
+        .filter(move |d| d.id == refused || model.as_ref() == Some(&deployment_model(d)))
+        .map(|d| d.id.clone())
 }
 
 impl Core {
@@ -985,13 +1001,13 @@ impl Core {
             if retry > 0 {
                 self.log_retry(target, at, retry, &failed.error);
             }
-            let healthy_ids: Vec<String> = match self
+            let healthy_deployments: Vec<Arc<Deployment>> = match self
                 .candidates(snapshot, op, request, &target.group, &counting)
                 .await
             {
                 Ok(c) => {
-                    let ids = c.healthy.iter().map(|d| d.id.clone());
-                    ids.take(counted(&c, c.healthy.len())).collect()
+                    let counted = counted(&c, c.healthy.len());
+                    c.healthy.into_iter().take(counted).collect()
                 }
                 // `_async_get_healthy_deployments` swallows the lookup's error and still reads the
                 // cooldowns: a Redis round trip the refused pick's failure log runs across.
@@ -1000,14 +1016,36 @@ impl Core {
                     Vec::new()
                 }
             };
-            let healthy = healthy_ids.len();
+            let healthy = healthy_deployments.len();
             // A pick's error is retried as Python's loop retries any exception: a retry policy
             // keeps going, else `should_retry_this_error` decides (it raises when nothing is
             // healthy).
             let Some(failure) = retried_failure(&failed.error) else {
                 return Err(failed);
             };
-            if !policy_applies && !self.should_retry(snapshot, request, &failure, healthy, all) {
+            let refused_by = failure
+                .failed_deployment_id
+                .as_ref()
+                .or(failed.deployment_id.as_ref());
+            if let Some(refused) = refused_by
+                && !policy_applies
+                && failure.is_a("ContextWindowExceededError")
+            {
+                let serving: Vec<String> =
+                    serving_the_refused_model(snapshot, refused, &healthy_deployments)
+                        .filter(|id| !inputs.skipped_ids.contains(id))
+                        .collect();
+                inputs.skipped_ids.extend(serving);
+            }
+            let untried = refused_by.map_or(0, |refused| {
+                healthy_deployments
+                    .iter()
+                    .filter(|d| d.id != *refused && !inputs.skipped_ids.contains(&d.id))
+                    .count()
+            });
+            if !policy_applies
+                && !self.should_retry(snapshot, request, &failure, (healthy, untried), all)
+            {
                 return Err(failed);
             }
             let uncounted = request.uncounted_retries.filter(|_| !policy_applies);
@@ -1036,9 +1074,7 @@ impl Core {
             if retry == 0 {
                 self.log_retry(target, at, 0, &failed.error);
             }
-            let named = failure.failed_deployment_id.as_ref();
-            if let (Some(status), Some(id)) =
-                (failure.status, named.or(failed.deployment_id.as_ref()))
+            if let (Some(status), Some(id)) = (failure.status, refused_by)
                 && !should_retry_status(status)
                 && !inputs.skipped_ids.contains(id)
             {
@@ -1047,7 +1083,9 @@ impl Core {
             // An endpoint a deployment does not serve is retried on the others, until every
             // one refused (`_every_deployment_refused`).
             if failure.is_a("UnsupportedEndpointError")
-                && healthy_ids.iter().all(|id| inputs.skipped_ids.contains(id))
+                && healthy_deployments
+                    .iter()
+                    .all(|d| inputs.skipped_ids.contains(&d.id))
             {
                 return Err(failed);
             }
@@ -1165,7 +1203,7 @@ impl Core {
         snapshot: &RouterStateSnapshot,
         request: &RouterRequest,
         failure: &AttemptError,
-        healthy: usize,
+        (healthy, untried): (usize, usize),
         all: usize,
     ) -> bool {
         let lists = Lists::of(snapshot, request);
@@ -1173,6 +1211,7 @@ impl Core {
             failure,
             RetryContext {
                 healthy,
+                untried,
                 all,
                 has_context_window_fallbacks: lists.context_window.is_some(),
                 has_content_policy_fallbacks: lists.content_policy.is_some(),

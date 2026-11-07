@@ -46,6 +46,7 @@ pub(crate) fn should_retry(
         &failure(outcome)?,
         RetryContext {
             healthy,
+            untried: healthy,
             all,
             has_context_window_fallbacks: context_window,
             has_content_policy_fallbacks: content_policy,

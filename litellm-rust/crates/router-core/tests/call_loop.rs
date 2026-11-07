@@ -831,6 +831,150 @@ async fn weighted_failover_serves_every_failure_but_a_context_window_error(
 
 #[rstest]
 #[tokio::test]
+async fn a_context_window_error_retries_on_a_deployment_that_has_not_refused(config: RouterConfig) {
+    let host = Arc::new(ScriptedHost::failing("primary", vec![context_window()]));
+    let router = router(
+        config,
+        json!({"num_retries": 2, "fallbacks": [{"primary": ["backup"]}]}),
+        host.clone(),
+    );
+    let response = router
+        .call(Op::from("acompletion"), request())
+        .await
+        .unwrap();
+    let selected = host.selected();
+    assert_eq!(
+        (response.model_group.as_str(), response.attempted_retries),
+        ("primary", 1)
+    );
+    assert_eq!(selected.len(), 2);
+    assert_ne!(selected[0], selected[1]);
+    assert_eq!(response.deployment_id, selected[1]);
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_context_window_error_every_deployment_refused_falls_back(config: RouterConfig) {
+    let host = Arc::new(ScriptedHost::failing(
+        "primary",
+        vec![context_window(), context_window()],
+    ));
+    let router = router(
+        config,
+        json!({"num_retries": 3, "fallbacks": [{"primary": ["backup"]}]}),
+        host.clone(),
+    );
+    let response = router
+        .call(Op::from("acompletion"), request())
+        .await
+        .unwrap();
+    let selected = host.selected();
+    assert_eq!(response.deployment_id, "b1");
+    assert_eq!(selected.len(), 3);
+    assert_ne!(selected[0], selected[1]);
+    assert_eq!(host.retries(), 1);
+}
+
+fn same_model_group(second: Value) -> RouterConfig {
+    serde_json::from_value(json!({
+        "model_list": [
+            {"model_name": "primary", "litellm_params": {"model": "openai/a"}, "model_info": {"id": "a1"}},
+            second,
+            {"model_name": "primary", "litellm_params": {"model": "openai/b"}, "model_info": {"id": "b2"}},
+        ]
+    }))
+    .unwrap()
+}
+
+#[rstest]
+#[case::same_model(json!(
+    {"model_name": "primary", "litellm_params": {"model": "openai/a"}, "model_info": {"id": "a2"}}
+))]
+#[case::same_base_model(json!(
+    {"model_name": "primary", "litellm_params": {"model": "openai/alias"}, "model_info": {"id": "a2", "base_model": "openai/a"}}
+))]
+#[tokio::test]
+async fn a_context_window_error_skips_every_deployment_serving_the_refused_model(
+    #[case] second: Value,
+) {
+    let host = Arc::new(ScriptedHost {
+        first_failure: Mutex::new(Some(context_window())),
+        ..ScriptedHost::default()
+    });
+    let router = router(
+        same_model_group(second),
+        json!({"num_retries": 3}),
+        host.clone(),
+    );
+    let response = router
+        .call(Op::from("acompletion"), request())
+        .await
+        .unwrap();
+    let selected = host.selected();
+    let serves_a = |id: &str| id != "b2";
+    assert_eq!(selected.len(), 2);
+    assert_ne!(serves_a(&selected[0]), serves_a(&selected[1]));
+    assert_eq!(response.deployment_id, selected[1]);
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_context_window_error_is_not_retried_when_every_deployment_serves_that_model() {
+    let config: RouterConfig = serde_json::from_value(json!({
+        "model_list": [
+            {"model_name": "primary", "litellm_params": {"model": "openai/a"}, "model_info": {"id": "a1"}},
+            {"model_name": "primary", "litellm_params": {"model": "openai/a"}, "model_info": {"id": "a2"}},
+        ]
+    }))
+    .unwrap();
+    let host = Arc::new(ScriptedHost::failing("primary", vec![context_window()]));
+    let router = router(config, json!({"num_retries": 3}), host.clone());
+    let refused = router.call(Op::from("acompletion"), request()).await;
+    assert!(
+        matches!(refused, Err(Error::Attempt(failed)) if failed.kind == FailureKind::ContextWindowExceeded)
+    );
+    assert_eq!((host.retries(), host.selected().len()), (0, 1));
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_retry_policy_still_retries_a_context_window_error_on_the_same_model() {
+    let config: RouterConfig = serde_json::from_value(json!({
+        "model_list": [
+            {"model_name": "primary", "litellm_params": {"model": "openai/a"}, "model_info": {"id": "a1"}},
+            {"model_name": "primary", "litellm_params": {"model": "openai/a"}, "model_info": {"id": "a2"}},
+        ],
+        "retry_policy": {"BadRequestErrorRetries": 2},
+    }))
+    .unwrap();
+    let host = Arc::new(ScriptedHost::failing("primary", vec![context_window()]));
+    let router = router(config, json!({"num_retries": 0}), host.clone());
+    let response = router
+        .call(Op::from("acompletion"), request())
+        .await
+        .unwrap();
+    let selected = host.selected();
+    assert_eq!(response.attempted_retries, 1);
+    assert_ne!(selected[0], selected[1]);
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_context_window_error_no_deployment_raised_is_not_retried(config: RouterConfig) {
+    let host = Arc::new(ScriptedHost {
+        pick_failures: Mutex::new(VecDeque::from([context_window()])),
+        ..ScriptedHost::default()
+    });
+    let router = router(config, json!({"num_retries": 3}), host.clone());
+    let refused = router.call(Op::from("acompletion"), tagged_request()).await;
+    assert!(
+        matches!(refused, Err(Error::Attempt(failed)) if failed.kind == FailureKind::ContextWindowExceeded)
+    );
+    assert_eq!((host.retries(), host.selected().len()), (0, 0));
+}
+
+#[rstest]
+#[tokio::test]
 async fn a_failed_agentic_followup_is_not_retried_but_still_falls_back(config: RouterConfig) {
     let host = Arc::new(ScriptedHost::failing("primary", vec![agentic_followup()]));
     let router = router(
@@ -943,6 +1087,30 @@ async fn a_stream_retry_is_reported_before_its_attempt(config: RouterConfig) {
         .await
         .unwrap();
     assert_eq!((response.attempted_retries, host.retries()), (1, 1));
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_stream_context_window_error_retries_on_another_deployment(config: RouterConfig) {
+    let host = Arc::new(ScriptedHost::default());
+    let router = router(config, json!({}), host.clone());
+    let origin = StreamOrigin {
+        deployment_id: Some("a1".to_owned()),
+        ..stream_origin()
+    };
+    let response = router
+        .retry_stream(
+            Op::from("acompletion"),
+            stream_request(),
+            origin,
+            context_window(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        (response.deployment_id.as_str(), host.selected()),
+        ("a2", vec!["a2".to_owned()])
+    );
 }
 
 fn fallback_list(value: serde_json::Value) -> Fallbacks {

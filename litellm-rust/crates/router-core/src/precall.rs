@@ -55,7 +55,7 @@ impl PreCallFacts {
 }
 
 /// The name a context-window error gives a deployment: its base model, else its model.
-fn deployment_model(deployment: &Deployment) -> String {
+pub(crate) fn deployment_model(deployment: &Deployment) -> String {
     let truthy = |value: Option<&Value>| match value {
         Some(Value::String(text)) if !text.is_empty() => Some(text.clone()),
         Some(Value::Null | Value::Bool(false)) | None => None,

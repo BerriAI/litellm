@@ -9,7 +9,10 @@ use std::sync::Arc;
 
 use serde::Deserialize;
 
-use super::{Failed, FallbackChain, FallbackHop, Lists, Target, Tried, group_members};
+use super::{
+    Failed, FallbackChain, FallbackHop, Lists, Target, Tried, group_members,
+    serving_the_refused_model,
+};
 use crate::{
     Router, RouterStateSnapshot,
     config::Op,
@@ -228,18 +231,39 @@ impl Router {
             ..SelectInputs::default()
         };
         let counted = |c: &Candidates, n: usize| if c.kind.is_single() { 0 } else { n };
-        let (healthy, all) = self
+        let (healthy_deployments, all) = self
             .core
             .candidates(&snapshot, &op, &request, &target.group, &counting)
             .await
-            .map(|c| (counted(&c, c.healthy.len()), counted(&c, c.all.len())))
-            .unwrap_or((0, 0));
+            .map(|c| {
+                let (healthy, all) = (counted(&c, c.healthy.len()), counted(&c, c.all.len()));
+                (c.healthy.into_iter().take(healthy).collect::<Vec<_>>(), all)
+            })
+            .unwrap_or_default();
+        let healthy = healthy_deployments.len();
+        let refused_by = failure
+            .failed_deployment_id
+            .as_deref()
+            .or(origin.deployment_id.as_deref());
         let (budget, policy_applies) =
             stream_retry_budget(&snapshot, &request, &origin, failure.kind);
+        let skipped_ids: Vec<String> = match refused_by {
+            Some(refused) if !policy_applies && failure.is_a("ContextWindowExceededError") => {
+                serving_the_refused_model(&snapshot, refused, &healthy_deployments).collect()
+            }
+            _ => Vec::new(),
+        };
+        let untried = refused_by.map_or(0, |refused| {
+            healthy_deployments
+                .iter()
+                .filter(|d| d.id != refused && !skipped_ids.contains(&d.id))
+                .count()
+        });
         let inputs = SelectInputs {
             target_order: target.order,
             requested: Some(target.group.clone()),
             fallback_hop: at.level > 0,
+            skipped_ids,
             ..SelectInputs::default()
         };
         let mut last = failure;
@@ -250,7 +274,7 @@ impl Router {
             if !policy_applies
                 && !self
                     .core
-                    .should_retry(&snapshot, &request, &last, healthy, all)
+                    .should_retry(&snapshot, &request, &last, (healthy, untried), all)
             {
                 break;
             }

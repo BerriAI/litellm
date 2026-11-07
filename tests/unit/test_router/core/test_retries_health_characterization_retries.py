@@ -121,6 +121,34 @@ async def test_a_403_retry_moves_to_a_deployment_that_has_not_refused_yet(
 
 
 @pytest.mark.asyncio
+async def test_a_context_window_error_retries_on_a_deployment_that_has_not_refused(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    core: Final = make_core(model_list=group("a", "b"), num_retries=2)
+    host.answer("*", fresh(context_window), None)
+
+    response: Final = await attempt(core)
+
+    called: Final = host.deployments_called("acompletion")
+    assert not isinstance(response, Exception)
+    assert len(called) == 2
+    assert called[0] != called[1]
+
+
+@pytest.mark.asyncio
+async def test_a_context_window_error_on_each_deployment_stops_when_none_is_left(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    core: Final = make_core(model_list=group("a", "b", "c"), num_retries=4)
+    host.answer("*", fresh(context_window))
+
+    error: Final = await attempt(core)
+
+    assert isinstance(error, litellm.ContextWindowExceededError)
+    assert sorted(host.deployments_called("acompletion")) == ["a", "b", "c"]
+
+
+@pytest.mark.asyncio
 async def test_a_401_on_each_deployment_cools_each_down_and_stops_when_none_is_left(
     make_core: MakeCore, host: ScriptedHost
 ) -> None:
@@ -377,6 +405,8 @@ ALL_TWO: Final = [{"model_info": {"id": "a"}}, {"model_info": {"id": "b"}}]
         (plain_error(), {"healthy_deployments": None}, False),
         (bad_request(), {"healthy_deployments": HEALTHY_ONE}, False),
         (context_window(), {"healthy_deployments": HEALTHY_ONE, "context_window_fallbacks": []}, False),
+        (context_window(), {"healthy_deployments": HEALTHY_ONE}, True),
+        (context_window(), {"healthy_deployments": []}, False),
         (content_policy(), {"healthy_deployments": HEALTHY_ONE, "content_policy_fallbacks": []}, False),
         (not_found(), {"healthy_deployments": ALL_TWO, "all_deployments": ALL_TWO}, False),
         (unprocessable(), {"healthy_deployments": ALL_TWO, "all_deployments": ALL_TWO}, False),
