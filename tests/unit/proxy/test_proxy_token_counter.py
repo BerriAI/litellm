@@ -2191,11 +2191,17 @@ async def test_anthropic_count_tokens_on_a_claude_deployment_sends_the_thinking_
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("deployment_drop_params", "request_drop_params"),
-    ((True, "maybe"), (True, False), (None, " true ")),
+    ("deployment_drop_params", "request_params"),
+    (
+        (True, {"drop_params": "maybe"}),
+        (True, {"drop_params": False}),
+        (True, {"drop_params": None}),
+        (True, {}),
+        (None, {"drop_params": " true "}),
+    ),
 )
 async def test_anthropic_count_tokens_reads_the_request_drop_params_over_the_deployments_like_inference(
-    monkeypatch: pytest.MonkeyPatch, deployment_drop_params: bool | None, request_drop_params: JsonValue
+    monkeypatch: pytest.MonkeyPatch, deployment_drop_params: bool | None, request_params: Mapping[str, JsonValue]
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     thinking: Final[dict[str, JsonValue]] = {"type": "enabled", "budget_tokens": 2000, "summary": "auto"}
@@ -2206,19 +2212,19 @@ async def test_anthropic_count_tokens_reads_the_request_drop_params_over_the_dep
         inference_route: Final = respx.post("https://api.anthropic.com/v1/messages").mock(
             return_value=httpx.Response(200, json=_CLAUDE_MESSAGE_REPLY)
         )
-        await _claude_router("anthropic/claude-opus-4-7", deployment_params).aanthropic_messages(
+        await _claude_router("anthropic/claude-opus-5-5", deployment_params).aanthropic_messages(
             model="claude-agent",
             messages=[{"role": "user", "content": "Weather in SF?"}],
             max_tokens=4096,
             thinking=thinking,
-            drop_params=request_drop_params,
+            **request_params,
         )
     sent: Final = json.loads(inference_route.calls.last.request.content)
 
     response, (count,) = await _count_on_a_claude_deployment(
         monkeypatch,
-        "anthropic/claude-opus-4-7",
-        {"thinking": thinking, "drop_params": request_drop_params},
+        "anthropic/claude-opus-5-5",
+        {"thinking": thinking, **request_params},
         lambda _: httpx.Response(200, json={"input_tokens": 7}),
         deployment_params=deployment_params,
     )
