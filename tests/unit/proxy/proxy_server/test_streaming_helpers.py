@@ -676,6 +676,20 @@ def test_restamp_streaming_chunk_model_respects_raw_model_name_toggle(return_raw
     assert logged is (not return_raw_model_name)
 
 
+@pytest.mark.parametrize("global_opt_out", [False, True])
+def test_restamp_streaming_chunk_model_respects_global_raw_model_name(global_opt_out: bool) -> None:
+    chunk: Final = _simple_chunk(model="provider-model")
+    new_chunk, logged = _restamp_streaming_chunk_model(
+        chunk=chunk,
+        requested_model_from_client="public-alias",
+        request_data={},
+        model_mismatch_logged=False,
+        response_model_settings={"return_raw_model_name": global_opt_out},
+    )
+    assert new_chunk.model == ("provider-model" if global_opt_out else "public-alias")
+    assert logged is (not global_opt_out)
+
+
 def test_restamp_streaming_chunk_model_overrides_model_on_dict():
     chunk = {"model": "internal", "choices": []}
     new_chunk, logged = _restamp_streaming_chunk_model(

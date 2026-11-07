@@ -10270,8 +10270,9 @@ def _restamp_streaming_chunk_model(
     model_mismatch_logged: bool,
     fallback_was_attempted: bool = False,
     fallback_model_from_metadata: str | None = None,
+    response_model_settings: Mapping[str, object] | None = None,
 ) -> tuple[object, bool]:
-    if should_return_raw_model_name(request_data):
+    if should_return_raw_model_name(request_data, response_model_settings):
         return chunk, model_mismatch_logged
 
     target_model: Final = fallback_model_from_metadata if fallback_was_attempted else requested_model_from_client
@@ -10931,6 +10932,9 @@ async def async_data_generator(
                 model_mismatch_logged=model_mismatch_logged,
                 fallback_was_attempted=fallback_was_attempted,
                 fallback_model_from_metadata=fallback_model_from_metadata,
+                response_model_settings=cast(  # cast-ok: proxy configuration validates the legacy untyped settings global
+                    Mapping[str, object], general_settings
+                ),
             )
 
             if strip_stream_usage and is_injected_stream_usage_artifact(chunk):
@@ -20684,6 +20688,7 @@ _GENERAL_SETTINGS_CONFIG_LIST_FIELD_TYPES: Final[Mapping[str, str]] = MappingPro
         "mcp_xff_num_trusted_hops": "Integer",
         "mcp_prefer_client_id_metadata_document": "Boolean",
         "always_include_stream_usage": "Boolean",
+        "return_raw_model_name": "Boolean",
         "forward_client_headers_to_llm_api": "Boolean",
         "mcp_required_fields": "List",
         "mcp_disabled_capabilities": "List",

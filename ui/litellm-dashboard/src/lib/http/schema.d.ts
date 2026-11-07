@@ -31299,6 +31299,12 @@ export interface components {
              */
             responses_websocket_session_limit_seconds: number;
             /**
+             * Return Raw Model Name
+             * @description Preserve the upstream response model instead of replacing it with the requested model alias. Applies to streaming and non-streaming responses. The per-request raw-model opt-out remains supported.
+             * @default false
+             */
+            return_raw_model_name: boolean;
+            /**
              * Return Wildcard Routes
              * @description When true, `/v1/models` lists wildcard routes like `openai/*` unless the request passes `return_wildcard_routes=false`.
              */
