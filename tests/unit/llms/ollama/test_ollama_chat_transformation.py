@@ -3,6 +3,7 @@ import inspect
 import itertools
 import os
 import sys
+import traceback
 from typing import Final, cast
 
 import pytest
@@ -1002,10 +1003,12 @@ class TestOllamaToolCallTransformation:
 
     @pytest.mark.parametrize(
         "arguments",
-        ['{"path": "a.rs"}{"path": "b.rs"}', '["a.rs", "b.rs"]', '[["path", "a.rs"]]'],
-        ids=["glued", "array", "pairs"],
+        ['{"path": "a.rs"}{"path": "b.rs"}', '["a.rs", "b.rs"]', '[["path", "a.rs"]]', "[]"],
+        ids=["glued", "array", "pairs", "empty_array"],
     )
-    def test_replayed_tool_call_arguments_that_are_not_an_object_answer_400(self, arguments: str):
+    def test_replayed_tool_call_arguments_that_are_not_an_object_answer_400_without_echoing_them(
+        self, arguments: str
+    ):
         with pytest.raises(litellm.BadRequestError) as exc_info:
             litellm.completion(
                 model="ollama_chat/qwen3:8b",
@@ -1015,6 +1018,7 @@ class TestOllamaToolCallTransformation:
 
         assert exc_info.value.status_code == 400
         assert "call_abc123" in str(exc_info.value)
+        assert "a.rs" not in "".join(traceback.format_exception(exc_info.value))
 
 
 class TestOllamaStreamingParallelToolCallIndex:
