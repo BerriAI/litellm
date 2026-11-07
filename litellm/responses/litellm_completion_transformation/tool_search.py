@@ -227,10 +227,10 @@ def route_runs_tool_search(model: str, custom_llm_provider: str | None) -> bool:
     ) and provider_builds_anthropic_request(model, custom_llm_provider)
 
 
-def request_runs_tool_search(tools: Iterable[object], model: str, custom_llm_provider: str | None) -> bool:
+def request_runs_tool_search(tools: Sequence[object], model: str, custom_llm_provider: str | None) -> bool:
     if any(is_anthropic_tool_search_chat_tool(tool) for tool in tools):
         return provider_builds_anthropic_request(model, custom_llm_provider)
-    return route_runs_tool_search(model, custom_llm_provider)
+    return has_server_tool_search(tools) and route_runs_tool_search(model, custom_llm_provider)
 
 
 def chat_config_builds_anthropic_request(chat_config: object) -> bool:
