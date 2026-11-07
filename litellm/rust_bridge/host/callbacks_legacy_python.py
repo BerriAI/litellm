@@ -286,7 +286,7 @@ def defer_success(
     end: datetime.datetime,
 ) -> None:
     logger.deferred_success_result = (response, start, end)  # rebind-ok: capture the native attempt before dispatch
-    logger.enqueue_deferred_logging = pending
+    logger.enqueue_deferred_logging = pending  # rebind-ok: the proxy releases logging here
 
 
 def _cache_hit(logger: LoggingSurface) -> Literal[True] | None:
