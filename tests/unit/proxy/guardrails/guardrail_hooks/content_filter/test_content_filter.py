@@ -276,6 +276,26 @@ class TestContentFilterGuardrail:
         ]
 
     @pytest.mark.asyncio
+    async def test_apply_guardrail_does_not_block_a_match_an_earlier_mask_pattern_already_covers(self):
+        guardrail: Final = ContentFilterGuardrail(
+            guardrail_name="test-mask-then-block",
+            patterns=[
+                ContentFilterPattern(
+                    pattern_type="prebuilt", pattern_name="generic_api_key", action=ContentFilterAction.MASK
+                ),
+                ContentFilterPattern(
+                    pattern_type="prebuilt", pattern_name="aws_secret_key", action=ContentFilterAction.BLOCK
+                ),
+            ],
+        )
+        guardrailed_inputs: Final = await guardrail.apply_guardrail(
+            inputs={"texts": ["config api_key=" + "A1b2C3d4E5" * 4]},
+            request_data={},
+            input_type="request",
+        )
+        assert guardrailed_inputs.get("texts") == ["config [GENERIC_API_KEY_REDACTED]"]
+
+    @pytest.mark.asyncio
     async def test_apply_guardrail_blocked_word_mask(self):
         """
         Test apply_guardrail with blocked word MASK action

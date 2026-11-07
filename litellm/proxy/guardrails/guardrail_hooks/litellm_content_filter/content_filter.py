@@ -12,7 +12,7 @@ import json
 import os
 import re
 import time
-from collections.abc import AsyncGenerator, AsyncIterable, Callable, Coroutine, Iterable, Iterator, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterable, Callable, Coroutine, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime
 from re import Pattern
@@ -232,7 +232,7 @@ class _StreamedScanPlan:
 class _RedactionSpan:
     start: int
     end: int
-    tag: str
+    pattern_name: str
 
 
 def _merge_redaction_spans(spans: Iterable[_RedactionSpan]) -> tuple[_RedactionSpan, ...]:
@@ -243,14 +243,17 @@ def _merge_redaction_spans(spans: Iterable[_RedactionSpan]) -> tuple[_RedactionS
     )
     last_indices: Final = (*(index - 1 for index in first_indices[1:]), len(ordered) - 1)
     return tuple(
-        _RedactionSpan(ordered[first].start, reach[last], ordered[first].tag)
+        _RedactionSpan(ordered[first].start, reach[last], ordered[first].pattern_name)
         for first, last in zip(first_indices, last_indices)
     )
 
 
-def _apply_redaction_spans(text: str, spans: tuple[_RedactionSpan, ...]) -> str:
+def _apply_redaction_spans(text: str, spans: tuple[_RedactionSpan, ...], redaction_format: str) -> str:
     previous_ends: Final = (0, *(span.end for span in spans))
-    kept_parts: Final = (text[previous_end : span.start] + span.tag for previous_end, span in zip(previous_ends, spans))
+    kept_parts: Final = (
+        text[previous_end : span.start] + redaction_format.format(pattern_name=span.pattern_name.upper())
+        for previous_end, span in zip(previous_ends, spans)
+    )
     return "".join((*kept_parts, text[previous_ends[-1] :]))
 
 
@@ -1425,18 +1428,27 @@ class ContentFilterGuardrail(CustomGuardrail):
         elif action == ContentFilterAction.MASK:
             verbose_proxy_logger.info("Masked all %s matches in content", pattern_name)
 
-    def _iter_pattern_redaction_spans(
-        self, matched_patterns: Iterable[tuple[CompiledPatternEntry, list[tuple[int, int]]]]
-    ) -> Iterator[_RedactionSpan]:
-        for pattern_entry, spans in matched_patterns:
-            if pattern_entry["action"] != ContentFilterAction.MASK:
-                continue
-            yield from (
-                _RedactionSpan(
-                    start, end, self.pattern_redaction_format.format(pattern_name=pattern_entry["pattern_name"].upper())
-                )
-                for start, end in spans
-            )
+    def _pattern_mask_spans(self, text: str, pattern_entry: CompiledPatternEntry) -> tuple[_RedactionSpan, ...]:
+        if pattern_entry["action"] != ContentFilterAction.MASK:
+            return ()
+        return tuple(
+            _RedactionSpan(start, end, pattern_entry["pattern_name"])
+            for start, end in self._find_pattern_spans(text, pattern_entry)
+        )
+
+    def _pattern_detected(
+        self,
+        text: str,
+        pattern_entry: CompiledPatternEntry,
+        earlier_mask_spans: Iterable[_RedactionSpan],
+        tagged_pattern_names: frozenset[str],
+    ) -> bool:
+        if pattern_entry["action"] == ContentFilterAction.MASK:
+            return pattern_entry["pattern_name"] in tagged_pattern_names
+        text_after_earlier_masks: Final = _apply_redaction_spans(
+            text, _merge_redaction_spans(earlier_mask_spans), self.pattern_redaction_format
+        )
+        return bool(self._find_pattern_spans(text_after_earlier_masks, pattern_entry))
 
     def _handle_blocked_word_match(
         self,
@@ -1525,16 +1537,20 @@ class ContentFilterGuardrail(CustomGuardrail):
             keyword, category_name, severity, action = category_keyword_match
             text = self._handle_category_keyword_match(keyword, category_name, severity, action, text, detections)
 
-        matched_patterns: Final = tuple(
-            (pattern_entry, pattern_spans)
-            for pattern_entry in self.compiled_patterns
-            if (pattern_spans := self._find_pattern_spans(text, pattern_entry))
+        mask_spans_by_pattern: Final = tuple(
+            self._pattern_mask_spans(text, pattern_entry) for pattern_entry in self.compiled_patterns
         )
-        for pattern_entry, _ in matched_patterns:
-            self._handle_pattern_match(pattern_entry["pattern_name"], pattern_entry["action"], detections)
-        text = _apply_redaction_spans(
-            text, _merge_redaction_spans(self._iter_pattern_redaction_spans(matched_patterns))
-        )
+        redaction_spans: Final = _merge_redaction_spans(itertools.chain.from_iterable(mask_spans_by_pattern))
+        tagged_pattern_names: Final = frozenset(span.pattern_name for span in redaction_spans)
+        for index, pattern_entry in enumerate(self.compiled_patterns):
+            if self._pattern_detected(
+                text,
+                pattern_entry,
+                itertools.chain.from_iterable(mask_spans_by_pattern[:index]),
+                tagged_pattern_names,
+            ):
+                self._handle_pattern_match(pattern_entry["pattern_name"], pattern_entry["action"], detections)
+        text = _apply_redaction_spans(text, redaction_spans, self.pattern_redaction_format)
 
         # Check blocked words - iterate through ALL blocked words
         text_lower = text.lower()
