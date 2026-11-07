@@ -1883,6 +1883,57 @@ def test_multi_deployment_402_cools_down(testing_litellm_router: Router) -> None
     )
 
 
+def _not_found_error() -> litellm.NotFoundError:
+    return litellm.NotFoundError(message="Resource not found", model="gpt-5-mini", llm_provider="azure")
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+def test_single_deployment_404_does_not_cooldown() -> None:
+    router = Router(
+        model_list=[
+            {"model_name": "gpt-5-mini", "litellm_params": {"model": "gpt-5-mini"}, "model_info": {"id": "dep-1"}},
+        ],
+    )
+    assert _should_cooldown_deployment(RoutingContext(router), "dep-1", 404, _not_found_error()) is False
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+def test_single_deployment_404_respects_allowed_fails_policy() -> None:
+    router = Router(
+        model_list=[
+            {"model_name": "gpt-5-mini", "litellm_params": {"model": "gpt-5-mini"}, "model_info": {"id": "dep-1"}},
+        ],
+        allowed_fails_policy=AllowedFailsPolicy(NotFoundErrorAllowedFails=0),
+    )
+    assert _should_cooldown_deployment(RoutingContext(router), "dep-1", 404, _not_found_error()) is True
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+def test_multi_deployment_404_cools_down(testing_litellm_router: Router) -> None:
+    assert (
+        _should_cooldown_deployment(RoutingContext(testing_litellm_router), "test_deployment", 404, _not_found_error())
+        is True
+    )
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+@pytest.mark.asyncio
+async def test_single_deployment_404_does_not_reject_following_requests() -> None:
+    router = Router(
+        model_list=[
+            {"model_name": "gpt-5-mini", "litellm_params": {"model": "gpt-5-mini", "api_key": "fake-key"}},
+        ],
+        num_retries=0,
+    )
+    messages = [{"role": "user", "content": "hi"}]
+
+    with pytest.raises(litellm.NotFoundError):
+        await router.acompletion(model="gpt-5-mini", messages=messages, mock_response=_not_found_error())
+
+    response = await router.acompletion(model="gpt-5-mini", messages=messages, mock_response="ok")
+    assert response.choices[0].message.content == "ok"
+
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 @pytest.mark.asyncio
 async def test_should_cooldown_deployment(testing_litellm_router):
