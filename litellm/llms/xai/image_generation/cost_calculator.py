@@ -28,6 +28,9 @@ def cost_calculator(
     call_type: str | None = None,
     model_info: ModelInfo | None = None,
 ) -> float | None:
+    if model_info is not None and model_info.get("input_cost_per_pixel") is not None:
+        return None
+
     caller_set_prices: Final = model_info is not None and any(
         model_info.get(key) is not None
         for key in (
