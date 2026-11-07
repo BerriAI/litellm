@@ -6,15 +6,17 @@ https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agentcore_InvokeAgen
 
 import json
 from collections.abc import AsyncGenerator, Mapping
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Optional, Union
 from urllib.parse import quote
 
 import httpx
-from pydantic import TypeAdapter
+from pydantic import JsonValue, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
+from litellm.litellm_core_utils.get_litellm_params import AWS_CREDENTIAL_KWARGS_KEYS
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     convert_content_list_to_str,
 )
@@ -53,6 +55,17 @@ else:
     AsyncHTTPHandler = Any
 
 _DECODED_JSON: Final = TypeAdapter(object)
+_PARAMS: Final = TypeAdapter(dict[str, object])
+_PAYLOAD_FIELD_NAMES: Final = TypeAdapter(tuple[str, ...])
+_PAYLOAD_FIELD_VALUE: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
+_UNFORWARDABLE_PAYLOAD_FIELDS: Final = AWS_CREDENTIAL_KWARGS_KEYS | frozenset({"prompt"})
+
+
+def _payload_field_value(name: str, value: object) -> JsonValue:
+    try:
+        return _PAYLOAD_FIELD_VALUE.validate_python(value)
+    except ValidationError:
+        raise BedrockError(status_code=400, message=f"forward_payload_fields: {name} is not a JSON value") from None
 
 
 class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
@@ -245,10 +258,12 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
           OpenAI-shaped multimodal blocks. This is opt-in because an AgentCore agent
           must be explicitly written to read ``payload["content"]``; by default the
           payload stays byte-identical to the legacy ``{"prompt": "..."}`` shape.
+        - Each request param named in the deployment's ``forward_payload_fields``
+          list is copied in under its own name, never ``prompt`` or AWS credentials.
 
         Returns:
-            dict: Payload dict containing the prompt and (optionally) the OpenAI
-            content list.
+            dict: Payload dict containing the prompt, the forwarded params and
+            (optionally) the OpenAI content list.
         """
         verbose_logger.debug("AgentCore transform_request - optional_params keys: %s", list(optional_params.keys()))
 
@@ -256,7 +271,10 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         prompt: Final = convert_content_list_to_str(messages[-1])
 
         # Create the payload - this is what goes in the body (raw JSON)
-        payload: Final[dict] = {"prompt": prompt}
+        payload: Final[dict] = {
+            "prompt": prompt,
+            **self._forwarded_payload_fields(_PARAMS.validate_python(optional_params)),
+        }
 
         # Opt-in: when forward_multimodal_content is set, forward the OpenAI content
         # list verbatim under "content" so an attachment-aware agent can read the raw
@@ -306,6 +324,17 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
                 return value.strip().lower() in ("1", "true", "yes", "on")
             return bool(value)
         return False
+
+    @staticmethod
+    def _forwarded_payload_fields(optional_params: Mapping[str, object]) -> Mapping[str, JsonValue]:
+        names: Final = _PAYLOAD_FIELD_NAMES.validate_python(optional_params.get("forward_payload_fields") or ())
+        return MappingProxyType(
+            {
+                name: _payload_field_value(name, optional_params[name])
+                for name in names
+                if name in optional_params and name not in _UNFORWARDABLE_PAYLOAD_FIELDS
+            }
+        )
 
     def _extract_sse_json(self, line: str) -> dict | None:
         """Extract and parse JSON from an SSE data line."""

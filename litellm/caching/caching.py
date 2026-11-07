@@ -428,6 +428,10 @@ class Cache:
         combined_kwargs: Final = ModelParamHelper.get_all_llm_api_params()
         is_semantic_cache: Final = self._is_semantic_cache()
         scope_excluded_params: Final = self._SEMANTIC_CACHE_SCOPE_EXCLUDED_PARAMS if is_semantic_cache else frozenset()
+        # A deployment that forwards request params into the provider payload makes their values part of the answer
+        keys_provider_params: Final = litellm.enable_caching_on_provider_specific_optional_params is True or bool(
+            kwargs.get("forward_payload_fields")
+        )
         for param in kwargs:
             if param in scope_excluded_params:
                 continue
@@ -438,7 +442,7 @@ class Cache:
                 if param_value is not None:
                     cache_key += f"{param}: {param_value}"
             elif not is_litellm_owned_kwarg(param):
-                if litellm.enable_caching_on_provider_specific_optional_params is True:  # feature flagged for now
+                if keys_provider_params:
                     if kwargs[param] is None:
                         continue  # ignore None params
                     cache_key += f"{param}: {kwargs[param]}"
