@@ -7,11 +7,10 @@ from typing import TYPE_CHECKING, Final, Optional, cast
 import openai
 from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import ORJSONResponse
+from pydantic import TypeAdapter
 
 import litellm
 from litellm.llms.base_llm.managed_resources.utils import (
-    extract_model_id_from_unified_id,
-    extract_provider_resource_id_from_unified_id,
     extract_target_model_names_from_unified_id,
     is_base64_encoded_unified_id,
 )
@@ -127,6 +126,7 @@ class _ManagedFileCopy:
 
 
 _PROBE_ARGUMENTS: Final = frozenset({"vector_store_id", "file_id", "extra_headers", "timeout", "custom_llm_provider"})
+_EXTRA_HEADERS: Final = TypeAdapter(dict[str, str] | None)
 
 
 async def _store_holds_file(
@@ -134,9 +134,9 @@ async def _store_holds_file(
 ) -> bool:
     try:
         await vector_store_file_aretrieve(
-            vector_store_id=extract_provider_resource_id_from_unified_id(vector_store_id) or vector_store_id,
+            vector_store_id=vector_store_id,
             file_id=file_id,
-            extra_headers=None,
+            extra_headers=_EXTRA_HEADERS.validate_python(credentials.get("extra_headers")),
             timeout=None,
             custom_llm_provider=provider.value,
             **{key: value for key, value in credentials.items() if key not in _PROBE_ARGUMENTS},
@@ -147,18 +147,19 @@ async def _store_holds_file(
     return True
 
 
-def _store_routes_to(vector_store_id: object, deployment_id: str) -> bool:
-    if not isinstance(vector_store_id, str) or not is_base64_encoded_unified_id(vector_store_id):
-        return True
-    return extract_model_id_from_unified_id(vector_store_id) == deployment_id
+def _raw_vector_store_id(data: Mapping[str, object]) -> str | None:
+    vector_store_id: Final = data.get("vector_store_id")
+    if not isinstance(vector_store_id, str) or is_base64_encoded_unified_id(vector_store_id):
+        return None
+    return vector_store_id
 
 
 async def _caller_team_copy_of_managed_file(
     provider: LlmProviders | None,
     file_id: str,
     upload_copy: str | None,
-    vector_store_id: object,
-    attaching: bool,
+    upload_credentials: Mapping[str, object] | None,
+    vector_store_id: str,
     user_api_key_dict: UserAPIKeyAuth,
     managed_files_obj: object | None,
     llm_router: Optional["Router"],
@@ -173,18 +174,15 @@ async def _caller_team_copy_of_managed_file(
     )
     if team_deployment is None or provider_file_id is None:
         return None
-    if attaching and not _store_routes_to(vector_store_id, team_deployment.deployment_id):
-        return None
-    if (
-        provider_file_id != upload_copy
-        and not attaching
-        and not (
-            isinstance(vector_store_id, str)
-            and await _store_holds_file(provider, vector_store_id, provider_file_id, team_deployment.credentials)
-        )
-    ):
-        return None
-    return _ManagedFileCopy(team_deployment.deployment_id, provider_file_id)
+    team_copy: Final = _ManagedFileCopy(team_deployment.deployment_id, provider_file_id)
+    if provider_file_id == upload_copy:
+        return team_copy
+    store_holds_upload_copy: Final = (
+        upload_copy is not None
+        and upload_credentials is not None
+        and await _store_holds_file(provider, vector_store_id, upload_copy, upload_credentials)
+    )
+    return None if store_holds_upload_copy else team_copy
 
 
 def _store_carries_credentials(store: LiteLLM_ManagedVectorStore | None) -> bool:
@@ -204,7 +202,6 @@ async def _update_request_data_with_managed_file_id(
     managed_files_obj: object | None,
     llm_router: Optional["Router"] = None,
     managed_vector_store: LiteLLM_ManagedVectorStore | None = None,
-    attaching: bool = False,
 ) -> tuple[dict, str | None]:
     """
     Update request data with model routing information from managed file ID.
@@ -279,27 +276,39 @@ async def _update_request_data_with_managed_file_id(
                 if stored_deployment_id and llm_router
                 else None
             )
+            raw_vector_store_id: Final = _raw_vector_store_id(data)
+            upload_deployment_id: Final = (
+                stored_deployment_id
+                if raw_vector_store_id is not None
+                and stored_deployment is not None
+                and stored_deployment.model_info.team_id in (None, user_api_key_dict.team_id)
+                else None
+            )
+            upload_routing_model: Final = upload_deployment_id or (
+                target_model_names[0] if target_model_names else None
+            )
             team_copy: Final = (
                 None
-                if carries_explicit_credentials(data) or _store_carries_credentials(managed_vector_store)
+                if raw_vector_store_id is None
+                or carries_explicit_credentials(data)
+                or _store_carries_credentials(managed_vector_store)
                 else await _caller_team_copy_of_managed_file(
                     await _resolve_provider(data=data, request=request),
                     file_id,
                     llm_output_file_id,
-                    data.get("vector_store_id"),
-                    attaching,
+                    (
+                        llm_router.registry().credentials(upload_routing_model, form="with_provider")
+                        if llm_router and upload_routing_model
+                        else None
+                    ),
+                    raw_vector_store_id,
                     user_api_key_dict,
                     managed_files_obj,
                     llm_router,
                 )
             )
-            file_routing_model: Final = (
-                stored_deployment_id
-                if stored_deployment is not None
-                and stored_deployment.model_info.team_id in (None, user_api_key_dict.team_id)
-                else (target_model_names[0] if target_model_names else None)
-            )
-            routing_model: Final = team_copy.deployment_id if team_copy is not None else file_routing_model
+            routing_deployment_id: Final = team_copy.deployment_id if team_copy is not None else upload_deployment_id
+            routing_model: Final = team_copy.deployment_id if team_copy is not None else upload_routing_model
             provider_file_id: Final = team_copy.provider_file_id if team_copy is not None else llm_output_file_id
             if routing_model:
                 data["model"] = routing_model
@@ -310,7 +319,11 @@ async def _update_request_data_with_managed_file_id(
                     if credentials:
                         prepare_data_with_credentials(
                             data=data,
-                            credentials=credentials,
+                            credentials=(
+                                credentials
+                                if routing_deployment_id is None
+                                else {**credentials, "model": routing_deployment_id}
+                            ),
                             file_id=provider_file_id,
                         )
                         verbose_logger.info(
@@ -691,7 +704,6 @@ async def vector_store_file_create(
             managed_files_obj=proxy_logging_obj.get_proxy_hook("managed_files"),
             llm_router=llm_router,
             managed_vector_store=managed_vector_store,
-            attaching=True,
         )
 
     # Then handle managed vector store IDs
