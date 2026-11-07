@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Ban, Pencil, Plus, SlidersHorizontal } from "lucide-react";
+import { Ban, Pencil, Plus, X } from "lucide-react";
 import { toast } from "sonner";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { $api } from "@/lib/http/api";
@@ -9,8 +9,8 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { customerStatus, formatUSD, useCustomerSpendByCustomer } from "./customerPortalData";
-import { customerLimitsOnKey, useAllKeys, useCustomerTrafficKeys, type PortalKey } from "./customerKeys";
-import KeyLimitDialog from "./KeyLimitDialog";
+import { keyTaggedWith, setCustomerTag, useAllKeys, useCustomerTrafficKeys, type PortalKey } from "./customerKeys";
+import AddKeyDialog from "./AddKeyDialog";
 import EditCustomerDialog from "./EditCustomerDialog";
 
 const STATUS_BADGE = {
@@ -25,7 +25,7 @@ export default function CustomerDetail({ customerId, onBack }: { customerId: str
   const spendQuery = useCustomerSpendByCustomer(accessToken);
   const keysQuery = useAllKeys(accessToken);
   const trafficQuery = useCustomerTrafficKeys(accessToken, customerId);
-  const [dialog, setDialog] = useState<{ open: boolean; editKey: PortalKey | null }>({ open: false, editKey: null });
+  const [addOpen, setAddOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const block = $api.useMutation("post", "/customer/block", { onSuccess: () => { toast.success("Customer blocked"); info.refetch(); } });
   const unblock = $api.useMutation("post", "/customer/update", { onSuccess: () => { toast.success("Customer unblocked"); info.refetch(); } });
@@ -36,14 +36,24 @@ export default function CustomerDetail({ customerId, onBack }: { customerId: str
     const keys = keysQuery.data ?? [];
     const traffic = trafficQuery.data ?? new Set<string>();
     return keys
-      .map((k) => ({ k, limits: customerLimitsOnKey(k, customerId), traffic: traffic.has(k.token) }))
-      .filter((r) => r.traffic || r.limits.tpm !== null || r.limits.rpm !== null);
+      .map((k) => ({ k, tagged: keyTaggedWith(k, customerId), traffic: traffic.has(k.token) }))
+      .filter((r) => r.traffic || r.tagged);
   }, [keysQuery.data, trafficQuery.data, customerId]);
   const shownTokens = useMemo(() => new Set(rows.map((r) => r.k.token)), [rows]);
   const label = c?.alias || customerId;
   const status = c ? customerStatus(c, spend) : "active";
   const max = c?.litellm_budget_table?.max_budget ?? null;
   const refresh = () => { keysQuery.refetch(); trafficQuery.refetch(); };
+  const removeKey = async (k: PortalKey) => {
+    if (!accessToken) return;
+    try {
+      await setCustomerTag(accessToken, k, customerId, false);
+      toast.success(`Removed ${k.alias} from ${label}`);
+      refresh();
+    } catch (e) {
+      toast.error(`Failed to update key: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  };
 
   return (
     <div className="w-full space-y-4 px-6 py-5">
@@ -73,38 +83,43 @@ export default function CustomerDetail({ customerId, onBack }: { customerId: str
         <div className="flex items-center justify-between border-b px-4 py-3">
           <div className="flex items-baseline gap-3">
             <h2 className="text-sm font-semibold">Keys</h2>
-            <p className="text-xs text-muted-foreground">Keys with traffic from this customer this month, or with a limit set for this customer.</p>
+            <p className="text-xs text-muted-foreground">Keys tagged with this customer, or with traffic from it this month.</p>
           </div>
-          <Button size="sm" variant="outline" onClick={() => setDialog({ open: true, editKey: null })}><Plus className="size-4" /> Add key</Button>
+          <Button size="sm" variant="outline" onClick={() => setAddOpen(true)}><Plus className="size-4" /> Add key</Button>
         </div>
         {rows.length === 0 ? (
           <div className="flex flex-col items-center gap-2 py-10 text-center text-sm text-muted-foreground">
-            <p>No keys yet. Add a key to set limits for this customer.</p>
-            <Button size="sm" onClick={() => setDialog({ open: true, editKey: null })}><Plus className="size-4" /> Add key</Button>
+            <p>No keys yet. Add a gateway key this customer will use.</p>
+            <Button size="sm" onClick={() => setAddOpen(true)}><Plus className="size-4" /> Add key</Button>
           </div>
         ) : (
           <Table>
             <TableHeader>
               <TableRow>
                 <TableHead className="pl-4">Key</TableHead>
-                <TableHead>TPM limit for this key</TableHead>
-                <TableHead>RPM limit for this key</TableHead>
-                <TableHead>Status</TableHead>
+                <TableHead>Models</TableHead>
+                <TableHead>TPM limit</TableHead>
+                <TableHead>RPM limit</TableHead>
+                <TableHead>Source</TableHead>
                 <TableHead className="w-32" />
               </TableRow>
             </TableHeader>
             <TableBody>
-              {rows.map(({ k, limits }) => (
+              {rows.map(({ k, tagged, traffic }) => (
                 <TableRow key={k.token}>
                   <TableCell className="pl-4">
                     <p className="font-medium">{k.alias}</p>
                     <p className="font-mono text-[11px] text-muted-foreground">{k.token.slice(0, 12)}...</p>
                   </TableCell>
-                  <TableCell className="tabular-nums">{limits.tpm !== null ? limits.tpm.toLocaleString() : <span className="text-muted-foreground">Inherits key limit{k.tpmLimit ? ` (${k.tpmLimit.toLocaleString()})` : ""}</span>}</TableCell>
-                  <TableCell className="tabular-nums">{limits.rpm !== null ? limits.rpm.toLocaleString() : <span className="text-muted-foreground">Inherits key limit{k.rpmLimit ? ` (${k.rpmLimit.toLocaleString()})` : ""}</span>}</TableCell>
-                  <TableCell><Badge variant={c?.blocked ? "outline" : "secondary"}>{c?.blocked ? "Blocked" : "Active"}</Badge></TableCell>
+                  <TableCell className="max-w-56 truncate text-muted-foreground">{k.models.length ? k.models.join(", ") : "All models"}</TableCell>
+                  <TableCell className="tabular-nums">{k.tpmLimit ? k.tpmLimit.toLocaleString() : <span className="text-muted-foreground">No limit</span>}</TableCell>
+                  <TableCell className="tabular-nums">{k.rpmLimit ? k.rpmLimit.toLocaleString() : <span className="text-muted-foreground">No limit</span>}</TableCell>
+                  <TableCell className="space-x-1">
+                    {tagged && <Badge variant="secondary">Added</Badge>}
+                    {traffic && <Badge variant="outline">Traffic this month</Badge>}
+                  </TableCell>
                   <TableCell className="text-right">
-                    <Button size="sm" variant="outline" onClick={() => setDialog({ open: true, editKey: k })}><SlidersHorizontal className="size-4" /> Edit limits</Button>
+                    {tagged && <Button size="sm" variant="ghost" onClick={() => removeKey(k)}><X className="size-4" /> Remove</Button>}
                   </TableCell>
                 </TableRow>
               ))}
@@ -115,15 +130,14 @@ export default function CustomerDetail({ customerId, onBack }: { customerId: str
       <Button variant="link" size="sm" className="h-auto p-0 text-xs text-muted-foreground" onClick={onBack}>Back to customers</Button>
       {c && <EditCustomerDialog open={editOpen} onOpenChange={setEditOpen} customer={c} onSaved={() => info.refetch()} />}
       {accessToken && (
-        <KeyLimitDialog
-          open={dialog.open}
-          onOpenChange={(open) => setDialog((d) => ({ ...d, open }))}
+        <AddKeyDialog
+          open={addOpen}
+          onOpenChange={setAddOpen}
           accessToken={accessToken}
           customerId={customerId}
           customerLabel={label}
           keys={keysQuery.data ?? []}
           excludeTokens={shownTokens}
-          editKey={dialog.editKey}
           onSaved={refresh}
         />
       )}

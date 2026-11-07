@@ -39,7 +39,7 @@ export default function CreateCustomerDialog({ open, onOpenChange, onCreated }: 
         <form onSubmit={submit} className="space-y-4">
           <DialogHeader>
             <DialogTitle>Create customer</DialogTitle>
-            <DialogDescription>Track spend and set limits for an end user of your product.</DialogDescription>
+            <DialogDescription>Track spend and set a budget for an end user of your product.</DialogDescription>
           </DialogHeader>
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-1.5">

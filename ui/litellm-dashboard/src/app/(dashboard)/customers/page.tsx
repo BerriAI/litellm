@@ -1,6 +1,6 @@
 "use client";
 
-import { customerLimitsOnKey, useAllKeys } from "./_components/customerKeys";
+import { keyTaggedWith, useAllKeys } from "./_components/customerKeys";
 import { useMemo, useState } from "react";
 import { parseAsString, useQueryState } from "nuqs";
 import { Plus } from "lucide-react";
@@ -36,11 +36,8 @@ export default function CustomersPage() {
     return customers
       .map((c) => {
         const s = spend?.get(c.user_id);
-        const limited = (keysQuery.data ?? []).filter((k) => {
-          const l = customerLimitsOnKey(k, c.user_id);
-          return l.tpm !== null || l.rpm !== null;
-        }).map((k) => k.token);
-        const keys = new Set([...(s?.keys ?? []), ...limited]).size;
+        const tagged = (keysQuery.data ?? []).filter((k) => keyTaggedWith(k, c.user_id)).map((k) => k.token);
+        const keys = new Set([...(s?.keys ?? []), ...tagged]).size;
         return { c, spend: s?.spend ?? 0, keys, status: customerStatus(c, s?.spend ?? 0) };
       })
       .sort((a, b) => b.spend - a.spend);

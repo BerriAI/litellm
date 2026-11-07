@@ -11,15 +11,12 @@ export interface PortalKey {
   metadata: Record<string, unknown>;
 }
 
-const limitMap = (metadata: Record<string, unknown>, field: string): Record<string, number> => {
-  const m = metadata[field];
-  return m && typeof m === "object" ? (m as Record<string, number>) : {};
+const customerIds = (metadata: Record<string, unknown>): string[] => {
+  const ids = metadata.customer_ids;
+  return Array.isArray(ids) ? ids.filter((x): x is string => typeof x === "string") : [];
 };
 
-export const customerLimitsOnKey = (key: PortalKey, customerId: string): { tpm: number | null; rpm: number | null } => ({
-  tpm: limitMap(key.metadata, "customer_tpm_limit")[customerId] ?? null,
-  rpm: limitMap(key.metadata, "customer_rpm_limit")[customerId] ?? null,
-});
+export const keyTaggedWith = (key: PortalKey, customerId: string): boolean => customerIds(key.metadata).includes(customerId);
 
 export const useAllKeys = (accessToken: string | null) =>
   useQuery({
@@ -52,15 +49,8 @@ export const useCustomerTrafficKeys = (accessToken: string | null, customerId: s
     },
   });
 
-export const writeCustomerLimits = async (
-  accessToken: string,
-  key: PortalKey,
-  customerId: string,
-  limits: { tpm: number | null; rpm: number | null },
-) => {
-  const tpmMap = { ...limitMap(key.metadata, "customer_tpm_limit") };
-  const rpmMap = { ...limitMap(key.metadata, "customer_rpm_limit") };
-  if (limits.tpm === null) delete tpmMap[customerId]; else tpmMap[customerId] = limits.tpm;
-  if (limits.rpm === null) delete rpmMap[customerId]; else rpmMap[customerId] = limits.rpm;
-  await keyUpdateCall(accessToken, { key: key.token, metadata: { ...key.metadata, customer_tpm_limit: tpmMap, customer_rpm_limit: rpmMap } });
+export const setCustomerTag = async (accessToken: string, key: PortalKey, customerId: string, tagged: boolean) => {
+  const others = customerIds(key.metadata).filter((id) => id !== customerId);
+  const ids = tagged ? [...others, customerId] : others;
+  await keyUpdateCall(accessToken, { key: key.token, metadata: { ...key.metadata, customer_ids: ids } });
 };
