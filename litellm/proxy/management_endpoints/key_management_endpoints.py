@@ -5034,7 +5034,7 @@ async def info_key_fn(
         default=None,
         description=(
             "Key to look up. Pass the key's sha256 hash so the raw key stays out of URLs and access "
-            "logs. Example key='d5345c0ecc68ae6295c69f91926b2bd379e25481a40c34b5884d157a9f65d8fa'"
+            "logs. Example key='YOUR_VIRTUAL_KEY'"
         ),
     ),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
@@ -5081,14 +5081,14 @@ async def info_key_fn(
 
     Example Curl:
     ```
-    curl -X GET "http://0.0.0.0:4000/key/info?key=d5345c0ecc68ae6295c69f91926b2bd379e25481a40c34b5884d157a9f65d8fa" \
--H "Authorization: Bearer $LITELLM_MASTER_KEY"
+    curl -X GET "http://0.0.0.0:4000/key/info?key=YOUR_VIRTUAL_KEY" \
+-H "Authorization: Bearer ${YOUR_VIRTUAL_KEY}"
     ```
 
     Example Curl - if no key is passed, it will use the Key Passed in Authorization Header
     ```
     curl -X GET "http://0.0.0.0:4000/key/info" \
--H "Authorization: Bearer sk-test-example-key-123"
+-H "Authorization: Bearer ${YOUR_VIRTUAL_KEY}"
     ```
     """
     from litellm.proxy.proxy_server import (
@@ -8044,7 +8044,7 @@ async def block_key(
     --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
     --header 'Content-Type: application/json' \
     --data '{
-        "key": "sk-Fn8Ej39NxjAXrvpUGKghGw"
+        "key": "YOUR_VIRTUAL_KEY"
     }'
     ```
 
@@ -8158,7 +8158,7 @@ async def unblock_key(
     --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
     --header 'Content-Type: application/json' \
     --data '{
-        "key": "sk-Fn8Ej39NxjAXrvpUGKghGw"
+        "key": "YOUR_VIRTUAL_KEY"
     }'
     ```
 

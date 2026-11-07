@@ -8505,7 +8505,7 @@ export interface paths {
          *      Example:
          *     ```bash
          *     curl --location 'http://0.0.0.0:4000/key/block'     --header "Authorization: Bearer $LITELLM_MASTER_KEY"     --header 'Content-Type: application/json'     --data '{
-         *         "key": "sk-Fn8Ej39NxjAXrvpUGKghGw"
+         *         "key": "YOUR_VIRTUAL_KEY"
          *     }'
          *     ```
          *
@@ -8821,12 +8821,12 @@ export interface paths {
          *
          *     Example Curl:
          *     ```
-         *     curl -X GET "http://0.0.0.0:4000/key/info?key=d5345c0ecc68ae6295c69f91926b2bd379e25481a40c34b5884d157a9f65d8fa" -H "Authorization: Bearer $LITELLM_MASTER_KEY"
+         *     curl -X GET "http://0.0.0.0:4000/key/info?key=YOUR_VIRTUAL_KEY" -H "Authorization: Bearer ${YOUR_VIRTUAL_KEY}"
          *     ```
          *
          *     Example Curl - if no key is passed, it will use the Key Passed in Authorization Header
          *     ```
-         *     curl -X GET "http://0.0.0.0:4000/key/info" -H "Authorization: Bearer sk-test-example-key-123"
+         *     curl -X GET "http://0.0.0.0:4000/key/info" -H "Authorization: Bearer ${YOUR_VIRTUAL_KEY}"
          *     ```
          */
         get: operations["info_key_fn_key_info_get"];
@@ -9064,7 +9064,7 @@ export interface paths {
          *     Example:
          *     ```bash
          *     curl --location 'http://0.0.0.0:4000/key/unblock'     --header "Authorization: Bearer $LITELLM_MASTER_KEY"     --header 'Content-Type: application/json'     --data '{
-         *         "key": "sk-Fn8Ej39NxjAXrvpUGKghGw"
+         *         "key": "YOUR_VIRTUAL_KEY"
          *     }'
          *     ```
          *
@@ -16248,7 +16248,7 @@ export interface paths {
          *
          *     Example Request for specific api_key
          *     ```
-         *     curl -X GET "http://0.0.0.0:8000/spend/logs?api_key=d5345c0ecc68ae6295c69f91926b2bd379e25481a40c34b5884d157a9f65d8fa" -H "Authorization: Bearer $LITELLM_MASTER_KEY"
+         *     curl -X GET "http://0.0.0.0:8000/spend/logs?api_key=YOUR_VIRTUAL_KEY" -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          *
          *     Example Request for specific user_id
@@ -17560,7 +17560,7 @@ export interface paths {
          *     - team_id: str - Required. The unique identifier of the team to get info on.
          *
          *     ```
-         *     curl --location 'http://localhost:4000/team/info?team_id=your_team_id_here'     --header 'Authorization: Bearer your_api_key_here'
+         *     curl --location 'http://localhost:4000/team/info?team_id=your_team_id_here'     -H "Authorization: Bearer ${YOUR_VIRTUAL_KEY}"
          *     ```
          */
         get: operations["team_info_team_info_get"];
@@ -18384,7 +18384,7 @@ export interface paths {
          *     Returns 404 if the caller is not a member of the team.
          *
          *     ```
-         *     curl --location 'http://localhost:4000/team/your_team_id/members/me'     --header 'Authorization: Bearer your_api_key_here'
+         *     curl --location 'http://localhost:4000/team/your_team_id/members/me'     -H "Authorization: Bearer ${YOUR_VIRTUAL_KEY}"
          *     ```
          */
         get: operations["team_member_me_team__team_id__members_me_get"];
@@ -24083,6 +24083,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/workflows": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Workflows */
+        get: operations["list_workflows_v1_workflows_get"];
+        put?: never;
+        /**
+         * Create Workflow
+         * @description Register a team-scoped draft without publishing or executing it.
+         */
+        post: operations["create_workflow_v1_workflows_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/workflows/runs": {
         parameters: {
             query?: never;
@@ -24136,6 +24157,26 @@ export interface paths {
         patch: operations["update_workflow_run_v1_workflows_runs__run_id__patch"];
         trace?: never;
     };
+    "/v1/workflows/runs/{run_id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Cancel Run
+         * @description Request cancellation and prevent further node dispatch for this run.
+         */
+        post: operations["cancel_run_v1_workflows_runs__run_id__cancel_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/workflows/runs/{run_id}/events": {
         parameters: {
             query?: never;
@@ -24184,6 +24225,118 @@ export interface paths {
          *     Uses optimistic concurrency for sequence numbers.
          */
         post: operations["append_workflow_message_v1_workflows_runs__run_id__messages_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workflows/runs/{run_id}/steps": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read Steps */
+        get: operations["read_steps_v1_workflows_runs__run_id__steps_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workflows/runs/{run_id}/steps/{step_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read Step */
+        get: operations["read_step_v1_workflows_runs__run_id__steps__step_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workflows/{workflow_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Workflow */
+        get: operations["get_workflow_v1_workflows__workflow_id__get"];
+        /** Replace Workflow */
+        put: operations["replace_workflow_v1_workflows__workflow_id__put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workflows/{workflow_id}/publish": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Publish Workflow
+         * @description Publish an immutable snapshot after independent approval of the current ETag.
+         */
+        post: operations["publish_workflow_v1_workflows__workflow_id__publish_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workflows/{workflow_id}/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Test Draft
+         * @description Execute the reviewed draft with explicit billing authorization.
+         */
+        post: operations["test_draft_v1_workflows__workflow_id__test_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workflows/{workflow_id}/validate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Validate Workflow
+         * @description Validate the reviewed draft without executing Python or calling models.
+         */
+        post: operations["validate_workflow_v1_workflows__workflow_id__validate_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -27302,6 +27455,15 @@ export interface components {
             unnamed_teams_count: number;
         };
         /**
+         * Audio
+         * @description Data about a previous audio response from the model.
+         *     [Learn more](https://platform.openai.com/docs/guides/audio).
+         */
+        Audio: {
+            /** Id */
+            id: string;
+        };
+        /**
          * AuditLogResponse
          * @description Response model for a single audit log entry
          */
@@ -28270,6 +28432,11 @@ export interface components {
              */
             start: string;
         };
+        /**
+         * BindingOutput
+         * @enum {string}
+         */
+        BindingOutput: "messages" | "result";
         /** BlockKeyRequest */
         BlockKeyRequest: {
             /** Key */
@@ -29549,6 +29716,13 @@ export interface components {
              */
             status: "cancelled";
         };
+        /** CancellationView */
+        CancellationView: {
+            /** Cancel Requested */
+            cancel_requested: boolean;
+            /** Run Id */
+            run_id: string;
+        };
         /** CapabilityCalibrationConfig */
         CapabilityCalibrationConfig: {
             /** Intercept */
@@ -29695,6 +29869,27 @@ export interface components {
             /** Tool Calls */
             tool_calls?: components["schemas"]["ChatCompletionAssistantToolCall"][] | null;
         };
+        /**
+         * ChatCompletionAssistantMessageParam
+         * @description Messages sent by the model in response to user messages.
+         */
+        ChatCompletionAssistantMessageParam: {
+            audio?: components["schemas"]["Audio"] | null;
+            /** Content */
+            content?: string | (components["schemas"]["ChatCompletionContentPartTextParam"] | components["schemas"]["ChatCompletionContentPartRefusalParam"])[] | null;
+            function_call?: components["schemas"]["openai__types__chat__chat_completion_assistant_message_param__FunctionCall"] | null;
+            /** Name */
+            name?: string;
+            /** Refusal */
+            refusal?: string | null;
+            /**
+             * Role
+             * @constant
+             */
+            role: "assistant";
+            /** Tool Calls */
+            tool_calls?: (components["schemas"]["ChatCompletionMessageFunctionToolCallParam"] | components["schemas"]["ChatCompletionMessageCustomToolCallParam"])[];
+        };
         /** ChatCompletionAssistantToolCall */
         ChatCompletionAssistantToolCall: {
             function: components["schemas"]["ChatCompletionToolCallFunctionChunk"];
@@ -29744,6 +29939,53 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /**
+         * ChatCompletionContentPartImageParam
+         * @description Learn about [image inputs](https://platform.openai.com/docs/guides/vision).
+         */
+        ChatCompletionContentPartImageParam: {
+            image_url: components["schemas"]["ImageURL"];
+            /**
+             * Type
+             * @constant
+             */
+            type: "image_url";
+        };
+        /**
+         * ChatCompletionContentPartInputAudioParam
+         * @description Learn about [audio inputs](https://platform.openai.com/docs/guides/audio).
+         */
+        ChatCompletionContentPartInputAudioParam: {
+            input_audio: components["schemas"]["InputAudio"];
+            /**
+             * Type
+             * @constant
+             */
+            type: "input_audio";
+        };
+        /** ChatCompletionContentPartRefusalParam */
+        ChatCompletionContentPartRefusalParam: {
+            /** Refusal */
+            refusal: string;
+            /**
+             * Type
+             * @constant
+             */
+            type: "refusal";
+        };
+        /**
+         * ChatCompletionContentPartTextParam
+         * @description Learn about [text inputs](https://platform.openai.com/docs/guides/text-generation).
+         */
+        ChatCompletionContentPartTextParam: {
+            /** Text */
+            text: string;
+            /**
+             * Type
+             * @constant
+             */
+            type: "text";
+        };
         /** ChatCompletionCustomToolCallPayload */
         ChatCompletionCustomToolCallPayload: {
             /** Input */
@@ -29758,6 +30000,23 @@ export interface components {
             cache_control?: components["schemas"]["ChatCompletionCachedContent"];
             /** Content */
             content: string | unknown[];
+            /** Name */
+            name?: string;
+            /**
+             * Role
+             * @constant
+             */
+            role: "developer";
+        };
+        /**
+         * ChatCompletionDeveloperMessageParam
+         * @description Developer-provided instructions that the model should follow, regardless of
+         *     messages sent by the user. With o1 models and newer, `developer` messages
+         *     replace the previous `system` messages.
+         */
+        ChatCompletionDeveloperMessageParam: {
+            /** Content */
+            content: string | components["schemas"]["ChatCompletionContentPartTextParam"][];
             /** Name */
             name?: string;
             /**
@@ -29820,6 +30079,18 @@ export interface components {
             /** Tool Call Id */
             tool_call_id: string | null;
         };
+        /** ChatCompletionFunctionMessageParam */
+        ChatCompletionFunctionMessageParam: {
+            /** Content */
+            content: string | null;
+            /** Name */
+            name: string;
+            /**
+             * Role
+             * @constant
+             */
+            role: "function";
+        };
         /** ChatCompletionImageObject */
         ChatCompletionImageObject: {
             /** Image Url */
@@ -29864,9 +30135,76 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /**
+         * ChatCompletionMessageCustomToolCallParam
+         * @description A call to a custom tool created by the model.
+         */
+        ChatCompletionMessageCustomToolCallParam: {
+            custom: components["schemas"]["Custom"];
+            /** Id */
+            id: string;
+            /**
+             * Type
+             * @constant
+             */
+            type: "custom";
+        };
+        /**
+         * ChatCompletionMessageFunctionToolCallParam
+         * @description A call to a function tool created by the model.
+         */
+        ChatCompletionMessageFunctionToolCallParam: {
+            function: components["schemas"]["Function"];
+            /** Id */
+            id: string;
+            /**
+             * Type
+             * @constant
+             */
+            type: "function";
+        };
         /** ChatCompletionMessageToolCall */
         ChatCompletionMessageToolCall: {
             [key: string]: unknown;
+        };
+        /** ChatCompletionNode */
+        ChatCompletionNode: {
+            /** Id */
+            id: string;
+            /** Max Completion Tokens */
+            max_completion_tokens?: number | null;
+            /** Max Tokens */
+            max_tokens?: number | null;
+            /** Messages */
+            messages: components["schemas"]["Reference"] | components["schemas"]["Constant"];
+            /** Model */
+            model: string;
+            response_format?: components["schemas"]["StructuredResponse"] | null;
+            /**
+             * @default {
+             *       "backoff_seconds": 0,
+             *       "max_attempts": 1
+             *     }
+             */
+            retry: components["schemas"]["litellm__models__workflow_bundle__RetryPolicy"];
+            /** Seed */
+            seed?: number | null;
+            /** Stop */
+            stop?: string | string[] | null;
+            /** Temperature */
+            temperature?: number | null;
+            /**
+             * Timeout Seconds
+             * @default 60
+             */
+            timeout_seconds: number;
+            /** Top P */
+            top_p?: number | null;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "chat_completion";
         };
         /**
          * ChatCompletionReasoningItem
@@ -29922,6 +30260,23 @@ export interface components {
             cache_control?: components["schemas"]["ChatCompletionCachedContent"];
             /** Content */
             content: string | unknown[];
+            /** Name */
+            name?: string;
+            /**
+             * Role
+             * @constant
+             */
+            role: "system";
+        };
+        /**
+         * ChatCompletionSystemMessageParam
+         * @description Developer-provided instructions that the model should follow, regardless of
+         *     messages sent by the user. With o1 models and newer, use `developer` messages
+         *     for this purpose instead.
+         */
+        ChatCompletionSystemMessageParam: {
+            /** Content */
+            content: string | components["schemas"]["ChatCompletionContentPartTextParam"][];
             /** Name */
             name?: string;
             /**
@@ -30012,6 +30367,18 @@ export interface components {
             /** Tool Call Id */
             tool_call_id: string;
         };
+        /** ChatCompletionToolMessageParam */
+        ChatCompletionToolMessageParam: {
+            /** Content */
+            content: string | components["schemas"]["ChatCompletionContentPartTextParam"][];
+            /**
+             * Role
+             * @constant
+             */
+            role: "tool";
+            /** Tool Call Id */
+            tool_call_id: string;
+        };
         /** ChatCompletionToolParam */
         ChatCompletionToolParam: {
             /** Allowed Callers */
@@ -30058,6 +30425,22 @@ export interface components {
             cache_control?: components["schemas"]["ChatCompletionCachedContent"];
             /** Content */
             content: string | (components["schemas"]["ChatCompletionTextObject"] | components["schemas"]["ChatCompletionImageObject"] | components["schemas"]["ChatCompletionAudioObject"] | components["schemas"]["ChatCompletionDocumentObject"] | components["schemas"]["ChatCompletionVideoObject"] | components["schemas"]["ChatCompletionFileObject"])[];
+            /**
+             * Role
+             * @constant
+             */
+            role: "user";
+        };
+        /**
+         * ChatCompletionUserMessageParam
+         * @description Messages sent by an end user, containing prompts or additional context
+         *     information.
+         */
+        ChatCompletionUserMessageParam: {
+            /** Content */
+            content: string | (components["schemas"]["ChatCompletionContentPartTextParam"] | components["schemas"]["ChatCompletionContentPartImageParam"] | components["schemas"]["ChatCompletionContentPartInputAudioParam"] | components["schemas"]["File"])[];
+            /** Name */
+            name?: string;
             /**
              * Role
              * @constant
@@ -30764,7 +31147,7 @@ export interface components {
             agent_access_default_deny: boolean;
             /**
              * Alert To Webhook Url
-             * @description Mapping of alert type to webhook url. e.g. `alert_to_webhook_url: {'budget_alerts': 'https://nothooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX'}`
+             * @description Mapping of alert type to webhook url. e.g. `alert_to_webhook_url: {'budget_alerts': '$ALERT_WEBHOOK_URL'}`
              */
             alert_to_webhook_url?: {
                 [key: string]: unknown;
@@ -30984,6 +31367,12 @@ export interface components {
              * @default false
              */
             enable_public_model_hub: boolean;
+            /**
+             * Enable Workflows
+             * @description Enable durable typed workflows and the optional Monty worker
+             * @default false
+             */
+            enable_workflows: boolean;
             /**
              * Enforce Fallback Model Access
              * @description If True, router fallbacks configured in router_settings are only attempted when the calling key (and its team and project) is allowed to call the fallback model; unauthorized fallback targets are skipped and the primary model's error is returned. Default is True. Set False to disable fallback model access enforcement.
@@ -31524,6 +31913,10 @@ export interface components {
         "ConfigurableClientsideParamsCustomAuth-Output": {
             /** Api Base */
             api_base: string;
+        };
+        /** Constant */
+        Constant: {
+            value: components["schemas"]["JsonValue"];
         };
         /** ContainerAuto */
         ContainerAuto: {
@@ -32229,6 +32622,16 @@ export interface components {
             /** User Id */
             user_id: string;
             user_role: components["schemas"]["LitellmUserRoles"] | null;
+        };
+        /**
+         * Custom
+         * @description The custom tool that the model called.
+         */
+        Custom: {
+            /** Input */
+            input: string;
+            /** Name */
+            name: string;
         };
         /** CustomDimension */
         CustomDimension: {
@@ -33038,6 +33441,42 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /** DraftList */
+        DraftList: {
+            /** Next Cursor */
+            next_cursor: string | null;
+            /** Workflows */
+            workflows: components["schemas"]["DraftView"][];
+        };
+        /** DraftTest */
+        DraftTest: {
+            /**
+             * Authorize Billing
+             * @constant
+             */
+            authorize_billing: true;
+            /** Messages */
+            messages: (components["schemas"]["ChatCompletionDeveloperMessageParam"] | components["schemas"]["ChatCompletionSystemMessageParam"] | components["schemas"]["ChatCompletionUserMessageParam"] | components["schemas"]["ChatCompletionAssistantMessageParam"] | components["schemas"]["ChatCompletionToolMessageParam"] | components["schemas"]["ChatCompletionFunctionMessageParam"])[];
+            metadata?: components["schemas"]["InvocationMetadata"] | null;
+            /** User */
+            user?: string | null;
+        };
+        /** DraftView */
+        DraftView: {
+            bundle: components["schemas"]["WorkflowBundle"];
+            /** Digest */
+            digest: string;
+            /** Etag */
+            etag: string;
+            /** Name */
+            name: string;
+            /** Published Snapshot Id */
+            published_snapshot_id: string | null;
+            /** Team Id */
+            team_id: string;
+            /** Workflow Id */
+            workflow_id: string;
+        };
         /**
          * Drag
          * @description A drag action.
@@ -33237,6 +33676,8 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /** EmptyWorkflowAction */
+        EmptyWorkflowAction: Record<string, never>;
         /** EndpointProvider */
         EndpointProvider: {
             /** Display Name */
@@ -33607,6 +34048,27 @@ export interface components {
             stored_in_db: boolean | null;
         };
         /**
+         * File
+         * @description Learn about [file inputs](https://platform.openai.com/docs/guides/text) for text generation.
+         */
+        File: {
+            file: components["schemas"]["FileFile"];
+            /**
+             * Type
+             * @constant
+             */
+            type: "file";
+        };
+        /** FileFile */
+        FileFile: {
+            /** File Data */
+            file_data?: string;
+            /** File Id */
+            file_id?: string;
+            /** Filename */
+            filename?: string;
+        };
+        /**
          * FileSearchTool
          * @description A tool that searches for relevant content from uploaded files.
          *
@@ -33658,14 +34120,15 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
-        /** FunctionCall */
-        FunctionCall: {
+        /**
+         * Function
+         * @description The function that the model called.
+         */
+        Function: {
             /** Arguments */
             arguments: string;
             /** Name */
-            name?: string | null;
-        } & {
-            [key: string]: unknown;
+            name: string;
         };
         /**
          * FunctionCallOutput
@@ -34662,6 +35125,16 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /** ImageURL */
+        ImageURL: {
+            /**
+             * Detail
+             * @enum {string}
+             */
+            detail?: "auto" | "low" | "high";
+            /** Url */
+            url: string;
+        };
         /** ImageURLListItem */
         ImageURLListItem: {
             image_url: components["schemas"]["ImageURLObject"];
@@ -34817,6 +35290,16 @@ export interface components {
              */
             type: "base64";
         };
+        /** InputAudio */
+        InputAudio: {
+            /** Data */
+            data: string;
+            /**
+             * Format
+             * @enum {string}
+             */
+            format: "wav" | "mp3";
+        };
         /** InputTokensDetails */
         InputTokensDetails: {
             /** Audio Tokens */
@@ -34908,6 +35391,14 @@ export interface components {
             invitation_id: string;
             /** Is Accepted */
             is_accepted: boolean;
+        };
+        /** InvocationMetadata */
+        InvocationMetadata: {
+            /**
+             * Tags
+             * @default []
+             */
+            tags: string[];
         };
         /**
          * ItemReference
@@ -39563,7 +40054,7 @@ export interface components {
             audio?: components["schemas"]["ChatCompletionAudioResponse"] | null;
             /** Content */
             content: string | null;
-            function_call: components["schemas"]["FunctionCall"] | null;
+            function_call: components["schemas"]["litellm__types__utils__FunctionCall"] | null;
             /** Images */
             images?: components["schemas"]["ImageURLListItem"][] | null;
             /** Provider Specific Fields */
@@ -43363,6 +43854,71 @@ export interface components {
                 };
             } | null;
         };
+        /** PublicationView */
+        PublicationView: {
+            /** Digest */
+            digest: string;
+            /** Model */
+            model: string;
+            /** Snapshot Id */
+            snapshot_id: string;
+        };
+        /** PublishWorkflow */
+        PublishWorkflow: {
+            /** Digest */
+            digest: string;
+        };
+        /** PythonNode */
+        PythonNode: {
+            /** Id */
+            id: string;
+            /** Inputs */
+            inputs: {
+                [key: string]: components["schemas"]["Reference"] | components["schemas"]["Constant"];
+            };
+            program: components["schemas"]["PythonProgram"];
+            /**
+             * @default {
+             *       "backoff_seconds": 0,
+             *       "max_attempts": 1
+             *     }
+             */
+            retry: components["schemas"]["litellm__models__workflow_bundle__RetryPolicy"];
+            /**
+             * Timeout Seconds
+             * @default 60
+             */
+            timeout_seconds: number;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "python";
+        };
+        /** PythonProgram */
+        PythonProgram: {
+            /**
+             * Contract Version
+             * @constant
+             */
+            contract_version: "1";
+            /** Function Name */
+            function_name: string;
+            /** Input Schema */
+            input_schema: {
+                [key: string]: components["schemas"]["JsonValue"];
+            };
+            /** Output Schema */
+            output_schema: {
+                [key: string]: components["schemas"]["JsonValue"];
+            };
+            /** Parameter Names */
+            parameter_names: string[];
+            /** Source */
+            source: string;
+            /** Source Sha256 */
+            source_sha256: string;
+        };
         /**
          * RankingOptions
          * @description Ranking options for search.
@@ -43450,6 +44006,14 @@ export interface components {
             generate_summary?: ("auto" | "concise" | "detailed") | null;
             /** Summary */
             summary?: ("auto" | "concise" | "detailed") | null;
+        };
+        /** Reference */
+        Reference: {
+            /** From */
+            from: string;
+            output: components["schemas"]["BindingOutput"];
+            /** Path */
+            path?: string | null;
         };
         /** RegenerateKeyRequest */
         RegenerateKeyRequest: {
@@ -43735,6 +44299,10 @@ export interface components {
              * @description Operation status
              */
             status: string;
+        };
+        /** RegisterWorkflow */
+        RegisterWorkflow: {
+            bundle: components["schemas"]["WorkflowBundle"];
         };
         /** RejectMCPServerRequest */
         RejectMCPServerRequest: {
@@ -45436,6 +46004,20 @@ export interface components {
              */
             type: "reasoning";
         };
+        /** ResponseSchema */
+        ResponseSchema: {
+            /** Name */
+            name: string;
+            /** Schema */
+            schema: {
+                [key: string]: components["schemas"]["JsonValue"];
+            };
+            /**
+             * Strict
+             * @default true
+             */
+            strict: boolean;
+        };
         /**
          * ResponseTextConfigParam
          * @description Configuration options for a text response from the model.
@@ -45804,33 +46386,6 @@ export interface components {
             total: number;
         };
         /**
-         * RetryPolicy
-         * @description Use this to set a custom number of retries per exception type
-         *     If RateLimitErrorRetries = 3, then 3 retries will be made for RateLimitError
-         *     Mapping of Exception type to number of retries
-         *     https://docs.litellm.ai/docs/exception_mapping
-         */
-        RetryPolicy: {
-            /** Authenticationerrorretries */
-            AuthenticationErrorRetries?: number | null;
-            /** Badrequesterrorretries */
-            BadRequestErrorRetries?: number | null;
-            /** Contentpolicyviolationerrorretries */
-            ContentPolicyViolationErrorRetries?: number | null;
-            /** Defaultretries */
-            DefaultRetries?: number | null;
-            /** Internalservererrorretries */
-            InternalServerErrorRetries?: number | null;
-            /** Notfounderrorretries */
-            NotFoundErrorRetries?: number | null;
-            /** Ratelimiterrorretries */
-            RateLimitErrorRetries?: number | null;
-            /** Serviceunavailableerrorretries */
-            ServiceUnavailableErrorRetries?: number | null;
-            /** Timeouterrorretries */
-            TimeoutErrorRetries?: number | null;
-        };
-        /**
          * RoleMappings
          * @description Configuration for mapping SSO groups to LiteLLM roles.
          *
@@ -46008,6 +46563,15 @@ export interface components {
              */
             status: "queued" | "running" | "completed" | "failed" | "cancelled";
         };
+        /** RunAccepted */
+        RunAccepted: {
+            /** Run Id */
+            run_id: string;
+            /** Snapshot Id */
+            snapshot_id: string;
+            /** Trace Url */
+            trace_url: string;
+        };
         /**
          * RunDeleteResponse
          * @description Response from deleting a run
@@ -46039,6 +46603,18 @@ export interface components {
             url: string;
             /** User */
             user?: string;
+        };
+        /** RunSteps */
+        RunSteps: {
+            /** Cancel Requested */
+            cancel_requested: boolean;
+            /** Run Id */
+            run_id: string;
+            /** Snapshot Id */
+            snapshot_id: string;
+            state: components["schemas"]["WorkflowRunState"];
+            /** Steps */
+            steps: components["schemas"]["WorkflowStep"][];
         };
         /** SCIMEnterpriseUser */
         SCIMEnterpriseUser: {
@@ -47812,6 +48388,16 @@ export interface components {
             window_end: number;
             /** Window Start */
             window_start: number;
+        };
+        /** StructuredResponse */
+        StructuredResponse: {
+            json_schema: components["schemas"]["ResponseSchema"];
+            /**
+             * Type
+             * @default json_schema
+             * @constant
+             */
+            type: "json_schema";
         };
         /** SubscriptionAccountFeeRequest */
         SubscriptionAccountFeeRequest: {
@@ -50569,7 +51155,7 @@ export interface components {
             } | null;
             /** Model Group Retry Policy */
             model_group_retry_policy?: {
-                [key: string]: components["schemas"]["RetryPolicy"];
+                [key: string]: components["schemas"]["litellm__types__router__RetryPolicy"];
             } | null;
             /** Num Retries */
             num_retries?: number | null;
@@ -50577,7 +51163,7 @@ export interface components {
             optional_pre_call_checks?: ("prompt_caching" | "router_budget_limiting" | "responses_api_deployment_check" | "deployment_affinity" | "session_affinity" | "forward_client_headers_by_model_group" | "enforce_model_rate_limits" | "encrypted_content_affinity")[] | null;
             /** Retry After */
             retry_after?: number | null;
-            retry_policy?: components["schemas"]["RetryPolicy"] | null;
+            retry_policy?: components["schemas"]["litellm__types__router__RetryPolicy"] | null;
             /** Routing Groups */
             routing_groups?: components["schemas"]["RoutingGroup"][] | null;
             /** Routing Strategy */
@@ -51835,6 +52421,13 @@ export interface components {
             /** Error Type */
             type: string;
         };
+        /** ValidationView */
+        ValidationView: {
+            /** Digest */
+            digest: string;
+            /** Valid */
+            valid: boolean;
+        };
         /**
          * VantageDryRunRequest
          * @description Request model for Vantage dry-run operations (capped for preview)
@@ -52147,6 +52740,28 @@ export interface components {
             /** Worker Id */
             worker_id: string;
         };
+        /** WorkflowBundle */
+        WorkflowBundle: {
+            /**
+             * Contract Version
+             * @constant
+             */
+            contract_version: "1";
+            /** Input Schema */
+            input_schema: {
+                [key: string]: components["schemas"]["JsonValue"];
+            };
+            /** Name */
+            name: string;
+            /** Nodes */
+            nodes: (components["schemas"]["ChatCompletionNode"] | components["schemas"]["PythonNode"])[];
+            output: components["schemas"]["Reference"];
+            /**
+             * Timeout Seconds
+             * @default 300
+             */
+            timeout_seconds: number;
+        };
         /** WorkflowEventCreateRequest */
         WorkflowEventCreateRequest: {
             /** Data */
@@ -52158,6 +52773,25 @@ export interface components {
             /** Step Name */
             step_name: string;
         };
+        /** WorkflowEventResponse */
+        WorkflowEventResponse: {
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            data: components["schemas"]["JsonValue"];
+            /** Event Id */
+            event_id: string;
+            /** Event Type */
+            event_type: string;
+            /** Run Id */
+            run_id: string;
+            /** Sequence Number */
+            sequence_number: number;
+            /** Step Name */
+            step_name: string;
+        };
         /** WorkflowMessageCreateRequest */
         WorkflowMessageCreateRequest: {
             /** Content */
@@ -52166,6 +52800,26 @@ export interface components {
             role: string;
             /** Session Id */
             session_id?: string | null;
+        };
+        /** WorkflowMessageResponse */
+        WorkflowMessageResponse: {
+            /** Content */
+            content: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Message Id */
+            message_id: string;
+            /** Role */
+            role: string;
+            /** Run Id */
+            run_id: string;
+            /** Sequence Number */
+            sequence_number: number;
+            /** Session Id */
+            session_id: string | null;
         };
         /** WorkflowRunCreateRequest */
         WorkflowRunCreateRequest: {
@@ -52180,6 +52834,39 @@ export interface components {
             /** Workflow Type */
             workflow_type: string;
         };
+        /** WorkflowRunResponse */
+        WorkflowRunResponse: {
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Created By */
+            created_by: string | null;
+            /** Engine Owned */
+            engine_owned: boolean;
+            input: components["schemas"]["JsonValue"];
+            metadata: components["schemas"]["JsonValue"];
+            output: components["schemas"]["JsonValue"];
+            /** Run Id */
+            run_id: string;
+            /** Session Id */
+            session_id: string;
+            /** Status */
+            status: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /** Workflow Type */
+            workflow_type: string;
+        };
+        /**
+         * WorkflowRunState
+         * @enum {string}
+         */
+        WorkflowRunState: "pending" | "running" | "completed" | "failed" | "cancelled";
         /** WorkflowRunUpdateRequest */
         WorkflowRunUpdateRequest: {
             /** Metadata */
@@ -52192,6 +52879,48 @@ export interface components {
             } | null;
             /** Status */
             status?: ("pending" | "running" | "paused" | "completed" | "failed") | null;
+        };
+        /** WorkflowStep */
+        WorkflowStep: {
+            /** Attempts */
+            attempts: number;
+            /**
+             * Completion Tokens
+             * @default 0
+             */
+            completion_tokens: number;
+            /**
+             * Deadline
+             * Format: date-time
+             */
+            deadline: string;
+            /** Error */
+            error?: string | null;
+            /** Finished At */
+            finished_at?: string | null;
+            input: components["schemas"]["JsonValue"];
+            /** Node Id */
+            node_id: string;
+            output?: components["schemas"]["JsonValue"] | null;
+            /**
+             * Prompt Tokens
+             * @default 0
+             */
+            prompt_tokens: number;
+            /** Request Id */
+            request_id?: string | null;
+            /** Response Cost */
+            response_cost?: number | null;
+            /** Run Id */
+            run_id: string;
+            /**
+             * Started At
+             * Format: date-time
+             */
+            started_at: string;
+            state: components["schemas"]["WorkflowRunState"];
+            /** Step Id */
+            step_id: string;
         };
         /** _A2AJsonRpcResponse */
         _A2AJsonRpcResponse: {
@@ -52210,6 +52939,19 @@ export interface components {
             result?: unknown | null;
         } & {
             [key: string]: unknown;
+        };
+        /** RetryPolicy */
+        litellm__models__workflow_bundle__RetryPolicy: {
+            /**
+             * Backoff Seconds
+             * @default 0
+             */
+            backoff_seconds: number;
+            /**
+             * Max Attempts
+             * @default 1
+             */
+            max_attempts: number;
         };
         /** ModelInfo */
         litellm__proxy___types__ModelInfo: {
@@ -52352,6 +53094,54 @@ export interface components {
             updated_by?: string | null;
         } & {
             [key: string]: unknown;
+        };
+        /**
+         * RetryPolicy
+         * @description Use this to set a custom number of retries per exception type
+         *     If RateLimitErrorRetries = 3, then 3 retries will be made for RateLimitError
+         *     Mapping of Exception type to number of retries
+         *     https://docs.litellm.ai/docs/exception_mapping
+         */
+        litellm__types__router__RetryPolicy: {
+            /** Authenticationerrorretries */
+            AuthenticationErrorRetries?: number | null;
+            /** Badrequesterrorretries */
+            BadRequestErrorRetries?: number | null;
+            /** Contentpolicyviolationerrorretries */
+            ContentPolicyViolationErrorRetries?: number | null;
+            /** Defaultretries */
+            DefaultRetries?: number | null;
+            /** Internalservererrorretries */
+            InternalServerErrorRetries?: number | null;
+            /** Notfounderrorretries */
+            NotFoundErrorRetries?: number | null;
+            /** Ratelimiterrorretries */
+            RateLimitErrorRetries?: number | null;
+            /** Serviceunavailableerrorretries */
+            ServiceUnavailableErrorRetries?: number | null;
+            /** Timeouterrorretries */
+            TimeoutErrorRetries?: number | null;
+        };
+        /** FunctionCall */
+        litellm__types__utils__FunctionCall: {
+            /** Arguments */
+            arguments: string;
+            /** Name */
+            name?: string | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * FunctionCall
+         * @description Deprecated and replaced by `tool_calls`.
+         *
+         *     The name and arguments of a function that should be called, as generated by the model.
+         */
+        openai__types__chat__chat_completion_assistant_message_param__FunctionCall: {
+            /** Arguments */
+            arguments: string;
+            /** Name */
+            name: string;
         };
         /**
          * ComputerToolParam
@@ -63677,7 +64467,7 @@ export interface operations {
                 end_date?: string | null;
                 /** @description Group spend by internal team or customer or api_key */
                 group_by?: ("team" | "customer" | "api_key") | null;
-                /** @description View spend for a specific api_key. Pass the key's sha256 hash so the raw key stays out of URLs and access logs. Example api_key='d5345c0ecc68ae6295c69f91926b2bd379e25481a40c34b5884d157a9f65d8fa' */
+                /** @description View spend for a specific api_key. Pass the key's sha256 hash so the raw key stays out of URLs and access logs. Example api_key='YOUR_VIRTUAL_KEY' */
                 api_key?: string | null;
                 /** @description View spend for a specific internal_user_id. Example internal_user_id='1234 */
                 internal_user_id?: string | null;
@@ -65607,7 +66397,7 @@ export interface operations {
     info_key_fn_key_info_get: {
         parameters: {
             query?: {
-                /** @description Key to look up. Pass the key's sha256 hash so the raw key stays out of URLs and access logs. Example key='d5345c0ecc68ae6295c69f91926b2bd379e25481a40c34b5884d157a9f65d8fa' */
+                /** @description Key to look up. Pass the key's sha256 hash so the raw key stays out of URLs and access logs. Example key='YOUR_VIRTUAL_KEY' */
                 key?: string | null;
             };
             header?: never;
@@ -65787,7 +66577,7 @@ export interface operations {
                 start_date?: string | null;
                 /** @description Time till which to view spend (YYYY-MM-DD) */
                 end_date?: string | null;
-                /** @description View spend for a specific api_key. Proxy admin only; other callers are scoped to their own key. Pass the key's sha256 hash so the raw key stays out of URLs and access logs. Example api_key='d5345c0ecc68ae6295c69f91926b2bd379e25481a40c34b5884d157a9f65d8fa' */
+                /** @description View spend for a specific api_key. Proxy admin only; other callers are scoped to their own key. Pass the key's sha256 hash so the raw key stays out of URLs and access logs. Example api_key='YOUR_VIRTUAL_KEY' */
                 api_key?: string | null;
             };
             header?: never;
@@ -87164,6 +87954,74 @@ export interface operations {
             };
         };
     };
+    list_workflows_v1_workflows_get: {
+        parameters: {
+            query?: {
+                team_id?: string | null;
+                after?: string | null;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DraftList"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_workflow_v1_workflows_post: {
+        parameters: {
+            query?: {
+                team_id?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RegisterWorkflow"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DraftView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_workflow_runs_v1_workflows_runs_get: {
         parameters: {
             query?: {
@@ -87216,7 +88074,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["WorkflowRunResponse"];
                 };
             };
             /** @description Validation Error */
@@ -87296,6 +88154,41 @@ export interface operations {
             };
         };
     };
+    cancel_run_v1_workflows_runs__run_id__cancel_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["EmptyWorkflowAction"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CancellationView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_workflow_events_v1_workflows_runs__run_id__events_get: {
         parameters: {
             query?: {
@@ -87350,7 +88243,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["WorkflowEventResponse"];
                 };
             };
             /** @description Validation Error */
@@ -87418,7 +88311,249 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["WorkflowMessageResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_steps_v1_workflows_runs__run_id__steps_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunSteps"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_step_v1_workflows_runs__run_id__steps__step_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+                step_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowStep"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_workflow_v1_workflows__workflow_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workflow_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DraftView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    replace_workflow_v1_workflows__workflow_id__put: {
+        parameters: {
+            query?: never;
+            header?: {
+                "if-match"?: string | null;
+            };
+            path: {
+                workflow_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RegisterWorkflow"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DraftView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    publish_workflow_v1_workflows__workflow_id__publish_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "if-match"?: string | null;
+            };
+            path: {
+                workflow_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PublishWorkflow"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublicationView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    test_draft_v1_workflows__workflow_id__test_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "if-match"?: string | null;
+            };
+            path: {
+                workflow_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DraftTest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunAccepted"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    validate_workflow_v1_workflows__workflow_id__validate_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "if-match"?: string | null;
+            };
+            path: {
+                workflow_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["EmptyWorkflowAction"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValidationView"];
                 };
             };
             /** @description Validation Error */

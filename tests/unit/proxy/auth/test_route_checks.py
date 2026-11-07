@@ -21,6 +21,23 @@ from litellm.proxy.auth.login_utils import PASSWORD_RESET_ALLOWED_ROUTES
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import router as llm_passthrough_router
 
+
+@pytest.mark.parametrize(("method", "path", "allowed"), (
+    ("POST", "/v1/workflows", True),
+    ("GET", "/v1/workflows", True),
+    ("PUT", "/v1/workflows/draft-id", True),
+    ("POST", "/v1/workflows/draft-id/publish", True),
+    ("GET", "/v1/workflows/runs/run-id/steps", True),
+    ("POST", "/v1/workflows/runs/run-id/cancel", True),
+    ("POST", "/v1/workflows/runs", False),
+    ("GET", "/v1/workflows/runs", False),
+    ("PATCH", "/v1/workflows/runs/run-id", False),
+    ("POST", "/v1/workflows/runs/run-id/events", False),
+    ("DELETE", "/v1/workflows/draft-id", False),
+))
+def test_workflow_execution_rbac_does_not_grant_legacy_tracking_access(method: str, path: str, allowed: bool) -> None:
+    assert RouteChecks.is_workflow_execution_route(path, method) is allowed
+
 DAILY_ACTIVITY_ROUTE_PAIRS: Final[tuple[tuple[str, str], ...]] = (
     ("/user/daily/activity", "/user/daily/activity/aggregated"),
     ("/user/daily/activity", "/user/daily/activity/aggregated/keys"),
@@ -2904,7 +2921,7 @@ def test_internal_user_can_access_key_reset_spend_route():
     request = MagicMock(spec=Request)
     request.query_params = {}
 
-    key_hash = "baec26d2901589fe9fec76610e6e2be4895cdd8e19b3ada9a4fa2eb85e1901ae"
+    key_hash = "a" * 64
     route = f"/key/{key_hash}/reset_spend"
 
     # Should not raise — the route-level check must pass for team admins
@@ -2936,7 +2953,7 @@ def test_non_admin_non_team_admin_cannot_access_config_update_but_can_attempt_re
     request = MagicMock(spec=Request)
     request.query_params = {}
 
-    key_hash = "baec26d2901589fe9fec76610e6e2be4895cdd8e19b3ada9a4fa2eb85e1901ae"
+    key_hash = "a" * 64
 
     # /key/{hash}/reset_spend passes the route check for internal_user
     RouteChecks.non_proxy_admin_allowed_routes_check(

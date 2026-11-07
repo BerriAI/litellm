@@ -373,6 +373,8 @@ class RouteChecks:
             pass
         elif route == "/lens" or route.startswith("/lens/"):
             pass  # Lens authorizes the delegated role, including its POST-based read endpoints.
+        elif RouteChecks.is_workflow_execution_route(route, RouteChecks.get_request_method(request=request)):
+            pass
         elif _user_role == LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value:
             RouteChecks._check_proxy_admin_viewer_access(
                 route=route,
@@ -765,6 +767,25 @@ class RouteChecks:
         return method.upper()
 
     _get_request_method = get_request_method
+
+    @staticmethod
+    def is_workflow_execution_route(route: str, method: str | None) -> bool:
+        run_patterns: Final = (
+            ("GET", "/v1/workflows/runs/{run_id}/steps"),
+            ("GET", "/v1/workflows/runs/{run_id}/steps/{step_id}"),
+            ("POST", "/v1/workflows/runs/{run_id}/cancel"),
+        )
+        definition_patterns: Final = (
+            ("POST", "/v1/workflows"),
+            ("GET", "/v1/workflows"),
+            ("GET", "/v1/workflows/{workflow_id}"),
+            ("PUT", "/v1/workflows/{workflow_id}"),
+            ("POST", "/v1/workflows/{workflow_id}/validate"),
+            ("POST", "/v1/workflows/{workflow_id}/test"),
+            ("POST", "/v1/workflows/{workflow_id}/publish"),
+        )
+        patterns: Final = run_patterns if route.startswith("/v1/workflows/runs") else definition_patterns
+        return any(method == verb and RouteChecks.check_route_access(route, (pattern,)) for verb, pattern in patterns)
 
     @staticmethod
     def is_self_scoped_credential_route(route: str, request: Request | None) -> bool:

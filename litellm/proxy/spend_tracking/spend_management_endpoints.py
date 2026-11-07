@@ -1470,7 +1470,7 @@ async def get_global_spend_report(
         default=None,
         description=(
             "View spend for a specific api_key. Pass the key's sha256 hash so the raw key stays "
-            "out of URLs and access logs. Example api_key='d5345c0ecc68ae6295c69f91926b2bd379e25481a40c34b5884d157a9f65d8fa'"
+            "out of URLs and access logs. Example api_key='YOUR_VIRTUAL_KEY'"
         ),
     ),
     internal_user_id: str | None = fastapi.Query(
@@ -1945,7 +1945,7 @@ async def get_key_spend_report(
             description=(
                 "View spend for a specific api_key. Proxy admin only; other callers are scoped to their "
                 "own key. Pass the key's sha256 hash so the raw key stays out of URLs and access logs. "
-                "Example api_key='d5345c0ecc68ae6295c69f91926b2bd379e25481a40c34b5884d157a9f65d8fa'"
+                "Example api_key='YOUR_VIRTUAL_KEY'"
             )
         ),
     ] = None,
@@ -3447,7 +3447,7 @@ async def view_spend_logs(
 
     Example Request for specific api_key
     ```
-    curl -X GET "http://0.0.0.0:8000/spend/logs?api_key=d5345c0ecc68ae6295c69f91926b2bd379e25481a40c34b5884d157a9f65d8fa" \
+    curl -X GET "http://0.0.0.0:8000/spend/logs?api_key=YOUR_VIRTUAL_KEY" \
 -H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
 

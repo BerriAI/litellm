@@ -686,6 +686,7 @@ from litellm.proxy.db.request_error_tracking import (
     request_error_accumulator,
 )
 from litellm.proxy.db.spend_counter_reseed import END_USER_COUNTER_PREFIX, SpendCounterReseed
+from litellm.proxy.deps.repositories import WorkflowRepositoryDep
 from litellm.proxy.discovery_endpoints import (
     agent_skills_discovery_router,
     ui_discovery_endpoints_router,
@@ -891,6 +892,8 @@ from litellm.proxy.telemetry.middleware import TelemetryMiddleware
 from litellm.proxy.telemetry.runtime import TelemetryRuntime
 from litellm.proxy.telemetry.settings import describe_errors as describe_telemetry_errors
 from litellm.proxy.telemetry.settings import load_settings as load_telemetry_settings
+from litellm.proxy.workflows.management import router as workflow_definition_router
+from litellm.proxy.workflows.runs import router as workflow_execution_router
 from litellm.redis.stores.connection import connect
 from litellm.redis.stores.spend_counters import (
     SPEND_COUNTERS_TARGET,
@@ -1995,7 +1998,12 @@ async def _proxy_lifespan(app: FastAPI, resources: AsyncExitStack) -> AsyncGener
                     await admin_mcp_stack.enter_async_context(admin_mcp_lifespan(app))
                     gc.freeze()
                     verbose_proxy_logger.warning("gc.freeze pinned %d startup objects", gc.get_freeze_count())
-                    yield state
+                    from litellm.proxy.workflows.dispatcher import workflow_dispatch_lifespan
+
+                    async with workflow_dispatch_lifespan(
+                        state, app, general_settings_view().get("enable_workflows") is True
+                    ):
+                        yield state
                 finally:
                     if model_info_scheduler is not None and model_info_scheduler.running:
                         model_info_scheduler.remove_job("refresh_model_info")
@@ -3155,6 +3163,10 @@ _GENERAL_SETTINGS_VIEW: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(M
 
 def general_settings_view() -> Mapping[str, object]:
     return _GENERAL_SETTINGS_VIEW.validate_python(general_settings)
+
+
+def llm_model_list_view() -> tuple[object, ...] | None:
+    return TypeAdapter[tuple[object, ...] | None](tuple[object, ...] | None).validate_python(llm_model_list)
 
 
 config_passthrough_endpoints: list[dict[str, object]] | None = None
@@ -13198,6 +13210,7 @@ async def chat_completion(
     fastapi_response: Response,
     model: str | None = None,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    workflows: WorkflowRepositoryDep = None,
 ):
     """
 
@@ -13225,6 +13238,12 @@ async def chat_completion(
     global general_settings, user_debug, proxy_logging_obj, llm_model_list
     global user_temperature, user_request_timeout, user_max_tokens, user_api_base
     data: Final = await read_request_body(request=request)
+    workflow_data: Final = _GENERAL_SETTINGS_VIEW.validate_python(data)
+    workflow_model: Final = workflow_data.get("model")
+    if isinstance(workflow_model, str) and workflow_model.startswith("workflow/"):
+        from litellm.proxy.workflows.invocation import invoke_workflow
+
+        return await invoke_workflow(request, user_api_key_dict, workflow_data, workflows)
     if user_api_key_dict is not None:
         if not isinstance(data.get("metadata"), dict):
             # Covers both missing and JSON-string metadata (multipart /
@@ -22512,6 +22531,8 @@ app.include_router(model_access_group_management_router)
 app.include_router(auto_router_management_router)
 app.include_router(tag_management_router)
 app.include_router(workflow_management_router)
+app.include_router(workflow_execution_router)
+app.include_router(workflow_definition_router)
 app.include_router(memory_router)
 app.include_router(lens_router)
 app.include_router(plugin_router)
