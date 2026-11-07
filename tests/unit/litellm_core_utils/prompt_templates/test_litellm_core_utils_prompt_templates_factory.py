@@ -83,7 +83,7 @@ from litellm.types.llms.openai import (
 from litellm.types.utils import ChatCompletionMessageToolCall, Function, ModelResponse, TextCompletionResponse
 from litellm.utils import (
     Rules,
-    _invalidate_model_cost_lowercase_map,
+    model_cost_changed,
     function_setup,
     validate_and_fix_openai_messages,
 )
@@ -6190,7 +6190,7 @@ def isolate_litellm_state():
     for attr, original_value in original_state.items():
         if hasattr(litellm, attr):
             setattr(litellm, attr, original_value)
-    _invalidate_model_cost_lowercase_map()
+    model_cost_changed()
 
 
 _SCALAR_DEFAULTS = {

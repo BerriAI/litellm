@@ -16,7 +16,7 @@ from litellm.types.files import (
     get_file_mime_type_from_extension,
     get_file_type_from_extension,
 )
-from litellm.utils import _invalidate_model_cost_lowercase_map
+from litellm.utils import model_cost_changed
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 
@@ -120,7 +120,7 @@ def isolate_litellm_state():
     for attr, original_value in original_state.items():
         if hasattr(litellm, attr):
             setattr(litellm, attr, original_value)
-    _invalidate_model_cost_lowercase_map()
+    model_cost_changed()
 
 
 _SCALAR_DEFAULTS = {

@@ -46,7 +46,9 @@ Every price in a row lowers to one `Price { meter, channel, when }` and its `Uni
 
 `store/` is the catalog's in-memory store and the only place that indexes model names. Its rules are in [src/store/AGENTS.md](src/store/AGENTS.md)
 
-`layers.rs`, `resolve/`, `model_info.rs` and `register.rs` hold types only. The functions over them land with their first caller
+`cost_map.rs` holds a host's inputs, the installed document and the `register_model` overlay in `register.rs`, and materializes them in the key order and alias sharing Python's `litellm.model_cost` has. It never holds the live table, which belongs to the host
+
+`resolve/` and `model_info.rs` hold types only. The functions over them land with their first caller
 
 Catalog errors use one opaque `Error` with typed causes and JSON Pointer accessors (`path`, `key`, `field`). `Error::rejects` alone decides whether an error fails the document, rejects its row or neither, and `ErrorKind` is the stable name hosts report it by
 
