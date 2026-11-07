@@ -5104,9 +5104,14 @@ async def info_key_fn(
 
         # default to using Auth token if no key is passed in
         key = key or user_api_key_dict.api_key
-        hashed_key: str | None = key
-        if key is not None:
-            hashed_key = hash_token_if_needed(token=key)  # rebind-ok: pre-existing rebinding on a rename-only line
+        if not key:
+            raise ProxyException(
+                message="No key passed in. Pass ?key= or authenticate with a virtual key.",
+                type=ProxyErrorTypes.bad_request_error,
+                param="key",
+                code=status.HTTP_400_BAD_REQUEST,
+            )
+        hashed_key: str | None = hash_token_if_needed(token=key)
         live_key_info: Final = await _prisma_table(VerificationTokenRepository(prisma_client)).find_unique(
             where={"token": hashed_key},
             include={"litellm_budget_table": True},
