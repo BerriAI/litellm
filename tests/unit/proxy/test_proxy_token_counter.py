@@ -1961,7 +1961,7 @@ async def test_anthropic_count_tokens_does_not_count_again_after_a_rate_limit(
 
 _BEDROCK_RUNTIME_HOST: Final = "bedrock-runtime.us-east-1.amazonaws.com"
 _BEDROCK_MANTLE_HOST: Final = "bedrock-mantle.us-east-1.api.aws"
-_BEDROCK_CLAUDE_DEPLOYMENT: Final[dict[str, str]] = {
+_BEDROCK_CLAUDE_DEPLOYMENT: Final[Mapping[str, str]] = {
     "model": "bedrock/us.anthropic.claude-count-probe-v1:0",
     "aws_access_key_id": "AKIATESTACCESSKEY",
     "aws_secret_access_key": "test-secret",

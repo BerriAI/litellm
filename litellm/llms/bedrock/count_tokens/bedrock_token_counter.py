@@ -12,6 +12,7 @@ from typing_extensions import assert_never
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.anthropic_beta_headers_manager import DeploymentBetaFilter
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.anthropic.common_utils import context_management_betas, context_management_with_edits
@@ -46,6 +47,7 @@ from litellm.types.utils import (
 RUNTIME_TOKENIZER_TYPE: Final = "bedrock_api"
 MANTLE_TOKENIZER_TYPE: Final = "bedrock_mantle_api"
 _RUNTIME_FALLBACK_STATUSES: Final = frozenset({400, 404})
+_CONVERSE_BETA_FILTER: Final = DeploymentBetaFilter(provider="bedrock_converse", api_base=None, unlisted="drop")
 
 
 class _CountTokensReply(LiteLLMPydanticObjectBase):
@@ -167,6 +169,12 @@ def _options_converse_sends(
     }
 
 
+def _beta_converse_sends(anthropic_beta: str | None, inference_model: str | None) -> str | None:
+    if anthropic_beta is None or inference_model is None or not _runs_on_converse(inference_model):
+        return anthropic_beta
+    return _CONVERSE_BETA_FILTER.filtered({"anthropic-beta": anthropic_beta}, keep=frozenset()).get("anthropic-beta")
+
+
 def _request_data(
     model: str, messages: Sequence[Mapping[str, object]], tools: Sequence[Mapping[str, object]] | None, system: object
 ) -> Mapping[str, object]:
@@ -284,14 +292,17 @@ class BedrockTokenCounter(BaseTokenCounter):
             return translated.response(request_model, model_to_use, primary_tokenizer)
         sent_messages: Final = messages if translated is None else translated.messages
         sent_tools: Final = tools if translated is None else translated.tools
+        inference_model: Final = (
+            deployment_inference_model(deployment) if is_mantle_claude_model(resolved_model) else None
+        )
         claude_options: Final = (
             claude_count_options(
                 counted_model,
                 _claude_options_provider(route, use_mantle),
                 sent_messages,
                 sent_tools,
-                _options_converse_sends(request_options, deployment_inference_model(deployment)),
-                anthropic_beta,
+                _options_converse_sends(request_options, inference_model),
+                _beta_converse_sends(anthropic_beta, inference_model),
                 deployment,
             )
             if is_mantle_claude_model(resolved_model)

@@ -2,7 +2,7 @@ import base64
 import functools
 import itertools
 import json
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Final
 
 import httpx
@@ -769,7 +769,7 @@ _MANTLE_COUNT_MODEL: Final = "bedrock_mantle/anthropic.claude-opus-5-5"
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("local_beta_headers_config", "aws_credentials_in_the_environment")
-async def test_runtime_count_without_a_deployment_drops_the_caller_betas_invoke_inference_drops() -> None:
+async def test_runtime_count_without_a_deployment_sends_the_caller_betas_invoke_inference_sends() -> None:
     sent: Final = await _invoke_inference_betas(_INTERLEAVED_THINKING, {})
     bedrock: Final = await _count_with_caller_beta("us.anthropic.claude-opus-5-5", _INTERLEAVED_THINKING, None)
 
@@ -866,15 +866,19 @@ def _at(value: JsonValue, *path: str) -> JsonValue:
     return functools.reduce(lambda node, key: node.get(key) if isinstance(node, dict) else None, path, value)
 
 
-def _content_texts(message: JsonValue) -> tuple[str, ...]:
+def _texts(message: JsonValue) -> tuple[str, ...]:
     content: Final = message.get("content") if isinstance(message, dict) else None
-    return (content,) if isinstance(content, str) else _texts(message)
+    if isinstance(content, str):
+        return (content,)
+    if not isinstance(content, list):
+        return ()
+    return tuple(text for block in content if isinstance(block, dict) and isinstance(text := block.get("text"), str))
 
 
 def _message_texts(body: Mapping[str, JsonValue]) -> tuple[str, ...]:
     messages: Final = body.get("messages")
     assert isinstance(messages, list)
-    return tuple(itertools.chain.from_iterable(map(_content_texts, messages)))
+    return tuple(itertools.chain.from_iterable(map(_texts, messages)))
 
 
 @pytest.mark.asyncio
@@ -899,6 +903,78 @@ async def test_mantle_count_for_a_converse_deployment_sends_the_format_and_betas
     }
     assert _message_texts(counted) == _message_texts(sent)
     assert _sent_betas(bedrock.requests[0]) == _sent_betas(inference.requests[0]) != ()
+
+
+_CONVERSE_DEPLOYMENT_MODEL: Final = "bedrock/converse/us.anthropic.claude-opus-5-5"
+_CALLER_BETAS_THE_ROWS_SPLIT: Final = ",".join(
+    (
+        _INTERLEAVED_THINKING,
+        "token-efficient-tools-2025-02-19",
+        ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER,
+        ANTHROPIC_BETA_HEADER_VALUES.STRUCTURED_OUTPUT_2025_09_25.value,
+        "context-1m-2025-08-07",
+    )
+)
+_BETAS: Final = TypeAdapter(frozenset[str])
+
+
+async def _converse_inference_betas(caller_beta: str) -> frozenset[str]:
+    inference: Final = _Bedrock(runtime=(200, _CONVERSE_REPLY), mantle=(200, _CONVERSE_REPLY))
+    await litellm.anthropic_messages(
+        model=_CONVERSE_DEPLOYMENT_MODEL,
+        messages=MESSAGES,
+        max_tokens=4096,
+        extra_headers={"anthropic-beta": caller_beta},
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(inference)),
+        **_THINKING,
+        **DEPLOYMENT["litellm_params"],
+    )
+    assert inference.posted_hosts() == (RUNTIME_HOST,)
+    return frozenset(_sent_betas(inference.requests[0]))
+
+
+async def _invoke_api_inference_betas(caller_beta: str) -> frozenset[str]:
+    return _BETAS.validate_python(await _invoke_inference_betas(caller_beta, {}))
+
+
+def _invoke_api_counted_betas(bedrock: _Bedrock) -> frozenset[str]:
+    assert bedrock.posted_hosts() == (RUNTIME_HOST,)
+    return _BETAS.validate_python(_betas_besides_effort(_invoke_body(bedrock.requests[0])))
+
+
+async def _mantle_api_inference_betas(caller_beta: str) -> frozenset[str]:
+    return await _mantle_inference_betas(caller_beta, {"model": _MANTLE_COUNT_MODEL})
+
+
+def _mantle_api_counted_betas(bedrock: _Bedrock) -> frozenset[str]:
+    assert bedrock.posted_hosts() == (MANTLE_HOST,)
+    return frozenset(_sent_betas(bedrock.requests[0]))
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("local_beta_headers_config")
+@pytest.mark.parametrize(
+    ("model_to_use", "count_api_inference_betas", "counted_betas"),
+    (
+        ("us.anthropic.claude-opus-5-5", _invoke_api_inference_betas, _invoke_api_counted_betas),
+        (_MANTLE_COUNT_MODEL, _mantle_api_inference_betas, _mantle_api_counted_betas),
+    ),
+    ids=("runtime", "mantle"),
+)
+async def test_count_for_a_converse_deployment_sends_only_the_caller_betas_converse_inference_sends(
+    model_to_use: str,
+    count_api_inference_betas: Callable[[str], Awaitable[frozenset[str]]],
+    counted_betas: Callable[[_Bedrock], frozenset[str]],
+) -> None:
+    converse_sent: Final = await _converse_inference_betas(_CALLER_BETAS_THE_ROWS_SPLIT)
+    bedrock: Final = await _count_with_caller_beta(
+        model_to_use,
+        _CALLER_BETAS_THE_ROWS_SPLIT,
+        {"litellm_params": {**DEPLOYMENT["litellm_params"], "model": _CONVERSE_DEPLOYMENT_MODEL}},
+    )
+
+    assert await count_api_inference_betas(_CALLER_BETAS_THE_ROWS_SPLIT) != converse_sent
+    assert counted_betas(bedrock) == await count_api_inference_betas(",".join(sorted(converse_sent)))
 
 
 @pytest.mark.asyncio
@@ -1053,13 +1129,6 @@ async def test_runtime_count_sends_the_tools_invoke_inference_sends() -> None:
     assert bedrock.posted_hosts() == (RUNTIME_HOST,)
     sent_tools: Final = _JSON_BODY.validate_json(inference.requests[0].content)["tools"]
     assert _invoke_body(bedrock.requests[0])["tools"] == sent_tools
-
-
-def _texts(message: JsonValue) -> tuple[str, ...]:
-    content: Final = message.get("content") if isinstance(message, dict) else None
-    if not isinstance(content, list):
-        return ()
-    return tuple(text for block in content if isinstance(block, dict) and isinstance(text := block.get("text"), str))
 
 
 @pytest.mark.asyncio
