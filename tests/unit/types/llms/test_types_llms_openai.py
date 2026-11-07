@@ -579,6 +579,35 @@ def test_shell_call_output_the_sdk_cannot_type_serializes_as_sent():
     assert json.loads(response.model_dump_json())["output"] == [item]
 
 
+@pytest.mark.parametrize(
+    "dump",
+    [
+        lambda response: response.model_dump(exclude_none=True),
+        lambda response: json.loads(response.model_dump_json(exclude_none=True)),
+    ],
+    ids=["python", "json"],
+)
+def test_function_call_and_tool_dump_async_under_its_wire_name(dump) -> None:
+    call: Final = {
+        "id": "fc_1",
+        "type": "function_call",
+        "call_id": "call_1",
+        "name": "get_weather",
+        "arguments": "{}",
+        "status": "completed",
+        "async": True,
+    }
+    tool: Final = {"type": "function", "name": "get_weather", "parameters": {}, "strict": True, "async": False}
+    response: Final = ResponsesAPIResponse.model_validate(
+        {"id": "resp_1", "created_at": 1, "object": "response", "status": "completed", "output": [call], "tools": [tool]}
+    )
+
+    dumped: Final = dump(response)
+
+    assert (dumped["output"], dumped["tools"]) == ([call], [tool])
+    assert ResponsesAPIResponse.model_validate(dumped).model_dump(exclude_none=True)["output"] == [call]
+
+
 def test_normalize_fine_tuning_job_dict_maps_azure_pending():
     from litellm.llms.openai.fine_tuning.handler import _normalize_fine_tuning_job_dict
 

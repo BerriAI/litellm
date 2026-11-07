@@ -2803,3 +2803,11 @@ class TestRegistration:
             guardrail_class_registry["microsoft_purview"]
             is MicrosoftPurviewDLPGuardrail
         )
+
+
+@pytest.mark.parametrize("odata_type", [None, 7], ids=["null", "number"])
+def test_should_block_rejects_a_policy_action_whose_odata_type_is_not_text(odata_type: object) -> None:
+    response: Final = {"policyActions": [{"@odata.type": odata_type, "restrictionAction": "block"}]}
+
+    with pytest.raises(TypeError, match=f"argument of type '{type(odata_type).__name__}'"):
+        PurviewGuardrailBase._should_block(response)

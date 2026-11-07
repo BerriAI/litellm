@@ -39,7 +39,7 @@ from litellm.litellm_core_utils.allowed_tools_tool_choice import (
     parse_chat_allowed_tools_tool_choice,
     responses_allowed_tools_tool_choice,
 )
-from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params, iter_items
 from litellm.litellm_core_utils.hidden_params import get_hidden_params, get_or_create_hidden_params
 from litellm.litellm_core_utils.prompt_templates.prompt_cache_breakpoint_utils import (
     prompt_cache_breakpoint_with_readable_mode,
@@ -349,12 +349,15 @@ _TOOL_SEARCH_REPLAY_ITEM_TYPES: Final = frozenset({"reasoning", *_TOOL_SEARCH_IT
 _TOOL_SEARCH_ITEMS_KEY: Final = "tool_search_items"
 
 
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
 def _json_field(value: object, key: str) -> object:
     return cast(Mapping[str, object], value).get(key) if isinstance(value, dict) else None  # cast-ok: untyped JSON
 
 
 def _tool_search_replay_item(item: object) -> Mapping[str, object] | None:
-    raw: Final[object] = item.model_dump(exclude_unset=True) if isinstance(item, BaseModel) else item
+    raw: Final[object] = item.model_dump(exclude_unset=True, by_alias=True) if isinstance(item, BaseModel) else item
     if not isinstance(raw, dict):
         return None
     fields: Final = cast(dict[str, object], raw)  # cast-ok: provider JSON item, keys forwarded verbatim
@@ -857,8 +860,8 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
         # Handle message items with output_text content
         if item_type == "message":
-            content_list: Final = item.get("content", [])
-            for content_item in content_list:
+            content_list: Final = _DECODED_JSON.validate_python(item.get("content", []))
+            for content_item in iter_items(content_list):
                 if isinstance(content_item, dict):
                     content_type = content_item.get("type")
                     if content_type == "output_text":
@@ -2050,7 +2053,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         from pydantic import BaseModel
 
         if isinstance(str_line, BaseModel):
-            return self.chunk_parser(str_line.model_dump())
+            return self.chunk_parser(str_line.model_dump(exclude_unset=True))
 
         if not str_line or str_line.startswith("event:"):
             # ignore.

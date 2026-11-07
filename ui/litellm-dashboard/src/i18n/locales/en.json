@@ -17414,12 +17414,12 @@
       "menu": {
         "unlimited": "Unlimited"
       },
-      "title": "Choose your classifier",
-      "titleTooltip": "Choose how requests are evaluated and routed to your tiers",
-      "aboutClassifiers": "About classifiers",
+      "title": "Choose your routing strategy",
+      "titleTooltip": "Choose how each request is evaluated and which model it is routed to",
+      "aboutClassifiers": "About routing strategies",
       "families": {
         "heuristics": "Heuristics",
-        "heuristicsDescription": "Classify locally, with no API call",
+        "heuristicsDescription": "Default. Classify locally, with no API call",
         "llmDescription": "Use a judge model to choose a solver",
         "decisionModel": "Decisions Model",
         "decisionModelDescription": "Use a decision model to choose a tier"
@@ -18443,9 +18443,9 @@
       "hardDescription": "Your stronger model",
       "roleModel": "{{label}} model",
       "selectModel": "Select a deployed model",
-      "needTwoModels": "Two deployed models are needed. Add a model or use Advanced configuration.",
+      "needTwoModels": "Two deployed models are needed. Add a model or customize tiers and keywords.",
       "chooseTwoModels": "Choose two models to get started.",
-      "advancedConfiguration": "Advanced configuration"
+      "advancedConfiguration": "Customize tiers and keywords"
     },
     "routerConfigBuilder": {
       "removeUtterance": "Remove {{utterance}}",
@@ -18751,7 +18751,6 @@
   "updateModelCredentialsModal": {
     "apiKeyRequired": "Enter a new API key",
     "updated": "API key updated",
-    "updateFailed": "Failed to update API key",
     "title": "Update API Key",
     "description": "Update this model's API key. Only the new key is sent; the rest of the deployment configuration is left untouched.",
     "apiKeyOnlyWarning": "Only the API key is rotated here. Models that authenticate with an Azure AD token, AWS credentials, or a Vertex service-account JSON aren't supported yet; update those from the model's LiteLLM Params for now.",
@@ -19607,7 +19606,6 @@
       "invalidLitellmParams": "LiteLLM Params must be a valid JSON object",
       "invalidModelInfo": "Invalid JSON in Model Info",
       "updateSuccess": "Model settings updated successfully",
-      "updateFailed": "Failed to update model settings",
       "noComplexityTiers": "No complexity tiers are configured yet, so there is nothing to test.",
       "testingConnection": "Testing connection...",
       "connectionSuccess": "Connection test successful!",

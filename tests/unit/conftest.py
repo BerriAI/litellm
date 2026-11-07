@@ -5,7 +5,7 @@ import os
 import sys
 import shutil
 import tempfile
-from collections.abc import AsyncIterator, Callable, Coroutine, Iterable, Iterator
+from collections.abc import AsyncIterator, Callable, Container, Coroutine, Iterable, Iterator
 from dataclasses import dataclass, field
 from functools import partial
 from importlib.metadata import version
@@ -628,3 +628,9 @@ def pytest_sessionfinish() -> None:
         _close_handler_if_needed(getattr(litellm, name, None))
     _run_coroutine_if_needed(close_litellm_async_clients())
     enable_socket()
+
+
+def in_operator_error(value: Container[object]) -> str:
+    with pytest.raises(TypeError) as native:
+        _ = "key" in value
+    return str(native.value)
