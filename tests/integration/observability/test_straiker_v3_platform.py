@@ -31,6 +31,8 @@ from integration._support.process import OwnedProxy, WorkerHealthcheck, owned_pr
 from integration._support.wire import Reply, Request, wire_server
 from integration._support.ports import allocate_port
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 V3_KEY: Final = "sk_agt_synthetic_integration_key"
 V1_KEY: Final = "synthetic-v1-collection-key"
 V3_PATH: Final = "/api/v3/detect"

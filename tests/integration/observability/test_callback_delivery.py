@@ -1,4 +1,3 @@
-import base64
 import json
 import uuid
 from collections.abc import Callable, Mapping
@@ -13,6 +12,10 @@ from integration._support.client import Gateway, JsonValue, eventually, object_v
 from integration._support.database import read_rows
 from integration._support.process import graceful_stop_seconds, owned_proxy
 from integration._support.wire import Reply, Request, wire_server
+
+from litellm.types.videos.utils import decode_video_id_with_provider
+
+pytestmark: Final = pytest.mark.shares_worker_state
 
 
 @pytest.mark.covers(
@@ -429,9 +432,8 @@ def _responses_text(body: dict[str, JsonValue]) -> str:
 
 
 def _video_job(body: dict[str, JsonValue]) -> tuple[str, str]:
-    encoded_id: Final = string_value(body["id"]).removeprefix("video_")
-    decoded: Final = base64.b64decode(encoded_id).decode()
-    return decoded.rsplit("video_id:", 1)[-1], string_value(body["status"])
+    decoded: Final = decode_video_id_with_provider(string_value(body["id"]))
+    return string_value(decoded.get("video_id")), string_value(body["status"])
 
 
 @dataclass(frozen=True, slots=True)

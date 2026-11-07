@@ -3,7 +3,7 @@ from typing import Final, Literal
 
 from pydantic import ConfigDict, Field, JsonValue, TypeAdapter
 
-from litellm.types.llms.base import LiteLLMBaseModel
+from litellm.types.llms.base_model import LiteLLMBaseModel
 
 TIER_NAMES: Final[tuple[str, ...]] = ("SIMPLE", "MEDIUM", "COMPLEX", "REASONING")
 AUTOROUTER_MODEL_NAME: Final = "autorouter"

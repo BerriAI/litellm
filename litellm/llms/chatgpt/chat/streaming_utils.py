@@ -7,6 +7,8 @@ Normalizes non-spec-compliant tool_call chunks from the ChatGPT backend API.
 from collections.abc import Awaitable
 from typing import Final, Protocol
 
+from pydantic import TypeAdapter
+
 from litellm.types.utils import (
     ChatCompletionDeltaCustomToolCall,
     ChatCompletionDeltaToolCall,
@@ -21,6 +23,9 @@ class ChatGPTChunkStream(Protocol):
     def __next__(self) -> ModelResponseStream: ...
 
     def __anext__(self) -> Awaitable[ModelResponseStream]: ...
+
+
+_DELEGATED_ATTRIBUTE: Final = TypeAdapter(object)
 
 
 def _first_choice_delta(chunk: ModelResponseStream) -> Delta | None:
@@ -47,7 +52,7 @@ class ChatGPTToolCallNormalizer:
         self._last_id: str | None = None  # tracks which tool call the next delta belongs to
 
     def __getattr__(self, name: str) -> object:
-        return getattr(self._stream, name)
+        return _DELEGATED_ATTRIBUTE.validate_python(getattr(self._stream, name))
 
     def __iter__(self) -> "ChatGPTToolCallNormalizer":
         return self

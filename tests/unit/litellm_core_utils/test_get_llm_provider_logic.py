@@ -1,4 +1,8 @@
+from collections.abc import Iterator
+from pathlib import Path
 from typing import Final
+
+import respx
 
 import asyncio, httpx, importlib, os
 import pytest
@@ -8,17 +12,52 @@ from litellm import CustomLLM
 from litellm.litellm_core_utils import get_llm_provider_logic
 from litellm.litellm_core_utils.get_llm_provider_logic import (
     get_llm_provider,
+    resolve_model_and_provider_for_metadata,
+    get_provider_affinity_header,
     inferred_provider,
     is_registered_custom_provider,
 )
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.litellm_core_utils.model_latest_aliases import get_model_latest_aliases
 from litellm.types.router import LiteLLM_Params
 from litellm.utils import _invalidate_model_cost_lowercase_map
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 from unittest.mock import patch
 
 CUSTOM_PROVIDER: Final = "test-onprem-llm"
+
+
+@pytest.mark.parametrize(
+    ("model", "provider"),
+    (("openai/gpt-luna-latest", None), ("gpt-luna-latest", "openai")),
+)
+def test_latest_alias_resolves_to_the_bundled_target(model: str, provider: str | None) -> None:
+    target: Final = get_model_latest_aliases()["openai"]["gpt-luna-latest"]
+    resolved, resolved_provider, _, api_base = get_llm_provider(
+        model, custom_llm_provider=provider, api_base="https://api.openai.com/v1"
+    )
+    assert (resolved, resolved_provider, api_base) == (target, "openai", "https://api.openai.com/v1")
+
+
+@pytest.mark.parametrize(
+    "model",
+    ("gemini/gemini-pro-latest", "gemini/gemini-flash-latest", "dashscope/qwen-plus-latest", "mistral/mistral-large-latest"),
+)
+def test_provider_native_latest_alias_passes_through(model: str) -> None:
+    provider, name = model.split("/", 1)
+    assert get_llm_provider(model)[:2] == (name, provider)
+
+
+def test_latest_alias_completion_reports_and_prices_the_target() -> None:
+    target: Final = get_model_latest_aliases()["anthropic"]["claude-opus-latest"]
+    response: Final = litellm.completion(
+        model="anthropic/claude-opus-latest", messages=[{"role": "user", "content": "hi"}], mock_response="hi"
+    )
+    assert response.model == target
+    cost: Final = litellm.completion_cost(completion_response=response)
+    assert cost is not None and cost > 0
+    assert cost == litellm.completion_cost(completion_response=response, model=target, custom_llm_provider="anthropic")
 
 
 @pytest.fixture
@@ -706,3 +745,99 @@ class TestClaudeModelPatternMatching:
         set_fallback_generalizations([])
         with pytest.raises(litellm.BadRequestError):
             litellm.get_llm_provider(model="claude-opus-4-9")
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
+class TestTypesafeJevPatternMatching:
+    def test_every_priced_jev_id_routes_to_typesafe(
+        self, shipped_generalizations: None
+    ) -> None:
+        from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
+
+        priced_ids: Final = tuple(
+            key.removeprefix("typesafe/")
+            for key in GetModelCostMap.load_local_model_cost_map()
+            if key.startswith("typesafe/")
+        )
+        assert "jev-latest" in priced_ids
+        assert {
+            model: litellm.get_llm_provider(model=model)[1] for model in priced_ids
+        } == dict.fromkeys(priced_ids, "typesafe")
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "foo/jev-latest",
+            "openjev-latest",
+            "jev-",
+            "jev-latest model",
+            "jev-internal-router",
+            "jev-2.0-internal",
+            "jev-1.0-acme.router",
+            "jev-1.0",
+            "jev-2.0",
+            "jev-1.13",
+        ],
+    )
+    def test_namespaced_or_partial_jev_name_does_not_match_rule(
+        self, model: str, shipped_generalizations: None
+    ) -> None:
+        from litellm.litellm_core_utils.fallback_generalizations import (
+            match_routing_generalization,
+        )
+
+        assert match_routing_generalization(model) is None
+
+
+@pytest.mark.parametrize("prefix", ["openai", "anthropic", "custom_openai", "openai_like"])
+def test_opencode_affinity_resolution_preserves_existing_transport(prefix: str) -> None:
+    api_base: Final = "https://opencode.ai/zen/go/v1"
+    model, provider, _, destination = get_llm_provider(model=f"{prefix}/test-model", api_base=api_base)
+    assert (model, provider, destination) == ("test-model", prefix, api_base)
+    assert get_provider_affinity_header(destination) == "x-opencode-session"
+
+
+@pytest.fixture
+def chatgpt_login_tripwire(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[None]:
+    blocked: Final = tmp_path / "blocked"
+    blocked.write_text("ordinary file")
+    monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(blocked / "unused"))
+    monkeypatch.delenv("CHATGPT_AUTH_FILE", raising=False)
+    with respx.mock as transport:
+        yield
+        assert len(transport.calls) == 0
+
+
+@pytest.mark.parametrize(
+    ("model", "custom_llm_provider", "expected"),
+    [
+        ("chatgpt/gpt-5.4", None, ("gpt-5.4", "chatgpt")),
+        ("gpt-5.4", "chatgpt", ("gpt-5.4", "chatgpt")),
+        ("github_copilot/gpt-4o", None, ("gpt-4o", "github_copilot")),
+        ("openai/gpt-5.4", None, ("gpt-5.4", "openai")),
+    ],
+)
+def test_resolve_model_and_provider_for_metadata_never_logs_in(
+    chatgpt_login_tripwire: None, model: str, custom_llm_provider: str | None, expected: tuple[str, str]
+) -> None:
+    assert resolve_model_and_provider_for_metadata(model, custom_llm_provider) == expected
+
+
+def test_metadata_callers_never_log_in_for_a_declared_chatgpt_deployment(
+    chatgpt_login_tripwire: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.litellm_core_utils.llm_response_utils.get_api_base import get_api_base
+    from litellm.proxy.spend_tracking.savings import _resolve_model
+    from litellm.router import Router
+    from litellm.utils import supports_native_streaming
+
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+
+    assert supports_native_streaming("chatgpt/gpt-5.4", None) is True
+    assert get_api_base("chatgpt/gpt-5.4", {"model": "chatgpt/gpt-5.4"}) == "https://chatgpt.com/backend-api/codex"
+    identity = _resolve_model("chatgpt/gpt-5.4", None)
+    assert identity is not None and identity.provider == "chatgpt"
+    group = Router(model_list=[{"model_name": "codex", "litellm_params": {"model": "chatgpt/gpt-5.4"}}]).registry().group(
+        "codex"
+    )
+    assert group is not None and group.providers == ["chatgpt"]

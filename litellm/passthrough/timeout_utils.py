@@ -5,7 +5,10 @@ from typing import Final
 
 from pydantic import TypeAdapter
 
-from litellm.litellm_core_utils.request_timeout_resolver import get_configured_request_timeout
+from litellm.litellm_core_utils.request_timeout_resolver import (
+    get_configured_request_timeout,
+    get_service_tier_timeout,
+)
 
 DEFAULT_PASS_THROUGH_REQUEST_TIMEOUT_SECONDS: Final = 600.0
 
@@ -50,21 +53,27 @@ def resolve_llm_passthrough_timeout(
     Anthropic /v1/messages).
 
     Non-streaming precedence: kwargs timeout/request_timeout -> litellm_params
-    timeout/request_timeout -> router_timeout -> litellm.request_timeout (litellm_settings.request_timeout,
+    timeout_by_service_tier[kwargs service_tier] -> litellm_params timeout/request_timeout -> router_timeout -> litellm.request_timeout (litellm_settings.request_timeout,
     when explicitly set) -> general_settings.pass_through_request_timeout -> 600s default.
 
     Streaming (``kwargs["stream"]`` truthy) resolves ``stream_timeout`` at every level before
     any generic timeout, matching ``Router._get_stream_timeout`` on the completion route:
-    kwargs stream_timeout -> litellm_params stream_timeout -> router_stream_timeout, then the
-    non-streaming chain above.
+    kwargs stream_timeout -> litellm_params stream_timeout_by_service_tier[kwargs service_tier] ->
+    litellm_params stream_timeout -> router_stream_timeout, then the non-streaming chain above.
 
     Only the first set value is validated as seconds, so a value in a lower-precedence
     field never fails the call.
     """
     request: Final = kwargs if kwargs is not None else _NO_PARAMS
     deployment: Final = litellm_params if litellm_params is not None else _NO_PARAMS
+    service_tier: Final = request.get("service_tier")
     stream_candidates: Final = (
-        (request.get("stream_timeout"), deployment.get("stream_timeout"), router_stream_timeout)
+        (
+            request.get("stream_timeout"),
+            get_service_tier_timeout(service_tier, deployment, "stream_timeout_by_service_tier"),
+            deployment.get("stream_timeout"),
+            router_stream_timeout,
+        )
         if request.get("stream")
         else ()
     )
@@ -72,6 +81,7 @@ def resolve_llm_passthrough_timeout(
         *stream_candidates,
         request.get("timeout"),
         request.get("request_timeout"),
+        get_service_tier_timeout(service_tier, deployment, "timeout_by_service_tier"),
         deployment.get("timeout"),
         deployment.get("request_timeout"),
         router_timeout,

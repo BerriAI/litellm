@@ -7,7 +7,7 @@ repository.workspace = true
 
 [dependencies]
 sqlx = { workspace = true, features = ["migrate"] }
-testcontainers-modules = { version = "0.15.0", features = ["postgres"] }
+testcontainers-modules = { workspace = true, features = ["postgres"] }
 thiserror.workspace = true
 tokio.workspace = true
 

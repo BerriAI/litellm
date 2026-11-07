@@ -2,6 +2,7 @@ import * as networking from "@/components/networking";
 import userEvent from "@testing-library/user-event";
 import { act } from "@testing-library/react";
 import type { MCPServerData } from "./MCPHubTableColumns";
+import type { DeploymentPricing } from "@/components/molecules/models/deploymentPricing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders, screen, testQueryClient, waitFor, within } from "../../../tests/test-utils";
 import ModelHubTable from "./ModelHubTable";
@@ -229,6 +230,107 @@ describe("ModelHubTable", () => {
     expect(networking.modelHubCall).not.toHaveBeenCalled();
   });
 
+  it("should limit the chat catalog to browsing models even for an admin", async () => {
+    vi.mocked(networking.modelHubCall).mockResolvedValue({
+      data: [{ model_group: "chat-model", providers: ["openai"], mode: "chat" }],
+    });
+    mockUseUISettings.mockReturnValue({ data: { values: {} }, isLoading: false });
+
+    renderWithProviders(
+      <ModelHubTable
+        accessToken="test-token"
+        publicPage={false}
+        premiumUser
+        userRole="Admin"
+        canOpenPlayground
+        canAddModels
+        variant="chat"
+      />,
+    );
+
+    expect(await screen.findByRole("button", { name: /^chat-model/ })).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "Search models" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "AI Hub" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Model Hub URL:")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Select Models to Make Public" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Add model" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "decisions" })).not.toBeInTheDocument();
+    expect(screen.queryByTestId("decision-model-garden")).not.toBeInTheDocument();
+    expect(networking.modelHubCall).toHaveBeenCalledWith("test-token");
+    expect(networking.getConfigFieldSetting).not.toHaveBeenCalled();
+    expect(networking.getAgentsList).not.toHaveBeenCalled();
+    expect(networking.fetchMCPServers).not.toHaveBeenCalled();
+    expect(networking.getClaudeCodePluginsList).not.toHaveBeenCalled();
+    expect(networking.getPublicModelHubInfo).not.toHaveBeenCalled();
+    expect(networking.modelCostMap).not.toHaveBeenCalled();
+  });
+
+  it("should combine provider selection with other filters and clear only the requested filters", async () => {
+    vi.mocked(networking.modelHubCall).mockResolvedValue({
+      data: [
+        { model_group: "openai-shared", providers: ["openai"], mode: "chat", supports_vision: true },
+        { model_group: "anthropic-shared", providers: ["anthropic"], mode: "chat", supports_vision: true },
+        { model_group: "openai-image", providers: ["openai"], mode: "image_generation" },
+      ],
+    });
+    mockUseUISettings.mockReturnValue({ data: { values: {} }, isLoading: false });
+    const user = userEvent.setup();
+    renderWithProviders(
+      <ModelHubTable
+        accessToken="test-token"
+        publicPage={false}
+        premiumUser={false}
+        userRole="Admin"
+        canOpenPlayground={false}
+        canAddModels={false}
+        variant="chat"
+      />,
+    );
+
+    await screen.findByRole("button", { name: /^openai-shared/ });
+    expect(screen.queryByDisplayValue("All Providers")).not.toBeInTheDocument();
+    const provider = screen.getByRole("combobox", { name: "Provider" });
+    const search = screen.getByRole("textbox", { name: "Search models" });
+    const mode = screen.getByRole("combobox", { name: "Model type" });
+    const feature = screen.getByRole("combobox", { name: "Model capability" });
+    await user.type(search, "shared");
+    await user.click(mode);
+    await user.click(await screen.findByRole("option", { name: "chat", exact: true }));
+    await waitFor(() => expect(screen.queryByRole("listbox")).not.toBeInTheDocument());
+    await user.click(feature);
+    await user.click(await screen.findByRole("option", { name: "Vision", exact: true }));
+    await waitFor(() => expect(screen.queryByRole("listbox")).not.toBeInTheDocument());
+    await user.click(provider);
+    await user.click(await screen.findByRole("option", { name: "OpenAI", exact: true }));
+    await waitFor(() => expect(screen.queryByRole("listbox")).not.toBeInTheDocument());
+
+    expect(screen.getByRole("button", { name: /^openai-shared/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^anthropic-shared/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^openai-image/ })).not.toBeInTheDocument();
+    expect(provider).toHaveTextContent("OpenAI");
+
+    await user.click(provider);
+    await user.click(await screen.findByRole("option", { name: "All providers", exact: true }));
+    await waitFor(() => expect(screen.queryByRole("listbox")).not.toBeInTheDocument());
+    expect(screen.getByRole("button", { name: /^anthropic-shared/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^openai-image/ })).not.toBeInTheDocument();
+    expect(search).toHaveValue("shared");
+    expect(mode).toHaveTextContent("chat");
+    expect(feature).toHaveTextContent("Vision");
+
+    await user.click(provider);
+    await user.click(await screen.findByRole("option", { name: "Anthropic", exact: true }));
+    await waitFor(() => expect(screen.queryByRole("listbox")).not.toBeInTheDocument());
+    await user.click(screen.getByRole("button", { name: "Clear Filters" }));
+    expect(provider).toHaveTextContent("All providers");
+    expect(search).toHaveValue("");
+    expect(mode).toHaveTextContent("All types");
+    expect(feature).toHaveTextContent("All capabilities");
+    expect(screen.getByRole("button", { name: /^openai-image/ })).toBeInTheDocument();
+    expect(screen.getByLabelText("3 models")).toBeInTheDocument();
+  });
+
   it("should call getUiConfig before modelHubPublicModelsCall when publicPage is true", async () => {
     const getUiConfigMock = vi.mocked(networking.getUiConfig);
     const modelHubPublicModelsCallMock = vi.mocked(networking.modelHubPublicModelsCall);
@@ -273,7 +375,7 @@ describe("ModelHubTable", () => {
 
   describe("model details usage example", () => {
     const openDetails = async (
-      model: { model_group: string; providers: string[]; mode: string },
+      model: { model_group: string; providers: string[]; mode: string; deployment_pricing?: DeploymentPricing[] },
       canOpenPlayground = true,
     ) => {
       vi.mocked(networking.modelHubCall).mockResolvedValue({ data: [model] });
@@ -322,6 +424,34 @@ describe("ModelHubTable", () => {
       expect(dialog).toHaveTextContent('"http://gateway.local:5000/v1/systemone"');
       expect(screen.getByRole("link", { name: "How to call decision models" })).toBeInTheDocument();
       expect(screen.queryByRole("link", { name: "Try it in the Playground" })).not.toBeInTheDocument();
+    });
+
+    it("shows each deployment's own prices, by service tier, in the model details", async () => {
+      const gpt5OnOpenAIAndAzure = {
+        model_group: "gpt-5",
+        providers: ["openai", "azure"],
+        mode: "chat",
+        deployment_pricing: [
+          {
+            provider: "openai",
+            costs: { input_cost_per_token: 2.5e-6, input_cost_per_token_priority: 5e-6 },
+            tiered_pricing: [],
+          },
+          { provider: "azure", costs: { input_cost_per_token: 2.75e-6 }, tiered_pricing: [] },
+        ],
+      };
+      const dialog = await openDetails(gpt5OnOpenAIAndAzure);
+
+      const openai = within(dialog).getByRole("region", { name: "OpenAI pricing" });
+      expect(within(openai).getByRole("row", { name: /Input \/ 1M tokens/ })).toHaveTextContent("$2.50$5.00");
+      expect(within(dialog).getByRole("region", { name: "Azure pricing" })).toHaveTextContent("$2.75");
+    });
+
+    it("leaves the pricing breakdown out when the proxy sends no deployment prices", async () => {
+      const dialog = await openDetails({ model_group: "gpt-5", providers: ["openai"], mode: "chat" });
+
+      expect(within(dialog).getByText("Input Cost per 1M Tokens:")).toBeInTheDocument();
+      expect(within(dialog).queryByText("Pricing by Deployment:")).not.toBeInTheDocument();
     });
 
     it("keeps the chat completions example for a chat model", async () => {

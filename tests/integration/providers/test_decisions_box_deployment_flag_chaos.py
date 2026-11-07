@@ -21,6 +21,8 @@ from integration._support.wire import Reply, Request, Wire, wire_server
 from integration._support.ports import allocate_port
 from pydantic import JsonValue, TypeAdapter
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 _API_KEY: Final = "synthetic-decisions-key"
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 _BOX: Final[dict[str, JsonValue]] = {"top": 0.1, "bottom": 0.4, "left": 0.2, "right": 0.6}
