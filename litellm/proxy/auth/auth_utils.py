@@ -719,6 +719,7 @@ def is_request_body_safe(
     for target in iter_request_fallback_targets(request_body):
         if isinstance(target, dict):
             _check_banned_params(target, general_settings, llm_router, model, manages_deployments=manages_deployments)
+            _reject_client_chosen_fallbacks("extra_body", _coerce_metadata_to_dict(target.get("extra_body")) or {})
             target_model = target.get("model")
             if isinstance(target_model, str):
                 _reject_url_valued_fallback_target(target_model)
