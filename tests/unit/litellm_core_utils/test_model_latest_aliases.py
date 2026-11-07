@@ -3,6 +3,7 @@ from typing import Final
 import pytest
 
 import litellm
+from litellm.litellm_core_utils.get_llm_provider_logic import PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO
 from litellm.litellm_core_utils.model_latest_aliases import (
     expand_model_latest_alias,
     get_model_latest_aliases,
@@ -36,10 +37,32 @@ def test_latest_aliases_price_and_route_like_their_targets() -> None:
             alias_key: Final = prefixed if prefixed in litellm.model_cost else alias
             target_key: Final = f"{provider}/{target}" if f"{provider}/{target}" in litellm.model_cost else target
             entry: Final = litellm.model_cost[alias_key]
-            assert (entry["litellm_provider"], entry["mode"]) == (provider, "chat")
+            assert entry["mode"] in ("chat", "responses")
             assert entry == litellm.model_cost[target_key]
+            assert resolve_model_latest_alias(alias, provider) == target
+            if provider in PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO:
+                continue
             assert litellm.get_llm_provider(prefixed)[:2] == (target, provider)
             assert litellm.get_llm_provider(alias, custom_llm_provider=provider)[:2] == (target, provider)
+
+
+@pytest.mark.parametrize(
+    ("model", "target", "provider", "target_provider"),
+    (
+        ("bedrock/claude-haiku-latest", "global.anthropic.claude-haiku-5-5", "bedrock", "bedrock_converse"),
+        ("vertex_ai/claude-haiku-latest", "claude-haiku-5-5", "vertex_ai", "vertex_ai-anthropic_models"),
+        ("azure/gpt-mini-latest", "gpt-5.4-mini", "azure", "azure"),
+        ("fireworks_ai/kimi-latest", "accounts/fireworks/models/kimi-k3", "fireworks_ai", "fireworks_ai"),
+    ),
+)
+def test_hosted_alias_is_sent_as_the_hosts_model_id(
+    model: str, target: str, provider: str, target_provider: str
+) -> None:
+    assert litellm.get_llm_provider(model)[:2] == (target, provider)
+    assert litellm.model_cost[model]["litellm_provider"] == target_provider
+    assert is_model_latest_alias(model)
+    assert resolve_model_latest_alias(model.partition("/")[2], provider) == target
+    assert get_model_latest_aliases()[provider][model.partition("/")[2]] == target
 
 
 def test_alias_resolution_is_scoped_to_the_owning_provider() -> None:
