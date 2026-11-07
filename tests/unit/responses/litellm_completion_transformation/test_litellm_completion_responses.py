@@ -910,6 +910,60 @@ class TestLiteLLMCompletionResponsesConfig:
         assert tool_calls[0].namespace == "collaboration"
         assert tool_calls[0].arguments == '{"message":"hello"}'
 
+    def test_transform_chat_completion_response_deferred_top_level_tool_call_has_namespace_equal_to_name(self):
+        """A deferred top-level function (defer_loading=True) comes back with namespace == name,
+        the shape the OpenAI Agents SDK reserves for it. Without it the SDK raises
+        "Tool get_reporting_categories not found" after a native tool search."""
+        tool_call_id = "call_deferred_top_level"
+        chat_completion_response = ModelResponse(
+            id="test-response-id",
+            created=1234567890,
+            model="bedrock/invoke/anthropic.claude-opus-5",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="tool_calls",
+                    index=0,
+                    message=Message(
+                        content=None,
+                        role="assistant",
+                        tool_calls=[
+                            ChatCompletionMessageToolCall(
+                                id=tool_call_id,
+                                type="function",
+                                function=Function(name="get_reporting_categories", arguments='{"market":"TR-TITCK"}'),
+                            )
+                        ],
+                    ),
+                )
+            ],
+        )
+
+        try:
+            responses_api_response = (
+                LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+                    request_input="Is CHG-TR-0042 Type IB in TR-TITCK?",
+                    responses_api_request={
+                        "tools": [
+                            {
+                                "type": "function",
+                                "name": "get_reporting_categories",
+                                "defer_loading": True,
+                                "parameters": {"type": "object", "properties": {"market": {"type": "string"}}},
+                            }
+                        ]
+                    },
+                    chat_completion_response=chat_completion_response,
+                )
+            )
+        finally:
+            TOOL_CALLS_CACHE.delete_cache(key=tool_call_id)
+
+        tool_calls = [item for item in responses_api_response.output if item.type == "function_call"]
+        assert [(c.name, c.namespace, c.arguments) for c in tool_calls] == [
+            ("get_reporting_categories", "get_reporting_categories", '{"market":"TR-TITCK"}')
+        ]
+
     def test_transform_chat_completion_response_plain_tool_call_has_no_namespace(self):
         """A non-namespace function call must not gain a namespace attribute, matching
         the streaming path which only sets it when a namespace was restored."""
@@ -2877,6 +2931,85 @@ class TestToolTransformation:
         )
 
         assert messages[0]["tool_calls"][0]["function"]["name"] == "mcp__everything__get_sum"
+
+    def test_function_call_echo_with_namespace_equal_to_name_keeps_bare_name(self):
+        """The Agents SDK echoes a deferred top-level call with namespace == name. The provider
+        was given the bare tool name, so the outbound chat tool_call must not become
+        "get_reporting_categories__get_reporting_categories"."""
+        messages = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+            input=[
+                {
+                    "type": "function_call",
+                    "name": "get_reporting_categories",
+                    "namespace": "get_reporting_categories",
+                    "call_id": "call_3",
+                    "arguments": '{"market": "KR-MFDS"}',
+                }
+            ],
+            responses_api_request={
+                "tools": [{"type": "function", "name": "get_reporting_categories", "defer_loading": True}]
+            },
+        )
+
+        assert [call["function"]["name"] for call in messages[0]["tool_calls"]] == ["get_reporting_categories"]
+
+    def test_function_call_echo_from_namespace_with_member_of_same_name_keeps_qualified_name(self):
+        """A namespace "search" with a member "search" is advertised as the chat tool
+        "search__search" and comes back as name == namespace == "search". Its echo must
+        still join, or the provider gets a call to a tool it was never given."""
+        tools = [
+            {
+                "type": "namespace",
+                "name": "search",
+                "description": "Search tools",
+                "tools": [{"type": "function", "name": "search", "defer_loading": True}],
+            }
+        ]
+        messages = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+            input=[
+                {
+                    "type": "function_call",
+                    "name": "search",
+                    "namespace": "search",
+                    "call_id": "call_4",
+                    "arguments": "{}",
+                }
+            ],
+            responses_api_request={"tools": tools},
+        )
+
+        assert [call["function"]["name"] for call in messages[0]["tool_calls"]] == ["search__search"]
+        assert LiteLLMCompletionResponsesConfig.deferred_top_level_names(tools) == frozenset()
+
+    def test_deferred_top_level_name_shared_with_self_named_namespace_member_stays_qualified(self):
+        """When a deferred top-level "search" and a namespace "search" with a member "search"
+        are both in the request, namespace == name cannot tell them apart. Neither direction
+        uses that shape for the top-level tool, so the namespace member keeps its round trip."""
+        tools = [
+            {"type": "function", "name": "search", "defer_loading": True},
+            {"type": "function", "name": "lookup", "defer_loading": True},
+            {
+                "type": "namespace",
+                "name": "search",
+                "description": "Search tools",
+                "tools": [{"type": "function", "name": "search"}],
+            },
+        ]
+
+        assert LiteLLMCompletionResponsesConfig.deferred_top_level_names(tools) == frozenset({"lookup"})
+        assert dict(LiteLLMCompletionResponsesConfig.namespace_tool_name_map(tools)) == {
+            "search__search": ("search", "search"),
+            "lookup": ("lookup", "lookup"),
+        }
+        messages = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+            input=[
+                {"type": "function_call", "name": "search", "namespace": "search", "call_id": "c5", "arguments": "{}"},
+                {"type": "function_call", "name": "lookup", "namespace": "lookup", "call_id": "c6", "arguments": "{}"},
+            ],
+            responses_api_request={"tools": tools},
+        )
+
+        assert [call["function"]["name"] for call in messages[0]["tool_calls"]] == ["search__search", "lookup"]
 
     def test_custom_tool_call_echo_keeps_short_name(self):
         """Custom tools stay advertised under their short name, so a namespace on

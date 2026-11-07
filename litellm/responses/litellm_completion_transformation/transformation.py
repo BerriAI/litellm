@@ -1427,6 +1427,9 @@ class LiteLLMCompletionResponsesConfig:
             LiteLLMCompletionResponsesConfig._transform_response_input_param_to_chat_completion_message,
             replay_reasoning=replay_reasoning,
             native_compaction=native_compaction,
+            deferred_top_level_names=LiteLLMCompletionResponsesConfig.deferred_top_level_names(
+                responses_api_request.get("tools")
+            ),
         )
         try:
             converted: Final = convert_input(sent_input)
@@ -1604,6 +1607,7 @@ class LiteLLMCompletionResponsesConfig:
         input: str | ResponseInputParam,
         replay_reasoning: bool = False,
         native_compaction: bool = False,
+        deferred_top_level_names: frozenset[str] = frozenset(),
     ) -> list[
         AllMessageValues | GenericChatCompletionMessage | ChatCompletionMessageToolCall | ChatCompletionResponseMessage
     ]:
@@ -1630,6 +1634,7 @@ class LiteLLMCompletionResponsesConfig:
                         input_item=_input,
                         replay_reasoning=replay_reasoning,
                         native_compaction=native_compaction,
+                        deferred_top_level_names=deferred_top_level_names,
                     )
                 )
 
@@ -2342,6 +2347,7 @@ class LiteLLMCompletionResponsesConfig:
         input_item: Mapping[str, object],
         replay_reasoning: bool = False,
         native_compaction: bool = False,
+        deferred_top_level_names: frozenset[str] = frozenset(),
     ) -> list[AllMessageValues | GenericChatCompletionMessage | ChatCompletionResponseMessage]:
         """
         Transform a Responses API input item into a Chat Completion message
@@ -2395,7 +2401,8 @@ class LiteLLMCompletionResponsesConfig:
             return LiteLLMCompletionResponsesConfig._transform_responses_api_function_call_to_chat_completion_message(
                 function_call=cast(  # cast-ok: callee coerces every field it reads with `or ""` / str()
                     Mapping[str, str], input_item
-                )
+                ),
+                deferred_top_level_names=deferred_top_level_names,
             )
         elif input_item.get("type") == "compaction":
             return list(
@@ -2664,6 +2671,7 @@ class LiteLLMCompletionResponsesConfig:
     @staticmethod
     def _transform_responses_api_function_call_to_chat_completion_message(
         function_call: Mapping[str, str],
+        deferred_top_level_names: frozenset[str] = frozenset(),
     ) -> list[AllMessageValues | GenericChatCompletionMessage | ChatCompletionResponseMessage]:
         """
         Transform a Responses API function_call into a Chat Completion message with tool calls
@@ -2693,7 +2701,11 @@ class LiteLLMCompletionResponsesConfig:
             raw_arguments = json.dumps({"content": raw_input}) if raw_input else ""
         raw_name: Final = function_call.get("name") or ""
         namespace: Final = function_call.get("namespace") or ""
-        qualify: Final = bool(namespace) and function_call.get("type") != "custom_tool_call"
+        # namespace == name on a deferred top-level tool of this request is the shape
+        # namespace_tool_name_map gives it: the chat tool is called by its bare name, so joining
+        # would send "<name>__<name>" upstream. A namespace whose member shares its name still joins.
+        deferred_top_level: Final = namespace == raw_name and raw_name in deferred_top_level_names
+        qualify: Final = bool(namespace) and not deferred_top_level and function_call.get("type") != "custom_tool_call"
         tool_call_id: Final = function_call.get("call_id") or function_call.get("id") or ""
         tool_call_function: Final = ChatCompletionToolCallFunctionChunk(
             name=f"{namespace}__{raw_name}" if qualify else raw_name,
@@ -3079,6 +3091,34 @@ class LiteLLMCompletionResponsesConfig:
         return result
 
     @staticmethod
+    def deferred_top_level_names(tools: ResponseTools) -> frozenset[str]:
+        """Names of deferred top-level function tools that travel as namespace == name.
+
+        A name is left out when a namespace of the same name has a member of that name too: both
+        would come back as namespace == name, so that call keeps the qualified form instead.
+        Only ``defer_loading is True`` counts here: the request path rejects other values, and
+        callers that only read the input (token counting under drop_params) must not raise.
+        """
+        self_named_namespace_members: Final = frozenset(
+            str(tool.get("name") or "")
+            for tool in tools or ()
+            if tool.get("type") == "namespace"
+            for namespace_tools in (tool.get("tools"),)
+            if isinstance(namespace_tools, Sequence) and not isinstance(namespace_tools, (str, bytes))
+            for namespace_tool in namespace_tools
+            if isinstance(namespace_tool, Mapping)
+            and namespace_tool.get("type") == "function"
+            and namespace_tool.get("name") == tool.get("name")
+        )
+        return frozenset(
+            name
+            for tool in tools or ()
+            if tool.get("type") == "function" and tool.get("defer_loading") is True
+            for name in (str(tool.get("name") or ""),)
+            if name and name not in self_named_namespace_members
+        )
+
+    @staticmethod
     def namespace_tool_name_map(tools: ResponseTools) -> NamespaceNameMap:
         namespace_entries: Final = tuple(
             (str(tool.get("name") or ""), str(namespace_tool.get("name") or ""))
@@ -3106,7 +3146,13 @@ class LiteLLMCompletionResponsesConfig:
         qualified_entries: Final = tuple(
             (f"{namespace}__{tool_name}", (namespace, tool_name)) for namespace, tool_name in namespace_entries
         )
-        return MappingProxyType(dict(qualified_entries + unambiguous_entries))
+        # A deferred top-level function comes back on the wire with namespace == name (the shape the
+        # OpenAI Agents SDK reserves for it, `agents/_tool_identity.py`). Without it the SDK cannot
+        # match the call to its tool and fails with "Tool <name> not found".
+        deferred_top_level_entries: Final = tuple(
+            (name, (name, name)) for name in LiteLLMCompletionResponsesConfig.deferred_top_level_names(tools)
+        )
+        return MappingProxyType(dict(qualified_entries + unambiguous_entries + deferred_top_level_entries))
 
     @staticmethod
     def _restore_namespace_tool_name(tool_name: str, names: NamespaceNameMap) -> tuple[str, str | None]:
