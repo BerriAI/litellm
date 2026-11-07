@@ -2,8 +2,9 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
-from typing import Any, Literal
+from typing import Annotated, Any, Literal, TypeAlias
 
+from pydantic import AfterValidator, ConfigDict, Field, StrictFloat, StrictInt, StrictStr
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -320,6 +321,33 @@ VECTOR_STORE_OPENAI_PARAMS = Literal[
     "max_num_results",
     "ranking_options",
     "rewrite_query",
+]
+
+
+class OpenAIComparisonFilter(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    type: Literal["eq", "ne", "gt", "gte", "lt", "lte", "in", "nin"]
+    key: str
+    value: str | bool | int | float | Annotated[tuple[StrictStr | StrictInt | StrictFloat, ...], Field(fail_fast=True)]
+
+
+def _require_members(members: tuple["OpenAIVectorStoreFilter", ...]) -> tuple["OpenAIVectorStoreFilter", ...]:
+    if not members:
+        raise ValueError("an and/or filter needs at least one member")
+    return members
+
+
+class OpenAICompoundFilter(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    type: Literal["and", "or"]
+    filters: Annotated[tuple["OpenAIVectorStoreFilter", ...], Field(fail_fast=True), AfterValidator(_require_members)]
+
+
+OpenAIVectorStoreFilter: TypeAlias = Annotated[
+    OpenAIComparisonFilter | OpenAICompoundFilter,
+    Field(discriminator="type"),
 ]
 
 
