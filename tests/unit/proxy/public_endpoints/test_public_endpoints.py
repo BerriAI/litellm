@@ -530,6 +530,7 @@ def _decisions_provider_entry(provider: str) -> ProviderCreateInfo:
         ("TypeSafe", "TypeSafe", LlmProviders.TYPESAFE),
         ("Nace", "Nace", LlmProviders.NACE),
         ("PARALLEL_AI", "Parallel AI", LlmProviders.PARALLEL_AI),
+        ("Turion", "Turion", LlmProviders.TURION),
         ("EU_JEV", "eu/jev", LlmProviders.EU_JEV),
         ("EMPIRIOLABS", "EmpirioLabs AI", LlmProviders.EMPIRIOLABS),
     ),
