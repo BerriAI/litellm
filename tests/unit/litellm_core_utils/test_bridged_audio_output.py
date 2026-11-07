@@ -139,9 +139,10 @@ async def test_model_listed_with_only_audio_output_still_reaches_upstream(
 ) -> None:
     upstream: Final = _upstream(respx_mock, GEMINI_API, SUNG_REPLY)
 
-    await bridge(SINGER_MODEL)
+    reply: Final = await bridge(SINGER_MODEL)
 
     assert upstream.call_count == 1
+    assert "La la la" in str(reply)
 
 
 @pytest.mark.respx(assert_all_called=False)
@@ -151,6 +152,7 @@ async def test_model_listed_with_only_audio_output_still_reaches_upstream(
     [
         pytest.param({"audio": AUDIO}, "audio", id="audio"),
         pytest.param({"modalities": ["text", "audio"]}, "modalities", id="modalities"),
+        pytest.param({"audio": AUDIO, "modalities": ["audio"]}, "audio and modalities", id="audio-and-modalities"),
         pytest.param(
             {"audio": AUDIO, "modalities": ["audio"], "additional_drop_params": ["audio"]},
             "modalities",
@@ -169,7 +171,7 @@ async def test_audio_request_is_refused_without_drop_params(
     assert refusal.value.status_code == 400
     assert (
         f"asks {VOICE_MODEL} for audio through {named}, which {endpoint} cannot carry. "
-        f"Leave out {named}, set drop_params: true, or call /v1/chat/completions"
+        f"Leave out {named}, or set drop_params: true to send the request without it."
     ) in str(refusal.value)
     assert upstream.call_count == 0
 
