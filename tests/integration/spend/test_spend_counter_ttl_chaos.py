@@ -214,7 +214,7 @@ def test_a_reservation_leaked_by_a_killed_worker_stays_for_the_counter_ttl(gatew
             in_flight: Final = pool.submit(_attempt, owned.gateway, slow, key, 0)
             reserved: Final = eventually(
                 lambda: counter_value(cache, counter),
-                lambda value: value is not None and value >= LEAK_KEY_BUDGET - 1e-9,
+                lambda value: value is not None and value == pytest.approx(LEAK_KEY_BUDGET),
                 seconds=SLOW_UPSTREAM_SECONDS,
             )
             with owned.replacing_worker(before[0]) as first, owned.replacing_worker(before[1]) as second:
