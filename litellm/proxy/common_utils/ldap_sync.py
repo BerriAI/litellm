@@ -221,7 +221,7 @@ class LDAPSync:
 
 
 class _EnabledFlag(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     enabled: bool = False
 
