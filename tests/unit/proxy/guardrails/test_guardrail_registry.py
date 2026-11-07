@@ -649,26 +649,27 @@ def test_unchanged_db_params_do_not_register_as_changed():
     assert handler._has_guardrail_params_changed(gid, new) is False
 
 
-def test_db_poll_does_not_rebuild_a_guardrail_whose_key_is_an_env_reference(monkeypatch):
+@pytest.mark.parametrize("field", ("api_key", "api_base"))
+def test_db_poll_does_not_rebuild_a_guardrail_whose_secret_field_is_an_env_reference(monkeypatch, field):
     from litellm.proxy.guardrails import guardrail_registry as registry_module
 
-    built_with_keys: Final[list[str | None]] = []
+    built_with: Final[list[str | None]] = []
 
     def _initializer(litellm_params, guardrail):
-        built_with_keys.append(litellm_params.api_key)
+        built_with.append(getattr(litellm_params, field))
         return CustomGuardrail(
             guardrail_name=guardrail["guardrail_name"], event_hook=GuardrailEventHooks.pre_call, default_on=True
         )
 
-    monkeypatch.setitem(registry_module.guardrail_initializer_registry, "env_key_test", _initializer)
-    monkeypatch.setenv("ENV_KEY_TEST_API_KEY", "resolved-key")
+    monkeypatch.setitem(registry_module.guardrail_initializer_registry, "env_ref_test", _initializer)
+    monkeypatch.setenv("ENV_REF_TEST_VALUE", "resolved-value")
     row: Final = {
-        "guardrail_id": "env-key",
-        "guardrail_name": "env-key",
+        "guardrail_id": "env-ref",
+        "guardrail_name": "env-ref",
         "litellm_params": {
-            "guardrail": "env_key_test",
+            "guardrail": "env_ref_test",
             "mode": "pre_call",
-            "api_key": "os.environ/ENV_KEY_TEST_API_KEY",
+            field: "os.environ/ENV_REF_TEST_VALUE",
         },
     }
     handler: Final = InMemoryGuardrailHandler()
@@ -677,7 +678,7 @@ def test_db_poll_does_not_rebuild_a_guardrail_whose_key_is_an_env_reference(monk
     handler.sync_guardrail_from_db(dict(row))
     handler.sync_guardrail_from_db(dict(row))
 
-    assert built_with_keys == ["resolved-key"]
+    assert built_with == ["resolved-value"]
 
 
 def test_db_poll_does_not_reinitialize_config_guardrail_without_default_on():
