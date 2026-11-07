@@ -6028,3 +6028,46 @@ def test_system_injection_point_marks_a_developer_prompt_for_openai_prompt_cache
         },
         {"role": "user", "content": "Which rule covers backups?"},
     ]
+
+
+_GEMINI_HOST: Final = "generativelanguage.googleapis.com"
+_GEMINI_REPLY: Final = MappingProxyType(
+    {
+        "candidates": [
+            {"content": {"role": "model", "parts": [{"text": "Rule 8.3."}]}, "finishReason": "STOP", "index": 0}
+        ],
+        "usageMetadata": {"promptTokenCount": 30, "candidatesTokenCount": 4, "totalTokenCount": 34},
+    }
+)
+
+
+@pytest.mark.parametrize(
+    ("prompt_role", "opens_a_context_cache"),
+    [pytest.param("system", True, id="system_prompt"), pytest.param("developer", False, id="developer_prompt")],
+)
+def test_system_injection_point_leaves_a_gemini_developer_prompt_out_of_context_caching(
+    prompt_role: str, opens_a_context_cache: bool, respx_mock: respx.MockRouter
+) -> None:
+    respx_mock.get(host=_GEMINI_HOST, path__regex=r"/cachedContents$").mock(
+        return_value=Response(200, json={"cachedContents": []})
+    )
+    create_cache: Final = respx_mock.post(host=_GEMINI_HOST, path__regex=r"/cachedContents$").mock(
+        return_value=Response(
+            200, json={"name": "cachedContents/developer-prefix", "usageMetadata": {"totalTokenCount": 9000}}
+        )
+    )
+    respx_mock.post(host=_GEMINI_HOST, path__regex=r":generateContent$").mock(
+        return_value=Response(200, json=dict(_GEMINI_REPLY))
+    )
+
+    litellm.completion(
+        model="gemini/gemini-3.8-flash",
+        messages=[
+            {"role": prompt_role, "content": " ".join(itertools.repeat(_DEVELOPER_PREFIX, 600))},
+            {"role": "user", "content": "Which rule covers backups?"},
+        ],
+        cache_control_injection_points=[{"location": "message", "role": "system"}],
+        api_key="offline-gemini-key",
+    )
+
+    assert create_cache.called is opens_a_context_cache

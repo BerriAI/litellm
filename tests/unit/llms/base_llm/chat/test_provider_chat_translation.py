@@ -770,8 +770,9 @@ def test_developer_role_translation(case: _Case, respx_mock: MockRouter) -> None
         ),
     ],
 )
+@pytest.mark.parametrize("drop_params", [False, True], ids=["strict", "drop_params"])
 def test_developer_message_cache_control_survives_the_system_role_translation(
-    case: _Case, expected_system: list[JsonValue], respx_mock: MockRouter
+    case: _Case, expected_system: list[JsonValue], drop_params: bool, respx_mock: MockRouter
 ) -> None:
     route: Final = _register(case, respx_mock, f"canned-{case['id']}")
     _complete(
@@ -780,10 +781,43 @@ def test_developer_message_cache_control_survives_the_system_role_translation(
             "messages": [
                 {"role": "developer", "content": "Be a good bot!", "cache_control": {"type": "ephemeral"}},
                 {"role": "user", "content": "Hello, how are you?"},
-            ]
+            ],
+            "drop_params": drop_params,
         },
     )
     assert _request_body(route)["system"] == expected_system
+
+
+@pytest.mark.parametrize(
+    ("case", "unmarked_system"),
+    [
+        pytest.param(_BY_ID["anthropic_sonnet45"], [{"type": "text", "text": "Be a good bot!"}], id="anthropic_sonnet45"),
+        pytest.param(
+            _BY_ID["bedrock_invoke_haiku"], [{"type": "text", "text": "Be a good bot!"}], id="bedrock_invoke_haiku"
+        ),
+        pytest.param(_BY_ID["bedrock_converse_haiku"], [{"text": "Be a good bot!"}], id="bedrock_converse_haiku"),
+    ],
+)
+@pytest.mark.parametrize(
+    "malformed_mark",
+    [{"type": "ephemeral", "ttl": "2h"}, {"type": "persistent"}],
+    ids=["unknown_ttl", "unknown_type"],
+)
+def test_drop_params_drops_a_malformed_developer_cache_control(
+    case: _Case, unmarked_system: list[JsonValue], malformed_mark: dict[str, str], respx_mock: MockRouter
+) -> None:
+    route: Final = _register(case, respx_mock, f"canned-{case['id']}")
+    _complete(
+        case,
+        {
+            "messages": [
+                {"role": "developer", "content": "Be a good bot!", "cache_control": malformed_mark},
+                {"role": "user", "content": "Hello, how are you?"},
+            ],
+            "drop_params": True,
+        },
+    )
+    assert _request_body(route)["system"] == unmarked_system
 
 
 @pytest.mark.parametrize(

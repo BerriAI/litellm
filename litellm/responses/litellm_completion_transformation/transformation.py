@@ -46,6 +46,7 @@ from litellm.integrations.anthropic_cache_control_hook import (
     dropped_cache_control,
     newest_marks_within_cache_control_limit,
     routed_model_info,
+    validated_cache_control,
     whole_messages_within_cache_control_limit,
     with_cache_control,
 )
@@ -285,7 +286,6 @@ _FILE_PART_ADAPTER: Final = TypeAdapter(_ResponsesFilePart)
 _MessageT = TypeVar("_MessageT")
 _MediaT: Final = TypeVar("_MediaT")
 _InputItemT: Final = TypeVar("_InputItemT")
-_CACHED_CONTENT_ADAPTER: Final = TypeAdapter(ChatCompletionCachedContent)
 _DICT_ITEMS_LIST_ADAPTER: Final = TypeAdapter(list[dict[object, object]])
 _TEXT_ADAPTER: Final = TypeAdapter(str)
 _RESPONSES_API_TOOL_CHOICE_ADAPTER: Final = TypeAdapter(ToolChoice)
@@ -734,13 +734,6 @@ def _input_item_cache_control(input_item: Mapping[str, object]) -> ChatCompletio
     )
 
 
-def _validated_cache_control(value: object) -> ChatCompletionCachedContent | None:
-    try:
-        return _CACHED_CONTENT_ADAPTER.validate_python(value)
-    except ValidationError:
-        return None
-
-
 def _without_keys(item: object, keys: frozenset[str]) -> object:
     if not isinstance(item, dict):
         return item
@@ -892,7 +885,7 @@ class _ItemMarkRules:
     external_marks: int
 
     def sanitized(self, message: _MessageT) -> _MessageT:
-        valid: Final = with_cache_control(message, _validated_cache_control)
+        valid: Final = with_cache_control(message, validated_cache_control)
         return _without_tool_block_marks(valid) if self.refuses_tool_block_marks else valid
 
     def checked(self, message: _MessageT) -> _MessageT:
