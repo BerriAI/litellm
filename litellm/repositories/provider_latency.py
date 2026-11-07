@@ -47,17 +47,8 @@ class _Recovery(BaseModel, frozen=True):
     recovered: bool
 
 
-_PAIRS: Final = TypeAdapter(tuple[IssueModelPair, ...])
 _COHORTS: Final = TypeAdapter(tuple[_CohortRow, ...])
 _MEMBERS: Final = TypeAdapter(tuple[_Member, ...])
-_CANDIDATES: Final = """
-SELECT DISTINCT custom_llm_provider AS provider, model FROM "LiteLLM_DailyUserSpend"
-WHERE date=$1 AND timed_requests>0 AND custom_llm_provider<>'' AND model<>''
-  AND CASE WHEN octet_length(custom_llm_provider)<=1024 THEN length(custom_llm_provider)<=256 ELSE false END
-  AND CASE WHEN octet_length(model)<=4096 THEN length(model)<=1024 ELSE false END
-  AND ($2::text IS NULL OR (custom_llm_provider,model)>($2,$3))
-ORDER BY provider,model LIMIT $4
-"""
 
 
 def _source(scope: UsageAlertScope) -> tuple[str, str]:
@@ -208,21 +199,6 @@ class ProviderLatencyRepository:
             ORDER BY model LIMIT 101""",
                 day.isoformat(),
                 provider,
-            )
-        )
-
-    async def candidate_pairs(
-        self, day: date, cursor: IssueModelPair | None = None, limit: int = 100
-    ) -> tuple[IssueModelPair, ...]:
-        if not 1 <= limit <= 100:
-            raise ValueError("Pair pages contain 1 to 100 candidates")
-        return _PAIRS.validate_python(
-            await self._database.query_raw(
-                _CANDIDATES,
-                day.isoformat(),
-                cursor.provider if cursor else None,
-                cursor.model if cursor else None,
-                limit,
             )
         )
 
