@@ -1116,3 +1116,73 @@ describe("MCPToolPermissions", () => {
     });
   });
 });
+
+it("selects stored provider tools and reflects registration edits without discovery", async () => {
+  vi.clearAllMocks();
+  testQueryClient.clear();
+  vi.mocked(networking.fetchMCPAccessGroups).mockResolvedValue([]);
+  vi.mocked(networking.fetchMCPToolsets).mockResolvedValue([]);
+  const provider = {
+    server_id: "native",
+    server_name: "Provider docs",
+    execution_mode: "provider" as const,
+    allowed_tools: ["search", "fetch"],
+    tool_name_to_description: { search: "Search docs" },
+    created_at: "",
+    created_by: "",
+    updated_at: "",
+    updated_by: "",
+  };
+  vi.mocked(networking.fetchMCPServers).mockResolvedValue([provider]);
+  const changed = vi.fn();
+  renderWithProviders(
+    <MCPToolPermissions
+      accessToken="test"
+      selectedServers={["native"]}
+      toolPermissions={{ native: [] }}
+      onChange={changed}
+    />,
+  );
+  await screen.findByText("Provider docs");
+  await userEvent.click(screen.getByRole("radio", { name: "Flat List" }));
+  await userEvent.click(await screen.findByRole("checkbox", { name: "search" }));
+  expect(changed).toHaveBeenCalledWith({ native: ["search"] }, "edit");
+  expect(networking.listMCPTools).not.toHaveBeenCalled();
+  vi.mocked(networking.fetchMCPServers).mockResolvedValue([{ ...provider, allowed_tools: ["fetch"] }]);
+  await testQueryClient.invalidateQueries();
+  await waitFor(() => expect(screen.queryByRole("checkbox", { name: "search" })).not.toBeInTheDocument());
+  expect(screen.getByRole("checkbox", { name: "fetch" })).toBeInTheDocument();
+  expect(networking.listMCPTools).not.toHaveBeenCalled();
+});
+
+it("keeps the delete-blocked default for every provider server that loads in the same pass", async () => {
+  vi.clearAllMocks();
+  testQueryClient.clear();
+  vi.mocked(networking.fetchMCPAccessGroups).mockResolvedValue([]);
+  vi.mocked(networking.fetchMCPToolsets).mockResolvedValue([]);
+  const provider = (server_id: string, allowed_tools: string[]) => ({
+    server_id,
+    server_name: server_id,
+    execution_mode: "provider" as const,
+    allowed_tools,
+    created_at: "",
+    created_by: "",
+    updated_at: "",
+    updated_by: "",
+  });
+  vi.mocked(networking.fetchMCPServers).mockResolvedValue([
+    provider("docs", ["search", "delete"]),
+    provider("files", ["read", "purge"]),
+  ]);
+  const changed = vi.fn();
+  renderWithProviders(
+    <MCPToolPermissions
+      accessToken="test"
+      selectedServers={["docs", "files"]}
+      toolPermissions={{}}
+      onChange={changed}
+    />,
+  );
+  await waitFor(() => expect(changed).toHaveBeenCalledTimes(2));
+  expect(changed).toHaveBeenLastCalledWith({ docs: ["search"], files: ["read"] }, "default");
+});

@@ -54,6 +54,8 @@ import { StdioDisabledBanner, TransportSelectItems } from "./StdioAvailability";
 import MCPPermissionManagement from "./MCPPermissionManagement";
 import OpenAPIFormSection, { OpenAPIKeyTool } from "./OpenAPIFormSection";
 import MCPLogoSelector from "./MCPLogoSelector";
+import ProviderMCPRegistrationForm from "./ProviderMCPRegistrationForm";
+import { Label } from "@/components/ui/label";
 import EnvVarsSection from "./EnvVarsSection";
 import { isAdminRole } from "@/utils/roles";
 import { validateMCPServerUrl, validateMCPServerName } from "./utils";
@@ -86,6 +88,7 @@ interface CreateMCPServerProps {
   prefillData?: DiscoverableMCPServer | null;
   onBackToDiscovery?: () => void;
   stdioEnabled?: boolean;
+  executionModeSelector?: React.ReactNode;
 }
 
 const payloadErrorMessage = (result: Exclude<BuildCreatePayloadResult, { kind: "ok" }>, t: TFunction): string => {
@@ -106,7 +109,7 @@ const CREATE_DEFAULTS: MountedFormValues = {
   oauth_passthrough: false,
 };
 
-const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
+const GatewayCreateMCPServer: React.FC<CreateMCPServerProps> = ({
   userID,
   userRole,
   accessToken,
@@ -118,6 +121,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   prefillData,
   onBackToDiscovery,
   stdioEnabled = true,
+  executionModeSelector,
 }) => {
   const { t } = useTranslation();
   const form = useForm<MountedFormValues>({ mode: "onChange", defaultValues: CREATE_DEFAULTS });
@@ -654,6 +658,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
           </div>
         </DialogHeader>
 
+        {executionModeSelector}
         <div className="mt-6">
           <FormProvider {...form}>
             <MountedFormProvider value={{ control: form.control, registry }}>
@@ -1042,6 +1047,72 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
             </MountedFormProvider>
           </FormProvider>
         </div>
+      </DialogContent>
+    </Dialog>
+  );
+};
+
+const CreateMCPServer: React.FC<CreateMCPServerProps> = (props) => {
+  const [executionMode, setExecutionMode] = useState<"litellm" | "provider">("litellm");
+  const selectorId = React.useId();
+  const { setModalVisible, isModalVisible } = props;
+  // A parent can close the modal by flipping isModalVisible without going through setVisible, so
+  // reset on every close; the next open always starts on the gateway form.
+  const [wasModalVisible, setWasModalVisible] = useState(isModalVisible);
+  if (wasModalVisible !== isModalVisible) {
+    setWasModalVisible(isModalVisible);
+    if (!isModalVisible) setExecutionMode("litellm");
+  }
+  const setVisible = React.useCallback(
+    (visible: boolean) => {
+      if (!visible) setExecutionMode("litellm");
+      setModalVisible(visible);
+    },
+    [setModalVisible],
+  );
+  const executionModeSelector = isAdminRole(props.userRole) ? (
+    <div className="space-y-2 pt-2">
+      <Label htmlFor={selectorId}>Execution mode</Label>
+      <Select
+        value={executionMode}
+        onValueChange={(value) => setExecutionMode(value === "provider" ? "provider" : "litellm")}
+        items={[
+          { value: "litellm", label: "LiteLLM-executed" },
+          { value: "provider", label: "Provider-executed" },
+        ]}
+      >
+        <SelectTrigger id={selectorId} className="w-full">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="litellm">LiteLLM-executed</SelectItem>
+          <SelectItem value="provider">Provider-executed</SelectItem>
+        </SelectContent>
+      </Select>
+    </div>
+  ) : null;
+  if (executionMode !== "provider" || !isAdminRole(props.userRole)) {
+    return (
+      <GatewayCreateMCPServer {...props} setModalVisible={setVisible} executionModeSelector={executionModeSelector} />
+    );
+  }
+  return (
+    <Dialog open={props.isModalVisible} onOpenChange={setVisible}>
+      <DialogContent className="top-8 max-h-[calc(100dvh-4rem)] translate-y-0 overflow-y-auto sm:max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>Add New MCP Server</DialogTitle>
+        </DialogHeader>
+        {executionModeSelector}
+        <ProviderMCPRegistrationForm
+          accessToken={props.accessToken}
+          availableAccessGroups={props.availableAccessGroups}
+          existingServers={props.existingServers}
+          onCancel={() => setVisible(false)}
+          onSuccess={(server) => {
+            setVisible(false);
+            props.onCreateSuccess(server);
+          }}
+        />
       </DialogContent>
     </Dialog>
   );
