@@ -74,7 +74,7 @@ function listResponse(query: URLSearchParams) {
   const offset = Number(query.get("offset") ?? 0);
   const emptyPage = { data: [], total: 0, limit: 25, offset };
   if (empty) return json(emptyPage);
-  const next = { ...SPEND_ISSUE, id: "second-page", title: "Second key spend increased" };
+  const next = { ...SPEND_ISSUE, id: "second-page", scope_label: "Second key", title: "Second key spend increased" };
   let data = offset === 0 ? [SPEND_ISSUE, RETIREMENT_ISSUE] : [next];
   const family = query.get("family");
   if (family) data = data.filter((issue) => issue.family === family);
@@ -164,17 +164,18 @@ describe("unified issue investigations", () => {
   it("shows retirement and key spend in one server-paginated inbox with issue destinations", async () => {
     const user = userEvent.setup();
     renderWithProviders(<IssuesInbox />);
-    expect(await screen.findByRole("link", { name: SPEND_ISSUE.title })).toHaveAttribute(
+    expect(await screen.findByRole("link", { name: "Spend on Checkout key rose to 20× normal" })).toHaveAttribute(
       "href",
       "/ui/alerts?issue=issue-checkout-spend",
     );
     expect(screen.getByRole("link", { name: RETIREMENT_ISSUE.title })).toBeInTheDocument();
-    expect(screen.getByText("↑ 20× · $600.00 vs $30.00")).toBeInTheDocument();
-    expect(screen.getByText("Key · Checkout key")).toBeInTheDocument();
+    expect(screen.getByText("$600.00 on Nov 4, 2026 UTC, compared with the usual $30.00.")).toBeInTheDocument();
+    expect(screen.getByRole("list", { name: "Alerts", exact: true })).toBeInTheDocument();
+    expect(screen.queryByRole("table")).not.toBeInTheDocument();
     expect(calls.filter((call) => call.path === "/issues")).toHaveLength(1);
     expect(calls.some((call) => call.path.includes("activity") || call.path.includes("deprecations"))).toBe(false);
     await user.click(screen.getByRole("button", { name: "Go to next page", exact: true }));
-    expect(await screen.findByRole("link", { name: "Second key spend increased" })).toBeInTheDocument();
+    expect(await screen.findByRole("link", { name: "Spend on Second key rose to 20× normal" })).toBeInTheDocument();
     expect(
       calls
         .filter((call) => call.path === "/issues")
@@ -193,7 +194,7 @@ describe("unified issue investigations", () => {
 
   it("keeps old performance list links usable", async () => {
     renderWithProviders(<IssuesInbox />, { searchParams: "type=usage&usage_status=resolved" });
-    await screen.findByRole("link", { name: SPEND_ISSUE.title });
+    await screen.findByRole("link", { name: "Spend on Checkout key rose to 20× normal" });
     const request = calls.find((call) => call.path === "/issues");
     expect(request?.query.get("kind")).toBe("performance");
     expect(request?.query.get("status")).toBe("resolved");
@@ -201,14 +202,16 @@ describe("unified issue investigations", () => {
 
   it("hides cached global issues when the reader loses global access", async () => {
     renderWithProviders(<IssuesInbox />);
-    await screen.findByRole("link", { name: SPEND_ISSUE.title });
+    await screen.findByRole("link", { name: "Spend on Checkout key rose to 20× normal" });
     await act(async () => {
       testQueryClient.setQueriesData(
         { queryKey: ["currentUser"] },
         { user_id: "test-admin", user_role: "internal_user_viewer" },
       );
     });
-    await waitFor(() => expect(screen.queryByRole("link", { name: SPEND_ISSUE.title })).not.toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.queryByRole("link", { name: "Spend on Checkout key rose to 20× normal" })).not.toBeInTheDocument(),
+    );
   });
 
   it("renders a clear empty state and retries list failures", async () => {
@@ -338,7 +341,7 @@ describe("unified issue investigations", () => {
   it("shows the saved status while dependent refreshes are stalled", async () => {
     const user = userEvent.setup();
     renderWithProviders(<IssuesInbox />);
-    await screen.findByRole("link", { name: SPEND_ISSUE.title });
+    await screen.findByRole("link", { name: "Spend on Checkout key rose to 20× normal" });
     renderWithProviders(<IssueDetail id={SPEND_ISSUE.id} />);
     await screen.findByRole("button", { name: "Mark resolved" });
     const fetchBefore = vi.mocked(globalThis.fetch).getMockImplementation()!;
@@ -436,7 +439,7 @@ describe("unified issue investigations", () => {
     auth.userId = "member-owner";
     renderWithProviders(<IssueDetail id={detail.id} />);
     await screen.findByText("Total Requests");
-    expect(screen.getByRole("heading", { name: SPEND_ISSUE.title })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Spend on Checkout key rose to 20× normal" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Resource activity" })).toHaveAttribute(
       "href",
       "/ui/api-keys?key=reporting-test-id&detail_tab=activity&activity_from=2026-10-28&activity_to=2026-11-04",
@@ -459,7 +462,7 @@ describe("unified issue investigations", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("You don’t have access to this alert.");
     expect(screen.getByRole("link", { name: "My usage" })).toHaveAttribute("href", "/ui/usage?view=my-usage");
     expect(screen.queryByText(/private-project/)).not.toBeInTheDocument();
-    expect(screen.queryByRole("heading", { name: SPEND_ISSUE.title })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Spend on Checkout key rose to 20× normal" })).not.toBeInTheDocument();
     expect(calls.filter((call) => call.path.startsWith("/issues"))).toHaveLength(1);
     expect(calls.some((call) => call.path.endsWith("/activity") || call.path.endsWith("/keys"))).toBe(false);
   });
@@ -474,7 +477,7 @@ describe("unified issue investigations", () => {
       await testQueryClient.invalidateQueries({ queryKey: ["issues"] });
     });
     expect(await screen.findByRole("alert")).toHaveTextContent("You don’t have access to this alert.");
-    expect(screen.queryByRole("heading", { name: SPEND_ISSUE.title })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Spend on Checkout key rose to 20× normal" })).not.toBeInTheDocument();
     expect(screen.queryByText("Total Requests")).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Resource activity" })).not.toBeInTheDocument();
   });

@@ -1,7 +1,8 @@
 import { useQueryStates } from "nuqs";
-import type { ColumnDef } from "@tanstack/react-table";
+import { useEffect } from "react";
+import { ChevronRight, RefreshCw } from "lucide-react";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-import { DataTable, DataTableToolbar, useUrlTableState } from "@/components/shared/DataTable";
+import { DataTablePagination, useUrlTableState } from "@/components/shared/DataTable";
 import { PageTabs, PageTabsContent, PageTabsList, PageTabsTrigger } from "@/components/shared/Page";
 import { Button } from "@/components/ui/button";
 import { hasCapability } from "@/utils/capabilities";
@@ -14,59 +15,38 @@ import {
   IssueFamily,
   IssueStatus,
   issueComparisonText,
-  issueDate,
+  issueHeadline,
   issueHref,
   issueImpactText,
-  issueResource,
   useIssues,
 } from "./issueApi";
 import { issueRouteParsers } from "./issueRoute";
 
 const TABLE_STATE = { sortFields: [], defaultSort: { id: "", desc: false }, defaultPageSize: 25, filterColumns: [] };
-const columns: ColumnDef<Issue>[] = [
-  {
-    id: "issue",
-    header: "Alert",
-    meta: { className: "whitespace-normal" },
-    cell: ({ row }) => (
-      <div className="min-w-0 space-y-1 py-1">
-        <a
-          href={issueHref(row.original.id)}
-          className="block max-w-64 truncate font-medium hover:underline md:max-w-xl"
-          title={row.original.title}
-        >
-          {row.original.title}
-        </a>
-        <p
-          className="max-w-64 truncate text-xs text-muted-foreground md:max-w-xl"
-          title={row.original.scope_label ?? row.original.cohort.scope_id ?? "Gateway"}
-        >
-          {issueResource(row.original)}
-        </p>
-      </div>
-    ),
-  },
-  {
-    id: "comparison",
-    header: "Change",
-    cell: ({ row }) => (
-      <div className="space-y-1">
-        <p className="text-sm tabular-nums">{issueComparisonText(row.original)}</p>
-        <p className="text-xs text-muted-foreground">{issueDate(row.original.observed_on)} UTC</p>
-      </div>
-    ),
-  },
-  {
-    id: "impact",
-    header: "Resources",
-    cell: ({ row }) => <span className="text-xs">{issueImpactText(row.original) || "—"}</span>,
-  },
-  {
-    id: "seen",
-    header: "Last detected",
-    cell: ({ row }) => <span className="text-xs">{issueDate(row.original.last_seen)} UTC</span>,
-  },
-];
+function AlertEntry({ issue }: { issue: Issue }) {
+  const impact = issueImpactText(issue);
+  return (
+    <li>
+      <a
+        href={issueHref(issue.id)}
+        aria-labelledby={`alert-${issue.id}`}
+        className="group flex items-start gap-4 px-4 py-5 transition-colors hover:bg-muted/40 focus-visible:outline-2 focus-visible:outline-ring focus-visible:outline-offset-[-2px] sm:px-5"
+      >
+        <div className="min-w-0 flex-1 space-y-1.5">
+          <h2 id={`alert-${issue.id}`} className="break-words text-sm font-medium leading-6">
+            {issueHeadline(issue)}
+          </h2>
+          <p className="break-words text-sm leading-6 text-muted-foreground">{issueComparisonText(issue)}</p>
+          {impact && <p className="text-xs text-muted-foreground">{impact}</p>}
+        </div>
+        <ChevronRight
+          aria-hidden="true"
+          className="mt-1 size-4 shrink-0 text-muted-foreground group-hover:text-foreground"
+        />
+      </a>
+    </li>
+  );
+}
 
 export default function IssuesInbox() {
   const { accessToken, userRole, isViewOnly } = useAuthorized();
@@ -83,6 +63,13 @@ export default function IssuesInbox() {
     limit: table.pagination.pageSize,
   };
   const query = useIssues(accessToken, queryOptions);
+  const { data: alerts = { data: [], total: 0 } } = query;
+  const lastPage = Math.max(0, Math.ceil(alerts.total / table.pagination.pageSize) - 1);
+  const { pageIndex, pageSize } = table.pagination;
+  const { onPaginationChange } = table;
+  useEffect(() => {
+    if (query.data && pageIndex > lastPage) onPaginationChange({ pageIndex: lastPage, pageSize });
+  }, [query.data, pageIndex, pageSize, lastPage, onPaginationChange]);
   const changeStatus = (next: IssueStatus) => {
     void setParams({ status: next, state: null, usage_status: null });
     table.onPaginationChange({ ...table.pagination, pageIndex: 0 });
@@ -119,51 +106,64 @@ export default function IssuesInbox() {
         ))}
       </PageTabsList>
       <PageTabsContent value={status} className="flex min-h-0 flex-1 flex-col">
-        <DataTable
-          columns={columns}
-          data={query.data?.data ?? []}
-          getRowId={(issue) => issue.id}
-          fillHeight
-          size="compact"
-          isLoading={query.isPending}
-          loadingMessage="Loading alerts…"
-          noDataMessage={
-            <div className="space-y-1">
-              <p>No {status} alerts.</p>
-              <p className="text-xs text-muted-foreground">
-                Daily performance checks need enough recorded usage history.
-              </p>
-            </div>
-          }
-          paginationMode="server"
-          pagination={table.pagination}
-          onPaginationChange={table.onPaginationChange}
-          rowCount={query.data?.total ?? 0}
-          toolbar={(instance) => (
-            <DataTableToolbar
-              table={instance}
-              onRefresh={() => void query.refetch()}
-              isRefreshing={query.isFetching}
-              showViewOptions={false}
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-md border">
+          <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 border-b px-4 py-3">
+            <select
+              aria-label="Alert type"
+              value={family ?? kind ?? "all"}
+              onChange={(event) => changeFamily(event.target.value)}
+              className="h-8 rounded-md border border-input bg-background px-2 text-xs"
             >
-              <select
-                aria-label="Alert type"
-                value={family ?? kind ?? "all"}
-                onChange={(event) => changeFamily(event.target.value)}
-                className="h-8 rounded-md border border-input bg-background px-2 text-xs"
-              >
-                <option value="all">All alert types</option>
-                {kind && <option value="performance">All performance types</option>}
-                {ISSUE_FAMILIES.map((value) => (
-                  <option key={value} value={value}>
-                    {FAMILY_LABELS[value]}
-                  </option>
-                ))}
-              </select>
-              {!isViewOnly && <UsageRules accessToken={accessToken} />}
-            </DataTableToolbar>
-          )}
-        />
+              <option value="all">All alert types</option>
+              {kind && <option value="performance">All performance types</option>}
+              {ISSUE_FAMILIES.map((value) => (
+                <option key={value} value={value}>
+                  {FAMILY_LABELS[value]}
+                </option>
+              ))}
+            </select>
+            {!isViewOnly && <UsageRules accessToken={accessToken} />}
+            <Button
+              variant="outline"
+              size="icon-sm"
+              aria-label="Refresh alerts"
+              disabled={query.isFetching}
+              onClick={() => void query.refetch()}
+            >
+              <RefreshCw className={query.isFetching ? "animate-spin" : undefined} />
+            </Button>
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            {query.isPending && (
+              <p role="status" className="p-5 text-sm text-muted-foreground">
+                Loading alerts…
+              </p>
+            )}
+            {!query.isPending && alerts.total === 0 && (
+              <div className="space-y-1 p-5">
+                <p>No {status} alerts.</p>
+                <p className="text-xs text-muted-foreground">
+                  Daily performance checks need enough recorded usage history.
+                </p>
+              </div>
+            )}
+            <ul aria-label="Alerts" className="divide-y">
+              {alerts.data.map((issue) => (
+                <AlertEntry key={issue.id} issue={issue} />
+              ))}
+            </ul>
+          </div>
+          <div className="shrink-0 border-t">
+            <DataTablePagination
+              page={pageIndex}
+              pageSize={pageSize}
+              rowCount={alerts.total}
+              onPageChange={(pageIndex) => onPaginationChange({ pageIndex, pageSize })}
+              onPageSizeChange={(pageSize) => onPaginationChange({ pageIndex: 0, pageSize })}
+              isLoading={query.isPending}
+            />
+          </div>
+        </div>
       </PageTabsContent>
     </PageTabs>
   );

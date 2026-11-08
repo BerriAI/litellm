@@ -22,6 +22,7 @@ import {
   IssueStatus,
   issueDate,
   issueImpactText,
+  issueHeadline,
   issueResource,
   issuesHref,
   updateIssueStatus,
@@ -142,7 +143,7 @@ function IssueBody({ issue }: { issue: Issue }) {
     <div className="min-w-0 space-y-6">
       <header className="flex flex-col items-start gap-4 sm:flex-row sm:justify-between">
         <div className="w-full min-w-0 flex-1 space-y-2 sm:w-auto">
-          <h1 className="break-words text-xl font-semibold">{issue.title}</h1>
+          <h1 className="break-words text-xl font-semibold">{issueHeadline(issue)}</h1>
           <p className="break-all text-sm text-muted-foreground" title={issue.cohort.scope_id ?? "Gateway"}>
             {issueResource(issue)}
           </p>
