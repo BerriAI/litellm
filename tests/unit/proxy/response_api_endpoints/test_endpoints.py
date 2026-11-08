@@ -1946,6 +1946,38 @@ async def test_background_create_the_provider_confirms_is_stored_under_its_provi
     assert store_kwargs["model_object_id"] == "resp_provider_job"
 
 
+@pytest.mark.parametrize(
+    ("data", "expected"),
+    [
+        ({}, ()),
+        ({"input": "hello"}, ()),
+        ({"input": [{"type": "input_file", "file_id": "file-text"}]}, ("file-text",)),
+        ({"input": [{"type": "input_image", "file_id": "file-image"}]}, ("file-image",)),
+        (
+            {"input": [{"role": "user", "content": [{"type": "input_image", "file_id": "file-image"}]}]},
+            ("file-image",),
+        ),
+        (
+            {"input": [{"role": "user", "content": {"type": "input_image", "file_id": "file-image"}}]},
+            ("file-image",),
+        ),
+        ({"input": [{"role": "user", "content": "hello"}]}, ()),
+        ({"input": [{"type": "input_text", "file_id": "not-a-file-part"}]}, ()),
+        ({"input": [{"type": [], "file_id": "not-a-file-part"}]}, ()),
+        (
+            {"tools": [{"type": "code_interpreter", "container": {"file_ids": ["file-tool", None, 7]}}]},
+            ("file-tool",),
+        ),
+    ],
+)
+def test_response_file_references_include_all_content_shapes(
+    data: Mapping[str, object], expected: tuple[str, ...]
+) -> None:
+    from litellm.proxy.response_api_endpoints.endpoints import _responses_file_ids
+
+    assert _responses_file_ids(data) == expected
+
+
 class TestResponsesAPIEndpoints(unittest.TestCase):
     @pytest.mark.asyncio
     @patch("litellm.proxy.proxy_server.llm_router")

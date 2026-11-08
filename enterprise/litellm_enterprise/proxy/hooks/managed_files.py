@@ -1940,7 +1940,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 continue
 
             # Check for direct input_file type
-            if item.get("type") == "input_file":
+            if item.get("type") in ("input_file", "input_image"):
                 file_id = item.get("file_id")
                 if isinstance(file_id, str) and file_id:
                     file_ids.append(file_id)
@@ -1949,7 +1949,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             content = item.get("content")
             if isinstance(content, list):
                 for content_item in content:
-                    if isinstance(content_item, dict) and content_item.get("type") == "input_file":
+                    if isinstance(content_item, dict) and content_item.get("type") in ("input_file", "input_image"):
                         file_id = content_item.get("file_id")
                         if isinstance(file_id, str) and file_id:
                             file_ids.append(file_id)

@@ -395,7 +395,8 @@ def test_update_responses_input_with_model_file_ids_decodes_xlitellm_encoded_id(
 
 
 @pytest.mark.parametrize("unusable_file_id", [[1], {"a": 1}])
-def test_update_responses_input_with_model_file_ids_keeps_a_non_string_file_id_as_sent(unusable_file_id):
+@pytest.mark.parametrize("input_type", ["input_file", "input_image"])
+def test_update_responses_input_with_model_file_ids_keeps_a_non_string_file_id_as_sent(unusable_file_id, input_type: str):
     from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
         update_responses_input_with_model_file_ids,
     )
@@ -405,8 +406,8 @@ def test_update_responses_input_with_model_file_ids_keeps_a_non_string_file_id_a
         {
             "role": "user",
             "content": [
-                {"type": "input_file", "file_id": encoded_id},
-                {"type": "input_file", "file_id": unusable_file_id},
+                {"type": input_type, "file_id": encoded_id},
+                {"type": input_type, "file_id": unusable_file_id},
             ],
         }
     ]

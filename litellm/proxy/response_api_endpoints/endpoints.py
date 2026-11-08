@@ -1574,10 +1574,7 @@ def _proxy_managed_files_hook() -> _ManagedFileAccess | None:
 _managed_files_hook_dep: Final = Depends(_proxy_managed_files_hook)
 
 
-async def _with_managed_file_id_mapping(
-    data: Mapping[str, object], managed_files: _ManagedFileAccess | None, user_api_key_dict: UserAPIKeyAuth
-) -> Mapping[str, object]:
-    caller_fields: Final = {name: value for name, value in data.items() if name != MODEL_FILE_ID_MAPPING_FIELD}
+def _responses_file_ids(data: Mapping[str, object]) -> tuple[str, ...]:
     input_items: Final = data.get("input")
     messages: Final = (
         tuple(as_str_mapping(item) or {} for item in TypeAdapter(tuple[object, ...]).validate_python(input_items))
@@ -1586,15 +1583,16 @@ async def _with_managed_file_id_mapping(
     )
     nested_content: Final = chain.from_iterable(
         TypeAdapter(tuple[object, ...]).validate_python(content)
-        for item in messages
         if isinstance(content := item.get("content"), list)
+        else (content,)
+        for item in messages
     )
     nested_parts: Final = tuple(as_str_mapping(part) or {} for part in nested_content)
     parts: Final = messages + nested_parts
     input_file_ids: Final = tuple(
         input_file_id
         for part in parts
-        if part.get("type") == "input_file" and isinstance(input_file_id := part.get("file_id"), str)
+        if part.get("type") in ("input_file", "input_image") and isinstance(input_file_id := part.get("file_id"), str)
     )
     tools: Final = data.get("tools")
     tool_rows: Final = (
@@ -1610,8 +1608,14 @@ async def _with_managed_file_id_mapping(
         for container in containers
         if isinstance(files := container.get("file_ids"), list)
     )
-    file_ids: Final = chain(input_file_ids, (reference for reference in container_files if isinstance(reference, str)))
-    for file_id in file_ids:
+    return tuple(chain(input_file_ids, (reference for reference in container_files if isinstance(reference, str))))
+
+
+async def _with_managed_file_id_mapping(
+    data: Mapping[str, object], managed_files: _ManagedFileAccess | None, user_api_key_dict: UserAPIKeyAuth
+) -> Mapping[str, object]:
+    caller_fields: Final = {name: value for name, value in data.items() if name != MODEL_FILE_ID_MAPPING_FIELD}
+    for file_id in _responses_file_ids(data):
         try:
             await validate_managed_id_requirement(
                 resource_id=file_id,

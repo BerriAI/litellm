@@ -1239,7 +1239,8 @@ def test_update_responses_input_with_multiple_file_ids():
     assert updated_input[0]["content"][1]["text"] == "Compare these files"
 
 
-def test_update_responses_input_with_model_file_id_mapping():
+@pytest.mark.parametrize("input_type", ["input_file", "input_image"])
+def test_update_responses_input_with_model_file_id_mapping(input_type: str):
     """
     Test that update_responses_input_with_model_file_ids correctly uses
     model_file_id_mapping to map managed file IDs to provider-specific file IDs.
@@ -1264,7 +1265,7 @@ def test_update_responses_input_with_model_file_id_mapping():
             "role": "user",
             "content": [
                 {
-                    "type": "input_file",
+                    "type": input_type,
                     "file_id": managed_file_id,
                 },
                 {
@@ -1419,6 +1420,13 @@ def test_update_responses_tools_with_mixed_file_ids():
         "openai_file_abc",
         regular_file_id,
     ]
+
+
+@pytest.mark.parametrize("input_type", ["input_file", "input_image"])
+def test_responses_content_file_references_are_collected(input_type: str) -> None:
+    hook: Final = PROXY_LiteLLMManagedFiles(DualCache(), prisma_client=None)
+    content: Final = [{"type": input_type, "file_id": "file-example"}, {"type": "input_text", "text": "hello"}]
+    assert hook.get_file_ids_from_responses_input([{"role": "user", "content": content}]) == ["file-example"]
 
 
 def test_get_file_ids_from_responses_tools():

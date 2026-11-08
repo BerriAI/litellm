@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Final, Optional, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import ORJSONResponse
+from pydantic import TypeAdapter
 
 import litellm
 from litellm.llms.base_llm.managed_resources.utils import is_base64_encoded_unified_id
@@ -26,6 +27,9 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     prepare_data_with_credentials,
 )
 from litellm.proxy.rag_endpoints.upload_security import safe_download_headers
+from litellm.proxy.route_llm_request import (
+    route_request,  # pyright: ignore[reportUnknownVariableType]  # legacy dispatcher has an untyped awaitable result
+)
 from litellm.proxy.vector_store_endpoints.utils import (
     assert_user_can_access_vector_store_id,
     is_allowed_to_call_vector_store_files_endpoint,
@@ -811,7 +815,6 @@ async def vector_store_file_list(
     if provider_enum is not None and "custom_llm_provider" not in data:
         data["custom_llm_provider"] = provider_enum.value
 
-    page_data: Final = MappingProxyType(dict(data))
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
 
     async def fetch_page(page_processor: ProxyBaseLLMRequestProcessing) -> object:
@@ -836,7 +839,17 @@ async def vector_store_file_list(
 
     async def next_page(cursor: str) -> VectorStoreFileListResponse:
         cursor_parameter: Final = "before" if query_params.get("before") else "after"
-        following: Final = await fetch_page(ProxyBaseLLMRequestProcessing(data={**page_data, cursor_parameter: cursor}))
+        processed_data: Final = TypeAdapter(dict[str, object]).validate_python(
+            processor.data  # pyright: ignore[reportUnknownMemberType]  # validate the legacy processor's untyped request data
+        )
+        call: Final = await route_request(
+            data={**processed_data, cursor_parameter: cursor},
+            route_type="avector_store_file_list",
+            llm_router=llm_router,
+            user_model=user_model if isinstance(user_model, str) else None,
+            user_api_key_dict=user_api_key_dict,
+        )
+        following: Final = await call
         if not isinstance(following, dict):
             raise HTTPException(status_code=502, detail="Invalid vector store file listing response")
         return cast(VectorStoreFileListResponse, following)  # cast-ok: the provider's file-list response shape

@@ -159,7 +159,7 @@ def update_responses_input_with_model_file_ids(
         if isinstance(content, list):
             updated_content = []
             for content_item in content:
-                if isinstance(content_item, dict) and content_item.get("type") == "input_file":
+                if isinstance(content_item, dict) and content_item.get("type") in ("input_file", "input_image"):
                     file_id = content_item.get("file_id")
                     if isinstance(file_id, str) and file_id:
                         provider_file_id = file_id  # Default to original
