@@ -102,7 +102,7 @@ _LAX_BOOL: Final = TypeAdapter(bool)
 
 
 def as_str_mapping(value: object) -> Mapping[str, object] | None:
-    return value if isinstance(value, Mapping) else None
+    return value if isinstance(value, (dict, Mapping)) else None
 
 
 def as_object_list(value: object) -> Sequence[object] | None:
@@ -174,6 +174,9 @@ def keyword_arguments(value: object, target: type[object]) -> KeywordArguments:
 
 
 def iter_items(value: object) -> Iterable[object]:
+    listed: Final = as_object_list(value)
+    if listed is not None:
+        return listed
     if isinstance(value, _SupportsIter):
         return value
     if isinstance(value, _SupportsGetItem):
