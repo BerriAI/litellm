@@ -191,6 +191,19 @@ def test_complete_url_sends_to_the_env_runtime_endpoint_over_api_base_like_conve
     assert url == "https://env-egress.example.com/openai/v1/chat/completions"
 
 
+@SIGNING_HOST_API_BASES
+def test_complete_url_skips_an_unused_malformed_region_when_api_base_is_set(monkeypatch, api_base):
+    monkeypatch.delenv("AWS_BEDROCK_RUNTIME_ENDPOINT", raising=False)
+    url = AmazonBedrockRuntimeChatCompletionsConfig().get_complete_url(
+        api_base=api_base,
+        api_key=None,
+        model="us.openai.gpt-5.6-sol",
+        optional_params={"aws_region_name": "Not A Region", "aws_bedrock_runtime_endpoint": "https://egress.example.com"},
+        litellm_params={},
+    )
+    assert url == "https://egress.example.com/openai/v1/chat/completions"
+
+
 @pytest.mark.parametrize("api_base", [None, "https://signing-host.example.com/openai/v1/chat/completions"])
 def test_complete_url_uses_a_full_chat_completions_runtime_endpoint_as_is(monkeypatch, api_base):
     monkeypatch.delenv("AWS_BEDROCK_RUNTIME_ENDPOINT", raising=False)

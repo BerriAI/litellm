@@ -2,6 +2,7 @@ import datetime
 from collections.abc import Mapping
 from functools import reduce
 from typing import Final
+from urllib.parse import urlsplit
 
 import httpx
 from pydantic import TypeAdapter, ValidationError
@@ -128,6 +129,26 @@ def _provider_response_model(result: object) -> str | None:
     return model if isinstance(model, str) and model else None
 
 
+def _origin(url: str) -> str:
+    parts: Final = urlsplit(url)
+    return f"{parts.scheme}://{parts.netloc}"
+
+
+def _called_bedrock_url(logging_obj: LiteLLMLoggingObject) -> str | None:
+    if getattr(logging_obj, "custom_llm_provider", None) != "bedrock":
+        return None
+    litellm_params: Final[object] = logging_obj.model_call_details.get("litellm_params")
+    called: Final[object] = _hidden_params_mapping(litellm_params).get("api_base")
+    return called if isinstance(called, str) and called else None
+
+
+def _reported_api_base(configured: str | None, logging_obj: LiteLLMLoggingObject) -> str | None:
+    called: Final = _called_bedrock_url(logging_obj)
+    if configured is None or called is None or _origin(called) == _origin(configured):
+        return configured
+    return _origin(called)
+
+
 class ResponseMetadata:
     """
     Handles setting and managing `_hidden_params`, `response_time_ms`, and `litellm_overhead_time_ms` for LiteLLM responses
@@ -161,7 +182,7 @@ class ResponseMetadata:
         model_id: Final = model_info.get("id", None)
         new_params: Final = {
             "litellm_call_id": getattr(logging_obj, "litellm_call_id", None),
-            "api_base": get_api_base(model=model or "", optional_params=kwargs),
+            "api_base": _reported_api_base(get_api_base(model=model or "", optional_params=kwargs), logging_obj),
             "model_id": model_id,
             "response_cost": logging_obj.response_cost_calculator(
                 result=self.result,

@@ -12,6 +12,7 @@ from collections.abc import Iterator
 from typing import Final
 from unittest.mock import MagicMock
 
+import httpx
 import pytest
 
 import litellm
@@ -19,6 +20,7 @@ import litellm.litellm_core_utils.llm_response_utils.response_metadata as respon
 import litellm.proxy.common_request_processing as common_request_processing_mod
 from litellm.cost_calculator import select_model_name_for_cost_calc
 from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
     ResponseMetadata,
     _union_duration_ms,
@@ -685,3 +687,54 @@ def test_update_response_metadata_keeps_the_provider_model_after_the_proxy_rewri
         select_model_name_for_cost_calc(model=None, completion_response=result, custom_llm_provider="azure")
         == "azure/gpt-5.4-nano-2026-03-17"
     )
+
+
+class _CannedChatClient(AsyncHTTPHandler):
+    async def post(self, url: str, *args: object, **kwargs: object) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-1",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "us.openai.gpt-6.1-sol",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+            request=httpx.Request("POST", url),
+        )
+
+
+@pytest.mark.parametrize(
+    ("deployment_hosts", "expected_api_base"),
+    [
+        (
+            {
+                "api_base": "https://gateway.example.com/openai/v1/chat/completions",
+                "aws_bedrock_runtime_endpoint": "https://runtime.example.com",
+            },
+            "https://runtime.example.com",
+        ),
+        (
+            {"api_base": "https://gateway.example.com/openai/v1/chat/completions"},
+            "https://gateway.example.com/openai/v1/chat/completions",
+        ),
+        ({"api_base": "https://gateway.example.com"}, "https://gateway.example.com"),
+        ({"aws_bedrock_runtime_endpoint": "https://runtime.example.com"}, None),
+    ],
+)
+@pytest.mark.asyncio
+async def test_bedrock_reported_api_base_names_the_host_called(monkeypatch, deployment_hosts, expected_api_base):
+    monkeypatch.delenv("AWS_BEDROCK_RUNTIME_ENDPOINT", raising=False)
+    response: Final = await litellm.acompletion(
+        model="bedrock/us.openai.gpt-6.1-sol",
+        messages=[{"role": "user", "content": "hi"}],
+        aws_region_name="us-east-1",
+        aws_access_key_id="test-key-id",
+        aws_secret_access_key="test-secret",
+        client=_CannedChatClient(),
+        **deployment_hosts,
+    )
+
+    assert response._hidden_params["api_base"] == expected_api_base
+
