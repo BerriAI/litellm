@@ -1571,7 +1571,7 @@ def deleted_auto_router_catalog(monkeypatch):
     config = proxy_server.ProxyConfig()
     config.auto_router_db_catalog = build_auto_router_catalog(rows)
     monkeypatch.setattr(proxy_server, "proxy_config", config)
-    monkeypatch.setattr(proxy_server, "MODEL_RECONCILE_LOCK", asyncio.Lock())
+    monkeypatch.setattr(proxy_server, "DB_RECONCILE_LOCK", asyncio.Lock())
     monkeypatch.setattr(proxy_server, "llm_router", Router(model_list=[]))
     monkeypatch.setattr(proxy_server, "_license_check", SimpleNamespace(auto_router_capability_limit=lambda: 1))
     monkeypatch.setattr(proxy_server, "heuristic_v1_tuning_baselines", {})
@@ -5959,7 +5959,7 @@ class TestConcurrentModelWritesDoNotEvictEachOther:
 
     @pytest.mark.asyncio
     async def test_reconciles_serialize_so_no_stale_snapshot_can_evict(self, monkeypatch):
-        """MODEL_RECONCILE_LOCK admits one reconcile at a time.
+        """DB_RECONCILE_LOCK admits one reconcile at a time.
 
         The fake body awaits, which is the whole point: without the lock the gather below
         parks all five inside the critical section at that await and observed depth goes
@@ -6088,7 +6088,7 @@ class TestConcurrentModelWritesDoNotEvictEachOther:
 
 class TestDeleteEvictionsHoldTheReconcileLock:
     """A delete evicts from ``llm_router`` directly instead of reconciling, so it must
-    take MODEL_RECONCILE_LOCK to do it.
+    take DB_RECONCILE_LOCK to do it.
 
     The db row is gone by then, but a reconcile that snapshotted the db BEFORE the row
     was deleted still lists that id as desired, and its ``_add_deployment`` upserts the
@@ -6102,7 +6102,7 @@ class TestDeleteEvictionsHoldTheReconcileLock:
     async def _assert_evicts_under_lock(monkeypatch, call_endpoint, model_id: str, config) -> None:
         """Run ``call_endpoint`` with the lock already held and assert it blocks.
 
-        Holding MODEL_RECONCILE_LOCK stands in for a reconcile that is mid-flight. If
+        Holding DB_RECONCILE_LOCK stands in for a reconcile that is mid-flight. If
         the eviction takes the lock it cannot run until we release; if it does not, it
         runs straight through and the deployment is evicted while the "reconcile" is
         still in its critical section -- exactly the interleaving that resurrects it.
@@ -6115,7 +6115,7 @@ class TestDeleteEvictionsHoldTheReconcileLock:
         own, exactly as here.
         """
         lock = asyncio.Lock()
-        monkeypatch.setattr("litellm.proxy.proxy_server.MODEL_RECONCILE_LOCK", lock)
+        monkeypatch.setattr("litellm.proxy.proxy_server.DB_RECONCILE_LOCK", lock)
         stale_catalog = config.auto_router_db_catalog
 
         async with lock:
@@ -6124,7 +6124,7 @@ class TestDeleteEvictionsHoldTheReconcileLock:
             for _ in range(50):
                 await asyncio.sleep(0)
             assert not task.done(), (
-                f"deleting {model_id} did not wait for MODEL_RECONCILE_LOCK -- an "
+                f"deleting {model_id} did not wait for DB_RECONCILE_LOCK -- an "
                 f"in-flight reconcile can resurrect the deployment it just evicted"
             )
             config.auto_router_db_catalog = stale_catalog
