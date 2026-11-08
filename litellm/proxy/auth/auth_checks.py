@@ -5623,24 +5623,15 @@ async def can_user_call_model(
 
 
 def personal_key_team_model_access_applies(valid_token: UserAPIKeyAuth | None) -> bool:
-    return (
-        bool(litellm.personal_key_model_access_from_teams)
-        and valid_token is not None
-        and valid_token.team_id is None
-        and valid_token.user_id is not None
-        and valid_token.api_key != LITELLM_PROXY_MASTER_KEY_ALIAS
-        and valid_token.user_role != LitellmUserRoles.PROXY_ADMIN
-    )
+    from litellm.proxy.auth.personal_model_adapter import personal_key_team_model_access_applies as applies
+
+    return applies(valid_token)
 
 
 def personal_key_inherits_team_grants(valid_token: UserAPIKeyAuth | None) -> bool:
-    """MCP server, MCP tool and agent inheritance is for a virtual key only. A keyless auth with no
-    team (one grant source of an admitted subject, a JWT user) resolves as the plain caller it is."""
-    return (
-        personal_key_team_model_access_applies(valid_token)
-        and valid_token is not None
-        and valid_token.api_key is not None
-    )
+    from litellm.proxy.auth.personal_model_adapter import personal_key_inherits_team_grants as inherits
+
+    return inherits(valid_token)
 
 
 @dataclass(frozen=True, slots=True)
@@ -5775,24 +5766,11 @@ async def _loaded_teams_allow_model(
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
 ) -> bool:
-    loaded: Final = tuple(team for team in teams if team is not None)
-    if not loaded:
-        return False
-    grants: Final = await asyncio.gather(
-        *(
-            _team_grants_personal_key_model(
-                model=model,
-                team_object=team,
-                valid_token=valid_token,
-                llm_router=llm_router,
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-                proxy_logging_obj=proxy_logging_obj,
-            )
-            for team in loaded
-        )
+    from litellm.proxy.auth.personal_model_adapter import loaded_teams_allow_model
+
+    return await loaded_teams_allow_model(
+        model, teams, valid_token, llm_router, prisma_client, user_api_key_cache, proxy_logging_obj
     )
-    return any(grants)
 
 
 async def _personal_key_listing_teams(
@@ -5838,62 +5816,11 @@ async def _personal_key_team_within_budget(
     *,
     check_db_only: bool = False,
 ) -> bool:
-    source: Final = valid_token.model_copy(
-        update={"team_id": team.team_id, "org_id": valid_token.org_id or team.organization_id}
+    from litellm.proxy.auth.personal_budget_adapter import personal_key_team_within_budget
+
+    return await personal_key_team_within_budget(
+        team, valid_token, prisma_client, user_api_key_cache, proxy_logging_obj, check_db_only=check_db_only
     )
-    try:
-        await team_max_budget_check(
-            team_object=team,
-            valid_token=source,
-            proxy_logging_obj=proxy_logging_obj,
-        )
-        await _team_multi_budget_check(team_object=team)
-        if check_db_only:
-            team_member_user_id: Final = valid_token.user_id
-            if team_member_user_id is None:
-                return False
-            team_membership: Final = await get_team_membership(
-                user_id=team_member_user_id,
-                team_id=team.team_id,
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-                proxy_logging_obj=proxy_logging_obj,
-                check_db_only=True,
-            )
-            await _check_team_member_budget(
-                team_object=team,
-                user_object=None,
-                valid_token=source,
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-                proxy_logging_obj=proxy_logging_obj,
-                team_membership=team_membership,
-                team_membership_loaded=True,
-            )
-        else:
-            await _check_team_member_budget(
-                team_object=team,
-                user_object=None,
-                valid_token=source,
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-                proxy_logging_obj=proxy_logging_obj,
-            )
-        await organization_max_budget_check(
-            valid_token=source,
-            team_object=team,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            proxy_logging_obj=proxy_logging_obj,
-        )
-    except litellm.BudgetExceededError:
-        return False
-    except NativeAuthFailure:
-        raise
-    except Exception as e:  # noqa: BLE001  # fail closed: a team whose budget cannot be checked grants nothing
-        verbose_proxy_logger.warning("Failed to check budget for personal key team %s, skipping: %s", team.team_id, e)
-        return False
-    return True
 
 
 @dataclass(frozen=True, slots=True)
