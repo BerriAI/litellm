@@ -3927,38 +3927,48 @@ class TestMCPServerManager:
     async def test_call_regular_mcp_tool_listed_key_does_not_reach_a_later_server(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        from mcp.types import JSONRPCRequest
+
         from litellm.proxy import proxy_server
 
         monkeypatch.setattr(proxy_server, "master_key", "test-master-key")
-        manager: Final = MCPServerManager()
+        tool_call_headers: Final[dict[str, httpx2.Headers]] = {}
+
+        async def respond(request: httpx2.Request) -> httpx2.Response:
+            if request.method == "DELETE":
+                return httpx2.Response(200)
+            payload: Final = _JSONRPC_ADAPTER.validate_json(request.content)
+            if not isinstance(payload, JSONRPCRequest):
+                return httpx2.Response(202)
+            if payload.method == "tools/call":
+                tool_call_headers[request.url.host] = request.headers
+                result: Final[dict[str, object]] = {"content": [], "isError": False}
+            else:
+                result = {
+                    "protocolVersion": "2025-03-26",
+                    "serverInfo": {"name": "upstream", "version": "1"},
+                    "capabilities": {"tools": {}},
+                }
+            return httpx2.Response(200, json={"jsonrpc": "2.0", "id": payload.id, "result": result})
+
+        manager: Final = MCPServerManager(upstream_transport=httpx2.MockTransport(respond))
         listing_server: Final = MCPServer(
             server_id="lists-key",
             name="lists-key",
-            url="https://example.com",
+            url="https://lists-key.example/mcp",
             transport=MCPTransport.http,
             auth_type=MCPAuth.oauth2,
             delegate_auth_to_upstream=True,
             extra_headers=["X-LiteLLM-API-Key"],
         )
         later_server: Final = listing_server.model_copy(
-            update={"server_id": "no-key", "name": "no-key", "extra_headers": None}
+            update={
+                "server_id": "no-key",
+                "name": "no-key",
+                "url": "https://no-key.example/mcp",
+                "extra_headers": None,
+            }
         )
-        mock_client: Final = AsyncMock()
-        mock_client.call_tool = AsyncMock(return_value=CallToolResult(content=[], isError=False))
-        sent_headers: Final[list[dict[str, str] | None]] = []
-
-        async def capture_create_mcp_client(
-            server: MCPServer,
-            mcp_auth_header: str | dict[str, str] | None,
-            extra_headers: dict[str, str] | None,
-            stdio_env: dict[str, str] | None,
-            subject_token: str | None = None,
-            **kwargs: object,
-        ) -> AsyncMock:
-            sent_headers.append(dict(extra_headers) if extra_headers else None)
-            return mock_client
-
-        manager.create_mcp_client = AsyncMock(side_effect=capture_create_mcp_client)
         oauth2_headers: Final = {"Authorization": "Bearer upstream-token"}
         raw_headers: Final = {
             "x-litellm-api-key": "sk-" + "1234",
@@ -3979,8 +3989,8 @@ class TestMCPServerManager:
                 user_api_key_auth=UserAPIKeyAuth(api_key="hashed-key"),
             )
 
-        assert sent_headers[0] is not None and sent_headers[0]["X-LiteLLM-API-Key"] == "sk-" + "1234"
-        assert sent_headers[1] is not None and "X-LiteLLM-API-Key" not in sent_headers[1]
+        assert tool_call_headers["lists-key.example"].get("x-litellm-api-key") == "sk-" + "1234"
+        assert "x-litellm-api-key" not in tool_call_headers["no-key.example"]
 
     @pytest.mark.asyncio
     async def test_call_regular_mcp_tool_v2_authz_code_drops_caller_authorization(
