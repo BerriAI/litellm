@@ -86,7 +86,6 @@ from litellm.constants import (
 from litellm.litellm_core_utils.agentic_followup_failure import is_agentic_followup_failure
 from litellm.litellm_core_utils.allowed_tools_tool_choice import (
     CHAT_ALLOWED_TOOLS_LAYOUT,
-    HOSTED_TOOL_CHOICE_TYPES,
     parse_chat_allowed_tools_tool_choice,
 )
 from litellm.litellm_core_utils.core_helpers import (
@@ -9757,14 +9756,9 @@ def validate_chat_completion_tool_choice(
                 llm_provider="",
             )
 
-        # Standard OpenAI format: {"type": "function", "function": {...}}
-        forces_hosted_tool: Final[bool] = (
-            isinstance(tool_choice_type, str) and tool_choice_type in HOSTED_TOOL_CHOICE_TYPES
-        )
-        if (
-            tool_choice_type != "allowed_tools"
-            and not forces_hosted_tool
-            and (tool_choice_type is None or tool_choice.get("function") is None)
+        # any other string type (web_search, mcp, a tool OpenAI ships tomorrow) is forwarded as is; completion() gates it by provider
+        if not isinstance(tool_choice_type, str) or (
+            tool_choice_type == "function" and tool_choice.get("function") is None
         ):
             raise BadRequestError(
                 message=f"Invalid tool choice, tool_choice={tool_choice}. Please ensure tool_choice follows the OpenAI spec",

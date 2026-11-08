@@ -76,7 +76,7 @@ from litellm.exceptions import LiteLLMUnknownProvider
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.allowed_tools_tool_choice import (
     raise_if_allowed_tools_tool_choice_unsupported,
-    raise_if_hosted_tool_choice_unsupported,
+    raise_if_responses_only_tool_choice_unsupported,
 )
 from litellm.litellm_core_utils.asyncify import asyncify, run_async_function
 from litellm.litellm_core_utils.audio_utils.utils import (
@@ -5916,7 +5916,7 @@ def completion(
             custom_llm_provider=custom_llm_provider,
             model=model,
         )
-        raise_if_hosted_tool_choice_unsupported(
+        raise_if_responses_only_tool_choice_unsupported(
             tool_choice=cast(  # cast-ok: widening an untyped dict to object is always sound, the helper validates it with pydantic
                 object, tool_choice
             ),

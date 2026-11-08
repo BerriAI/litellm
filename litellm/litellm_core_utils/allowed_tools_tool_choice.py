@@ -8,22 +8,7 @@ from litellm.exceptions import BadRequestError
 
 ALLOWED_TOOLS_TOOL_CHOICE_PROVIDERS: Final = frozenset({"openai", "azure", "litellm_proxy"})
 
-HOSTED_TOOL_CHOICE_TYPES: Final = frozenset(
-    {
-        "file_search",
-        "web_search",
-        "web_search_preview",
-        "web_search_preview_2025_03_11",
-        "computer",
-        "computer_use",
-        "computer_use_preview",
-        "code_interpreter",
-        "image_generation",
-        "mcp",
-        "shell",
-        "apply_patch",
-    }
-)
+CHAT_TOOL_CHOICE_TYPES: Final = frozenset({"function", "allowed_tools", "auto", "none", "required"})
 
 CHAT_ALLOWED_TOOLS_LAYOUT: Final = (
     '{"type": "allowed_tools", "allowed_tools": {"mode": "auto" | "required", "tools": [<at least one tool>]}}'
@@ -87,31 +72,33 @@ def raise_if_allowed_tools_tool_choice_unsupported(
     )
 
 
-def hosted_tool_choice_type(tool_choice: object) -> str | None:
-    """The hosted tool a Responses API ``tool_choice`` forces, such as ``web_search``, or ``None`` for any other choice."""
+def responses_only_tool_choice_type(tool_choice: object) -> str | None:
+    """The ``type`` of a ``tool_choice`` dict chat completions has no shape for, such as ``web_search`` or ``mcp``,
+    which only the Responses API accepts, or ``None`` for a chat tool choice."""
     try:
         choice_type: Final = _TOOL_CHOICE_TYPE.validate_python(tool_choice).type
     except ValidationError:
         return None
-    return choice_type if choice_type in HOSTED_TOOL_CHOICE_TYPES else None
+    return None if choice_type in CHAT_TOOL_CHOICE_TYPES else choice_type
 
 
-def raise_if_hosted_tool_choice_unsupported(
+def raise_if_responses_only_tool_choice_unsupported(
     tool_choice: object,
     custom_llm_provider: str,
     model: str,
 ) -> None:
-    """Anthropic drops a tool_choice dict it does not recognise and Bedrock sends a tool named "", so a forced hosted
-    tool stops here with a 400 on providers that cannot run it. ``drop_params`` is deliberately not consulted: the
-    request required the tool, and dropping the choice would let the model answer without it."""
-    hosted: Final = hosted_tool_choice_type(tool_choice)
-    if hosted is None or custom_llm_provider in ALLOWED_TOOLS_TOOL_CHOICE_PROVIDERS:
+    """Anthropic drops a tool_choice dict it does not recognise and Bedrock sends a tool named "", so a choice only the
+    Responses API accepts stops here with a 400 on providers without a Responses bridge. ``drop_params`` is deliberately
+    not consulted: the request required the tool, and dropping the choice would let the model answer without it."""
+    choice_type: Final = responses_only_tool_choice_type(tool_choice)
+    if choice_type is None or custom_llm_provider in ALLOWED_TOOLS_TOOL_CHOICE_PROVIDERS:
         return
     raise BadRequestError(
         message=(
-            f"tool_choice type '{hosted}' forces an OpenAI hosted tool and is only supported for "
-            f"{', '.join(sorted(ALLOWED_TOOLS_TOOL_CHOICE_PROVIDERS))}, got custom_llm_provider={custom_llm_provider}. "
-            "drop_params does not drop it, since that would let the model answer without the tool the request required."
+            f"tool_choice={tool_choice} has type '{choice_type}', which only the Responses API accepts (a hosted tool "
+            f"such as web_search or mcp), so it is only supported for {', '.join(sorted(ALLOWED_TOOLS_TOOL_CHOICE_PROVIDERS))}, "
+            f"got custom_llm_provider={custom_llm_provider}. drop_params does not drop it, since that would let the model "
+            "answer without the tool the request required."
         ),
         model=model,
         llm_provider=custom_llm_provider,
