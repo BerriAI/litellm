@@ -19,7 +19,7 @@ from starlette.types import Scope
 from typing_extensions import assert_never
 
 import litellm
-from litellm._auth.credential import litellm_header_token
+from litellm._auth.runtime import litellm_header_token
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_logger
 from litellm.constants import MCP_ALL_TOOLS_WILDCARD, MCP_PEEKED_BODY_SCOPE_KEY

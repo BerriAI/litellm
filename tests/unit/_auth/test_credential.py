@@ -3,16 +3,14 @@ from typing import Final
 
 import pytest
 
+from tests.unit._auth.conftest import CredentialSelector
+
 from litellm._auth.credential import (
     KeySource,
     PresentedKeys,
     SelectedKey,
     WebSocketDenial,
     WebSocketKeys,
-    litellm_header_token,
-    scheme_credential,
-    select_api_key,
-    select_websocket_api_key,
 )
 
 AWS4_BEARER: Final = (
@@ -54,8 +52,10 @@ PRECEDENCE: Final = (
         ("Bearertoken", None),
     ],
 )
-def test_scheme_credential_strips_a_known_scheme_in_any_case(value: str, expected: str | None):
-    assert scheme_credential(value) == expected
+def test_scheme_credential_strips_a_known_scheme_in_any_case(
+    credentials: CredentialSelector, value: str, expected: str | None
+):
+    assert credentials.scheme_credential(value) == expected
 
 
 @pytest.mark.parametrize(
@@ -68,16 +68,18 @@ def test_scheme_credential_strips_a_known_scheme_in_any_case(value: str, expecte
         ("Bearer ", ""),
     ],
 )
-def test_litellm_header_strips_a_known_scheme_or_keeps_the_raw_value(value: str, expected: str):
-    assert litellm_header_token(value) == expected
+def test_litellm_header_strips_a_known_scheme_or_keeps_the_raw_value(
+    credentials: CredentialSelector, value: str, expected: str
+):
+    assert credentials.litellm_header_token(value) == expected
 
 
 @pytest.mark.parametrize("rank", range(len(PRECEDENCE)))
-def test_higher_priority_source_wins_over_every_lower_one(rank: int):
+def test_higher_priority_source_wins_over_every_lower_one(credentials: CredentialSelector, rank: int):
     higher, source, template = PRECEDENCE[rank]
     winner: Final = template.format(higher)
     losers: Final = {field: lower_template.format("loser") for field, _, lower_template in PRECEDENCE[rank + 1 :]}
-    assert select_api_key(PresentedKeys(**losers, **{higher: winner})) == SelectedKey(
+    assert credentials.select_api_key(PresentedKeys(**losers, **{higher: winner})) == SelectedKey(
         source=source, presented=winner, token=higher
     )
 
@@ -91,8 +93,10 @@ def test_higher_priority_source_wins_over_every_lower_one(rank: int):
         (PresentedKeys(authorization="Token x", x_api_key="lower"), ""),
     ],
 )
-def test_selected_source_without_a_known_scheme_yields_an_empty_token(keys: PresentedKeys, expected: str):
-    selected: Final = select_api_key(keys)
+def test_selected_source_without_a_known_scheme_yields_an_empty_token(
+    credentials: CredentialSelector, keys: PresentedKeys, expected: str
+):
+    selected: Final = credentials.select_api_key(keys)
     assert selected is not None
     assert selected.token == expected
 
@@ -106,21 +110,25 @@ def test_selected_source_without_a_known_scheme_yields_an_empty_token(keys: Pres
         (PresentedKeys(api_key=""), KeySource.API_KEY),
     ],
 )
-def test_only_empty_authorization_and_query_fall_through(keys: PresentedKeys, expected_source: KeySource):
-    selected: Final = select_api_key(keys)
+def test_only_empty_authorization_and_query_fall_through(
+    credentials: CredentialSelector, keys: PresentedKeys, expected_source: KeySource
+):
+    selected: Final = credentials.select_api_key(keys)
     assert selected is not None
     assert selected.source is expected_source
 
 
 @pytest.mark.parametrize("keys", [PresentedKeys(), PresentedKeys(authorization=""), PresentedKeys(query="")])
-def test_nothing_presented_selects_nothing(keys: PresentedKeys):
-    assert select_api_key(keys) is None
+def test_nothing_presented_selects_nothing(credentials: CredentialSelector, keys: PresentedKeys):
+    assert credentials.select_api_key(keys) is None
 
 
-def test_presented_keeps_the_raw_value_of_the_selected_source():
+def test_presented_keeps_the_raw_value_of_the_selected_source(
+    credentials: CredentialSelector,
+):
     keys: Final = PresentedKeys(authorization=AWS4_BEARER)
-    assert select_api_key(keys) == SelectedKey(KeySource.AUTHORIZATION, AWS4_BEARER, "token")
-    assert select_api_key(replace(keys, custom_header="Basic abc")) == SelectedKey(
+    assert credentials.select_api_key(keys) == SelectedKey(KeySource.AUTHORIZATION, AWS4_BEARER, "token")
+    assert credentials.select_api_key(replace(keys, custom_header="Basic abc")) == SelectedKey(
         KeySource.CUSTOM_HEADER, "Basic abc", "abc"
     )
 
@@ -148,6 +156,6 @@ def test_presented_keeps_the_raw_value_of_the_selected_source():
     ],
 )
 def test_websocket_takes_a_bearer_authorization_then_api_key_then_subprotocol(
-    keys: WebSocketKeys, expected: str | WebSocketDenial
+    credentials: CredentialSelector, keys: WebSocketKeys, expected: str | WebSocketDenial
 ):
-    assert select_websocket_api_key(keys) == expected
+    assert credentials.select_websocket_api_key(keys) == expected

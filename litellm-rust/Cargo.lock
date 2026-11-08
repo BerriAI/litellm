@@ -4337,6 +4337,7 @@ dependencies = [
  "litellm-llms",
  "litellm-llms-types",
  "litellm-model-catalog",
+ "litellm-request-auth-core",
  "litellm-router-core",
  "litellm-router-types",
  "litellm-secret-value",
@@ -4402,6 +4403,19 @@ dependencies = [
  "testcontainers-modules",
  "thiserror 2.0.19",
  "tokio",
+]
+
+[[package]]
+name = "litellm-request-auth-core"
+version = "0.1.0"
+dependencies = [
+ "litellm-secret-value",
+ "rstest",
+ "serde",
+ "sha2 0.10.9",
+ "strum",
+ "thiserror 2.0.19",
+ "veil",
 ]
 
 [[package]]

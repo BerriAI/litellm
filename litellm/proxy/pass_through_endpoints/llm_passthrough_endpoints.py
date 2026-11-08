@@ -31,7 +31,7 @@ from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm import get_llm_provider
-from litellm._auth.credential import scheme_credential
+from litellm._auth.runtime import scheme_credential
 from litellm._logging import redact_internal_details_from_client_message, verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.constants import (

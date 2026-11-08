@@ -462,6 +462,7 @@ jobs:
 
           - shard: rust-bridge-harness
             test-path: >-
+              tests/unit/_auth
               tests/test_litellm_rust/test_dispatch.py
               tests/test_litellm_rust/test_public_entries.py
               tests/test_litellm_rust/chat_completions/test_dispatch.py

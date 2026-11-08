@@ -26,9 +26,6 @@ from litellm._auth.credential import (
     PresentedKeys,
     WebSocketDenial,
     WebSocketKeys,
-    scheme_credential,
-    select_api_key,
-    select_websocket_api_key,
 )
 from litellm._auth.decision import (
     AdminKey,
@@ -57,7 +54,7 @@ from litellm._auth.decision import (
     WithinModelBudgets,
 )
 from litellm._auth.driver import drive, drive_model_budgets, drive_team_member_model_budgets
-from litellm._auth.python_core import PythonCore
+from litellm._auth.runtime import get_auth_core, scheme_credential, select_api_key, select_websocket_api_key
 from litellm._internal_context import service_target
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm._service_logger import ServiceLogging
@@ -983,7 +980,9 @@ class _TeamMemberModelBudgetEffects:
         resolved: Final[tuple[tuple[str, str], ...]] = tuple(
             (
                 candidate,
-                target if (target := resolve_model_group_alias(model_group_aliases, candidate)) is not None else candidate,
+                target
+                if (target := resolve_model_group_alias(model_group_aliases, candidate)) is not None
+                else candidate,
             )
             for candidate in _budget_fallback_candidates(fallback_models or ())
         )
@@ -1138,7 +1137,9 @@ async def _check_team_member_model_budget_with_fallback(
     )
     match await drive_team_member_model_budgets(_AUTH_CORE.check_team_member_model_budgets(), effects):
         case Deny(denial=denial):
-            raise denial_exception(denial, token=valid_token.token, route=route, jwt_auth_enabled=False, key=valid_token)
+            raise denial_exception(
+                denial, token=valid_token.token, route=route, jwt_auth_enabled=False, key=valid_token
+            )
         case Allow():
             return
 
@@ -2212,7 +2213,7 @@ def _custom_auth_token_for_this_request(response: object) -> UserAPIKeyAuth:
     return UserAPIKeyAuth.model_validate(response).model_copy()
 
 
-_AUTH_CORE: Final[AuthCore] = PythonCore()
+_AUTH_CORE: Final[AuthCore] = get_auth_core()
 
 
 class _ResolvedEndUser(NamedTuple):
