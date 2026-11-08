@@ -127,7 +127,8 @@ const A2AMetrics: React.FC<A2AMetricsProps> = ({ a2aMetadata, timeToFirstToken, 
           <Tooltip>
             <TooltipTrigger render={<span className="flex items-center text-info" />}>
               <Clock className="mr-1 size-3" />
-              {(totalLatency / 1000).toFixed(2)}s
+              {(totalLatency / 1000).toFixed(2)}
+              {t("playground.chatUi.a2aMetrics.secondsSuffix")}
             </TooltipTrigger>
             <TooltipContent>{t("playground.chatUi.a2aMetrics.totalLatency")}</TooltipContent>
           </Tooltip>

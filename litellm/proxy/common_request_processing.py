@@ -7,6 +7,7 @@ from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, 
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from functools import lru_cache
+from http import HTTPStatus
 from itertools import chain
 from types import MappingProxyType
 from typing import (
@@ -52,7 +53,7 @@ from litellm.constants import (
     STREAM_SSE_KEEPALIVE_PING_BYTES,
     UNSAFE_PROXY_RESPONSE_HEADERS,
 )
-from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.integrations.custom_guardrail import CustomGuardrail, ModifyResponseException
 from litellm.integrations.otel.runtime import phase_event
 from litellm.litellm_core_utils.add_retry_fallback_headers import get_hidden_params_dict
 from litellm.litellm_core_utils.agentic_followup_failure import is_agentic_followup_failure
@@ -63,11 +64,16 @@ from litellm.litellm_core_utils.bug_report import (
     strip_bug_report_notice,
 )
 from litellm.litellm_core_utils.core_helpers import (
+    attribute_or_none,
     finite_cost,
     get_or_create_metadata_bucket,
+    has_attributes,
     independent_snapshot,
     is_expected_client_error,
+    proxy_request_headers,
     redact_nested_match_and_regex_keys,
+    require_attributes,
+    stream_cost_injection_requested,
 )
 from litellm.litellm_core_utils.dd_tracing import NullTracer, tracer
 from litellm.litellm_core_utils.get_supported_openai_params import (
@@ -94,6 +100,7 @@ from litellm.litellm_core_utils.streaming_handler import (
     backfill_missing_cache_usage_fields,
 )
 from litellm.litellm_core_utils.tool_fields import DropPolicy, MalformedField, drop_policy, resolve_tool_fields
+from litellm.llms.openai.responses.guardrail_translation.handler import OpenAIResponsesHandler
 from litellm.proxy._types import LiteLLMRoutes, ProxyErrorTypes, ProxyException, UserAPIKeyAuth
 from litellm.proxy.anthropic_endpoints.answered_status import is_provider_overload, with_openai_overload_status
 from litellm.proxy.auth.auth_checks import (
@@ -122,6 +129,11 @@ from litellm.proxy.common_utils.openai_error_payload import (
     openai_error_param,
     openai_error_type,
     relayed_provider_specific_fields,
+)
+from litellm.proxy.common_utils.responses_stream_errors import (
+    SSE_LINE_BREAK,
+    ResponsesStreamErrorState,
+    sse_error_object,
 )
 from litellm.proxy.common_utils.sse_keepalive import (
     SSE_COMMENT_PING_BYTES,
@@ -674,6 +686,10 @@ class _ReadsHeaderValues(Protocol):
     def get(self, key: str, default: str = "") -> str: ...
 
 
+class _NativeLoggingRelease(Protocol):
+    def release(self, success: bool, /) -> object: ...
+
+
 def _as_header_reader(headers: _ReadsHeaderValues) -> _ReadsHeaderValues:
     return headers
 
@@ -691,6 +707,10 @@ class _DispatchesSuccessHandlers(Protocol):
 
 def _as_success_dispatcher(logging_obj: _DispatchesSuccessHandlers) -> _DispatchesSuccessHandlers:
     return logging_obj
+
+
+class _ClosesAsync(Protocol):
+    def aclose(self) -> Awaitable[object]: ...
 
 
 def serialize_http_exception_detail(
@@ -1013,11 +1033,32 @@ async def _enforce_guardrail_added_tag_budgets(
         ) from e
 
 
-async def _parse_event_data_for_error(event_line: str | bytes) -> int | None:
+SseDataPayload: TypeAlias = Callable[[str | bytes], str | None]
+
+
+def _sse_text(event_line: str | bytes) -> str:
+    return event_line.decode("utf-8") if isinstance(event_line, bytes) else event_line
+
+
+def _sse_data_payload(event_line: str | bytes) -> str | None:
+    text: Final = _sse_text(event_line)
+    return text.removeprefix("data: ").strip() if text.startswith("data: ") else None
+
+
+def _responses_event_data_payload(event_line: str | bytes) -> str | None:
+    match SSE_LINE_BREAK.split(_sse_text(event_line).strip()):
+        case ["event: error", data_line] if data_line.startswith("data: "):
+            return data_line.removeprefix("data: ").strip()
+        case _:
+            return _sse_data_payload(event_line)
+
+
+async def _parse_event_data_for_error(
+    event_line: str | bytes, data_payload: SseDataPayload = _sse_data_payload
+) -> int | None:
     """Parses an event line and returns an error code if present, else None."""
-    event_line = event_line.decode("utf-8") if isinstance(event_line, bytes) else event_line
-    if event_line.startswith("data: "):
-        json_str: Final = event_line[len("data: ") :].strip()
+    json_str: Final = data_payload(event_line)
+    if json_str is not None:
         if not json_str or json_str == "[DONE]":  # handle empty data or [DONE] message
             return None
         try:
@@ -1048,18 +1089,17 @@ async def _parse_event_data_for_error(event_line: str | bytes) -> int | None:
     return None
 
 
-def _extract_error_from_sse_chunk(event_line: str | bytes) -> dict:
+def _extract_error_from_sse_chunk(event_line: str | bytes, data_payload: SseDataPayload = _sse_data_payload) -> dict:
     """
     Extract error dictionary from SSE format chunk.
 
     Args:
         event_line: SSE format event line, e.g. "data: {"error": {...}}\n\n"
+        data_payload: Reads the JSON payload out of the event line
 
     Returns:
         Error dictionary in OpenAI API format
     """
-    event_line = event_line.decode("utf-8") if isinstance(event_line, bytes) else event_line
-
     # Default error format
     default_error: Final = {
         "message": "Unknown error",
@@ -1068,8 +1108,8 @@ def _extract_error_from_sse_chunk(event_line: str | bytes) -> dict:
         "code": "500",
     }
 
-    if event_line.startswith("data: "):
-        json_str: Final = event_line[len("data: ") :].strip()
+    json_str: Final = data_payload(event_line)
+    if json_str is not None:
         if not json_str or json_str == "[DONE]":
             return default_error
 
@@ -1277,9 +1317,25 @@ def _sse_error_frames(error_obj: Mapping[str, object]) -> tuple[str, str]:
     return f"data: {json.dumps({'error': error_obj}, default=str)}\n\n", "data: [DONE]\n\n"
 
 
+def _responses_error_frames(error_obj: Mapping[str, object]) -> tuple[str, ...]:
+    return (ResponsesStreamErrorState().format_error(error_obj),)
+
+
+@dataclass(frozen=True, slots=True)
+class LateSseFraming:
+    """How a response the keepalive already opened ends once its upstream fails late."""
+
+    failure: Callable[[Exception], tuple[str, ...]]
+    body: Callable[[Response], tuple[bytes, ...]]
+
+
 def _openai_late_failure_frames(exc: Exception) -> tuple[str, ...]:
     _, error_obj = sse_error_payload(exc)
     return _sse_error_frames(error_obj)
+
+
+def _openai_late_body_frames(produced: Response) -> tuple[bytes, ...]:
+    return b"data: " + (bytes(produced.body) or b"{}") + b"\n\n", b"data: [DONE]\n\n"
 
 
 def _anthropic_late_failure_frames(exc: Exception) -> tuple[str, ...]:
@@ -1292,65 +1348,87 @@ def _anthropic_late_failure_frames(exc: Exception) -> tuple[str, ...]:
     )
 
 
-_ANTHROPIC_LATE_ERROR_BODY_LIMIT: Final = 64 * 1024
-
-
-async def _read_late_error_body(response: Response) -> bytes:
-    """Read at most one page of an error body. A read that fails yields what it got."""
-    read: bytes = b""  # rebind-ok: accumulates streamed chunks, then takes the buffered body
-    try:
-        if isinstance(response, StreamingResponse):
-            async for chunk in response.body_iterator:
-                read += chunk.encode("utf-8") if isinstance(chunk, str) else bytes(chunk)
-                if len(read) >= _ANTHROPIC_LATE_ERROR_BODY_LIMIT:
-                    break
-        else:
-            read = bytes(response.body or b"")  # rebind-ok: the buffered body arrives whole, nothing to accumulate
-    except Exception:  # noqa: BLE001  # the stream is already broken; the caller still needs a frame
-        verbose_proxy_logger.exception("could not read the body of an upstream late failure")
-    return read[:_ANTHROPIC_LATE_ERROR_BODY_LIMIT]
-
-
-class _LateErrorDetail(BaseModel):
-    model_config = ConfigDict(extra="ignore", frozen=True)
-
-    message: str | None = None
-
-
-class _LateErrorEnvelope(BaseModel):
-    model_config = ConfigDict(extra="ignore", frozen=True)
-
-    error: _LateErrorDetail | None = None
-
-
 def _late_error_message(body: bytes, status_code: int) -> str:
+    """The message inside an upstream error body, or a readable stand-in."""
     fallback: Final = f"upstream returned HTTP {status_code}"
-    detail: Final = body.decode("utf-8", "replace")
+    detail: Final = body.decode("utf-8", "replace").strip()
     if not detail:
         return fallback
     try:
-        envelope: Final = _LateErrorEnvelope.model_validate_json(detail)
-    except ValidationError:
+        parsed: Final = json.loads(detail)
+    except ValueError:
         return detail
-    message: Final = envelope.error.message if envelope.error is not None else None
-    return message or detail
+    if isinstance(parsed, dict):
+        error: Final = parsed.get("error")
+        if isinstance(error, dict):
+            message: Final = error.get("message")
+            if isinstance(message, str) and message:
+                return message
+    return detail
 
 
-async def _anthropic_late_response_frames(response: Response) -> tuple[str, ...]:
+def _anthropic_late_body_frames(produced: Response) -> tuple[bytes, ...]:
     """The frame an Anthropic stream ends with when the upstream answered with an error status.
 
     The status line is already out, so the failure has to travel as an event. Anthropic
-    clients read `event: error` and skip anything else, which is why the upstream body
-    cannot simply be relayed.
+    clients pick events by name and skip anything else, which is why the upstream body
+    cannot simply be relayed as a bare `data:` line the way OpenAI clients read it.
     """
-    body: Final = await _read_late_error_body(response)
-    message: Final = redact_internal_details_from_client_message(_late_error_message(body, response.status_code))
-    return (
-        anthropic_error_sse_frame(
-            status_code=response.status_code,
-            raw_message=message,
-        ),
+    message: Final = redact_internal_details_from_client_message(
+        _late_error_message(bytes(produced.body or b""), produced.status_code)
     )
+    return (anthropic_error_sse_frame(status_code=produced.status_code, raw_message=message).encode(),)
+
+
+def _responses_late_failure_frames(exc: Exception) -> tuple[str, ...]:
+    if isinstance(exc, ModifyResponseException):
+        return tuple(chunk.decode() for chunk in OpenAIResponsesHandler().build_block_sse_chunks(exc))
+    return _responses_error_frames(sse_error_payload(exc)[1])
+
+
+def _responses_late_body_frames(produced: Response) -> tuple[bytes, ...]:
+    body: Final = bytes(produced.body)
+    error_obj: Final = sse_error_object(body or b"{}") or {"message": body.decode()}
+    with_status: Final = {**error_obj, "code": error_obj.get("code") or str(produced.status_code)}
+    return tuple(frame.encode() for frame in _responses_error_frames(with_status))
+
+
+OPENAI_LATE_SSE_FRAMING: Final = LateSseFraming(failure=_openai_late_failure_frames, body=_openai_late_body_frames)
+ANTHROPIC_LATE_SSE_FRAMING: Final = LateSseFraming(
+    failure=_anthropic_late_failure_frames, body=_anthropic_late_body_frames
+)
+RESPONSES_LATE_SSE_FRAMING: Final = LateSseFraming(
+    failure=_responses_late_failure_frames, body=_responses_late_body_frames
+)
+
+
+@dataclass(frozen=True, slots=True)
+class FirstChunkSseFraming:
+    """How a stream's first chunk is read for an error, and how the stream ends when reading it fails."""
+
+    data_payload: SseDataPayload
+    error_frames: Callable[[Mapping[str, object]], tuple[str, ...]]
+    lowest_error_status: int
+
+
+OPENAI_FIRST_CHUNK_FRAMING: Final = FirstChunkSseFraming(
+    data_payload=_sse_data_payload, error_frames=_sse_error_frames, lowest_error_status=HTTPStatus.CONTINUE
+)
+RESPONSES_FIRST_CHUNK_FRAMING: Final = FirstChunkSseFraming(
+    data_payload=_responses_event_data_payload,
+    error_frames=_responses_error_frames,
+    lowest_error_status=HTTPStatus.BAD_REQUEST,
+)
+
+
+@dataclass(frozen=True, slots=True)
+class SseFraming:
+    first_chunk: FirstChunkSseFraming
+    late: LateSseFraming
+
+
+OPENAI_SSE_FRAMING: Final = SseFraming(first_chunk=OPENAI_FIRST_CHUNK_FRAMING, late=OPENAI_LATE_SSE_FRAMING)
+RESPONSES_SSE_FRAMING: Final = SseFraming(first_chunk=RESPONSES_FIRST_CHUNK_FRAMING, late=RESPONSES_LATE_SSE_FRAMING)
 
 
 def _sse_stream_headers(headers: Mapping[str, str]) -> Mapping[str, str]:
@@ -1381,6 +1459,7 @@ async def create_response(
     request: Request | None = None,
     refresh_headers: Callable[[], Awaitable[Mapping[str, str]]] | None = None,
     general_settings: Mapping[str, object] = _NO_GENERAL_SETTINGS,
+    framing: FirstChunkSseFraming = OPENAI_FIRST_CHUNK_FRAMING,
 ) -> StreamingResponse | JSONResponse:
     """
     Create streaming response, checking if the first chunk is an error.
@@ -1416,8 +1495,10 @@ async def create_response(
 
         if first_chunk_value is not None:
             try:
-                error_code_from_chunk: Final = await _parse_event_data_for_error(first_chunk_value)
-                if error_code_from_chunk is not None:
+                error_code_from_chunk: Final = await _parse_event_data_for_error(
+                    first_chunk_value, framing.data_payload
+                )
+                if error_code_from_chunk is not None and error_code_from_chunk >= framing.lowest_error_status:
                     # First chunk is an error, stream hasn't really started yet
                     # Should return standard JSON error response instead of SSE format
                     final_status_code = error_code_from_chunk
@@ -1428,7 +1509,9 @@ async def create_response(
 
                     # Parse error content
                     error_dict: Final = with_call_id(
-                        JSON_OBJECT.validate_python(_extract_error_from_sse_chunk(first_chunk_value)),
+                        JSON_OBJECT.validate_python(
+                            _extract_error_from_sse_chunk(first_chunk_value, framing.data_payload)
+                        ),
                         error_body_call_id(general_settings, resolved_headers.get(LITELLM_CALL_ID_HEADER)),
                     )
 
@@ -1470,7 +1553,7 @@ async def create_response(
         error_status, error_obj = sse_error_payload(e)
 
         async def error_gen_message() -> AsyncGenerator[str, None]:
-            for frame in _sse_error_frames(error_obj):
+            for frame in framing.error_frames(error_obj):
                 yield frame
 
         return StreamingResponse(
@@ -1553,13 +1636,13 @@ async def _aclose_late_response(produced: Response) -> None:
             verbose_proxy_logger.debug("error closing relayed streaming generator: %s", exc)
 
 
-async def _relay_late_response(produced: Response) -> AsyncGenerator[bytes, None]:
+async def _relay_late_response(produced: Response, framing: LateSseFraming) -> AsyncGenerator[bytes, None]:
     """Replay a Response that was built after a keepalive had already opened the wire."""
     if not isinstance(produced, StreamingResponse):
         # The status line is already on the wire, so a non-streaming body, an error
         # body included, can only reach the client as an SSE frame.
-        yield b"data: " + (bytes(produced.body) or b"{}") + b"\n\n"
-        yield b"data: [DONE]\n\n"
+        for frame in framing.body(produced):
+            yield frame
         return
 
     try:
@@ -1601,8 +1684,7 @@ async def open_sse_before_first_byte(
     ping_interval_seconds: float | str | None,
     media_type: str = "text/event-stream",
     on_late_failure: Callable[[Exception], Awaitable[HTTPException | None]] | None = None,
-    late_failure_frames: Callable[[Exception], tuple[str, ...]] = _openai_late_failure_frames,
-    answers_as_anthropic: bool = False,
+    late_framing: LateSseFraming = OPENAI_LATE_SSE_FRAMING,
 ) -> _LateResponseT | StreamingResponse:
     """Write SSE keepalive comments while the upstream LLM call is still in flight.
 
@@ -1648,20 +1730,10 @@ async def open_sse_before_first_byte(
                 # would never fire and the failure would go unaudited. The hook
                 # also gets to sanitize what reaches the client, by returning or
                 # raising a replacement, so its answer decides the frame.
-                failure_frames: Final = _anthropic_late_failure_frames if answers_as_anthropic else late_failure_frames
-                for frame in failure_frames(await _sanitized_late_failure(exc, on_late_failure)):
+                for frame in late_framing.failure(await _sanitized_late_failure(exc, on_late_failure)):
                     yield frame.encode()
                 return
-            if answers_as_anthropic and produced.status_code >= 400:
-                # The upstream answered with an error status after the keepalive had
-                # already committed a 200. Those bytes cannot be relayed as they are:
-                # a caller that speaks a different stream protocol reads them as an
-                # unknown event and treats the truncated stream as a completed turn.
-                for frame in await _anthropic_late_response_frames(produced):
-                    yield frame.encode()
-                await _aclose_late_response(produced)
-                return
-            async for chunk in _relay_late_response(produced):
+            async for chunk in _relay_late_response(produced, late_framing):
                 yield chunk
         finally:
             if not produce_task.done():
@@ -3066,6 +3138,7 @@ class ProxyBaseLLMRequestProcessing:
         is_streaming_request: bool | None = False,
         contents: list[object] | None = None,
         skip_pre_call_logic: bool = False,
+        sse_framing: SseFraming = OPENAI_SSE_FRAMING,
     ) -> object:
         """Run the request, sending SSE keepalives while the upstream is still silent.
 
@@ -3107,10 +3180,11 @@ class ProxyBaseLLMRequestProcessing:
                 is_streaming_request=is_streaming_request,
                 contents=contents,
                 skip_pre_call_logic=skip_pre_call_logic,
+                first_chunk_framing=sse_framing.first_chunk,
             ),
             ping_interval_seconds=ttft_keepalive_interval(self.data, llm_router),
             on_late_failure=_audit_late_failure,
-            late_failure_frames=_anthropic_late_failure_frames if answers_as_anthropic else _openai_late_failure_frames,
+            late_framing=ANTHROPIC_LATE_SSE_FRAMING if answers_as_anthropic else sse_framing.late,
         )
 
     async def _process_llm_request(
@@ -3134,6 +3208,7 @@ class ProxyBaseLLMRequestProcessing:
         is_streaming_request: bool | None = False,
         contents: list[object] | None = None,  # Add contents parameter
         skip_pre_call_logic: bool = False,
+        first_chunk_framing: FirstChunkSseFraming = OPENAI_FIRST_CHUNK_FRAMING,
     ) -> Any:
         """
         Common request processing logic for both chat completions and responses API endpoints
@@ -3417,6 +3492,7 @@ class ProxyBaseLLMRequestProcessing:
                         request=request,
                         refresh_headers=refresh_stream_headers,
                         general_settings=general_settings,
+                        framing=first_chunk_framing,
                     )
 
             ### CALL HOOKS ### - modify outgoing data
@@ -3656,8 +3732,8 @@ class ProxyBaseLLMRequestProcessing:
 
         Streaming ``/v1/responses`` short-circuits out of
         ``base_process_llm_request`` before the non-streaming ownership
-        tail runs. The OpenAI SDK closes the connection at ``data: [DONE]``
-        and starlette cancels the body task on disconnect, so a write that
+        tail runs. The OpenAI SDK can close the connection right after the terminal
+        event and starlette cancels the body task on disconnect, so a write that
         waits for the generator to finish never lands. The iterator sets
         ``completed_response`` before it hands over its terminal chunk, so
         the ``LiteLLM_ManagedObjectTable`` row is written the moment it
@@ -4241,10 +4317,10 @@ class ProxyBaseLLMRequestProcessing:
         gating logic directly rather than reimplementing the finally block.
         """
         if getattr(logging_obj, "call_type", None) in ("ocr", "aocr"):
-            pending: Final = getattr(logging_obj, "_native_pending_logging", None)
+            pending: Final = attribute_or_none(logging_obj, "_native_pending_logging")
             if pending is not None:
                 logging_obj._native_pending_logging = None  # rebind-ok: consume the native OCR release signal once
-                pending.release(not exception_raised)
+                require_attributes(pending, _NativeLoggingRelease, "release").release(not exception_raised)
         _enqueue_fn: Final = getattr(logging_obj, "enqueue_deferred_logging", None)
         if _enqueue_fn is None:
             return
@@ -4676,7 +4752,7 @@ class ProxyBaseLLMRequestProcessing:
     async def finalize_streaming_generator_cleanup(
         request: Request | None,
         request_data: dict,
-        response: Any,
+        response: object,
         stream_completed: bool = False,
         client_disconnected: bool = False,
         user_api_key_dict: UserAPIKeyAuth | None = None,
@@ -4713,7 +4789,7 @@ class ProxyBaseLLMRequestProcessing:
                 ):
                     await proxy_logging_obj.arelease_max_parallel_requests_on_disconnect(user_api_key_dict)
 
-            if hasattr(response, "aclose"):
+            if has_attributes(response, _ClosesAsync, "aclose"):
                 try:
                     await response.aclose()
                 except BaseException as e:  # noqa: BLE001
@@ -4773,7 +4849,10 @@ class ProxyBaseLLMRequestProcessing:
         # await, response-string materialization, and cost-injection call are
         # pure overhead on the streaming hot path (the default config).
         caps: Final = ProxyLogging.callback_capabilities()
-        cost_injection_enabled: Final = bool(getattr(litellm, "include_cost_in_streaming_usage", False))
+        request_headers: Final = proxy_request_headers(
+            request_data  # pyright: ignore[reportUnknownArgumentType]  # request_data is the untyped proxy request dict
+        )
+        cost_injection_enabled: Final = stream_cost_injection_requested(request_headers)
         fast_path = not caps.has_streaming_chunk_override and not caps.has_guardrail and not cost_injection_enabled
         debug_enabled: Final = verbose_proxy_logger.isEnabledFor(logging.DEBUG)
         stream_completed = False
@@ -4820,7 +4899,7 @@ class ProxyBaseLLMRequestProcessing:
 
                     model_name = request_data.get("model", "")
                     chunk = ProxyBaseLLMRequestProcessing.process_chunk_with_cost_injection(
-                        chunk, model_name, request_data.get("litellm_logging_obj")
+                        chunk, model_name, request_data.get("litellm_logging_obj"), request_headers=request_headers
                     )
 
                 # Set before the yield: an async generator suspends at the yield,
@@ -4949,18 +5028,30 @@ class ProxyBaseLLMRequestProcessing:
     @overload
     @staticmethod
     def process_chunk_with_cost_injection(
-        chunk: bytes, model_name: str, litellm_logging_obj: LiteLLMLoggingObj | None = None
+        chunk: bytes,
+        model_name: str,
+        litellm_logging_obj: LiteLLMLoggingObj | None = None,
+        *,
+        request_headers: Mapping[str, object] | None = None,
     ) -> bytes: ...
 
     @overload
     @staticmethod
     def process_chunk_with_cost_injection(
-        chunk: object, model_name: str, litellm_logging_obj: LiteLLMLoggingObj | None = None
+        chunk: object,
+        model_name: str,
+        litellm_logging_obj: LiteLLMLoggingObj | None = None,
+        *,
+        request_headers: Mapping[str, object] | None = None,
     ) -> object: ...
 
     @staticmethod
     def process_chunk_with_cost_injection(
-        chunk: object, model_name: str, litellm_logging_obj: LiteLLMLoggingObj | None = None
+        chunk: object,
+        model_name: str,
+        litellm_logging_obj: LiteLLMLoggingObj | None = None,
+        *,
+        request_headers: Mapping[str, object] | None = None,
     ) -> object:
         """
         Process a streaming chunk and inject cost information if enabled.
@@ -4969,11 +5060,12 @@ class ProxyBaseLLMRequestProcessing:
             chunk: The streaming chunk (dict, str, bytes, or bytearray)
             model_name: Model name for cost calculation
             litellm_logging_obj: The call's logging object, used for pricing
+            request_headers: The proxy request headers, read for the per-request opt-in header
 
         Returns:
             The processed chunk with cost information injected if applicable
         """
-        if not getattr(litellm, "include_cost_in_streaming_usage", False):
+        if not stream_cost_injection_requested(request_headers):
             return chunk
 
         try:

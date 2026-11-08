@@ -79,6 +79,7 @@ import { Tag } from "../tag_management/types";
 import EditLoggingSettings from "../team/EditLoggingSettings";
 import { useZodForm } from "@/lib/forms/useZodForm";
 import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
+import { codeSamples } from "@/i18n/untranslated/codeSamples";
 
 interface KeyEditViewProps {
   keyData: KeyResponse;
@@ -116,6 +117,7 @@ function KeyEditSession({
     values: toKeyEditFormValues(keyData),
     resetOptions: { keepDirtyValues: true },
   });
+  const { dirtyFields } = form.formState;
   const [promptsList, setPromptsList] = useState<string[]>([]);
   const [tagsList, setTagsList] = useState<Record<string, Tag>>({});
   const team = teams?.find((team) => team.team_id === keyData.team_id);
@@ -321,7 +323,7 @@ function KeyEditSession({
           ...values,
           ...(detachProject && enableProjectsUI && canDetachProject ? { project_id: null } : {}),
         }),
-        [...Object.keys(form.formState.dirtyFields), ...(budgetLimitsUnchanged ? [] : ["budget_limits"])],
+        [...Object.keys(dirtyFields), ...(budgetLimitsUnchanged ? [] : ["budget_limits"])],
       );
     } finally {
       setIsKeySaving(false);
@@ -575,7 +577,7 @@ function KeyEditSession({
                 {...field}
                 value={(field.value as string | undefined) ?? ""}
                 rows={4}
-                placeholder='{"gpt-4": 100, "claude-v1": 200}'
+                placeholder={codeSamples.models.perModelLimitsJson}
               />
             )}
           </FormField>
@@ -590,7 +592,7 @@ function KeyEditSession({
                 {...field}
                 value={(field.value as string | undefined) ?? ""}
                 rows={4}
-                placeholder='{"gpt-4": 100, "claude-v1": 200}'
+                placeholder={codeSamples.models.perModelLimitsJson}
               />
             )}
           </FormField>
@@ -618,7 +620,7 @@ function KeyEditSession({
                 {...field}
                 value={(field.value as string | undefined) ?? ""}
                 rows={4}
-                placeholder='{"gpt-4": 4096}'
+                placeholder={codeSamples.models.perModelMaxTokensJson}
                 disabled={!canEditEstimates}
               />
             )}

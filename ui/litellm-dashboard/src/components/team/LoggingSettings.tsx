@@ -14,6 +14,7 @@ import { Eye, EyeOff, Info, Plus, Trash2 } from "lucide-react";
 import { callbackInfo, callback_map, mapDisplayToInternalNames } from "../callback_info_helpers";
 import { Logo } from "@/components/molecules/logo/Logo";
 import NumericalInput from "../shared/numerical_input";
+import { codeSamples } from "@/i18n/untranslated/codeSamples";
 
 const CALLBACK_TYPE_ITEMS: readonly { value: string; labelKey: ParseKeys }[] = [
   { value: "success", labelKey: "teams.loggingSettings.callbackTypes.success" },
@@ -187,7 +188,7 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({
         <NumericalInput
           step={0.01}
           width={400}
-          placeholder={`os.environ/${paramName.toUpperCase()}`}
+          placeholder={codeSamples.teams.callbackEnvVar(paramName)}
           value={config.callback_vars[paramName] || ""}
           onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
             updateCallbackVar(configIndex, paramName, e.target.value)
@@ -198,7 +199,7 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({
     return (
       <CallbackVarInput
         sensitive={paramType === "password"}
-        placeholder={`os.environ/${paramName.toUpperCase()}`}
+        placeholder={codeSamples.teams.callbackEnvVar(paramName)}
         value={config.callback_vars[paramName] || ""}
         onValueChange={(newValue) => updateCallbackVar(configIndex, paramName, newValue)}
       />
@@ -288,10 +289,10 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({
             </SelectTrigger>
             <SelectContent>
               {allCallbacks.map((callbackName) => {
-                const description = callbackInfo[callbackName]?.description;
+                const descriptionKey = callbackInfo[callbackName]?.descriptionKey;
                 return (
                   <SelectItem key={callbackName} value={callbackName}>
-                    <SimpleTooltip content={description} side="right">
+                    <SimpleTooltip content={descriptionKey ? t(descriptionKey) : undefined} side="right">
                       <div className="flex items-center space-x-2">
                         <Logo
                           src={callbackInfo[callbackName]?.logo}
@@ -383,10 +384,10 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({
                       </SelectTrigger>
                       <SelectContent>
                         {supportedCallbacks.map((callbackName) => {
-                          const description = callbackInfo[callbackName]?.description;
+                          const descriptionKey = callbackInfo[callbackName]?.descriptionKey;
                           return (
                             <SelectItem key={callbackName} value={callbackName}>
-                              <SimpleTooltip content={description} side="right">
+                              <SimpleTooltip content={descriptionKey ? t(descriptionKey) : undefined} side="right">
                                 <div className="flex items-center space-x-2">
                                   <Logo
                                     src={callbackInfo[callbackName]?.logo}

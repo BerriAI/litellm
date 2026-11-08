@@ -6,6 +6,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import i18n from "@/i18n/i18n";
 import { Plus, X } from "lucide-react";
 import React, { useState } from "react";
+import type { ParseKeys } from "i18next";
 import { useTranslation } from "react-i18next";
 
 export interface ModelBudgetConfig {
@@ -42,17 +43,20 @@ const readNumber = (raw: unknown): number | null => {
 
 const readPeriod = (raw: unknown): string | null => (typeof raw === "string" && raw !== "" ? raw : null);
 
-export const MODEL_BUDGET_PERIOD_OPTIONS = [
-  { value: "1h", label: "Hourly" },
-  { value: "24h", label: "Daily" },
-  { value: "7d", label: "Weekly" },
-  { value: "30d", label: "Monthly" },
-  { value: "1mo", label: "Calendar month" },
+export const MODEL_BUDGET_PERIOD_OPTIONS: readonly { value: string; labelKey: ParseKeys }[] = [
+  { value: "1h", labelKey: "keyTeamHelpers.modelMaxBudgetEditor.periods.hourly" },
+  { value: "24h", labelKey: "keyTeamHelpers.modelMaxBudgetEditor.periods.daily" },
+  { value: "7d", labelKey: "keyTeamHelpers.modelMaxBudgetEditor.periods.weekly" },
+  { value: "30d", labelKey: "keyTeamHelpers.modelMaxBudgetEditor.periods.monthly" },
+  { value: "1mo", labelKey: "keyTeamHelpers.modelMaxBudgetEditor.periods.calendarMonth" },
 ];
 
 const DEFAULT_PERIOD = "30d";
 
-const MODEL_PATTERN_VALUE = { hint: "Model pattern", accepts: (typed: string) => typed.includes("*") };
+const MODEL_PATTERN_VALUE = {
+  hintKey: "keyTeamHelpers.modelMaxBudgetEditor.modelPattern" as ParseKeys,
+  accepts: (typed: string) => typed.includes("*"),
+};
 
 export const entriesToModelMaxBudget = (entries: readonly ModelBudgetEntry[]): ModelMaxBudget =>
   Object.fromEntries(
@@ -76,7 +80,7 @@ export const modelMaxBudgetToEntries = (budget: ModelMaxBudget | null | undefine
     extra: Object.fromEntries(Object.entries(config ?? {}).filter(([field]) => !MODELLED_FIELDS.includes(field))),
   }));
 
-export const MODEL_MAX_BUDGET_PREMIUM_HINT = "Premium feature - Upgrade to set per-model budgets";
+export const MODEL_MAX_BUDGET_PREMIUM_HINT: ParseKeys = "keyTeamHelpers.modelMaxBudgetEditor.premiumHint";
 
 interface ModelMaxBudgetEditorProps {
   value: ModelMaxBudget;
@@ -121,11 +125,13 @@ export function ModelMaxBudgetEditor({
     emitChange(entries.map((entry) => (entry.id === id ? { ...entry, ...patch } : entry)));
 
   const usedModels = new Set(entries.map((entry) => entry.model).filter(Boolean));
-  const hintWhenLocked = premiumUser ? undefined : MODEL_MAX_BUDGET_PREMIUM_HINT;
+  const hintWhenLocked = premiumUser ? undefined : t(MODEL_MAX_BUDGET_PREMIUM_HINT);
+  const periodItems = MODEL_BUDGET_PERIOD_OPTIONS.map(({ value, labelKey }) => ({ value, label: t(labelKey) }));
+  const modelPatternValue = { hint: t(MODEL_PATTERN_VALUE.hintKey), accepts: MODEL_PATTERN_VALUE.accepts };
 
   const blurb = (
     <div className="text-xs text-muted-foreground">
-      {premiumUser ? t("keyTeamHelpers.modelMaxBudgetEditor.blurb") : MODEL_MAX_BUDGET_PREMIUM_HINT}
+      {premiumUser ? t("keyTeamHelpers.modelMaxBudgetEditor.blurb") : t(MODEL_MAX_BUDGET_PREMIUM_HINT)}
     </div>
   );
 
@@ -170,7 +176,7 @@ export function ModelMaxBudgetEditor({
                 onValueChange={(model) => updateEntry(entry.id, { model })}
                 placeholder={t("keyTeamHelpers.modelMaxBudgetEditor.selectModel")}
                 emptyText={t("keyTeamHelpers.modelMaxBudgetEditor.noModels")}
-                customValue={MODEL_PATTERN_VALUE}
+                customValue={modelPatternValue}
                 reservedValues={entries.flatMap((other) => (other.id !== entry.id && other.model ? [other.model] : []))}
                 disabled={!premiumUser}
               />
@@ -197,7 +203,7 @@ export function ModelMaxBudgetEditor({
                 />
               </InputGroup>
               <Select
-                items={MODEL_BUDGET_PERIOD_OPTIONS}
+                items={periodItems}
                 value={entry.timePeriod}
                 onValueChange={(period: string | null) => period && updateEntry(entry.id, { timePeriod: period })}
               >
@@ -205,7 +211,7 @@ export function ModelMaxBudgetEditor({
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {MODEL_BUDGET_PERIOD_OPTIONS.map((option) => (
+                  {periodItems.map((option) => (
                     <SelectItem key={option.value} value={option.value}>
                       {option.label}
                     </SelectItem>
