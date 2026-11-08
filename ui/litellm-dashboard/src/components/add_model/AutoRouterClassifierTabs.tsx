@@ -34,6 +34,7 @@ import {
   isAllowanceExhausted,
   AUTO_ROUTER_CONTACT_URL,
 } from "./AutoRouterAvailability";
+import { productNames } from "@/i18n/untranslated/productNames";
 
 export function ClassifierOption({
   value,
@@ -229,7 +230,13 @@ const AutoRouterClassifierTabs: React.FC<AutoRouterClassifierTabsProps> = ({
               description: t("addModel.autoRouterClassifierTabs.families.decisionModelDescription"),
             },
             ...(switchyard
-              ? [{ value: "switchyard", label: "Switchyard", description: "Route by the conversation’s tool history." }]
+              ? [
+                  {
+                    value: "switchyard",
+                    label: productNames.switchyard,
+                    description: t("addModel.autoRouterClassifierTabs.families.switchyardDescription"),
+                  },
+                ]
               : []),
           ].map((option) => (
             <Label
@@ -262,10 +269,10 @@ const AutoRouterClassifierTabs: React.FC<AutoRouterClassifierTabsProps> = ({
             <Label htmlFor={`${id}-decision-model`}>{t("addModel.autoRouterClassifierTabs.decisionModelLabel")}</Label>
             <Select
               items={[
-                { value: "jev", label: "Jev" },
-                { value: "laya", label: "Laya" },
-                { value: "bespoke", label: "Bespoke Nimble" },
-                { value: "databricks", label: "Databricks" },
+                { value: "jev", label: productNames.jev },
+                { value: "laya", label: productNames.laya },
+                { value: "bespoke", label: productNames.bespokeNimble },
+                { value: "databricks", label: productNames.databricks },
               ]}
               value={normalizeJevClassifierConfig(value.jev_classifier_config).provider}
               onValueChange={changeProvider}
@@ -274,10 +281,10 @@ const AutoRouterClassifierTabs: React.FC<AutoRouterClassifierTabsProps> = ({
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="jev">Jev</SelectItem>
-                <SelectItem value="laya">Laya</SelectItem>
-                <SelectItem value="bespoke">Bespoke Nimble</SelectItem>
-                <SelectItem value="databricks">Databricks</SelectItem>
+                <SelectItem value="jev">{productNames.jev}</SelectItem>
+                <SelectItem value="laya">{productNames.laya}</SelectItem>
+                <SelectItem value="bespoke">{productNames.bespokeNimble}</SelectItem>
+                <SelectItem value="databricks">{productNames.databricks}</SelectItem>
               </SelectContent>
             </Select>
           </div>

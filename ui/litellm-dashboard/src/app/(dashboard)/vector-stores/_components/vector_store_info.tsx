@@ -30,6 +30,9 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { useZodForm } from "@/lib/forms/useZodForm";
 import { SearchSelect } from "@/components/shared/SearchSelect";
 import { credentialOptions } from "@/components/shared/credentialOptions";
+import { codeSamples } from "@/i18n/untranslated/codeSamples";
+
+const DEFAULT_VECTOR_STORE_PROVIDER = "bedrock";
 
 interface VectorStoreInfoViewProps {
   vectorStoreId: string;
@@ -353,7 +356,7 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
                             rows={4}
                             value={metadataString}
                             onChange={(event) => setMetadataString(event.target.value)}
-                            placeholder='{"key": "value"}'
+                            placeholder={codeSamples.vectorStores.metadataJson}
                           />
                         </div>
                       </FieldGroup>
@@ -394,7 +397,7 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
                       <p className="font-medium">{t("vectorStores.info.details.provider")}</p>
                       <div className="flex items-center space-x-2 mt-1">
                         {(() => {
-                          const provider = vectorStoreDetails.custom_llm_provider || "bedrock";
+                          const provider = vectorStoreDetails.custom_llm_provider || DEFAULT_VECTOR_STORE_PROVIDER;
                           const { displayName, logo } = getVectorStoreProviderLogoAndName(provider);
 
                           return (
