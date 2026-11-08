@@ -1771,16 +1771,17 @@ def test_exact_cache_without_identity_keeps_sdk_entries() -> None:
 @pytest.mark.parametrize("metadata_field", ("metadata", "litellm_metadata"))
 @pytest.mark.parametrize("identity_field", ("user_api_key", "user_api_key_team_id", "user_api_key_org_id"))
 @pytest.mark.parametrize("nested", (False, True))
+@pytest.mark.parametrize("hook_fields", ({}, dict.fromkeys((*_TENANT_A_IDENTITY, "user_api_key_org_id"))))
 def test_exact_cache_preserves_flattened_identity_with_hook_metadata(
-    metadata_field: str, identity_field: str, nested: bool
+    metadata_field: str, identity_field: str, nested: bool, hook_fields: dict[str, None]
 ) -> None:
     cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
     identity: Final = {**_TENANT_A_IDENTITY, "user_api_key_org_id": "org-a"}
 
     def request(values: dict[str, str]) -> dict[str, object]:
         data: Final = {
-            "metadata": {"trace": "complete"},
-            "litellm_metadata": {"trace": "complete"},
+            "metadata": {"trace": "complete", **hook_fields},
+            "litellm_metadata": {"trace": "complete", **hook_fields},
             metadata_field: values,
         }
         return {"litellm_params": data} if nested else data

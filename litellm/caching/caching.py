@@ -463,7 +463,7 @@ class Cache:
             None,
         )
         flattened: Final = {
-            field: next((source[field] for source in metadata_sources if field in source), None)
+            field: next((source[field] for source in metadata_sources if source.get(field) is not None), None)
             for field in (*self._SEMANTIC_CACHE_TENANT_SCOPE_FIELDS, self._SEMANTIC_CACHE_END_USER_SCOPE_FIELD)
         }
         identity: Final = (
