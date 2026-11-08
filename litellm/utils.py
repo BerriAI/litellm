@@ -8862,33 +8862,63 @@ def shorten_message_to_fit_limit(message, tokens_needed, model: str | None, rais
     if model is not None and "gpt" in model and tokens_needed <= 10:
         return message
 
-    content = message["content"]
+    content = message.get("content")
+    if content is None:
+        return message
     attempts = 0
 
     verbose_logger.debug("content: %s", content)
 
-    while attempts < MAX_TOKEN_TRIMMING_ATTEMPTS:
-        verbose_logger.debug("getting token count for message: %s", message)
-        total_tokens = get_token_count([message], model)
-        verbose_logger.debug("total_tokens: %s, tokens_needed: %s", total_tokens, tokens_needed)
+    if isinstance(content, list):
+        while attempts < MAX_TOKEN_TRIMMING_ATTEMPTS:
+            verbose_logger.debug("getting token count for message: %s", message)
+            total_tokens = get_token_count([message], model)
+            verbose_logger.debug("total_tokens: %s, tokens_needed: %s", total_tokens, tokens_needed)
 
-        if total_tokens <= tokens_needed:
-            break
+            if total_tokens <= tokens_needed:
+                break
 
-        ratio = (tokens_needed) / total_tokens
+            ratio = (tokens_needed) / total_tokens if total_tokens > 0 else 0
+            text_blocks = [
+                p for p in content if isinstance(p, dict) and p.get("type") == "text" and isinstance(p.get("text"), str)
+            ]
+            if not text_blocks:
+                break
+            longest_block = max(text_blocks, key=lambda p: len(p["text"]))
+            part_text = longest_block["text"]
+            new_length = max(0, int(len(part_text) * ratio) - 1)
+            half_length = new_length // 2
+            if half_length == 0:
+                longest_block["text"] = ""
+            else:
+                longest_block["text"] = part_text[:half_length] + ".." + part_text[-half_length:]
+            attempts += 1
+    elif isinstance(content, str):
+        while attempts < MAX_TOKEN_TRIMMING_ATTEMPTS:
+            verbose_logger.debug("getting token count for message: %s", message)
+            total_tokens = get_token_count([message], model)
+            verbose_logger.debug("total_tokens: %s, tokens_needed: %s", total_tokens, tokens_needed)
 
-        new_length = int(len(content) * ratio) - 1
-        new_length = max(0, new_length)
+            if total_tokens <= tokens_needed:
+                break
 
-        half_length = new_length // 2
-        left_half = content[:half_length]
-        right_half = content[-half_length:]
+            ratio = (tokens_needed) / total_tokens if total_tokens > 0 else 0
 
-        trimmed_content = left_half + ".." + right_half
-        message["content"] = trimmed_content
-        verbose_logger.debug("trimmed_content: %s", trimmed_content)
-        content = trimmed_content
-        attempts += 1
+            new_length = int(len(content) * ratio) - 1
+            new_length = max(0, new_length)
+
+            half_length = new_length // 2
+            if half_length == 0:
+                message["content"] = ""
+                break
+            left_half = content[:half_length]
+            right_half = content[-half_length:]
+
+            trimmed_content = left_half + ".." + right_half
+            message["content"] = trimmed_content
+            verbose_logger.debug("trimmed_content: %s", trimmed_content)
+            content = trimmed_content
+            attempts += 1
 
     if attempts >= MAX_TOKEN_TRIMMING_ATTEMPTS and raise_error_on_max_limit:
         raise Exception(
@@ -8931,6 +8961,12 @@ def trim_messages(
             if model in litellm.model_cost:
                 max_tokens_for_model: Final = litellm.model_cost[model]["max_input_tokens"]
                 max_tokens = int(max_tokens_for_model * trim_ratio)
+            elif model is not None:
+                catalog_info = lookup_catalog_model_info(model, custom_llm_provider=None)
+                if not isinstance(catalog_info, ModelInfoLookupMiss) and catalog_info.get("max_input_tokens"):
+                    max_tokens = int(catalog_info["max_input_tokens"] * trim_ratio)
+                else:
+                    return messages
             else:
                 # if user did not specify max (input) tokens
                 # or passed an llm litellm does not know
@@ -8941,7 +8977,16 @@ def trim_messages(
         for message in messages:
             if message["role"] == "system":
                 system_message += "\n" if system_message else ""
-                system_message += message["content"]
+                content = message.get("content")
+                if isinstance(content, str):
+                    system_message += content
+                elif isinstance(content, list):
+                    text_parts = [
+                        p.get("text", "")
+                        for p in content
+                        if isinstance(p, dict) and p.get("type") == "text" and isinstance(p.get("text"), str)
+                    ]
+                    system_message += "\n".join(text_parts)
 
         ## Handle Tool Call ## - check if last message is a tool response, return as is - https://github.com/BerriAI/litellm/issues/4931
         tool_messages: Final = []
