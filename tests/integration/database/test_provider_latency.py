@@ -5,8 +5,8 @@ import pytest
 from integration._support.actors import ManagementDatabase
 
 from litellm.repositories.provider_latency import ProviderLatencyRepository
-from litellm.types.proxy.issues import IssueModelPair
-from litellm.types.proxy.usage_alerts import UsageAlertRuleInput
+from litellm.types.proxy.issues import AlertModelPair
+from litellm.types.proxy.usage_alerts import AlertRuleInput
 
 
 @pytest.mark.asyncio(loop_scope="session")
@@ -38,7 +38,7 @@ async def test_provider_lookup_skips_oversized_names_and_preserves_valid_models(
             tuple(pair[0] for pair in pairs),
             tuple(pair[1] for pair in pairs),
         )
-        expected = tuple(IssueModelPair(provider=p, model=m) for p, m in pairs[2:5])
+        expected = tuple(AlertModelPair(provider=p, model=m) for p, m in pairs[2:5])
         first = await repository.provider_pairs(provider, day)
         second = await repository.provider_pairs(wide_provider, day)
         invalid = await repository.provider_pairs("a" * 257, day)
@@ -58,9 +58,9 @@ async def test_provider_lookup_skips_oversized_names_and_preserves_valid_models(
 async def test_provider_latency_requires_established_within_model_regressions(db: ManagementDatabase) -> None:
     prefix = f"provider-latency-{uuid4()}"
     day = date(2031, 1, 12)
-    pairs = tuple(IssueModelPair(provider=prefix, model=f"{prefix}-{suffix}") for suffix in ("a", "b"))
+    pairs = tuple(AlertModelPair(provider=prefix, model=f"{prefix}-{suffix}") for suffix in ("a", "b"))
     keys = (prefix + "-key-a", prefix + "-key-b")
-    rule = UsageAlertRuleInput(name="Latency", scope_type="key", metric="latency", direction="increase", min_value=500)
+    rule = AlertRuleInput(name="Latency", scope_type="key", metric="latency", direction="increase", min_value=500)
     repository = ProviderLatencyRepository(db.prisma.writer_db)
     try:
         await db.prisma.writer_db.query_raw(

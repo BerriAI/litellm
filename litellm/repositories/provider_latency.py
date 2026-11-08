@@ -9,8 +9,8 @@ from pydantic import BaseModel, Field, TypeAdapter
 from litellm.constants import PTU_SENTINEL_API_KEY
 from litellm.repositories.daily_activity_buckets import api_key_bucket, api_key_from_bucket
 from litellm.repositories.usage_alert_metrics import MetricsDatabase
-from litellm.types.proxy.issues import IssueCohort, IssueComparison, IssueImpact, IssueModelPair
-from litellm.types.proxy.usage_alerts import UsageAlertMetricPoint, UsageAlertRuleInput, UsageAlertScope
+from litellm.types.proxy.issues import AlertCohort, AlertComparison, AlertImpact, AlertModelPair
+from litellm.types.proxy.usage_alerts import AlertRuleInput, UsageAlertMetricPoint, UsageAlertScope
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
@@ -18,15 +18,15 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True, slots=True)
 class ProviderLatencyEvidence:
-    cohort: IssueCohort
-    comparison: IssueComparison
-    impact: IssueImpact
+    cohort: AlertCohort
+    comparison: AlertComparison
+    impact: AlertImpact
     comparable_timed_requests: int
     total_timed_requests: int
 
 
 class _CohortRow(BaseModel, frozen=True):
-    pairs: tuple[IssueModelPair, ...]
+    pairs: tuple[AlertModelPair, ...]
     observed: float
     expected: float
     sample_days: int | None
@@ -162,9 +162,9 @@ SELECT (SELECT COUNT(*) FROM covered)=cardinality($4::text[]) AND NOT EXISTS (
 
 
 def _arguments(
-    pairs: tuple[IssueModelPair, ...],
+    pairs: tuple[AlertModelPair, ...],
     day: date,
-    rule: UsageAlertRuleInput,
+    rule: AlertRuleInput,
     source_ids: tuple[str, ...] | None = None,
 ) -> tuple[object, ...]:
     if not 1 <= len(pairs) <= 100 or len(frozenset(pairs)) != len(pairs):
@@ -195,8 +195,8 @@ class ProviderLatencyRepository:
     def from_prisma(cls, prisma: "PrismaClient") -> "ProviderLatencyRepository":
         return cls(cast(MetricsDatabase, prisma.writer_db))  # cast-ok: generated Prisma query_raw interface
 
-    async def provider_pairs(self, provider: str, day: date) -> tuple[IssueModelPair, ...]:
-        return TypeAdapter(tuple[IssueModelPair, ...]).validate_python(
+    async def provider_pairs(self, provider: str, day: date) -> tuple[AlertModelPair, ...]:
+        return TypeAdapter(tuple[AlertModelPair, ...]).validate_python(
             await self._database.query_raw(
                 """SELECT DISTINCT custom_llm_provider AS provider,model FROM "LiteLLM_DailyUserSpend"
             WHERE date=$1 AND custom_llm_provider=$2 AND model IS NOT NULL AND model<>'' AND timed_requests>0
@@ -209,7 +209,7 @@ class ProviderLatencyRepository:
         )
 
     async def latency_cohort(
-        self, pairs: tuple[IssueModelPair, ...], day: date, rule: UsageAlertRuleInput
+        self, pairs: tuple[AlertModelPair, ...], day: date, rule: AlertRuleInput
     ) -> ProviderLatencyEvidence | None:
         arguments: Final = _arguments(pairs, day, rule)
         if len(pairs) < 2:
@@ -219,8 +219,8 @@ class ProviderLatencyRepository:
             return None
         row: Final = rows[0]
         return ProviderLatencyEvidence(
-            cohort=IssueCohort(scope_type="provider", scope_id=pairs[0].provider, model_pairs=row.pairs),
-            comparison=IssueComparison(
+            cohort=AlertCohort(scope_type="provider", scope_id=pairs[0].provider, model_pairs=row.pairs),
+            comparison=AlertComparison(
                 metric="latency",
                 direction="increase",
                 observed_value=row.observed,
@@ -231,7 +231,7 @@ class ProviderLatencyRepository:
                 baseline_sample_days=row.sample_days,
                 history=row.history,
             ),
-            impact=IssueImpact(
+            impact=AlertImpact(
                 keys=row.keys,
                 users=row.users,
                 teams=row.teams,
@@ -246,9 +246,9 @@ class ProviderLatencyRepository:
 
     async def source_members(
         self,
-        pairs: tuple[IssueModelPair, ...],
+        pairs: tuple[AlertModelPair, ...],
         day: date,
-        rule: UsageAlertRuleInput,
+        rule: AlertRuleInput,
         scope_type: UsageAlertScope,
         source_ids: tuple[str, ...],
     ) -> frozenset[str]:
@@ -273,7 +273,7 @@ class ProviderLatencyRepository:
         rows: Final = _MEMBERS.validate_python(await self._database.query_raw(query, *arguments))
         return frozenset(api_key_bucket(row.entity_id) if scope_type == "key" else row.entity_id for row in rows)
 
-    async def cohort_recovered(self, pairs: tuple[IssueModelPair, ...], day: date, rule: UsageAlertRuleInput) -> bool:
+    async def cohort_recovered(self, pairs: tuple[AlertModelPair, ...], day: date, rule: AlertRuleInput) -> bool:
         arguments: Final = _arguments(pairs, day, rule)
         rows: Final = TypeAdapter(tuple[_Recovery, ...]).validate_python(
             await self._database.query_raw(_RECOVERY_QUERY, *arguments)

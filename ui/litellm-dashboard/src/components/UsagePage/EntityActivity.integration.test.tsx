@@ -7,7 +7,7 @@ import EntityActivity from "./EntityActivity";
 const auth = vi.hoisted(() => ({ userRole: "Admin", userId: "viewer", accessToken: "test-session" }));
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({ default: () => auth }));
 const fetchMock = vi.fn<typeof fetch>();
-const dates = "activity_from=2026-10-01&activity_to=2026-10-07&alert=incident-1";
+const dates = "activity_from=2026-10-01&activity_to=2026-10-07&signal=incident-1";
 const response = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), {
     status,
@@ -39,7 +39,7 @@ describe("entity activity", () => {
     await userEvent.click(screen.getByRole("button", { name: "Apply" }));
     await waitFor(() => expect(urls().at(-1)?.searchParams.get("start_date")).toBe("2026-10-03"));
     expect(urls().at(-1)?.searchParams.get("api_key")).toBe("key-hash");
-    expect(onUrlUpdate.mock.lastCall?.[0].searchParams.get("alert")).toBe("incident-1");
+    expect(onUrlUpdate.mock.lastCall?.[0].searchParams.get("signal")).toBe("incident-1");
   });
 
   it.each([
@@ -59,7 +59,7 @@ describe("entity activity", () => {
     expect(url.searchParams.get("timezone")).toBe("0");
     expect(url.searchParams.get("bounded")).toBe("true");
     expect(url.searchParams.get("include_model_breakdown")).toBe(scope === "key" ? "true" : null);
-    expect(url.searchParams.has("alert")).toBe(false);
+    expect(url.searchParams.has("signal")).toBe(false);
   });
 
   it("keeps a member's key request within their user scope", async () => {

@@ -9,10 +9,10 @@ import { backgroundFetchClient } from "@/lib/http/api";
 import type { components } from "@/lib/http/schema";
 import { FAMILY_LABELS } from "./issueApi";
 
-type Family = components["schemas"]["IssueFamilySetting"];
-type Policy = components["schemas"]["IssueFamilyPolicy"];
-type PolicyUpdate = components["schemas"]["IssueFamilyPolicyUpdate"];
-type FamilyUpdate = components["schemas"]["IssueFamilyUpdate"];
+type Family = components["schemas"]["AlertFamilySetting"];
+type Policy = components["schemas"]["AlertFamilyPolicy"];
+type PolicyUpdate = components["schemas"]["AlertFamilyPolicyUpdate"];
+type FamilyUpdate = components["schemas"]["AlertFamilyUpdate"];
 const SELECT_CLASS = "h-9 rounded-md border border-input bg-background px-2 text-sm";
 const FLOOR_UNITS = { spend: "USD", latency: "ms", reliability: "percentage points", traffic: "requests" };
 const NUMBER_FIELDS = ["multiplier", "min_value", "min_requests", "baseline_days", "min_history_days"] as const;
@@ -162,7 +162,7 @@ export default function IssueFamilySettings({ accessToken }: { accessToken: stri
     queryKey: ["issueFamilies", getProxyBaseUrl(), user?.user_id, user?.user_role],
     enabled: Boolean(accessToken && user?.user_id),
     queryFn: async ({ signal }: { signal: AbortSignal }) => {
-      const { data } = await backgroundFetchClient.GET("/issues/families", { signal });
+      const { data } = await backgroundFetchClient.GET("/alerts/defaults", { signal });
       if (!data) throw new Error("Could not load monitoring settings");
       return data;
     },
@@ -172,7 +172,7 @@ export default function IssueFamilySettings({ accessToken }: { accessToken: stri
   const save = useMutation({
     mutationFn: async (body: FamilyUpdate) => {
       if (!editing) throw new Error("Choose an alert type");
-      const { data } = await backgroundFetchClient.PATCH("/issues/families/{family}", {
+      const { data } = await backgroundFetchClient.PATCH("/alerts/defaults/{family}", {
         params: { path: { family: editing.family } },
         body,
       });

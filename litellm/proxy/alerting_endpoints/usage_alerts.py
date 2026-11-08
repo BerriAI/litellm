@@ -1,4 +1,4 @@
-"""Public management API for daily usage alert rules and incidents."""
+"""Performance rules and read-only detection evidence."""
 
 from datetime import date
 from typing import Annotated, Final, TypeAlias
@@ -14,28 +14,24 @@ from litellm.proxy.deps.repositories import UsageAlertsRepositoryDep
 from litellm.repositories.daily_activity_buckets import api_key_from_bucket
 from litellm.types.proxy.auth.user_roles import LitellmUserRoles
 from litellm.types.proxy.usage_alerts import (
-    UsageAlert,
-    UsageAlertGroupList,
-    UsageAlertGroupUpdate,
-    UsageAlertGroupUpdateResult,
-    UsageAlertList,
+    AlertModelList,
+    AlertRule,
+    AlertRuleInput,
+    AlertRuleList,
+    PerformanceSignal,
+    PerformanceSignalList,
     UsageAlertMetric,
-    UsageAlertModelList,
-    UsageAlertRule,
-    UsageAlertRuleInput,
     UsageAlertRuleKind,
-    UsageAlertRuleList,
     UsageAlertScope,
     UsageAlertStatus,
-    UsageAlertUpdate,
 )
 
-router: Final = APIRouter(prefix="/usage", tags=["usage alerts"])
+router: Final = APIRouter(prefix="/alerts", tags=["alerts"])
 
 
 def require_repository(repository: UsageAlertStore | None) -> UsageAlertStore:
     if repository is None:
-        raise HTTPException(status_code=503, detail="Usage alerts require a database connection")
+        raise HTTPException(status_code=503, detail="Alert signals require a database connection")
     return repository
 
 
@@ -71,9 +67,7 @@ def require_write_access(user: UserAPIKeyAuth, route: str) -> None:
         raise HTTPException(status_code=403, detail="This credential does not grant alert write access")
 
 
-def require_notification_access(
-    user: UserAPIKeyAuth, data: UsageAlertRuleInput, existing: UsageAlertRule | None = None
-) -> None:
+def require_notification_access(user: UserAPIKeyAuth, data: AlertRuleInput, existing: AlertRule | None = None) -> None:
     if user.user_role == LitellmUserRoles.PROXY_ADMIN:
         return
     if data.notification_channels or data.email_recipients:
@@ -97,16 +91,16 @@ async def require_scope(
     if user.user_role == LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY:
         if not write:
             return
-        raise HTTPException(status_code=403, detail="Read-only users cannot manage usage alerts")
+        raise HTTPException(status_code=403, detail="Read-only users cannot manage alerts")
     if user.user_role not in (
         LitellmUserRoles.INTERNAL_USER,
         LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
         LitellmUserRoles.ORG_ADMIN,
         LitellmUserRoles.TEAM,
     ):
-        raise HTTPException(status_code=403, detail="Usage alerts require a management role")
+        raise HTTPException(status_code=403, detail="Alert signals require a management role")
     if write and user.user_role == LitellmUserRoles.INTERNAL_USER_VIEW_ONLY:
-        raise HTTPException(status_code=403, detail="Read-only users cannot manage usage alerts")
+        raise HTTPException(status_code=403, detail="Read-only users cannot manage alerts")
     if scope_id is None:
         raise HTTPException(status_code=403, detail="Specify a scope you can access")
     if scope_type == "user" and user.user_id is not None and scope_id == user.user_id:
@@ -128,8 +122,8 @@ async def require_scope(
     raise HTTPException(status_code=403, detail="You cannot access this alert scope")
 
 
-@router.get("/alert-rules", response_model=UsageAlertRuleList)
-async def list_usage_alert_rules(
+@router.get("/rules", response_model=AlertRuleList)
+async def list_alert_rules(
     user: User,
     repository: Repository,
     scope_type: UsageAlertScope | None = None,
@@ -137,59 +131,30 @@ async def list_usage_alert_rules(
     limit: Limit = 50,
     offset: Offset = 0,
     kind: UsageAlertRuleKind = "all",
-) -> UsageAlertRuleList:
+) -> AlertRuleList:
     store: Final = require_repository(repository)
     await require_scope(user, store, scope_type, scope_id, write=False)
     return await store.list_rules(scope_type, scope_id, limit, offset, kind)
 
 
-@router.get("/alert-groups", response_model=UsageAlertGroupList)
-async def list_usage_alert_groups(
-    user: User,
-    repository: Repository,
-    scope_type: UsageAlertScope | None = None,
-    scope_id: ScopeId = None,
-    status: UsageAlertStatus | None = None,
-    start_date: date | None = None,
-    end_date: date | None = None,
-    limit: Limit = 50,
-    offset: Offset = 0,
-) -> UsageAlertGroupList:
-    store: Final = require_repository(repository)
-    await require_scope(user, store, scope_type, scope_id, write=False)
-    if start_date is not None and end_date is not None and start_date > end_date:
-        raise HTTPException(status_code=422, detail="start_date must not be after end_date")
-    return await store.list_groups(scope_type, scope_id, status, start_date, end_date, limit, offset)
-
-
-@router.patch("/alert-groups", response_model=UsageAlertGroupUpdateResult)
-async def update_usage_alert_group(
-    data: UsageAlertGroupUpdate, user: User, repository: Repository
-) -> UsageAlertGroupUpdateResult:
-    store: Final = require_repository(repository)
-    require_write_access(user, "/usage/alert-groups")
-    await require_scope(user, store, data.scope_type, data.scope_id, write=True)
-    return await store.set_group_status(data)
-
-
-@router.get("/alert-models", response_model=UsageAlertModelList)
-async def list_usage_alert_models(
+@router.get("/models", response_model=AlertModelList)
+async def list_alert_models(
     user: User,
     repository: Repository,
     search: ScopeId = None,
     cursor: ScopeId = None,
     limit: Limit = 20,
-) -> UsageAlertModelList:
+) -> AlertModelList:
     store: Final = require_repository(repository)
     await require_scope(user, store, "model", None, write=False)
     return await store.list_reported_models(search, cursor, limit)
 
 
-@router.post("/alert-rules", response_model=UsageAlertRule, status_code=201)
-async def create_usage_alert_rule(data: UsageAlertRuleInput, user: User, repository: Repository) -> UsageAlertRule:
-    """Create a daily usage alert rule for a scope the caller can manage."""
+@router.post("/rules", response_model=AlertRule, status_code=201)
+async def create_alert_rule(data: AlertRuleInput, user: User, repository: Repository) -> AlertRule:
+    """Create a daily performance rule for a scope the caller can manage."""
     store: Final = require_repository(repository)
-    require_write_access(user, "/usage/alert-rules")
+    require_write_access(user, "/alerts/rules")
     await require_scope(user, store, data.scope_type, data.scope_id, write=True)
     require_notification_access(user, data)
     saved: Final = await store.save_rule(
@@ -200,8 +165,8 @@ async def create_usage_alert_rule(data: UsageAlertRuleInput, user: User, reposit
     return saved
 
 
-@router.get("/alert-rules/{rule_id}", response_model=UsageAlertRule)
-async def get_usage_alert_rule(rule_id: str, user: User, repository: Repository) -> UsageAlertRule:
+@router.get("/rules/{rule_id}", response_model=AlertRule)
+async def get_alert_rule(rule_id: str, user: User, repository: Repository) -> AlertRule:
     store: Final = require_repository(repository)
     rule: Final = await store.get_rule(rule_id)
     if rule is None:
@@ -210,12 +175,10 @@ async def get_usage_alert_rule(rule_id: str, user: User, repository: Repository)
     return rule
 
 
-@router.put("/alert-rules/{rule_id}", response_model=UsageAlertRule)
-async def update_usage_alert_rule(
-    rule_id: str, data: UsageAlertRuleInput, user: User, repository: Repository
-) -> UsageAlertRule:
+@router.put("/rules/{rule_id}", response_model=AlertRule)
+async def update_alert_rule(rule_id: str, data: AlertRuleInput, user: User, repository: Repository) -> AlertRule:
     store: Final = require_repository(repository)
-    require_write_access(user, f"/usage/alert-rules/{rule_id}")
+    require_write_access(user, f"/alerts/rules/{rule_id}")
     rule: Final = await store.get_rule(rule_id)
     if rule is None:
         raise HTTPException(status_code=404, detail="Alert rule not found")
@@ -237,10 +200,10 @@ async def update_usage_alert_rule(
     return saved
 
 
-@router.delete("/alert-rules/{rule_id}", status_code=204)
-async def delete_usage_alert_rule(rule_id: str, user: User, repository: Repository) -> Response:
+@router.delete("/rules/{rule_id}", status_code=204)
+async def delete_alert_rule(rule_id: str, user: User, repository: Repository) -> Response:
     store: Final = require_repository(repository)
-    require_write_access(user, f"/usage/alert-rules/{rule_id}")
+    require_write_access(user, f"/alerts/rules/{rule_id}")
     rule: Final = await store.get_rule(rule_id)
     if rule is None:
         raise HTTPException(status_code=404, detail="Alert rule not found")
@@ -251,8 +214,8 @@ async def delete_usage_alert_rule(rule_id: str, user: User, repository: Reposito
     return Response(status_code=204)
 
 
-@router.get("/alerts", response_model=UsageAlertList)
-async def list_usage_alerts(
+@router.get("/signals", response_model=PerformanceSignalList)
+async def list_performance_signals(
     user: User,
     repository: Repository,
     scope_type: UsageAlertScope | None = None,
@@ -263,7 +226,7 @@ async def list_usage_alerts(
     end_date: date | None = None,
     limit: Limit = 50,
     offset: Offset = 0,
-) -> UsageAlertList:
+) -> PerformanceSignalList:
     store: Final = require_repository(repository)
     await require_scope(user, store, scope_type, scope_id, write=False)
     if start_date is not None and end_date is not None and start_date > end_date:
@@ -271,25 +234,11 @@ async def list_usage_alerts(
     return await store.list_alerts(scope_type, scope_id, metric, status, start_date, end_date, limit, offset)
 
 
-@router.get("/alerts/{alert_id}", response_model=UsageAlert)
-async def get_usage_alert(alert_id: str, user: User, repository: Repository) -> UsageAlert:
+@router.get("/signals/{signal_id}", response_model=PerformanceSignal)
+async def get_performance_signal(signal_id: str, user: User, repository: Repository) -> PerformanceSignal:
     store: Final = require_repository(repository)
-    alert: Final = await store.get_alert(alert_id)
+    alert: Final = await store.get_alert(signal_id)
     if alert is None:
-        raise HTTPException(status_code=404, detail="Usage alert not found")
+        raise HTTPException(status_code=404, detail="Alert signal not found")
     await require_scope(user, store, alert.scope_type, alert.scope_id, write=False)
     return alert
-
-
-@router.patch("/alerts/{alert_id}", response_model=UsageAlert)
-async def update_usage_alert(alert_id: str, data: UsageAlertUpdate, user: User, repository: Repository) -> UsageAlert:
-    store: Final = require_repository(repository)
-    require_write_access(user, f"/usage/alerts/{alert_id}")
-    alert: Final = await store.get_alert(alert_id)
-    if alert is None:
-        raise HTTPException(status_code=404, detail="Usage alert not found")
-    await require_scope(user, store, alert.scope_type, alert.scope_id, write=True)
-    updated: Final = await store.set_status(alert_id, data.status)
-    if updated is None:
-        raise HTTPException(status_code=404, detail="Usage alert not found")
-    return updated

@@ -1,13 +1,13 @@
 import { Bar, BarChart, CartesianGrid, Cell, ReferenceLine, XAxis, YAxis } from "recharts";
 import { ChartContainer, ChartTooltip, ChartTooltipContent } from "@/components/ui/chart";
 import { formatAlertValue, METRIC_LABELS } from "@/components/UsageAlerts/usageAlertApi";
-import { Issue, issueDate, primaryComparison } from "./issueApi";
+import { Alert, issueDate, primaryComparison } from "./issueApi";
 
 export function formatHistoryValue(metric: Parameters<typeof formatAlertValue>[0], value: unknown) {
   return typeof value === "number" && Number.isFinite(value) ? formatAlertValue(metric, value) : "Not recorded";
 }
 
-export function issueHistory(issue: Issue) {
+export function issueHistory(issue: Alert) {
   const comparison = primaryComparison(issue);
   const history = issue.deprecation?.daily_requests ?? comparison?.history ?? [];
   const metric = issue.deprecation ? "requests" : comparison?.metric ?? "requests";
@@ -25,7 +25,7 @@ export function issueHistory(issue: Issue) {
   return { data, metric, comparison };
 }
 
-export default function IssueHistoryChart({ issue, compact = false }: { issue: Issue; compact?: boolean }) {
+export default function IssueHistoryChart({ issue, compact = false }: { issue: Alert; compact?: boolean }) {
   const { data, metric, comparison } = issueHistory(issue);
   const label = issue.deprecation ? "Daily requests" : `Daily ${METRIC_LABELS[metric].toLowerCase()}`;
   if (data.length === 0)

@@ -31,11 +31,11 @@ from litellm.repositories.usage_alerts import UsageAlertsRepository
 from litellm.types.integrations.slack_alerting import AlertType
 from litellm.types.proxy.usage_alert_defaults import USAGE_ALERT_SCOPES, default_usage_rules
 from litellm.types.proxy.usage_alerts import (
+    AlertRule,
+    AlertRuleInput,
     UsageAlertEvaluationStatus,
     UsageAlertObservation,
     UsageAlertProgress,
-    UsageAlertRule,
-    UsageAlertRuleInput,
     UsageAlertScope,
     UsageAlertWorkCursor,
 )
@@ -72,7 +72,7 @@ class _Observations:
 
 
 def _observations(
-    rule: UsageAlertRule,
+    rule: AlertRule,
     rows: Sequence[DailyAlertMetrics],
     target: date,
     suppressed: frozenset[str | None] = frozenset(),
@@ -117,7 +117,7 @@ class UsageAlertJob:
         store: UsageAlertsRepository,
         metrics: UsageAlertMetricsRepository,
         health: UsageAlertHealthRepository,
-        defaults: tuple[UsageAlertRuleInput, ...] | None = None,
+        defaults: tuple[AlertRuleInput, ...] | None = None,
         *,
         deprecation_projection: Callable[[datetime], Awaitable[None]] | None = None,
         performance_projection: PerformanceIssueProjector,
@@ -231,7 +231,7 @@ class UsageAlertJob:
             await self._store.finish_projection_work(work)
 
     @staticmethod
-    def _position(rule: UsageAlertRule, target: date) -> UsageAlertProgress:
+    def _position(rule: AlertRule, target: date) -> UsageAlertProgress:
         if rule.evaluation_progress is not None and rule.evaluation_progress.revision == rule.updated_at:
             return rule.evaluation_progress
         return UsageAlertProgress(day=target, revision=rule.updated_at)
@@ -285,15 +285,14 @@ class UsageAlertJob:
             return cursor.advance(None), advanced, True
         return cursor.advance(selected[-1].id), advanced, False
 
-    async def _attempt_scope_page(self, rules: tuple[UsageAlertRule, ...], target: date, wildcard: bool) -> bool:
+    async def _attempt_scope_page(self, rules: tuple[AlertRule, ...], target: date, wildcard: bool) -> bool:
         try:
             return await self._scope_page(rules, target, wildcard)
         except AnalyticsCapacityError:
-            await self._store.save_progress(tuple((rule, self._position(rule, target)) for rule in rules))
             verbose_proxy_logger.info("Usage alert page deferred within its database budget")
             return False
 
-    async def _scope_page(self, rules: tuple[UsageAlertRule, ...], target: date, wildcard: bool) -> bool:
+    async def _scope_page(self, rules: tuple[AlertRule, ...], target: date, wildcard: bool) -> bool:
         scope: Final = rules[0].scope_type
         start: Final = datetime.combine(target, time(), tzinfo=timezone.utc)
         coverage: Final = await self._health.coverage("team" if scope == "team" else "user", start)
@@ -364,7 +363,7 @@ class UsageAlertJob:
 
     async def _record_evaluations(
         self,
-        evaluations: tuple[tuple[UsageAlertRule, UsageAlertEvaluationStatus], ...],
+        evaluations: tuple[tuple[AlertRule, UsageAlertEvaluationStatus], ...],
         target: date,
         *,
         completed: bool,
@@ -374,7 +373,7 @@ class UsageAlertJob:
 
     async def _page(
         self,
-        rules: Mapping[str | None, tuple[UsageAlertRule, ...]],
+        rules: Mapping[str | None, tuple[AlertRule, ...]],
         rows: tuple[DailyAlertMetrics, ...],
         target: date,
         suppressed: Mapping[str, frozenset[str | None]],
@@ -396,7 +395,7 @@ class UsageAlertJob:
 
     async def _rule_chunk(
         self,
-        selected: tuple[UsageAlertRule, ...],
+        selected: tuple[AlertRule, ...],
         entities: tuple[str | None, ...],
         rows: tuple[DailyAlertMetrics, ...],
         by_entity: Mapping[str, tuple[DailyAlertMetrics, ...]],
@@ -420,7 +419,7 @@ class UsageAlertJob:
 
     async def _rule_page(
         self,
-        rule: UsageAlertRule,
+        rule: AlertRule,
         rows: tuple[DailyAlertMetrics, ...],
         target: date,
         active: frozenset[str | None],

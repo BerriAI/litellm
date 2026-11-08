@@ -3,24 +3,24 @@ import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { backgroundFetchClient } from "@/lib/http/api";
 import { getProxyBaseUrl } from "@/components/networking";
 import { Button } from "@/components/ui/button";
-import { formatAlertValue, METRIC_LABELS, UsageAlert } from "./usageAlertApi";
+import { formatAlertValue, METRIC_LABELS, PerformanceSignal } from "./usageAlertApi";
 
 export default function UsageAlertContext({
-  alertId,
+  signalId,
   scope,
   entityId,
 }: {
-  alertId: string;
-  scope: UsageAlert["scope_type"];
+  signalId: string;
+  scope: PerformanceSignal["scope_type"];
   entityId: string | null;
 }) {
   const { accessToken, userId, userRole, isAuthorized } = useAuthorized();
-  const options: UseQueryOptions<UsageAlert> = {
-    queryKey: ["usageAlert", getProxyBaseUrl(), userId, userRole, alertId],
-    enabled: Boolean(isAuthorized && accessToken && alertId),
+  const options: UseQueryOptions<PerformanceSignal> = {
+    queryKey: ["performanceSignal", getProxyBaseUrl(), userId, userRole, signalId],
+    enabled: Boolean(isAuthorized && accessToken && signalId),
     queryFn: async ({ signal }) => {
-      const { data } = await backgroundFetchClient.GET("/usage/alerts/{alert_id}", {
-        params: { path: { alert_id: alertId } },
+      const { data } = await backgroundFetchClient.GET("/alerts/signals/{signal_id}", {
+        params: { path: { signal_id: signalId } },
         signal,
       });
       if (!data) throw new Error("Alert unavailable");

@@ -13,7 +13,7 @@ export const parseActivityDay = createParser({
 export const entityActivityParsers = {
   activity_from: parseActivityDay,
   activity_to: parseActivityDay,
-  alert: parseAsString,
+  signal: parseAsString,
 };
 
 export const modelActivityParser = parseAsString.withOptions({ history: "push" });

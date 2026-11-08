@@ -5,9 +5,9 @@ import { getProxyBaseUrl } from "@/components/networking";
 import { Button } from "@/components/ui/button";
 import { boundedActivityMetrics } from "@/components/UsagePage/keyActivityData";
 import { backgroundFetchClient } from "@/lib/http/api";
-import type { Issue } from "./issueApi";
+import type { Alert } from "./issueApi";
 
-export default function IssueActivity({ issue, from, to }: { issue: Issue; from: string; to: string }) {
+export default function IssueActivity({ issue, from, to }: { issue: Alert; from: string; to: string }) {
   const { userId, userRole, isAuthorized, accessToken } = useAuthorized();
   const authorized = Boolean(isAuthorized && accessToken && issue.can_view_activity === true);
   const enabled = authorized && from <= to;
@@ -15,8 +15,8 @@ export default function IssueActivity({ issue, from, to }: { issue: Issue; from:
     queryKey: ["issueActivity", getProxyBaseUrl(), userId, userRole, issue.id, from, to],
     enabled,
     queryFn: async ({ signal }: { signal: AbortSignal }) => {
-      const { data } = await backgroundFetchClient.GET("/issues/{issue_id}/activity", {
-        params: { path: { issue_id: issue.id }, query: { start_date: from, end_date: to } },
+      const { data } = await backgroundFetchClient.GET("/alerts/{alert_id}/activity", {
+        params: { path: { alert_id: issue.id }, query: { start_date: from, end_date: to } },
         signal,
       });
       if (!data) throw new Error("Could not load activity");

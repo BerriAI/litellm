@@ -38,7 +38,7 @@ export default function PerformanceMonitoring({
     queryKey: ["performanceMonitoring", getProxyBaseUrl(), user?.user_id, user?.user_role],
     enabled: Boolean(accessToken && user?.user_id),
     queryFn: async ({ signal }: { signal: AbortSignal }) => {
-      const { data } = await backgroundFetchClient.GET("/issues/monitoring", { signal });
+      const { data } = await backgroundFetchClient.GET("/alerts/monitoring", { signal });
       if (!data) throw new Error("Could not load Performance monitoring");
       return data;
     },
@@ -48,7 +48,7 @@ export default function PerformanceMonitoring({
   const query = useQuery(options);
   const update = useMutation({
     mutationFn: async (enabled: boolean) => {
-      const { data } = await backgroundFetchClient.PATCH("/issues/monitoring", { body: { enabled } });
+      const { data } = await backgroundFetchClient.PATCH("/alerts/monitoring", { body: { enabled } });
       if (!data) throw new Error("Could not update Performance monitoring");
       return data;
     },

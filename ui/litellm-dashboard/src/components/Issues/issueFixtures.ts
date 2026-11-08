@@ -1,7 +1,7 @@
 import type { components } from "@/lib/http/schema";
-import type { Issue } from "./issueApi";
+import type { Alert } from "./issueApi";
 
-export const SPEND_ISSUE: Issue = {
+export const SPEND_ISSUE: Alert = {
   id: "issue-checkout-spend",
   cohort_key: "cohort-checkout-spend",
   kind: "performance",
@@ -57,7 +57,7 @@ export const SPEND_ISSUE: Issue = {
   can_view_activity: true,
 };
 
-export const RETIREMENT_ISSUE: Issue = {
+export const RETIREMENT_ISSUE: Alert = {
   ...SPEND_ISSUE,
   id: "issue-model-retirement",
   cohort_key: "cohort-model-retirement",
@@ -99,7 +99,7 @@ export const RETIREMENT_ISSUE: Issue = {
   },
 };
 
-export const FAMILY_SETTINGS: components["schemas"]["IssueFamilyList"] = {
+export const FAMILY_SETTINGS: components["schemas"]["AlertFamilyList"] = {
   projection_pending: false,
   data: (["spend", "latency", "reliability", "traffic"] as const).map((family) => ({
     family,

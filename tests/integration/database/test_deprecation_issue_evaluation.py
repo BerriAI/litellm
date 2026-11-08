@@ -118,10 +118,10 @@ async def test_retirement_issue_http_state_survives_replay_and_reopens_only_for_
         await record(now.date(), 100)
         projector = DeprecationIssueProjector.from_prisma(db.prisma, source)
         await projector.run(now)
-        page = gateway.get("/issues", {"scope_type": "model", "scope_id": name})
+        page = gateway.get("/alerts", {"scope_type": "model", "scope_id": name})
         assert page["total"] == 1
         original = page["data"][0]
-        path = f"/issues/{original['id']}"
+        path = f"/alerts/{original['id']}"
         assert original["status"] == "open"
         assert original["impact"]["requests"] == 100
         assert gateway.get(path + "/signals")["total"] == 1

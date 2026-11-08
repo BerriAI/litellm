@@ -11,10 +11,10 @@ import { issueRouteParsers } from "@/components/Issues/issueRoute";
 export default function AlertsPage() {
   const { t } = useTranslation();
   const [params] = useQueryStates(issueRouteParsers);
-  if (params.issue)
+  if (params.alert)
     return (
       <Page className="mx-auto max-w-[1440px] gap-4">
-        <IssueDetail id={params.issue} />
+        <IssueDetail id={params.alert} />
       </Page>
     );
   if (params.model)

@@ -22,7 +22,7 @@ from litellm.repositories.analytics_budget import (
 )
 from litellm.repositories.config_repository import BoundedConfigRepository
 from litellm.repositories.usage_alert_metrics import UsageAlertMetricsRepository
-from litellm.types.proxy.issues import IssueCohort, IssueDeprecation, IssueImpact, IssueInput, IssueSignal
+from litellm.types.proxy.issues import AlertCohort, AlertDeprecation, AlertImpact, AlertInput, AlertSignal
 from litellm.types.proxy.model_deprecation import (
     DeprecationAlertState,
     ModelDeprecationInfo,
@@ -84,7 +84,7 @@ def deprecation_issue(
     usage: ModelDeprecationUsage,
     state: DeprecationAlertState,
     now: datetime,
-) -> IssueInput:
+) -> AlertInput:
     today: Final = now.astimezone(timezone.utc).date()
     model: Final = candidate.model
     name: Final = model.model_name or usage.model
@@ -93,21 +93,21 @@ def deprecation_issue(
         if model.deprecation_date < today
         else f"{name} retires on {model.deprecation_date.isoformat()}"
     )
-    return IssueInput(
+    return AlertInput(
         id=f"deprecation:{candidate.state_key.removeprefix('model_deprecation_alert:')}",
         cohort_key=candidate.state_key,
         kind="model_deprecation",
         family="retirement",
         title=title,
-        cohort=IssueCohort(scope_type="model", scope_id=usage.model),
+        cohort=AlertCohort(scope_type="model", scope_id=usage.model),
         observed_on=usage.last_used_date,
         observed_at=now,
         range_start=today - timedelta(days=29),
         range_end=today,
         grouping_reason="model_deprecation",
         explanation="This model has recorded requests in the last 30 UTC dates and is retiring within 30 days or has retired.",
-        impact=IssueImpact(keys=usage.keys, users=usage.users, teams=usage.teams, models=1, requests=usage.requests),
-        deprecation=IssueDeprecation(
+        impact=AlertImpact(keys=usage.keys, users=usage.users, teams=usage.teams, models=1, requests=usage.requests),
+        deprecation=AlertDeprecation(
             model=model,
             usage_model=usage.model,
             requests=usage.requests,
@@ -124,8 +124,8 @@ def used_deprecation_issues(
     usage: Mapping[str, ModelDeprecationUsage],
     states: Mapping[str, DeprecationAlertState],
     now: datetime,
-) -> tuple[IssueInput, ...]:
-    def build(candidate: DeprecationCandidate) -> IssueInput:
+) -> tuple[AlertInput, ...]:
+    def build(candidate: DeprecationCandidate) -> AlertInput:
         state: Final = states.get(candidate.state_key) or DeprecationAlertState(
             model=candidate.usage_model, deprecation_date=candidate.model.deprecation_date
         )
@@ -175,8 +175,8 @@ class DeprecationIssueProjector:
         saved: Final = await self._issues.upsert_issues(issues)
         await self._issues.add_signal_batch(
             tuple(
-                IssueSignal(
-                    issue_id=issue.id, source="model_deprecation", source_id=issue.id, deprecation=issue.deprecation
+                AlertSignal(
+                    alert_id=issue.id, source="model_deprecation", source_id=issue.id, deprecation=issue.deprecation
                 )
                 for issue in saved
             )

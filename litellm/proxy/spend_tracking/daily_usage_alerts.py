@@ -8,7 +8,7 @@ from typing import Final, Literal, Protocol
 
 from litellm.repositories.usage_alert_metrics import DailyAlertMetrics
 from litellm.types.proxy.usage_alert_defaults import is_default_usage_rule
-from litellm.types.proxy.usage_alerts import UsageAlertRule
+from litellm.types.proxy.usage_alerts import AlertRule
 
 
 class ComparisonRule(Protocol):
@@ -76,7 +76,7 @@ def compare_daily_usage(
     if (
         rule.metric == "requests"
         and rule.direction == "decrease"
-        and isinstance(rule, UsageAlertRule)
+        and isinstance(rule, AlertRule)
         and is_default_usage_rule(rule)
         and any(
             sum(row.requests for row in group) < rule.min_requests

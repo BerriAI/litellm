@@ -1,12 +1,12 @@
 import type { paths } from "@/lib/http/schema";
 import { uiHref } from "@/utils/uiHref";
 
-type AlertPage = paths["/usage/alerts"]["get"]["responses"][200]["content"]["application/json"];
-export type UsageAlert = AlertPage["data"][number];
-export type AlertModelsPage = paths["/usage/alert-models"]["get"]["responses"][200]["content"]["application/json"];
-type RulePage = paths["/usage/alert-rules"]["get"]["responses"][200]["content"]["application/json"];
+type AlertPage = paths["/alerts/signals"]["get"]["responses"][200]["content"]["application/json"];
+export type PerformanceSignal = AlertPage["data"][number];
+export type AlertModelsPage = paths["/alerts/models"]["get"]["responses"][200]["content"]["application/json"];
+type RulePage = paths["/alerts/rules"]["get"]["responses"][200]["content"]["application/json"];
 export type UsageRule = RulePage["data"][number];
-export type RuleInput = paths["/usage/alert-rules"]["post"]["requestBody"]["content"]["application/json"];
+export type RuleInput = paths["/alerts/rules"]["post"]["requestBody"]["content"]["application/json"];
 export const METRIC_LABELS = {
   spend: "Spend",
   requests: "Requests",
@@ -16,9 +16,11 @@ export const METRIC_LABELS = {
 };
 export const SCOPE_LABELS = { deployment: "Gateway", key: "Key", team: "Team", user: "User", model: "Model" };
 
-export const usageAlertHref = (alert: UsageAlert) => uiHref(alert.activity_path);
+export const usageAlertHref = (alert: PerformanceSignal) => uiHref(alert.activity_path);
 
-export function formatAlertChange(alert: Pick<UsageAlert, "baseline_value" | "observed_value" | "direction">): string {
+export function formatAlertChange(
+  alert: Pick<PerformanceSignal, "baseline_value" | "observed_value" | "direction">,
+): string {
   if (alert.baseline_value === 0) return alert.observed_value > 0 ? "New activity" : "No change";
   if (alert.observed_value === 0) return "↓ 100%";
   const ratio =
@@ -29,7 +31,7 @@ export function formatAlertChange(alert: Pick<UsageAlert, "baseline_value" | "ob
   return `${alert.direction === "increase" ? "↑" : "↓"} ${formatted}×`;
 }
 
-export function formatAlertValue(metric: UsageAlert["metric"], value: number): string {
+export function formatAlertValue(metric: PerformanceSignal["metric"], value: number): string {
   if (metric === "spend")
     return new Intl.NumberFormat("en-US", {
       style: "currency",

@@ -7,11 +7,11 @@ import pytest
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.integrations.SlackAlerting.usage_alerts import UsageAlertDelivery, activity_url, incident_message
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-from litellm.types.proxy.issues import Issue, IssueCohort, IssueDelivery, IssuePendingDelivery
-from litellm.types.proxy.usage_alerts import UsageAlert, UsageAlertRule
+from litellm.types.proxy.issues import Alert, AlertCohort, AlertDelivery, AlertPendingDelivery
+from litellm.types.proxy.usage_alerts import PerformanceSignal, AlertRule
 
 _NOW: Final = datetime(2026, 10, 20, tzinfo=timezone.utc)
-_RULE: Final = UsageAlertRule(
+_RULE: Final = AlertRule(
     name="Request spike",
     id="rule",
     scope_type="key",
@@ -23,7 +23,7 @@ _RULE: Final = UsageAlertRule(
     created_by=None,
     notification_channels=("slack",),
 )
-_ALERT: Final = UsageAlert(
+_ALERT: Final = PerformanceSignal(
     id="incident",
     rule_id="rule",
     rule_name="Request spike",
@@ -45,13 +45,13 @@ _ALERT: Final = UsageAlert(
 )
 
 
-_ISSUE: Final = Issue(
+_ISSUE: Final = Alert(
     id="issue-example",
     cohort_key="cohort-example",
     kind="performance",
     family="traffic",
     title="Traffic increased",
-    cohort=IssueCohort(scope_type="key", scope_id="reporting-key"),
+    cohort=AlertCohort(scope_type="key", scope_id="reporting-key"),
     observed_on=_ALERT.day,
     observed_at=_NOW,
     range_start=_ALERT.baseline_start,
@@ -62,11 +62,11 @@ _ISSUE: Final = Issue(
     last_seen=_NOW,
     updated_at=_NOW,
 )
-_PENDING: Final = IssuePendingDelivery(
+_PENDING: Final = AlertPendingDelivery(
     issue=_ISSUE,
     rule=_RULE,
     alert=_ALERT,
-    delivery=IssueDelivery(id="delivery-example", issue_id=_ISSUE.id, channel="slack"),
+    delivery=AlertDelivery(id="delivery-example", issue_id=_ISSUE.id, channel="slack"),
 )
 
 
@@ -131,7 +131,7 @@ async def test_issue_delivery_links_to_investigation_and_preserves_the_bound_sou
     try:
         assert await UsageAlertDelivery(slack).send_issue(_PENDING)
         assert len(requests) == 1
-        assert b"https://gateway.example.com/ui/alerts?issue=issue-example" in requests[0].content
+        assert b"https://gateway.example.com/ui/alerts?alert=issue-example" in requests[0].content
         assert (
             b"https://gateway.example.com/ui/api-keys?key=reporting-key&amp;detail_tab=activity" in requests[0].content
         )

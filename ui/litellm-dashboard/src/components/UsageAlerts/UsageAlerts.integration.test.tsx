@@ -97,12 +97,12 @@ describe("usage alerts API integration", () => {
       const call = { path: url.pathname, method: request.method, body, query: url.searchParams };
       calls.push(call);
       if (url.pathname === "/management/v1/users/me") return json({ user_id: "test-admin", user_role: "proxy_admin" });
-      if (url.pathname === "/usage/alerts/incident-test") return json({ ...observation, status: "resolved" });
-      if (url.pathname === "/issues/families") return json(FAMILY_SETTINGS);
-      if (url.pathname === "/usage/alert-rules" && request.method === "POST") {
+      if (url.pathname === "/alerts/signals/incident-test") return json({ ...observation, status: "resolved" });
+      if (url.pathname === "/alerts/defaults") return json(FAMILY_SETTINGS);
+      if (url.pathname === "/alerts/rules" && request.method === "POST") {
         return ruleResponse(body);
       }
-      if (url.pathname === "/usage/alert-rules") {
+      if (url.pathname === "/alerts/rules") {
         const page = {
           data: customRules,
           total: customRules.length,
@@ -122,7 +122,7 @@ describe("usage alerts API integration", () => {
         };
         return json(page);
       }
-      if (url.pathname === "/usage/alert-models") {
+      if (url.pathname === "/alerts/models") {
         return modelsResponse(url.searchParams);
       }
       return json({ detail: "Unexpected request" }, 404);
@@ -150,7 +150,7 @@ describe("usage alerts API integration", () => {
   );
 
   it("shows saved evidence on the matching entity without recomputing from a current rule", async () => {
-    renderWithProviders(<UsageAlertContext alertId="incident-test" scope="key" entityId="reporting-test-id" />);
+    renderWithProviders(<UsageAlertContext signalId="incident-test" scope="key" entityId="reporting-test-id" />);
     expect(await screen.findByText(/Spend was \$120.00 on 2026-11-04 UTC/)).toHaveTextContent(
       "baseline was $30.00 across 5 recorded days",
     );
@@ -159,7 +159,7 @@ describe("usage alerts API integration", () => {
   });
 
   it("does not attach an incident explanation to the wrong entity", async () => {
-    renderWithProviders(<UsageAlertContext alertId="incident-test" scope="team" entityId="team-example" />);
+    renderWithProviders(<UsageAlertContext signalId="incident-test" scope="team" entityId="team-example" />);
     expect(await screen.findByText("This alert belongs to a different entity.")).toBeInTheDocument();
     expect(screen.queryByText(/Spend was/)).not.toBeInTheDocument();
   });
@@ -204,7 +204,7 @@ describe("usage alerts API integration", () => {
     renderWithProviders(<UsageRules accessToken="test-access-token" />);
     await user.click(await screen.findByRole("button", { name: "Settings" }));
     expect(await screen.findByRole("button", { name: "Edit Unexpected spend" })).toBeInTheDocument();
-    expect(calls.some((call) => call.path === "/usage/alert-rules")).toBe(false);
+    expect(calls.some((call) => call.path === "/alerts/rules")).toBe(false);
     await user.click(screen.getByText("Custom rules", { selector: "summary" }));
     await user.click(screen.getByRole("button", { name: "New rule", exact: true }));
     expect(screen.getByLabelText("Name")).not.toBeVisible();
@@ -236,7 +236,7 @@ describe("usage alerts API integration", () => {
     await user.click(screen.getByRole("button", { name: "Save rule" }));
     const expected = { scope_type: "model", scope_id: "provider/recorded-model" };
     await waitFor(() => expect(calls.find((call) => call.method === "POST")?.body).toMatchObject(expected));
-    expect(calls.find((call) => call.path === "/usage/alert-models")?.query.get("limit")).toBe("20");
+    expect(calls.find((call) => call.path === "/alerts/models")?.query.get("limit")).toBe("20");
     expect(calls.some((call) => call.path === "/v2/model/info")).toBe(false);
   });
 

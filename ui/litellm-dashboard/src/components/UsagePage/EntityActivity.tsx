@@ -99,7 +99,7 @@ export default function EntityActivity({ scope, id, teamId }: Props) {
 
   return (
     <div className="space-y-4">
-      {params.alert && <UsageAlertContext alertId={params.alert} scope={scope} entityId={id} />}
+      {params.signal && <UsageAlertContext signalId={params.signal} scope={scope} entityId={id} />}
       <div className="flex items-center justify-end gap-2">
         <span className="text-sm text-muted-foreground">UTC</span>
         <AdvancedDatePicker

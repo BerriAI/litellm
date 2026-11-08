@@ -3,23 +3,23 @@ from typing import Literal, Protocol
 
 from litellm.models.team import LiteLLM_TeamTable
 from litellm.types.proxy.issues import (
-    Issue,
-    IssueActivityResponse,
-    IssueCohort,
-    IssueDeliveryBinding,
-    IssueFamily,
-    IssueFamilyList,
-    IssueFamilySetting,
-    IssueFamilyUpdate,
-    IssueImpact,
-    IssueInput,
-    IssueKind,
-    IssueList,
-    IssuePendingDelivery,
-    IssueProjectionSignal,
-    IssueScope,
-    IssueSignal,
-    IssueSignalList,
+    Alert,
+    AlertActivityResponse,
+    AlertCohort,
+    AlertDeliveryBinding,
+    AlertFamily,
+    AlertFamilyList,
+    AlertFamilySetting,
+    AlertFamilyUpdate,
+    AlertImpact,
+    AlertInput,
+    AlertKind,
+    AlertList,
+    AlertPendingDelivery,
+    AlertProjectionSignal,
+    AlertScope,
+    AlertSignal,
+    AlertSignalList,
     PerformanceMonitoring,
 )
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
@@ -36,23 +36,23 @@ class IssueStore(Protocol):
     async def set_performance_monitoring(self, enabled: bool, enterprise: bool = False) -> PerformanceMonitoring: ...
 
     async def publish_performance_issues(
-        self, inputs: tuple[IssueInput, ...], enterprise: bool
-    ) -> tuple[Issue, ...]: ...
+        self, inputs: tuple[AlertInput, ...], enterprise: bool
+    ) -> tuple[Alert, ...]: ...
 
-    async def get_issue(self, issue_id: str) -> Issue | None: ...
+    async def get_issue(self, issue_id: str) -> Alert | None: ...
 
     async def team_activity_access(self, team_id: str, user_id: str) -> LiteLLM_TeamTable | None: ...
 
     async def list_issues(
         self,
-        kind: IssueKind | None = None,
-        family: IssueFamily | None = None,
+        kind: AlertKind | None = None,
+        family: AlertFamily | None = None,
         status: UsageAlertStatus | None = None,
-        scope_type: IssueScope | None = None,
+        scope_type: AlertScope | None = None,
         scope_id: str | None = None,
         limit: int = 50,
         offset: int = 0,
-    ) -> IssueList: ...
+    ) -> AlertList: ...
 
     async def set_status(
         self,
@@ -60,42 +60,42 @@ class IssueStore(Protocol):
         status: UsageAlertStatus,
         expected_status: UsageAlertStatus,
         actor: str | None = None,
-        authorized_scopes: tuple[IssueCohort, ...] | None = None,
-    ) -> Issue | None: ...
+        authorized_scopes: tuple[AlertCohort, ...] | None = None,
+    ) -> Alert | None: ...
 
-    async def status_scopes(self, issue_id: str) -> tuple[IssueCohort, ...]: ...
+    async def status_scopes(self, issue_id: str) -> tuple[AlertCohort, ...]: ...
 
     async def upsert_issues(
         self,
-        inputs: tuple[IssueInput, ...],
+        inputs: tuple[AlertInput, ...],
         reopen: bool = False,
         status: UsageAlertStatus | None = None,
-    ) -> tuple[Issue, ...]: ...
+    ) -> tuple[Alert, ...]: ...
 
-    async def find_active_issues(self, cohort_keys: tuple[str, ...]) -> tuple[Issue, ...]: ...
+    async def find_active_issues(self, cohort_keys: tuple[str, ...]) -> tuple[Alert, ...]: ...
 
-    async def add_signal_batch(self, signals: tuple[IssueSignal, ...]) -> None: ...
+    async def add_signal_batch(self, signals: tuple[AlertSignal, ...]) -> None: ...
 
     async def list_signals(
-        self, issue_id: str, limit: int = 50, offset: int = 0, visible_scope: IssueCohort | None = None
-    ) -> IssueSignalList: ...
+        self, issue_id: str, limit: int = 50, offset: int = 0, visible_scope: AlertCohort | None = None
+    ) -> AlertSignalList: ...
 
     async def active_signals(
         self,
         day: date,
         limit: int = 500,
         cursor: str | None = None,
-        scope_type: IssueScope | None = None,
+        scope_type: AlertScope | None = None,
         metric: UsageAlertMetric | None = None,
         scope_ids: tuple[str, ...] | None = None,
         completed_only: bool = False,
-    ) -> tuple[IssueProjectionSignal, ...]: ...
+    ) -> tuple[AlertProjectionSignal, ...]: ...
 
     async def active_resource_issue_ids(self, cursor: str | None = None) -> tuple[str, ...]: ...
 
     async def recover_issues(self, day: date, issue_ids: tuple[str, ...] | None = None) -> int: ...
 
-    async def active_provider_issues(self, limit: int = 500, cursor: str | None = None) -> tuple[Issue, ...]: ...
+    async def active_provider_issues(self, limit: int = 500, cursor: str | None = None) -> tuple[Alert, ...]: ...
 
     async def recover_issue_ids(self, ids: tuple[str, ...], observed_at: datetime) -> int: ...
 
@@ -105,17 +105,17 @@ class IssueStore(Protocol):
 
     async def finish_deprecation_projection(self, observed_at: datetime) -> int: ...
 
-    async def family_settings(self) -> IssueFamilyList: ...
+    async def family_settings(self) -> AlertFamilyList: ...
 
     async def update_family(
-        self, family: PerformanceIssueFamily, data: IssueFamilyUpdate
-    ) -> IssueFamilySetting | None: ...
+        self, family: PerformanceIssueFamily, data: AlertFamilyUpdate
+    ) -> AlertFamilySetting | None: ...
 
-    async def queue_deliveries(self, bindings: tuple[IssueDeliveryBinding, ...]) -> None: ...
+    async def queue_deliveries(self, bindings: tuple[AlertDeliveryBinding, ...]) -> None: ...
 
-    async def pending_deliveries(self, limit: int = 100) -> tuple[IssuePendingDelivery, ...]: ...
+    async def pending_deliveries(self, limit: int = 100) -> tuple[AlertPendingDelivery, ...]: ...
 
-    async def pending_delivery(self, delivery_id: str) -> IssuePendingDelivery | None: ...
+    async def pending_delivery(self, delivery_id: str) -> AlertPendingDelivery | None: ...
 
     async def reserve_delivery(self, delivery_id: str) -> bool: ...
 
@@ -130,15 +130,15 @@ class IssueStore(Protocol):
 
 class IssueActivityStore(Protocol):
     async def daily_activity(
-        self, cohort: IssueCohort, start: date, end: date, model_limit: int = 20
-    ) -> IssueActivityResponse: ...
+        self, cohort: AlertCohort, start: date, end: date, model_limit: int = 20
+    ) -> AlertActivityResponse: ...
 
     async def keys(
-        self, cohort: IssueCohort, start: date, end: date, limit: int, offset: int
+        self, cohort: AlertCohort, start: date, end: date, limit: int, offset: int
     ) -> DailyActivityKeyPageResponse: ...
 
     async def users(
-        self, cohort: IssueCohort, start: date, end: date, limit: int, offset: int
+        self, cohort: AlertCohort, start: date, end: date, limit: int, offset: int
     ) -> DailyActivityUserPageResponse: ...
 
-    async def impact(self, cohort: IssueCohort, start: date, end: date) -> IssueImpact: ...
+    async def impact(self, cohort: AlertCohort, start: date, end: date) -> AlertImpact: ...

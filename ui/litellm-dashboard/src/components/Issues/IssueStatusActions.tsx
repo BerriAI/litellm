@@ -7,9 +7,9 @@ import { Button } from "@/components/ui/button";
 import { hasCapability } from "@/utils/capabilities";
 import { ApiError } from "@/lib/http/client";
 import type { components } from "@/lib/http/schema";
-import { Issue, IssueStatus, updateIssueStatus } from "./issueApi";
+import { Alert, IssueStatus, updateIssueStatus } from "./issueApi";
 
-export default function IssueStatusActions({ issue, globalAccess = false }: { issue: Issue; globalAccess?: boolean }) {
+export default function IssueStatusActions({ issue, globalAccess = false }: { issue: Alert; globalAccess?: boolean }) {
   const { isViewOnly, accessToken, userRole } = useAuthorized();
   const { data: user } = useCurrentUser(accessToken);
   const client = useQueryClient();
@@ -17,7 +17,7 @@ export default function IssueStatusActions({ issue, globalAccess = false }: { is
     mutationFn: (status: IssueStatus) => updateIssueStatus(issue, status),
     onSuccess: (updated) => {
       const scope = ["issues", getProxyBaseUrl(), user?.user_id, user?.user_role];
-      client.setQueryData<Issue>(
+      client.setQueryData<Alert>(
         [...scope, "detail", issue.id],
         (previous) =>
           previous && {
@@ -26,7 +26,7 @@ export default function IssueStatusActions({ issue, globalAccess = false }: { is
             can_update_status: updated.can_update_status ?? previous.can_update_status,
           },
       );
-      client.setQueriesData<components["schemas"]["IssueList"]>(
+      client.setQueriesData<components["schemas"]["AlertList"]>(
         { queryKey: [...scope, "list"] },
         (page) =>
           page && {

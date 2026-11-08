@@ -35,7 +35,7 @@ export default function UsageRules({ accessToken }: { accessToken: string | null
     queryKey: ["usageAlertRules", getProxyBaseUrl(), user?.user_id, user?.user_role, offset, "custom"],
     enabled: open && customOpen && Boolean(accessToken && user?.user_id),
     queryFn: async ({ signal }) => {
-      const { data } = await backgroundFetchClient.GET("/usage/alert-rules", {
+      const { data } = await backgroundFetchClient.GET("/alerts/rules", {
         params: { query: { limit: 20, offset, kind: "custom" } },
         signal,
       });
@@ -46,8 +46,8 @@ export default function UsageRules({ accessToken }: { accessToken: string | null
   const save = useMutation({
     mutationFn: async (body: RuleInput) =>
       editing
-        ? backgroundFetchClient.PUT("/usage/alert-rules/{rule_id}", { params: { path: { rule_id: editing.id } }, body })
-        : backgroundFetchClient.POST("/usage/alert-rules", { body }),
+        ? backgroundFetchClient.PUT("/alerts/rules/{rule_id}", { params: { path: { rule_id: editing.id } }, body })
+        : backgroundFetchClient.POST("/alerts/rules", { body }),
     onSuccess: async () => {
       setEditing(undefined);
       await queryClient.invalidateQueries({ queryKey: ["usageAlertRules"] });
@@ -55,7 +55,7 @@ export default function UsageRules({ accessToken }: { accessToken: string | null
   });
   const remove = useMutation({
     mutationFn: (id: string) =>
-      backgroundFetchClient.DELETE("/usage/alert-rules/{rule_id}", { params: { path: { rule_id: id } } }),
+      backgroundFetchClient.DELETE("/alerts/rules/{rule_id}", { params: { path: { rule_id: id } } }),
     onSuccess: async () => {
       setDeleting(null);
       if (query.data?.data.length === 1) setOffset(Math.max(0, offset - 20));

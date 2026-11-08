@@ -1,4 +1,4 @@
-"""Issue investigations reuse the same aggregate filters as entity Activity."""
+"""Alert investigations reuse the same aggregate filters as entity Activity."""
 
 from collections.abc import Mapping
 from dataclasses import asdict, replace
@@ -15,9 +15,9 @@ from litellm.repositories.daily_activity_buckets import api_key_bucket, api_key_
 from litellm.repositories.daily_activity_repository import DailyActivityQueryDatabase, DailyActivityRepository
 from litellm.repositories.daily_activity_sql import PRISMA_TO_PG_TABLE, build_where_clause
 from litellm.types.proxy.issues import (
-    IssueActivityResponse,
-    IssueCohort,
-    IssueImpact,
+    AlertActivityResponse,
+    AlertCohort,
+    AlertImpact,
 )
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     DailyActivityKeyPageResponse,
@@ -51,7 +51,7 @@ class _UserLabel(BaseModel, frozen=True):
     user_email: str | None
 
 
-def issue_activity_scope(cohort: IssueCohort, start: date, end: date) -> DailyActivityScope:
+def issue_activity_scope(cohort: AlertCohort, start: date, end: date) -> DailyActivityScope:
     if start > end or (end - start).days > 365:
         raise ValueError("Choose an ordered date range of at most 366 days")
     return DailyActivityScope(
@@ -83,14 +83,14 @@ class IssueActivityRepository:
         return cls(daily_activity_repository(prisma, query_database=database), database)
 
     async def daily_activity(
-        self, cohort: IssueCohort, start: date, end: date, model_limit: int = 20
-    ) -> IssueActivityResponse:
+        self, cohort: AlertCohort, start: date, end: date, model_limit: int = 20
+    ) -> AlertActivityResponse:
         return await BoundedDailyActivityRepository(self.database).aggregate(
             issue_activity_scope(cohort, start, end), model_limit=model_limit if cohort.scope_type == "key" else None
         )
 
     async def keys(
-        self, cohort: IssueCohort, start: date, end: date, limit: int, offset: int
+        self, cohort: AlertCohort, start: date, end: date, limit: int, offset: int
     ) -> DailyActivityKeyPageResponse:
         if not 1 <= limit <= 100 or offset < 0:
             raise ValueError("Read between one and 100 keys with a nonnegative offset")
@@ -113,7 +113,7 @@ class IssueActivityRepository:
         )
 
     async def users(
-        self, cohort: IssueCohort, start: date, end: date, limit: int, offset: int
+        self, cohort: AlertCohort, start: date, end: date, limit: int, offset: int
     ) -> DailyActivityUserPageResponse:
         if not 1 <= limit <= 100 or offset < 0:
             raise ValueError("Read between one and 100 users with a nonnegative offset")
@@ -206,7 +206,7 @@ class IssueActivityRepository:
         )
         return rows[0]
 
-    async def impact(self, cohort: IssueCohort, start: date, end: date) -> IssueImpact:
+    async def impact(self, cohort: AlertCohort, start: date, end: date) -> AlertImpact:
         scope: Final = issue_activity_scope(cohort, start, end)
         counts: Final = await self._counts(scope)
         teams: Final = (
@@ -214,7 +214,7 @@ class IssueActivityRepository:
             if cohort.scope_type not in ("user", "team")
             else None
         )
-        return IssueImpact(
+        return AlertImpact(
             keys=counts.keys,
             models=counts.models,
             requests=counts.requests,

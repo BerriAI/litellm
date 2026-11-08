@@ -124,7 +124,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
   const defaultRange = useMemo(() => defaultUsageDateRange(defaultTimeRange), [defaultTimeRange]);
 
   const [urlParams, setUrlParams] = useQueryStates(usageUrlParsers);
-  const [alertId] = useQueryState("alert", entityActivityParsers.alert);
+  const [signalId] = useQueryState("signal", entityActivityParsers.signal);
   const { range, from, to } = urlParams;
   const dateValue = useMemo<DateRangePickerValue>(
     () => dateRangeFromParams({ range, from, to }) ?? defaultRange.value,
@@ -172,7 +172,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
   // For non-admins or "my-usage" view, always pass their own user_id
   const effectiveUserId = usageView === "my-usage" || !isAdmin ? userID || null : urlParams.user;
   const isDeploymentUsage = isAdmin && usageView === "global" && effectiveUserId === null;
-  const showUsageAlert = Boolean(alertId && isDeploymentUsage);
+  const showUsageAlert = Boolean(signalId && isDeploymentUsage);
 
   const clientScopeInput = {
     userId: userID,
@@ -462,9 +462,9 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
 
   return (
     <div ref={pageRef} className="relative w-full px-4 pt-3 pb-8 sm:px-6">
-      {showUsageAlert && alertId && (
+      {showUsageAlert && signalId && (
         <div className="mb-3">
-          <UsageAlertContext alertId={alertId} scope="deployment" entityId={null} />
+          <UsageAlertContext signalId={signalId} scope="deployment" entityId={null} />
         </div>
       )}
       <header className="mb-3 flex w-full flex-wrap items-center justify-between gap-3 border-b pb-3">

@@ -53,7 +53,7 @@ describe("model migration impact", () => {
       calls.push(call);
       if (url.pathname === "/management/v1/users/me")
         return apiResponse({ user_id: "user-1", user_role: "proxy_admin" });
-      if (url.pathname === "/issues") {
+      if (url.pathname === "/alerts") {
         const page = { data: [RETIREMENT_ISSUE], total: 1, limit: 25, offset: 0 };
         return apiResponse(page);
       }
@@ -81,7 +81,7 @@ describe("model migration impact", () => {
     expect(screen.getByRole("heading", { name: "Alerts", exact: true })).toBeInTheDocument();
     expect(await screen.findByRole("link", { name: RETIREMENT_ISSUE.title })).toHaveAttribute(
       "href",
-      "/ui/alerts?issue=issue-model-retirement",
+      "/ui/alerts?alert=issue-model-retirement",
     );
   });
   it.each([undefined, "model-deprecations"])("should preserve migration deep links with type %s", async (type) => {

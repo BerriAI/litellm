@@ -2,35 +2,32 @@ from datetime import date
 from typing import Protocol
 
 from litellm.types.proxy.usage_alerts import (
-    UsageAlert,
-    UsageAlertGroupList,
-    UsageAlertGroupUpdate,
-    UsageAlertGroupUpdateResult,
-    UsageAlertList,
+    AlertModelList,
+    AlertRule,
+    AlertRuleInput,
+    AlertRuleList,
+    PerformanceSignal,
+    PerformanceSignalList,
     UsageAlertMetric,
-    UsageAlertModelList,
-    UsageAlertRule,
-    UsageAlertRuleInput,
     UsageAlertRuleKind,
-    UsageAlertRuleList,
     UsageAlertScope,
     UsageAlertStatus,
 )
 
 
 class UsageAlertStore(Protocol):
-    async def get_rule(self, rule_id: str) -> UsageAlertRule | None: ...
+    async def get_rule(self, rule_id: str) -> AlertRule | None: ...
 
     async def save_rule(
         self,
-        data: UsageAlertRuleInput,
+        data: AlertRuleInput,
         created_by: str | None,
-        existing: UsageAlertRule | None = None,
+        existing: AlertRule | None = None,
         *,
         overrides_defaults: bool = False,
-    ) -> UsageAlertRule | None: ...
+    ) -> AlertRule | None: ...
 
-    async def delete_rule(self, rule_id: str, *, existing: UsageAlertRule | None = None) -> bool: ...
+    async def delete_rule(self, rule_id: str, *, existing: AlertRule | None = None) -> bool: ...
 
     async def list_rules(
         self,
@@ -39,9 +36,9 @@ class UsageAlertStore(Protocol):
         limit: int = 50,
         offset: int = 0,
         kind: UsageAlertRuleKind = "all",
-    ) -> UsageAlertRuleList: ...
+    ) -> AlertRuleList: ...
 
-    async def get_alert(self, alert_id: str) -> UsageAlert | None: ...
+    async def get_alert(self, alert_id: str) -> PerformanceSignal | None: ...
 
     async def list_alerts(
         self,
@@ -53,24 +50,11 @@ class UsageAlertStore(Protocol):
         end_date: date | None = None,
         limit: int = 50,
         offset: int = 0,
-    ) -> UsageAlertList: ...
+    ) -> PerformanceSignalList: ...
 
-    async def set_status(self, alert_id: str, status: UsageAlertStatus) -> UsageAlert | None: ...
+    async def set_status(self, alert_id: str, status: UsageAlertStatus) -> PerformanceSignal | None: ...
 
-    async def list_groups(
-        self,
-        scope_type: UsageAlertScope | None = None,
-        scope_id: str | None = None,
-        status: UsageAlertStatus | None = None,
-        start_date: date | None = None,
-        end_date: date | None = None,
-        limit: int = 50,
-        offset: int = 0,
-    ) -> UsageAlertGroupList: ...
-
-    async def set_group_status(self, data: UsageAlertGroupUpdate) -> UsageAlertGroupUpdateResult: ...
-
-    async def list_reported_models(self, search: str | None, cursor: str | None, limit: int) -> UsageAlertModelList: ...
+    async def list_reported_models(self, search: str | None, cursor: str | None, limit: int) -> AlertModelList: ...
 
     async def key_ownership(self, key_id: str) -> tuple[str | None, str | None] | None: ...
 

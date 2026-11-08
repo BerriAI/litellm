@@ -19,26 +19,21 @@ from pydantic import BaseModel, ConfigDict, TypeAdapter
 from litellm.repositories.daily_activity_buckets import api_key_from_bucket
 from litellm.types.proxy.usage_alert_defaults import DEFAULT_USAGE_RULE_IDS
 from litellm.types.proxy.usage_alerts import (
-    UsageAlert,
+    AlertModelList,
+    AlertModelOption,
+    AlertRule,
+    AlertRuleInput,
+    AlertRuleList,
+    PerformanceSignal,
+    PerformanceSignalList,
     UsageAlertDefaultSummary,
     UsageAlertEvaluationStatus,
-    UsageAlertGroup,
-    UsageAlertGroupList,
-    UsageAlertGroupMetric,
-    UsageAlertGroupUpdate,
-    UsageAlertGroupUpdateResult,
-    UsageAlertList,
     UsageAlertMetric,
-    UsageAlertModelList,
-    UsageAlertModelOption,
     UsageAlertObservation,
     UsageAlertProgress,
     UsageAlertProjectionCursor,
     UsageAlertProjectionWork,
-    UsageAlertRule,
-    UsageAlertRuleInput,
     UsageAlertRuleKind,
-    UsageAlertRuleList,
     UsageAlertScope,
     UsageAlertStatus,
     UsageAlertWorkCursor,
@@ -78,19 +73,6 @@ class _RuleCounts(_Count, frozen=True):
     default_summary: UsageAlertDefaultSummary
 
 
-class _GroupRow(BaseModel, frozen=True):
-    scope_type: UsageAlertScope
-    scope_id: str | None
-    day: date
-    incident_count: int
-    metrics: tuple[UsageAlertGroupMetric, ...]
-
-
-class _GroupPage(BaseModel, frozen=True):
-    total: int
-    data: tuple[_GroupRow, ...]
-
-
 class _ResourceLabel(BaseModel, frozen=True):
     scope_type: str
     scope_id: str | None
@@ -113,8 +95,8 @@ class _Ownership(BaseModel, frozen=True):
 _DEFAULT_RULE_IDS: Final = DEFAULT_USAGE_RULE_IDS
 
 
-def _rule(record: Mapping[str, object]) -> UsageAlertRule:
-    return UsageAlertRule.model_validate({**record, "is_default": str(record.get("id")) in _DEFAULT_RULE_IDS})
+def _rule(record: Mapping[str, object]) -> AlertRule:
+    return AlertRule.model_validate({**record, "is_default": str(record.get("id")) in _DEFAULT_RULE_IDS})
 
 
 def activity_path(
@@ -137,14 +119,14 @@ def activity_path(
                     "tab": "keys",
                     "from": (day - timedelta(days=baseline_days)).isoformat(),
                     "to": day.isoformat(),
-                    "alert": alert_id,
+                    "signal": alert_id,
                 }
             )
         )
     query: Final = {
         "activity_from": (day - timedelta(days=baseline_days)).isoformat(),
         "activity_to": day.isoformat(),
-        "alert": alert_id,
+        "signal": alert_id,
     }
     if parameter and entity_id and not entity_id.startswith("sk-"):
         query[parameter] = entity_id
@@ -152,7 +134,7 @@ def activity_path(
     return route + "?" + urlencode(query)
 
 
-def _observation_payload(rule: UsageAlertRule, item: UsageAlertObservation, now: datetime) -> Mapping[str, object]:
+def _observation_payload(rule: AlertRule, item: UsageAlertObservation, now: datetime) -> Mapping[str, object]:
     alert_id: Final = str(
         uuid5(
             NAMESPACE_URL,
@@ -170,7 +152,7 @@ def _observation_payload(rule: UsageAlertRule, item: UsageAlertObservation, now:
             ),
         )
     )
-    incident: Final = UsageAlert(
+    incident: Final = PerformanceSignal(
         id=alert_id,
         rule_id=rule.id,
         rule_name=rule.name,
@@ -208,7 +190,7 @@ class UsageAlertsRepository:
             cast(AlertDatabase, prisma.writer_db)  # cast-ok: PrismaWrapper forwards query_raw to its generated client
         )
 
-    async def get_rule(self, rule_id: str) -> UsageAlertRule | None:
+    async def get_rule(self, rule_id: str) -> AlertRule | None:
         rows: Final = TypeAdapter(tuple[_Record, ...]).validate_python(
             await self.database.query_raw(
                 'SELECT record FROM "LiteLLM_UsageAlertRule" WHERE id=$1 AND NOT deleted', rule_id
@@ -218,14 +200,14 @@ class UsageAlertsRepository:
 
     async def save_rule(
         self,
-        data: UsageAlertRuleInput,
+        data: AlertRuleInput,
         created_by: str | None,
-        existing: UsageAlertRule | None = None,
+        existing: AlertRule | None = None,
         *,
         overrides_defaults: bool = False,
-    ) -> UsageAlertRule | None:
+    ) -> AlertRule | None:
         now: Final = datetime.now(timezone.utc)
-        rule: Final = UsageAlertRule.model_validate(
+        rule: Final = AlertRule.model_validate(
             {
                 **data.model_dump(),
                 "id": existing.id if existing else str(uuid4()),
@@ -255,7 +237,7 @@ class UsageAlertsRepository:
         saved: Final = TypeAdapter(tuple[_Record, ...]).validate_python(rows)
         return _rule(saved[0].record) if saved else None
 
-    async def delete_rule(self, rule_id: str, *, existing: UsageAlertRule | None = None) -> bool:
+    async def delete_rule(self, rule_id: str, *, existing: AlertRule | None = None) -> bool:
         return bool(
             await self.database.query_raw(
                 """UPDATE "LiteLLM_UsageAlertRule" SET deleted=true,enabled=false
@@ -276,7 +258,7 @@ class UsageAlertsRepository:
         limit: int = 50,
         offset: int = 0,
         kind: UsageAlertRuleKind = "all",
-    ) -> UsageAlertRuleList:
+    ) -> AlertRuleList:
         args: Final = (scope_type, scope_id, json.dumps(tuple(sorted(_DEFAULT_RULE_IDS))), kind)
         where: Final = "NOT deleted AND ($1::text IS NULL OR scope_type=$1) AND ($2::text IS NULL OR scope_id=$2)"
         builtin: Final = "id IN (SELECT jsonb_array_elements_text($3::jsonb))"
@@ -305,7 +287,7 @@ class UsageAlertsRepository:
                 offset,
             )
         )
-        return UsageAlertRuleList(
+        return AlertRuleList(
             data=tuple(_rule(row.record) for row in rows),
             total=count[0].count,
             limit=limit,
@@ -315,7 +297,7 @@ class UsageAlertsRepository:
 
     async def enabled_rule_page(
         self, scope: UsageAlertScope, wildcard: bool, cursor: str | None, limit: int = 500
-    ) -> tuple[UsageAlertRule, ...]:
+    ) -> tuple[AlertRule, ...]:
         if not 1 <= limit <= 500:
             raise ValueError("Read at most 500 rules")
         rows: Final = TypeAdapter(tuple[_Record, ...]).validate_python(
@@ -327,7 +309,7 @@ class UsageAlertsRepository:
                 limit,
             )
         )
-        return tuple(UsageAlertRule.model_validate(row.record) for row in rows)
+        return tuple(AlertRule.model_validate(row.record) for row in rows)
 
     async def work_cursor(self) -> UsageAlertWorkCursor:
         rows: Final = TypeAdapter(tuple[_Record, ...]).validate_python(
@@ -344,7 +326,7 @@ class UsageAlertsRepository:
             cursor.model_dump_json(),
         )
 
-    async def save_progress(self, updates: tuple[tuple[UsageAlertRule, UsageAlertProgress], ...]) -> None:
+    async def save_progress(self, updates: tuple[tuple[AlertRule, UsageAlertProgress], ...]) -> None:
         if not updates:
             return
         if len(updates) > 500:
@@ -369,7 +351,7 @@ class UsageAlertsRepository:
         )
 
     async def suppressed_entities(
-        self, rules: tuple[UsageAlertRule, ...], entities: tuple[str | None, ...]
+        self, rules: tuple[AlertRule, ...], entities: tuple[str | None, ...]
     ) -> Mapping[str, frozenset[str | None]]:
         defaults: Final = tuple(rule for rule in rules if rule.id in _DEFAULT_RULE_IDS)
         if not defaults or not entities:
@@ -446,11 +428,11 @@ class UsageAlertsRepository:
             work.version,
         )
 
-    async def get_alert(self, alert_id: str) -> UsageAlert | None:
+    async def get_alert(self, alert_id: str) -> PerformanceSignal | None:
         rows: Final = TypeAdapter(tuple[_Record, ...]).validate_python(
             await self.database.query_raw('SELECT record FROM "LiteLLM_UsageAlertIncident" WHERE id=$1', alert_id)
         )
-        return UsageAlert.model_validate(rows[0].record) if rows else None
+        return PerformanceSignal.model_validate(rows[0].record) if rows else None
 
     async def list_alerts(
         self,
@@ -462,7 +444,7 @@ class UsageAlertsRepository:
         end_date: date | None = None,
         limit: int = 50,
         offset: int = 0,
-    ) -> UsageAlertList:
+    ) -> PerformanceSignalList:
         args: Final = (
             scope_type,
             scope_id,
@@ -485,14 +467,14 @@ class UsageAlertsRepository:
                 offset,
             )
         )
-        return UsageAlertList(
-            data=tuple(UsageAlert.model_validate(row.record) for row in rows),
+        return PerformanceSignalList(
+            data=tuple(PerformanceSignal.model_validate(row.record) for row in rows),
             total=count[0].count,
             limit=limit,
             offset=offset,
         )
 
-    async def set_status(self, alert_id: str, status: UsageAlertStatus) -> UsageAlert | None:
+    async def set_status(self, alert_id: str, status: UsageAlertStatus) -> PerformanceSignal | None:
         rows: Final = TypeAdapter(tuple[_Record, ...]).validate_python(
             await self.database.query_raw(
                 """UPDATE "LiteLLM_UsageAlertIncident" SET status=$2, record=jsonb_set(record,'{status}',to_jsonb($2::text)),updated_at=CURRENT_TIMESTAMP WHERE id=$1 RETURNING record""",
@@ -500,92 +482,7 @@ class UsageAlertsRepository:
                 status,
             )
         )
-        return UsageAlert.model_validate(rows[0].record) if rows else None
-
-    async def list_groups(
-        self,
-        scope_type: UsageAlertScope | None = None,
-        scope_id: str | None = None,
-        status: UsageAlertStatus | None = None,
-        start_date: date | None = None,
-        end_date: date | None = None,
-        limit: int = 50,
-        offset: int = 0,
-    ) -> UsageAlertGroupList:
-        rows: Final = TypeAdapter(tuple[_GroupPage, ...]).validate_python(
-            await self.database.query_raw(
-                """WITH groups AS MATERIALIZED (
-                    SELECT scope_type,scope_id,day,count(*)::int AS incident_count FROM "LiteLLM_UsageAlertIncident"
-                    WHERE ($1::text IS NULL OR scope_type=$1) AND ($2::text IS NULL OR scope_id=$2)
-                        AND ($3::text IS NULL OR status=$3) AND ($4::text IS NULL OR day >= $4)
-                        AND ($5::text IS NULL OR day <= $5)
-                    GROUP BY scope_type,scope_id,day
-                ), page AS MATERIALIZED (
-                    SELECT * FROM groups ORDER BY day DESC,scope_type,scope_id NULLS FIRST LIMIT $6 OFFSET $7
-                ), selected AS (
-                    SELECT i.* FROM page p JOIN "LiteLLM_UsageAlertIncident" i
-                        ON i.scope_type=p.scope_type AND i.scope_id=p.scope_id AND i.day=p.day
-                    WHERE ($3::text IS NULL OR i.status=$3)
-                    UNION ALL
-                    SELECT i.* FROM page p JOIN "LiteLLM_UsageAlertIncident" i
-                        ON i.scope_type=p.scope_type AND i.scope_id IS NULL AND i.day=p.day
-                    WHERE p.scope_id IS NULL AND ($3::text IS NULL OR i.status=$3)
-                ), ranked AS (
-                    SELECT scope_type,scope_id,day,metric,record,
-                        count(*) OVER (PARTITION BY scope_type,scope_id,day,metric)::int AS incident_count,
-                        row_number() OVER (PARTITION BY scope_type,scope_id,day,metric
-                            ORDER BY record->>'first_seen' DESC,id) AS rank
-                    FROM selected
-                ), packed AS (
-                    SELECT p.scope_type,p.scope_id,p.day,p.incident_count,
-                        jsonb_agg(jsonb_build_object('metric',r.metric,'incident_count',r.incident_count,
-                            'representative',r.record) ORDER BY CASE r.metric
-                                WHEN 'requests' THEN 0 WHEN 'spend' THEN 1 WHEN 'error_rate' THEN 2
-                                WHEN 'errors' THEN 3 ELSE 4 END) AS metrics
-                    FROM page p JOIN ranked r ON p.scope_type=r.scope_type
-                        AND p.scope_id IS NOT DISTINCT FROM r.scope_id AND p.day=r.day AND r.rank=1
-                    GROUP BY p.scope_type,p.scope_id,p.day,p.incident_count
-                ) SELECT (SELECT count(*)::int FROM groups) AS total,
-                    COALESCE((SELECT jsonb_agg(to_jsonb(packed) ORDER BY day DESC,scope_type,scope_id NULLS FIRST)
-                        FROM packed),'[]'::jsonb) AS data""",
-                scope_type,
-                scope_id,
-                status,
-                start_date.isoformat() if start_date else None,
-                end_date.isoformat() if end_date else None,
-                limit,
-                offset,
-            )
-        )
-        page: Final = rows[0]
-        labels: Final[Mapping[tuple[str, str | None], str | None]] = (
-            await self.resource_labels(page.data) if page.data else {}
-        )
-        return UsageAlertGroupList(
-            data=tuple(
-                UsageAlertGroup(
-                    id=str(
-                        uuid5(
-                            NAMESPACE_URL,
-                            json.dumps(
-                                ["litellm:performance-group", row.scope_type, row.scope_id, row.day.isoformat()]
-                            ),
-                        )
-                    ),
-                    scope_type=row.scope_type,
-                    scope_id=row.scope_id,
-                    scope_label=labels.get((row.scope_type, row.scope_id)),
-                    day=row.day,
-                    incident_count=row.incident_count,
-                    metrics=row.metrics,
-                    activity_path=row.metrics[0].representative.activity_path,
-                )
-                for row in page.data
-            ),
-            total=page.total,
-            limit=limit,
-            offset=offset,
-        )
+        return PerformanceSignal.model_validate(rows[0].record) if rows else None
 
     async def resource_labels(
         self, groups: tuple[ResourceLabelScope, ...]
@@ -626,25 +523,7 @@ class UsageAlertsRepository:
         )
         return MappingProxyType({(row.scope_type, row.scope_id): row.label for row in rows})
 
-    async def set_group_status(self, data: UsageAlertGroupUpdate) -> UsageAlertGroupUpdateResult:
-        rows: Final = TypeAdapter(tuple[_Count, ...]).validate_python(
-            await self.database.query_raw(
-                """WITH changed AS (
-                    UPDATE "LiteLLM_UsageAlertIncident" SET status=$5,
-                        record=jsonb_set(record,'{status}',to_jsonb($5::text)),updated_at=CURRENT_TIMESTAMP
-                    WHERE scope_type=$1 AND scope_id IS NOT DISTINCT FROM $2::text AND day=$3 AND status=$4
-                    RETURNING id
-                ) SELECT count(*)::int AS count FROM changed""",
-                data.scope_type,
-                data.scope_id,
-                data.day.isoformat(),
-                data.expected_status,
-                data.status,
-            )
-        )
-        return UsageAlertGroupUpdateResult(updated_count=rows[0].count)
-
-    async def list_reported_models(self, search: str | None, cursor: str | None, limit: int) -> UsageAlertModelList:
+    async def list_reported_models(self, search: str | None, cursor: str | None, limit: int) -> AlertModelList:
         today: Final = datetime.now(timezone.utc).date()
         rows: Final = TypeAdapter(tuple[_ModelIdentity, ...]).validate_python(
             await self.database.query_raw(
@@ -661,8 +540,8 @@ class UsageAlertsRepository:
             )
         )
         selected: Final = rows[:limit]
-        return UsageAlertModelList(
-            data=tuple(UsageAlertModelOption(scope_id=row.model, label=row.model) for row in selected),
+        return AlertModelList(
+            data=tuple(AlertModelOption(scope_id=row.model, label=row.model) for row in selected),
             limit=limit,
             next_cursor=selected[-1].model if len(rows) > limit else None,
             start_date=today - timedelta(days=29),
@@ -699,10 +578,10 @@ class UsageAlertsRepository:
         )
 
     @staticmethod
-    def _checkpoint(rule: UsageAlertRule, day: date) -> str:
+    def _checkpoint(rule: AlertRule, day: date) -> str:
         return f"{rule.id}:{rule.updated_at.isoformat()}:{day.isoformat()}"
 
-    async def completed_rule_ids(self, rules: tuple[UsageAlertRule, ...], day: date) -> frozenset[str]:
+    async def completed_rule_ids(self, rules: tuple[AlertRule, ...], day: date) -> frozenset[str]:
         if len(rules) > 500:
             raise ValueError("A checkpoint batch must contain at most 500 rules")
         rows: Final = TypeAdapter(tuple[_Identifier, ...]).validate_python(
@@ -717,7 +596,7 @@ class UsageAlertsRepository:
 
     async def record_evaluations(
         self,
-        evaluations: tuple[tuple[UsageAlertRule, UsageAlertEvaluationStatus], ...],
+        evaluations: tuple[tuple[AlertRule, UsageAlertEvaluationStatus], ...],
         day: date,
         *,
         completed: bool,
@@ -764,16 +643,16 @@ class UsageAlertsRepository:
             str(uuid4()),
         )
 
-    async def ensure_default_rules(self, rules: tuple[UsageAlertRuleInput, ...]) -> None:
+    async def ensure_default_rules(self, rules: tuple[AlertRuleInput, ...]) -> None:
         for rule in rules:
             await self._ensure_default_rule(rule)
 
-    async def _ensure_default_rule(self, rule: UsageAlertRuleInput) -> None:
+    async def _ensure_default_rule(self, rule: AlertRuleInput) -> None:
         rule_id: Final = str(
             uuid5(NAMESPACE_URL, f"litellm:usage-alert:{rule.scope_type}:{rule.metric}:{rule.direction}")
         )
         now: Final = datetime.now(timezone.utc)
-        record: Final = UsageAlertRule.model_validate(
+        record: Final = AlertRule.model_validate(
             {**rule.model_dump(), "id": rule_id, "created_at": now, "updated_at": now, "created_by": None}
         )
         await self.database.query_raw(
@@ -786,8 +665,8 @@ class UsageAlertsRepository:
         )
 
     async def record_observations(
-        self, rule: UsageAlertRule, observations: tuple[UsageAlertObservation, ...]
-    ) -> tuple[UsageAlert, ...]:
+        self, rule: AlertRule, observations: tuple[UsageAlertObservation, ...]
+    ) -> tuple[PerformanceSignal, ...]:
         if not observations:
             return ()
         if len(observations) > 500 or len({item.entity_id for item in observations}) != len(observations):
@@ -838,7 +717,7 @@ class UsageAlertsRepository:
                 str(uuid4()),
             )
         )
-        return tuple(UsageAlert.model_validate(row.record) for row in rows)
+        return tuple(PerformanceSignal.model_validate(row.record) for row in rows)
 
     async def prune(self, retention_days: int = 90, limit: int = 500) -> bool:
         incidents: Final = await self.database.query_raw(

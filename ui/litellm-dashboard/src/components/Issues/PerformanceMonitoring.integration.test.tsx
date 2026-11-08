@@ -18,7 +18,7 @@ describe("Performance monitoring activation", () => {
       const request = input instanceof Request ? input : new Request(input);
       const path = new URL(request.url).pathname;
       if (path === "/management/v1/users/me") return json({ user_id: "example-admin", user_role: "proxy_admin" });
-      if (path !== "/issues/monitoring") return json({ detail: "Unexpected request" }, 404);
+      if (path !== "/alerts/monitoring") return json({ detail: "Unexpected request" }, 404);
       if (failed) return json({ detail: "Unavailable" }, 503);
       if (request.method === "PATCH") {
         const body = await request.json();
