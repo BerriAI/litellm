@@ -346,12 +346,15 @@ def _proxy_model_client(rows: list[prisma_models.LiteLLM_ProxyModelTable]) -> Si
 
 class TestModelRepository:
     @pytest.mark.parametrize("total", (0, 60))
-    async def test_scoped_model_page_preserves_count_and_bounds_rows(self, total: int) -> None:
+    async def test_scoped_model_page_preserves_count_and_bounds_rows(
+        self, total: int, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("LITELLM_SALT_KEY", "sk-test-salt")
         row: Final = {
             "model_id": "saved-model",
             "model_name": "saved-model",
             "model_info": {"team_id": "owner-team"},
-            "litellm_params": {"model": "openai/test-model"},
+            "litellm_params": {"model": "openai/test-model", "api_key": encrypt_value_helper("literal-value")},
         }
         database: Final = SimpleNamespace(query_raw=AsyncMock(side_effect=[[{"total": total}], [row]]))
         models, count = await ModelRepository(SimpleNamespace(db=database)).search_scoped_model_page(
@@ -364,6 +367,7 @@ class TestModelRepository:
         )
         assert count == total
         assert [model.model_id for model in models] == (["saved-model"] if total else [])
+        assert [model.litellm_params for model in models] == ([row["litellm_params"]] if total else [])
         assert database.query_raw.await_args_list[0].args[1:] == (
             None,
             "%saved%",

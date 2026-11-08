@@ -144,6 +144,7 @@ class ModelRepository(BaseRepository[LiteLLM_ProxyModelTable]):
         allowed_team_ids: Set[str],
         take: int,
     ) -> tuple[Sequence[LiteLLM_ProxyModelTable], int]:
+        """Read stored parameter values without applying the serving or decryption paths."""
         database: Final = require_attributes(self._connected_client(), _ModelReadClient, "db").db
         arguments: Final = (
             model_name,
@@ -165,7 +166,7 @@ class ModelRepository(BaseRepository[LiteLLM_ProxyModelTable]):
             if take > 0 and total > 0
             else ()
         )
-        return tuple(self._to_model_list(records)), total
+        return tuple(LiteLLM_ProxyModelTable.model_validate(record_to_dict(record)) for record in records), total
 
     async def find_by_team_id(self, team_id: str) -> list[LiteLLM_ProxyModelTable]:
         """Find models associated with a specific team.
