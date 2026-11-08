@@ -312,14 +312,21 @@ def declared_prompt_caching(model_info: Mapping[str, object] | None) -> bool | N
     return declared if isinstance(declared, bool) else None
 
 
-def _marks_a_developer_message(message: AllMessageValues) -> bool:
-    return message["role"] == "developer" and ("cache_control" in message or bool(_cache_control_values(message)))
-
-
 def _cost_map_caches_prompts(models: Iterable[str], custom_llm_provider: str | None) -> bool:
     from litellm.utils import supports_prompt_caching
 
     return any(supports_prompt_caching(model=name, custom_llm_provider=custom_llm_provider) for name in models)
+
+
+def _caches_prompts(
+    model: str, custom_llm_provider: str | None, model_info: Mapping[str, object] | None, base_model: object
+) -> bool:
+    declared: Final = declared_prompt_caching(model_info)
+    if declared is not None:
+        return declared
+    return _cost_map_caches_prompts(
+        dict.fromkeys(name for name in (base_model, model) if isinstance(name, str) and name), custom_llm_provider
+    )
 
 
 def developer_messages_for_a_prompt_caching_model(
@@ -330,22 +337,11 @@ def developer_messages_for_a_prompt_caching_model(
     model_info: Mapping[str, object] | None,
     base_model: object,
 ) -> Sequence[AllMessageValues]:
-    if not any(map(_marks_a_developer_message, messages)):
+    if not _carries_a_developer_cache_control(messages):
         return messages
-    declared: Final = declared_prompt_caching(model_info)
-    caches_prompts: Final = (
-        declared
-        if declared is not None
-        else _cost_map_caches_prompts(
-            dict.fromkeys(name for name in (base_model, model) if isinstance(name, str) and name), custom_llm_provider
-        )
-    )
-    if caches_prompts:
+    if _caches_prompts(model, custom_llm_provider, model_info, base_model):
         return messages
-    return [
-        with_cache_control(message, dropped_cache_control) if message["role"] == "developer" else message
-        for message in messages
-    ]
+    return _without_developer_cache_controls(messages)
 
 
 def _first_marked_index(value: object) -> int | None:
@@ -956,6 +952,7 @@ EXTERNAL_BREAKPOINTS_STAMP: Final = "_litellm_external_breakpoints"
 OUTSIDE_MESSAGES_TTLS_STAMP: Final = "_litellm_outside_messages_cache_control_ttls"
 CUSTOM_LLM_PROVIDER_STAMP: Final = "_litellm_custom_llm_provider"
 BASE_MODEL_STAMP: Final = "_litellm_base_model"
+PROMPT_CACHING_STAMP: Final = "_litellm_caches_prompts"
 
 
 def _accepts_cache_control(part: object) -> bool:
@@ -1090,7 +1087,8 @@ class AnthropicCacheControlHook(CustomPromptManagement):
             max_blocks=MAX_CACHE_CONTROL_BLOCKS - reserved_blocks,
             openai_dialect=openai_dialect,
             answered_tool_ids=answered_tool_ids,
-            covers_developer=not _serves_gemini_or_names_a_gemini_base_model(
+            covers_developer=injection_points[0].get(PROMPT_CACHING_STAMP) is not False
+            and not _serves_gemini_or_names_a_gemini_base_model(
                 model, custom_llm_provider, injection_points[0].get(BASE_MODEL_STAMP)
             ),
             outside_ttls=(
@@ -1921,10 +1919,19 @@ class AnthropicCacheControlHook(CustomPromptManagement):
                 if isinstance(base_model, str) and base_model
                 else with_outside_ttls
             )
-            non_default_params["cache_control_injection_points"] = (
-                AnthropicCacheControlHook._stamped(with_base_model, CUSTOM_LLM_PROVIDER_STAMP, custom_llm_provider)
-                if custom_llm_provider is not None and _marks_a_server_tool_call(messages)
+            with_prompt_caching: Final = (
+                AnthropicCacheControlHook._stamped(
+                    with_base_model,
+                    PROMPT_CACHING_STAMP,
+                    _caches_prompts(model, custom_llm_provider, model_info, base_model),
+                )
+                if any(message["role"] == "developer" for message in messages)
                 else with_base_model
+            )
+            non_default_params["cache_control_injection_points"] = (
+                AnthropicCacheControlHook._stamped(with_prompt_caching, CUSTOM_LLM_PROVIDER_STAMP, custom_llm_provider)
+                if custom_llm_provider is not None and _marks_a_server_tool_call(messages)
+                else with_prompt_caching
             )
             return
         points: Final = AnthropicCacheControlHook.get_default_injection_points(
