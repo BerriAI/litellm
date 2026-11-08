@@ -1678,7 +1678,7 @@ def _pdf_strip_inline_images(content: bytes) -> bytes:
 
 
 def _pdf_page_content_metrics(page: _PdfPage, page_content: bytes) -> _PdfStreamMetrics:
-    form_metrics_memo: Final[dict[int, _PdfStreamMetrics]] = {}  # mutable-ok: page-local cache avoids repeated walks
+    form_metrics_memo: Final[dict[tuple[int, int], _PdfStreamMetrics]] = {}  # mutable-ok: page-local walk cache
 
     def stream_metrics(
         content: bytes,
@@ -1724,14 +1724,15 @@ def _pdf_page_content_metrics(page: _PdfPage, page_content: bytes) -> _PdfStream
             return _PdfStreamMetrics(b"", 0, 0, inherited_resources, (), extraction_limited=True)
         if not isinstance(resolved, _PdfFormXObject) or resolved.get("/Subtype") != "/Form":
             return _PdfStreamMetrics(b"", 0, 0, inherited_resources, ())
-        cached: Final = form_metrics_memo.get(identity)
+        form_resources: Final = _pdf_resolve_object(resolved.get("/Resources"))
+        resources: Final = form_resources if isinstance(form_resources, _PdfResourceDictionary) else inherited_resources
+        cache_key: Final = (identity, id(resources))
+        cached: Final = form_metrics_memo.get(cache_key)
         if cached is not None:
             return cached
         content: Final = _pdf_strip_inline_images(resolved.get_data())
-        form_resources: Final = _pdf_resolve_object(resolved.get("/Resources"))
-        resources: Final = form_resources if isinstance(form_resources, _PdfResourceDictionary) else inherited_resources
         metrics: Final = stream_metrics(content, resources, ancestors | {identity})
-        form_metrics_memo[identity] = metrics
+        form_metrics_memo[cache_key] = metrics
         return metrics
 
     resources: Final = _pdf_resolve_object(page.get("/Resources"))

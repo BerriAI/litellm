@@ -3577,6 +3577,45 @@ def test_pdf_text_object_strings_containing_bt_and_et_do_not_split_sampling():
     assert priced - blank_price == len(exact_text)
 
 
+@pytest.mark.parametrize("pdf_pricing", ["claude", "openai"])
+@pytest.mark.parametrize(("second_text", "second_count"), [(b"second", 7), (b"", 0)])
+def test_shared_pdf_form_uses_each_parents_resources(
+    pdf_pricing: Literal["claude", "openai"], second_text: bytes, second_count: int
+):
+    path: Final = b"10 10 m 20 20 l S\n"
+    padding: Final = path * (PDF_PAGE_MAX_EXACT_CONTENT_BYTES // len(path) + 1)
+    attributes: Final = b"/Type /XObject /Subtype /Form /BBox [0 0 612 792]"
+    fonts: Final = b" /Resources << /Font << /F1 3 0 R >> >>"
+
+    def document(second_leaf: int) -> str:
+        return _pdf_data_url_with_xobjects(
+            padding + b"/First Do\n/Second Do\n",
+            b"<< /First 6 0 R /Second 7 0 R >>",
+            (
+                _pdf_stream(
+                    b"/Shared Do",
+                    attributes + b" /Resources << /XObject << /Shared 8 0 R /Leaf 9 0 R >> >>",
+                ),
+                _pdf_stream(
+                    b"/Shared Do",
+                    attributes + f" /Resources << /XObject << /Shared 8 0 R /Leaf {second_leaf} 0 R >> >>".encode(),
+                ),
+                _pdf_stream(b"/Leaf Do", attributes),
+                _pdf_stream(b"BT /F1 12 Tf (first) Tj ET", attributes + fonts),
+                _pdf_stream(b"BT /F1 12 Tf (" + second_text + b") Tj ET", attributes + fonts),
+            ),
+        )
+
+    def count_text(text: str) -> int:
+        return text.count("first") + 7 * text.count("second")
+
+    shared_price: Final = _count_inline_pdf_tokens(document(9), count_text, pdf_pricing)
+    distinct_price: Final = _count_inline_pdf_tokens(document(10), count_text, pdf_pricing)
+    assert shared_price is not None
+    assert distinct_price is not None
+    assert distinct_price - shared_price == second_count - 1
+
+
 def test_repeated_identity_h_form_draws_count_each_text_sample():
     path_operator: Final = b"10 10 m 20 20 l S\n"
     path_padding: Final = path_operator * (PDF_PAGE_MAX_EXACT_CONTENT_BYTES // len(path_operator) + 1)
