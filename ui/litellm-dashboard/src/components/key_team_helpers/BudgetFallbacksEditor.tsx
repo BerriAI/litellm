@@ -3,6 +3,7 @@ import { SearchSelect } from "@/components/shared/SearchSelect";
 import { Button } from "@/components/ui/button";
 import { ArrowDown, Plus, X } from "lucide-react";
 import React, { useState } from "react";
+import { useTranslation } from "react-i18next";
 
 interface FallbackEntry {
   id: string;
@@ -36,6 +37,7 @@ const dictToEntries = (dict: Record<string, string[]>): FallbackEntry[] => {
 };
 
 export function BudgetFallbacksEditor({ value, onChange, availableModels }: BudgetFallbacksEditorProps) {
+  const { t } = useTranslation();
   const [entries, setEntries] = useState<FallbackEntry[]>(() => dictToEntries(value));
 
   const emitChange = (updated: FallbackEntry[]) => {
@@ -61,11 +63,11 @@ export function BudgetFallbacksEditor({ value, onChange, availableModels }: Budg
     return (
       <div>
         <div className="text-xs text-muted-foreground mb-2">
-          When a model exceeds its per-model budget, requests automatically reroute to fallback models
+          {t("keyTeamHelpers.budgetFallbacksEditor.description")}
         </div>
         <Button variant="outline" size="sm" onClick={addEntry}>
           <Plus className="w-3 h-3" />
-          Add Budget Fallback
+          {t("keyTeamHelpers.budgetFallbacksEditor.addFallback")}
         </Button>
       </div>
     );
@@ -73,9 +75,7 @@ export function BudgetFallbacksEditor({ value, onChange, availableModels }: Budg
 
   return (
     <div className="space-y-4">
-      <div className="text-xs text-muted-foreground">
-        When a model exceeds its per-model budget, requests automatically reroute to fallback models
-      </div>
+      <div className="text-xs text-muted-foreground">{t("keyTeamHelpers.budgetFallbacksEditor.description")}</div>
       {entries.map((entry) => {
         const availablePrimaryOptions = availableModels.filter(
           (m) => m === entry.primaryModel || !usedPrimaryModels.has(m),
@@ -93,7 +93,9 @@ export function BudgetFallbacksEditor({ value, onChange, availableModels }: Budg
             </button>
 
             <div className="mb-3">
-              <label className="block text-xs font-medium text-muted-foreground mb-1">Primary Model</label>
+              <label className="block text-xs font-medium text-muted-foreground mb-1">
+                {t("keyTeamHelpers.budgetFallbacksEditor.primaryModel")}
+              </label>
               <SearchSelect
                 options={availablePrimaryOptions.map((m) => ({ label: m, value: m }))}
                 value={entry.primaryModel}
@@ -101,32 +103,38 @@ export function BudgetFallbacksEditor({ value, onChange, availableModels }: Budg
                   const newFallbacks = entry.fallbackModels.filter((m) => m !== v);
                   updateEntry(entry.id, { primaryModel: v, fallbackModels: newFallbacks });
                 }}
-                placeholder="Select model"
-                emptyText="No models found"
+                placeholder={t("keyTeamHelpers.budgetFallbacksEditor.selectModel")}
+                emptyText={t("keyTeamHelpers.budgetFallbacksEditor.noModels")}
               />
             </div>
 
             <div className="flex items-center justify-center -my-1 mb-2">
               <div className="bg-warning/10 text-warning px-3 py-0.5 rounded-full text-[10px] font-bold border border-warning/15 flex items-center gap-1">
                 <ArrowDown className="w-3 h-3" />
-                IF BUDGET EXCEEDED, TRY
+                {t("keyTeamHelpers.budgetFallbacksEditor.ifExceeded")}
               </div>
             </div>
 
             <div>
-              <label className="block text-xs font-medium text-muted-foreground mb-1">Fallback Models</label>
+              <label className="block text-xs font-medium text-muted-foreground mb-1">
+                {t("keyTeamHelpers.budgetFallbacksEditor.fallbackModels")}
+              </label>
               <MultiSelect
                 options={availableFallbackOptions.map((m) => ({ label: m, value: m }))}
                 value={entry.fallbackModels}
                 onValueChange={(values) => updateEntry(entry.id, { fallbackModels: values })}
-                placeholder={entry.primaryModel ? "Select fallback models" : "Select a primary model first"}
-                emptyText="No models found"
+                placeholder={
+                  entry.primaryModel
+                    ? t("keyTeamHelpers.budgetFallbacksEditor.selectFallbackModels")
+                    : t("keyTeamHelpers.budgetFallbacksEditor.selectPrimaryFirst")
+                }
+                emptyText={t("keyTeamHelpers.budgetFallbacksEditor.noModels")}
                 disabled={!entry.primaryModel}
                 className="w-full"
               />
               {entry.fallbackModels.length > 1 && (
                 <div className="text-[10px] text-muted-foreground mt-1 ml-1">
-                  Tried in order; first model still within its own budget is used
+                  {t("keyTeamHelpers.budgetFallbacksEditor.triedInOrder")}
                 </div>
               )}
             </div>
@@ -135,7 +143,7 @@ export function BudgetFallbacksEditor({ value, onChange, availableModels }: Budg
       })}
       <Button variant="outline" size="sm" onClick={addEntry}>
         <Plus className="w-3 h-3" />
-        Add Budget Fallback
+        {t("keyTeamHelpers.budgetFallbacksEditor.addFallback")}
       </Button>
     </div>
   );

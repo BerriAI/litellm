@@ -10,7 +10,6 @@ import pytest
 import litellm
 from litellm.caching.caching import DualCache
 from litellm.caching.redis_cache import RedisCache
-from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.proxy._types import Litellm_EntityType, UserAPIKeyAuth
 from litellm.proxy.hooks.model_max_budget_limiter import (
     PROXY_VirtualKeyModelMaxBudgetLimiter,
@@ -20,6 +19,7 @@ from litellm.proxy.hooks.model_max_budget_limiter import (
     model_budget_start_time_cache_key,
     resolve_model_budget,
 )
+from litellm.router_strategy.budget_limiter import budget_window_seconds
 
 
 async def _reset_at_of_open_window(
@@ -30,7 +30,7 @@ async def _reset_at_of_open_window(
             entity_type=entity_type, entity_id=entity_id, budget_model=budget_model, budget_duration=period
         )
     )
-    return datetime.fromtimestamp(started_at + duration_in_seconds(period), tz=timezone.utc).isoformat()
+    return datetime.fromtimestamp(started_at + budget_window_seconds(started_at, period), tz=timezone.utc).isoformat()
 
 
 # Test class setup
@@ -926,19 +926,37 @@ async def test_bedrock_traffic_charges_the_bare_family_name_budget():
 
 
 @pytest.mark.asyncio
-async def test_user_model_budget_window_resets_when_the_period_elapses():
-    """
-    A monthly user budget must start a fresh window once the period elapses,
-    and the window start must be scoped to that one budget model so a second
-    model on a shorter period cannot drag it forward.
-    """
+@pytest.mark.parametrize(
+    ("charged_at", "expired_window_start", "next_reset"),
+    [
+        (
+            datetime(2026, 10, 31, tzinfo=timezone.utc),
+            datetime(2026, 9, 30, tzinfo=timezone.utc),
+            datetime(2026, 11, 30, tzinfo=timezone.utc),
+        ),
+        (
+            datetime(2024, 3, 1, tzinfo=timezone.utc),
+            datetime(2024, 1, 31, tzinfo=timezone.utc),
+            datetime(2024, 4, 1, tzinfo=timezone.utc),
+        ),
+        (
+            datetime(2025, 3, 1, tzinfo=timezone.utc),
+            datetime(2025, 1, 31, tzinfo=timezone.utc),
+            datetime(2025, 4, 1, tzinfo=timezone.utc),
+        ),
+    ],
+    ids=["shorter-current-month", "leap-february", "non-leap-february"],
+)
+async def test_user_model_budget_window_resets_when_the_period_elapses(
+    charged_at: datetime, expired_window_start: datetime, next_reset: datetime
+) -> None:
     from litellm.proxy.hooks.model_max_budget_limiter import (
         model_budget_spend_cache_key,
         model_budget_start_time_cache_key,
     )
 
     dual_cache = DualCache()
-    limiter = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=dual_cache)
+    limiter = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=dual_cache, clock=charged_at.timestamp)
     user_id = "user-1"
     user_model_max_budget = {"gpt-4": {"budget_limit": 1.0, "time_period": "1mo"}}
     spend_key = model_budget_spend_cache_key(
@@ -969,13 +987,10 @@ async def test_user_model_budget_window_resets_when_the_period_elapses():
             model="gpt-4",
         )
 
-    # Age the window past its period. The next charge opens a new window rather
-    # than adding to the exhausted one.
-    elapsed = duration_in_seconds("1mo") + 60
     await dual_cache.async_set_cache(
         key=start_time_key,
-        value=datetime.now(timezone.utc).timestamp() - elapsed,
-        ttl=elapsed,
+        value=expired_window_start.timestamp(),
+        ttl=60,
     )
 
     await limiter.async_log_success_event(kwargs, response_obj=None, start_time=None, end_time=None)
@@ -985,14 +1000,13 @@ async def test_user_model_budget_window_resets_when_the_period_elapses():
         entity_id=user_id,
         model_max_budget=user_model_max_budget,
         cache=dual_cache,
+        now=charged_at,
     ) == {
         "gpt-4": {
             "current_spend": 1.5,
             "budget_limit": 1.0,
             "time_period": "1mo",
-            "budget_reset_at": await _reset_at_of_open_window(
-                dual_cache, Litellm_EntityType.USER, user_id, "gpt-4", "1mo"
-            ),
+            "budget_reset_at": next_reset.isoformat(),
         }
     }
 

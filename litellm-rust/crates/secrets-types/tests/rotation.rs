@@ -1,10 +1,12 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use litellm_secret_value::SecretValue;
 use litellm_secrets_types::{
     BaseSecretManager, Error, HashicorpOperationContext, RotationError, SecretDeleter,
-    SecretOperationContext, SecretRotator, SecretValue, SecretWriteContext, SecretWriter,
-    async_rotate_secret, validate_secret_name,
+    SecretOperationContext, SecretRotator, SecretWriteContext, SecretWriter, async_rotate_secret,
+    validate_secret_name,
 };
+
 use rstest::{fixture, rstest};
 
 struct Manager {

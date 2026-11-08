@@ -10,13 +10,19 @@ from collections.abc import Iterable, Mapping, Sequence
 from itertools import groupby
 from typing import Any, Final, cast
 
+from pydantic import TypeAdapter
+
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     TOOL_RESULT_IMAGE_BOUNDARY,
     TOOL_RESULT_IMAGE_PLACEHOLDER,
     anthropic_inline_document,
+)
+from litellm.litellm_core_utils.prompt_templates.prompt_cache_breakpoint_utils import (
+    with_prompt_cache_breakpoint,
+)
+from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
     encrypted_reasoning_signature,
     responses_reasoning_items_from_thinking_blocks,
-    with_prompt_cache_breakpoint,
 )
 from litellm.litellm_core_utils.reasoning_effort_utils import (
     reasoning_effort_from_thinking,
@@ -54,6 +60,7 @@ from litellm.types.llms.openai import (
 
 REASONING_SUMMARY_PART_SEPARATOR: Final = "\n\n"
 RESPONSES_INCLUDE_ENCRYPTED_REASONING: Final = "reasoning.encrypted_content"
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class LiteLLMAnthropicToResponsesAPIAdapter:
@@ -534,6 +541,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         output_config: dict[str, object] | None = None,
         auto_summary_level: str = "detailed",
         *,
+        model: str,
         drop_params: bool = True,
     ) -> dict[str, object] | None:
         """
@@ -555,7 +563,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             if isinstance(output_config, dict) and output_config.get("effort"):
                 effort = output_config["effort"]
         elif thinking_type == "enabled":
-            budget_effort: Final = reasoning_effort_from_thinking(thinking, drop_params=drop_params)
+            budget_effort: Final = reasoning_effort_from_thinking(thinking, model=model, drop_params=drop_params)
             if budget_effort is None:
                 return None
             effort = budget_effort
@@ -578,6 +586,12 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             for block in cls._content_blocks(system)
             if block.get("type") == "text" and isinstance(text := block.get("text"), str) and text
         )
+
+    @staticmethod
+    def _resolve_output_format_strict(strict: bool | None) -> bool:
+        if strict is None:
+            return True
+        return strict
 
     def translate_request(
         self,
@@ -667,6 +681,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                 thinking,
                 output_config=cast(dict[str, object] | None, output_config),
                 auto_summary_level=auto_summary_level,
+                model=model,
                 drop_params=drop_params,
             )
             if reasoning:
@@ -687,7 +702,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                         "type": "json_schema",
                         "name": "structured_output",
                         "schema": schema,
-                        "strict": output_format.get("strict", False),
+                        "strict": self._resolve_output_format_strict(output_format.get("strict")),
                     }
                 }
 
@@ -793,15 +808,17 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                         content.append(reasoning_block)
                 elif item_type == "function_call":
                     try:
-                        input_data = json.loads(item.get("arguments", "{}"))
+                        input_data = _DECODED_JSON.validate_python(json.loads(item.get("arguments", "{}")))
                     except (json.JSONDecodeError, TypeError):
                         input_data = {}
                     content.append(
-                        AnthropicResponseContentBlockToolUse(
-                            type="tool_use",
-                            id=item.get("call_id") or item.get("id", ""),
-                            name=item.get("name", ""),
-                            input=input_data,
+                        AnthropicResponseContentBlockToolUse.model_validate(
+                            {
+                                "type": "tool_use",
+                                "id": item.get("call_id") or item.get("id", ""),
+                                "name": item.get("name", ""),
+                                "input": input_data,
+                            }
                         ).model_dump(exclude_none=True)
                     )
                     stop_reason = "tool_use"
