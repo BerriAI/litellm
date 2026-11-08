@@ -300,7 +300,6 @@ from litellm.litellm_core_utils.total_deadline import (
     current_total_deadline,
     total_deadline,
     total_timeout_from_request,
-    total_timeout_held,
 )
 from litellm.proxy.anthropic_endpoints.answered_status import with_answered_status
 from litellm.proxy.anthropic_endpoints.streaming_model_restamp import (
@@ -3292,26 +3291,22 @@ class ProxyBaseLLMRequestProcessing:
                 )
             self.route_type = route_type
         else:
-            # Pre-call admission reserves shared quota before it records what it took, so a total_timeout never
-            # interrupts it: a deadline that passed meanwhile ends the request right after, before dispatch,
-            # where the failure path hands back what it reserved.
-            with total_timeout_held():
-                self.data, logging_obj = await self._pre_call_with_fallbacks(
-                    request=request,
-                    general_settings=general_settings,
-                    proxy_logging_obj=proxy_logging_obj,
-                    user_api_key_dict=user_api_key_dict,
-                    version=version,
-                    proxy_config=proxy_config,
-                    user_model=user_model,
-                    user_temperature=user_temperature,
-                    user_request_timeout=user_request_timeout,
-                    user_max_tokens=user_max_tokens,
-                    user_api_base=user_api_base,
-                    model=model,
-                    route_type=route_type,
-                    llm_router=llm_router,
-                )
+            self.data, logging_obj = await self._pre_call_with_fallbacks(
+                request=request,
+                general_settings=general_settings,
+                proxy_logging_obj=proxy_logging_obj,
+                user_api_key_dict=user_api_key_dict,
+                version=version,
+                proxy_config=proxy_config,
+                user_model=user_model,
+                user_temperature=user_temperature,
+                user_request_timeout=user_request_timeout,
+                user_max_tokens=user_max_tokens,
+                user_api_base=user_api_base,
+                model=model,
+                route_type=route_type,
+                llm_router=llm_router,
+            )
             phase_event("litellm.request.pre_call_completed")
 
         _post_call_guardrails_active: Final = self._has_post_call_guardrails()

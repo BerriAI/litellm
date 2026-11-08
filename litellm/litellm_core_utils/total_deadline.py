@@ -149,8 +149,8 @@ def current_total_deadline() -> TotalDeadline | None:
     return _CURRENT.get()
 
 
-@contextlib.contextmanager
-def total_timeout_held() -> Generator[None, None, None]:
+@contextlib.asynccontextmanager
+async def total_timeout_held() -> AsyncGenerator[None, None]:
     deadline: Final = _CURRENT.get()
     if deadline is None:
         yield

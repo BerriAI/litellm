@@ -13634,14 +13634,16 @@ class TestTotalTimeout:
         assert expired.code == "408"
         assert moderation_stopped
 
-    def test_a_budget_that_runs_out_while_preparing_lets_preparation_finish_then_ends_before_the_call(
+    def test_a_budget_that_runs_out_while_preparing_cuts_preparation_short_and_never_calls_the_provider(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        async def preparation_outlasts_the_budget() -> tuple[ProxyException, bool, bool]:
+        async def preparation_outlasts_the_budget() -> tuple[ProxyException, bool, bool, float]:
+            loop: Final = asyncio.get_running_loop()
+            started: Final = loop.time()
             prepared: Final = asyncio.Event()
             called: Final = asyncio.Event()
 
-            async def slow_admission(**_: object) -> tuple[dict[str, object], MagicMock]:
+            async def slow_guardrail(**_: object) -> tuple[dict[str, object], MagicMock]:
                 await asyncio.sleep(120)
                 prepared.set()
                 return {"model": "fake-model"}, MagicMock()
@@ -13651,11 +13653,12 @@ class TestTotalTimeout:
                 return litellm.ModelResponse()
 
             with pytest.raises(ProxyException) as raised:
-                await self._process(monkeypatch, provider, body={"total_timeout": 60}, preparation=slow_admission)
-            return raised.value, prepared.is_set(), called.is_set()
+                await self._process(monkeypatch, provider, body={"total_timeout": 60}, preparation=slow_guardrail)
+            return raised.value, prepared.is_set(), called.is_set(), loop.time() - started
 
-        expired, prepared, called = _run_on_autojump_clock(preparation_outlasts_the_budget())
+        expired, prepared, called, elapsed = _run_on_autojump_clock(preparation_outlasts_the_budget())
 
         assert expired.code == "408"
-        assert prepared
+        assert not prepared
         assert not called
+        assert elapsed < 120
