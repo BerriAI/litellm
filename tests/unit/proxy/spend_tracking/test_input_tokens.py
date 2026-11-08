@@ -462,3 +462,15 @@ def test_count_input_tokens_for_model_azure_deployment_route_ignores_gemini_name
     assert tokens is not None
     # Must count the long message tokens, not the 1 token from contents
     assert tokens > 20
+
+
+def test_count_input_tokens_for_model_vertex_claude_raw_predict_counts_messages() -> None:
+    body: Final = {
+        "messages": [{"role": "user", "content": "A Vertex Claude prompt with several tokens " * 5}],
+    }
+    route: Final = (
+        "/vertex_ai/v1/projects/my-project/locations/us-east5/publishers/anthropic/models/claude-3-5-sonnet:rawPredict"
+    )
+    tokens = count_input_tokens_for_model(request_body=body, model="gpt-4o", route=route)
+    assert tokens is not None
+    assert tokens > 20

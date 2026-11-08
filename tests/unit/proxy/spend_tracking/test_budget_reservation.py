@@ -625,6 +625,13 @@ def test_requested_output_tokens_gemini_generation_config() -> None:
     assert (
         _requested_output_tokens(body_chat_decoy, route="/openai/deployments/gemini-2.0-flash/chat/completions") is None
     )
+    assert (
+        _requested_output_tokens(
+            body_chat_decoy,
+            route="/vertex_ai/v1/projects/proj/locations/us/publishers/anthropic/models/claude-3-5-sonnet:rawPredict",
+        )
+        is None
+    )
     assert _requested_output_tokens(body_chat_decoy) is None
 
     # Native route honors generationConfig

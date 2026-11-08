@@ -410,14 +410,17 @@ def _extract_gemini_text(request_body: Mapping[str, object]) -> str | None:
 def is_native_gemini_route(route: str | None) -> bool:
     if not route:
         return False
-    for standard_path in ("/chat/completions", "/completions", "/responses", "/embeddings", "/rerank"):
+    for standard_path in (
+        "/chat/completions",
+        "/completions",
+        "/responses",
+        "/embeddings",
+        "/rerank",
+        "rawPredict",
+    ):
         if standard_path in route:
             return False
-    if "generateContent" in route or "streamGenerateContent" in route:
-        return True
-    if route.startswith("/vertex_ai/") or route.startswith("/gemini/"):
-        return True
-    return False
+    return "generateContent" in route or "streamGenerateContent" in route
 
 
 def count_input_tokens_for_model(request_body: dict, model: str, route: str | None = None) -> int | None:
