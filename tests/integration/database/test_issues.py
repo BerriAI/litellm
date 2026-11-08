@@ -651,6 +651,7 @@ async def test_late_default_override_stops_queued_delivery_and_recovers_on_fresh
             "LiteLLM_IssueDelivery",
             "LiteLLM_IssueDeliveryRule",
             "LiteLLM_VerificationToken",
+            "LiteLLM_DeletedVerificationToken",
             "LiteLLM_TeamTable",
             "LiteLLM_UserTable",
         ):
