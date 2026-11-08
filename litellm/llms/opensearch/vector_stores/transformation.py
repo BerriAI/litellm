@@ -19,7 +19,6 @@ from litellm.llms.base_llm.vector_store.transformation import (
     VectorStoreEmbeddingExecutor,
 )
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, SignsRequestsWithAWS, sign_aws_request
-from litellm.llms.opensearch.vector_stores.index_passthrough import index_endpoints
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.bedrock import AwsAuthParams
 from litellm.types.router import GenericLiteLLMParams
@@ -223,7 +222,7 @@ class OpenSearchVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig, SignsRequ
         return BaseVectorStoreAuthCredentials()
 
     def get_vector_store_endpoints_by_type(self) -> VectorStoreIndexEndpoints:
-        return index_endpoints()
+        return VectorStoreIndexEndpoints(read=[], write=[])
 
     def validate_environment(
         self, headers: Mapping[str, object], litellm_params: GenericLiteLLMParams | None

@@ -6,16 +6,15 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, TypeAlias
 from urllib.parse import quote
 
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 
 from litellm.exceptions import AuthenticationError, BadRequestError
 from litellm.llms.bedrock.base_aws_llm import run_aws_signing
-from litellm.types.vector_stores import VectorStoreIndexEndpoints
 
 if TYPE_CHECKING:
     from litellm.llms.opensearch.vector_stores.transformation import OpenSearchVectorStoreConfig
 
-IndexHttpMethod: TypeAlias = Literal["GET", "POST", "PUT", "DELETE", "PATCH"]
+IndexHttpMethod: TypeAlias = Literal["GET", "HEAD", "POST", "PUT", "DELETE", "PATCH"]
 IndexPermission: TypeAlias = Literal["read", "write"]
 BodyKind: TypeAlias = Literal["query", "msearch", "mget", "bulk", "unscanned"]
 
@@ -52,12 +51,9 @@ class IndexOperation:
     takes_id: bool
     body: BodyKind
 
-    @property
-    def endpoint_pattern(self) -> str:
-        return f"/{self.api}/" if self.takes_id else f"/{self.api}"
-
     def matches(self, method: str, api: tuple[str, ...]) -> bool:
-        return method in self.methods and api[0] == self.api and len(api) == (2 if self.takes_id else 1)
+        named: Final = (self.api,) if self.api else ()
+        return method in self.methods and api[: len(named)] == named and len(api) == len(named) + self.takes_id
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,6 +65,7 @@ class SignedIndexRequest:
 
 
 INDEX_OPERATIONS: Final = (
+    IndexOperation("read", ("GET", "HEAD"), "", False, "unscanned"),
     IndexOperation("write", ("POST",), "_doc", False, "unscanned"),
     IndexOperation("write", ("PUT", "POST", "DELETE"), "_doc", True, "unscanned"),
     IndexOperation("write", ("PUT", "POST"), "_create", True, "unscanned"),
@@ -78,8 +75,8 @@ INDEX_OPERATIONS: Final = (
     IndexOperation("write", ("POST",), "_update_by_query", False, "query"),
     IndexOperation("read", ("GET", "POST"), "_search", False, "query"),
     IndexOperation("read", ("GET", "POST"), "_count", False, "query"),
-    IndexOperation("read", ("GET",), "_doc", True, "unscanned"),
-    IndexOperation("read", ("GET",), "_source", True, "unscanned"),
+    IndexOperation("read", ("GET", "HEAD"), "_doc", True, "unscanned"),
+    IndexOperation("read", ("GET", "HEAD"), "_source", True, "unscanned"),
     IndexOperation("read", ("GET", "POST"), "_mget", False, "mget"),
     IndexOperation("read", ("GET", "POST"), "_msearch", False, "msearch"),
     IndexOperation("read", ("GET", "POST"), "_explain", True, "query"),
@@ -92,18 +89,16 @@ _NDJSON_APIS: Final = frozenset(
 )
 
 
-def carries_ndjson_body(route: str, media_type: str) -> bool:
-    return media_type == NDJSON_CONTENT_TYPE or route.rpartition("/")[2] in _NDJSON_APIS
+_JSON_OBJECT_BODY: Final = TypeAdapter(dict[str, object])
 
 
-def _endpoint_patterns(permission: IndexPermission) -> Iterator[tuple[IndexHttpMethod, str]]:
-    for operation in INDEX_OPERATIONS:
-        if operation.permission == permission:
-            yield from zip(operation.methods, (operation.endpoint_pattern,) * len(operation.methods))
-
-
-def index_endpoints() -> VectorStoreIndexEndpoints:
-    return VectorStoreIndexEndpoints(read=list(_endpoint_patterns("read")), write=list(_endpoint_patterns("write")))
+def hook_request_body(route: str, media_type: str, body: bytes) -> Mapping[str, object]:
+    if media_type == NDJSON_CONTENT_TYPE or route.rpartition("/")[2] in _NDJSON_APIS:
+        return {}
+    try:
+        return _JSON_OBJECT_BODY.validate_json(body)
+    except ValidationError:
+        return {}
 
 
 def index_operation(method: str, api: tuple[str, ...]) -> IndexOperation | None:
@@ -114,8 +109,6 @@ def parse_index_path(endpoint: str) -> IndexPath | IndexRefusal:
     segments: Final = tuple(endpoint.split("/"))
     if any(segment in ("", ".", "..") for segment in segments):
         return IndexRefusal(400, f"The OpenSearch path '{endpoint}' has an empty, '.' or '..' segment. {_PATH_HELP}")
-    if len(segments) < 2:
-        return IndexRefusal(400, f"The OpenSearch path '{endpoint}' names no API after the index. {_PATH_HELP}")
     return IndexPath(index_name=segments[0], api=segments[1:])
 
 
@@ -184,11 +177,11 @@ def _plain(value: _JsonObject) -> Mapping[str, object]:
     return dict(value.pairs)
 
 
-def _bulk_action_json(name: str, metadata: Sequence[tuple[str, object]]) -> bytes:
+def _object_json(pairs: Sequence[tuple[str, object]]) -> str:
     fields: Final = ",".join(
-        f"{json.dumps(key)}:{json.dumps(child, default=_plain, separators=(',', ':'))}" for key, child in metadata
+        f"{json.dumps(key)}:{json.dumps(child, default=_plain, separators=(',', ':'))}" for key, child in pairs
     )
-    return f"{{{json.dumps(name)}:{{{fields}}}}}".encode()
+    return f"{{{fields}}}"
 
 
 def _unparseable(api: str) -> IndexRefusal:
@@ -219,9 +212,53 @@ def _whole_body_refusal(api: str, body: bytes) -> IndexRefusal | None:
     return _line_refusal(api, body, _OUT_OF_INDEX_KEYS)
 
 
-def _msearch_refusal(body: bytes) -> IndexRefusal | None:
-    lines: Final = (line for line in body.split(b"\n") if line.strip(_JSON_BLANK))
-    return next(filter(None, (_line_refusal("_msearch", line, _OUT_OF_INDEX_KEYS) for line in lines)), None)
+def _pinned_index(
+    metadata: _JsonObject, key: str, forbidden: frozenset[str], index: _BulkIndex, line_kind: str
+) -> _JsonObject | IndexRefusal | None:
+    unnamed: Final = _JsonObject(tuple(pair for pair in metadata.pairs if pair[0] != key))
+    refusal: Final = _index_reference(unnamed, forbidden)
+    if refusal is not None:
+        return refusal
+    named: Final = tuple(value for name, value in metadata.pairs if name == key)
+    if not named:
+        return None
+    if any(value != index.name for value in named):
+        return IndexRefusal(
+            400,
+            f"A {line_kind} sets '{key}' to another index than '{index.name}' in the URL path. "
+            f"Remove '{key}' or set it to '{index.name}'.",
+        )
+    return _JsonObject(tuple((name, index.provider_name if name == key else value) for name, value in metadata.pairs))
+
+
+def _msearch_header(line: bytes, index: _BulkIndex) -> bytes | IndexRefusal:
+    if not line.strip(_JSON_BLANK):
+        return line
+    parsed: Final = _parse(line)
+    if parsed is None:
+        return _unparseable("_msearch")
+    if not isinstance(parsed.value, _JsonObject):
+        return _index_reference(parsed.value, _OUT_OF_INDEX_KEYS) or line
+    pinned: Final = _pinned_index(parsed.value, "index", _OUT_OF_INDEX_KEYS, index, "_msearch header line")
+    if pinned is None:
+        return line
+    return pinned if isinstance(pinned, IndexRefusal) else _object_json(pinned.pairs).encode()
+
+
+def _msearch_entry(header: bytes, lines: Iterator[bytes], index: _BulkIndex) -> tuple[bytes | IndexRefusal, ...]:
+    rendered: Final = _msearch_header(header, index)
+    query: Final = None if isinstance(rendered, IndexRefusal) else next(lines, None)
+    if query is None:
+        return (rendered,)
+    refusal: Final = _line_refusal("_msearch", query, _OUT_OF_INDEX_KEYS) if query.strip(_JSON_BLANK) else None
+    return (rendered, refusal or query)
+
+
+def _msearch_lines(lines: Iterator[bytes], index: _BulkIndex) -> Iterator[bytes | IndexRefusal]:
+    for header in lines:
+        yield from (entry := _msearch_entry(header, lines, index))
+        if any(isinstance(line, IndexRefusal) for line in entry):
+            return
 
 
 def _bulk_action(line: bytes) -> _BulkAction | None:
@@ -242,22 +279,12 @@ def _bulk_action_line(action: _BulkAction | None, line: bytes, index: _BulkIndex
             "A _bulk action line must be one JSON object naming index, create, update, or delete. "
             "LiteLLM did not send the request.",
         )
-    pairs: Final = action.metadata.pairs
-    unnamed: Final = _JsonObject(tuple(pair for pair in pairs if pair[0] != "_index"))
-    refusal: Final = _index_reference(unnamed, _BULK_METADATA_KEYS)
-    if refusal is not None:
-        return refusal
-    named: Final = tuple(value for key, value in pairs if key == "_index")
-    if not named:
+    pinned: Final = _pinned_index(action.metadata, "_index", _BULK_METADATA_KEYS, index, "_bulk action line")
+    if pinned is None:
         return line
-    if any(value != index.name for value in named):
-        return IndexRefusal(
-            400,
-            f"A _bulk action line sets '_index' to another index than '{index.name}' in the URL path. "
-            f"Remove '_index' or set it to '{index.name}'.",
-        )
-    rewritten: Final = tuple((key, index.provider_name if key == "_index" else value) for key, value in pairs)
-    return _bulk_action_json(action.name, rewritten)
+    if isinstance(pinned, IndexRefusal):
+        return pinned
+    return f"{{{json.dumps(action.name)}:{_object_json(pinned.pairs)}}}".encode()
 
 
 def _bulk_entry(line: bytes, lines: Iterator[bytes], index: _BulkIndex) -> tuple[bytes | IndexRefusal, ...]:
@@ -278,8 +305,8 @@ def _bulk_lines(lines: Iterator[bytes], index: _BulkIndex) -> Iterator[bytes | I
             return
 
 
-def _bulk_body(body: bytes, index: _BulkIndex) -> bytes | IndexRefusal:
-    rendered: Final = tuple(_bulk_lines(iter(body.split(b"\n")), index))
+def _rendered_body(lines: Iterator[bytes | IndexRefusal]) -> bytes | IndexRefusal:
+    rendered: Final = tuple(lines)
     refusal: Final = next((line for line in rendered if isinstance(line, IndexRefusal)), None)
     if refusal is not None:
         return refusal
@@ -291,9 +318,9 @@ def _checked_body(operation: IndexOperation, body: bytes, index: _BulkIndex) -> 
         case "query" | "mget":
             return _whole_body_refusal(operation.api, body) or body
         case "msearch":
-            return _msearch_refusal(body) or body
+            return _rendered_body(_msearch_lines(iter(body.split(b"\n")), index))
         case "bulk":
-            return _bulk_body(body, index)
+            return _rendered_body(_bulk_lines(iter(body.split(b"\n")), index))
         case "unscanned":
             return body
 

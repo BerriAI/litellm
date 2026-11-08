@@ -161,9 +161,9 @@ from litellm.proxy.utils import ProxyLogging as ProxyLoggingType
 from litellm.proxy.utils import is_known_model, normalize_route_for_root_path
 from litellm.proxy.vector_store_endpoints.endpoints import build_request_data_from_managed_vector_store
 from litellm.proxy.vector_store_endpoints.utils import (
-    assert_proxy_admin_for_unlisted_vector_store_endpoint,
     assert_proxy_admin_for_vector_store_index_management,
     assert_user_can_access_vector_store,
+    assert_vector_store_index_access,
     get_litellm_managed_vector_store,
     is_allowed_to_call_vector_store_endpoint,
     normalize_litellm_params,
@@ -1076,16 +1076,23 @@ async def _opensearch_store_params(
 ) -> Mapping[str, object]:
     registry: Final = litellm.vector_store_registry
     store_name: Final = index_object.litellm_params.vector_store_name
-    vector_store: Final = (
-        registry.get_litellm_managed_vector_store_from_registry_by_name(vector_store_name=store_name)
-        if registry is not None
-        else None
+    named_stores: Final = tuple(
+        store
+        for store in (registry.vector_stores if registry is not None else ())
+        if store.get("vector_store_name") == store_name
     )
-    if vector_store is None:
+    if len(named_stores) > 1:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{len(named_stores)} vector stores are named {store_name}, so LiteLLM cannot tell which one "
+            f"index {index_object.index_name} is on. Give each vector store a unique name.",
+        )
+    if not named_stores:
         raise HTTPException(
             status_code=400,
             detail=f"Vector store {store_name} of index {index_object.index_name} is not registered.",
         )
+    vector_store: Final = named_stores[0]
     params: Final = with_named_credential(
         build_request_data_from_managed_vector_store(normalize_litellm_params(vector_store))
     )
@@ -1102,7 +1109,7 @@ async def _opensearch_store_params(
 
 @router.api_route(
     "/opensearch/{endpoint:path}",
-    methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
+    methods=["GET", "HEAD", "POST", "PUT", "DELETE", "PATCH"],
     tags=["OpenSearch Pass-through", "pass-through"],
     openapi_extra={
         "requestBody": {
@@ -1134,7 +1141,7 @@ async def opensearch_proxy_route(  # noqa: ANN201  # returns create_pass_through
     """
     from litellm.llms.opensearch.vector_stores.index_passthrough import (
         IndexRefusal,
-        carries_ndjson_body,
+        hook_request_body,
         index_operation,
         parse_index_path,
         prepare_index_request,
@@ -1145,13 +1152,8 @@ async def opensearch_proxy_route(  # noqa: ANN201  # returns create_pass_through
     if isinstance(path, IndexRefusal):
         raise HTTPException(status_code=path.status_code, detail=path.message)
     operation: Final = index_operation(request.method, path.api)
-    if operation is None:
-        assert_proxy_admin_for_unlisted_vector_store_endpoint(user_api_key_dict, path.index_name)
-    is_allowed_to_call_vector_store_endpoint(
-        provider=LlmProviders.OPENSEARCH,
-        index_name=path.index_name,
-        request=request,
-        user_api_key_dict=user_api_key_dict,
+    assert_vector_store_index_access(
+        user_api_key_dict, path.index_name, operation.permission if operation is not None else None
     )
     index_object: Final = _registered_vector_store_index(path.index_name)
     store_params: Final = await _opensearch_store_params(index_object, user_api_key_dict)
@@ -1178,8 +1180,7 @@ async def opensearch_proxy_route(  # noqa: ANN201  # returns create_pass_through
     )
     setattr(request.state, LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY, prepared.body)
     setattr(request.state, LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY, {})
-    if carries_ndjson_body(endpoint, prepared.media_type):
-        safe_set_request_parsed_body(request, {})
+    safe_set_request_parsed_body(request, dict(hook_request_body(endpoint, prepared.media_type, prepared.body)))
     return await endpoint_func(request, fastapi_response, user_api_key_dict)
 
 

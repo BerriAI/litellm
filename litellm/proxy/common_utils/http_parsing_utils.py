@@ -406,17 +406,13 @@ _read_request_body: Final = read_request_body
 
 
 def is_opaque_pass_through_request(route: str, content_type: str) -> bool:
-    """Azure Speech audio and OpenSearch NDJSON bodies are forwarded byte for byte, so auth must not parse them."""
-    media_type: Final = _normalize_media_type(content_type)
-    if route.startswith(f"{AZURE_SPEECH_PASS_THROUGH_ROUTE_PREFIX}/"):
-        return media_type.startswith("audio/") or media_type == "multipart/form-data"
+    """Azure Speech audio and every OpenSearch body are forwarded byte for byte, so auth must not parse them."""
     if route.startswith(f"{OPENSEARCH_PASS_THROUGH_ROUTE_PREFIX}/"):
-        from litellm.llms.opensearch.vector_stores.index_passthrough import (  # noqa: PLC0415  # loaded only for OpenSearch routes, like the route itself
-            carries_ndjson_body,
-        )
-
-        return carries_ndjson_body(route, media_type)
-    return False
+        return True
+    media_type: Final = _normalize_media_type(content_type)
+    return route.startswith(f"{AZURE_SPEECH_PASS_THROUGH_ROUTE_PREFIX}/") and (
+        media_type.startswith("audio/") or media_type == "multipart/form-data"
+    )
 
 
 async def read_raw_json_body(request: Request | None) -> bytes | None:

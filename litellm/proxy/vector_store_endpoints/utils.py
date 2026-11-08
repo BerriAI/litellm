@@ -46,6 +46,10 @@ def _is_proxy_admin(user_api_key_dict: UserAPIKeyAuth) -> bool:
     )
 
 
+def _key_metadata(user_api_key_dict: UserAPIKeyAuth) -> Mapping[str, object]:
+    return user_api_key_dict.metadata
+
+
 def assert_proxy_admin_for_vector_store_index_management(
     user_api_key_dict: UserAPIKeyAuth,
     *,
@@ -423,9 +427,16 @@ def vector_store_endpoint_forbidden(index_name: str) -> HTTPException:
     )
 
 
-def assert_proxy_admin_for_unlisted_vector_store_endpoint(user_api_key_dict: UserAPIKeyAuth, index_name: str) -> None:
-    if not _is_proxy_admin(user_api_key_dict):
-        raise vector_store_endpoint_forbidden(index_name)
+def assert_vector_store_index_access(
+    user_api_key_dict: UserAPIKeyAuth, index_name: str, permission: Literal["read", "write"] | None
+) -> None:
+    if _is_proxy_admin(user_api_key_dict):
+        return
+    if permission is not None and check_vector_store_permission(
+        index_name, permission, _key_metadata(user_api_key_dict), user_api_key_dict.team_metadata
+    ):
+        return
+    raise vector_store_endpoint_forbidden(index_name)
 
 
 def is_allowed_to_call_vector_store_endpoint(
@@ -447,7 +458,7 @@ def is_allowed_to_call_vector_store_endpoint(
     ):
         return True
     # check what allowed permissions are for the key
-    key_metadata: Final = user_api_key_dict.metadata
+    key_metadata: Final = _key_metadata(user_api_key_dict)
     team_metadata: Final = user_api_key_dict.team_metadata
 
     provider_config: Final = ProviderConfigManager.get_provider_vector_stores_config(provider=provider)
@@ -521,7 +532,7 @@ def is_allowed_to_call_vector_store_files_endpoint(
     ):
         return True
 
-    key_metadata: Final = user_api_key_dict.metadata
+    key_metadata: Final = _key_metadata(user_api_key_dict)
     team_metadata: Final = user_api_key_dict.team_metadata
 
     provider_config: Final = ProviderConfigManager.get_provider_vector_store_files_config(provider=provider)
