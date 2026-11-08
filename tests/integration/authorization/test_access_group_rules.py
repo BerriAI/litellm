@@ -8,9 +8,10 @@ import jwt
 import pytest
 import yaml
 from cryptography.hazmat.primitives.asymmetric import rsa
-from litellm.proxy.mcp_server.idp_token_exchange import REJECTED_SUBJECT_TOKEN
 
+from litellm.proxy.mcp_server.idp_token_exchange import REJECTED_SUBJECT_TOKEN
 from tests.integration._support.client import Gateway, string_value
+from tests.integration._support.database import read_rows
 from tests.integration._support.process import owned_proxy
 from tests.integration._support.wire import Reply, Request, wire_server
 
@@ -18,7 +19,7 @@ pytestmark: Final = pytest.mark.shares_worker_state
 
 
 @pytest.mark.parametrize(
-    "enabled,mapping,claimed", ((True, False, False), (False, False, False), (True, True, False), (True, True, True))
+    "enabled,mapping,claimed", ((True, False, True), (False, False, True), (True, True, False), (True, True, True))
 )
 def test_rules_add_models_to_jwt_and_scoped_virtual_key_without_opening_other_models(
     gateway: Gateway, tmp_path: Path, enabled: bool, mapping: bool, claimed: bool
@@ -50,6 +51,7 @@ def test_rules_add_models_to_jwt_and_scoped_virtual_key_without_opening_other_mo
             "enable_jwt_auth": True,
             "litellm_jwtauth": {
                 "user_id_jwt_field": "sub",
+                "team_ids_jwt_field": "groups",
                 "user_id_upsert": True,
                 "enforce_team_based_model_access": True,
                 **(
@@ -105,8 +107,8 @@ def test_rules_add_models_to_jwt_and_scoped_virtual_key_without_opening_other_mo
             )
             assert fallback_response.status_code == 403, fallback_response.text
             for key, model, allowed in (
-                (token, group_model, enabled and not mapping),
-                *(((token, group_model, False),) if mapping else ()),
+                (token, group_model, enabled and claimed),
+                *(((token, group_model, enabled and claimed),) if mapping else ()),
                 (token, outside, False),
                 (unmatched, group_model, False),
                 (virtual_key, explicit, True),
@@ -125,6 +127,16 @@ def test_rules_add_models_to_jwt_and_scoped_virtual_key_without_opening_other_mo
                         response.json()["choices"][0]["message"]["content"]
                         == "Hello! This is a mock response from the fake OpenAI endpoint."
                     ), response.text
+
+            if mapping and claimed:
+                rows: Final = read_rows(
+                    'SELECT models, access_group_ids FROM "LiteLLM_VerificationToken" '
+                    'WHERE user_id=%s AND team_id=%s',
+                    (subject, team_id),
+                )
+                assert len(rows) == 1, rows
+                assert group_model not in rows[0]["models"], rows
+                assert not rows[0]["access_group_ids"], rows
 
 
 @pytest.mark.parametrize("consumer", ("auto_register", "token_exchange"))

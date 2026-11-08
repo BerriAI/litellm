@@ -10,30 +10,34 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import jwt
-from cryptography.hazmat.primitives.asymmetric import rsa
 import pytest
+from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi import HTTPException
+from starlette.requests import Request
 
+import litellm.proxy.proxy_server as proxy_server
 from litellm.caching.dual_cache import DualCache
 from litellm.proxy._types import (
     DEFAULT_JWKS_STALE_TTL,
-    JWTLiteLLMRoleMap,
     JWTIssuerConfig,
-    LiteLLMRoutes,
+    JWTLiteLLMRoleMap,
+    LiteLLM_AccessGroupTable,
     LiteLLM_JWTAuth,
     LiteLLM_ModelTable,
     LiteLLM_TeamMembership,
     LiteLLM_TeamTable,
     LiteLLM_UserTable,
+    LiteLLMRoutes,
     LitellmUserRoles,
     Member,
     ProxyErrorTypes,
     ProxyException,
     RoleBasedPermissions,
     ScopeMapping,
+    UserAPIKeyAuth,
 )
 from litellm.proxy.agent_endpoints.agent_registry import AgentRegistry
-from litellm.proxy.auth.auth_checks import TeamNotFoundError, can_key_call_model
+from litellm.proxy.auth.auth_checks import TeamNotFoundError
 from litellm.proxy.auth.handle_jwt import (
     ID_JAG_TYP,
     JWKS_FETCH_ATTEMPTS,
@@ -47,17 +51,11 @@ from litellm.proxy.auth.handle_jwt import (
     NoMatchingJWTPublicKeyError,
 )
 from litellm.proxy.auth.model_access_denied import ModelAccessDeniedHTTPException
-from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
-from litellm.types.agents import AgentResponse
-from litellm.proxy._types import UserAPIKeyAuth, LiteLLM_AccessGroupTable
 from litellm.proxy.auth.user_api_key_auth import (
-    _authorize_authenticated_request,
-    authorize_jwt_for_credential_issuance,
     user_api_key_auth,
 )
-from litellm.types.proxy.auth.user_api_key_auth import JWTModelAccessPolicy
-from starlette.requests import Request
-import litellm.proxy.proxy_server as proxy_server
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.types.agents import AgentResponse
 
 
 async def _jwt_team_selection_identity(
@@ -72,7 +70,6 @@ async def _jwt_team_selection_identity(
     matching_rule: bool | None = None,
     scope_models: tuple[str, ...] | None = None,
     role_models: tuple[str, ...] | None = None,
-    credential_issuing: bool = False,
 ) -> UserAPIKeyAuth:
     cache: Final = UserApiKeyCache()
     database: Final = MagicMock()
@@ -167,13 +164,7 @@ async def _jwt_team_selection_identity(
                 }
             )
             request._body = json.dumps(request_data).encode()
-            if not credential_issuing:
-                return await user_api_key_auth(request=request, api_key=f"Bearer {token}")
-            return (
-                await authorize_jwt_for_credential_issuance(
-                    token, request=request, request_data=request_data, route=route
-                )
-            ).identity
+            return await user_api_key_auth(request=request, api_key=f"Bearer {token}")
         result: Final = await JWTAuthManager.auth_builder(
             api_key=token,
             jwt_handler=handler,
@@ -200,10 +191,6 @@ async def test_unresolved_claim_keeps_model_denial_after_single_membership_is_se
         models=["selection-model"],
         members_with_roles=[Member(user_id="selection-user", role="user")],
     )
-    selected: Final = await _jwt_team_selection_identity(
-        monkeypatch, (membership_team,), ("unresolved-claim",), ("membership-team",), "selection-model"
-    )
-    assert selected.team_id == "membership-team"
     with pytest.raises(ProxyException) as denied:
         await _jwt_team_selection_identity(
             monkeypatch,
@@ -260,18 +247,16 @@ async def test_auth_builder_db_teams_attribute_to_first_model_allowed_membership
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("matching", (True, False))
-@pytest.mark.parametrize("credential_issuing", (True, False))
 async def test_jwt_rule_grants_a_claimed_teams_missing_model_without_losing_attribution(
     monkeypatch: pytest.MonkeyPatch,
     matching: bool,
-    credential_issuing: bool,
 ) -> None:
     team: Final = LiteLLM_TeamTable(
         team_id="claimed-team",
         models=["other-model"],
         members_with_roles=[Member(user_id="selection-user", role="user")],
     )
-    if matching and not credential_issuing:
+    if matching:
         identity: Final = await _jwt_team_selection_identity(
             monkeypatch,
             (team,),
@@ -293,14 +278,13 @@ async def test_jwt_rule_grants_a_claimed_teams_missing_model_without_losing_attr
                 "selection-model",
                 authorize=True,
                 matching_rule=matching,
-                credential_issuing=credential_issuing,
             )
         assert denied.value.code == "403"
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("requested_model", (None, "selection-model"))
-async def test_jwt_native_team_policy_can_issue_credentials_with_rules_configured(
+async def test_jwt_native_team_access_with_rules_configured(
     monkeypatch: pytest.MonkeyPatch,
     requested_model: str | None,
 ) -> None:
@@ -317,7 +301,6 @@ async def test_jwt_native_team_policy_can_issue_credentials_with_rules_configure
         requested_model,
         authorize=True,
         matching_rule=True,
-        credential_issuing=True,
     )
     assert identity.team_id == "native-team"
     assert identity.user_id == "selection-user"
@@ -326,7 +309,7 @@ async def test_jwt_native_team_policy_can_issue_credentials_with_rules_configure
 @pytest.mark.asyncio
 @pytest.mark.parametrize("granted", (True, False))
 @pytest.mark.parametrize("policy_kind", ("scope", "role"))
-async def test_jwt_claim_model_policy_is_enforced_centrally(
+async def test_jwt_role_and_scope_model_restrictions_remain_in_builder(
     monkeypatch: pytest.MonkeyPatch,
     granted: bool,
     policy_kind: str,
@@ -337,12 +320,6 @@ async def test_jwt_claim_model_policy_is_enforced_centrally(
         members_with_roles=[Member(user_id="selection-user", role="user")],
     )
     scope_models: Final = ("selection-model",) if granted else ()
-    resolved: Final = await _jwt_team_selection_identity(
-        monkeypatch, (team,), ("scope-team",), ("scope-team",), "selection-model",
-        scope_models=scope_models if policy_kind == "scope" else None,
-        role_models=scope_models if policy_kind == "role" else None,
-    )
-    assert resolved.team_id == "scope-team"
     if granted:
         identity: Final = await _jwt_team_selection_identity(
             monkeypatch,
@@ -371,64 +348,16 @@ async def test_jwt_claim_model_policy_is_enforced_centrally(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("credential_issuing", (True, False))
-@pytest.mark.parametrize(
-    "model,matching,enabled,allowed,fallback",
-    (
-        ("group-model", True, True, True, None),
-        ("outside", True, True, False, None),
-        ("group-model", False, True, False, None),
-        ("group-model", True, False, False, None),
-        ("group-model", True, True, False, "outside"),
-    ),
-)
-async def test_jwt_group_rules_restrict_teamless_identity_during_central_authorization(
-    monkeypatch: pytest.MonkeyPatch, model: str, matching: bool, enabled: bool, allowed: bool,
-    fallback: str | None, credential_issuing: bool,
+@pytest.mark.parametrize("matching", (True, False))
+async def test_teamless_jwt_is_rejected_before_rule_grants(
+    monkeypatch: pytest.MonkeyPatch, matching: bool,
 ) -> None:
-    handler: Final = JWTHandler()
-    handler.litellm_jwtauth = LiteLLM_JWTAuth(enforce_team_based_model_access=True)
-    cache: Final = UserApiKeyCache()
-    group: Final = LiteLLM_AccessGroupTable(
-        access_group_id="science-id", access_group_name="science", access_model_names=["group-model"]
-    )
-    cache.set_cache("access_group_rule_name:science", group, model_type=LiteLLM_AccessGroupTable)
-    cache.set_cache("access_group_id:science-id", group, model_type=LiteLLM_AccessGroupTable)
-    monkeypatch.setattr(
-        proxy_server,
-        "general_settings",
-        {"access_group_rules": [{"attribute": "jwt_claims.groups", "contains": "science", "access_group": "science"}]}
-        if enabled
-        else {},
-    )
-    monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
-    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
-    monkeypatch.setattr(proxy_server, "llm_router", None)
-    monkeypatch.setattr(proxy_server, "user_custom_auth", None)
-
-    assert await JWTAuthManager.find_team_with_model_access(
-        set(), model, "/chat/completions", handler, None, cache, None, MagicMock()
-    ) == (None, None)
-    principal: Final = UserAPIKeyAuth(jwt_claims={"groups": ["science" if matching else "other"]})
-    principal.set_jwt_model_policy(JWTModelAccessPolicy(required_team="token"))
-    request: Final = Request({"type": "http", "method": "POST", "path": "/chat/completions", "headers": []})
-    request_data: Final = {"model": model, **({"fallbacks": [fallback]} if fallback else {})}
-    if allowed and not credential_issuing:
-        assert (
-            await _authorize_authenticated_request(principal, request, request_data, "/chat/completions", "synthetic")
-            is None
+    with pytest.raises(ProxyException, match="No teams found in token") as denied:
+        await _jwt_team_selection_identity(
+            monkeypatch, (), (), (), "selection-model", authorize=True,
+            fallback_to_db_teams=False, matching_rule=matching,
         )
-        assert principal.access_group_ids == ["science-id"]
-        with pytest.raises(ProxyException, match="model"):
-            await can_key_call_model("outside", None, principal, None)
-    else:
-        with pytest.raises(
-            ProxyException, match="model" if fallback and not credential_issuing else "No teams found in token"
-        ):
-            await _authorize_authenticated_request(
-                principal, request, request_data, "/chat/completions", "synthetic",
-                credential_issuing=credential_issuing,
-            )
+    assert denied.value.code == "403"
 
 
 @pytest.mark.asyncio
@@ -596,7 +525,7 @@ async def test_find_team_with_model_access_reports_passthrough_allowlist_denial(
     assert exc_info.value.status_code == 403
     assert "allowed_passthrough_routes" in exc_info.value.detail
     assert "requested model" not in exc_info.value.detail
-    mock_is_auth_enforced_pass_through_route.assert_called_once_with(
+    mock_is_auth_enforced_pass_through_route.assert_called_with(
         route="/my-pass-through", method="POST"
     )
 
@@ -4201,18 +4130,30 @@ async def test_find_and_validate_specific_team_id_non_404_http_exception_propaga
 
 
 @pytest.mark.asyncio
-async def test_find_team_with_model_access_enforce_team_based_access_still_raises(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    identity: Final = await _jwt_team_selection_identity(
-        monkeypatch, (), (), (), "selection-model", fallback_to_db_teams=False
-    )
-    assert identity.team_id is None
-    with pytest.raises(ProxyException, match="No teams found in token") as denied:
-        await _jwt_team_selection_identity(
-            monkeypatch, (), (), (), "selection-model", authorize=True, fallback_to_db_teams=False
+async def test_find_team_with_model_access_enforce_team_based_access_still_raises():
+    """Regression guard: when no group claims are present and
+    `enforce_team_based_model_access` is on, the original 403 still fires —
+    the new soft-fail only applies to the unresolved-claim path inside the
+    loop, not to the no-team-claims-at-all path at the top."""
+    from fastapi import HTTPException
+
+    jwt_handler = JWTHandler()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(enforce_team_based_model_access=True)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await JWTAuthManager.find_team_with_model_access(
+            team_ids=set(),
+            requested_model="gpt-4o-mini",
+            route="/chat/completions",
+            jwt_handler=jwt_handler,
+            prisma_client=None,
+            user_api_key_cache=None,
+            parent_otel_span=None,
+            proxy_logging_obj=None,
         )
-    assert denied.value.code == "403"
+
+    assert exc_info.value.status_code == 403
+    assert "enforce_team_based_model_access" in str(exc_info.value.detail)
 
 
 @pytest.mark.asyncio
@@ -4267,13 +4208,48 @@ async def test_find_and_validate_specific_team_id_unresolved_claim_default_raise
 
 @pytest.mark.asyncio
 async def test_find_team_with_model_access_unresolved_group_claim_default_raises(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    identity: Final = await _jwt_team_selection_identity(monkeypatch, (), ("unknown-team",), (), "selection-model")
-    assert identity.team_id is None
-    with pytest.raises(ProxyException, match="No team has access to the requested model") as denied:
-        await _jwt_team_selection_identity(monkeypatch, (), ("unknown-team",), (), "selection-model", authorize=True)
-    assert denied.value.code == "403"
+    monkeypatch,
+):
+    """Default `team_claim_fallback=False`: group claims that don't resolve
+    to any LiteLLM team must still raise 403 — preserves the strict
+    claim-based authorization boundary."""
+    import sys
+    import types
+
+    from fastapi import HTTPException
+
+    from litellm.router import Router
+
+    router = Router(
+        model_list=[
+            {"model_name": "gpt-4o-mini", "litellm_params": {"model": "gpt-4o-mini"}}
+        ]
+    )
+    proxy_server_module = types.ModuleType("proxy_server")
+    proxy_server_module.llm_router = router
+    monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", proxy_server_module)
+
+    async def raise_404(*_args, **_kwargs):
+        raise HTTPException(status_code=404, detail="missing")
+
+    monkeypatch.setattr("litellm.proxy.auth.handle_jwt.get_team_object", raise_404)
+
+    jwt_handler = JWTHandler()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth()
+
+    with pytest.raises(HTTPException) as exc_info:
+        await JWTAuthManager.find_team_with_model_access(
+            team_ids={"idp-group-a", "idp-group-b"},
+            requested_model="gpt-4o-mini",
+            route="/chat/completions",
+            jwt_handler=jwt_handler,
+            prisma_client=None,
+            user_api_key_cache=None,
+            parent_otel_span=None,
+            proxy_logging_obj=None,
+        )
+
+    assert exc_info.value.status_code == 403
 
 
 # GH #26789: JWT claim user_id must rebind to legacy DB row after fuzzy match.
@@ -5743,14 +5719,15 @@ async def test_resolve_team_from_header_accepts_db_teams_provisionally_under_fal
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("fallback", (False, True))
-async def test_auth_builder_leaves_teamless_model_denial_to_central_authorization(
+async def test_auth_builder_preserves_teamless_enforcement_denial(
     monkeypatch: pytest.MonkeyPatch,
     fallback: bool,
 ) -> None:
-    identity: Final = await _jwt_team_selection_identity(
-        monkeypatch, (), (), (), "selection-model", fallback_to_db_teams=fallback
-    )
-    assert identity.team_id is None
+    with pytest.raises(HTTPException) as builder_denied:
+        await _jwt_team_selection_identity(
+            monkeypatch, (), (), (), "selection-model", fallback_to_db_teams=fallback
+        )
+    assert builder_denied.value.status_code == 403
     with pytest.raises(ProxyException) as denied:
         await _jwt_team_selection_identity(
             monkeypatch, (), (), (), "selection-model", authorize=True, fallback_to_db_teams=fallback
@@ -5855,15 +5832,14 @@ async def test_resolve_db_team_fallback_skips_unresolvable_membership():
             False,
             ["team_solo"],
             None,
-            None,
+            "team_solo",
             False,
-            id="flag_off_single_db_team_does_not_replace_required_claim",
+            id="flag_off_single_db_team_upstream_fallback",
         ),
     ],
 )
 @pytest.mark.asyncio
 async def test_auth_builder_db_team_fallback_when_jwt_has_no_team(
-    monkeypatch: pytest.MonkeyPatch,
     fallback_to_db_teams: bool,
     user_teams: list,
     header_team_id: str | None,
@@ -5874,8 +5850,8 @@ async def test_auth_builder_db_team_fallback_when_jwt_has_no_team(
 
     fallback_to_db_teams=True attributes usage to the user's first resolvable DB
     team, honors a valid x-litellm-team-id header, and rejects a header team the
-    user does not belong to. With team enforcement and the flag off, DB
-    memberships do not replace the required token team.
+    user does not belong to. The default (flag off) preserves the upstream
+    single-team fallback: a lone DB team is resolved, multiple are ambiguous.
     """
     user_id = "u_db_fallback"
     user_object = LiteLLM_UserTable(
@@ -5966,13 +5942,7 @@ async def test_auth_builder_db_team_fallback_when_jwt_has_no_team(
                 request_headers=request_headers,
             )
 
-    if expect_403 and header_team_id is None:
-        identity: Final = await call_auth_builder()
-        assert identity["team_id"] is None
-        with pytest.raises(ProxyException) as central_denial:
-            await _jwt_team_selection_identity(monkeypatch, (), (), (), "selection-model", authorize=True)
-        assert central_denial.value.code == "403"
-    elif expect_403:
+    if expect_403:
         with pytest.raises(HTTPException) as exc_info:
             await call_auth_builder()
         assert exc_info.value.status_code == 403
@@ -6564,8 +6534,6 @@ async def test_resolve_db_team_fallback_distinguishes_no_membership_vs_model_den
         await _jwt_team_selection_identity(monkeypatch, (team,), (), ("only-team",), "selection-model", authorize=True)
     assert model_denied.value.code == "403"
     assert "not a member of any team" not in model_denied.value.message
-    empty: Final = await _jwt_team_selection_identity(monkeypatch, (), (), (), "selection-model")
-    assert empty.team_id is None
     with pytest.raises(ProxyException, match="not a member of any team") as no_member:
         await _jwt_team_selection_identity(monkeypatch, (), (), (), "selection-model", authorize=True)
     assert no_member.value.code == "403"
@@ -7849,6 +7817,12 @@ async def test_jwt_identity_and_authorization_keep_provisioning_in_admission(
         general_settings={},
         route="/mcp/example",
     )
+    if not model_allowed:
+        with pytest.raises(HTTPException) as denial:
+            await pending
+        assert denial.value.status_code == 403
+        users.create.assert_not_awaited()
+        return
     if operation == "authorize" and not existing_user:
         with pytest.raises(UserNotFoundError):
             await pending

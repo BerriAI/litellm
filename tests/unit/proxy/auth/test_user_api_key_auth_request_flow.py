@@ -87,7 +87,7 @@ from litellm.proxy.auth.user_api_key_auth import (
     _reserve_budget_after_common_checks,
     _route_requires_auth_despite_public,
     _routing_selector_matches_claim,
-    authorize_authenticated_model_access,
+    _authorize_authenticated_request,
     run_centralized_common_checks,
     _run_post_custom_auth_checks,
     user_api_key_auth_builder,
@@ -1790,9 +1790,9 @@ async def test_auth_prefetches_referenced_objects_before_central_model_authoriza
     api_key = "sk-prefetch-order-test"
     valid_token = UserAPIKeyAuth(api_key=api_key, token=hash_token(api_key), user_id="u1", team_id="t1")
 
-    mock_cache = AsyncMock()
-    mock_cache.async_get_cache = AsyncMock(return_value=None)
-    mock_cache.delete_cache = MagicMock()
+    mock_cache = UserApiKeyCache()
+    mock_cache.set_cache("team_id:t1", LiteLLM_TeamTable(team_id="t1"))
+    mock_cache.set_cache("team_membership:u1:t1", LiteLLM_TeamMembership(user_id="u1", team_id="t1"))
     mock_proxy_logging_obj = MagicMock()
     mock_proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
 
@@ -1822,7 +1822,7 @@ async def test_auth_prefetches_referenced_objects_before_central_model_authoriza
     try:
         for attr, val in _attrs_to_set.items():
             setattr(_proxy_server_mod, attr, val)
-        request = Request(scope={"type": "http"})
+        request = Request(scope={"type": "http", "method": "POST", "path": "/chat/completions"})
         request._url = URL(url="/chat/completions")
 
         with (
@@ -1855,8 +1855,8 @@ async def test_auth_prefetches_referenced_objects_before_central_model_authoriza
             assert isinstance(resolved, UserAPIKeyAuth)
             mock_prefetch.assert_awaited_once()
             assert mock_prefetch.await_args.kwargs["refs"].team_id == "t1"
-            call: Final = authorize_authenticated_model_access(
-                resolved, request=request, request_data={"model": "gpt-4o"}, route="/chat/completions"
+            call: Final = _authorize_authenticated_request(
+                resolved, request, {"model": "gpt-4o"}, "/chat/completions", api_key
             )
             if model_allowed:
                 await call

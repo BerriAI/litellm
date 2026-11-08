@@ -1,10 +1,8 @@
 from collections.abc import Mapping
-from dataclasses import dataclass
 from typing import (
     TYPE_CHECKING,
     Any,  # noqa: TID251  # moved UserAPIKeyAuth fields and the Span alias are typed Any
     Final,
-    Literal,
     TypeAlias,
 )
 
@@ -128,63 +126,22 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
         super().__init__(**kwargs)  # pyright: ignore[reportArgumentType, reportUnknownMemberType]  # pydantic validates raw values
 
 
-@dataclass(frozen=True, slots=True)
-class JWTModelAccessPolicy:
-    required_team: Literal["token", "database"] | None = None
-    unresolved_team_ids: frozenset[str] = frozenset()
-    role_models: tuple[str, ...] | None = None
-    scope_models: tuple[str, ...] | None = None
-
-
 class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response object for user api key auth
     """
     Return the row in the db
     """
 
     api_key: str | None = None
-    _access_group_rule_grants: tuple[str, ...] = PrivateAttr(default=())
-    _jwt_model_policy: JWTModelAccessPolicy | None = PrivateAttr(default=None)
-    _requires_key_model_check: bool = PrivateAttr(default=False)
-    _access_group_rules_only: bool = PrivateAttr(default=False)
+    _access_group_rule_grants: frozenset[str] = PrivateAttr(default=frozenset())
 
     @property
-    def access_group_rules_only(self) -> bool:
-        return self._access_group_rules_only
-
-    def restrict_models_to_access_group_rules(self) -> None:
-        self._access_group_rules_only = True
-
-    @property
-    def jwt_model_policy(self) -> JWTModelAccessPolicy | None:
-        return self._jwt_model_policy
-
-    def set_jwt_model_policy(self, policy: JWTModelAccessPolicy | None) -> None:
-        self._jwt_model_policy = policy
-
-    @property
-    def requires_key_model_check(self) -> bool:
-        return self._requires_key_model_check
-
-    def require_key_model_check(self) -> None:
-        self._requires_key_model_check = True
-
-    @property
-    def access_group_rule_grants(self) -> tuple[str, ...]:
+    def access_group_rule_grants(self) -> frozenset[str]:
         return self._access_group_rule_grants
-
-    def with_access_group_rule_grants(self, grants: tuple[str, ...]) -> "UserAPIKeyAuth":
-        if not grants:
-            return self
-        auth: Final = self.model_copy(
-            update={"access_group_ids": list(dict.fromkeys((*(self.access_group_ids or ()), *grants)))}
-        )
-        auth._access_group_rule_grants = tuple(dict.fromkeys((*self._access_group_rule_grants, *grants)))
-        return auth
 
     def apply_access_group_rule_grants(self, grants: tuple[str, ...]) -> None:
         if grants:
+            self._access_group_rule_grants = frozenset(grants)
             self.access_group_ids = list(dict.fromkeys((*(self.access_group_ids or ()), *grants)))
-            self._access_group_rule_grants = tuple(dict.fromkeys((*self._access_group_rule_grants, *grants)))
 
     user_role: LitellmUserRoles | None = None
     allowed_model_region: AllowedModelRegion | None = None

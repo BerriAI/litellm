@@ -507,7 +507,6 @@ async def _resolve_jwt_auth(
     from litellm.proxy.auth.handle_jwt import JWTAuthManager  # noqa: PLC0415  # proxy import cycle
     from litellm.proxy.auth.user_api_key_auth import (  # noqa: PLC0415  # proxy import cycle
         _resolve_jwt_to_virtual_key,  # pyright: ignore[reportPrivateUsage]  # reuse admission mapping policy without provisioning a new key
-        authorize_jwt_for_credential_issuance,
     )
     from litellm.proxy.proxy_server import (  # noqa: PLC0415  # proxy globals initialized at startup
         general_settings,
@@ -550,19 +549,26 @@ async def _resolve_jwt_auth(
             if identity.user_object is not None and isinstance(_active_user_record(identity.user_object), str):
                 return None
             return identity
-        authorized: Final = await authorize_jwt_for_credential_issuance(
+        authorized: Final = await JWTAuthManager.authorize_jwt(
             api_key=token,
-            request=request,
+            jwt_handler=jwt_handler,
+            request_data={},
+            general_settings=general_settings,
             route=write_route,
-            provision_identity=False,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=None,
+            proxy_logging_obj=proxy_logging_obj,
+            request_headers=dict(request.headers),
+            request_method=request.method,
         )
-        resolved_user: Final = authorized.result["user_object"]
+        resolved_user: Final = authorized["user_object"]
         if resolved_user is not None and isinstance(_active_user_record(resolved_user), str):
             return None
+        return JWTAuthManager.user_api_key_auth_from_result(authorized)
     except Exception as exc:  # noqa: BLE001  # public OAuth exchange stays available; unvalidated identities never write credentials
         verbose_logger.debug("OAuth JWT identity could not be validated (%s)", type(exc).__name__)
         return None
-    return authorized.identity
 
 
 _UpstreamGrantRejection = Literal["no_access_token", "expired_lifetime"]

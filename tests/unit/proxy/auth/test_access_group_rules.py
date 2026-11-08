@@ -113,11 +113,13 @@ async def test_virtual_key_user_grants_are_additive_and_do_not_mutate_cached_ide
         cache=cache,
         prisma_client=_Database(object()),
     )
-    granted: Final = identity.with_access_group_rule_grants(ids)
+    granted: Final = identity.model_copy()
+    granted.apply_access_group_rule_grants(ids)
     assert granted.access_group_ids == ["existing", "science-id"]
-    assert granted.access_group_rule_grants == ("science-id",)
+    assert granted.access_group_rule_grants == frozenset({"science-id"})
     assert identity.access_group_ids == ["existing"]
-    assert identity.with_access_group_rule_grants(()) is identity
+    identity.apply_access_group_rule_grants(())
+    assert identity.access_group_ids == ["existing"]
 
 
 @pytest.mark.asyncio

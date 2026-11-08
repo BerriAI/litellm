@@ -14,7 +14,7 @@ from typing_extensions import assert_never
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import JWTAuthBuilderResult, ProxyException
-from litellm.proxy.auth.handle_jwt import JWTHandler
+from litellm.proxy.auth.handle_jwt import JWTAuthManager, JWTHandler
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.mcp_server.gateway_dcr_flow import SubjectIdentity, SubjectTokenRefusal
 
@@ -112,18 +112,28 @@ class AuthorizeSubjectToken(Protocol):
 
 
 async def exchange_idp_subject_token(subject_token: str, request: Request) -> SubjectIdentity | SubjectTokenRefusal:
-    from litellm.proxy.auth.user_api_key_auth import (
-        authorize_jwt_for_credential_issuance,
+    from litellm.proxy.proxy_server import (  # noqa: PLC0415  # rebound after startup, so read them per call
+        general_settings,
+        jwt_handler,
+        prisma_client,
+        proxy_logging_obj,
+        user_api_key_cache,
     )
-    from litellm.proxy.proxy_server import jwt_handler
 
     async def authorize(token: str, request_headers: Mapping[str, str]) -> JWTAuthBuilderResult:
-        authorized: Final = await authorize_jwt_for_credential_issuance(
+        return await JWTAuthManager.auth_builder(
             api_key=token,
-            request=request,
+            jwt_handler=jwt_handler,
+            request_data={},
+            general_settings=general_settings,
             route=EXCHANGE_ROUTE,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=None,
+            proxy_logging_obj=proxy_logging_obj,
+            request_headers=request_headers,
+            request_method="POST",
         )
-        return authorized.result
 
     return await identity_from_subject_token(
         subject_token,
