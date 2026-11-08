@@ -41,6 +41,7 @@ _TABLES: Final = (
     "LiteLLM_DailyTeamSpend",
     "LiteLLM_Config",
     "LiteLLM_VerificationToken",
+    "LiteLLM_DeletedVerificationToken",
     "LiteLLM_UserTable",
     "LiteLLM_TeamTable",
     "LiteLLM_SpendLogDelivery",
