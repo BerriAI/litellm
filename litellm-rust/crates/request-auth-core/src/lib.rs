@@ -11,6 +11,7 @@ pub mod budget_pricing;
 pub mod common_budgets;
 pub mod common_flow;
 pub mod credential;
+pub mod end_user_context;
 mod error;
 pub mod fallback_access;
 pub mod fallback_candidate;

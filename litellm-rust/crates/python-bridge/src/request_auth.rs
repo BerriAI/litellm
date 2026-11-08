@@ -646,3 +646,87 @@ pub(crate) fn request_auth_resolved_models(
         .map_err(map_error)?;
     to_py(py, &decision)
 }
+
+#[pyfunction]
+pub(crate) fn request_auth_end_user_normalize_id(
+    py: Python<'_>,
+    facts: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    let facts: core::end_user_context::IdFacts = from_py(facts)?;
+    to_py(
+        py,
+        &py.detach(move || core::end_user_context::normalize_id(&facts)),
+    )
+}
+
+#[pyfunction]
+pub(crate) fn request_auth_end_user_default_id(
+    py: Python<'_>,
+    facts: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    let facts: core::end_user_context::DefaultFacts = from_py(facts)?;
+    to_py(
+        py,
+        &py.detach(move || core::end_user_context::default_id(&facts)),
+    )
+}
+
+#[pyfunction]
+pub(crate) fn request_auth_end_user_apply(
+    py: Python<'_>,
+    facts: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    let facts: core::end_user_context::ApplyFacts = from_py(facts)?;
+    to_py(
+        py,
+        &py.detach(move || core::end_user_context::apply_default(&facts)),
+    )
+}
+
+#[pyfunction]
+pub(crate) fn request_auth_end_user_registry(
+    py: Python<'_>,
+    facts: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    let facts: core::end_user_context::RegistryFacts = from_py(facts)?;
+    to_py(
+        py,
+        &py.detach(move || core::end_user_context::registry(&facts)),
+    )
+}
+
+#[pyfunction]
+pub(crate) fn request_auth_end_user_assignments(
+    py: Python<'_>,
+    facts: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    let facts: core::end_user_context::AssignmentFacts = from_py(facts)?;
+    to_py(
+        py,
+        &py.detach(move || core::end_user_context::assignments(&facts)),
+    )
+}
+
+#[pyfunction]
+pub(crate) fn request_auth_end_user_lookup(
+    py: Python<'_>,
+    facts: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    let facts: core::end_user_context::LookupFacts = from_py(facts)?;
+    to_py(
+        py,
+        &py.detach(move || core::end_user_context::lookup(&facts)),
+    )
+}
+
+#[pyfunction]
+pub(crate) fn request_auth_end_user_validation(
+    py: Python<'_>,
+    facts: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    let facts: core::end_user_context::ValidationFacts = from_py(facts)?;
+    to_py(
+        py,
+        &py.detach(move || core::end_user_context::validation(&facts)),
+    )
+}
