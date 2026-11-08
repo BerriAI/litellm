@@ -37,11 +37,11 @@ from litellm.secret_managers.main import str_to_bool
 if TYPE_CHECKING:
     from collections.abc import Sequence
     from types import TracebackType
-    from typing import Self
 
     from prisma import Prisma
     from prisma import models as prisma_models
     from prisma.types import HttpConfig
+    from typing_extensions import Self
 
     from litellm.repositories.prisma_protocols import TableActions
 

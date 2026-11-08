@@ -186,7 +186,8 @@ class BaseRAGIngestion(ABC):
 
         # Use router if available
         if self.router is not None:
-            ocr_response = await require_attributes(self.router, _OcrRouter, "aocr").aocr(
+            ocr_router: Final = require_attributes(self.router, _OcrRouter, "aocr")
+            ocr_response = await ocr_router.aocr(
                 model=ocr_model,
                 document={"type": doc_type, url_key: data_url},
             )

@@ -374,11 +374,8 @@ async def chat_completion_pass_through_endpoint(
             and data["model"] is not None
             and llm_router.registry().resolve(data["model"], kind="recognized")
         ):
-            llm_response = asyncio.create_task(
-                require_attributes(llm_router, _AdapterCompletionRouter, "aadapter_completion").aadapter_completion(
-                    **data
-                )
-            )
+            adapter_router = require_attributes(llm_router, _AdapterCompletionRouter, "aadapter_completion")
+            llm_response = asyncio.create_task(adapter_router.aadapter_completion(**data))
         elif (
             llm_router is not None
             and data["model"] not in router_model_names
@@ -387,19 +384,13 @@ async def chat_completion_pass_through_endpoint(
                 or len(llm_router.registry().patterns().patterns) > 0
             )
         ):  # check for wildcard routes or default deployment before checking deployment_names
-            llm_response = asyncio.create_task(
-                require_attributes(llm_router, _AdapterCompletionRouter, "aadapter_completion").aadapter_completion(
-                    **data
-                )
-            )
+            adapter_router = require_attributes(llm_router, _AdapterCompletionRouter, "aadapter_completion")
+            llm_response = asyncio.create_task(adapter_router.aadapter_completion(**data))
         elif llm_router is not None and data["model"] in llm_router.registry().names(
             kind="deployment_names"
         ):  # model in router deployments, calling a specific deployment on the router (lowest priority)
-            llm_response = asyncio.create_task(
-                require_attributes(llm_router, _AdapterCompletionRouter, "aadapter_completion").aadapter_completion(
-                    **data, specific_deployment=True
-                )
-            )
+            adapter_router = require_attributes(llm_router, _AdapterCompletionRouter, "aadapter_completion")
+            llm_response = asyncio.create_task(adapter_router.aadapter_completion(**data, specific_deployment=True))
         elif user_model is not None:  # `litellm --model <your-model-name>`
             llm_response = asyncio.create_task(litellm.aadapter_completion(**data))
         else:
