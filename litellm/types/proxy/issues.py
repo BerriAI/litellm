@@ -15,6 +15,7 @@ from litellm.types.proxy.usage_alerts import (
     UsageAlertDirection,
     UsageAlertEvaluationCounts,
     UsageAlertMetric,
+    UsageAlertMetricPoint,
     UsageAlertRule,
     UsageAlertStatus,
 )
@@ -66,6 +67,7 @@ class IssueComparison(BaseModel, frozen=True):
     baseline_start: date
     baseline_end: date
     baseline_sample_days: int | None = Field(default=None, ge=1, le=30)
+    history: tuple[UsageAlertMetricPoint, ...] = Field(default=(), max_length=31)
 
     @model_validator(mode="after")
     def validate_comparison(self) -> Self:
@@ -97,6 +99,7 @@ class IssueDeprecation(BaseModel, frozen=True):
     last_used_date: date
     last_day_requests: int = Field(ge=0)
     state: DeprecationAlertState
+    daily_requests: tuple[UsageAlertMetricPoint, ...] = Field(default=(), max_length=30)
 
 
 class IssueInput(BaseModel, frozen=True):

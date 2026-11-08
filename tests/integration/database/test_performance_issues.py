@@ -145,6 +145,10 @@ async def test_retirement_usage_omits_oversized_models_before_materialization(db
         rows = await UsageAlertMetricsRepository(prisma.writer_db).deprecation_usage(models, _DAY, _DAY)
         assert frozenset(row.model for row in rows) == frozenset(models[1:])
         assert tuple(row.requests for row in rows) == (7, 7)
+        assert tuple(tuple((point.day, point.value) for point in row.daily_requests) for row in rows) == (
+            ((_DAY, 7),),
+            ((_DAY, 7),),
+        )
 
 
 @asynccontextmanager
@@ -236,6 +240,10 @@ async def test_key_spend_issue_consolidates_traffic_and_uses_fresh_days(db: Mana
         assert original.comparisons[0].baseline_value == 1
         assert original.comparisons[1].observed_value == 50000
         assert original.comparisons[1].threshold is None
+        expected_days = tuple(_DAY - timedelta(days=offset) for offset in range(7, -1, -1))
+        assert tuple(point.day for point in original.comparisons[0].history) == expected_days
+        assert tuple(point.value for point in original.comparisons[0].history) == (1,) * 7 + (50,)
+        assert tuple(point.value for point in original.comparisons[1].history) == (1000,) * 7 + (50000,)
         assert (await issues.list_signals(original.id)).total == 10
         await job._run(_NOW + timedelta(hours=1))
         assert (await issues.list_issues()).data == first.data
