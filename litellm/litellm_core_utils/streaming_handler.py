@@ -2512,7 +2512,9 @@ class CustomStreamWrapper:
             traceback_exception: Final = traceback.format_exc()
             public_exception: Final = self._public_stream_exception(e)
             # LOG FAILURE - handle streaming failure logging in the _next_ object, remove `handle_failure` once it's deprecated
-            threading.Thread(target=self.logging_obj.failure_handler, args=(public_exception, traceback_exception)).start()
+            threading.Thread(
+                target=self.logging_obj.failure_handler, args=(public_exception, traceback_exception)
+            ).start()
             self.close()
             self._handle_stream_fallback_error(e, public_exception)
 
