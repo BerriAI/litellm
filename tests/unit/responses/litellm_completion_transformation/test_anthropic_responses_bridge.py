@@ -1595,7 +1595,7 @@ async def test_previous_response_id_keeps_the_tools_an_earlier_codex_tool_search
         [("tool_use", "toolu_standup")],
         [("tool_result", "toolu_standup"), ("text", None)],
     ]
-    assert prisma_client.db.queries == 1
+    assert prisma_client.db.queries == 2
 
 
 @pytest.mark.asyncio

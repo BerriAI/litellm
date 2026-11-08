@@ -18,14 +18,14 @@ from openai.types.responses.response_function_web_search import (
 from pydantic import TypeAdapter, ValidationError
 
 import litellm
-from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field
-from litellm.constants import CALLER_SESSION_ID_METADATA_KEY
+from litellm.constants import CALLER_SESSION_ID_METADATA_KEY, PREVIOUS_RESPONSE_IDS_METADATA_KEY
 from litellm.integrations.anthropic_cache_control_hook import MAX_CACHE_CONTROL_BLOCKS, AnthropicCacheControlHook
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR
 from litellm.litellm_core_utils.prompt_templates.factory import (
     _bedrock_converse_messages_pt,
     anthropic_messages_pt,
 )
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field
 from litellm.responses.litellm_completion_transformation.reasoning_items import encode_thinking_blocks
 from litellm.responses.litellm_completion_transformation.tool_search import tool_search_routing
 from litellm.responses.litellm_completion_transformation.transformation import (
@@ -7265,8 +7265,6 @@ def test_a_continued_chain_logs_its_spend_under_the_chain_session_with_request_c
     monkeypatch: pytest.MonkeyPatch, request_kwargs: Mapping[str, object], logged_metadata_key: str
 ):
     monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
-    sent_kwargs: Final = deepcopy(request_kwargs)
-
     request: Final = _continued_chain_request(request_kwargs)
 
     assert request["litellm_trace_id"] == "chain-session"
@@ -7275,7 +7273,7 @@ def test_a_continued_chain_logs_its_spend_under_the_chain_session_with_request_c
         **TypeAdapter(dict[str, object]).validate_python(request_kwargs[logged_metadata_key]),
         CALLER_SESSION_ID_METADATA_KEY: "chain-session",
     }
-    assert request_kwargs == sent_kwargs
+    assert request[logged_metadata_key] is request_kwargs[logged_metadata_key]
 
 
 def test_a_continued_chain_leaves_the_turns_metadata_alone_without_request_correlation(
@@ -7289,6 +7287,42 @@ def test_a_continued_chain_leaves_the_turns_metadata_alone_without_request_corre
     assert request["litellm_trace_id"] == "chain-session"
     assert "litellm_metadata" not in request
     assert request["metadata"] == {CALLER_SESSION_ID_METADATA_KEY: "turn-session", "user_api_key": "hashed"}
+
+
+@pytest.mark.parametrize("request_correlation_in_logs", [True, False])
+def test_a_continued_chain_stores_the_replayed_turns_as_its_path_to_the_root(
+    monkeypatch: pytest.MonkeyPatch, request_correlation_in_logs: bool
+):
+    """The proxy's spend log row for this turn carries the ids it replayed, so a fork off it replays only them."""
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", request_correlation_in_logs)
+
+    async def session_lookup(previous_response_id: str) -> ChatCompletionSession:
+        return ChatCompletionSession(
+            messages=[{"role": "user", "content": "turn 1"}],
+            litellm_session_id="chain-session",
+            previous_response_ids=("chatcmpl-root", "chatcmpl-turn-1"),
+        )
+
+    request: Final = asyncio.run(
+        LiteLLMCompletionResponsesConfig.async_responses_api_session_handler(
+            previous_response_id="resp_turn_1",
+            litellm_completion_request={
+                "model": _CLAUDE_ON_BEDROCK,
+                "custom_llm_provider": "bedrock",
+                "messages": [{"role": "user", "content": "turn 2"}],
+            },
+            instructions=None,
+            session_lookup=session_lookup,
+            request_kwargs={"litellm_metadata": {"user_api_key": "hashed"}, "metadata": {"tag": "client"}},
+        )
+    )
+
+    assert request["litellm_metadata"] == {
+        "user_api_key": "hashed",
+        **({CALLER_SESSION_ID_METADATA_KEY: "chain-session"} if request_correlation_in_logs else {}),
+        PREVIOUS_RESPONSE_IDS_METADATA_KEY: ["chatcmpl-root", "chatcmpl-turn-1"],
+    }
+    assert "metadata" not in request
 
 
 @pytest.mark.asyncio
