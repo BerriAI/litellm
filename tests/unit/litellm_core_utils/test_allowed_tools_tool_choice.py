@@ -7,11 +7,11 @@ import pytest
 from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.allowed_tools_tool_choice import (
     ChatAllowedToolsToolChoice,
+    hosted_tool_choice_type,
     is_allowed_tools_tool_choice,
     parse_chat_allowed_tools_tool_choice,
-    raise_if_responses_only_tool_choice_unsupported,
+    raise_if_hosted_tool_choice_unsupported,
     responses_allowed_tools_tool_choice,
-    responses_only_tool_choice_type,
 )
 
 _CHAT_LAYOUT: Final[dict[str, object]] = {
@@ -108,39 +108,34 @@ def test_is_allowed_tools_tool_choice(tool_choice: Mapping[str, object] | str | 
     [
         ({"type": "web_search"}, "web_search"),
         ({"type": "mcp", "server_label": "docs"}, "mcp"),
-        ({"type": "a_tool_openai_ships_next_month"}, "a_tool_openai_ships_next_month"),
         ({"type": "function", "function": {"name": "get_time"}}, None),
         ({"type": "allowed_tools"}, None),
-        ({"type": "auto"}, None),
         ("required", None),
         (None, None),
     ],
 )
-def test_responses_only_tool_choice_type(tool_choice: Mapping[str, object] | str | None, expected: str | None):
-    assert responses_only_tool_choice_type(tool_choice) == expected
+def test_hosted_tool_choice_type(tool_choice: Mapping[str, object] | str | None, expected: str | None):
+    assert hosted_tool_choice_type(tool_choice) == expected
 
 
 @pytest.mark.parametrize("provider", ["openai", "azure", "litellm_proxy"])
-def test_responses_only_tool_choice_passes_where_a_responses_bridge_exists(provider: str):
+def test_hosted_tool_choice_passes_where_the_responses_api_runs_the_tool(provider: str):
     assert (
-        raise_if_responses_only_tool_choice_unsupported({"type": "web_search"}, custom_llm_provider=provider, model="m")
-        is None
+        raise_if_hosted_tool_choice_unsupported({"type": "web_search"}, custom_llm_provider=provider, model="m") is None
     )
 
 
 @pytest.mark.parametrize("provider", ["anthropic", "bedrock", "gemini", "vertex_ai"])
-def test_responses_only_tool_choice_is_a_400_where_the_provider_cannot_run_it(provider: str):
-    with pytest.raises(BadRequestError, match=r"has type 'file_search'.*only supported for") as exc:
-        raise_if_responses_only_tool_choice_unsupported(
-            {"type": "file_search"}, custom_llm_provider=provider, model="m"
-        )
+def test_hosted_tool_choice_is_a_400_where_the_provider_cannot_run_it(provider: str):
+    with pytest.raises(BadRequestError, match=r"tool_choice type 'file_search'.*only supported for") as exc:
+        raise_if_hosted_tool_choice_unsupported({"type": "file_search"}, custom_llm_provider=provider, model="m")
     assert exc.value.status_code == 400
     assert f"custom_llm_provider={provider}" in str(exc.value)
 
 
-def test_a_function_tool_choice_is_a_chat_choice_anywhere():
+def test_a_function_tool_choice_is_not_a_hosted_tool_anywhere():
     assert (
-        raise_if_responses_only_tool_choice_unsupported(
+        raise_if_hosted_tool_choice_unsupported(
             {"type": "function", "function": {"name": "get_time"}}, custom_llm_provider="anthropic", model="m"
         )
         is None

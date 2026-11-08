@@ -614,7 +614,7 @@ _HOSTED_TOOL_CHOICE: Final = {"type": "web_search"}
 _HOSTED_TOOLS: Final[list[dict[str, object]]] = [*_TWO_TOOLS, {"type": "web_search"}]
 
 
-def test_completion_forwards_a_responses_only_tool_choice_to_the_responses_api_unchanged(respx_mock: respx.MockRouter):
+def test_completion_forwards_a_hosted_tool_choice_to_the_responses_api_unchanged(respx_mock: respx.MockRouter):
     route: Final = respx_mock.post("https://api.openai.com/v1/responses").respond(
         json={
             "id": "resp_hosted",
@@ -652,11 +652,11 @@ def test_completion_forwards_a_responses_only_tool_choice_to_the_responses_api_u
 
 @pytest.mark.parametrize("drop_params", [False, True])
 @pytest.mark.parametrize("model", ["anthropic/claude-sonnet-4-5", "gemini/gemini-2.5-flash", "bedrock/converse/x"])
-def test_completion_responses_only_tool_choice_is_a_400_where_the_provider_cannot_run_it(
+def test_completion_hosted_tool_choice_is_a_400_where_the_provider_cannot_run_it(
     respx_mock: respx.MockRouter, model: str, drop_params: bool
 ):
     with pytest.raises(
-        litellm.BadRequestError, match=r"has type 'web_search'.*only supported for azure, litellm_proxy, openai"
+        litellm.BadRequestError, match=r"tool_choice type 'web_search'.*only supported for azure, litellm_proxy, openai"
     ) as exc:
         litellm.completion(
             model=model,

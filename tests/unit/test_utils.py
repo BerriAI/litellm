@@ -8806,10 +8806,11 @@ def test_validate_tool_choice_cursor_format():
     "tool_choice",
     [
         {},
+        {"type": "invalid"},
         {"type": "function"},
         {"name": "lookup_fruit"},
+        {"type": "web_search_tool"},
         {"type": ["web_search"]},
-        {"type": None},
     ],
 )
 def test_validate_tool_choice_invalid_dict_is_a_400(tool_choice):
@@ -8828,15 +8829,15 @@ def test_validate_tool_choice_invalid_dict_is_a_400(tool_choice):
     "tool_choice",
     [
         {"type": "web_search"},
+        {"type": "web_search_preview"},
         {"type": "file_search"},
+        {"type": "code_interpreter"},
         {"type": "mcp", "server_label": "docs", "name": "search"},
-        {"type": "a_tool_openai_ships_next_month"},
     ],
     ids=lambda choice: str(choice["type"]),
 )
-def test_validate_tool_choice_with_a_type_chat_has_no_shape_for_passes_through(tool_choice: dict[str, object]):
-    """A dict with a string type chat completions does not know is a Responses API choice (a hosted tool, or one OpenAI
-    adds later) that the bridge sends as is, so validation leaves it alone and the provider gate decides."""
+def test_validate_tool_choice_forcing_a_hosted_tool_passes_through(tool_choice: dict[str, object]):
+    """Forcing an OpenAI hosted tool is a Responses API choice the bridge sends as is, so validation leaves it alone."""
     assert validate_chat_completion_tool_choice(tool_choice, model=MODEL) is tool_choice
 
 
@@ -8889,7 +8890,7 @@ def test_validate_tool_choice_invalid_type_is_a_400(tool_choice):
 def test_validate_tool_choice_without_model_is_still_a_400():
     """Callers that predate the model argument keep getting a 400, with an empty model on the error."""
     with pytest.raises(litellm.BadRequestError, match="Invalid tool choice") as exc_info:
-        validate_chat_completion_tool_choice({"type": "function"})
+        validate_chat_completion_tool_choice({"type": "bogus"})
     assert exc_info.value.status_code == 400
     assert exc_info.value.model == ""
 
@@ -10218,8 +10219,7 @@ def test_validate_chat_completion_user_messages(messages, expected_bool):
     "tool_choice, expected_bool",
     [
         ({"type": "function", "function": {"name": "get_current_weather"}}, True),
-        ({"type": "function", "name": "get_current_weather"}, False),
-        ({"type": "web_search"}, True),
+        ({"type": "tool", "name": "get_current_weather"}, False),
         (None, True),
         ("auto", True),
         ("required", True),

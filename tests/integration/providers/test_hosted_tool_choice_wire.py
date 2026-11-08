@@ -35,7 +35,7 @@ def _chat_request(model: str, tool_choice: dict[str, JsonValue]) -> dict[str, Js
     [{"type": "web_search"}, {"type": "web_search_preview"}, {"type": "file_search"}],
     ids=_choice_id,
 )
-def test_responses_only_tool_choice_reaches_the_responses_api_unchanged(
+def test_hosted_tool_choice_reaches_the_responses_api_unchanged(
     gateway: Gateway, provider: SharedProvider, tool_choice: dict[str, JsonValue]
 ) -> None:
     provider.expect(responses_reply("resp_hosted_tool_choice", "gpt-5.6-sol", "It is 18C in Paris.", stream=False))
@@ -49,7 +49,7 @@ def test_responses_only_tool_choice_reaches_the_responses_api_unchanged(
     assert {"type": tool_choice["type"]} in list_value(sent["tools"]), sent["tools"]
 
 
-def test_responses_only_tool_choice_is_a_400_before_any_call_where_the_provider_cannot_enforce_it(
+def test_hosted_tool_choice_is_a_400_before_any_call_where_the_provider_cannot_enforce_it(
     gateway: Gateway, provider: SharedProvider
 ) -> None:
     response: Final = gateway.request(
