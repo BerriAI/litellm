@@ -5,7 +5,7 @@ import type { components } from "@/lib/http/schema";
 import { getProxyBaseUrl } from "@/components/networking";
 import { hasCapability } from "@/utils/capabilities";
 import { uiHref } from "@/utils/uiHref";
-import { formatAlertChange, formatAlertValue } from "@/components/UsageAlerts/usageAlertApi";
+import { formatAlertValue } from "@/components/UsageAlerts/usageAlertApi";
 
 export type Issue = components["schemas"]["Issue"];
 export type IssuePage = components["schemas"]["IssueList"];
@@ -54,14 +54,42 @@ export const primaryComparison = (issue: Issue) =>
   (issue.comparisons ?? []).find((comparison) => comparison.metric === PRIMARY_METRICS[issue.family]) ??
   issue.comparisons?.[0];
 
-export function issueComparisonText(issue: Issue): string {
-  if (issue.deprecation) return `Retirement · ${issue.deprecation.model.deprecation_date}`;
+const READABLE_METRICS = {
+  spend: "Spend on",
+  requests: "Requests to",
+  latency: "Response time for",
+  errors: "Errors for",
+  error_rate: "Error rate for",
+};
+
+export function issueHeadline(issue: Issue): string {
   const comparison = primaryComparison(issue);
-  if (!comparison) return "Comparison unavailable";
+  if (issue.deprecation || !comparison) return issue.title;
+  const { metric, observed_value: actual, baseline_value: baseline, direction } = comparison;
+  const label = issue.scope_label ?? issue.cohort.scope_id ?? "the gateway";
+  const subject = issue.cohort.scope_type === "provider" ? `${label} models` : label;
+  const prefix = `${READABLE_METRICS[metric]} ${subject}`;
+  if (baseline <= 0)
+    return `${prefix} rose from ${formatAlertValue(metric, baseline)} to ${formatAlertValue(metric, actual)}`;
+  if (direction === "decrease") {
+    const percent = ((1 - actual / baseline) * 100).toLocaleString(undefined, { maximumFractionDigits: 1 });
+    return `${prefix} fell ${percent}%`;
+  }
+  const ratio = (actual / baseline).toLocaleString(undefined, { maximumFractionDigits: 1 });
+  return `${prefix} rose to ${ratio}× normal`;
+}
+
+export function issueComparisonText(issue: Issue): string {
+  if (issue.deprecation) {
+    const { requests, model } = issue.deprecation;
+    const replacement = model.successor_model ? ` Suggested replacement: ${model.successor_model}.` : "";
+    return `${requests.toLocaleString()} recent requests.${replacement}`;
+  }
+  const comparison = primaryComparison(issue);
+  if (!comparison) return "Open the alert to review its recorded activity.";
   const actual = formatAlertValue(comparison.metric, comparison.observed_value);
   const baseline = formatAlertValue(comparison.metric, comparison.baseline_value);
-  if (comparison.baseline_value === 0) return `${actual} vs ${baseline}`;
-  return `${formatAlertChange(comparison)} · ${actual} vs ${baseline}`;
+  return `${actual} on ${issueDate(issue.observed_on)} UTC, compared with the usual ${baseline}.`;
 }
 
 export function issueImpactText(issue: Issue): string {

@@ -2,6 +2,8 @@ import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useQueryStates } from "nuqs";
 import { ArrowLeft, Copy } from "lucide-react";
+import { useCurrentUser } from "@/app/(dashboard)/hooks/currentUser/useCurrentUser";
+import { getProxyBaseUrl } from "@/components/networking";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { Button } from "@/components/ui/button";
 import AdvancedDatePicker from "@/components/shared/advanced_date_picker";
@@ -20,6 +22,7 @@ import {
   IssueStatus,
   issueDate,
   issueImpactText,
+  issueHeadline,
   issueResource,
   issuesHref,
   updateIssueStatus,
@@ -40,15 +43,18 @@ function resourceHref(issue: Issue): string | undefined {
 }
 
 function IssueStatusActions({ issue }: { issue: Issue }) {
-  const { isViewOnly } = useAuthorized();
+  const { isViewOnly, accessToken } = useAuthorized();
+  const { data: user } = useCurrentUser(accessToken);
   const client = useQueryClient();
   const mutation = useMutation({
     mutationFn: (status: IssueStatus) => updateIssueStatus(issue, status),
-    onSuccess: () =>
-      Promise.all([
+    onSuccess: (updated) => {
+      client.setQueryData(["issues", getProxyBaseUrl(), user?.user_id, user?.user_role, "detail", issue.id], updated);
+      return Promise.all([
         client.invalidateQueries({ queryKey: ["issues"] }),
         client.invalidateQueries({ queryKey: ["deprecationAlerts"] }),
-      ]),
+      ]);
+    },
   });
   const inactiveRetirement = issue.kind === "model_deprecation" && issue.active === false;
   if (isViewOnly || issue.can_update_status !== true) return null;
@@ -137,7 +143,7 @@ function IssueBody({ issue }: { issue: Issue }) {
     <div className="min-w-0 space-y-6">
       <header className="flex flex-col items-start gap-4 sm:flex-row sm:justify-between">
         <div className="w-full min-w-0 flex-1 space-y-2 sm:w-auto">
-          <h1 className="break-words text-xl font-semibold">{issue.title}</h1>
+          <h1 className="break-words text-xl font-semibold">{issueHeadline(issue)}</h1>
           <p className="break-all text-sm text-muted-foreground" title={issue.cohort.scope_id ?? "Gateway"}>
             {issueResource(issue)}
           </p>
