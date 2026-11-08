@@ -111,7 +111,6 @@ from litellm.types.llms.openai import (
     ResponseAPIUsage,
     ResponseCompactionItem,
     ResponseCompletedEvent,
-    ResponsesAPIOptionalRequestParams,
     ResponsesAPIResponse,
     ResponsesAPIStreamEvents,
     ResponsesAPIStreamingResponse,
@@ -296,8 +295,6 @@ _TOOL_OUTPUT_TEXT_PART_TYPES: Final = frozenset({"input_text", "output_text", "t
 _PATCHABLE_ITEM_FIELDS: Final[Mapping[str, str]] = MappingProxyType(
     {"function_call_output": "output", "custom_tool_call_output": "output", "message": "content"}
 )
-
-_EMPTY_RESPONSES_REQUEST: Final[ResponsesAPIOptionalRequestParams] = {}
 
 
 def _item_rewrite_field(item: Mapping[str, object]) -> str | None:
@@ -505,20 +502,22 @@ def _provenance_unit_bounds(
 def _input_item_provenance(
     raw_input: Sequence[object],
     expected_messages: Sequence[object],
+    request_tools: object = None,
 ) -> tuple[Mapping[int, int], frozenset[int]] | None:
     if not all(isinstance(item, Mapping) for item in raw_input):
         return None
+    request_params: Final = {"tools": request_tools}
     solo_conversions: Final = tuple(
         LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
             input=cast("ResponseInputParam", [item]),  # cast-ok: items checked as Mappings above
-            responses_api_request=_EMPTY_RESPONSES_REQUEST,
+            responses_api_request=request_params,
         )
         for item in raw_input
     )
     full_conversion: Final = tuple(
         LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
             input=cast("ResponseInputParam", list(raw_input)),  # cast-ok: items checked as Mappings above
-            responses_api_request=_EMPTY_RESPONSES_REQUEST,
+            responses_api_request=request_params,
         )
     )
     if full_conversion != tuple(expected_messages):
@@ -530,7 +529,7 @@ def _input_item_provenance(
         else tuple(
             LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
                 input=cast("ResponseInputParam", list(raw_input[start:end])),  # cast-ok: checked as Mappings above
-                responses_api_request=_EMPTY_RESPONSES_REQUEST,
+                responses_api_request=request_params,
             )
         )
         for start, end in units
@@ -688,11 +687,12 @@ def _patched_request_fields(
     instructions: object,
     original_messages: Sequence[object],
     structured_messages: Sequence[object],
+    request_tools: object = None,
 ) -> _RequestFields | None:
     if not isinstance(raw_input, list) or len(original_messages) != len(structured_messages):
         return None
     offset: Final = 1 if instructions else 0
-    provenance: Final = _input_item_provenance(raw_input, tuple(original_messages)[offset:])
+    provenance: Final = _input_item_provenance(raw_input, tuple(original_messages)[offset:], request_tools)
     if provenance is None:
         return None
     item_for_message, tainted = provenance
@@ -735,10 +735,13 @@ def _patch_or_convert_request_fields(
     instructions: object,
     original_messages: Sequence[object],
     structured_messages: Sequence[AllMessageValues],
+    request_tools: object = None,
 ) -> _RequestFields | None:
     if not isinstance(structured_messages, list):
         return None
-    patched: Final = _patched_request_fields(raw_input, instructions, original_messages, structured_messages)
+    patched: Final = _patched_request_fields(
+        raw_input, instructions, original_messages, structured_messages, request_tools
+    )
     if patched is not None:
         return patched
     input_items, converted_instructions = (
@@ -986,7 +989,7 @@ class OpenAIResponsesHandler(BaseTranslation):
             )
         )
         return _patch_or_convert_request_fields(
-            data.get("input"), data.get("instructions"), structured_messages, merged
+            data.get("input"), data.get("instructions"), structured_messages, merged, data.get("tools")
         )
 
     def extract_request_tool_names(self, data: Mapping[str, object]) -> list[str]:
