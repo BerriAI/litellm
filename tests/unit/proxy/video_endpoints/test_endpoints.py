@@ -38,7 +38,7 @@ import pytest
 
 import litellm.proxy.proxy_server as proxy_server
 import litellm.proxy.video_endpoints.endpoints as endpoints
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
@@ -226,7 +226,7 @@ def harness():
 
 
 def _user() -> UserAPIKeyAuth:
-    return UserAPIKeyAuth(api_key="sk-test")
+    return UserAPIKeyAuth(api_key="sk-test", user_role=LitellmUserRoles.PROXY_ADMIN)
 
 
 # =========================================================================== #

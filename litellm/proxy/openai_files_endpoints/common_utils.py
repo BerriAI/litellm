@@ -24,7 +24,7 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 from litellm.constants import MAX_FILE_LIST_LIMIT
 from litellm.litellm_core_utils.batch_utils import batch_cost_is_final
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
-from litellm.proxy._types import ProxyException
+from litellm.proxy._types import LitellmUserRoles, ProxyException
 from litellm.repositories.managed_file_repository import ManagedFileRepository
 from litellm.repositories.table_repositories import (
     ManagedObjectRepository,
@@ -823,6 +823,13 @@ async def handle_model_based_routing(
         data=data,
     )
 
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN and get_original_file_id(file_id).startswith(
+        ("gs://", "s3://")
+    ):
+        from fastapi import HTTPException
+
+        raise HTTPException(status_code=403, detail="Use a managed file id for this operation.")
+
     # Priority 1: Model embedded in file_id
     if check_file_id_encoding and model_from_id is not None:
         credentials = await get_authorized_credentials_for_model(
@@ -1210,6 +1217,7 @@ async def validate_managed_id_requirement(
     resource_kind: Literal["file", "batch", "fine-tuning job"],
     user_api_key_dict: "UserAPIKeyAuth",
     managed_files_obj: object | None,
+    require_owned_resource: bool = False,
 ) -> None:
     """
     Enforce proxy-level managed resources on every route that accepts a provider-issued id
@@ -1228,7 +1236,9 @@ async def validate_managed_id_requirement(
 
     import litellm
 
-    if litellm.require_managed_files is not True:
+    if litellm.require_managed_files is not True and (
+        not require_owned_resource or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
+    ):
         return
 
     if not resource_id:
@@ -1236,7 +1246,7 @@ async def validate_managed_id_requirement(
 
     if not is_base64_encoded_unified_file_id(resource_id):
         raise HTTPException(
-            status_code=400,
+            status_code=400 if litellm.require_managed_files is True else 403,
             detail=(
                 f"Raw provider {resource_kind} ids cannot be used when require_managed_files is enabled in "
                 f"litellm_settings. Use the LiteLLM managed {resource_kind} id returned when the "
@@ -1246,15 +1256,20 @@ async def validate_managed_id_requirement(
 
     if not isinstance(managed_files_obj, ManagedResourceAccessChecker):
         raise HTTPException(
-            status_code=500,
+            status_code=403 if require_owned_resource else 500,
             detail="Managed resource ownership validation is unavailable.",
         )
 
-    can_access: Final = (
-        await managed_files_obj.can_user_call_unified_file_id(resource_id, user_api_key_dict)
-        if resource_kind == "file"
-        else await managed_files_obj.can_user_call_unified_object_id(resource_id, user_api_key_dict)
-    )
+    try:
+        can_access: Final = (
+            await managed_files_obj.can_user_call_unified_file_id(resource_id, user_api_key_dict)
+            if resource_kind == "file"
+            else await managed_files_obj.can_user_call_unified_object_id(resource_id, user_api_key_dict)
+        )
+    except HTTPException as e:
+        if e.status_code != 404 or not require_owned_resource:
+            raise
+        raise HTTPException(status_code=403, detail="Managed resource is not available to this caller.") from e
     if can_access:
         return
 

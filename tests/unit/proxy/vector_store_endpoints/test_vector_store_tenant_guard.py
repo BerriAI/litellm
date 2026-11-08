@@ -6,7 +6,7 @@ import pytest
 from fastapi import HTTPException, Request, Response
 
 import litellm
-from litellm.proxy._types import LiteLLM_ManagedVectorStoresTable, UserAPIKeyAuth
+from litellm.proxy._types import LiteLLM_ManagedVectorStoresTable, LitellmUserRoles, UserAPIKeyAuth
 from litellm.types.utils import SpecialEnums
 from litellm.types.vector_store_files import (
     VectorStoreFileListResponse,
@@ -104,7 +104,7 @@ async def test_vector_store_file_create_forces_path_id_over_body_id():
             vector_store_id="vs_path_allowed",
             request=request,
             fastapi_response=Response(),
-            user_api_key_dict=UserAPIKeyAuth(team_id="team-a"),
+            user_api_key_dict=UserAPIKeyAuth(team_id="team-a", user_role=LitellmUserRoles.PROXY_ADMIN),
         )
 
     assert response == {"ok": True}

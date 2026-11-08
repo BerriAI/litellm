@@ -115,6 +115,35 @@ async def test_v1_models_lists_team_alias_next_to_its_target_in_both_shapes(rout
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("private_first", [False, True])
+async def test_shared_group_alias_metadata_matches_its_routable_deployment(
+    monkeypatch: pytest.MonkeyPatch, router: Router, private_first: bool
+) -> None:
+    shared = {
+        "model_name": "shared-group", "litellm_params": {"model": "openai/gpt-4o", "api_key": "test"},
+        "model_info": {"id": "shared", "max_input_tokens": 4096, "max_output_tokens": 512, "mode": "chat"},
+    }
+    private = {
+        "model_name": "shared-group", "litellm_params": {"model": "openai/gpt-4o", "api_key": "test"},
+        "model_info": {"id": "private", "team_id": "team-private", "max_input_tokens": 32768, "max_output_tokens": 8192},
+    }
+    scoped_router = Router(model_list=[private, shared] if private_first else [shared, private])
+    monkeypatch.setattr(proxy_server, "llm_router", scoped_router)
+    monkeypatch.setattr(proxy_server, "llm_model_list", scoped_router.model_list)
+    caller = UserAPIKeyAuth(
+        api_key="test", models=["shared-group"], team_id="team-shared",
+        team_model_aliases={"team-alias": "shared-group"},
+    )
+
+    listing = await proxy_server.model_list(user_api_key_dict=caller, request=None)
+    described = await proxy_server.model_info(model_id="team-alias", user_api_key_dict=caller)
+    listed = next(row for row in listing["data"] if row["id"] == "team-alias")
+
+    assert (listed["max_input_tokens"], listed["max_output_tokens"], listed["mode"]) == (4096, 512, "chat")
+    assert described == listed
+
+
+@pytest.mark.asyncio
 async def test_claude_code_picker_lists_the_alias_under_its_own_name(router: Router) -> None:
     caller = _team_member(team_model_aliases={"claude-sonnet-4-5": "gpt-4.1-mini"})
 

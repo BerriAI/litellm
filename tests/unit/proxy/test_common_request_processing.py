@@ -90,6 +90,7 @@ from litellm.proxy.hooks.model_max_budget_limiter import (
     team_member_budget_entity_id,
 )
 from litellm.proxy.utils import ProxyLogging
+from litellm.proxy.proxy_server import ProxyConfig as RequestProxyConfig
 from litellm.responses.mcp.parked_stream_dispatch import IN_FLIGHT_ROUND
 from litellm.router import Router
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
@@ -226,6 +227,20 @@ def test_include_guardrail_response_requested_is_false_without_exact_true():
 
 
 class TestProxyBaseLLMRequestProcessing:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("route_type", ["acompletion", "aembedding", "aimage_generation", "aspeech", "atranscription", "aresponses"])
+    async def test_model_routes_use_configured_provider_selection(self, route_type: str) -> None:
+        processing_obj = ProxyBaseLLMRequestProcessing(data={"model": "configured", "custom_llm_provider": "openai"})
+        router = Router(model_list=[{"model_name": "configured", "litellm_params": {"model": "openai/gpt-4o", "api_key": "test"}}])
+        request = Request({"type": "http", "method": "POST", "path": "/v1/chat/completions", "headers": [], "query_string": b""})
+        logging = ProxyLogging(user_api_key_cache=UserApiKeyCache())
+        with pytest.raises(HTTPException) as error:
+            await processing_obj.common_processing_pre_call_logic(
+                request=request, general_settings={}, user_api_key_dict=ProxyUserAPIKeyAuth(api_key="test"),
+                proxy_logging_obj=logging, proxy_config=RequestProxyConfig(), route_type=route_type, llm_router=router,
+            )
+        assert error.value.status_code == 403
+
     @pytest.mark.asyncio
     async def test_base_passthrough_process_llm_request_preserves_litellm_headers_for_non_streaming_response(
         self, monkeypatch

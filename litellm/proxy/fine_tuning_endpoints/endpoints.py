@@ -6,9 +6,12 @@
 ##########################################################################
 
 import asyncio
-from typing import Final, cast
+from collections.abc import Awaitable, Callable, Mapping, Sequence
+from types import MappingProxyType
+from typing import Final, Protocol, cast, runtime_checkable
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from pydantic import BaseModel, TypeAdapter
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -18,6 +21,7 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.openai_files_endpoints.common_utils import (  # noqa: F401  # legacy module exports
     _is_base64_encoded_unified_file_id,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    get_batch_id_from_unified_batch_id,
     is_base64_encoded_unified_file_id,
     validate_managed_id_requirement,
 )
@@ -29,6 +33,99 @@ router: Final = APIRouter()
 from litellm.types.llms.openai import LiteLLMFineTuningJobCreate
 
 fine_tuning_config = None
+
+
+@runtime_checkable
+class _FineTuningListAccess(Protocol):
+    async def owned_fine_tuning_job_ids(
+        self, ids: Sequence[str], user_api_key_dict: UserAPIKeyAuth
+    ) -> Mapping[str, str]: ...
+
+
+async def _provider_job_cursor(
+    after: str | None, user_api_key_dict: UserAPIKeyAuth, managed_files_obj: object
+) -> str | None:
+    if after is None or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
+        return after
+    await validate_managed_id_requirement(
+        resource_id=after,
+        resource_kind="fine-tuning job",
+        user_api_key_dict=user_api_key_dict,
+        managed_files_obj=managed_files_obj,
+        require_owned_resource=True,
+    )
+    decoded: Final = is_base64_encoded_unified_file_id(after)
+    return get_batch_id_from_unified_batch_id(decoded) if decoded else after
+
+
+async def _owned_jobs(response: object, user_api_key_dict: UserAPIKeyAuth, managed_files_obj: object) -> object:
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
+        return response
+    payload: Final = TypeAdapter(dict[str, object]).validate_python(
+        response.model_dump() if isinstance(response, BaseModel) else response
+    )
+    jobs: Final = TypeAdapter(tuple[dict[str, object], ...]).validate_python(payload.get("data", []))
+    ids: Final = tuple(job_id for job in jobs if isinstance(job_id := job.get("id"), str))
+    allowed: Final[Mapping[str, str]] = (
+        await managed_files_obj.owned_fine_tuning_job_ids(ids, user_api_key_dict)
+        if isinstance(managed_files_obj, _FineTuningListAccess)
+        else MappingProxyType({})
+    )
+    owned: Final = tuple(
+        {**job, "id": allowed[owned_id]}
+        for job in jobs
+        if isinstance(owned_id := job.get("id"), str) and owned_id in allowed
+    )
+    return {
+        **payload,
+        "data": list(owned),
+        **({"first_id": owned[0].get("id") if owned else None} if "first_id" in payload else {}),
+        **({"last_id": owned[-1].get("id") if owned else None} if "last_id" in payload else {}),
+    }
+
+
+class _OwnedJobPage(BaseModel, frozen=True):
+    response: Mapping[str, object]
+    next_cursor: str | None
+
+
+async def _owned_job_page(
+    response: object, user_api_key_dict: UserAPIKeyAuth, managed_files_obj: object
+) -> _OwnedJobPage:
+    source: Final = TypeAdapter(dict[str, object]).validate_python(
+        response.model_dump() if isinstance(response, BaseModel) else response
+    )
+    owned: Final = TypeAdapter(dict[str, object]).validate_python(
+        await _owned_jobs(source, user_api_key_dict, managed_files_obj)
+    )
+    if owned.get("data") or not source.get("has_more"):
+        return _OwnedJobPage(response=owned, next_cursor=None)
+    jobs: Final = TypeAdapter(tuple[dict[str, object], ...]).validate_python(source.get("data", []))
+    cursor: Final = jobs[-1].get("id") if jobs else None
+    return _OwnedJobPage(
+        response=owned if isinstance(cursor, str) else {**owned, "has_more": False},
+        next_cursor=cursor if isinstance(cursor, str) else None,
+    )
+
+
+async def _owned_job_pages(
+    response: object,
+    next_page: Callable[[str | None], Awaitable[object]],
+    user_api_key_dict: UserAPIKeyAuth,
+    managed_files_obj: object,
+) -> object:
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
+        return response
+    state: tuple[str | None, _OwnedJobPage] = (  # rebind-ok: advance through provider pages without recursion
+        None,
+        await _owned_job_page(response, user_api_key_dict, managed_files_obj),
+    )
+    while state[1].next_cursor is not None and state[1].next_cursor != state[0]:
+        state = (
+            state[1].next_cursor,
+            await _owned_job_page(await next_page(state[1].next_cursor), user_api_key_dict, managed_files_obj),
+        )
+    return {**state[1].response, "has_more": False} if state[1].next_cursor is not None else state[1].response
 
 
 def set_fine_tuning_config(config):
@@ -142,12 +239,14 @@ async def create_fine_tuning_job(
             resource_kind="file",
             user_api_key_dict=user_api_key_dict,
             managed_files_obj=proxy_logging_obj.get_proxy_hook("managed_files"),
+            require_owned_resource=True,
         )
         await validate_managed_id_requirement(
             resource_id=fine_tuning_request.validation_file,
             resource_kind="file",
             user_api_key_dict=user_api_key_dict,
             managed_files_obj=proxy_logging_obj.get_proxy_hook("managed_files"),
+            require_owned_resource=True,
         )
         response: LiteLLMFineTuningJob | None = None
         if training_file:
@@ -269,6 +368,7 @@ async def retrieve_fine_tuning_job(
             resource_kind="fine-tuning job",
             user_api_key_dict=user_api_key_dict,
             managed_files_obj=proxy_logging_obj.get_proxy_hook("managed_files"),
+            require_owned_resource=True,
         )
         # Include original request and headers in the data
         base_llm_response_processor: Final = ProxyBaseLLMRequestProcessing(data=data)
@@ -433,6 +533,13 @@ async def list_fine_tuning_jobs(
             route_type=CallTypes.alist_fine_tuning_jobs.value,
         )
 
+        provider_after: Final = await _provider_job_cursor(
+            after, user_api_key_dict, proxy_logging_obj.get_proxy_hook("managed_files")
+        )
+
+        async def provider_page(cursor: str | None) -> object:
+            return await litellm.alist_fine_tuning_jobs(**data, after=cursor, limit=limit)
+
         response: object = None
         if target_model_names and isinstance(target_model_names, str):
             target_model_names_list: Final = target_model_names.split(",")
@@ -448,12 +555,15 @@ async def list_fine_tuning_jobs(
                     detail="LLM Router not initialized. Ensure models added to proxy.",
                 )
             data["model"] = target_model_names_list[0]
-            response = await llm_router.alist_fine_tuning_jobs(
-                **data,
-                after=after,
-                limit=limit,
+            job_router: Final = llm_router
+
+            async def router_page(cursor: str | None) -> object:
+                return await job_router.alist_fine_tuning_jobs(**data, after=cursor, limit=limit)
+
+            response = await router_page(provider_after)
+            return await _owned_job_pages(
+                response, router_page, user_api_key_dict, proxy_logging_obj.get_proxy_hook("managed_files")
             )
-            return response
         elif custom_llm_provider:
             # get configs for custom_llm_provider
             llm_provider_config: Final = get_fine_tuning_provider_config(custom_llm_provider=custom_llm_provider)
@@ -461,11 +571,7 @@ async def list_fine_tuning_jobs(
             if llm_provider_config is not None:
                 data.update(llm_provider_config)
 
-            response = await litellm.alist_fine_tuning_jobs(
-                **data,
-                after=after,
-                limit=limit,
-            )
+            response = await provider_page(provider_after)
         if response is None:
             raise HTTPException(
                 status_code=400,
@@ -489,7 +595,9 @@ async def list_fine_tuning_jobs(
             )
         )
 
-        return response
+        return await _owned_job_pages(
+            response, provider_page, user_api_key_dict, proxy_logging_obj.get_proxy_hook("managed_files")
+        )
 
     except Exception as e:
         await proxy_logging_obj.post_call_failure_hook(
@@ -544,6 +652,7 @@ async def cancel_fine_tuning_job(
             resource_kind="fine-tuning job",
             user_api_key_dict=user_api_key_dict,
             managed_files_obj=proxy_logging_obj.get_proxy_hook("managed_files"),
+            require_owned_resource=True,
         )
         # Include original request and headers in the data
         base_llm_response_processor: Final = ProxyBaseLLMRequestProcessing(data=data)

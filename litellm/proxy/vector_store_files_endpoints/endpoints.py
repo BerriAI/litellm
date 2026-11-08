@@ -8,7 +8,7 @@ from fastapi.responses import ORJSONResponse
 
 import litellm
 from litellm.llms.base_llm.managed_resources.utils import is_base64_encoded_unified_id
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.common_utils.openai_endpoint_utils import (
@@ -108,8 +108,19 @@ async def _with_managed_file_list_ids(
     user_api_key_dict: UserAPIKeyAuth,
 ) -> VectorStoreFileListResponse:
     data: Final = response.get("data")
-    if not data or not isinstance(managed_files_obj, ManagedFileIdResolver):
+    if not data:
         return response
+    if not isinstance(managed_files_obj, ManagedFileIdResolver):
+        return (
+            response
+            if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
+            else {
+                **response,
+                "data": [],
+                "first_id": None,
+                "last_id": None,
+            }
+        )
 
     provider_file_ids: Final = tuple(
         dict.fromkeys(provider_file_id for file in data if isinstance(provider_file_id := file.get("id"), str))
@@ -125,7 +136,18 @@ async def _with_managed_file_list_ids(
             if _provider_file_id_from_managed_id(managed_file_id) == provider_file_id
         }
     )
-    return _with_managed_file_ids(response, round_trippable_id_map)
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
+        return _with_managed_file_ids(response, round_trippable_id_map)
+    owned: Final = tuple(file for file in data if file.get("id") in round_trippable_id_map)
+    return _with_managed_file_ids(
+        {
+            **response,
+            "data": list(owned),
+            "first_id": owned[0].get("id") if owned else None,
+            "last_id": owned[-1].get("id") if owned else None,
+        },
+        round_trippable_id_map,
+    )
 
 
 async def _update_request_data_with_managed_file_id(
@@ -171,6 +193,7 @@ async def _update_request_data_with_managed_file_id(
         resource_kind="file",
         user_api_key_dict=user_api_key_dict,
         managed_files_obj=managed_files_obj,
+        require_owned_resource=True,
     )
 
     # First, check if this is a unified managed file ID (base64 encoded)

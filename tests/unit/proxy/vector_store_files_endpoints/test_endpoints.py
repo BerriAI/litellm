@@ -122,13 +122,12 @@ async def _resolve(
     ],
 )
 @pytest.mark.asyncio
-async def test_vector_store_file_list_maps_owned_ids_and_preserves_raw_ids(
+async def test_vector_store_file_list_only_returns_owned_ids(
     provider_ids: tuple[str, str],
 ) -> None:
     managed_file_id: Final = _unified_file_id()
     expected_provider_ids: Final = tuple(
-        managed_file_id if provider_file_id == RAW_FILE_ID else provider_file_id
-        for provider_file_id in provider_ids
+        managed_file_id for provider_file_id in provider_ids if provider_file_id == RAW_FILE_ID
     )
     provider_response: Final[VectorStoreFileListResponse] = {
         "object": "list",
@@ -157,7 +156,7 @@ async def test_vector_store_file_list_maps_owned_ids_and_preserves_raw_ids(
             for provider_file_id in expected_provider_ids
         ],
         "first_id": expected_provider_ids[0],
-        "last_id": expected_provider_ids[1],
+        "last_id": expected_provider_ids[-1],
         "has_more": True,
     }
     assert response == expected_response
@@ -199,10 +198,9 @@ async def test_vector_store_file_list_only_maps_round_trippable_ids() -> None:
         "object": "list",
         "data": [
             _vector_store_file_row(managed_file_id),
-            _vector_store_file_row("file-model-b"),
         ],
         "first_id": managed_file_id,
-        "last_id": "file-model-b",
+        "last_id": managed_file_id,
         "has_more": False,
     }
     assert response == expected_response
@@ -261,7 +259,7 @@ async def test_forged_unified_file_id_rejected_without_ownership_record():
                 llm_router=None,
             )
 
-    assert exc.value.status_code == 404
+    assert exc.value.status_code == 403
     assert data["file_id"] == forged_id
 
 
@@ -284,9 +282,9 @@ async def test_owned_unified_file_id_allowed_when_managed_files_required():
 
 
 @pytest.mark.asyncio
-async def test_raw_file_id_allowed_when_managed_files_not_required():
+async def test_raw_file_id_rejected_in_default_mode():
     with patch.object(litellm, "require_managed_files", False):
-        data, original = await _resolve(RAW_FILE_ID)
+        with pytest.raises(HTTPException) as exc:
+            await _resolve(RAW_FILE_ID)
 
-    assert original is None
-    assert data["file_id"] == RAW_FILE_ID
+    assert exc.value.status_code == 403

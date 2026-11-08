@@ -1513,6 +1513,8 @@ class TestVideoEndpointsProxyLitellmParams:
             initialize,
             router,
         )
+        from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
         from litellm.proxy.video_endpoints.endpoints import router as video_router
 
         # Clean up any existing router config
@@ -1544,6 +1546,7 @@ class TestVideoEndpointsProxyLitellmParams:
             asyncio.run(initialize(config=config_fp, debug=True))
             app.include_router(router)
             app.include_router(video_router)
+            app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
 
             return TestClient(app)
         finally:
@@ -2228,11 +2231,12 @@ def video_proxy_test_client():
     from fastapi.testclient import TestClient
 
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
     from litellm.proxy.video_endpoints.endpoints import router as video_router
 
     app = FastAPI()
     app.include_router(video_router)
-    app.dependency_overrides[user_api_key_auth] = lambda: MagicMock()
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
     return TestClient(app)
 
 
@@ -2428,7 +2432,7 @@ async def test_edit_and_extension_read_cached_body_after_auth_consumes_stream(
     from starlette.requests import Request
 
     import litellm.proxy.video_endpoints.endpoints as endpoints
-    from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+    from litellm.proxy._types import LitellmUserRoles, ProxyException, UserAPIKeyAuth
     from litellm.proxy.common_utils.http_parsing_utils import read_request_body
 
     body = urlencode(form).encode()
@@ -2461,7 +2465,7 @@ async def test_edit_and_extension_read_cached_body_after_auth_consumes_stream(
         await handler(
             request=request,
             fastapi_response=Response(),
-            user_api_key_dict=UserAPIKeyAuth(api_key="sk-9876"),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-9876", user_role=LitellmUserRoles.PROXY_ADMIN),
         )
 
     message = str(exc_info.value)

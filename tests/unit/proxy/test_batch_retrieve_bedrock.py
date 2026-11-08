@@ -22,7 +22,7 @@ from fastapi.testclient import TestClient
 
 import litellm
 from litellm.caching.caching import DualCache
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.openai_files_endpoints.common_utils import (
     encode_file_id_with_model,
@@ -175,7 +175,7 @@ def test_file_content_routes_to_bedrock_for_encoded_output_file_id(
     """
     _setup_proxy(monkeypatch, bedrock_router)
 
-    user_key = UserAPIKeyAuth(api_key="test-key")
+    user_key = UserAPIKeyAuth(api_key="test-key", user_role=LitellmUserRoles.PROXY_ADMIN)
     app.dependency_overrides[user_api_key_auth] = lambda: user_key
 
     encoded_file_id = encode_file_id_with_model(

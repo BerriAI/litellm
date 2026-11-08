@@ -12,6 +12,7 @@ seam stayed untouched, so a guard that raises after the provider call would stil
 
 import base64
 from contextlib import ExitStack
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -21,12 +22,12 @@ import pytest
 import respx
 
 
-from fastapi import Response
+from fastapi import HTTPException, Response
 
 import litellm
 import litellm.proxy.fine_tuning_endpoints.endpoints as endpoints
 import litellm.proxy.proxy_server as proxy_server
-from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+from litellm.proxy._types import LitellmUserRoles, ProxyException, UserAPIKeyAuth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
@@ -233,10 +234,9 @@ MANAGED_VALIDATION_FILE_ID: Final = _unified_file_id("validation-unified-id", "f
     ("validation_file", "provider_validation_file", "expected_validation_file"),
     [
         (None, None, None),
-        (RAW_FILE_ID, RAW_FILE_ID, RAW_FILE_ID),
         (MANAGED_VALIDATION_FILE_ID, "file-provider-validation", MANAGED_VALIDATION_FILE_ID),
     ],
-    ids=["no-validation-file", "raw-validation-file", "managed-validation-file"],
+    ids=["no-validation-file", "managed-validation-file"],
 )
 async def test_create__managed_job_returns_the_callers_file_ids(
     seams, validation_file: str | None, provider_validation_file: str | None, expected_validation_file: str | None
@@ -263,11 +263,13 @@ async def test_create__other_teams_unified_training_file_rejected(seams):
 
 
 @pytest.mark.asyncio
-async def test_create__raw_training_file_allowed_when_managed_files_not_required(seams):
+async def test_create__raw_training_file_rejected_in_default_mode(seams):
     with patch.object(litellm, "require_managed_files", False):
-        await _create(RAW_FILE_ID)
+        with pytest.raises(ProxyException) as exc:
+            await _create(RAW_FILE_ID)
 
-    assert seams.litellm_calls["acreate_fine_tuning_job"].call_count == 1
+    assert exc.value.code == "403"
+    seams.assert_no_provider_call()
 
 
 @pytest.mark.asyncio
@@ -375,5 +377,75 @@ async def test_list__returns_the_jobs_the_configured_provider_lists(seams):
     with patch.object(endpoints, "fine_tuning_config", [provider_config]):
         page: Final = await _list(custom_llm_provider="openai")
 
-    assert [job.id for job in page.data] == [RAW_JOB_ID]
-    assert page.has_more is False
+    assert page["data"] == []
+    assert page["has_more"] is False
+
+
+@dataclass(frozen=True)
+class _OwnedJobIds:
+    ids: Mapping[str, str]
+
+    async def owned_fine_tuning_job_ids(
+        self, ids: Sequence[str], user_api_key_dict: UserAPIKeyAuth
+    ) -> Mapping[str, str]:
+        return self.ids
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("owned", [True, False])
+async def test_owned_job_pages_use_managed_ids(owned: bool) -> None:
+    managed_id: Final = _unified_job_id()
+    job: Final = _job().model_dump()
+    page: Final = {"object": "list", "data": [job], "has_more": False}
+    result: Final = await endpoints._owned_jobs(
+        page, UserAPIKeyAuth(api_key="test"), _OwnedJobIds({RAW_JOB_ID: managed_id} if owned else {}),
+    )
+    assert result == {**page, "data": [{**job, "id": managed_id}] if owned else []}
+
+
+@pytest.mark.asyncio
+async def test_admin_job_pages_preserve_provider_response() -> None:
+    page: Final = {"object": "list", "data": [_job()], "has_more": False}
+    assert await endpoints._owned_jobs(page, UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN), None) is page
+
+
+@pytest.mark.asyncio
+async def test_owned_job_cursor_resolves_to_provider_id() -> None:
+    assert await endpoints._provider_job_cursor(
+        _unified_job_id(), UserAPIKeyAuth(api_key="test"), ManagedResourceAccessCheckerStub()
+    ) == RAW_JOB_ID
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cursor", [None, RAW_JOB_ID])
+async def test_admin_job_cursor_keeps_provider_value(cursor: str | None) -> None:
+    assert await endpoints._provider_job_cursor(
+        cursor, UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN), None
+    ) == cursor
+
+
+@pytest.mark.asyncio
+async def test_job_cursor_requires_a_managed_reference() -> None:
+    with pytest.raises(HTTPException) as exc:
+        await endpoints._provider_job_cursor(RAW_JOB_ID, UserAPIKeyAuth(api_key="test"), None)
+    assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_job_listing_continues_until_an_owned_page(seams) -> None:
+    job: Final = _job().model_dump()
+    respx.get(f"{FINE_TUNING_API_BASE}/fine_tuning/jobs").mock(
+        side_effect=[
+            httpx.Response(200, json={"data": [{**job, "id": "ftjob-older"}], "has_more": True}),
+            httpx.Response(200, json={"data": [job], "has_more": False}),
+        ]
+    )
+    seams.logging.get_proxy_hook.return_value = _OwnedJobIds({RAW_JOB_ID: _unified_job_id()})
+    provider_config: Final = {
+        "custom_llm_provider": "openai", "api_key": "sk-provider", "api_base": FINE_TUNING_API_BASE
+    }
+    with patch.object(endpoints, "fine_tuning_config", [provider_config]):
+        page: Final = await _list(custom_llm_provider="openai")
+    assert page["data"] == [{**job, "id": _unified_job_id()}]
+    assert page["has_more"] is False

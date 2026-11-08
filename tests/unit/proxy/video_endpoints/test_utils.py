@@ -15,18 +15,26 @@ are checked by the genuine decode round-trip.
 """
 
 from typing import Final
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from fastapi import HTTPException
+from litellm.caching.caching import DualCache
+from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm_enterprise.proxy.hooks.managed_files import _PROXY_LiteLLMManagedFiles
 
 
 from litellm.router import Router
 from litellm.types.videos.main import DecodedVideoId
 from litellm.proxy.video_endpoints.utils import (
+    authorize_video_reference,
     encode_character_id_in_response,
     encode_video_id_in_response,
     extract_model_from_target_model_names,
     fallback_requested_model,
     get_custom_provider_from_data,
+    record_video_ownership,
     routable_model_name,
     video_model_group,
     video_reference_to_id,
@@ -591,3 +599,47 @@ def test_fallback_requested_model__is_none_for_a_create_a_provider_wildcard_serv
 
 def test_video_model_group__is_none_without_a_router() -> None:
     assert video_model_group(_decoded("sora-2", "dep-sora-shared"), None) is None
+
+
+@pytest.mark.asyncio
+async def test_video_creation_records_creator_and_allows_its_follow_up() -> None:
+    caller: Final = UserAPIKeyAuth(api_key="test", user_id="user-one", team_id="team-one", org_id="org-one", models=["video-group"])
+    video: Final = _video(encode_video_id_with_provider("video-one", "openai", "video-group"))
+    prisma: Final = MagicMock()
+    table: Final = prisma.db.litellm_managedobjecttable
+    table.upsert = AsyncMock()
+    table.find_first = AsyncMock(return_value=SimpleNamespace(created_by="user-one", team_id="team-one"))
+    store: Final = _PROXY_LiteLLMManagedFiles(internal_usage_cache=DualCache(), prisma_client=prisma)
+
+    result: Final = await record_video_ownership(video, store, caller)
+    await authorize_video_reference(
+        video.id, decode_video_id_with_provider(video.id), "openai", _router_with_groups("video-group"), store, caller,
+    )
+
+    created: Final = table.upsert.await_args.kwargs["data"]["create"]
+    assert (created["unified_object_id"], created["model_object_id"], created["file_purpose"]) == (video.id, "video-one", "video")
+    assert (created["created_by"], created["team_id"], created["api_key"]) == ("user-one", "team-one", "test")
+    assert result is video
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("store_available", [False, True])
+async def test_video_without_a_saved_owner_is_unavailable(store_available: bool) -> None:
+    prisma: Final = MagicMock()
+    prisma.db.litellm_managedobjecttable.find_first = AsyncMock(return_value=None)
+    store: Final = _PROXY_LiteLLMManagedFiles(internal_usage_cache=DualCache(), prisma_client=prisma) if store_available else None
+    video_id: Final = encode_video_id_with_provider("video-one", "openai", "video-group")
+    with pytest.raises(HTTPException) as error:
+        await authorize_video_reference(
+            video_id, decode_video_id_with_provider(video_id), "openai", _router_with_groups("video-group"),
+            store, UserAPIKeyAuth(api_key="test", models=["video-group"]),
+        )
+    assert error.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_admin_can_follow_a_legacy_video_without_a_store() -> None:
+    assert await authorize_video_reference(
+        "video-one", decode_video_id_with_provider("video-one"), "openai", None, None,
+        UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+    ) is None
