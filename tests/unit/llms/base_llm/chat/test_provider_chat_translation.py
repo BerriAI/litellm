@@ -820,6 +820,161 @@ def test_drop_params_drops_a_malformed_developer_cache_control(
     assert _request_body(route)["system"] == unmarked_system
 
 
+def _user_message_with_marked_parts(marks: int) -> dict[str, JsonValue]:
+    return {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": f"Question part {part}.", "cache_control": {"type": "ephemeral"}}
+            for part in range(marks)
+        ],
+    }
+
+
+_ANTHROPIC_SYSTEMS: Final = pytest.param(
+    _BY_ID["anthropic_sonnet45"],
+    [{"type": "text", "text": "Be a good bot!", "cache_control": {"type": "ephemeral"}}],
+    [{"type": "text", "text": "Be a good bot!"}],
+    id="anthropic_sonnet45",
+)
+_BEDROCK_CONVERSE_SYSTEMS: Final = pytest.param(
+    _BY_ID["bedrock_converse_haiku"],
+    [{"text": "Be a good bot!"}, {"cachePoint": {"type": "default"}}],
+    [{"text": "Be a good bot!"}],
+    id="bedrock_converse_haiku",
+)
+
+
+@pytest.mark.parametrize(
+    ("case", "marked_system", "unmarked_system"), [_ANTHROPIC_SYSTEMS, _BEDROCK_CONVERSE_SYSTEMS]
+)
+@pytest.mark.parametrize(("user_marks", "keeps_developer_mark"), [(3, True), (4, False)], ids=["at_limit", "over_limit"])
+def test_a_developer_cache_control_is_kept_only_within_the_four_mark_limit(
+    case: _Case,
+    marked_system: list[JsonValue],
+    unmarked_system: list[JsonValue],
+    user_marks: int,
+    keeps_developer_mark: bool,
+    respx_mock: MockRouter,
+) -> None:
+    route: Final = _register(case, respx_mock, f"canned-{case['id']}")
+    _complete(
+        case,
+        {
+            "messages": [
+                {"role": "developer", "content": "Be a good bot!", "cache_control": {"type": "ephemeral"}},
+                _user_message_with_marked_parts(user_marks),
+            ],
+        },
+    )
+    assert _request_body(route)["system"] == (marked_system if keeps_developer_mark else unmarked_system)
+
+
+_WEATHER_TOOL: Final[Mapping[str, JsonValue]] = {
+    "type": "function",
+    "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {}}},
+}
+
+
+@pytest.mark.parametrize(
+    ("case", "marked_system", "unmarked_system"), [_ANTHROPIC_SYSTEMS, _BEDROCK_CONVERSE_SYSTEMS]
+)
+@pytest.mark.parametrize(
+    ("user_marks", "developer_mark", "tool_mark", "keeps_developer_mark"),
+    [
+        (2, {"type": "ephemeral"}, {"type": "ephemeral"}, True),
+        (3, {"type": "ephemeral"}, {"type": "ephemeral"}, False),
+        (0, {"type": "ephemeral"}, {"type": "ephemeral", "ttl": "5m"}, True),
+        (0, {"type": "ephemeral", "ttl": "1h"}, {"type": "ephemeral", "ttl": "5m"}, False),
+    ],
+    ids=["tool_mark_at_limit", "tool_mark_over_limit", "same_default_ttl", "one_hour_after_five_minutes"],
+)
+def test_a_developer_cache_control_counts_tool_marks_and_their_ttl(
+    case: _Case,
+    marked_system: list[JsonValue],
+    unmarked_system: list[JsonValue],
+    user_marks: int,
+    developer_mark: dict[str, JsonValue],
+    tool_mark: dict[str, JsonValue],
+    keeps_developer_mark: bool,
+    respx_mock: MockRouter,
+) -> None:
+    route: Final = _register(case, respx_mock, f"canned-{case['id']}")
+    _complete(
+        case,
+        {
+            "messages": [
+                {"role": "developer", "content": "Be a good bot!", "cache_control": developer_mark},
+                _user_message_with_marked_parts(user_marks) if user_marks else {"role": "user", "content": "Hi"},
+            ],
+            "tools": [{**_WEATHER_TOOL, "cache_control": tool_mark}],
+        },
+    )
+    assert _request_body(route)["system"] == (marked_system if keeps_developer_mark else unmarked_system)
+
+
+@pytest.mark.parametrize(
+    ("case", "marked_system", "unmarked_system"), [_ANTHROPIC_SYSTEMS, _BEDROCK_CONVERSE_SYSTEMS]
+)
+@pytest.mark.parametrize(
+    ("developer_mark", "keeps_developer_mark"),
+    [({"type": "ephemeral"}, True), ({"type": "ephemeral", "ttl": "1h"}, False)],
+    ids=["same_ttl_as_the_tool_config_point", "one_hour_after_the_tool_config_point"],
+)
+def test_a_developer_cache_control_counts_the_tool_config_injection_point(
+    case: _Case,
+    marked_system: list[JsonValue],
+    unmarked_system: list[JsonValue],
+    developer_mark: dict[str, JsonValue],
+    keeps_developer_mark: bool,
+    respx_mock: MockRouter,
+) -> None:
+    route: Final = _register(case, respx_mock, f"canned-{case['id']}")
+    _complete(
+        case,
+        {
+            "messages": [
+                {"role": "developer", "content": "Be a good bot!", "cache_control": developer_mark},
+                {"role": "user", "content": "Hi"},
+            ],
+            "tools": [dict(_WEATHER_TOOL)],
+            "cache_control_injection_points": [{"location": "tool_config"}],
+        },
+    )
+    assert _request_body(route)["system"] == (marked_system if keeps_developer_mark else unmarked_system)
+
+
+@pytest.mark.parametrize(("case", "marked_system", "unmarked_system"), [_ANTHROPIC_SYSTEMS])
+@pytest.mark.parametrize(
+    ("request_fields", "keeps_developer_mark"),
+    [
+        ({"cache_control": {"type": "ephemeral"}}, False),
+        ({"extra_body": {"cache_control": {"type": "ephemeral"}}}, False),
+        ({}, True),
+    ],
+    ids=["top_level_cache_control", "extra_body_cache_control", "no_outside_mark"],
+)
+def test_a_developer_cache_control_counts_marks_outside_messages_and_tools(
+    case: _Case,
+    marked_system: list[JsonValue],
+    unmarked_system: list[JsonValue],
+    request_fields: dict[str, JsonValue],
+    keeps_developer_mark: bool,
+    respx_mock: MockRouter,
+) -> None:
+    route: Final = _register(case, respx_mock, f"canned-{case['id']}")
+    _complete(
+        case,
+        {
+            "messages": [
+                {"role": "developer", "content": "Be a good bot!", "cache_control": {"type": "ephemeral"}},
+                _user_message_with_marked_parts(3),
+            ],
+            **request_fields,
+        },
+    )
+    assert _request_body(route)["system"] == (marked_system if keeps_developer_mark else unmarked_system)
+
+
 @pytest.mark.parametrize(
     "case",
     _pick(

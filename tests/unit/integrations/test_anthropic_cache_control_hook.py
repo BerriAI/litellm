@@ -6012,6 +6012,73 @@ def test_developer_prompts_only_take_the_breakpoints_configured_points_leave_ove
     assert _count_converse_cache_points(sent) == 4
 
 
+_WEATHER_TOOL: Final = MappingProxyType(
+    {
+        "type": "function",
+        "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {}}},
+    }
+)
+_ONE_HOUR: Final = MappingProxyType({"type": "ephemeral", "ttl": "1h"})
+
+
+@pytest.mark.parametrize(
+    ("question_mark", "tool_mark", "other_points", "point_control", "caches_the_developer_prompt"),
+    [
+        pytest.param({"type": "ephemeral"}, None, (), None, True, id="same_ttl"),
+        pytest.param(dict(_ONE_HOUR), None, (), None, False, id="one_hour_question_after_the_prompt"),
+        pytest.param(
+            None,
+            {"type": "ephemeral", "ttl": "5m"},
+            (),
+            dict(_ONE_HOUR),
+            False,
+            id="one_hour_prompt_after_a_five_minute_tool",
+        ),
+        pytest.param(
+            None,
+            None,
+            ({"location": "tool_config"},),
+            dict(_ONE_HOUR),
+            False,
+            id="one_hour_prompt_after_the_tool_config_point",
+        ),
+    ],
+)
+def test_system_injection_point_leaves_a_developer_prompt_unmarked_when_its_mark_would_mix_ttls(
+    question_mark: dict[str, str] | None,
+    tool_mark: dict[str, str] | None,
+    other_points: tuple[dict[str, str], ...],
+    point_control: dict[str, str] | None,
+    caches_the_developer_prompt: bool,
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = _converse_route(respx_mock)
+    question_part: Final = {"type": "text", "text": "Which rule covers backups?"}
+
+    litellm.completion(
+        model=_CLAUDE_ON_CONVERSE,
+        messages=[
+            {"role": "developer", "content": [{"type": "text", "text": _DEVELOPER_PREFIX}]},
+            {
+                "role": "user",
+                "content": [question_part if question_mark is None else {**question_part, "cache_control": question_mark}],
+            },
+        ],
+        tools=[dict(_WEATHER_TOOL) if tool_mark is None else {**_WEATHER_TOOL, "cache_control": tool_mark}],
+        cache_control_injection_points=[
+            *other_points,
+            {"location": "message", "role": "system", "control": point_control},
+        ],
+        **_OFFLINE_AWS_CREDENTIALS,
+    )
+
+    assert _sent_converse_body(route).system == (
+        ({"text": _DEVELOPER_PREFIX}, {"cachePoint": {"type": "default"}})
+        if caches_the_developer_prompt
+        else ({"text": _DEVELOPER_PREFIX},)
+    )
+
+
 def test_system_injection_point_marks_a_developer_prompt_for_openai_prompt_cache_breakpoints(
     respx_mock: respx.MockRouter,
 ) -> None:

@@ -5775,6 +5775,7 @@ def completion(
     from litellm.integrations.anthropic_cache_control_hook import (
         AnthropicCacheControlHook,
         developer_message_with_valid_cache_control,
+        developer_messages_within_the_cache_limits,
         routed_model_info,
     )
     from litellm.types.llms.openai import AllMessageValues
@@ -5970,12 +5971,26 @@ def completion(
             typed_messages: Final = cast(  # cast-ok: completion types messages as a bare List
                 list[AllMessageValues], messages
             )
+            checked_messages: Final = (
+                [developer_message_with_valid_cache_control(message) for message in typed_messages]
+                if drop_unsupported_params
+                else typed_messages
+            )
+            typed_tools: Final = cast(list[object] | None, tools)  # cast-ok: completion types tools as a bare List
             translated_messages: Final = list(
                 provider_config.translate_developer_role_to_system_role(
-                    messages=(
-                        [developer_message_with_valid_cache_control(message) for message in typed_messages]
-                        if drop_unsupported_params
-                        else typed_messages
+                    messages=developer_messages_within_the_cache_limits(
+                        checked_messages,
+                        MappingProxyType(
+                            {
+                                "tools": typed_tools,
+                                "cache_control": non_default_params.get("cache_control"),
+                                "extra_body": non_default_params.get("extra_body"),
+                                "cache_control_injection_points": non_default_params.get(
+                                    "cache_control_injection_points"
+                                ),
+                            }
+                        ),
                     ),
                     model=model,
                     custom_llm_provider=custom_llm_provider,
