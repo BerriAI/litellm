@@ -2,10 +2,13 @@
 
 pub mod access;
 pub mod admission;
+pub mod budget_pricing;
+pub mod common_budgets;
 pub mod credential;
 mod error;
 mod key;
 pub mod managed;
+pub mod model_budget_data;
 mod model_budgets;
 pub mod protocol;
 

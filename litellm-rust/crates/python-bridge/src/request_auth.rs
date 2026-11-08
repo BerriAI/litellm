@@ -33,6 +33,97 @@ pub(crate) fn request_auth_access(py: Python<'_>, facts: &Bound<'_, PyAny>) -> P
     to_py(py, &py.detach(move || core::access::decide(facts)))
 }
 
+#[pyfunction]
+pub(crate) fn request_auth_budget_window_start(
+    py: Python<'_>,
+    facts: &Bound<'_, PyAny>,
+) -> PyResult<Option<f64>> {
+    let facts: core::common_budgets::WindowFacts = from_py(facts)?;
+    Ok(py.detach(move || core::common_budgets::window_start(&facts)))
+}
+
+#[pyfunction]
+pub(crate) fn request_auth_model_budget_resolve(
+    py: Python<'_>,
+    facts: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    let facts: core::model_budget_data::ResolveFacts = from_py(facts)?;
+    to_py(
+        py,
+        &py.detach(move || core::model_budget_data::resolve(&facts)),
+    )
+}
+
+#[pyfunction]
+pub(crate) fn request_auth_model_budget_query(
+    py: Python<'_>,
+    facts: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    let facts: core::model_budget_data::QueryFacts = from_py(facts)?;
+    to_py(
+        py,
+        &py.detach(move || core::model_budget_data::query(&facts)),
+    )
+}
+
+#[pyfunction]
+pub(crate) fn request_auth_model_budget_check(
+    py: Python<'_>,
+    facts: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    let facts: core::model_budget_data::Snapshot = from_py(facts)?;
+    to_py(
+        py,
+        &py.detach(move || core::model_budget_data::check(&facts)),
+    )
+}
+
+#[pyfunction]
+pub(crate) fn request_auth_budget_price(
+    py: Python<'_>,
+    facts: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    let facts: core::budget_pricing::ModelPriceFacts = from_py(facts)?;
+    to_py(py, &py.detach(move || core::budget_pricing::price(&facts)))
+}
+
+#[pyfunction]
+pub(crate) fn request_auth_budget_route(
+    py: Python<'_>,
+    facts: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    let facts: core::budget_pricing::RouteBudgetFacts = from_py(facts)?;
+    to_py(py, &py.detach(move || core::budget_pricing::route(&facts)))
+}
+
+#[pyfunction]
+pub(crate) fn request_auth_common_budget(
+    py: Python<'_>,
+    facts: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    let facts: core::common_budgets::BudgetFacts = from_py(facts)?;
+    to_py(py, &py.detach(move || core::common_budgets::check(&facts)))
+}
+
+#[pyfunction]
+pub(crate) fn request_auth_budget_alert(
+    py: Python<'_>,
+    facts: &Bound<'_, PyAny>,
+) -> PyResult<bool> {
+    let facts: core::common_budgets::AlertFacts = from_py(facts)?;
+    Ok(py.detach(move || core::common_budgets::alert(&facts)))
+}
+
+#[pyfunction]
+pub(crate) fn request_auth_member_limit(
+    py: Python<'_>,
+    facts: &Bound<'_, PyAny>,
+) -> PyResult<Option<f64>> {
+    let facts: core::common_budgets::MemberLimitFacts = from_py(facts)?;
+    py.detach(move || core::common_budgets::member_limit(&facts))
+        .map_err(map_error)
+}
+
 fn map_error(error: core::Error) -> PyErr {
     let message = litellm_error::Report::new(&error).to_string();
     match error {
