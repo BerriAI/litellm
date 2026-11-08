@@ -7,6 +7,7 @@ import { isUserTeamAdminForAnyTeam } from "@/utils/roles";
 import { Folder, Plus, SearchIcon, X } from "lucide-react";
 import { parseAsString, useQueryState } from "nuqs";
 import { useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { PageHeader, PageHeaderControls, PageHeaderDescription, PageHeaderTitle } from "@/components/shared/PageHeader";
 import { Button } from "@/components/ui/button";
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
@@ -16,6 +17,7 @@ import { ProjectsTable } from "./ProjectsTable";
 import { useClearProjectKeysTableState, useProjectsTableState } from "./useProjectsUrlState";
 
 export function ProjectsPage() {
+  const { t } = useTranslation();
   const { data: projects, isLoading } = useProjects();
   const { data: teams, isLoading: isTeamsLoading } = useTeams();
   const { userId } = useAuthorized();
@@ -66,14 +68,14 @@ export function ProjectsPage() {
       <PageHeader>
         <PageHeaderTitle>
           <Folder />
-          Projects
+          {t("projects.page.title")}
         </PageHeaderTitle>
-        <PageHeaderDescription>Manage projects within your teams</PageHeaderDescription>
+        <PageHeaderDescription>{t("projects.page.description")}</PageHeaderDescription>
         {canCreateProject && (
           <PageHeaderControls>
             <Button onClick={() => setIsCreateModalVisible(true)}>
               <Plus className="size-4" />
-              Create Project
+              {t("projects.page.createButton")}
             </Button>
           </PageHeaderControls>
         )}
@@ -86,13 +88,17 @@ export function ProjectsPage() {
               <SearchIcon className="size-4 text-muted-foreground" />
             </InputGroupAddon>
             <InputGroupInput
-              placeholder="Search projects by name, ID, description, or team..."
+              placeholder={t("projects.page.searchPlaceholder")}
               value={searchText}
               onChange={(e) => setSearchText(e.target.value)}
             />
             {searchText && (
               <InputGroupAddon align="inline-end">
-                <InputGroupButton size="icon-xs" aria-label="Clear search" onClick={() => setSearchText("")}>
+                <InputGroupButton
+                  size="icon-xs"
+                  aria-label={t("projects.page.clearSearch")}
+                  onClick={() => setSearchText("")}
+                >
                   <X />
                 </InputGroupButton>
               </InputGroupAddon>

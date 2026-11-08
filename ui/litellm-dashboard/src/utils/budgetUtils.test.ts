@@ -67,7 +67,7 @@ describe("describeBudgetResetSchedule", () => {
     const schedule = describeBudgetResetSchedule("30d", resetAt);
     expect(schedule.label).toBe("Jul 15, 2026 12:00 UTC");
     expect(schedule.resetAt).toBe(resetAt);
-    expect(schedule.tooltip).toContain("Next reset Jul 15, 2026 12:00 UTC.");
+    expect(schedule.tooltip).toContain("Next reset Jul 15, 2026 12:00 (UTC).");
     expect(schedule.tooltip).toContain("carries into the next period");
   });
 

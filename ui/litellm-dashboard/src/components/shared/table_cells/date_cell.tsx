@@ -1,8 +1,25 @@
 "use client";
 
+import type { ParseKeys } from "i18next";
+
+import i18n from "@/i18n/i18n";
+
 import { CellTooltip } from "./cell_tooltip";
 
-const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"] as const;
+const MONTHS: readonly ParseKeys[] = [
+  "shared.tableCells.dateCell.months.jan",
+  "shared.tableCells.dateCell.months.feb",
+  "shared.tableCells.dateCell.months.mar",
+  "shared.tableCells.dateCell.months.apr",
+  "shared.tableCells.dateCell.months.may",
+  "shared.tableCells.dateCell.months.jun",
+  "shared.tableCells.dateCell.months.jul",
+  "shared.tableCells.dateCell.months.aug",
+  "shared.tableCells.dateCell.months.sep",
+  "shared.tableCells.dateCell.months.oct",
+  "shared.tableCells.dateCell.months.nov",
+  "shared.tableCells.dateCell.months.dec",
+];
 
 export type DatePrecision = "datetime" | "date";
 
@@ -47,19 +64,21 @@ const dateParts = (date: Date, timeZone: DateCellTimeZone): DateParts =>
 
 const clockTime = ({ hours, minutes, seconds }: DateParts): string => `${pad(hours)}:${pad(minutes)}:${pad(seconds)}`;
 
+const monthName = ({ month }: DateParts): string => i18n.t(MONTHS[month]);
+
 export const formatCellDate = (date: Date, precision: DatePrecision, timeZone: DateCellTimeZone = "local"): string => {
   const parts = dateParts(date, timeZone);
   const formatted =
     precision === "date"
-      ? `${MONTHS[parts.month]} ${parts.day}, ${parts.year}`
-      : `${MONTHS[parts.month]} ${parts.day}, ${clockTime(parts)}`;
+      ? `${monthName(parts)} ${parts.day}, ${parts.year}`
+      : `${monthName(parts)} ${parts.day}, ${clockTime(parts)}`;
   return timeZone === "UTC" ? `${formatted} UTC` : formatted;
 };
 
 export const formatFullTimestamp = (date: Date, timeZone: DateCellTimeZone = "local"): string => {
   const parts = dateParts(date, timeZone);
   const zoneName = timeZone === "UTC" ? "UTC" : Intl.DateTimeFormat().resolvedOptions().timeZone;
-  return `${MONTHS[parts.month]} ${parts.day}, ${parts.year}, ${clockTime(parts)} (${zoneName})`;
+  return `${monthName(parts)} ${parts.day}, ${parts.year}, ${clockTime(parts)} (${zoneName})`;
 };
 
 export function DateCell({ value, precision = "datetime", fallback = "-", timeZone = "local" }: DateCellProps) {

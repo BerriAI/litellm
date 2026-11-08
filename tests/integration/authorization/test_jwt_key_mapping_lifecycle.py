@@ -114,7 +114,7 @@ class _ChatRequest(BaseModel):
 class _ProxyError(BaseModel):
     message: str
     type: str
-    param: str
+    param: str | None
     code: str
 
 
@@ -398,7 +398,7 @@ def _assert_unmapped(response: httpx.Response, client_id: str) -> None:
     assert response.status_code == 403, response.text
     error: Final = _ErrorResponse.model_validate_json(response.content)
     expected: Final = f"JWT Key Mapping: No registered mapping for {_CLIENT_CLAIM}='{client_id}'. Access denied."
-    assert error.error == _ProxyError(message=expected, type="auth_error", param="None", code="403"), response.text
+    assert error.error == _ProxyError(message=expected, type="auth_error", param=None, code="403"), response.text
 
 
 def _mapping_info(gateway: Gateway, identity: str) -> _JWTMappingResponse:
