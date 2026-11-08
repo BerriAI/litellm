@@ -2273,7 +2273,7 @@ async def get_end_user_object(
         )
 
         if response is None:
-            raise Exception
+            return None
 
         end_user_row: Final = await _apply_default_budget_to_end_user(
             end_user_obj=LiteLLM_EndUserTable.model_validate(response.dict()),
@@ -2300,7 +2300,25 @@ async def get_end_user_object(
             key_end_user_budget_id=key_end_user_budget_id,
         )
 
-    except Exception:
+    except Exception as e:
+        from litellm.proxy.proxy_server import general_settings
+
+        verbose_proxy_logger.warning(
+            "end user %s could not be loaded (%s), so its budget will not be evaluated for this request",
+            end_user_id,
+            e,
+        )
+        if general_settings.get("fail_closed_budget_enforcement") is True:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "error": (
+                        "Budget enforcement unavailable: the end user object could not be loaded, "
+                        "so its budget could not be evaluated, and fail_closed_budget_enforcement "
+                        "is enabled, so the request was rejected. Retry shortly."
+                    )
+                },
+            ) from e
         return None
 
 
@@ -2392,6 +2410,8 @@ async def _end_user_id_exists_in_db(
         )
         if end_user_obj is not None:
             return True
+    except HTTPException:
+        raise
     except Exception as e:
         verbose_proxy_logger.debug("end_user validation: get_end_user_object lookup failed: %s", e)
 
