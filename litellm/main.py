@@ -5687,6 +5687,7 @@ def completion(
                         model=model,
                         custom_llm_provider=custom_llm_provider,
                         model_info=model_info,
+                        base_model=base_model if isinstance(base_model, str) else None,
                     )
                 ),
                 other_request_fields=MappingProxyType(

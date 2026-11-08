@@ -833,14 +833,35 @@ _OPENAI_COMPATIBLE_UNMAPPED: Final = _openai_case(
 )
 
 
+_OPENAI_PROMPT_CACHING_MODEL: Final = next(
+    name
+    for name, entry in litellm.model_cost.items()
+    if entry.get("litellm_provider") == "openai" and entry.get("supports_prompt_caching") is True
+)
+
+
 @pytest.mark.parametrize(
-    ("deployment_model_info", "keeps_developer_mark"),
-    [(None, False), ({"supports_prompt_caching": True}, True), ({"supports_prompt_caching": False}, False)],
-    ids=["unmapped_model", "deployment_declares_caching", "deployment_declares_no_caching"],
+    ("deployment_fields", "keeps_developer_mark"),
+    [
+        ({}, False),
+        ({"model_info": {"supports_prompt_caching": True}}, True),
+        ({"model_info": {"supports_prompt_caching": False}}, False),
+        ({"base_model": _OPENAI_PROMPT_CACHING_MODEL}, True),
+        ({"model_info": {"base_model": _OPENAI_PROMPT_CACHING_MODEL}}, True),
+        ({"model_info": {"base_model": _OPENAI_PROMPT_CACHING_MODEL, "supports_prompt_caching": False}}, False),
+    ],
+    ids=[
+        "unmapped_model",
+        "deployment_declares_caching",
+        "deployment_declares_no_caching",
+        "base_model_caches",
+        "model_info_base_model_caches",
+        "declared_no_caching_outranks_base_model",
+    ],
 )
 @pytest.mark.parametrize("drop_params", [False, True], ids=["strict", "drop_params"])
 def test_a_developer_cache_control_reaches_only_a_model_that_caches_prompts(
-    deployment_model_info: dict[str, JsonValue] | None,
+    deployment_fields: dict[str, JsonValue],
     keeps_developer_mark: bool,
     drop_params: bool,
     respx_mock: MockRouter,
@@ -854,13 +875,42 @@ def test_a_developer_cache_control_reaches_only_a_model_that_caches_prompts(
                 {"role": "user", "content": "Hi"},
             ],
             "drop_params": drop_params,
-            **({} if deployment_model_info is None else {"model_info": deployment_model_info}),
+            **deployment_fields,
         },
     )
     unmarked: Final[dict[str, JsonValue]] = {"role": "system", "content": "Be a good bot!"}
     assert _mapping(_items(_request_body(route)["messages"])[0]) == (
         {**unmarked, "cache_control": {"type": "ephemeral"}} if keeps_developer_mark else unmarked
     )
+
+
+_DEVELOPER_PARTS: Final[list[JsonValue]] = [{"type": "text", "text": "Be a good bot!"}]
+
+
+@pytest.mark.parametrize(
+    "marking",
+    [
+        {
+            "messages": [
+                {"role": "developer", "content": [{**_DEVELOPER_PARTS[0], "cache_control": {"type": "ephemeral"}}]}
+            ]
+        },
+        {
+            "messages": [{"role": "developer", "content": _DEVELOPER_PARTS}],
+            "cache_control_injection_points": [{"location": "message", "role": "system"}],
+        },
+    ],
+    ids=["client_part_mark", "system_point"],
+)
+def test_a_developer_part_cache_control_never_reaches_a_model_that_does_not_cache_prompts(
+    marking: dict[str, JsonValue], respx_mock: MockRouter
+) -> None:
+    route: Final = _register(_OPENAI_COMPATIBLE_UNMAPPED, respx_mock, "canned-openai-compatible")
+    user_turn: Final[JsonValue] = {"role": "user", "content": "Hi"}
+    _complete(_OPENAI_COMPATIBLE_UNMAPPED, {"messages": [{"role": "developer", "content": _DEVELOPER_PARTS}, user_turn]})
+    unmarked_body: Final = _request_body(route)
+    _complete(_OPENAI_COMPATIBLE_UNMAPPED, {**marking, "messages": [*_items(marking["messages"]), user_turn]})
+    assert _request_body(route)["messages"] == unmarked_body["messages"]
 
 
 def _user_message_with_marked_parts(marks: int) -> dict[str, JsonValue]:

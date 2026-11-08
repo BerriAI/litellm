@@ -289,12 +289,31 @@ def declared_prompt_caching(model_info: object) -> bool | None:
     return declared if isinstance(declared, bool) else None
 
 
+def _marks_a_developer_message(message: AllMessageValues) -> bool:
+    return message["role"] == "developer" and ("cache_control" in message or bool(_cache_control_values(message)))
+
+
+def _without_cache_control(value: object) -> object:
+    fields: Final = as_str_mapping(value)
+    return value if fields is None else {key: field for key, field in fields.items() if key != "cache_control"}
+
+
 def _without_developer_cache_control(message: AllMessageValues) -> AllMessageValues:
-    if message["role"] != "developer" or "cache_control" not in message:
+    fields: Final = as_str_mapping(message)
+    if message["role"] != "developer" or fields is None:
         return message
-    return cast(  # cast-ok: the same developer message without its cache marker
-        AllMessageValues, {key: value for key, value in message.items() if key != "cache_control"}
+    unmarked: Final = {key: value for key, value in fields.items() if key != "cache_control"}
+    parts: Final = _as_object_list(fields.get("content"))
+    return cast(  # cast-ok: the same developer message without its cache markers
+        AllMessageValues,
+        unmarked if parts is None else {**unmarked, "content": [_without_cache_control(part) for part in parts]},
     )
+
+
+def _cost_map_caches_prompts(models: Iterable[str], custom_llm_provider: str | None) -> bool:
+    from litellm.utils import supports_prompt_caching
+
+    return any(supports_prompt_caching(model=name, custom_llm_provider=custom_llm_provider) for name in models)
 
 
 def developer_messages_for_a_prompt_caching_model(
@@ -303,16 +322,17 @@ def developer_messages_for_a_prompt_caching_model(
     model: str,
     custom_llm_provider: str | None,
     model_info: object,
+    base_model: object,
 ) -> Sequence[AllMessageValues]:
-    from litellm.utils import supports_prompt_caching
-
-    if not any(message["role"] == "developer" and "cache_control" in message for message in messages):
+    if not any(map(_marks_a_developer_message, messages)):
         return messages
     declared: Final = declared_prompt_caching(model_info)
     caches_prompts: Final = (
         declared
         if declared is not None
-        else supports_prompt_caching(model=model, custom_llm_provider=custom_llm_provider)
+        else _cost_map_caches_prompts(
+            dict.fromkeys(name for name in (base_model, model) if isinstance(name, str) and name), custom_llm_provider
+        )
     )
     return messages if caches_prompts else [_without_developer_cache_control(message) for message in messages]
 
