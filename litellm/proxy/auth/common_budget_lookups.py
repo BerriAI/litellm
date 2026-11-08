@@ -4,6 +4,7 @@ from typing import Final
 
 from litellm._auth import common_budgets
 from litellm._auth.common_budgets import BudgetFacts
+from litellm._auth.failure import NativeAuthFailure
 from litellm.proxy._types import (
     Litellm_EntityType,
     LiteLLM_TagTable,
@@ -53,6 +54,8 @@ async def organization_max_budget_check(
             proxy_logging_obj=proxy_logging_obj,
             include_budget_table=True,
         )
+    except NativeAuthFailure:
+        raise
     except Exception:  # noqa: BLE001  # preserve organization lookup failure handling
         return
     if org is None:
@@ -165,10 +168,10 @@ async def check_team_member_budget(
         get_team_member_default_budget,
         get_team_membership,
         get_utc_datetime,
-        team_member_max_budget_alert_check,
     )
+    from litellm.proxy.auth.budget_alert_adapter import team_member_max_budget_alert_check
 
-    if team_object is None or valid_token is None or valid_token.user_id is None:
+    if team_object is None or team_object.team_id is None or valid_token is None or valid_token.user_id is None:  # pyright: ignore[reportUnnecessaryComparison]  # retain the legacy None guard for constructed cache rows
         return
     membership: Final = (
         team_membership
