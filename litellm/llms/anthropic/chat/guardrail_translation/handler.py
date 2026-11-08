@@ -945,7 +945,7 @@ class AnthropicMessagesHandler(BaseTranslation):
 
             guardrailed_texts: Final = guardrailed_inputs.get("texts", [])
             guardrailed_tools: Final = guardrailed_inputs.get("tools")
-            if guardrailed_tools is not None:
+            if guardrailed_tools is not None and guardrailed_tools != tools_to_check:
                 # Convert tools back from OpenAI format to Anthropic format
                 anthropic_config: Final = AnthropicConfig()
                 anthropic_tools: Final[list[AllAnthropicToolsValues]] = []
@@ -953,7 +953,10 @@ class AnthropicMessagesHandler(BaseTranslation):
                     converted_tool, mcp_server = anthropic_config.map_tool_helper(
                         _with_original_name(tool, original_tool_names.declared)
                     )
-                    if converted_tool is not None:
+                    if (
+                        converted_tool is not None
+                        and not str(converted_tool.get("name") or "").startswith("litellm_unnamed_tool_")
+                    ):
                         anthropic_tools.append(converted_tool)
                     # Note: MCP servers are handled separately in the main transformation
                 data["tools"] = (
@@ -964,7 +967,18 @@ class AnthropicMessagesHandler(BaseTranslation):
                     )
                     if scan_only_tool_results
                     else [
-                        *(tool for tool in data.get("tools") or [] if is_provider_native_tool_dict(tool)),
+                        *(
+                            tool
+                            for tool in data.get("tools") or []
+                            if is_provider_native_tool_dict(tool)
+                            or (
+                                isinstance(tool, Mapping)
+                                and (
+                                    str(tool.get("type") or "").startswith("web_search")
+                                    or tool.get("type") == "mcp_toolset"
+                                )
+                            )
+                        ),
                         *anthropic_tools,
                     ]
                 )
