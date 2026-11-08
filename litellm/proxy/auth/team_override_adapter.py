@@ -15,7 +15,7 @@ from litellm.router_api import RegistryReader
 @dataclass(frozen=True, slots=True)
 class _Source:
     model: str | Sequence[str]
-    token: UserAPIKeyAuth
+    token: UserAPIKeyAuth | None
     team: LiteLLM_TeamTable | None
     router: RegistryReader | None
     team_aliases: Mapping[str, str] | None
@@ -25,7 +25,7 @@ class _Source:
 
 async def read_team_override_facts(
     model: str | Sequence[str],
-    valid_token: UserAPIKeyAuth,
+    valid_token: UserAPIKeyAuth | None,
     team_object: LiteLLM_TeamTable | None,
     llm_router: RegistryReader | None,
     team_model_aliases: Mapping[str, str] | None = None,
@@ -40,7 +40,7 @@ async def read_team_override_facts(
 
 async def can_team_call_model_with_override(
     model: str | Sequence[str],
-    valid_token: UserAPIKeyAuth,
+    valid_token: UserAPIKeyAuth | None,
     team_object: LiteLLM_TeamTable | None,
     llm_router: RegistryReader | None,
     team_model_aliases: Mapping[str, str] | None = None,
@@ -94,8 +94,8 @@ async def _read(facts: TeamOverrideFacts, source: _Source) -> TeamOverrideFacts:
                 source.model,
                 source.router,
                 facts.assigned_models,
-                source.token.team_model_aliases,
-                source.token.team_id,
+                source.token.team_model_aliases if source.token is not None else None,
+                source.token.team_id if source.token is not None else None,
                 source.key_aliases,
                 "key",
             )
