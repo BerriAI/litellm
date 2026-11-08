@@ -23,6 +23,8 @@ pub mod personal_owner;
 pub mod personal_model_request;
 pub mod member_models;
 pub mod resolved_models;
+pub mod personal_model_listing;
+pub mod agent_ceilings;
 pub mod owner_teams;
 pub mod protocol;
 pub mod route_access;

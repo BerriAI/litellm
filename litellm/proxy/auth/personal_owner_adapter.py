@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, Literal
 
 from litellm._auth.failure import NativeAuthFailure, NativeAuthRuntimeError
 from litellm._auth.personal_owner import PersonalOwnerFacts, personal_owner
@@ -29,6 +29,7 @@ class _Source:
     logging: ProxyLogging | None
     check_db_only: bool
     owner: LiteLLM_UserTable | None = None
+    purpose: Literal["Models", "Grants"] = "Grants"
 
 
 async def read_personal_owner_facts(
@@ -38,6 +39,7 @@ async def read_personal_owner_facts(
     proxy_logging_obj: ProxyLogging | None,
     *,
     check_db_only: bool = False,
+    purpose: Literal["Models", "Grants"] = "Grants",
 ) -> PersonalOwnerReading:
     facts: Final = PersonalOwnerFacts(
         valid_token.user_id is not None,
@@ -47,7 +49,7 @@ async def read_personal_owner_facts(
     )
     return await _read(
         PersonalOwnerReading(facts),
-        _Source(valid_token, prisma_client, user_api_key_cache, proxy_logging_obj, check_db_only),
+        _Source(valid_token, prisma_client, user_api_key_cache, proxy_logging_obj, check_db_only, purpose=purpose),
     )
 
 
@@ -121,7 +123,7 @@ async def _read(reading: PersonalOwnerReading, source: _Source) -> PersonalOwner
                 source.prisma,
                 source.cache,
                 source.logging,
-                purpose="Grants",
+                purpose=source.purpose,
                 check_db_only=source.check_db_only,
             )
             return PersonalOwnerReading(replace(reading.facts, teams=teams.facts), teams.teams)

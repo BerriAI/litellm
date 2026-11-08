@@ -6,7 +6,7 @@ from fastapi import HTTPException
 from pydantic import BaseModel
 
 import litellm
-from litellm._auth.failure import NativeAuthFailure, NativeAuthRuntimeError
+from litellm._auth.failure import NativeAuthFailure, NativeAuthRuntimeError, native_boundary
 from litellm._auth.model_access import (
     ModelAccessDecision,
     ModelAccessFacts,
@@ -45,6 +45,7 @@ class ModelLists(BaseModel, frozen=True):
     models: tuple[str, ...] = ()
 
 
+@native_boundary
 def object_model_grants(source: object) -> tuple[str, ...]:
     return ModelLists.model_validate(source, from_attributes=True).models
 
@@ -71,6 +72,7 @@ def _record(model: str, router: RegistryReader | None, team_id: str | None) -> M
     )
 
 
+@native_boundary
 def project_model_facts(
     model: str | Sequence[str],
     llm_router: RegistryReader | None,
