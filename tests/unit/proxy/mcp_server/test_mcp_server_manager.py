@@ -3924,6 +3924,65 @@ class TestMCPServerManager:
         assert captured_extra_headers == {"Authorization": "Bearer sk-" + "1234", "x-tenant": "tenant-control"}
 
     @pytest.mark.asyncio
+    async def test_call_regular_mcp_tool_listed_key_does_not_reach_a_later_server(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from litellm.proxy import proxy_server
+
+        monkeypatch.setattr(proxy_server, "master_key", "test-master-key")
+        manager: Final = MCPServerManager()
+        listing_server: Final = MCPServer(
+            server_id="lists-key",
+            name="lists-key",
+            url="https://example.com",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+            delegate_auth_to_upstream=True,
+            extra_headers=["X-LiteLLM-API-Key"],
+        )
+        later_server: Final = listing_server.model_copy(
+            update={"server_id": "no-key", "name": "no-key", "extra_headers": None}
+        )
+        mock_client: Final = AsyncMock()
+        mock_client.call_tool = AsyncMock(return_value=CallToolResult(content=[], isError=False))
+        sent_headers: Final[list[dict[str, str] | None]] = []
+
+        async def capture_create_mcp_client(
+            server: MCPServer,
+            mcp_auth_header: str | dict[str, str] | None,
+            extra_headers: dict[str, str] | None,
+            stdio_env: dict[str, str] | None,
+            subject_token: str | None = None,
+            **kwargs: object,
+        ) -> AsyncMock:
+            sent_headers.append(dict(extra_headers) if extra_headers else None)
+            return mock_client
+
+        manager.create_mcp_client = AsyncMock(side_effect=capture_create_mcp_client)
+        oauth2_headers: Final = {"Authorization": "Bearer upstream-token"}
+        raw_headers: Final = {
+            "x-litellm-api-key": "sk-" + "1234",
+            "Authorization": "Bearer upstream-token",
+        }
+
+        for server in (listing_server, later_server):
+            await manager._call_regular_mcp_tool(
+                mcp_server=server,
+                original_tool_name="tool",
+                arguments={},
+                tasks=[],
+                mcp_auth_header=None,
+                mcp_server_auth_headers=None,
+                oauth2_headers=oauth2_headers,
+                raw_headers=raw_headers,
+                proxy_logging_obj=None,
+                user_api_key_auth=UserAPIKeyAuth(api_key="hashed-key"),
+            )
+
+        assert sent_headers[0] is not None and sent_headers[0]["X-LiteLLM-API-Key"] == "sk-" + "1234"
+        assert sent_headers[1] is not None and "X-LiteLLM-API-Key" not in sent_headers[1]
+
+    @pytest.mark.asyncio
     async def test_call_regular_mcp_tool_v2_authz_code_drops_caller_authorization(
         self,
     ):

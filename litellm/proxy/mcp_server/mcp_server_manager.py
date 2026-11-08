@@ -6644,7 +6644,7 @@ class MCPServerManager:
                 # For M2M OAuth servers, Authorization must come from token fetch.
                 extra_headers = None
             else:
-                extra_headers = oauth2_headers
+                extra_headers = dict(oauth2_headers) if oauth2_headers else None
                 # Migrated authorization_code: the v2 resolver injects the stored per-user
                 # token, so drop the caller-forwarded Authorization (apply-if-absent would
                 # otherwise let it shadow the resolved token). Delegate keeps it. Centralized
