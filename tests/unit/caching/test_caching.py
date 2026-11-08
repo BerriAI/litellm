@@ -21,8 +21,10 @@ from litellm.caching.caching import Cache, CacheMode, response_cache_phase
 from litellm.caching.caching_handler import _PENDING_CACHE_WRITES
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
-from litellm.caching.redis_cache import RedisCache, _RedisTimeoutLogThrottle
+from litellm.caching.redis_cache import RedisCache, RedisTimeoutLogThrottle
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.types.caching import EMBEDDING_CACHE_FORMAT_VERSION, LiteLLMCacheType, SemanticCacheScope
 from litellm.types.utils import Embedding, EmbeddingResponse, Usage
 
@@ -94,9 +96,9 @@ def test_cache_key_debug_log_does_not_include_prompt_material(caplog):
     ],
 )
 def test_add_cache_timeout_only_joins_redis_throttle_for_redis_backends(backend, expected_level, caplog, monkeypatch):
-    throttle = _RedisTimeoutLogThrottle(interval=5.0, clock=MagicMock(return_value=1_000.0))
+    throttle = RedisTimeoutLogThrottle(interval=5.0, clock=MagicMock(return_value=1_000.0))
     assert throttle.admit() == 0
-    monkeypatch.setattr(redis_cache_module, "_redis_timeout_log_throttle", throttle)
+    monkeypatch.setattr(redis_cache_module, "redis_timeout_log_throttle", throttle)
 
     cache = Cache(type=LiteLLMCacheType.LOCAL)
     backend.set_cache.side_effect = TimeoutError("lit7520 backend timed out")
@@ -257,6 +259,29 @@ def test_cache_rejects_unsupported_type() -> None:
     ) as raised:
         Cache(**cache_params)
     assert str(raised.value).split("Supported types: ")[1].split(", ") == [member.value for member in LiteLLMCacheType]
+
+
+class _PingableInMemoryCache(InMemoryCache):
+    async def ping(self) -> bool:
+        return True
+
+    async def delete_cache_keys(self, keys: list[str]) -> None:
+        for key in keys:
+            self.delete_cache(key)
+
+
+@pytest.mark.asyncio
+async def test_cache_ping_and_delete_cache_keys_reach_a_backend_that_supports_them() -> None:
+    backend: Final = _PingableInMemoryCache()
+    cache: Final = Cache(type="local", _backend=backend)
+    backend.set_cache("kept", "kept value")
+    backend.set_cache("dropped", "dropped value")
+
+    assert await cache.ping() is True
+    await cache.delete_cache_keys(["dropped"])
+
+    assert backend.get_cache("dropped") is None
+    assert backend.get_cache("kept") == "kept value"
 
 
 def test_semantic_cache_scope_rejects_unknown_value():
@@ -470,6 +495,30 @@ def test_cache_key_tells_apart_requests_that_differ_only_in_continuation_token()
     assert cache.get_cache_key(**request, continuation_token="dG9rLTE=") == resumed_key
     assert cache.get_cache_key(**request, continuation_token=None) == first_segment_key
     assert cache.get_cache_key(**request, continuation_token="") == first_segment_key
+
+
+def test_cache_key_tells_apart_requests_that_ask_for_token_ids() -> None:
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    request: Final = {"model": "hosted_vllm/qwen3", "messages": [{"role": "user", "content": "count"}]}
+
+    plain_key: Final = cache.get_cache_key(**request)
+
+    assert cache.get_cache_key(**request, return_token_ids=True) != plain_key
+    assert cache.get_cache_key(**request, return_token_ids=False) == plain_key
+    assert cache.get_cache_key(**request, return_token_ids=None) == plain_key
+
+
+def test_cache_key_tells_apart_requests_that_ask_for_token_ids_through_extra_body() -> None:
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    request: Final = {"model": "hosted_vllm/qwen3", "messages": [{"role": "user", "content": "count"}]}
+
+    plain_key: Final = cache.get_cache_key(**request)
+    other_extra_body_key: Final = cache.get_cache_key(**request, extra_body={"top_k": 5})
+
+    assert cache.get_cache_key(**request, extra_body={"return_token_ids": True}) != plain_key
+    assert cache.get_cache_key(**request, extra_body={"top_k": 5, "return_token_ids": True}) != other_extra_body_key
+    assert cache.get_cache_key(**request, extra_body={"return_token_ids": False}) == plain_key
+    assert cache.get_cache_key(**request, extra_body={"continuation_token": "abc"}) != plain_key
 
 
 def test_cache_key_tells_apart_requests_that_differ_only_in_tool_call_id_shape() -> None:
@@ -1622,10 +1671,12 @@ _TENANT_B_IDENTITY: Final = {"user_api_key": "hashed-key-b", "user_api_key_team_
         pytest.param({"cache": {"namespace": "shared"}}, id="same-client-namespace"),
     ],
 )
-def test_exact_cache_is_not_shared_across_tenants(monkeypatch, client_cache_options):
+def test_exact_cache_is_not_shared_across_tenants(
+    monkeypatch: pytest.MonkeyPatch, client_cache_options: dict[str, object]
+) -> None:
     monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL))
 
-    def answer(tenant: dict[str, str], content: str) -> str:
+    def answer(tenant: dict[str, str], content: str) -> object:
         response = completion(
             model="gpt-4o-mini",
             messages=_CACHING_TEST_MESSAGES,
@@ -1643,7 +1694,7 @@ def test_exact_cache_is_not_shared_across_tenants(monkeypatch, client_cache_opti
 
 @pytest.mark.parametrize("metadata_field", ["metadata", "litellm_metadata"])
 @pytest.mark.parametrize("forged_key_param", ["cache_key", "preset_cache_key"])
-def test_exact_cache_rejects_another_tenants_cache_key(metadata_field, forged_key_param):
+def test_exact_cache_rejects_another_tenants_cache_key(metadata_field: str, forged_key_param: str) -> None:
     cache = Cache(type=LiteLLMCacheType.LOCAL)
     tenant_a_request = {"model": "gpt-4o-mini", "messages": messages, metadata_field: dict(_TENANT_A_IDENTITY)}
     cache.add_cache('{"answer": "tenant a"}', **tenant_a_request)
@@ -1656,3 +1707,58 @@ def test_exact_cache_rejects_another_tenants_cache_key(metadata_field, forged_ke
 
     assert cache.get_cache(**tenant_a_request) is not None
     assert cache.get_cache(**forged_key, **{metadata_field: dict(_TENANT_B_IDENTITY)}) is None
+
+
+@pytest.mark.parametrize("metadata_field", ("metadata", "litellm_metadata"))
+@pytest.mark.parametrize("identity_field", ("api_key", "team_id", "org_id"))
+@pytest.mark.parametrize("nested", (False, True))
+def test_exact_cache_entries_follow_authenticated_identity(
+    metadata_field: str, identity_field: str, nested: bool
+) -> None:
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    identity: Final = {"api_key": "key-a", "team_id": "team-a", "org_id": "org-a"}
+
+    def request(values: dict[str, str]) -> dict[str, object]:
+        data: Final = {"metadata": {"user_api_key": "request-label"}, metadata_field: {}}
+        authenticated: Final = LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata(
+            data=data,
+            user_api_key_dict=UserAPIKeyAuth(**values, is_session_token=True, key_alias="session-label"),
+            _metadata_variable_name=metadata_field,
+        )
+        return (
+            {"metadata": {"user_api_key": "request-label"}, "litellm_params": authenticated}
+            if nested
+            else authenticated
+        )
+
+    first: Final = request(identity)
+    second: Final = request({**identity, identity_field: "different"})
+    cache.add_cache({"answer": "first"}, cache_key="named-entry", **first)
+    assert cache.get_cache(cache_key="named-entry", **second) is None
+    cache.add_cache({"answer": "second"}, cache_key="named-entry", **second)
+    assert cache.get_cache(cache_key="named-entry", **first) == {"answer": "first"}
+    assert cache.get_cache(cache_key="named-entry", **second) == {"answer": "second"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("metadata_field", ("metadata", "litellm_metadata"))
+async def test_exact_async_cache_preserves_scoped_custom_entries(metadata_field: str) -> None:
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    first: Final = {metadata_field: _TENANT_A_IDENTITY}
+    second: Final = {metadata_field: _TENANT_B_IDENTITY}
+    await cache.async_add_cache({"answer": "first"}, cache_key="named-entry", **first)
+    assert await cache.async_get_cache(cache_key="named-entry", **second) is None
+    assert await cache.async_get_cache(cache_key="named-entry", **first) == {"answer": "first"}
+
+
+@pytest.mark.parametrize("invalid_key", (None, 1, {}))
+def test_exact_cache_invalid_custom_keys_do_not_fall_back(invalid_key: object) -> None:
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    cache.add_cache({"answer": "stored"}, model="test-model", metadata=_TENANT_A_IDENTITY)
+    assert cache.get_cache(model="test-model", cache_key=invalid_key, metadata=_TENANT_A_IDENTITY) is None
+
+
+def test_exact_cache_without_identity_keeps_sdk_entries() -> None:
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    cache.add_cache({"answer": "stored"}, cache_key="named-entry")
+    assert cache.get_cache(cache_key="named-entry", metadata={"trace": "request"}) == {"answer": "stored"}

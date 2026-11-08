@@ -482,8 +482,7 @@ def _responses_body(marker: str, *directives: str) -> dict[str, JsonValue]:
 
 def _failed_response_error(response: httpx.Response) -> dict[str, JsonValue]:
     assert response.status_code == 200, response.text
-    lines: Final = _data_lines(response.text)
-    assert lines[-1] == "[DONE]" and lines.count("[DONE]") == 1, response.text
+    assert "[DONE]" not in _data_lines(response.text), response.text
     events: Final = _payloads(response.text)
     kinds: Final = tuple(string_value(event["type"]) for event in events)
     assert kinds[0] == "response.created" and kinds[-1] == "response.failed", response.text

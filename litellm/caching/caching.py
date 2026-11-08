@@ -13,10 +13,10 @@ import json
 import logging
 import time
 import traceback
-from collections.abc import Generator, Mapping
+from collections.abc import Awaitable, Callable, Generator, Mapping
 from contextlib import contextmanager
 from enum import Enum
-from typing import Any, Final, Literal, cast
+from typing import Any, Final, Literal, Protocol, cast
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter
 
@@ -25,6 +25,7 @@ from litellm._internal_context import current_service_target, service_target
 from litellm._logging import verbose_logger
 from litellm.constants import CACHED_STREAMING_CHUNK_DELAY
 from litellm.integrations.otel.runtime import phase_span
+from litellm.litellm_core_utils.core_helpers import get_metadata_variable_name_from_kwargs, require_attributes
 from litellm.litellm_core_utils.model_param_helper import (
     ModelParamHelper,
     embeds_thought_signature_in_tool_call_id,
@@ -45,13 +46,47 @@ from .redis_semantic_cache import RedisSemanticCache
 from .s3_cache import S3Cache
 
 RESPONSE_CACHE_TARGET: Final = "llm_response"
-_ALWAYS_KEYED_PROVIDER_PARAMS: Final = frozenset({"continuation_token"})
+_ALWAYS_KEYED_PROVIDER_PARAMS: Final = frozenset({"continuation_token", "return_token_ids"})
 _TENANT_TAG_PREFIX: Final = "tenant-"
 _TENANT_TAG_DIGEST_LENGTH: Final = 32
+_TENANT_METADATA: Final = TypeAdapter(Mapping[str, object])
 _DECODED_LITERAL: Final = TypeAdapter(object)
 _REDIS_STARTUP_NODES_ADAPTER: Final = TypeAdapter(
     list[dict[str, object]], config=ConfigDict(strict=True, hide_input_in_errors=True)
 )
+
+
+class _CacheTenantIdentity(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    api_key: str | None = None
+    team_id: str | None = None
+    org_id: str | None = None
+    end_user_id: str | None = None
+
+
+class _SupportsAsyncPing(Protocol):
+    @property
+    def ping(self) -> Callable[[], Awaitable[object]] | None: ...
+
+
+class _SupportsAsyncDeleteCacheKeys(Protocol):
+    @property
+    def delete_cache_keys(self) -> Callable[[object], Awaitable[object]] | None: ...
+
+
+def _keyed_provider_params_in_extra_body(kwargs: Mapping[str, object]) -> str:
+    raw_extra_body: Final = kwargs.get("extra_body")
+    if not isinstance(raw_extra_body, dict):
+        return ""
+    extra_body: Final = cast(  # cast-ok: isinstance leaves the key and value types unknown
+        Mapping[str, object], raw_extra_body
+    )
+    return "".join(
+        f"extra_body.{param}: {extra_body[param]}"
+        for param in sorted(_ALWAYS_KEYED_PROVIDER_PARAMS)
+        if extra_body.get(param)
+    )
 
 
 @contextmanager
@@ -379,9 +414,12 @@ class Cache:
     @staticmethod
     def _get_tenant_scope(kwargs: Mapping[str, object], fields: tuple[str, ...]) -> str:
         litellm_params: Final = kwargs.get("litellm_params")
-        param_sources: Final = (kwargs, litellm_params if isinstance(litellm_params, Mapping) else {})
+        param_sources: Final[tuple[Mapping[str, object], ...]] = (
+            kwargs,
+            _TENANT_METADATA.validate_python(litellm_params) if isinstance(litellm_params, Mapping) else {},
+        )
         metadata_sources: Final[tuple[Mapping[str, object], ...]] = tuple(
-            metadata
+            _TENANT_METADATA.validate_python(metadata)
             for source in param_sources
             for key in ("metadata", "litellm_metadata")
             if isinstance(metadata := source.get(key), Mapping)
@@ -398,13 +436,7 @@ class Cache:
         return self._SEMANTIC_CACHE_TENANT_SCOPE_FIELDS
 
     def scope_cache_key(self, cache_key: str, kwargs: Mapping[str, object]) -> str:
-        """
-        Prefix ``cache_key`` with the tag of the tenant (key / team / org from proxy auth) that kwargs carry.
-
-        Idempotent, so every key a tenant uses starts with its own tag, whatever ``cache_key``,
-        ``cache.namespace`` or ``preset_cache_key`` the caller sends. No-op without a tenant (SDK use)
-        """
-        tenant_scope: Final = self._get_tenant_scope(kwargs, self._cache_tenant_scope_fields())
+        tenant_scope: Final = self._get_cache_key_tenant_scope(kwargs)
         if not tenant_scope:
             return cache_key
         tenant_digest: Final = hashlib.sha256(tenant_scope.encode()).hexdigest()[:_TENANT_TAG_DIGEST_LENGTH]
@@ -412,6 +444,46 @@ class Cache:
         if cache_key.startswith(tenant_prefix):
             return cache_key
         return f"{tenant_prefix}{cache_key}"
+
+    def _get_cache_key_tenant_scope(self, kwargs: Mapping[str, object]) -> str:
+        params: Final = kwargs.get("litellm_params")
+        sources: Final[tuple[Mapping[str, object], ...]] = (
+            kwargs,
+            _TENANT_METADATA.validate_python(params) if isinstance(params, Mapping) else {},
+        )
+        fields: Final = self._cache_tenant_scope_fields()
+        metadata_sources: Final = tuple(
+            _TENANT_METADATA.validate_python(raw)
+            for source in sources
+            if isinstance(raw := source.get(get_metadata_variable_name_from_kwargs(source)), Mapping)
+        )
+        metadata: Final = next(
+            (source for source in metadata_sources if source.get("user_api_key_auth") is not None),
+            next((source for source in metadata_sources if any(field in source for field in fields)), None),
+        )
+        if metadata is None:
+            return ""
+        auth: Final = metadata.get("user_api_key_auth")
+        identity: Final = (
+            _CacheTenantIdentity.model_validate(auth, from_attributes=True)
+            if auth is not None
+            else _CacheTenantIdentity.model_validate(
+                {
+                    "api_key": metadata.get("user_api_key"),
+                    "team_id": metadata.get("user_api_key_team_id"),
+                    "org_id": metadata.get("user_api_key_org_id"),
+                    "end_user_id": metadata.get("user_api_key_end_user_id"),
+                }
+            )
+        )
+        values: Final = {
+            "user_api_key": identity.api_key,
+            "user_api_key_team_id": identity.team_id,
+            "user_api_key_org_id": identity.org_id,
+            "user_api_key_end_user_id": identity.end_user_id,
+        }
+        scope: Final = tuple((field, values[field]) for field in fields if values[field] is not None)
+        return json.dumps(scope, separators=(",", ":")) if scope else ""
 
     def resolve_cache_key(self, kwargs: Mapping[str, object]) -> str | None:
         if "cache_key" not in kwargs:
@@ -466,7 +538,10 @@ class Cache:
             "" if embeds_thought_signature_in_tool_call_id(kwargs) else "thought_signature_in_tool_call_id: False"
         )
         hashed_cache_key = Cache._get_hashed_cache_key(
-            cache_key + reasoning_summary_material + tool_call_id_shape_material
+            cache_key
+            + _keyed_provider_params_in_extra_body(kwargs)
+            + reasoning_summary_material
+            + tool_call_id_shape_material
         )
         hashed_cache_key = self._add_namespace_to_cache_key(hashed_cache_key, **kwargs)
         hashed_cache_key = self.scope_cache_key(hashed_cache_key, kwargs)
@@ -1044,14 +1119,16 @@ class Cache:
         cache_key, cached_data, kwargs = self._add_cache_logic(result=result, **kwargs)
         await self.cache.batch_cache_write(cache_key, cached_data, **kwargs)
 
-    async def ping(self):
-        cache_ping: Final = getattr(self.cache, "ping")
+    async def ping(self) -> object:
+        cache_ping: Final = require_attributes(self.cache, _SupportsAsyncPing, "ping").ping
         if cache_ping:
             return await cache_ping()
         return None
 
-    async def delete_cache_keys(self, keys):
-        cache_delete_cache_keys: Final = getattr(self.cache, "delete_cache_keys")
+    async def delete_cache_keys(self, keys: object) -> object:
+        cache_delete_cache_keys: Final = require_attributes(
+            self.cache, _SupportsAsyncDeleteCacheKeys, "delete_cache_keys"
+        ).delete_cache_keys
         if cache_delete_cache_keys:
             return await cache_delete_cache_keys(keys)
         return None

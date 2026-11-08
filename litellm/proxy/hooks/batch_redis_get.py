@@ -7,12 +7,15 @@ import traceback
 from typing import Final, Literal
 
 from fastapi import HTTPException
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache, InMemoryCache, RedisCache, response_cache_phase
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
+
+_CACHE_REQUEST: Final = TypeAdapter(dict[str, object])
 
 
 class _PROXY_BatchRedisRequests(CustomLogger):
@@ -50,7 +53,9 @@ class _PROXY_BatchRedisRequests(CustomLogger):
 
             cache_key_name: Final = f"litellm:{api_key}:{call_type}"
             scoped_key_prefix: Final = (
-                litellm.cache.scope_cache_key(cache_key_name, data) if litellm.cache is not None else cache_key_name
+                litellm.cache.scope_cache_key(cache_key_name, _CACHE_REQUEST.validate_python(data))
+                if litellm.cache is not None
+                else cache_key_name
             )
             self.in_memory_cache = cache.in_memory_cache
 
