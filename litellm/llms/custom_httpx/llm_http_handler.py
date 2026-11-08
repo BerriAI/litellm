@@ -68,7 +68,7 @@ from litellm.litellm_core_utils.chat_completion_agentic_loop import (
 )
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, set_provider_response_headers_in_hidden_params
 from litellm.litellm_core_utils.dot_notation_indexing import delete_nested_value
-from litellm.litellm_core_utils.get_litellm_params import AWS_CREDENTIAL_KWARGS_KEYS
+from litellm.litellm_core_utils.get_litellm_params import with_aws_credential_fallbacks
 from litellm.litellm_core_utils.get_llm_provider_logic import get_provider_affinity_header
 from litellm.litellm_core_utils.llm_request_utils import serialize_multipart_form_fields
 from litellm.litellm_core_utils.provider_affinity import add_provider_affinity_header
@@ -577,18 +577,6 @@ def _mask_presigned_request_headers(transformed_request: bytes | str | dict) -> 
     }
 
 
-def _aws_signing_overrides(
-    optional_params: Mapping[str, object], litellm_params: Mapping[str, object]
-) -> Mapping[str, object]:
-    return MappingProxyType(
-        {
-            key: litellm_params[key]
-            for key in AWS_CREDENTIAL_KWARGS_KEYS
-            if optional_params.get(key) is None and litellm_params.get(key) is not None
-        }
-    )
-
-
 class _PreparedFileContentRequest(NamedTuple):
     url: str
     params: dict
@@ -957,10 +945,7 @@ class BaseLLMHTTPHandler:
                 "tuple[dict[str, object], bytes | None]",
                 provider_config.sign_request(
                     headers=request_headers,
-                    optional_params={
-                        **optional_params,
-                        **_aws_signing_overrides(optional_params, litellm_params),
-                    },
+                    optional_params={**with_aws_credential_fallbacks(optional_params, litellm_params)},
                     request_data=data,
                     api_base=api_base,
                     api_key=api_key,
