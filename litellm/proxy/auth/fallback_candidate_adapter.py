@@ -1,6 +1,10 @@
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
-from typing import Final, Protocol, cast
+from typing import (  # noqa: TID251  # preserve opaque legacy budget mappings without coercing their keys
+    Final,
+    Protocol,
+    cast,
+)
 
 from pydantic import BaseModel
 

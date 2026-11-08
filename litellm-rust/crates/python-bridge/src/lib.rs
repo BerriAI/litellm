@@ -54,6 +54,8 @@ mod _native {
         request_auth_model_helpers,
         request_auth_personal_owner,
         request_auth_personal_model_request,
+        request_auth_member_models,
+        request_auth_resolved_models,
     };
     #[pymodule_export]
     use crate::router::{RouterCall, RouterCoreHandle};

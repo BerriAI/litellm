@@ -273,3 +273,17 @@ pub(crate) fn request_auth_personal_model_request(py: Python<'_>, facts: &Bound<
     let decision = py.detach(move || core::personal_model_request::decide(&facts)).map_err(map_error)?;
     to_py(py, &decision)
 }
+
+#[pyfunction]
+pub(crate) fn request_auth_member_models(py: Python<'_>, facts: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
+    let facts: core::member_models::Facts = from_py(facts)?;
+    let decision = py.detach(move || core::member_models::decide(&facts)).map_err(map_error)?;
+    to_py(py, &decision)
+}
+
+#[pyfunction]
+pub(crate) fn request_auth_resolved_models(py: Python<'_>, facts: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
+    let facts: core::resolved_models::Facts = from_py(facts)?;
+    let decision = py.detach(move || core::resolved_models::decide(&facts)).map_err(map_error)?;
+    to_py(py, &decision)
+}
