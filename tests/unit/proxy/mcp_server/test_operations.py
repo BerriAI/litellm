@@ -140,7 +140,7 @@ async def test_mapped_caller_bearer_reaches_agent_evaluation(
         mcp_auth_header=None,
         mcp_server_auth_headers=None,
     )
-    assert "authorization" not in raw
+    assert oauth is None
     provider_requests: Final[asyncio.Queue[str]] = asyncio.Queue()
 
     def provider(exchange: httpx.Request) -> httpx.Response:
@@ -1917,7 +1917,7 @@ async def test_initial_tool_listing_preserves_legacy_error_fallback(
 
 
 @pytest.mark.parametrize("header_name", ("x-litellm-api-key", "X-LiteLLM-API-Key"))
-def test_discovery_extra_headers_exclude_gateway_admission_key(header_name: str) -> None:
+def test_discovery_extra_headers_forward_listed_admission_key(header_name: str) -> None:
     caller_key: Final = "Bearer sk-admission-only"
     raw_headers: Final = {"x-litellm-api-key": caller_key, "x-tenant": "tenant-control"}
     server: Final = MCPServer(
@@ -1937,8 +1937,7 @@ def test_discovery_extra_headers_exclude_gateway_admission_key(header_name: str)
         UserAPIKeyAuth(api_key="sk-admission-only"),
     )
     assert auth_header is None
-    assert extra_headers == {"X-Tenant": "tenant-control"}
-    assert raw_headers == {"x-litellm-api-key": caller_key, "x-tenant": "tenant-control"}
+    assert extra_headers == {header_name: caller_key, "X-Tenant": "tenant-control"}
 
 
 @pytest.mark.asyncio

@@ -941,15 +941,13 @@ async def inject_mcp_jwt_headers_for_upstream(
     if signer is None or user_api_key_dict is None:
         return merged
 
-    normalized_raw: Final = {k.lower(): v for k, v in (raw_headers or {}).items()}
-    incoming_bearer_token: str | None = None
-    auth_hdr: Final = normalized_raw.get("authorization", "")
-    if auth_hdr.lower().startswith("bearer "):
-        incoming_bearer_token = auth_hdr[len("bearer ") :]
+    from litellm.proxy.mcp_server.auth.user_api_key_auth_mcp import MCPRequestHandler
+
+    incoming_bearer_token: Final = MCPRequestHandler.guardrail_bearer_from_raw_headers(raw_headers, user_api_key_dict)
 
     hook_data: Final = {
         "mcp_tool_name": "" if for_list_tools else mcp_tool_name,
-        "incoming_bearer_token": incoming_bearer_token,
+        "incoming_bearer_token": incoming_bearer_token.get_secret_value() if incoming_bearer_token else None,
         "extra_headers": merged,
     }
     call_type: Final[CallTypesLiteral] = "list_mcp_tools" if for_list_tools else "call_mcp_tool"

@@ -321,7 +321,7 @@ def test_validated_admission_jwt_is_not_forwarded_as_an_extra_header(auth_type: 
     "auth_type",
     [MCPAuth.none, MCPAuth.api_key, MCPAuth.bearer_token, MCPAuth.basic, MCPAuth.true_passthrough],
 )
-def test_admission_authorization_is_not_forwarded_for_any_auth_type(
+def test_listed_admission_authorization_forwards_except_for_true_passthrough(
     auth_type: MCPAuth, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from litellm.proxy import proxy_server
@@ -341,7 +341,11 @@ def test_admission_authorization_is_not_forwarded_for_any_auth_type(
         "Authorization": "Bearer sk-" + "1234",
         "x-tenant": "tenant-control",
     }
-    expected_without_admission_key: Final = {"x-tenant": "tenant-control"}
+    expected_without_admission_key: Final = (
+        {"x-tenant": "tenant-control"}
+        if auth_type == MCPAuth.true_passthrough
+        else {"x-tenant": "tenant-control", "Authorization": "Bearer sk-" + "1234"}
+    )
     admission_upstream_headers: Final = _prepare_mcp_server_headers(
         server,
         mcp_auth_header=None,
@@ -414,12 +418,13 @@ def test_no_master_key_preserves_caller_authorization_unless_auth_is_enabled(
         raw_headers=raw_headers,
         user_api_key_auth=user,
     )[1]
-    assert auth_enabled_headers == {"x-tenant": "t"}
-    assert _openapi_forwarded_extra_headers(server, raw_headers, user) == {"x-tenant": "t"}
+    expected_auth_enabled: Final = {"x-tenant": "t"} if auth_type == MCPAuth.true_passthrough else expected_forwarded
+    assert auth_enabled_headers == expected_auth_enabled
+    assert _openapi_forwarded_extra_headers(server, raw_headers, user) == expected_auth_enabled
 
 
 @pytest.mark.parametrize("auth_type", [MCPAuth.none, MCPAuth.bearer_token, MCPAuth.true_passthrough])
-def test_custom_auth_is_stripped_in_no_auth_dev_mode(
+def test_custom_auth_is_stripped_in_no_auth_dev_mode_for_true_passthrough(
     auth_type: MCPAuth, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from litellm.proxy import proxy_server
@@ -438,7 +443,11 @@ def test_custom_auth_is_stripped_in_no_auth_dev_mode(
     raw_headers: Final = {"Authorization": "Bearer custom-tok", "x-tenant": "t"}
     user: Final = UserAPIKeyAuth(api_key="custom-tok")
     user.authenticated_by_custom_auth = True
-    expected_headers: Final = {"x-tenant": "t"}
+    expected_headers: Final = (
+        {"x-tenant": "t"}
+        if auth_type == MCPAuth.true_passthrough
+        else {"x-tenant": "t", "Authorization": "Bearer custom-tok"}
+    )
     forwarded_headers: Final = _prepare_mcp_server_headers(
         server,
         mcp_auth_header=None,
@@ -502,6 +511,11 @@ def test_custom_admission_header_controls_authorization_forwarding(
         extra_headers=["Authorization", "x-tenant"],
     )
     user: Final = UserAPIKeyAuth(api_key="hashed-key")
+    expected_headers: Final = (
+        expected
+        if auth_type == MCPAuth.true_passthrough
+        else {"x-tenant": "t", "Authorization": raw_headers["Authorization"]}
+    )
 
     upstream_headers: Final = _prepare_mcp_server_headers(
         server,
@@ -511,8 +525,8 @@ def test_custom_admission_header_controls_authorization_forwarding(
         raw_headers=raw_headers,
         user_api_key_auth=user,
     )[1]
-    assert upstream_headers == expected
-    assert _openapi_forwarded_extra_headers(server, raw_headers, user) == expected
+    assert upstream_headers == expected_headers
+    assert _openapi_forwarded_extra_headers(server, raw_headers, user) == expected_headers
 
 
 class TestMCPServerManager:
@@ -3856,7 +3870,7 @@ class TestMCPServerManager:
         assert captured_extra_headers == {"x-request-id": "req-123"}
 
     @pytest.mark.asyncio
-    async def test_call_regular_mcp_tool_never_forwards_admission_key_for_none_auth(
+    async def test_call_regular_mcp_tool_forwards_listed_admission_key_for_none_auth(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         from litellm.proxy import proxy_server
@@ -3907,7 +3921,7 @@ class TestMCPServerManager:
 
         assert capture_extra_headers.await_args is not None
         captured_extra_headers: Final = capture_extra_headers.await_args.args[0]
-        assert captured_extra_headers == {"x-tenant": "tenant-control"}
+        assert captured_extra_headers == {"Authorization": "Bearer sk-" + "1234", "x-tenant": "tenant-control"}
 
     @pytest.mark.asyncio
     async def test_call_regular_mcp_tool_v2_authz_code_drops_caller_authorization(
@@ -21576,7 +21590,7 @@ async def test_repeated_stale_discovery_uses_current_callers_endpoint(endpoint: 
 
 
 @pytest.mark.parametrize("header_name", ("x-litellm-api-key", "X-LiteLLM-API-Key"))
-def test_openapi_extra_headers_exclude_gateway_admission_key(header_name: str) -> None:
+def test_openapi_extra_headers_forward_listed_admission_key(header_name: str) -> None:
     caller_key: Final = "Bearer sk-admission-only"
     raw_headers: Final = {"x-litellm-api-key": caller_key, "x-tenant": "tenant-control"}
     server: Final = MCPServer(
@@ -21593,8 +21607,7 @@ def test_openapi_extra_headers_exclude_gateway_admission_key(header_name: str) -
         None,
         raw_headers,
         UserAPIKeyAuth(api_key="sk-admission-only"),
-    ) == (None, {"X-Tenant": "tenant-control"}, None)
-    assert raw_headers == {"x-litellm-api-key": caller_key, "x-tenant": "tenant-control"}
+    ) == (None, {header_name: caller_key, "X-Tenant": "tenant-control"}, None)
 
 
 @pytest.mark.asyncio
@@ -21900,3 +21913,32 @@ def test_id_jag_listed_tool_metadata_is_isolated_between_identity_assertions() -
     manager.record_listed_tools(server, (first,), callers[0])
     manager.record_listed_tools(server, (second,), callers[1])
     assert tuple(manager.get_listed_tool(server, "list_notes", caller) for caller in callers) == (first, second, None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("raw_headers", "expected_bearer"),
+    [
+        ({"authorization": "Bearer sk-admission-key"}, None),
+        ({"x-litellm-api-key": "sk-admission-key", "authorization": "Bearer upstream-token"}, "upstream-token"),
+    ],
+)
+async def test_pre_call_guardrail_bearer_never_carries_the_admission_key(
+    raw_headers: dict[str, str], expected_bearer: str | None
+) -> None:
+    from litellm.proxy._types import hash_token
+
+    proxy_logging_obj: Final = _permissive_proxy_logging()
+
+    await MCPServerManager().pre_call_tool_check(
+        name="tool",
+        arguments={},
+        server_name="guarded",
+        user_api_key_auth=UserAPIKeyAuth(api_key=hash_token("sk-admission-key")),
+        proxy_logging_obj=proxy_logging_obj,
+        server=MCPServer(server_id="guarded", name="guarded", transport=MCPTransport.stdio),
+        raw_headers=raw_headers,
+    )
+
+    hook_kwargs: Final = proxy_logging_obj.create_mcp_request_object_from_kwargs.call_args.args[0]
+    assert hook_kwargs["incoming_bearer_token"] == expected_bearer

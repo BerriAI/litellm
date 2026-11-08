@@ -1292,3 +1292,40 @@ async def test_inject_mcp_jwt_signs_for_tool_call_path():
     scopes = set(decoded["scope"].split())
     assert "mcp:tools/call" in scopes
     assert "mcp:tools/search_web:call" in scopes
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("raw_headers", "introspected"),
+    [
+        ({"Authorization": "Bearer sk-admission-key"}, False),
+        ({"x-litellm-api-key": "sk-admission-key", "Authorization": "Bearer upstream-opaque"}, True),
+    ],
+)
+async def test_inject_mcp_jwt_never_introspects_the_admission_key(
+    raw_headers: dict[str, str], introspected: bool
+) -> None:
+    from fastapi import HTTPException
+
+    from litellm.proxy._types import UserAPIKeyAuth, hash_token
+    from litellm.proxy.guardrails.guardrail_hooks.mcp_jwt_signer.mcp_jwt_signer import (
+        inject_mcp_jwt_headers_for_upstream,
+    )
+
+    _make_signer(
+        access_token_discovery_uri="http://127.0.0.1:9/.well-known/openid-configuration",
+        token_introspection_endpoint="http://127.0.0.1:9/introspect",
+    )
+
+    async def sign() -> dict[str, str]:
+        return await inject_mcp_jwt_headers_for_upstream(
+            user_api_key_dict=UserAPIKeyAuth(api_key=hash_token("sk-admission-key"), user_id="alice"),
+            raw_headers=raw_headers,
+            for_list_tools=True,
+        )
+
+    if introspected:
+        with pytest.raises(HTTPException):
+            await sign()
+    else:
+        assert (await sign())["Authorization"].startswith("Bearer ")
