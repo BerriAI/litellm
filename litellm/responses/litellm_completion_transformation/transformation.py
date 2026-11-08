@@ -1361,7 +1361,7 @@ class LiteLLMCompletionResponsesConfig:
     @staticmethod
     def transform_responses_api_input_to_messages(
         input: str | ResponseInputParam,
-        responses_api_request: ResponsesAPIOptionalRequestParams | dict,
+        responses_api_request: ResponsesAPIOptionalRequestParams | dict[str, object],
         replay_reasoning: bool = False,
         item_cache_control: bool = False,
         tool_call_provider_fields: bool = False,
@@ -1412,12 +1412,9 @@ class LiteLLMCompletionResponsesConfig:
             | ChatCompletionResponseMessage
             | Message
         ] = []
-        if responses_api_request.get("instructions"):
-            messages.append(
-                LiteLLMCompletionResponsesConfig.transform_instructions_to_system_message(
-                    responses_api_request.get("instructions")
-                )
-            )
+        instructions: Final = responses_api_request.get("instructions")
+        if isinstance(instructions, str) and instructions:
+            messages.append(LiteLLMCompletionResponsesConfig.transform_instructions_to_system_message(instructions))
 
         dumped_input: Final = with_compaction_items_as_params(input)
         read_input: Final = _input_to_read(dumped_input, only_since_compaction, native_compaction)
