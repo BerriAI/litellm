@@ -52,10 +52,12 @@ mod _native {
         request_auth_litellm_header_token, request_auth_managed, request_auth_member_limit,
         request_auth_model_access, request_auth_model_attribution, request_auth_model_budget_check,
         request_auth_model_budget_query, request_auth_model_budget_resolve,
-        request_auth_model_groups, request_auth_org_admin, request_auth_org_route,
-        request_auth_owner_teams, request_auth_personal_budget, request_auth_personal_models,
-        request_auth_reservation, request_auth_route_access, request_auth_scheme_credential,
-        request_auth_select_api_key, request_auth_select_websocket_api_key, request_auth_start,
+        request_auth_model_groups, request_auth_model_helpers, request_auth_org_admin,
+        request_auth_org_route, request_auth_owner_teams, request_auth_personal_budget,
+        request_auth_personal_model_request, request_auth_personal_models,
+        request_auth_personal_owner, request_auth_reservation, request_auth_route_access,
+        request_auth_scheme_credential, request_auth_select_api_key,
+        request_auth_select_websocket_api_key, request_auth_start, request_auth_team_override,
         request_auth_unpriced_model,
     };
     #[pymodule_export]

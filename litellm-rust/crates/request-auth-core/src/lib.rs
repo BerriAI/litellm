@@ -22,14 +22,18 @@ pub mod model_attribution;
 pub mod model_budget_data;
 mod model_budgets;
 pub mod model_groups;
+pub mod model_helpers;
 pub mod org_routes;
 pub mod owner_teams;
 pub mod patterns;
 pub mod personal_budget;
+pub mod personal_model_request;
 pub mod personal_models;
+pub mod personal_owner;
 pub mod protocol;
 pub mod reservation;
 pub mod route_access;
+pub mod team_override;
 pub mod unpriced_models;
 
 pub use error::Error;

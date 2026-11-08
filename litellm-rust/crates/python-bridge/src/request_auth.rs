@@ -574,3 +574,51 @@ pub(crate) fn request_auth_context_percentage(
     let facts: core::budget_context::NumericFacts = from_py(facts)?;
     Ok(py.detach(move || core::budget_context::percentage(&facts)))
 }
+
+#[pyfunction]
+pub(crate) fn request_auth_team_override(
+    py: Python<'_>,
+    facts: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    let facts: core::team_override::Facts = from_py(facts)?;
+    let decision = py
+        .detach(move || core::team_override::decide(&facts))
+        .map_err(map_error)?;
+    to_py(py, &decision)
+}
+
+#[pyfunction]
+pub(crate) fn request_auth_model_helpers(
+    py: Python<'_>,
+    facts: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    let facts: core::model_helpers::Facts = from_py(facts)?;
+    let decision = py
+        .detach(move || core::model_helpers::decide(&facts))
+        .map_err(map_error)?;
+    to_py(py, &decision)
+}
+
+#[pyfunction]
+pub(crate) fn request_auth_personal_owner(
+    py: Python<'_>,
+    facts: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    let facts: core::personal_owner::Facts = from_py(facts)?;
+    let decision = py
+        .detach(move || core::personal_owner::decide(&facts))
+        .map_err(map_error)?;
+    to_py(py, &decision)
+}
+
+#[pyfunction]
+pub(crate) fn request_auth_personal_model_request(
+    py: Python<'_>,
+    facts: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    let facts: core::personal_model_request::Facts = from_py(facts)?;
+    let decision = py
+        .detach(move || core::personal_model_request::decide(&facts))
+        .map_err(map_error)?;
+    to_py(py, &decision)
+}
