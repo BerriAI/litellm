@@ -5510,6 +5510,7 @@ def completion(
 
     from litellm.integrations.anthropic_cache_control_hook import (
         AnthropicCacheControlHook,
+        developer_messages_for_a_prompt_caching_model,
     )
     from litellm.types.llms.openai import AllMessageValues
 
@@ -5680,7 +5681,14 @@ def completion(
 
         if provider_config is not None:
             translated_messages: Final = provider_config.translate_developer_role_to_system_role(
-                messages=messages,
+                messages=list(
+                    developer_messages_for_a_prompt_caching_model(
+                        cast(list[AllMessageValues], messages),  # cast-ok: completion types messages as a bare List
+                        model=model,
+                        custom_llm_provider=custom_llm_provider,
+                        model_info=model_info,
+                    )
+                ),
                 other_request_fields=MappingProxyType(
                     {
                         "tools": cast(list[object] | None, tools),  # cast-ok: completion types tools as a bare List

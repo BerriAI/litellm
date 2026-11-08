@@ -283,6 +283,40 @@ def request_keeps_developer_cache_control(
     )
 
 
+def declared_prompt_caching(model_info: object) -> bool | None:
+    fields: Final = as_str_mapping(model_info)
+    declared: Final = None if fields is None else fields.get("supports_prompt_caching")
+    return declared if isinstance(declared, bool) else None
+
+
+def _without_developer_cache_control(message: AllMessageValues) -> AllMessageValues:
+    if message["role"] != "developer" or "cache_control" not in message:
+        return message
+    return cast(  # cast-ok: the same developer message without its cache marker
+        AllMessageValues, {key: value for key, value in message.items() if key != "cache_control"}
+    )
+
+
+def developer_messages_for_a_prompt_caching_model(
+    messages: Sequence[AllMessageValues],
+    *,
+    model: str,
+    custom_llm_provider: str | None,
+    model_info: object,
+) -> Sequence[AllMessageValues]:
+    from litellm.utils import supports_prompt_caching
+
+    if not any(message["role"] == "developer" and "cache_control" in message for message in messages):
+        return messages
+    declared: Final = declared_prompt_caching(model_info)
+    caches_prompts: Final = (
+        declared
+        if declared is not None
+        else supports_prompt_caching(model=model, custom_llm_provider=custom_llm_provider)
+    )
+    return messages if caches_prompts else [_without_developer_cache_control(message) for message in messages]
+
+
 def _tool_call_carries_cache_breakpoint(tool_call: object, message: object, answered_tool_ids: Container[str]) -> bool:
     if _attribute_or_key(tool_call, "cache_control") is None:
         return False
