@@ -39,12 +39,13 @@ async def test_alert_resource_labels_bound_legacy_display_values(db: ManagementD
         await repository.database.query_raw('DELETE FROM "LiteLLM_UserTable" WHERE user_id=$1', identity)
 
 
-def test_scoped_rules_use_real_management_auth_and_preserve_read_only_roles(gateway: Gateway) -> None:
+@pytest.mark.parametrize("grant", ["management_routes", "/usage", "/usage/alert-rules"])
+def test_scoped_rules_use_real_management_auth_and_preserve_read_only_roles(gateway: Gateway, grant: str) -> None:
     with gateway.scenario() as scenario:
         owner: Final = scenario.user(user_role="internal_user")
         outsider: Final = scenario.user(user_role="internal_user")
         viewer: Final = scenario.user(user_role="proxy_admin_viewer")
-        owner_key: Final = scenario.key(user_id=owner, key_type="management")
+        owner_key: Final = scenario.key(user_id=owner, key_type="default", allowed_routes=[grant])
         outsider_key: Final = scenario.key(user_id=outsider, key_type="management")
         viewer_key: Final = scenario.key(user_id=viewer, key_type="read_only")
         inference_key: Final = scenario.key(user_id=owner, key_type="llm_api")
