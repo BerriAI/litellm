@@ -1,4 +1,5 @@
 import { useQueryStates } from "nuqs";
+import { useQueryClient } from "@tanstack/react-query";
 import { useEffect } from "react";
 import { RefreshCw } from "lucide-react";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
@@ -53,6 +54,7 @@ function AlertEntry({ issue }: { issue: Issue }) {
 
 export default function IssuesInbox() {
   const { accessToken, userRole, isViewOnly } = useAuthorized();
+  const client = useQueryClient();
   const [params, setParams] = useQueryStates(issueRouteParsers);
   const table = useUrlTableState(TABLE_STATE);
   const status = params.status ?? params.state ?? params.usage_status ?? "open";
@@ -66,6 +68,10 @@ export default function IssuesInbox() {
     limit: table.pagination.pageSize,
   };
   const query = useIssues(accessToken, queryOptions);
+  const refresh = () => {
+    void query.refetch();
+    void client.invalidateQueries({ queryKey: ["performanceMonitoring"] });
+  };
   const { data: alerts = { data: [], total: 0 } } = query;
   const lastPage = Math.max(0, Math.ceil(alerts.total / table.pagination.pageSize) - 1);
   const { pageIndex, pageSize } = table.pagination;
@@ -90,7 +96,7 @@ export default function IssuesInbox() {
     return (
       <div role="alert" className="space-y-2">
         <p>Could not load alerts.</p>
-        <Button variant="outline" onClick={() => void query.refetch()}>
+        <Button variant="outline" onClick={refresh}>
           Retry
         </Button>
       </div>
@@ -132,7 +138,7 @@ export default function IssuesInbox() {
               size="icon-sm"
               aria-label="Refresh alerts"
               disabled={query.isFetching}
-              onClick={() => void query.refetch()}
+              onClick={refresh}
             >
               <RefreshCw className={query.isFetching ? "animate-spin" : undefined} />
             </Button>

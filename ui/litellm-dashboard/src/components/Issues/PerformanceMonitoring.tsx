@@ -15,7 +15,7 @@ function monitoringCopy({ enabled, incidents_used: used, incident_limit: limit }
   if (!enabled)
     return [
       "Performance alerts",
-      `Detect unusual spend, latency, errors, and traffic.${limit === null ? "" : ` Includes ${limit - used} detected incidents.`}`,
+      `Detect unusual spend, latency, errors, and traffic.${limit === null ? "" : ` ${limit - used} included incidents remaining.`}`,
     ];
   return [
     "Performance alerts enabled",
@@ -43,6 +43,7 @@ export default function PerformanceMonitoring({
       return data;
     },
     retry: false,
+    refetchInterval: 5 * 60_000,
   };
   const query = useQuery(options);
   const update = useMutation({

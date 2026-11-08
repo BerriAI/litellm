@@ -37,6 +37,7 @@ let deniedDetail = false;
 let resourceTotal = 1;
 let modelBreakdown: NonNullable<components["schemas"]["BoundedDailyActivityResponse"]["model_breakdown"]> | null = null;
 let families = FAMILY_SETTINGS;
+let monitoring: components["schemas"]["PerformanceMonitoring"];
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 
@@ -117,6 +118,7 @@ describe("unified issue investigations", () => {
     resourceTotal = 1;
     modelBreakdown = null;
     families = FAMILY_SETTINGS;
+    monitoring = { enabled: true, incidents_used: 0, incident_limit: null };
     auth.isViewOnly = false;
     auth.isAuthorized = true;
     auth.userRole = "Admin";
@@ -134,8 +136,7 @@ describe("unified issue investigations", () => {
         return json({ user_id: auth.userId, user_role: auth.userRole === "Admin" ? "proxy_admin" : "internal_user" });
       if (url.pathname === "/issues/foreign-issue") return json({ detail: "Forbidden private-project metadata" }, 403);
       if (url.pathname === "/issues") return refreshed(() => listResponse(url.searchParams));
-      if (url.pathname === "/issues/monitoring")
-        return json({ enabled: true, incidents_used: 0, incident_limit: null });
+      if (url.pathname === "/issues/monitoring") return json(monitoring);
       if (url.pathname === "/issues/families") return json(families);
       if (url.pathname === "/issues/families/spend") return json(FAMILY_SETTINGS.data[0]);
       if (url.pathname.endsWith("/activity"))
@@ -205,6 +206,19 @@ describe("unified issue investigations", () => {
     ).toBe("0");
   });
 
+  it("refreshes the remaining allowance alongside the alerts", async () => {
+    monitoring = { enabled: true, incidents_used: 4, incident_limit: 5 };
+    renderWithProviders(<IssuesInbox />);
+    expect(await screen.findByText(/4 of 5 included incidents detected/)).toBeVisible();
+    await screen.findByRole("link", { name: RETIREMENT_ISSUE.title });
+    monitoring = { enabled: true, incidents_used: 5, incident_limit: 5 };
+    empty = true;
+    fireEvent.click(screen.getByRole("button", { name: "Refresh alerts" }));
+    expect(await screen.findByText("No open alerts.")).toBeVisible();
+    expect(await screen.findByText("Performance monitoring paused")).toBeVisible();
+    expect(screen.getByRole("link", { name: "Upgrade to Enterprise" })).toBeVisible();
+  });
+
   it("keeps old performance list links usable", async () => {
     renderWithProviders(<IssuesInbox />, { searchParams: "type=usage&usage_status=resolved" });
     await screen.findByRole("link", { name: "Spend on Checkout key rose to 20× normal" });
@@ -248,13 +262,11 @@ describe("unified issue investigations", () => {
       expect(calls.some((call) => call.method === "PATCH" && call.path === `/issues/${SPEND_ISSUE.id}`)).toBe(true),
     );
     expect(
-      calls.filter(
-        (call) =>
-          call.method === "GET" &&
-          call.path.startsWith("/issues/") &&
-          !call.path.endsWith("/families") &&
-          !call.path.endsWith("/monitoring"),
-      ),
+      calls.filter((call) => {
+        const individualAlert =
+          call.path.startsWith("/issues/") && !["/issues/families", "/issues/monitoring"].includes(call.path);
+        return call.method === "GET" && individualAlert;
+      }),
     ).toHaveLength(0);
     expect(calls.find((call) => call.method === "PATCH")?.body).toEqual({
       status: "resolved",

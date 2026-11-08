@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, renderWithProviders, screen, testQueryClient } from "../../../tests/test-utils";
+import { act, fireEvent, renderWithProviders, screen, testQueryClient } from "../../../tests/test-utils";
 import PerformanceMonitoring from "./PerformanceMonitoring";
 
 let state = { enabled: false, incidents_used: 0, incident_limit: 5 as number | null };
@@ -28,7 +28,28 @@ describe("Performance monitoring activation", () => {
       return json(state);
     });
   });
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  it("shows remaining allowance when paused after detecting incidents", async () => {
+    state = { enabled: false, incidents_used: 2, incident_limit: 5 };
+    renderWithProviders(<PerformanceMonitoring accessToken="test-session" />);
+    expect(await screen.findByText(/3 included incidents remaining/)).toBeVisible();
+    expect(screen.getByRole("button", { name: "Enable performance alerts" })).toBeEnabled();
+  });
+
+  it("updates an open page when monitoring exhausts its allowance", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    state = { enabled: true, incidents_used: 4, incident_limit: 5 };
+    renderWithProviders(<PerformanceMonitoring accessToken="test-session" />);
+    expect(await screen.findByText(/4 of 5 included incidents detected/)).toBeVisible();
+    state = { enabled: true, incidents_used: 5, incident_limit: 5 };
+    await act(() => vi.advanceTimersByTimeAsync(5 * 60_000));
+    expect(await screen.findByText("Performance monitoring paused")).toBeVisible();
+    expect(screen.getByRole("link", { name: "Upgrade to Enterprise" })).toBeVisible();
+  });
 
   it("enables defaults in one action and reads back saved state", async () => {
     renderWithProviders(<PerformanceMonitoring accessToken="test-session" />);
