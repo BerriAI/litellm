@@ -9,6 +9,7 @@ from litellm.responses.litellm_completion_transformation.claude_hosted_tools imp
     claude_computer_member_call,
     openai_computer_call,
 )
+from litellm.responses.litellm_completion_transformation.transformation import LiteLLMCompletionResponsesConfig
 
 
 def _openai_action(member: str, member_input: Mapping[str, object]) -> dict[str, object]:
@@ -106,8 +107,19 @@ def test_malformed_member_arguments_give_no_computer_call() -> None:
     ],
     ids=["back_button", "single_point_drag", "unknown_type", "missing"],
 )
-def test_computer_call_input_claude_cannot_run_answers_400(action: object) -> None:
+def test_computer_call_claude_cannot_run_answers_400_only_on_the_bridge(action: object) -> None:
+    history: Final = [
+        {"type": "message", "role": "user", "content": "Go back a page"},
+        {"type": "computer_call", "call_id": "call_1", "action": action, "pending_safety_checks": [], "status": "completed"},
+    ]
+
     with pytest.raises(UnsupportedParamsError) as rejected:
-        claude_computer_member_call(action)
+        LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model="claude-sonnet-5-5", input=history, responses_api_request={}, custom_llm_provider="anthropic"
+        )
+    read: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+        input=history, responses_api_request={}
+    )
 
     assert rejected.value.status_code == 400
+    assert [message.get("role") for message in read] == ["user"]

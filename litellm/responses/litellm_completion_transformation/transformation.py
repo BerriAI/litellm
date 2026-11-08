@@ -158,6 +158,7 @@ from .claude_hosted_tools import (
     claude_code_execution_command,
     claude_computer_member_call_message,
     claude_tools_for_openai_hosted_tools,
+    first_unrunnable_computer_call,
     is_claude_code_execution_use,
     is_computer_member_call,
     openai_computer_call,
@@ -1370,6 +1371,11 @@ class LiteLLMCompletionResponsesConfig:
         )
         if malformed_field_error is not None:
             raise malformed_field_error
+        unrunnable_computer_call: Final = first_unrunnable_computer_call(
+            _input_to_read(request_input, not native_compaction, native_compaction)
+        )
+        if unrunnable_computer_call is not None:
+            raise unrunnable_computer_call
 
         litellm_completion_request: dict = {
             "messages": (
@@ -2458,7 +2464,8 @@ class LiteLLMCompletionResponsesConfig:
                 )
             )
         elif input_item.get("type") == "computer_call":
-            return [claude_computer_member_call_message(input_item)]
+            member_call_message: Final = claude_computer_member_call_message(input_item)
+            return [] if member_call_message is None else [member_call_message]
         elif LiteLLMCompletionResponsesConfig._is_input_item_function_call(input_item):
             # handle function call input items
             return LiteLLMCompletionResponsesConfig._transform_responses_api_function_call_to_chat_completion_message(

@@ -271,9 +271,12 @@ def _openai_scroll(x: int, y: int, member_input: _ClaudeMemberInput) -> ActionSc
     )
 
 
-def claude_computer_member_call_message(computer_call: Mapping[str, object]) -> ChatCompletionResponseMessage:
+def claude_computer_member_call_message(computer_call: Mapping[str, object]) -> ChatCompletionResponseMessage | None:
+    member_call: Final = claude_computer_member_call(computer_call.get("action"))
+    if isinstance(member_call, UnsupportedParamsError):
+        return None
+    member, member_input = member_call
     call_id: Final = computer_call.get("call_id") or computer_call.get("id")
-    member, member_input = claude_computer_member_call(computer_call.get("action"))
     return ChatCompletionResponseMessage(
         role="assistant",
         content=None,
@@ -289,16 +292,29 @@ def claude_computer_member_call_message(computer_call: Mapping[str, object]) -> 
     )
 
 
-def claude_computer_member_call(action: object) -> tuple[str, Mapping[str, object]]:
+def first_unrunnable_computer_call(input: str | Sequence[object]) -> UnsupportedParamsError | None:
+    if isinstance(input, str):
+        return None
+    return next((error for error in map(_unrunnable_computer_call, input) if error is not None), None)
+
+
+def _unrunnable_computer_call(item: object) -> UnsupportedParamsError | None:
+    if message_field(item, "type") != "computer_call":
+        return None
+    member_call: Final = claude_computer_member_call(message_field(item, "action"))
+    return member_call if isinstance(member_call, UnsupportedParamsError) else None
+
+
+def claude_computer_member_call(action: object) -> tuple[str, Mapping[str, object]] | UnsupportedParamsError:
     try:
         parsed: Final = _ACTION_ADAPTER.validate_python(action)
     except ValidationError as error:
-        raise UnsupportedParamsError(
+        return UnsupportedParamsError(
             message=f"A `computer_call` input item has no valid `action`: {error}", status_code=400
-        ) from error
+        )
     member_call: Final = _claude_member_call_for(parsed)
     if member_call is None:
-        raise UnsupportedParamsError(
+        return UnsupportedParamsError(
             message=f"The `computer_call` action {parsed.model_dump_json()} has no equivalent in Claude's computer use.",
             status_code=400,
         )
