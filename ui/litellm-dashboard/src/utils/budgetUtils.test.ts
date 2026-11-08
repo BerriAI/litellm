@@ -32,8 +32,9 @@ describe("formatBudgetResetTime", () => {
     "prints the reset instant in UTC and says so for a %s viewer",
     (timeZone) => {
       process.env.TZ = timeZone;
-      expect(formatBudgetResetTime("2026-11-01T00:00:00Z")).toBe("Nov 1, 2026 00:00 UTC");
-      expect(formatBudgetResetTime("2026-10-31T17:30:00-07:00")).toBe("Nov 1, 2026 00:30 UTC");
+      expect(formatBudgetResetTime("2026-11-01T00:00:00Z")).toBe("Nov 1, 2026 at 12:00 AM UTC");
+      expect(formatBudgetResetTime("2026-10-31T17:30:00-07:00")).toBe("Nov 1, 2026 at 12:30 AM UTC");
+      expect(formatBudgetResetTime("2026-11-01T13:05:00Z")).toBe("Nov 1, 2026 at 1:05 PM UTC");
     },
   );
 

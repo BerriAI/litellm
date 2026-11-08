@@ -6,11 +6,15 @@ import i18n from "@/i18n/i18n";
 
 dayjs.extend(utc);
 
-export function formatBudgetResetTime(iso: string | null | undefined): string | null {
+export function formatBudgetResetTime(iso: string | null | undefined, t: TFunction = i18n.t.bind(i18n)): string | null {
   if (!iso) return null;
   const resetDate = dayjs.utc(iso);
   if (!resetDate.isValid()) return null;
-  return resetDate.format("MMM D, YYYY HH:mm [UTC]");
+  const timestamp = t("keyDetail.keyInfoView.timestamp", {
+    date: resetDate.format("MMM D, YYYY"),
+    time: resetDate.format("h:mm A"),
+  });
+  return `${timestamp} UTC`;
 }
 
 export function formatBudgetResetUtc(iso: string | null | undefined): string | null {
