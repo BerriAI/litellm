@@ -30,6 +30,8 @@ from litellm.types.utils import CountContextManagement, LlmProviders, TokenCount
 
 TOKENIZER_TYPE: Final = "xai_api"
 _SEPARATOR: Final = "<|separator|>\n\n"
+_TOKEN_ID_KEY: Final = b'"token_id":'
+_TOKENIZE_TIMEOUT_SECONDS: Final = 30.0
 _ROLE_LABELS: Final = MappingProxyType({"system": "System", "developer": "System", "assistant": "Assistant"})
 
 
@@ -72,10 +74,6 @@ class _Message(_Strict):
 class _TranslatedRequest(_Strict):
     messages: tuple[Mapping[str, object], ...]
     tools: tuple[Mapping[str, object], ...] | None = None
-
-
-class _TokenizeTextReply(_Strict):
-    token_ids: tuple[JsonValue, ...]
 
 
 _MESSAGES: Final = TypeAdapter(tuple[_Message, ...], config=ConfigDict(hide_input_in_errors=True))
@@ -151,6 +149,10 @@ def _is_xai_deployment(litellm_params: Mapping[str, object]) -> bool:
     return provider == LlmProviders.XAI.value
 
 
+def _count_token_ids_without_parsing(reply: bytes) -> int:
+    return reply.count(_TOKEN_ID_KEY)
+
+
 def _non_blank(value: object) -> str | None:
     return value if isinstance(value, str) and value.strip() else None
 
@@ -218,15 +220,18 @@ class XAITokenCounter(BaseTokenCounter):
                 url=join_api_base(api_base, "tokenize-text"),
                 headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
                 json={"text": text, "model": model},
+                timeout=_TOKENIZE_TIMEOUT_SECONDS,
             )
-            reply: Final = _TokenizeTextReply.model_validate_json(response.content)
         except MaskedHTTPStatusError as e:
             status_code: Final = e.response.status_code
             return self._error(request_model, model, status_code, e.text or f"xAI tokenize-text answered {status_code}")
-        except (httpx.RequestError, litellm.Timeout, ValueError) as e:
+        except (httpx.RequestError, litellm.Timeout) as e:
             return self._error(request_model, model, 502, f"xAI tokenize-text failed: {type(e).__name__}")
+        token_count: Final = _count_token_ids_without_parsing(response.content)
+        if token_count == 0:
+            return self._error(request_model, model, 502, "xAI tokenize-text answered without token ids")
         return TokenCountResponse(
-            total_tokens=len(reply.token_ids),
+            total_tokens=token_count,
             request_model=request_model,
             model_used=model,
             tokenizer_type=TOKENIZER_TYPE,

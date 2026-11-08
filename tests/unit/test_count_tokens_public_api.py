@@ -232,3 +232,21 @@ def test_acount_tokens_estimates_an_xai_model_without_known_framing_locally(http
 
     assert route.call_count == 0
     assert result.tokenizer_type == "local_tokenizer"
+
+
+def test_acount_tokens_adds_the_tool_framing_to_an_xai_count_that_carries_tools(httpx_transport_clients):
+    tool = {"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {}}}}
+    with respx.mock(assert_all_called=True) as router:
+        router.post("https://api.x.ai/v1/tokenize-text").mock(
+            return_value=httpx.Response(200, json={"token_ids": [{"token_id": i} for i in range(5)]})
+        )
+        result = asyncio.run(
+            litellm.acount_tokens(
+                model="xai/grok-4.3", messages=[{"role": "user", "content": "hi"}], tools=[tool], api_key="k"
+            )
+        )
+
+    info = litellm.get_model_info("xai/grok-4.3")
+    tool_framing = info["token_count_tool_framing"]
+    assert isinstance(tool_framing, int) and tool_framing != info["token_count_framing"]
+    assert result.total_tokens == 5 + tool_framing

@@ -1756,6 +1756,15 @@ async def test_azure_grok_with_an_xai_token_count_model_counts_with_xai_and_the_
     assert route.calls.last.request.headers["Authorization"] == "Bearer xai-env-key"
 
 
+_AZURE_GROK_UNMAPPED_COUNTED_BY_XAI: Final = MappingProxyType(
+    {
+        **_AZURE_GROK,
+        "litellm_params": {**_AZURE_GROK["litellm_params"], "model": "azure_ai/grok-not-in-the-cost-map"},
+        "model_info": {"token_count_model": {"model": "grok-4.7", "litellm_provider": "xai"}},
+    }
+)
+
+
 @pytest.mark.asyncio
 async def test_azure_grok_without_an_xai_token_count_model_never_sends_the_prompt_to_xai(
     monkeypatch: pytest.MonkeyPatch,
@@ -1773,11 +1782,7 @@ async def test_azure_grok_without_an_xai_token_count_model_never_sends_the_promp
     "deployment",
     [
         {"model_name": "grok-unmapped", "litellm_params": {"model": "xai/grok-not-in-the-cost-map", "api_key": "k"}},
-        {
-            **_AZURE_GROK,
-            "litellm_params": {**_AZURE_GROK["litellm_params"], "model": "azure_ai/grok-not-in-the-cost-map"},
-            "model_info": {"token_count_model": {"model": "grok-4.7", "litellm_provider": "xai"}},
-        },
+        _AZURE_GROK_UNMAPPED_COUNTED_BY_XAI,
     ],
     ids=["xai_model", "azure_model_counted_by_xai"],
 )
@@ -1792,6 +1797,49 @@ async def test_a_grok_model_without_known_framing_is_estimated_locally_instead_o
     assert route.call_count == 0
     assert isinstance(response, dict)
     assert response["litellm_count_source"] == "local_estimate"
+
+
+@pytest.mark.asyncio
+async def test_an_xai_token_count_model_from_the_cost_map_never_sends_an_azure_prompt_to_xai(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("XAI_API_KEY", "xai-env-key")
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "azure_ai/grok-with-a-cost-map-xai-count",
+        {
+            "litellm_provider": "azure_ai",
+            "mode": "chat",
+            "token_count_framing": 7,
+            "token_count_model": {"model": "grok-4.7", "litellm_provider": "xai"},
+        },
+    )
+    deployment: Final = {
+        **_AZURE_GROK,
+        "litellm_params": {**_AZURE_GROK["litellm_params"], "model": "azure_ai/grok-with-a-cost-map-xai-count"},
+    }
+
+    response, route = await _count_with_xai_mocked(monkeypatch, deployment, token_ids=5)
+
+    assert route.call_count == 0
+    assert isinstance(response, dict)
+    assert response["litellm_count_source"] == "local_estimate"
+
+
+@pytest.mark.asyncio
+async def test_an_opted_in_model_without_known_framing_tells_the_admin_how_to_count_with_xai(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setenv("XAI_API_KEY", "xai-env-key")
+    verbose_proxy_logger.addHandler(caplog.handler)
+    try:
+        with caplog.at_level(logging.WARNING, logger=verbose_proxy_logger.name):
+            await _count_with_xai_mocked(monkeypatch, _AZURE_GROK_UNMAPPED_COUNTED_BY_XAI, token_ids=5)
+    finally:
+        verbose_proxy_logger.removeHandler(caplog.handler)
+
+    warnings: Final = [record.getMessage() for record in caplog.records if record.levelno == logging.WARNING]
+    assert any("azure-grok" in warning and "model_info.token_count_framing" in warning for warning in warnings)
 
 
 _XAI_WEATHER_FUNCTION: Final = MappingProxyType(

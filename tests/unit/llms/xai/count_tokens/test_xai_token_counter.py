@@ -1,4 +1,5 @@
 import json
+import time
 from collections.abc import Callable, Mapping
 from typing import Final
 
@@ -222,8 +223,8 @@ def _refuse(request: httpx.Request) -> httpx.Response:
     [
         (lambda request: httpx.Response(429, text="slow down", request=request), 429, "slow down"),
         (lambda request: httpx.Response(503, request=request), 503, "answered 503"),
-        (lambda request: httpx.Response(200, json={"tokens": []}, request=request), 502, "ValidationError"),
-        (lambda request: httpx.Response(200, text="<html>", request=request), 502, "ValidationError"),
+        (lambda request: httpx.Response(200, json={"tokens": []}, request=request), 502, "without token ids"),
+        (lambda request: httpx.Response(200, text="<html>", request=request), 502, "without token ids"),
         (_refuse, 502, "ReadError"),
     ],
     ids=["provider_error", "empty_error_body", "unexpected_shape", "not_json", "unreachable"],
@@ -239,6 +240,57 @@ async def test_a_failed_count_answers_an_error_with_its_status(
     assert result is not None
     assert (result.error, result.status_code, result.total_tokens) == (True, status_code, 0)
     assert result.error_message is not None and message in result.error_message
+
+
+@pytest.mark.asyncio
+async def test_counts_each_token_once_when_the_token_text_spells_the_reply_keys() -> None:
+    tokens: Final = ("He", " said", ' "', "token", "_id", '":', '"token_id":', "token_id", '{"token_id":1}', "\\")
+    xai: Final = _XAI(
+        lambda request: httpx.Response(
+            200,
+            json={
+                "token_ids": [
+                    {"token_id": i, "string_token": token, "token_bytes": list(token.encode())}
+                    for i, token in enumerate(tokens)
+                ]
+            },
+            request=request,
+        )
+    )
+
+    result: Final = await _counter(xai).count_tokens(
+        model_to_use="xai/grok-4.7", messages=HI, contents=None, deployment=XAI_DEPLOYMENT
+    )
+
+    assert result is not None
+    assert (result.error, result.total_tokens) == (False, len(tokens))
+
+
+@pytest.mark.asyncio
+async def test_a_large_count_reply_is_counted_without_holding_the_event_loop() -> None:
+    token_count: Final = 250_000
+    token: Final = b'{"token_id":1,"string_token":" word","token_bytes":[32,119,111,114,100]}'
+    reply: Final = b'{"token_ids":[' + b",".join([token] * token_count) + b"]}"
+    xai: Final = _XAI(lambda request: httpx.Response(200, content=reply, request=request))
+
+    started: Final = time.perf_counter()
+    result: Final = await _counter(xai).count_tokens(
+        model_to_use="xai/grok-4.7", messages=HI, contents=None, deployment=XAI_DEPLOYMENT
+    )
+    elapsed: Final = time.perf_counter() - started
+
+    assert result is not None and result.total_tokens == token_count
+    assert elapsed < 0.3
+
+
+@pytest.mark.asyncio
+async def test_a_count_stops_waiting_for_xai_long_before_the_completion_timeout() -> None:
+    xai: Final = _XAI(_tokens(1))
+
+    await _counter(xai).count_tokens(model_to_use="xai/grok-4.7", messages=HI, contents=None, deployment=XAI_DEPLOYMENT)
+
+    timeouts: Final = xai.requests[0].extensions["timeout"]
+    assert all(seconds is not None and seconds <= 30 for seconds in timeouts.values())
 
 
 @pytest.mark.parametrize(

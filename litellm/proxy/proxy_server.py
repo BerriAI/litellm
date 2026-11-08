@@ -15204,7 +15204,7 @@ def _with_client_oauth_token(
 
 def _count_model_counter(settings: TokenCountSettings) -> BaseTokenCounter | None:
     count_model: Final = settings.count_model
-    if count_model is None or count_model.litellm_provider != "xai":
+    if count_model is None or not count_model.configured or count_model.litellm_provider != "xai":
         return None
     from litellm.llms.xai.count_tokens.token_counter import XAITokenCounter
 
@@ -15212,10 +15212,17 @@ def _count_model_counter(settings: TokenCountSettings) -> BaseTokenCounter | Non
 
 
 def _counter_with_known_framing(
-    counter: BaseTokenCounter | None, settings: TokenCountSettings
+    counter: BaseTokenCounter | None, settings: TokenCountSettings, model: str
 ) -> BaseTokenCounter | None:
     if counter is None or counter.includes_framing or settings.framing is not None:
         return counter
+    if settings.count_model is not None and settings.count_model.configured:
+        verbose_proxy_logger.warning(
+            "token_count_model is set for %s, but its prompt overhead is unknown, so it counts with the local "
+            "estimate. Set model_info.token_count_framing to count with %s",
+            model,
+            settings.count_model.model,
+        )
     return None
 
 
@@ -16117,7 +16124,9 @@ async def _count_request_tokens(
         # Auto-route to the correct provider based on model
         routed_counter, _model, custom_llm_provider = _get_provider_token_counter(deployment, model_to_use)
         provider_counter = _counter_with_known_framing(
-            _with_client_oauth_token(_count_model_counter(settings) or routed_counter, client_oauth_token), settings
+            _with_client_oauth_token(_count_model_counter(settings) or routed_counter, client_oauth_token),
+            settings,
+            request.model,
         )
         if _model is not None:
             model_to_use = _model

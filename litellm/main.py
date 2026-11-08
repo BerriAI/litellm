@@ -173,6 +173,7 @@ from litellm.types.router import GenericLiteLLMParams, validate_litellm_params_s
 from litellm.types.utils import (
     AgenticLoopParams,
     BaseUrlRoutingHint,
+    ModelInfo,
     ModelResponseStream,
     ProviderRoutingHints,
     RawRequestTypedDict,
@@ -9557,6 +9558,13 @@ from litellm.litellm_core_utils.streaming_chunk_builder_utils import (  # noqa: 
 ########## Token Counting API ##########
 
 
+def _hidden_chat_prompt_tokens(model_info: ModelInfo, tools: Sequence[Mapping[str, object]] | None) -> int | None:
+    from litellm.litellm_core_utils.token_counter import sends_function_tools
+
+    tool_framing: Final = model_info.get("token_count_tool_framing") if sends_function_tools(tools) else None
+    return tool_framing if tool_framing is not None else model_info.get("token_count_framing")
+
+
 async def acount_tokens(
     model: str,
     messages: list[dict[str, object]] | None = None,
@@ -9623,7 +9631,7 @@ async def acount_tokens(
             added_framing: Final = (
                 0
                 if token_counter_instance is None or token_counter_instance.includes_framing
-                else litellm.get_model_info(model).get("token_count_framing")
+                else _hidden_chat_prompt_tokens(litellm.get_model_info(model), tools)
             )
             if (
                 token_counter_instance is not None
