@@ -18,9 +18,14 @@ from __future__ import annotations
 import json
 from collections.abc import Iterator, Mapping, Sequence
 from itertools import islice
-from typing import Final, NamedTuple
+from typing import Final, Literal, NamedTuple
 
 from pydantic import TypeAdapter
+
+StallDetectionReason = Literal[
+    "repeated_tool_call",
+    "repeated_tool_error",
+]
 
 _ARGUMENTS_PARSE_FAILED: Final = object()
 _DECODED_ARGUMENTS: Final = TypeAdapter(object)
@@ -97,8 +102,8 @@ def detect_stalled_task(
     *,
     window: int,
     repeat_threshold: int,
-) -> bool:
-    """Whether the newest tool call is still part of a stuck pattern: it repeats, or it
+) -> StallDetectionReason | None:
+    """Which stuck pattern the newest tool call is part of, if any: it repeats, or it
     errored, at least repeat_threshold times across the last `window` calls.
 
     Both tests are anchored on the newest call rather than counting whichever pattern is
@@ -108,14 +113,16 @@ def detect_stalled_task(
     matches, so a retry loop broken up by an unrelated lookup still reads as stuck.
     """
     if not messages or repeat_threshold <= 0:
-        return False
+        return None
     recent: Final = tuple(islice(_iter_tool_call_events_newest_first(messages), window))
     if len(recent) < repeat_threshold:
-        return False
+        return None
     newest: Final = recent[0]
     repeats: Final = sum(1 for event in recent if event.signature == newest.signature)
     if repeats >= repeat_threshold:
-        return True
+        return "repeated_tool_call"
     if not newest.is_error:
-        return False
-    return sum(1 for event in recent if event.is_error) >= repeat_threshold
+        return None
+    if sum(1 for event in recent if event.is_error) >= repeat_threshold:
+        return "repeated_tool_error"
+    return None
