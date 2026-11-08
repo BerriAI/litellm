@@ -118,8 +118,22 @@ def test_a_single_attempt_endpoint_raises_with_no_note(make_core: MakeCore, host
     show_router_debug(host)
     host.answer("openai/a", server_error())
     with pytest.raises(litellm.InternalServerError) as raised:
-        core.responses(model="a", input="hi")  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]  # an endpoint
+        core.ocr(model="a", document={"type": "document_url", "document_url": "https://example.test/a.pdf"})  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]  # an endpoint
     assert NOTE not in str(raised.value)
+    assert host.deployments_called() == ["a"]
+
+
+def test_the_sync_responses_endpoint_falls_back_and_notes_the_failed_fallback(
+    make_core: MakeCore, host: EndpointHost
+) -> None:
+    core: Final = build(make_core, fallbacks=[{"a": ["b"]}])
+    show_router_debug(host)
+    host.answer("openai/a", server_error())
+    host.answer("openai/b", server_error())
+    with pytest.raises(litellm.InternalServerError) as raised:
+        core.responses(model="a", input="hi")  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]  # an endpoint
+    assert f"{NOTE} 'a' failed with the error above. Fallback to b also failed" in str(raised.value)
+    assert host.deployments_called() == ["a", "b"]
 
 
 async def test_an_empty_request_list_says_no_fallbacks_are_configured(make_core: MakeCore, host: EndpointHost) -> None:
