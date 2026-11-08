@@ -26,6 +26,8 @@ const auth = vi.hoisted(() => ({
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({ default: () => auth }));
 const calls: { path: string; query: URLSearchParams; method: string; body: unknown }[] = [];
 let detail: Issue;
+let refreshBarrier: Promise<void> | undefined;
+let holdReads = false;
 let failList = false;
 let failActivity = false;
 let staleStatus = false;
@@ -99,6 +101,8 @@ describe("unified issue investigations", () => {
     testQueryClient.clear();
     calls.length = 0;
     detail = structuredClone(SPEND_ISSUE);
+    refreshBarrier = undefined;
+    holdReads = false;
     failList = false;
     failActivity = false;
     staleStatus = false;
@@ -124,7 +128,10 @@ describe("unified issue investigations", () => {
       if (url.pathname === "/management/v1/users/me")
         return json({ user_id: auth.userId, user_role: auth.userRole === "Admin" ? "proxy_admin" : "internal_user" });
       if (url.pathname === "/issues/foreign-issue") return json({ detail: "Forbidden private-project metadata" }, 403);
-      if (url.pathname === "/issues") return listResponse(url.searchParams);
+      if (url.pathname === "/issues") {
+        if (holdReads) await refreshBarrier;
+        return listResponse(url.searchParams);
+      }
       if (url.pathname === "/issues/monitoring")
         return json({ enabled: true, incidents_used: 0, incident_limit: null });
       if (url.pathname === "/issues/families") return json(families);
@@ -152,7 +159,10 @@ describe("unified issue investigations", () => {
         if (request.method === "PATCH") {
           if (staleStatus) return json({ detail: "Issue changed" }, 409);
           detail = { ...detail, ...body };
+          holdReads = Boolean(refreshBarrier);
+          return json({ ...detail, can_update_status: null, can_view_activity: null });
         }
+        if (holdReads) await refreshBarrier;
         return json(detail);
       }
       return json({ detail: "Unexpected request" }, 404);
@@ -249,6 +259,37 @@ describe("unified issue investigations", () => {
       status: "resolved",
       expected_status: "open",
     });
+  });
+
+  it("retains investigation permissions while the status refresh is pending", async () => {
+    const refresh = Promise.withResolvers<void>();
+    refreshBarrier = refresh.promise;
+    renderWithProviders(<IssueDetail id={detail.id} />);
+    await screen.findByRole("link", { name: "View key activity" });
+    try {
+      await userEvent.click(screen.getByRole("button", { name: "Mark resolved" }));
+      await waitFor(() =>
+        expect(calls.filter((call) => call.method === "GET" && call.path === `/issues/${detail.id}`)).toHaveLength(2),
+      );
+      expect(screen.getByRole("link", { name: "View key activity" })).toBeVisible();
+      expect(screen.getByRole("button", { name: "Reopen" })).toBeDisabled();
+    } finally {
+      await act(async () => refresh.resolve());
+    }
+  });
+
+  it("reflects a saved feed status before the list refresh returns", async () => {
+    const refresh = Promise.withResolvers<void>();
+    refreshBarrier = refresh.promise;
+    renderWithProviders(<IssuesInbox />);
+    await screen.findByRole("link", { name: "Spend on Checkout key rose to 20× normal" });
+    try {
+      await userEvent.click(screen.getAllByRole("button", { name: "Mark resolved" })[0]);
+      await waitFor(() => expect(calls.filter((call) => call.path === "/issues")).toHaveLength(2));
+      expect(screen.getByRole("button", { name: "Reopen" })).toBeDisabled();
+    } finally {
+      await act(async () => refresh.resolve());
+    }
   });
 
   it("leaves missing history unavailable instead of fabricating a chart", async () => {

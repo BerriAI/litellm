@@ -3,6 +3,10 @@ import { ChartContainer, ChartTooltip, ChartTooltipContent } from "@/components/
 import { formatAlertValue, METRIC_LABELS } from "@/components/UsageAlerts/usageAlertApi";
 import { Issue, issueDate, primaryComparison } from "./issueApi";
 
+export function formatHistoryValue(metric: Parameters<typeof formatAlertValue>[0], value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) ? formatAlertValue(metric, value) : "Not recorded";
+}
+
 export function issueHistory(issue: Issue) {
   const comparison = primaryComparison(issue);
   const history = issue.deprecation?.daily_requests ?? comparison?.history ?? [];
@@ -81,7 +85,7 @@ export default function IssueHistoryChart({ issue, compact = false }: { issue: I
               <ChartTooltipContent
                 hideIndicator
                 labelFormatter={(day) => issueDate(String(day))}
-                formatter={(value) => formatAlertValue(metric, Number(value))}
+                formatter={(value) => formatHistoryValue(metric, value)}
               />
             }
           />
@@ -114,7 +118,7 @@ export default function IssueHistoryChart({ issue, compact = false }: { issue: I
             {data.map((point) => (
               <tr key={point.day}>
                 <td>{point.day}</td>
-                <td>{point.value === null ? "Not recorded" : formatAlertValue(metric, point.value)}</td>
+                <td>{formatHistoryValue(metric, point.value)}</td>
               </tr>
             ))}
           </tbody>

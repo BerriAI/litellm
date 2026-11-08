@@ -6,6 +6,7 @@ import { getProxyBaseUrl } from "@/components/networking";
 import { Button } from "@/components/ui/button";
 import { hasCapability } from "@/utils/capabilities";
 import { ApiError } from "@/lib/http/client";
+import type { components } from "@/lib/http/schema";
 import { Issue, IssueStatus, updateIssueStatus } from "./issueApi";
 
 export default function IssueStatusActions({ issue, globalAccess = false }: { issue: Issue; globalAccess?: boolean }) {
@@ -15,7 +16,20 @@ export default function IssueStatusActions({ issue, globalAccess = false }: { is
   const mutation = useMutation({
     mutationFn: (status: IssueStatus) => updateIssueStatus(issue, status),
     onSuccess: (updated) => {
-      client.setQueryData(["issues", getProxyBaseUrl(), user?.user_id, user?.user_role, "detail", issue.id], updated);
+      const scope = ["issues", getProxyBaseUrl(), user?.user_id, user?.user_role];
+      client.setQueryData<Issue>([...scope, "detail", issue.id], (previous) => ({
+        ...updated,
+        can_view_activity: updated.can_view_activity ?? previous?.can_view_activity,
+        can_update_status: updated.can_update_status ?? previous?.can_update_status,
+      }));
+      client.setQueriesData<components["schemas"]["IssueList"]>(
+        { queryKey: [...scope, "list"] },
+        (page) =>
+          page && {
+            ...page,
+            data: page.data.map((row) => (row.id === updated.id ? { ...row, status: updated.status } : row)),
+          },
+      );
       return Promise.all([
         client.invalidateQueries({ queryKey: ["issues"] }),
         client.invalidateQueries({ queryKey: ["deprecationAlerts"] }),

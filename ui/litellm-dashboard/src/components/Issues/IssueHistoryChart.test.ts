@@ -1,8 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { issueHistory } from "./IssueHistoryChart";
+import { formatHistoryValue, issueHistory } from "./IssueHistoryChart";
 import { SPEND_ISSUE } from "./issueFixtures";
 
 describe("saved alert history", () => {
+  it("labels absent tooltip values separately from recorded zero spend", () => {
+    expect(formatHistoryValue("spend", null)).toBe("Not recorded");
+    expect(formatHistoryValue("spend", undefined)).toBe("Not recorded");
+    expect(formatHistoryValue("spend", 0)).toBe("$0.00");
+    expect(formatHistoryValue("spend", 30)).toBe("$30.00");
+  });
   it("keeps missing days as gaps and real zero observations as zero", () => {
     const issue = {
       ...SPEND_ISSUE,
