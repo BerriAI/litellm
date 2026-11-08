@@ -505,13 +505,14 @@ def credential_reference_rejection(
         return None
     requested_logging: Final = _logging_entries(requested_metadata)
     requested_names: Final = logging_credential_names(requested_logging)
-    references_involved: Final = bool(requested_names or logging_credential_names(stored_logging))
+    stored_names: Final = logging_credential_names(stored_logging)
+    references_involved: Final = bool(requested_names or stored_names)
     if references_involved and not is_proxy_admin and requested_logging != stored_logging:
         return CredentialReferenceRejection(
             403,
             "Only proxy admins can change the logging entries of a key that uses litellm_credential_name",
         )
-    undefined: Final = sorted({name for name in requested_names if not is_defined(name)})
+    undefined: Final = sorted({name for name in set(requested_names) - set(stored_names) if not is_defined(name)})
     if undefined:
         return CredentialReferenceRejection(
             400, f"metadata.logging references undefined credential(s): {', '.join(undefined)}"
