@@ -1361,7 +1361,7 @@ class LiteLLMCompletionResponsesConfig:
     @staticmethod
     def transform_responses_api_input_to_messages(
         input: str | ResponseInputParam,
-        responses_api_request: ResponsesAPIOptionalRequestParams | dict[str, object],
+        responses_api_request: ResponsesAPIOptionalRequestParams | dict,
         replay_reasoning: bool = False,
         item_cache_control: bool = False,
         tool_call_provider_fields: bool = False,
@@ -1412,9 +1412,12 @@ class LiteLLMCompletionResponsesConfig:
             | ChatCompletionResponseMessage
             | Message
         ] = []
-        instructions: Final = responses_api_request.get("instructions")
-        if isinstance(instructions, str) and instructions:
-            messages.append(LiteLLMCompletionResponsesConfig.transform_instructions_to_system_message(instructions))
+        if responses_api_request.get("instructions"):
+            messages.append(
+                LiteLLMCompletionResponsesConfig.transform_instructions_to_system_message(
+                    responses_api_request.get("instructions")
+                )
+            )
 
         dumped_input: Final = with_compaction_items_as_params(input)
         read_input: Final = _input_to_read(dumped_input, only_since_compaction, native_compaction)
@@ -3100,12 +3103,12 @@ class LiteLLMCompletionResponsesConfig:
             return None
 
     @staticmethod
-    def _namespace_member_names(tool: Mapping[str, object]) -> frozenset[str]:
+    def _namespace_member_names(tool: Mapping[str, object]) -> tuple[str, ...]:
         try:
             members: Final = _RESPONSE_TOOLS_ADAPTER.validate_python(tool.get("tools"))
         except ValidationError:
-            return frozenset()
-        return frozenset(str(member.get("name") or "") for member in members or () if member.get("type") == "function")
+            return ()
+        return tuple(str(member.get("name") or "") for member in members if member.get("type") == "function")
 
     @staticmethod
     def self_named_namespace_members(tools: ResponseTools) -> frozenset[str]:
@@ -3141,13 +3144,10 @@ class LiteLLMCompletionResponsesConfig:
     @staticmethod
     def namespace_tool_name_map(tools: ResponseTools) -> NamespaceNameMap:
         namespace_entries: Final = tuple(
-            (str(tool.get("name") or ""), str(namespace_tool.get("name") or ""))
+            (str(tool.get("name") or ""), member_name)
             for tool in tools or ()
             if tool.get("type") == "namespace"
-            for namespace_tools in (tool.get("tools"),)
-            if isinstance(namespace_tools, Sequence) and not isinstance(namespace_tools, (str, bytes))
-            for namespace_tool in namespace_tools
-            if isinstance(namespace_tool, Mapping) and namespace_tool.get("type") == "function"
+            for member_name in LiteLLMCompletionResponsesConfig._namespace_member_names(tool)
         )
         top_level_function_names: Final = frozenset(
             str(tool.get("name") or "") for tool in tools or () if tool.get("type") == "function"
