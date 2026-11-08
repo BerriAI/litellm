@@ -2392,12 +2392,12 @@ async def delete_team_models(
     if deleted_model_ids:
         await publish_config_change(redis_cache=coordination_redis_cache(), object_type="litellm_proxymodeltable")
 
-    # Under MODEL_RECONCILE_LOCK, for the same reason as delete_model: the rows are
+    # Under DB_RECONCILE_LOCK, for the same reason as delete_model: the rows are
     # gone, but a reconcile holding a pre-delete snapshot would upsert these ids back
     # onto this pod. The lock orders the eviction after any in-flight reconcile.
-    from litellm.proxy.proxy_server import MODEL_RECONCILE_LOCK, proxy_config
+    from litellm.proxy.proxy_server import DB_RECONCILE_LOCK, proxy_config
 
-    async with MODEL_RECONCILE_LOCK:
+    async with DB_RECONCILE_LOCK:
         proxy_config.remove_auto_router_catalog_entries(frozenset(deleted_model_ids))
         if llm_router is not None:
             for model_id in deleted_model_ids:
@@ -2884,7 +2884,7 @@ async def delete_model(
         """
 
         from litellm.proxy.proxy_server import (
-            MODEL_RECONCILE_LOCK,
+            DB_RECONCILE_LOCK,
             general_settings_view,
             llm_router,
             premium_user,
@@ -2945,13 +2945,13 @@ async def delete_model(
                 )
 
             ## DELETE FROM ROUTER ##
-            # Under MODEL_RECONCILE_LOCK. The db row is already gone, but a reconcile
+            # Under DB_RECONCILE_LOCK. The db row is already gone, but a reconcile
             # that snapshotted the db BEFORE that delete still lists this id as desired,
             # and its _add_deployment upserts the deployment straight back -- leaving
             # this pod serving a model the database no longer has, until the next
             # reconcile. Taking the lock orders this eviction after any such in-flight
             # reconcile's re-add, so the eviction is the last word.
-            async with MODEL_RECONCILE_LOCK:
+            async with DB_RECONCILE_LOCK:
                 proxy_config.remove_auto_router_catalog_entries(frozenset({model_info.id}))
                 if llm_router is not None:
                     llm_router.apply(ChangeSet(delete=[model_info.id]))
@@ -3892,7 +3892,7 @@ def reload_serving_verdict(
     Without it (no reconcile ran) every drop is reported, which is the safe direction.
 
     ``live_after`` is the router's serving state captured by the reload itself, while it
-    still held MODEL_RECONCILE_LOCK. Pass it whenever the caller has it: re-reading the
+    still held DB_RECONCILE_LOCK. Pass it whenever the caller has it: re-reading the
     router here instead means sampling it after the lock was released, where the NEXT
     reconcile's leading wipe (clear_cache un-serves every db model before reloading
     them) shows up as this reload having dropped them. Falling back to a fresh read is
@@ -3970,13 +3970,13 @@ async def clear_cache() -> ReconcileOutcome:
     Returns what the reload saw (see ReconcileOutcome) so callers can pass it to
     raise_if_reload_degraded_serving.
 
-    Runs under MODEL_RECONCILE_LOCK for its whole extent, not just the reload at the
+    Runs under DB_RECONCILE_LOCK for its whole extent, not just the reload at the
     end, so the auto-router reset and the reload that rebuilds those routers are atomic
     to any other reconcile. The inner call is _add_deployment_locked because
     add_deployment would re-acquire the same non-reentrant lock and deadlock.
     """
     from litellm.proxy.proxy_server import (
-        MODEL_RECONCILE_LOCK,
+        DB_RECONCILE_LOCK,
         llm_router,
         prisma_client,
         proxy_config,
@@ -3988,7 +3988,7 @@ async def clear_cache() -> ReconcileOutcome:
         verbose_proxy_logger.debug("llm_router or prisma_client is None, skipping cache clear")
         return ReconcileOutcome(still_desired=None, live_after=None)
 
-    async with MODEL_RECONCILE_LOCK:
+    async with DB_RECONCILE_LOCK:
         try:
             # Only clear DB models, preserve config models
             verbose_proxy_logger.debug("Clearing only DB models, preserving config models")
@@ -4060,7 +4060,7 @@ async def clear_cache() -> ReconcileOutcome:
                 llm_router.registry().plugins("switchyard").pop(model_name, None)
 
             # Reload only DB models. _add_deployment_locked, not add_deployment: this
-            # coroutine already holds MODEL_RECONCILE_LOCK and asyncio.Lock is not
+            # coroutine already holds DB_RECONCILE_LOCK and asyncio.Lock is not
             # reentrant, so the public wrapper would deadlock against itself.
             outcome: Final = await proxy_config.add_deployment_locked(
                 prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj
