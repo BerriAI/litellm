@@ -38,6 +38,7 @@ from litellm.constants import (
     KUBERNETES_POD_ROUTING_KEY,
     ROUTER_BUDGET_ATTRIBUTED_SPEND_CALL_DETAIL_KEY,
     ROUTING_REQUEST_TAGS_METADATA_KEY,
+    X_LITELLM_DISABLE_CALLBACKS,
 )
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import initialize_standard_callback_dynamic_params
 from litellm.litellm_core_utils.internal_call_metadata import (
@@ -46,6 +47,7 @@ from litellm.litellm_core_utils.internal_call_metadata import (
     parent_session_kwargs,
     sanitized_forwardable_call_metadata,
 )
+from litellm.litellm_core_utils.redact_messages import MESSAGE_REDACTION_ENABLE_HEADERS
 from litellm.router_strategy.cascade_router.config import CascadeRouterConfig
 from litellm.types.router import PreRoutingHookResponse
 from litellm.types.utils import (
@@ -95,6 +97,14 @@ REQUEST_POLICY_PARAMS: Final = ("guardrails", "allowed_model_region", "turn_off_
 # and the callbacks' credentials. The verifier logs a row of its own, so its call carries them and its row reaches the
 # request's own callbacks too; the strong leg logs under the request's own logging object and needs none of this.
 REQUEST_CALLBACK_LIST_PARAMS: Final = ("success_callback", "failure_callback")
+# Request headers the logging path reads after the call, each from its own place: the enterprise callback controls
+# read the callbacks-disable header from the row's `proxy_server_request`, message redaction reads its enable and
+# disable headers from the row's metadata `headers`. The verifier logs a row of its own, so its call carries each
+# header where its reader looks and nothing else of the request's wrapper (no body, no other header: the router reads
+# routing inputs from those), the shape the Anthropic Messages bridge gives its sub-calls.
+# the literal `should_redact_message_logging` reads for the disable side; upstream keeps no constant for it
+MESSAGE_REDACTION_DISABLE_HEADER: Final = "litellm-disable-message-redaction"
+MESSAGE_REDACTION_HEADERS: Final = (*MESSAGE_REDACTION_ENABLE_HEADERS, MESSAGE_REDACTION_DISABLE_HEADER)
 # Stamps that describe the request rather than the leg that answered it; the strong leg's own routing rewrites
 # them (its group, a fresh fallback count) and they are put back whatever the leg's outcome.
 _REQUEST_IDENTITY_STAMPS: Final = ("model_group", "model_group_alias", "original_model_group", "attempted_fallbacks")
@@ -277,11 +287,27 @@ def request_policy_kwargs(
     return policies
 
 
+def _named_headers(headers: object, names: Iterable[str]) -> dict[str, str]:  # mutable-ok: built below
+    """The named headers present in a header mapping, matched case-insensitively, under their canonical names."""
+    mapping: Final = mapping_or_none(headers)
+    if not mapping:
+        return {}
+    lowered: Final = {key.lower(): value for key, value in mapping.items() if isinstance(value, str)}
+    return {name: lowered[name] for name in names if name in lowered}
+
+
+def request_redaction_headers(parent_metadata: Mapping[str, object] | None) -> dict[str, object]:  # mutable-ok: merged
+    """The request's message-redaction headers, where redaction reads them: the metadata's `headers`."""
+    found: Final = _named_headers((parent_metadata or {}).get("headers"), MESSAGE_REDACTION_HEADERS)
+    return {"headers": found} if found else {}
+
+
 def request_logging_kwargs(
     request_kwargs: Mapping[str, object],
 ) -> dict[str, object]:  # mutable-ok: unpacked into a call
     """The request's logging settings as its own callbacks resolve them, for a call that logs a row of its own:
-    the callbacks' credentials and opt-outs, the key's or team's callback lists, and the proxy's trusted-vars stamp."""
+    the callbacks' credentials and opt-outs, the key's or team's callback lists, the proxy's trusted-vars stamp, and
+    the callbacks-disable header in a `proxy_server_request` of its own, where the enterprise controls read it."""
     credentials: Final = {
         key: value
         for key, value in initialize_standard_callback_dynamic_params(dict(request_kwargs)).items()
@@ -298,7 +324,12 @@ def request_logging_kwargs(
         if isinstance(trusted, Mapping)
         else {}
     )
-    return {**credentials, **callback_lists, **stamp}
+    parent_request: Final = mapping_or_none(request_kwargs.get("proxy_server_request"))
+    disable: Final = _named_headers(
+        parent_request.get("headers") if parent_request else None, (X_LITELLM_DISABLE_CALLBACKS,)
+    )
+    controls: Final = {"proxy_server_request": {"headers": disable}} if disable else {}
+    return {**credentials, **callback_lists, **stamp, **controls}
 
 
 def forwarded_request_params(
@@ -933,11 +964,12 @@ class CascadeRouter:
         parent_metadata: Final = parent_metadata_of(parent)
         # The verifier's prompt is new (the request and the cheap answer) and goes out after the cheap deployment
         # pick, so its call carries what a detached sub-call gets: the caller's identity, for attribution and
-        # budgets, and the request's own tags. None of the request's per-call state (deployment stamps, rate-limit
-        # reservation, executed-guardrail markers, routing decision) describes this call.
+        # budgets, the request's own tags, and its message-redaction headers. None of the request's per-call state
+        # (deployment stamps, rate-limit reservation, executed-guardrail markers, routing decision) describes this call.
         metadata: Final = {
             **sanitized_forwardable_call_metadata(parent_metadata or {}, CASCADE_VERIFIER_CALL_ORIGIN),
             **request_tags_of(parent_metadata),
+            **request_redaction_headers(parent_metadata),
             INTERNAL_CALL_ORIGIN_METADATA_KEY: CASCADE_VERIFIER_CALL_ORIGIN,  # stamped also when the request has none
             "cascade_router": self.model_name,
         }

@@ -79,6 +79,24 @@ def test_decisions_logs_every_request_field_the_caller_sent():
     assert set(logged) == {"input", "questions"}
 
 
+def test_a_decisions_row_carries_the_requests_wrapper_like_every_other_endpoints_row():
+    """The callback controls read the request's callbacks-disable header from the row's own `proxy_server_request`,
+    and spend logs read the request body there; the chat path has always carried it in the row's logging params."""
+    logging_obj: Final = _logging_obj("adecisions")
+    wrapper: Final = {"headers": {"x-litellm-disable-callbacks": "langfuse"}}
+
+    _prepare_decisions_call(
+        **CONNECTION,
+        decision_input="My card was charged twice.",
+        questions=[{"type": "predicate", "instructions": QUESTION_TEXT}],
+        audio=None,
+        videos=None,
+        kwargs={"litellm_logging_obj": logging_obj, "proxy_server_request": wrapper},
+    )
+
+    assert logging_obj.model_call_details["litellm_params"]["proxy_server_request"] == wrapper
+
+
 def test_request_is_logged_even_when_it_is_rejected_before_the_provider_call():
     logging_obj: Final = _logging_obj("asystemone")
 

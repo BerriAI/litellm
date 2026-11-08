@@ -844,6 +844,7 @@ class _Recorder(CustomLogger):
                 "model_id": payload.get("model_id"),
                 "messages": payload.get("messages"),
                 "decision": metadata.get("routing_decision"),
+                "request_wrapper": (kwargs.get("litellm_params") or {}).get("proxy_server_request"),
             }
         )
 
@@ -1204,6 +1205,80 @@ async def test_the_verifier_call_carries_the_callers_identity_and_budgets_so_its
     (call,) = seen
     assert {k: call["metadata"][k] for k in caller} == caller
     assert "routing_decision" not in call["metadata"]
+    assert "proxy_server_request" not in call and "headers" not in call["metadata"]  # nothing is made up either
+
+
+async def test_the_verifier_row_honours_the_requests_logging_control_headers(monkeypatch):
+    """A request can disable callbacks by header, which the enterprise controls read from the row's own
+    `proxy_server_request`, and turn message redaction on by header, which redaction reads from the row's own
+    metadata `headers`. The verifier logs a row of its own, so its call carries each header where its reader looks,
+    and nothing else of the request's wrapper."""
+    from litellm.constants import REDACTED_BY_LITELLM
+    from litellm_enterprise.enterprise_callbacks.callback_controls import EnterpriseCallbackControls
+
+    seen = _verifier_calls(monkeypatch)
+    recorder = _Recorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    router = _priced_router(verifier_model="judge", verifier_kind="chat", min_chars=2)
+    await router.acompletion(
+        model="cascade",
+        messages=MESSAGES,
+        metadata={"headers": {"x-litellm-enable-message-redaction": "true", "user-agent": "curl"}},
+        proxy_server_request={
+            "url": "http://proxy/v1/chat/completions",
+            "method": "POST",
+            "headers": {
+                "authorization": "Bearer sk-x",
+                "X-LiteLLM-Disable-Callbacks": "langfuse",
+                "user-agent": "curl",
+            },
+            "body": {"messages": MESSAGES},
+        },
+    )
+    await _flush_logging()
+    (call,) = seen
+    assert call["proxy_server_request"] == {"headers": {"x-litellm-disable-callbacks": "langfuse"}}
+    assert EnterpriseCallbackControls.get_disabled_callbacks(
+        {"proxy_server_request": call["proxy_server_request"]}, {}
+    ) == ["langfuse"]
+    assert call["metadata"]["headers"] == {"x-litellm-enable-message-redaction": "true"}
+    verifier_rows = [event for event in recorder.events if event["origin"] == "cascade_verifier"]
+    assert verifier_rows
+    assert all(
+        REDACTED_BY_LITELLM in str(row["messages"]) and "tiny" not in str(row["messages"]) for row in verifier_rows
+    )
+    # the row's own logging params carry the wrapper: that is where the callback controls read it at dispatch
+    assert all(row["request_wrapper"] == call["proxy_server_request"] for row in verifier_rows)
+
+
+async def test_the_decision_verifier_call_carries_the_requests_logging_control_headers_too():
+    """Both verifier kinds get the same call kwargs; the decisions API puts the wrapper on its row's logging params
+    (tests/unit/decisions/test_call.py), so a decision-kind verifier row is read the same way at dispatch."""
+    router, _, _ = _decision_router("Paris is the capital of France.", "yes", 0.9)
+    seen = {}
+
+    async def fake_adecisions(model, **kwargs):
+        from litellm.types.decisions import ChoiceAnswer, DecisionsResponse
+
+        seen.update(kwargs)
+        answers = {"answered": ChoiceAnswer(type="choice", choice="yes", confidence=0.9, probabilities={"yes": 0.9})}
+        return DecisionsResponse(model=model, answers=answers)
+
+    router.adecisions = fake_adecisions
+    await router.acompletion(
+        model="support-cascade",
+        messages=MESSAGES,
+        metadata={"headers": {"litellm-disable-message-redaction": "true", "user-agent": "curl"}},
+        proxy_server_request={
+            "url": "http://proxy/v1/chat/completions",
+            "method": "POST",
+            "headers": {"authorization": "Bearer sk-x", "x-litellm-disable-callbacks": "langfuse"},
+            "body": {"messages": MESSAGES},
+        },
+    )
+    assert seen["proxy_server_request"] == {"headers": {"x-litellm-disable-callbacks": "langfuse"}}
+    assert seen["metadata"]["headers"] == {"litellm-disable-message-redaction": "true"}
+    assert seen["num_retries"] == 0 and seen["disable_fallbacks"] is True
 
 
 async def test_the_verifier_row_logs_to_the_requests_own_callbacks(monkeypatch):

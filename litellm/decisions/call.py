@@ -617,6 +617,9 @@ def prepare_call(
                 "input_cost_per_query": (
                     kwargs.get("input_cost_per_query") if provider in QUERY_PRICED_DECISIONS_PROVIDERS else None
                 ),
+                # as every other endpoint's row: the callback controls read the request's callbacks-disable header
+                # from here, and spend logs its request body
+                "proxy_server_request": kwargs.get("proxy_server_request"),
             },
             custom_llm_provider=provider,
         )
