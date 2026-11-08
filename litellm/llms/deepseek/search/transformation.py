@@ -1,6 +1,7 @@
 """
-DeepSeek Search API.
-Endpoint: POST https://api.deepseek.com/v1/tools/search
+DeepSeek Search and Fetch APIs.
+Search: POST https://api.deepseek.com/v1/tools/search
+Fetch: POST https://api.deepseek.com/v1/tools/fetch
 Docs: https://api-docs.deepseek.com/guides/search/
 """
 
@@ -8,6 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from typing import Final
+from urllib.parse import urlsplit
 
 import httpx
 from pydantic import ConfigDict, TypeAdapter, ValidationError
@@ -27,9 +29,14 @@ _STR_LIST: Final = TypeAdapter(list[str])
 
 DEEPSEEK_SEARCH_MAX_COUNT: Final = 50
 DEEPSEEK_SEARCH_MAX_QUERY_CHARS: Final = 128
+DEEPSEEK_FETCH_MAX_URL_CHARS: Final = 8192
 _DEEPSEEK_SEARCH_PATH: Final = "/v1/tools/search"
-# DeepSeek chat defaults DEEPSEEK_API_BASE to the /beta prefix; the search route lives at the root.
+_DEEPSEEK_FETCH_PATH: Final = "/v1/tools/fetch"
+FETCH_URL_PARAM: Final = "fetch_url"
+_FETCH_SCHEMES: Final = frozenset({"http", "https"})
+# DeepSeek chat defaults DEEPSEEK_API_BASE to the /beta prefix; the tool routes live at the root.
 _CHAT_ONLY_BASE_SUFFIXES: Final = ("/beta", "/v1")
+_TOOL_PATHS: Final = (_DEEPSEEK_SEARCH_PATH, _DEEPSEEK_FETCH_PATH)
 
 
 class DeepSeekSearchConfig(BaseSearchConfig):
@@ -66,9 +73,11 @@ class DeepSeekSearchConfig(BaseSearchConfig):
     ) -> str:
         resolved_base: Final = api_base or get_secret_str("DEEPSEEK_API_BASE") or self.DEEPSEEK_API_BASE
         clean_base: Final = resolved_base.rstrip("/")
-        if clean_base.endswith(_DEEPSEEK_SEARCH_PATH):
+        path: Final = _DEEPSEEK_FETCH_PATH if _fetch_url(optional_params) is not None else _DEEPSEEK_SEARCH_PATH
+        if clean_base.endswith(path):
             return clean_base
-        return f"{_strip_chat_suffix(clean_base)}{_DEEPSEEK_SEARCH_PATH}"
+        without_tool: Final = _without_tool_path(clean_base)
+        return f"{_strip_chat_suffix(without_tool)}{path}"
 
     def transform_search_request(
         self,
@@ -84,11 +93,14 @@ class DeepSeekSearchConfig(BaseSearchConfig):
         Everything outside the unified spec (``need_content``, ``ori_question``, ``localization``)
         is forwarded as-is.
         """
+        fetch_url: Final = _fetch_url(optional_params)
+        if fetch_url is not None:
+            return {"url": _checked_fetch_url(fetch_url)}
         joined_query: Final = " ".join(query) if isinstance(query, list) else query
         domains: Final = _domain_filter(optional_params.get("search_domain_filter"))
         count: Final = _count(optional_params.get("max_results"))
         unified: Final = self.get_supported_perplexity_optional_params()
-        passthrough: Final = {k: v for k, v in optional_params.items() if k not in unified}
+        passthrough: Final = {k: v for k, v in optional_params.items() if k not in unified and k != FETCH_URL_PARAM}
         return {
             **passthrough,
             "query": _checked_query(_with_site_filters(joined_query, domains), domains),
@@ -102,6 +114,9 @@ class DeepSeekSearchConfig(BaseSearchConfig):
         **kwargs: object,  # kwargs-ok: BaseSearchConfig.transform_search_response signature
     ) -> SearchResponse:
         response_json: Final = _JSON_OBJECT.validate_python(raw_response.json())
+        page_url: Final = _fetch_url(_optional_mapping(kwargs.get("optional_params")))
+        if page_url is not None or ("results" not in response_json and "content" in response_json):
+            return _fetch_page_response(response_json, page_url or "")
         raw_results: Final = _JSON_OBJECTS.validate_python(response_json.get("results", ()))
         return SearchResponse(
             results=[_to_search_result(item) for item in raw_results],
@@ -113,6 +128,59 @@ def _strip_chat_suffix(base: str) -> str:
     return next(
         (base.removesuffix(suffix) for suffix in _CHAT_ONLY_BASE_SUFFIXES if base.endswith(suffix)),
         base,
+    )
+
+
+def _without_tool_path(base: str) -> str:
+    stripped: Final = next((base.removesuffix(path) for path in _TOOL_PATHS if base.endswith(path)), base)
+    return stripped.rstrip("/")
+
+
+def _optional_mapping(raw: object) -> Mapping[str, object]:
+    try:
+        return _JSON_OBJECT.validate_python(raw)
+    except ValidationError:
+        return {}
+
+
+def _fetch_url(optional_params: Mapping[str, object]) -> str | None:
+    raw: Final = optional_params.get(FETCH_URL_PARAM)
+    return raw if isinstance(raw, str) else None
+
+
+def _checked_fetch_url(url: str) -> str:
+    parsed: Final = urlsplit(url)
+    if (
+        not url
+        or len(url) > DEEPSEEK_FETCH_MAX_URL_CHARS
+        or parsed.scheme not in _FETCH_SCHEMES
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+    ):
+        raise BadRequestError(
+            message=(
+                "DeepSeek Fetch needs an http or https URL with a host, no username or password, "
+                f"and at most {DEEPSEEK_FETCH_MAX_URL_CHARS} characters."
+            ),
+            model="deepseek/fetch",
+            llm_provider="deepseek",
+        )
+    return url
+
+
+def _fetch_page_response(payload: Mapping[str, object], url: str) -> SearchResponse:
+    title: Final = payload.get("title")
+    content: Final = payload.get("content")
+    title_text: Final = title if isinstance(title, str) else ""
+    content_text: Final = content if isinstance(content, str) else ""
+    return SearchResponse(
+        results=[
+            SearchResult.model_validate(
+                {"title": title_text, "url": url, "snippet": content_text, "content": content_text}
+            )
+        ],
+        object="fetch",
     )
 
 

@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal
 from urllib.parse import urlsplit
 
 import httpx
-from pydantic import PrivateAttr
+from pydantic import ConfigDict, PrivateAttr
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret_str
@@ -85,6 +85,38 @@ class SearchResponse(LiteLLMPydanticObjectBase):
     @hidden_params.setter
     def hidden_params(self, hidden_params: dict[str, builtins.object]) -> None:  # mutable-ok: API requires mutation
         self._hidden_params = hidden_params
+
+
+class FetchResponse(LiteLLMPydanticObjectBase):  # frozen-ok: logging assigns hidden params after init
+    """One page fetched from a provider tool, in the DeepSeek Fetch shape."""
+
+    model_config = ConfigDict(extra="allow", protected_namespaces=())
+
+    title: str
+    content: str
+    url: str
+    object: str = "fetch"
+
+    _hidden_params: dict[str, builtins.object] = PrivateAttr(default_factory=dict)  # mutable-ok: metadata bag
+
+    @property
+    def hidden_params(self) -> dict[str, builtins.object]:  # mutable-ok: API requires mutation
+        return self._hidden_params
+
+    @hidden_params.setter
+    def hidden_params(self, hidden_params: dict[str, builtins.object]) -> None:  # mutable-ok: API requires mutation
+        self._hidden_params = hidden_params
+
+
+def to_fetch_response(response: SearchResponse) -> FetchResponse:
+    """The single page a fetch-shaped search response carried, with an empty page left unbilled."""
+    result: Final = response.results[0] if response.results else None
+    content: Final = "" if result is None else result.snippet
+    title: Final = "" if result is None else result.title
+    url: Final = "" if result is None else result.url
+    fetched: Final = FetchResponse(title=title, content=content, url=url)
+    fetched.hidden_params = {**response.hidden_params, **({} if content.strip() else {"response_cost": 0.0})}
+    return fetched
 
 
 class BaseSearchConfig:

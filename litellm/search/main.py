@@ -15,8 +15,14 @@ from pydantic import TypeAdapter
 import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import request_timeout
+from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.llms.base_llm.search.transformation import BaseSearchConfig, SearchResponse
+from litellm.llms.base_llm.search.transformation import (
+    BaseSearchConfig,
+    FetchResponse,
+    SearchResponse,
+    to_fetch_response,
+)
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.types.utils import SearchProviders
 from litellm.utils import ProviderConfigManager, client, filter_out_litellm_params
@@ -67,6 +73,28 @@ def _build_search_optional_params(
     return optional_params
 
 
+def _tool_model(search_provider: str, fetch_url: str | None) -> str:
+    is_fetch: Final = search_provider == SearchProviders.DEEPSEEK.value and isinstance(fetch_url, str)
+    kind: Final = "fetch" if is_fetch else "search"
+    return f"{search_provider}/{kind}"
+
+
+def _present_search_response(response: SearchResponse) -> SearchResponse:
+    if response.object != "fetch":
+        return response
+    return to_fetch_response(response)  # pyright: ignore[reportReturnType]  # fetch pages are a FetchResponse at runtime
+
+
+def _require_deepseek_fetch(fetch_provider: str) -> None:
+    if fetch_provider == SearchProviders.DEEPSEEK.value:
+        return
+    raise BadRequestError(
+        message=f"Fetch is only supported for the deepseek provider, got {fetch_provider}.",
+        model=f"{fetch_provider}/fetch",
+        llm_provider=fetch_provider,
+    )
+
+
 @client
 async def asearch(
     query: str | list[str],
@@ -79,6 +107,8 @@ async def asearch(
     api_base: str | None = None,
     timeout: float | httpx.Timeout | None = None,
     extra_headers: dict[str, object] | None = None,
+    *,
+    fetch_url: str | None = None,
     **kwargs,
 ) -> SearchResponse:
     """
@@ -143,6 +173,7 @@ async def asearch(
             api_base=api_base,
             timeout=timeout,
             extra_headers=extra_headers,
+            fetch_url=fetch_url,
             **kwargs,
         )
 
@@ -158,11 +189,10 @@ async def asearch(
         if response is None:
             raise ValueError(f"Got an unexpected None response from the Search API: {response}")
 
-        return response
+        return _present_search_response(response)
     except Exception as e:
-        model_name: Final = f"{search_provider}/search"
         raise litellm.exception_type(
-            model=model_name,
+            model=_tool_model(search_provider, fetch_url),
             custom_llm_provider=search_provider,
             original_exception=e,
             completion_kwargs=local_vars,
@@ -182,6 +212,8 @@ def search(
     api_base: str | None = None,
     timeout: float | httpx.Timeout | None = None,
     extra_headers: dict[str, object] | None = None,
+    *,
+    fetch_url: str | None = None,
     **kwargs,
 ) -> SearchResponse | Coroutine[object, object, SearchResponse]:
     """
@@ -238,6 +270,7 @@ def search(
         ```
     """
     local_vars: Final = locals()
+    tool_model: Final = _tool_model(search_provider, fetch_url)
     try:
         litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.pop("litellm_logging_obj")
         litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
@@ -261,7 +294,7 @@ def search(
         verbose_logger.debug("Search call - provider: %s", search_provider)
 
         # Build optional_params from explicit parameters
-        optional_params: Final = _build_search_optional_params(
+        base_optional: Final = _build_search_optional_params(
             max_results=max_results,
             search_domain_filter=search_domain_filter,
             max_tokens_per_page=max_tokens_per_page,
@@ -271,11 +304,11 @@ def search(
         # Filter out internal LiteLLM parameters from kwargs
         search_kwargs: Final = _SEARCH_KWARGS.validate_python(kwargs)
         filtered_kwargs: Final = filter_out_litellm_params(kwargs=search_kwargs)
-
-        # Add remaining kwargs to optional_params (for provider-specific params)
-        for key, value in filtered_kwargs.items():
-            if key not in optional_params:
-                optional_params[key] = value
+        forwarded: Final = {key: value for key, value in filtered_kwargs.items() if key not in base_optional}
+        fetch_param: Final[Mapping[str, object]] = (
+            {"fetch_url": fetch_url} if _tool_model(search_provider, fetch_url).endswith("/fetch") else {}
+        )
+        optional_params: Final = {**base_optional, **forwarded, **fetch_param}
 
         verbose_logger.debug("Search optional_params: %s", optional_params)
 
@@ -294,10 +327,9 @@ def search(
         )
 
         # Pre Call logging
-        model_name = f"{search_provider}/search"
         litellm_logging_obj.update_from_kwargs(
             kwargs=kwargs,
-            model=model_name,
+            model=tool_model,
             optional_params=optional_params,
             litellm_params={
                 "litellm_call_id": litellm_call_id,
@@ -321,13 +353,70 @@ def search(
             provider_config=search_provider_config,
         )
 
-        return response
+        if _is_async or not isinstance(response, SearchResponse):
+            return response
+        return _present_search_response(response)
     except Exception as e:
-        model_name = f"{search_provider}/search"
         raise litellm.exception_type(
-            model=model_name,
+            model=tool_model,
             custom_llm_provider=search_provider,
             original_exception=e,
             completion_kwargs=local_vars,
             extra_kwargs=kwargs,
         )
+
+
+def fetch(
+    url: str,
+    fetch_provider: str = SearchProviders.DEEPSEEK.value,
+    api_key: str | None = None,
+    api_base: str | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    extra_headers: Mapping[str, str] | None = None,
+) -> FetchResponse:
+    """Fetch one page through a provider tool. DeepSeek is the supported provider."""
+    _require_deepseek_fetch(fetch_provider)
+    response: Final = search(
+        query=url,
+        search_provider=fetch_provider,
+        api_key=api_key,
+        api_base=api_base,
+        timeout=timeout,
+        extra_headers=dict(extra_headers) if extra_headers is not None else None,
+        fetch_url=url,
+    )
+    if isinstance(response, FetchResponse):
+        return response
+    raise BadRequestError(
+        message="DeepSeek Fetch did not return a page.",
+        model="deepseek/fetch",
+        llm_provider=SearchProviders.DEEPSEEK.value,
+    )
+
+
+async def afetch(
+    url: str,
+    fetch_provider: str = SearchProviders.DEEPSEEK.value,
+    api_key: str | None = None,
+    api_base: str | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    extra_headers: Mapping[str, str] | None = None,
+) -> FetchResponse:
+    """Async fetch of one page through a provider tool. DeepSeek is the supported provider."""
+    _require_deepseek_fetch(fetch_provider)
+    response: Final = await asearch(
+        query=url,
+        search_provider=fetch_provider,
+        api_key=api_key,
+        api_base=api_base,
+        timeout=timeout,
+        extra_headers=dict(extra_headers) if extra_headers is not None else None,
+        fetch_url=url,
+    )
+    if isinstance(response, FetchResponse):
+        return response
+    raise BadRequestError(
+        message="DeepSeek Fetch did not return a page.",
+        model="deepseek/fetch",
+        llm_provider=SearchProviders.DEEPSEEK.value,
+    )
