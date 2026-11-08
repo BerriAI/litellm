@@ -1,4 +1,5 @@
 import copy
+from collections.abc import Mapping
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -7,6 +8,7 @@ import pytest
 import litellm
 from litellm import ModelResponse
 from litellm.llms.openai.chat.o_series_transformation import OpenAIOSeriesConfig
+from litellm.utils import get_optional_params
 import os
 
 
@@ -219,3 +221,123 @@ def test_o_series_request_turns_system_into_user_without_touching_the_callers_me
 
     assert [message["role"] for message in body["messages"]] == ["user", "user"]
     assert messages == messages_before
+
+
+def _o3_row_with(flags: Mapping[str, bool]) -> dict[str, object]:
+    return {
+        **{
+            field: value
+            for field, value in litellm.model_cost["o3"].items()
+            if not (field.startswith("supports_") and field.endswith("_reasoning_effort"))
+        },
+        **flags,
+    }
+
+
+@pytest.mark.parametrize(
+    ("flags", "level", "forwarded"),
+    [
+        ({}, "minimal", True),
+        ({"supports_minimal_reasoning_effort": False}, "minimal", False),
+        ({"supports_minimal_reasoning_effort": True}, "minimal", True),
+        ({"supports_none_reasoning_effort": False}, "none", False),
+        ({"supports_minimal_reasoning_effort": False}, "low", True),
+        ({"supports_xhigh_reasoning_effort": False}, "xhigh", False),
+        ({}, "xhigh", True),
+    ],
+)
+def test_the_o_series_row_flags_alone_decide_whether_a_chat_level_is_forwarded(
+    local_model_cost_map: None,
+    monkeypatch: pytest.MonkeyPatch,
+    flags: dict[str, bool],
+    level: str,
+    forwarded: bool,
+):
+    monkeypatch.setitem(litellm.model_cost, "o3", _o3_row_with(flags))
+    config: Final = OpenAIOSeriesConfig()
+    dropped: Final = config.map_openai_params(
+        non_default_params={"reasoning_effort": level, "max_tokens": 10},
+        optional_params={},
+        model="o3",
+        drop_params=True,
+    )
+    assert dropped.get("reasoning_effort") == (level if forwarded else None)
+    assert dropped["max_completion_tokens"] == 10
+    if forwarded:
+        assert (
+            config.map_openai_params(
+                non_default_params={"reasoning_effort": level},
+                optional_params={},
+                model="o3",
+                drop_params=False,
+            )["reasoning_effort"]
+            == level
+        )
+    else:
+        with pytest.raises(litellm.utils.UnsupportedParamsError, match=f"reasoning_effort={level} is not supported"):
+            config.map_openai_params(
+                non_default_params={"reasoning_effort": level},
+                optional_params={},
+                model="o3",
+                drop_params=False,
+            )
+
+
+@pytest.mark.parametrize("model", ["o3", "o3-2025-04-16"])
+def test_o3_rows_turn_minimal_and_none_off(local_model_cost_map: None, model: str):
+    """Pinned so the row-flag test above cannot go vacuous: OpenAI's chat completions endpoint answered
+    400 for reasoning_effort minimal and none on o3 and 200 for low, medium, high and xhigh, both through
+    a local proxy and straight from api.openai.com on 2026-11-07. When OpenAI adds a level, flip the rows
+    and this assertion together."""
+    row: Final = litellm.model_cost[model]
+    assert row["supports_minimal_reasoning_effort"] is False
+    assert row["supports_none_reasoning_effort"] is False
+
+
+@pytest.mark.parametrize(
+    ("non_default_params", "optional_params"),
+    [
+        ({"reasoning_effort": {"effort": "minimal", "summary": "auto"}}, {}),
+        ({}, {"reasoning_effort": "minimal"}),
+    ],
+)
+def test_o3_judges_every_form_of_a_requested_level(
+    local_model_cost_map: None, non_default_params: dict[str, object], optional_params: dict[str, object]
+):
+    assert "reasoning_effort" not in OpenAIOSeriesConfig().map_openai_params(
+        non_default_params=non_default_params,
+        optional_params=optional_params,
+        model="o3",
+        drop_params=True,
+    )
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["openai", "azure"])
+@pytest.mark.parametrize(
+    ("model_info", "drop_params", "sent"),
+    [
+        (None, True, None),
+        ({"reasoning_effort_levels": ["minimal", "low"]}, False, "minimal"),
+    ],
+)
+def test_o3_chat_request_forwards_minimal_only_when_the_deployment_declares_it(
+    local_model_cost_map: None,
+    custom_llm_provider: str,
+    model_info: Mapping[str, object] | None,
+    drop_params: bool,
+    sent: str | None,
+):
+    optional_params: Final = get_optional_params(
+        model="o3",
+        custom_llm_provider=custom_llm_provider,
+        reasoning_effort="minimal",
+        drop_params=drop_params,
+        model_info=model_info,
+    )
+    assert optional_params.get("reasoning_effort") == sent
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["openai", "azure"])
+def test_o3_chat_request_refuses_minimal_without_drop_params(local_model_cost_map: None, custom_llm_provider: str):
+    with pytest.raises(litellm.utils.UnsupportedParamsError, match="reasoning_effort=minimal is not supported"):
+        get_optional_params(model="o3", custom_llm_provider=custom_llm_provider, reasoning_effort="minimal")
