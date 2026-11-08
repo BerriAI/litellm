@@ -42,6 +42,7 @@ from litellm.caching.redis_cluster_cache import RedisClusterCache
 from litellm.litellm_core_utils.get_model_cost_map import ModelCostMapReloaded
 from litellm.proxy._types import (
     AwsErrorTypeProxyException,
+    LiteLLM_ProxyModelTable,
     LitellmUserRoles,
     ModelAccessDeniedProxyException,
     ProxyErrorTypes,
@@ -2514,24 +2515,22 @@ async def test_apply_search_filter_scopes_byok_to_caller_teams():
     }
 
     # DB-only BYOK rows fetched by the over-broad JSON branch.
-    db_caller_row = MagicMock()
-    db_caller_row.model_id = "byok-db-mine"
-    db_caller_row.model_name = "model_name_team-mine_db"
-    db_caller_row.model_info = {
-        "id": "byok-db-mine",
-        "team_id": "team-mine",
-        "team_public_model_name": "Claude DB Mine",
-        "db_model": True,
-    }
-    db_other_row = MagicMock()
-    db_other_row.model_id = "byok-db-other"
-    db_other_row.model_name = "model_name_team-other_db"
-    db_other_row.model_info = {
-        "id": "byok-db-other",
-        "team_id": "team-other",
-        "team_public_model_name": "Claude DB Other",
-        "db_model": True,
-    }
+    db_caller_row = LiteLLM_ProxyModelTable(
+        model_id="byok-db-mine", model_name="model_name_team-mine_db",
+        litellm_params={"model": "claude-sonnet"},
+        model_info={
+            "id": "byok-db-mine", "team_id": "team-mine",
+            "team_public_model_name": "Claude DB Mine", "db_model": True,
+        },
+    )
+    db_other_row = LiteLLM_ProxyModelTable(
+        model_id="byok-db-other", model_name="model_name_team-other_db",
+        litellm_params={"model": "claude-sonnet"},
+        model_info={
+            "id": "byok-db-other", "team_id": "team-other",
+            "team_public_model_name": "Claude DB Other", "db_model": True,
+        },
+    )
 
     prisma_client = MagicMock()
     prisma_client.db.litellm_proxymodeltable.count = AsyncMock(return_value=2)
@@ -2540,15 +2539,7 @@ async def test_apply_search_filter_scopes_byok_to_caller_teams():
     caller_user_row.teams = ["team-mine"]
     prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=caller_user_row)
 
-    proxy_config = MagicMock()
-    proxy_config.decrypt_model_list_from_db = lambda rows: [
-        {
-            "model_name": r.model_name,
-            "model_info": r.model_info,
-            "litellm_params": {"model": "claude-sonnet"},
-        }
-        for r in rows
-    ]
+    proxy_config = proxy_server_module.ProxyConfig()
 
     non_admin = MagicMock(spec=UserAPIKeyAuth)
     non_admin.user_role = LitellmUserRoles.INTERNAL_USER

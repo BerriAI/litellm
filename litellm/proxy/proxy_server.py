@@ -174,7 +174,7 @@ from litellm.proxy.common_utils.callback_utils import (
     normalize_callback_names,
     process_callback,
 )
-from litellm.proxy.common_utils.db_model_utils import team_model_params_are_allowed
+from litellm.proxy.common_utils.db_model_utils import decrypt_db_model_params, team_model_params_are_allowed
 from litellm.proxy.common_utils.realtime_utils import (  # noqa: F401, RUF100  # legacy module exports
     _realtime_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     realtime_request_body,
@@ -8038,14 +8038,25 @@ class ProxyConfig:
                 added_models += 1
         return added_models
 
-    def decrypt_model_list_from_db(self, new_models: list) -> list:
-        _model_list: Final[list] = []
+    def decrypt_model_list_from_db(self, new_models: list, *, _for_management_read: bool = False) -> list:
+        _model_list: Final[list[Mapping[str, object]]] = []
         for m in new_models:
             _litellm_params = m.litellm_params
             if isinstance(_litellm_params, BaseModel):
                 _litellm_params = _litellm_params.model_dump()
             if isinstance(_litellm_params, dict):
                 _model_info = self.get_model_info_with_id(model=m)
+                if _for_management_read:
+                    _model_list.append(
+                        {
+                            "model_name": m.model_name,
+                            "litellm_params": decrypt_db_model_params(
+                                _DB_MODEL_PARAMS.validate_python(_litellm_params)
+                            ),
+                            "model_info": _model_info.model_dump(exclude_none=True),
+                        }
+                    )
+                    continue
                 # decrypt values
                 _litellm_params = {
                     k: self._resolve_db_litellm_param(key=k, value=v, model_info=_model_info)
@@ -17075,7 +17086,7 @@ async def _fetch_db_models_for_search(
 
     decrypted: Final[list[dict[str, object]]] = []
     for db_model in matching_db_rows:
-        decrypted_models = proxy_config.decrypt_model_list_from_db([db_model])
+        decrypted_models = proxy_config.decrypt_model_list_from_db([db_model], _for_management_read=True)
         if decrypted_models:
             decrypted.extend(decrypted_models)
 
@@ -17125,10 +17136,7 @@ async def _apply_search_filter_to_models(
     Returns:
         Tuple of (filtered_models, total_count). total_count is None if not searching.
     """
-    if not search or not search.strip():
-        return all_models, None
-
-    search_lower: Final = search.lower().strip()
+    search_lower: Final = (search or "").lower().strip()
 
     allowed_team_ids: Final = await _get_caller_byok_team_scope(
         user_api_key_dict=user_api_key_dict,
@@ -17642,7 +17650,7 @@ async def _find_model_by_id(
             db_model: Final = await ModelRepository(prisma_client).table.find_unique(where={"model_id": model_id})
             if db_model:
                 # Convert database model to router format
-                decrypted_models: Final = proxy_config.decrypt_model_list_from_db([db_model])
+                decrypted_models: Final = proxy_config.decrypt_model_list_from_db([db_model], _for_management_read=True)
                 if decrypted_models:
                     found_model = decrypted_models[0]
         except Exception as e:
@@ -17805,7 +17813,7 @@ async def model_info_v2(
         raise HTTPException(status_code=400, detail="use_stored_params requires modelId")
 
     # Return empty data array when no models are configured (graceful handling for fresh installs)
-    if llm_router is None or not llm_router.registry().all():
+    if (llm_router is None or not llm_router.registry().all()) and prisma_client is None:
         return {
             "data": [],
             "total_count": 0,
@@ -17820,6 +17828,8 @@ async def model_info_v2(
             detail={"error": CommonProxyErrors.db_not_connected_error.value},
         )
 
+    model_info_router: Final = llm_router if llm_router is not None else litellm.Router(model_list=[])
+
     # Load existing config
     await proxy_config.get_config()
 
@@ -17830,7 +17840,7 @@ async def model_info_v2(
         matched_models: Final = await _find_model_by_id(
             model_id=modelId,
             search=search,
-            llm_router=llm_router,
+            llm_router=model_info_router,
             prisma_client=prisma_client,
             proxy_config=proxy_config,
         )
@@ -17846,7 +17856,7 @@ async def model_info_v2(
         # Normal flow when modelId is not provided
         all_models = [
             m
-            for m in copy.deepcopy(llm_router.registry().all())
+            for m in copy.deepcopy(model_info_router.registry().all())
             if not _byok_row_outside_caller_teams(m.get("model_info", {}), allowed_team_ids)
         ]
 
@@ -17874,7 +17884,7 @@ async def model_info_v2(
     if user_models_only:
         all_models = await non_admin_all_models(
             all_models=all_models,
-            llm_router=llm_router,
+            llm_router=model_info_router,
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
         )
@@ -17883,7 +17893,7 @@ async def model_info_v2(
         all_models = await get_all_team_and_direct_access_models(
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
-            llm_router=llm_router,
+            llm_router=model_info_router,
             all_models=all_models,
         )
 
@@ -17893,7 +17903,7 @@ async def model_info_v2(
         all_models[i] = _enrich_model_info_with_litellm_data(
             model=_model,
             debug=debug if debug is not None else False,
-            llm_router=llm_router,
+            llm_router=model_info_router,
         )
 
     # Apply teamId filter if provided
@@ -17902,7 +17912,7 @@ async def model_info_v2(
             all_models=all_models,
             team_id=teamId.strip(),
             prisma_client=prisma_client,
-            llm_router=llm_router,
+            llm_router=model_info_router,
             user_api_key_dict=user_api_key_dict,
         )
         # Update search_total_count after teamId filter is applied

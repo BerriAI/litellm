@@ -27,6 +27,7 @@ from litellm.caching.llm_caching_handler import LLMClientCache
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy import proxy_server
 from litellm.proxy._types import LiteLLM_ProxyModelTable
+from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
 from litellm.utils import _invalidate_model_cost_lowercase_map
 
 from .conftest import normalize, route_entry_points_to_stubs  # type: ignore[import-not-found]
@@ -281,6 +282,70 @@ def test_deleted_model_params_stay_absent_after_reload_and_another_save(
     )
     persisted: Final = json.loads(saved_again["litellm_params"])
     assert persisted == {**saved_params, "rpm": 10}
+
+
+@pytest.mark.parametrize("router_state", ("populated", "empty", "absent"))
+@pytest.mark.parametrize("view", ("lookup", "search", "list", "editor"))
+def test_saved_team_models_remain_editable_without_serving(
+    client: TestClient,
+    auth_as: Callable[[], AbstractContextManager[object]],
+    monkeypatch: pytest.MonkeyPatch,
+    mock_prisma: MagicMock,
+    router_state: str,
+    view: str,
+) -> None:
+    monkeypatch.setenv("LITELLM_SALT_KEY", "stored-model-settings-key")
+    monkeypatch.setenv("LITELLM_TEST_MODEL_ENDPOINT", "configured-endpoint")
+    reference: Final = "os.environ/LITELLM_TEST_MODEL_ENDPOINT"
+    plain: Final = {"model": "openai/gpt-4o-mini", "api_key": "literal-key", "api_base": reference, "custom_null": None}
+    row: Final = LiteLLM_ProxyModelTable(
+        model_id="saved-model",
+        model_name="saved-model",
+        model_info={"id": "saved-model", "team_id": "owner-team"},
+        litellm_params={
+            key: encrypt_value_helper(value=value) if isinstance(value, str) else value for key, value in plain.items()
+        },
+    )
+    config: Final = proxy_server.ProxyConfig()
+    assert config.decrypt_model_list_from_db([row]) == []
+    mock_prisma.db.litellm_proxymodeltable.find_unique.return_value = row
+    mock_prisma.db.litellm_proxymodeltable.find_many.return_value = [row]
+    mock_prisma.db.litellm_proxymodeltable.count.return_value = 1
+    models: Final = (
+        [
+            {
+                "model_name": "valid-model",
+                "model_info": {"id": "valid-model"},
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "literal-key"},
+            }
+        ]
+        if router_state == "populated"
+        else []
+    )
+    router: Final = None if router_state == "absent" else litellm.Router(model_list=models)
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "prisma_client", mock_prisma)
+    monkeypatch.setattr(proxy_server, "proxy_config", config)
+    params: Final = (
+        {"modelId": "saved-model", "use_stored_params": "true"}
+        if view == "editor"
+        else {"modelId": "saved-model"}
+        if view == "lookup"
+        else {"search": "saved-model"}
+        if view == "search"
+        else {}
+    )
+
+    with auth_as():
+        response: Final = client.get("/v2/model/info", params=params)
+
+    assert response.status_code == 200, response.text
+    saved: Final = [model for model in response.json()["data"] if model["model_info"]["id"] == "saved-model"]
+    assert len(saved) == 1, response.text
+    assert saved[0]["litellm_params"] == {"model": "openai/gpt-4o-mini", "api_base": reference, "custom_null": None}
+    assert "configured-endpoint" not in response.text
+    assert "literal-key" not in response.text
+    assert router is None or router.registry().deployment("saved-model") is None
 
 
 def test_v2_model_info_in_openapi_schema():
