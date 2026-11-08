@@ -5555,9 +5555,22 @@ async def test_system_injection_point_leaves_a_developer_prompt_for_a_routed_gem
     assert "cache_control" not in route.calls.last.request.content.decode()
 
 
-def test_system_injection_point_marks_a_developer_prompt_for_a_gateway_alias_with_a_claude_base_model(
+@pytest.mark.parametrize(
+    "deployment_fields",
+    [
+        pytest.param({"base_model": "anthropic/claude-haiku-5-5"}, id="base_model"),
+        pytest.param({"model_info": {"base_model": "anthropic/claude-haiku-5-5"}}, id="model_info_base_model"),
+    ],
+)
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["completion", "acompletion"])
+@pytest.mark.asyncio
+async def test_system_injection_point_marks_a_developer_prompt_for_a_gateway_alias_with_a_claude_base_model(
+    deployment_fields: dict[str, object],
+    asynchronous: bool,
     respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     route: Final = respx_mock.post(_GATEWAY_URL).mock(
         return_value=Response(
             200,
@@ -5574,17 +5587,21 @@ def test_system_injection_point_marks_a_developer_prompt_for_a_gateway_alias_wit
         )
     )
 
-    litellm.completion(
-        model="litellm_proxy/team-assistant",
-        messages=[
+    request: Final = {
+        "model": "litellm_proxy/team-assistant",
+        "messages": [
             {"role": "developer", "content": _DEVELOPER_PREFIX},
             {"role": "user", "content": "Which rule covers backups?"},
         ],
-        cache_control_injection_points=[{"location": "message", "role": "system"}],
-        api_key="offline-key",
-        api_base=_GATEWAY_URL.removesuffix("/chat/completions"),
-        base_model="anthropic/claude-haiku-5-5",
-    )
+        "cache_control_injection_points": [{"location": "message", "role": "system"}],
+        "api_key": "offline-key",
+        "api_base": _GATEWAY_URL.removesuffix("/chat/completions"),
+        **deployment_fields,
+    }
+    if asynchronous:
+        await litellm.acompletion(**request)
+    else:
+        litellm.completion(**request)
 
     assert json.loads(route.calls.last.request.content)["messages"][0] == {
         "role": "system",
