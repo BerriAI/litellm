@@ -1,5 +1,7 @@
 import asyncio
-from collections.abc import Mapping
+import os
+from collections.abc import Callable, Mapping
+from functools import partial
 from types import MappingProxyType
 from typing import Final, Literal
 from urllib.parse import urlparse
@@ -52,6 +54,28 @@ AZURE_ENTRA_CREDENTIAL_PARAM_KEYS: Final = frozenset({"azure_ad_token", "client_
 AZURE_ENTRA_LITELLM_PARAM_KEYS: Final = AZURE_ENTRA_CREDENTIAL_PARAM_KEYS | frozenset(
     {"tenant_id", "client_id", "azure_username", "azure_scope"}
 )
+AZURE_DEFAULT_SCOPE: Final = "https://cognitiveservices.azure.com/.default"
+_AZURE_ENTRA_ENVIRONMENT_VARIABLES: Final = MappingProxyType(
+    {
+        "tenant_id": "AZURE_TENANT_ID",
+        "client_id": "AZURE_CLIENT_ID",
+        "client_secret": "AZURE_CLIENT_SECRET",
+        "azure_username": "AZURE_USERNAME",
+        "azure_password": "AZURE_PASSWORD",
+        "azure_ad_token": "AZURE_AD_TOKEN",
+    }
+)
+
+
+def azure_entra_environment_defaults() -> Mapping[str, object]:
+    return MappingProxyType(
+        {
+            **{key: os.getenv(variable) for key, variable in _AZURE_ENTRA_ENVIRONMENT_VARIABLES.items()},
+            "azure_scope": os.getenv("AZURE_SCOPE", AZURE_DEFAULT_SCOPE),
+        }
+    )
+
+
 AZURE_ENTRA_CREDENTIAL_HELP: Final = (
     "Set `tenant_id` + `client_id` + `client_secret`, `azure_ad_token` (an `oidc/` token also needs "
     "`tenant_id` + `client_id`), or `client_id` + `azure_username` + `azure_password` in the agent's `litellm_params`"
@@ -68,6 +92,17 @@ def _resolve_config_secret(value: object) -> str | None:
     if not isinstance(value, str) or not value:
         return None
     return get_secret_str(value) if value.startswith("os.environ/") else value
+
+
+def _agent_entra_token(provider: Callable[[], str], model: str) -> str:
+    from litellm.llms.azure.common_utils import EntraRejectionError, entra_token
+
+    try:
+        return entra_token(provider)
+    except EntraRejectionError as rejection:
+        raise litellm.AuthenticationError(
+            message=rejection.message, llm_provider="azure_ai", model=model
+        ) from rejection
 
 
 def get_azure_ai_agent_entra_token(litellm_params: Mapping[str, object]) -> str:
@@ -88,18 +123,32 @@ def get_azure_ai_agent_entra_token(litellm_params: Mapping[str, object]) -> str:
     azure_username: Final = resolved["azure_username"]
     azure_password: Final = resolved["azure_password"]
     azure_ad_token: Final = resolved["azure_ad_token"]
+    model: Final = str(litellm_params.get("model") or "")
     if tenant_id and client_id and client_secret:
-        return get_azure_ad_token_from_entra_id(
-            tenant_id=tenant_id, client_id=client_id, client_secret=client_secret, scope=scope
-        )()
+        return _agent_entra_token(
+            get_azure_ad_token_from_entra_id(
+                tenant_id=tenant_id, client_id=client_id, client_secret=client_secret, scope=scope
+            ),
+            model,
+        )
     if client_id and azure_username and azure_password:
-        return get_azure_ad_token_from_username_password(
-            client_id=client_id, azure_username=azure_username, azure_password=azure_password, scope=scope
-        )()
+        return _agent_entra_token(
+            get_azure_ad_token_from_username_password(
+                client_id=client_id, azure_username=azure_username, azure_password=azure_password, scope=scope
+            ),
+            model,
+        )
     federated: Final = azure_ad_token is not None and azure_ad_token.startswith("oidc/")
     if azure_ad_token and federated and tenant_id and client_id:
-        return get_azure_ad_token_from_oidc(
-            azure_ad_token=azure_ad_token, azure_client_id=client_id, azure_tenant_id=tenant_id, scope=scope
+        return _agent_entra_token(
+            partial(
+                get_azure_ad_token_from_oidc,
+                azure_ad_token=azure_ad_token,
+                azure_client_id=client_id,
+                azure_tenant_id=tenant_id,
+                scope=scope,
+            ),
+            model,
         )
     if azure_ad_token and not federated:
         return azure_ad_token

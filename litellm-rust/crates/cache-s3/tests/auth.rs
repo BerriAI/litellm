@@ -5,9 +5,9 @@ use rstest::rstest;
 
 fn explicit(session_token: Option<&str>) -> AwsAuthConfig {
     AwsAuthConfig {
-        access_key_id: Some("key".to_string()),
-        secret_access_key: Some("secret".to_string()),
-        session_token: session_token.map(str::to_string),
+        access_key_id: Some("key".into()),
+        secret_access_key: Some("secret".into()),
+        session_token: session_token.map(Into::into),
         region_name: Some("us-east-1".to_string()),
         ..Default::default()
     }

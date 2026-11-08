@@ -2,6 +2,7 @@
 
 import { Dialog as DialogPrimitive } from "@base-ui/react/dialog";
 import { CircleAlert, Shield, TriangleAlert } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import {
   type DeploymentWarning,
   useDeploymentHealthAccess,
@@ -11,6 +12,7 @@ import { Alert, AlertTitle } from "@/components/shared/Alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { SheetTrigger } from "@/components/ui/sheet";
+import i18n from "@/i18n/i18n";
 import { deploymentWarningContent } from "./DeploymentWarningContent";
 
 export type DeploymentHealthHandle = DialogPrimitive.Handle<unknown>;
@@ -20,21 +22,27 @@ export const createDeploymentHealthHandle = (): DeploymentHealthHandle => Dialog
 export const activeWarnings = (warnings: readonly DeploymentWarning[]): DeploymentWarning[] =>
   warnings.filter((warning) => !warning.ignore);
 
-const pluralWarnings = (count: number): string => `${count} active ${count === 1 ? "warning" : "warnings"}`;
+const pluralWarnings = (count: number): string => i18n.t("shell.deploymentHealth.activeWarnings", { count });
 
 export const DeploymentHealthIcon = ({ handle }: { handle: DeploymentHealthHandle }) => {
+  const { t } = useTranslation();
   const { canView } = useDeploymentHealthAccess();
   const { data } = useDeploymentWarnings();
   if (!canView) return null;
 
   const active = activeWarnings(data?.warnings ?? []);
+  if (active.length === 0) return null;
   const hasCritical = active.some((warning) => warning.severity === "critical");
 
   return (
     <SheetTrigger
       handle={handle}
       render={<Button variant="ghost" size="icon" className="relative text-muted-foreground hover:text-foreground" />}
-      aria-label={active.length > 0 ? `Deployment health, ${pluralWarnings(active.length)}` : "Deployment health"}
+      aria-label={
+        active.length > 0
+          ? t("shell.deploymentHealth.icon.withCount", { warnings: pluralWarnings(active.length) })
+          : t("shell.deploymentHealth.icon.label")
+      }
     >
       <Shield className="size-4" aria-hidden />
       {active.length > 0 ? (
@@ -50,7 +58,29 @@ export const DeploymentHealthIcon = ({ handle }: { handle: DeploymentHealthHandl
   );
 };
 
+export const DeploymentHealthLink = ({ handle }: { handle: DeploymentHealthHandle }) => {
+  const { t } = useTranslation();
+  const { canView } = useDeploymentHealthAccess();
+  if (!canView) return null;
+  return (
+    <SheetTrigger
+      handle={handle}
+      render={
+        <Button
+          variant="ghost"
+          size="sm"
+          className="w-full justify-start gap-2 text-xs font-normal text-muted-foreground"
+        />
+      }
+    >
+      <Shield className="size-4" aria-hidden />
+      {t("shell.deploymentHealth.link.label")}
+    </SheetTrigger>
+  );
+};
+
 export const DeploymentHealthBanner = ({ handle }: { handle: DeploymentHealthHandle }) => {
+  const { t } = useTranslation();
   const { canView } = useDeploymentHealthAccess();
   const { data } = useDeploymentWarnings();
   const active = activeWarnings(data?.warnings ?? []);
@@ -63,8 +93,8 @@ export const DeploymentHealthBanner = ({ handle }: { handle: DeploymentHealthHan
     <Alert
       variant={critical ? "error" : "warning"}
       role={critical ? "alert" : "status"}
-      aria-label="Deployment alert"
-      className="min-h-10 shrink-0 items-center *:[svg]:text-warning data-[variant=error]:*:[svg]:text-destructive rounded-none border-x-0 border-t-0 border-b-warning/25 bg-warning/10 px-4 py-2 text-[13px] leading-5 text-foreground data-[variant=error]:border-b-destructive/25 data-[variant=error]:bg-destructive/10"
+      aria-label={t("shell.deploymentHealth.banner.label")}
+      className="min-h-10 shrink-0 items-center *:[svg]:row-span-1 *:[svg]:translate-y-0 *:[svg]:text-warning data-[variant=error]:*:[svg]:text-destructive rounded-none border-x-0 border-t-0 border-b-warning/25 bg-warning/10 px-4 py-2 text-[13px] leading-5 text-foreground data-[variant=error]:border-b-destructive/25 data-[variant=error]:bg-destructive/10"
     >
       <Icon aria-hidden />
       <AlertTitle className="flex flex-wrap items-center gap-x-2">
@@ -75,7 +105,7 @@ export const DeploymentHealthBanner = ({ handle }: { handle: DeploymentHealthHan
             <Button variant="link" className="h-auto p-0 text-[13px] leading-5 font-medium text-foreground underline" />
           }
         >
-          Review
+          {t("shell.deploymentHealth.banner.review")}
         </SheetTrigger>
       </AlertTitle>
     </Alert>

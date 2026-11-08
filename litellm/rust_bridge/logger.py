@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping
 from typing import Final
 
@@ -27,7 +28,38 @@ def enabled(level: int) -> bool:
     return verbose_logger.isEnabledFor(level)
 
 
+def _redis_timeout_line(level: int, message: str) -> tuple[int, str]:
+    """``log_redis_failure``'s timeout rule, on the throttle redis-py's timeouts count against too."""
+    from litellm.caching.redis_cache import redis_timeout_log_throttle
+
+    suppressed: Final = redis_timeout_log_throttle.admit()
+    if suppressed is None:
+        return logging.DEBUG, message
+    if suppressed == 0:
+        return level, message
+    return (
+        level,
+        f"{message} ({suppressed} more Redis timeouts since the previous Redis timeout line were logged at DEBUG)",
+    )
+
+
 def emit(
+    level: int,
+    message: str,
+    pathname: str,
+    lineno: int,
+    target: str,
+    fields: Mapping[str, JsonValue],
+    correlation: tuple[str, str],
+) -> None:
+    if fields.get("redis.failure") == "timeout":
+        throttled_level, throttled_message = _redis_timeout_line(level, message)
+        _emit(throttled_level, throttled_message, pathname, lineno, target, fields, correlation)
+        return
+    _emit(level, message, pathname, lineno, target, fields, correlation)
+
+
+def _emit(
     level: int,
     message: str,
     pathname: str,

@@ -1,7 +1,7 @@
+import type { ParseKeys } from "i18next";
 import type { BillingPeriod } from "./types";
 
-export const ATTRIBUTION_RULE =
-  "A subscription fee is counted once for each monthly billing period whose start date falls inside the selected dates. Fixed costs sit beside metered spend and are never added to it, to key or team spend, or to budgets.";
+export const ATTRIBUTION_RULE: ParseKeys = "usage.subscriptionCost.attributionRule";
 
 export const formatFee = (amount: number, currency: string): string => `${amount.toFixed(2)} ${currency}`;
 
