@@ -39,12 +39,37 @@ async def test_alert_resource_labels_bound_legacy_display_values(db: ManagementD
         await repository.database.query_raw('DELETE FROM "LiteLLM_UserTable" WHERE user_id=$1', identity)
 
 
-def test_scoped_rules_use_real_management_auth_and_preserve_read_only_roles(gateway: Gateway) -> None:
+@pytest.mark.asyncio(loop_scope="session")
+async def test_deleted_key_labels_use_the_latest_alias_and_prefer_live_keys(db: ManagementDatabase) -> None:
+    repository: Final = UsageAlertsRepository.from_prisma(db.prisma)
+    identity: Final = sha256(uuid4().bytes).hexdigest()
+    scope: Final = UsageAlertRuleInput(
+        name="Deleted key", scope_type="key", scope_id=identity, metric="spend", direction="increase"
+    )
+    try:
+        await repository.database.query_raw(
+            """INSERT INTO "LiteLLM_DeletedVerificationToken" (id,token,key_alias,deleted_at)
+            VALUES ($1||'-old',$1,'Old alias',TIMESTAMP '2000-01-01'),
+                   ($1||'-new',$1,repeat('x',512),TIMESTAMP '2000-01-02')""",
+            identity,
+        )
+        assert await repository.resource_labels((scope,)) == {("key", identity): "x" * 256}
+        await repository.database.query_raw(
+            'INSERT INTO "LiteLLM_VerificationToken" (token,key_alias) VALUES ($1,$2)', identity, "Live alias"
+        )
+        assert await repository.resource_labels((scope,)) == {("key", identity): "Live alias"}
+    finally:
+        await repository.database.query_raw('DELETE FROM "LiteLLM_VerificationToken" WHERE token=$1', identity)
+        await repository.database.query_raw('DELETE FROM "LiteLLM_DeletedVerificationToken" WHERE token=$1', identity)
+
+
+@pytest.mark.parametrize("grant", ["management_routes", "/usage", "/usage/alert-rules"])
+def test_scoped_rules_use_real_management_auth_and_preserve_read_only_roles(gateway: Gateway, grant: str) -> None:
     with gateway.scenario() as scenario:
         owner: Final = scenario.user(user_role="internal_user")
         outsider: Final = scenario.user(user_role="internal_user")
         viewer: Final = scenario.user(user_role="proxy_admin_viewer")
-        owner_key: Final = scenario.key(user_id=owner, key_type="management")
+        owner_key: Final = scenario.key(user_id=owner, key_type="default", allowed_routes=[grant])
         outsider_key: Final = scenario.key(user_id=outsider, key_type="management")
         viewer_key: Final = scenario.key(user_id=viewer, key_type="read_only")
         inference_key: Final = scenario.key(user_id=owner, key_type="llm_api")

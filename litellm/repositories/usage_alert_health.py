@@ -1,5 +1,6 @@
 """Sample successful aggregate flushes without adding request-time telemetry."""
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import (
     TYPE_CHECKING,
@@ -11,6 +12,7 @@ from typing import (
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter
 
+from litellm.repositories.analytics_budget import AnalyticsDatabase, BoundedAnalyticsDatabase, analytics_deadline
 from litellm.repositories.usage_alert_metrics import MetricsDatabase
 
 if TYPE_CHECKING:
@@ -34,22 +36,24 @@ class UsageAlertHealthRepository:
 
     @classmethod
     def from_prisma(cls, prisma: "PrismaClient") -> "UsageAlertHealthRepository":
-        database: Final = cast(MetricsDatabase, prisma.writer_db)  # cast-ok: generated Prisma delegate
-        return cls(database)
+        database: Final = cast(AnalyticsDatabase, prisma.writer_db)  # cast-ok: generated Prisma transaction delegate
+        return cls(BoundedAnalyticsDatabase(database, background=True))
 
     async def record(self, source: FlushSource, now: datetime) -> bool:
         hour: Final = now.astimezone(timezone.utc).replace(minute=0, second=0, microsecond=0, tzinfo=None)
         rows: Final = await self._database.query_raw(
-            """INSERT INTO "LiteLLM_UsageAlertFlush" (source,hour,observed_at)
+            """WITH removed AS (
+                DELETE FROM "LiteLLM_UsageAlertFlush" WHERE (source,hour) IN (
+                    SELECT source,hour FROM "LiteLLM_UsageAlertFlush"
+                    WHERE hour<$2::timestamp-INTERVAL '35 days' ORDER BY hour,source LIMIT 10
+                )
+            ) INSERT INTO "LiteLLM_UsageAlertFlush" (source,hour,observed_at)
             SELECT $1,$2::timestamp,$3::timestamp WHERE NOT EXISTS (
                 SELECT 1 FROM "LiteLLM_SpendLogDelivery" WHERE state='pending' AND created_at<$2::timestamp LIMIT 1
             ) ON CONFLICT (source,hour) DO UPDATE SET observed_at=EXCLUDED.observed_at RETURNING source""",
             source,
             hour,
             now.astimezone(timezone.utc).replace(tzinfo=None),
-        )
-        await self._database.query_raw(
-            'DELETE FROM "LiteLLM_UsageAlertFlush" WHERE hour<$1::timestamp RETURNING source', hour - timedelta(days=35)
         )
         return bool(rows)
 
@@ -70,11 +74,11 @@ class UsageAlertHealthRepository:
 
 
 class UsageAlertFlushRecorder:
-    """At most one heartbeat attempt per source per worker per hour after success."""
+    """Retry optional freshness once a minute, and stop after an hourly success."""
 
     def __init__(self) -> None:
-        self._user_hour: datetime | None = None
-        self._team_hour: datetime | None = None
+        self._user_after: datetime | None = None
+        self._team_after: datetime | None = None
 
     async def record(self, prisma_client: "PrismaClient", source: FlushSource) -> None:
         from litellm._logging import verbose_proxy_logger
@@ -84,17 +88,21 @@ class UsageAlertFlushRecorder:
             return
         now: Final = datetime.now(timezone.utc)
         hour: Final = now.replace(minute=0, second=0, microsecond=0)
-        prior: Final = self._user_hour if source == "user" else self._team_hour
-        if prior == hour:
+        prior: Final = self._user_after if source == "user" else self._team_after
+        if prior is not None and now < prior:
             return
+        self._defer(source, now + timedelta(minutes=1))
         try:
-            database: Final = cast(MetricsDatabase, prisma_client.writer_db)  # cast-ok: generated Prisma delegate
-            if not await UsageAlertHealthRepository(database).record(source, now):
-                return
+            with analytics_deadline(asyncio.get_running_loop().time() + 1):
+                if not await UsageAlertHealthRepository.from_prisma(prisma_client).record(source, now):
+                    return
         except Exception:  # noqa: BLE001  # observability must not fail or requeue a committed spend flush
             verbose_proxy_logger.warning("Could not record usage-alert aggregate freshness")
             return
+        self._defer(source, hour + timedelta(hours=1))
+
+    def _defer(self, source: FlushSource, until: datetime) -> None:
         if source == "user":
-            self._user_hour = hour
+            self._user_after = until
         else:
-            self._team_hour = hour
+            self._team_after = until
