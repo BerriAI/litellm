@@ -237,17 +237,39 @@ def _as_object_list(value: object | None) -> list[object] | None:
     return _validated_object_list(value)
 
 
-def _cache_control_values(value: object) -> tuple[object, ...]:
+def _own_cache_control(value: object) -> tuple[object, ...]:
     fields: Final = as_str_mapping(value)
-    if fields is not None:
-        own: Final = () if fields.get("cache_control") is None else (fields["cache_control"],)
-        return own + _nested_cache_control_values(field for key, field in fields.items() if key != "cache_control")
-    items: Final = _as_object_list(value)
-    return () if items is None else _nested_cache_control_values(items)
+    return () if fields is None or fields.get("cache_control") is None else (fields["cache_control"],)
 
 
-def _nested_cache_control_values(values: Iterable[object]) -> tuple[object, ...]:
-    return tuple(itertools.chain.from_iterable(map(_cache_control_values, values)))
+def _each_cache_control(
+    cache_controls_of: Callable[[object], tuple[object, ...]], values: object
+) -> tuple[object, ...]:
+    return tuple(itertools.chain.from_iterable(map(cache_controls_of, _as_object_list(values) or ())))
+
+
+def _message_cache_controls(message: object) -> tuple[object, ...]:
+    fields: Final = as_str_mapping(message)
+    if fields is None:
+        return ()
+    return (
+        _own_cache_control(fields)
+        + _each_cache_control(_own_cache_control, fields.get("content"))
+        + _each_cache_control(_own_cache_control, fields.get("tool_calls"))
+    )
+
+
+def _tool_cache_controls(tool: object) -> tuple[object, ...]:
+    fields: Final = as_str_mapping(tool)
+    return () if fields is None else _own_cache_control(fields) + _own_cache_control(fields.get("function"))
+
+
+def _request_cache_controls(fields: Mapping[str, object]) -> tuple[object, ...]:
+    extra_body: Final = as_str_mapping(fields.get("extra_body")) or MappingProxyType({})
+    top_level: Final = extra_body.get("cache_control", fields.get("cache_control"))
+    return (() if top_level is None else (top_level,)) + _each_cache_control(
+        _tool_cache_controls, extra_body["tools"] if "tools" in extra_body else fields.get("tools")
+    )
 
 
 def _cache_control_ttl(cache_control: object) -> object:
@@ -255,8 +277,12 @@ def _cache_control_ttl(cache_control: object) -> object:
     return None if fields is None else fields.get("ttl") or "5m"
 
 
-def cache_control_ttls(value: object) -> tuple[object, ...]:
-    return tuple(map(_cache_control_ttl, _cache_control_values(value)))
+def messages_cache_control_ttls(messages: object) -> tuple[object, ...]:
+    return tuple(map(_cache_control_ttl, _each_cache_control(_message_cache_controls, messages)))
+
+
+def request_cache_control_ttls(fields: Mapping[str, object]) -> tuple[object, ...]:
+    return tuple(map(_cache_control_ttl, _request_cache_controls(fields)))
 
 
 def tool_config_point_ttls(points: object) -> tuple[object, ...]:
@@ -276,8 +302,8 @@ def request_keeps_developer_cache_control(
     shares one TTL within the cap."""
     return keeps_one_ttl_within_the_cap(
         (
-            *cache_control_ttls(messages),
-            *cache_control_ttls(other_request_fields),
+            *messages_cache_control_ttls(messages),
+            *request_cache_control_ttls(other_request_fields),
             *tool_config_point_ttls(other_request_fields.get("cache_control_injection_points")),
         )
     )
@@ -801,7 +827,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
                     continue
 
                 if targeted_role == "developer" and not keeps_one_ttl_within_the_cap(
-                    (*cache_control_ttls(messages), *outside_ttls, _cache_control_ttl(control))
+                    (*messages_cache_control_ttls(messages), *outside_ttls, _cache_control_ttl(control))
                 ):
                     continue
 
@@ -1289,7 +1315,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
                 non_default_params.get("prompt_cache_options"),
             )
             outside_ttls: Final = (
-                cache_control_ttls(
+                request_cache_control_ttls(
                     MappingProxyType(
                         {
                             "tools": cast(list[object] | None, tools),  # cast-ok: the seed types tools as a bare list

@@ -25,10 +25,10 @@ from litellm._logging import verbose_logger
 from litellm.integrations.anthropic_cache_control_hook import (
     CARRY_UNMATCHED_MESSAGE_POINTS,
     EXTERNAL_BREAKPOINTS_STAMP,
-    PROMPT_CACHING_STAMP,
     AnthropicCacheControlHook,
     configured_injection_points,
     developer_messages_for_a_prompt_caching_model,
+    request_keeps_developer_cache_control,
     supports_openai_prompt_cache_breakpoint,
 )
 from litellm.litellm_core_utils.prompt_templates.factory import (
@@ -5150,6 +5150,89 @@ def test_system_injection_point_leaves_a_developer_prompt_unmarked_when_its_mark
     )
 
 
+_TOOL_WITH_A_CACHE_CONTROL_ARGUMENT: Final = MappingProxyType(
+    {
+        "type": "function",
+        "function": {
+            "name": "set_cache_policy",
+            "parameters": {"type": "object", "properties": {"cache_control": {"type": "string"}}},
+        },
+    }
+)
+
+
+@pytest.mark.parametrize(
+    ("developer_mark", "points"),
+    [
+        pytest.param(dict(_ONE_HOUR), None, id="client_mark"),
+        pytest.param(None, [{"location": "message", "role": "system", "control": dict(_ONE_HOUR)}], id="injection_point"),
+    ],
+)
+def test_one_hour_developer_prompt_stays_cached_beside_a_tool_argument_named_cache_control(
+    developer_mark: dict[str, str] | None, points: list[dict[str, object]] | None
+) -> None:
+    sent_bodies: Final[list[_ConverseBody]] = []
+    developer: Final = {"role": "developer", "content": _DEVELOPER_PREFIX}
+
+    litellm.completion(
+        model=_CLAUDE_ON_CONVERSE,
+        messages=[
+            developer if developer_mark is None else {**developer, "cache_control": developer_mark},
+            {"role": "user", "content": "Which rule covers backups?"},
+        ],
+        tools=[dict(_TOOL_WITH_A_CACHE_CONTROL_ARGUMENT)],
+        cache_control_injection_points=points,
+        client=_converse_client(sent_bodies),
+        **_OFFLINE_AWS_CREDENTIALS,
+    )
+
+    assert sent_bodies[-1].system == (
+        {"text": _DEVELOPER_PREFIX},
+        {"cachePoint": {"type": "default", "ttl": "1h"}},
+    )
+
+
+_FIVE_MINUTES: Final = MappingProxyType({"type": "ephemeral", "ttl": "5m"})
+_FIVE_MINUTE_TOOL: Final = MappingProxyType({**_WEATHER_TOOL, "cache_control": dict(_FIVE_MINUTES)})
+
+
+@pytest.mark.parametrize(
+    ("outside_fields", "keeps_the_mark"),
+    [
+        pytest.param({"tools": [dict(_TOOL_WITH_A_CACHE_CONTROL_ARGUMENT)]}, True, id="tool_argument_named_cache_control"),
+        pytest.param(
+            {"tools": [{**_WEATHER_TOOL, "function": {**_WEATHER_TOOL["function"], "cache_control": dict(_FIVE_MINUTES)}}]},
+            False,
+            id="mark_under_the_tool_function",
+        ),
+        pytest.param({"cache_control": dict(_FIVE_MINUTES)}, False, id="top_level_mark"),
+        pytest.param({"extra_body": {"cache_control": dict(_FIVE_MINUTES)}}, False, id="envelope_top_level_mark"),
+        pytest.param(
+            {"tools": [dict(_WEATHER_TOOL)], "extra_body": {"tools": [dict(_FIVE_MINUTE_TOOL)]}},
+            False,
+            id="envelope_tool_mark",
+        ),
+        pytest.param(
+            {"tools": [dict(_FIVE_MINUTE_TOOL)], "extra_body": {"tools": [dict(_WEATHER_TOOL)]}},
+            True,
+            id="tool_mark_the_envelope_replaces",
+        ),
+    ],
+)
+def test_one_hour_developer_mark_follows_the_ttls_of_the_marks_sent_outside_the_messages(
+    outside_fields: dict[str, object], keeps_the_mark: bool
+) -> None:
+    messages: Final = cast(
+        list[AllMessageValues],
+        [
+            {"role": "developer", "content": _DEVELOPER_PREFIX, "cache_control": dict(_ONE_HOUR)},
+            {"role": "user", "content": "Which rule covers backups?"},
+        ],
+    )
+
+    assert request_keeps_developer_cache_control(messages, MappingProxyType(outside_fields)) is keeps_the_mark
+
+
 def test_system_injection_point_marks_a_developer_prompt_for_openai_prompt_cache_breakpoints() -> None:
     sent_bodies: Final[list[Mapping[str, object]]] = []
 
@@ -5506,25 +5589,32 @@ def test_system_injection_point_on_a_developer_prompt_starts_no_provider_sign_in
         pytest.param("lemonade", "Qwen3-8B-GGUF", id="lemonade"),
     ],
 )
-def test_developer_prompt_caching_check_sends_no_model_lookup(custom_llm_provider: str, model: str):
-    messages: Final = cast(
-        list[AllMessageValues],
-        [
-            {"role": "developer", "content": "Answer in French.", "cache_control": {"type": "ephemeral"}},
-            {"role": "user", "content": "Hi"},
-        ],
-    )
+def test_developer_prompt_caching_check_answers_without_a_model_lookup(custom_llm_provider: str, model: str):
+    developer: Final = {"role": "developer", "content": "Answer in French."}
+    question: Final = {"role": "user", "content": "Hi"}
     params: Final[dict[str, object]] = {"cache_control_injection_points": [{"location": "message", "role": "system"}]}
 
     with respx.mock(assert_all_called=False) as router:
         lookups: Final = router.route().mock(return_value=Response(500))
-        developer_messages_for_a_prompt_caching_model(
-            messages, model=model, custom_llm_provider=custom_llm_provider, model_info=None, base_model=None
+        checked: Final = developer_messages_for_a_prompt_caching_model(
+            cast(list[AllMessageValues], [{**developer, "cache_control": {"type": "ephemeral"}}, question]),
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            model_info=None,
+            base_model=None,
         )
         AnthropicCacheControlHook.maybe_seed_default_injection_points(
-            params, list(messages), model, custom_llm_provider
+            params, cast(list[AllMessageValues], [dict(developer), dict(question)]), model, custom_llm_provider
+        )
+        _, injected, _ = AnthropicCacheControlHook().get_chat_completion_prompt(
+            model=model,
+            messages=cast(list[AllMessageValues], [dict(developer), dict(question)]),
+            non_default_params=params,
+            prompt_id=None,
+            prompt_variables=None,
+            dynamic_callback_params={},
         )
 
     assert lookups.called is False
-    seeded: Final = cast(list[dict[str, object]], params["cache_control_injection_points"])
-    assert all(PROMPT_CACHING_STAMP in point for point in seeded)
+    assert list(checked) == [developer, question]
+    assert injected == [developer, question]
