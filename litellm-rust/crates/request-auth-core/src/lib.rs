@@ -10,6 +10,12 @@ mod key;
 pub mod managed;
 pub mod model_budget_data;
 mod model_budgets;
+pub mod patterns;
+pub mod route_access;
+pub mod org_routes;
+pub mod model_access;
+pub mod model_groups;
+pub mod fallback_access;
 pub mod protocol;
 
 pub use error::Error;
