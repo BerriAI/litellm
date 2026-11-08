@@ -1028,21 +1028,17 @@ def set_schema_property_ordering(schema: dict[str, object], depth: int = 0) -> d
     return schema
 
 
-def filter_schema_fields(schema_dict: dict[str, object], valid_fields: set[str], processed=None) -> dict[str, object]:
+def filter_schema_fields(
+    schema_dict: dict[str, object], valid_fields: set[str], processed: frozenset[int] = frozenset()
+) -> dict[str, object]:
     """
     Recursively filter a schema dictionary to keep only valid fields.
+    `processed` holds the ids of the enclosing nodes, so a cycle stops the walk while a
+    sub-schema object reused in several places is filtered at each of them.
     """
-    if processed is None:
-        processed = set()
-
-    # Handle circular references
-    schema_id: Final = id(schema_dict)
-    if schema_id in processed:
+    if not isinstance(schema_dict, dict) or id(schema_dict) in processed:
         return schema_dict
-    processed.add(schema_id)
-
-    if not isinstance(schema_dict, dict):
-        return schema_dict
+    processed = processed | {id(schema_dict)}
 
     result: Final = {}
     schema_dict = _filter_anyof_fields(schema_dict)
