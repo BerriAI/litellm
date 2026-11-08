@@ -228,20 +228,24 @@ describe("unified issue investigations", () => {
     expect(screen.getByText(/enough recorded usage history/)).toBeInTheDocument();
   });
 
-  it("loads saved comparisons and only the issue-scoped Activity, with lazy resources", async () => {
+  it("explains the change and links to entity Activity without loading investigation data", async () => {
     const user = userEvent.setup();
     renderWithProviders(<IssueDetail id={SPEND_ISSUE.id} />);
+    expect(
+      await screen.findByRole("heading", { name: "Spend on Checkout key rose to 20× normal" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("$600.00 on Nov 4, 2026 UTC, compared with the usual $30.00.")).toBeInTheDocument();
+    expect(screen.getByRole("figure", { name: "Spend comparison" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "View key activity" })).toHaveAttribute(
+      "href",
+      "/ui/api-keys?key=reporting-test-id&detail_tab=activity&activity_from=2026-10-28&activity_to=2026-11-04",
+    );
+    expect(calls.some((call) => /\/(activity|keys|users|signals)$/.test(call.path))).toBe(false);
+    await user.click(screen.getByText("Alert details", { selector: "summary" }));
     const table = await screen.findByRole("table", { name: "Saved alert comparisons" });
     expect(within(table).getByText("$600.00")).toBeInTheDocument();
     expect(within(table).getByText("$30.00")).toBeInTheDocument();
     expect(within(table).getByText("At least $90.00")).toBeInTheDocument();
-    await screen.findByText("Total Requests");
-    expect(screen.getByText("42")).toBeInTheDocument();
-    const request = calls.find((call) => call.path.endsWith("/activity"));
-    expect(request?.path).toBe(`/issues/${SPEND_ISSUE.id}/activity`);
-    expect(request?.query.get("start_date")).toBe("2026-10-28");
-    expect(request?.query.get("end_date")).toBe("2026-11-04");
-    expect(calls.some((call) => call.path.endsWith("/keys") || call.path.endsWith("/signals"))).toBe(false);
     await user.click(screen.getByText("Resources in this traffic", { selector: "summary" }));
     expect(await screen.findByRole("link", { name: "Related checkout key" })).toHaveAttribute(
       "href",
@@ -257,6 +261,7 @@ describe("unified issue investigations", () => {
     async (canView) => {
       detail = { ...SPEND_ISSUE, can_view_activity: canView };
       renderWithProviders(<IssueDetail id={SPEND_ISSUE.id} />);
+      await userEvent.click(await screen.findByText("Alert details", { selector: "summary" }));
       expect(await screen.findByRole("table", { name: "Saved alert comparisons" })).toBeInTheDocument();
       expect(screen.getByText("You don’t have access to this alert’s activity.")).toBeInTheDocument();
       expect(screen.queryByText("Resources in this traffic")).not.toBeInTheDocument();
@@ -277,7 +282,9 @@ describe("unified issue investigations", () => {
         metrics: { spend: 10, api_requests: 22, successful_requests: 20, failed_requests: 2, total_tokens: 4000 },
       },
     };
+    detail = { ...detail, cohort: { scope_type: "provider", scope_id: "provider", model_pairs: [] } };
     renderWithProviders(<IssueDetail id={SPEND_ISSUE.id} />);
+    await userEvent.click(await screen.findByText("View activity for this alert", { selector: "summary" }));
     const remainder = await screen.findByRole("row", { name: /Other \(117 models\)/ });
     expect(within(remainder).getByText("$10.00")).toBeInTheDocument();
     expect(within(remainder).getByText("4,000")).toBeInTheDocument();
@@ -289,7 +296,10 @@ describe("unified issue investigations", () => {
 
   it("preserves saved evidence when the Activity date range changes", async () => {
     resourceTotal = 41;
+    detail = { ...detail, cohort: { scope_type: "provider", scope_id: "provider", model_pairs: [] } };
     renderWithProviders(<IssueDetail id={SPEND_ISSUE.id} />, { searchParams: "resourcespage=3" });
+    await userEvent.click(await screen.findByText("Alert details", { selector: "summary" }));
+    await userEvent.click(await screen.findByText("View activity for this alert", { selector: "summary" }));
     await screen.findByText("Total Requests");
     await userEvent.click(screen.getByText("Resources in this traffic", { selector: "summary" }));
     await screen.findByRole("link", { name: "Related checkout key" });
@@ -379,20 +389,28 @@ describe("unified issue investigations", () => {
       "href",
       "/ui/alerts?type=model-deprecations&model=provider%2Fretiring-model",
     );
-    await screen.findByText("Total Requests");
-    expect(calls.some((call) => call.path === `/issues/${RETIREMENT_ISSUE.id}/activity`)).toBe(true);
+    expect(screen.getByRole("link", { name: "View model activity" })).toHaveAttribute(
+      "href",
+      "/ui/models-and-endpoints?activity_model=provider%2Fretiring-model&detail_tab=activity&activity_from=2026-10-28&activity_to=2026-11-04",
+    );
+    expect(calls.some((call) => call.path === `/issues/${RETIREMENT_ISSUE.id}/activity`)).toBe(false);
   });
 
   it("does not show invalid per-success averages when all requests failed", async () => {
     allFailed = true;
+    detail = { ...detail, cohort: { scope_type: "provider", scope_id: "provider", model_pairs: [] } };
     renderWithProviders(<IssueDetail id={detail.id} />);
+    await userEvent.click(await screen.findByText("View activity for this alert", { selector: "summary" }));
     await screen.findByText("Total Requests");
     expect(screen.getByLabelText("Alert activity")).not.toHaveTextContent(/NaN|Infinity|∞/);
   });
 
   it("retries failed Activity without losing saved issue evidence", async () => {
     failActivity = true;
+    detail = { ...detail, cohort: { scope_type: "provider", scope_id: "provider", model_pairs: [] } };
     renderWithProviders(<IssueDetail id={detail.id} />);
+    await userEvent.click(await screen.findByText("Alert details", { selector: "summary" }));
+    await userEvent.click(await screen.findByText("View activity for this alert", { selector: "summary" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Could not load activity");
     expect(screen.getByText("At least $90.00")).toBeInTheDocument();
     failActivity = false;
@@ -413,7 +431,9 @@ describe("unified issue investigations", () => {
   it("lets a read-only admin inspect an issue without mutation controls", async () => {
     auth.isViewOnly = true;
     renderWithProviders(<IssueDetail id={detail.id} />);
-    await screen.findByText("Total Requests");
+    await screen.findByRole("heading", {
+      name: detail.kind === "model_deprecation" ? detail.title : "Spend on Checkout key rose to 20× normal",
+    });
     expect(screen.queryByRole("button", { name: "Mark resolved" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Dismiss" })).not.toBeInTheDocument();
     expect(calls.some((call) => call.method === "PATCH")).toBe(false);
@@ -430,7 +450,9 @@ describe("unified issue investigations", () => {
         can_update_status: permission,
       };
       renderWithProviders(<IssueDetail id={detail.id} />);
-      await screen.findByText("Total Requests");
+      await screen.findByRole("heading", {
+        name: detail.kind === "model_deprecation" ? detail.title : "Spend on Checkout key rose to 20× normal",
+      });
       expect(screen.queryByRole("button", { name: "Mark resolved" })).not.toBeInTheDocument();
       expect(screen.queryByRole("button", { name: "Dismiss" })).not.toBeInTheDocument();
     },
@@ -440,7 +462,9 @@ describe("unified issue investigations", () => {
     auth.userRole = "Internal User";
     auth.userId = "member-owner";
     renderWithProviders(<IssueDetail id={detail.id} />);
-    await screen.findByText("Total Requests");
+    await screen.findByRole("heading", {
+      name: detail.kind === "model_deprecation" ? detail.title : "Spend on Checkout key rose to 20× normal",
+    });
     expect(screen.getByRole("heading", { name: "Spend on Checkout key rose to 20× normal" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Resource activity" })).toHaveAttribute(
       "href",
@@ -473,7 +497,9 @@ describe("unified issue investigations", () => {
     auth.userRole = "Internal User";
     auth.userId = "member-owner";
     renderWithProviders(<IssueDetail id={detail.id} />);
-    await screen.findByText("Total Requests");
+    await screen.findByRole("heading", {
+      name: detail.kind === "model_deprecation" ? detail.title : "Spend on Checkout key rose to 20× normal",
+    });
     deniedDetail = true;
     await act(async () => {
       await testQueryClient.invalidateQueries({ queryKey: ["issues"] });
@@ -492,6 +518,7 @@ describe("unified issue investigations", () => {
       ),
     };
     renderWithProviders(<IssueDetail id={detail.id} />);
+    await userEvent.click(await screen.findByText("Alert details", { selector: "summary" }));
     const table = await screen.findByRole("table", { name: "Saved alert comparisons" });
     const row = within(table).getByRole("row", { name: /^Requests/ });
     expect(row).toHaveTextContent("1,200");
@@ -503,7 +530,9 @@ describe("unified issue investigations", () => {
   it.each(["resolved", "dismissed"] as const)("only reopens active %s retirement issues", async (status) => {
     detail = { ...RETIREMENT_ISSUE, status, active: false };
     const view = renderWithProviders(<IssueDetail id={detail.id} />);
-    await screen.findByText("Total Requests");
+    await screen.findByRole("heading", {
+      name: detail.kind === "model_deprecation" ? detail.title : "Spend on Checkout key rose to 20× normal",
+    });
     expect(screen.queryByRole("button", { name: "Reopen" })).not.toBeInTheDocument();
     view.unmount();
     testQueryClient.clear();

@@ -216,7 +216,9 @@ describe("issue notifications", () => {
     await user.click(screen.getByRole("button", { name: "Notifications, 2 alerts need attention" }));
     const destination = screen.getByRole("link", { name: SPEND_ISSUE.title });
     expect(destination).toHaveAttribute("href", "/ui/alerts?issue=issue-checkout-spend");
-    expect(screen.getByRole("article", { name: SPEND_ISSUE.title })).toHaveTextContent("↑ 20× · $600.00 vs $30.00");
+    expect(screen.getByRole("article", { name: SPEND_ISSUE.title })).toHaveTextContent(
+      "$600.00 on Nov 4, 2026 UTC, compared with the usual $30.00.",
+    );
     expect(screen.getByRole("link", { name: "View all 2" })).toHaveAttribute("href", "/ui/alerts");
     const content = screen.getByLabelText("Notification content");
     expect(content).toContainElement(destination);
