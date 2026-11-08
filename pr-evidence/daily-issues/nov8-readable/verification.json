@@ -1,0 +1,12 @@
+{
+  "ui_source": "8168a596c08d838662aa413b9ffa23dd69f4b1a1",
+  "before_ui_source": "4ac2619a113",
+  "data": "Same isolated synthetic daily history and saved alerts. No browser network mocks.",
+  "checks": [
+    "37 focused UI cases pass",
+    "Live desktop and 390px light/dark inbox checks",
+    "Whole-entry spend link opens saved comparisons and scoped Activity",
+    "No browser exceptions or horizontal document overflow"
+  ],
+  "backend": "Independent local two-worker proxy and temporary PostgreSQL/Redis. Monitoring trial changes were present on the API; this capture tests the fourth-layer dashboard."
+}
