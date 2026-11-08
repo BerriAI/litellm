@@ -639,6 +639,13 @@ def test_requested_output_tokens_gemini_generation_config() -> None:
     assert _requested_output_tokens(body_camel, route="/vertex_ai/models/gemini-pro:generateContent") == 4096, (
         "Native route honors generationConfig"
     )
+    route_responses_proj: Final = (
+        "/vertex_ai/v1/projects/responses-prod/locations/us-central1/publishers/google"
+        "/models/gemini-pro:generateContent"
+    )
+    assert _requested_output_tokens(body_camel, route=route_responses_proj) == 4096, (
+        "Native route with 'responses' in project ID must still honor generationConfig"
+    )
 
     body_decoy: Final = {
         "contents": [],

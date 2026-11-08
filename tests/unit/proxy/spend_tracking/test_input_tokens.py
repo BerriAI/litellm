@@ -519,3 +519,28 @@ def test_count_input_tokens_for_model_vertex_claude_raw_predict_counts_messages(
     tokens = count_input_tokens_for_model(request_body=body, model="gpt-4o", route=route)
     assert tokens is not None, "Vertex Claude rawPredict route should count tokens"
     assert tokens > 20, "Must count Anthropic messages on rawPredict endpoints"
+
+
+def test_is_native_gemini_route_matches_endpoint_action_suffix() -> None:
+    from litellm.proxy.spend_tracking.input_tokens import is_native_gemini_route
+
+    route_with_responses_proj: Final = (
+        "/vertex_ai/v1/projects/responses-prod/locations/us-central1/publishers/google"
+        "/models/gemini-1.5-flash:generateContent"
+    )
+    assert is_native_gemini_route(route_with_responses_proj) is True, (
+        "Vertex route with project id containing 'responses' must match native action suffix"
+    )
+
+    route_with_query: Final = (
+        "/vertex_ai/v1/projects/my-proj/locations/us-central1/publishers/google"
+        "/models/gemini-1.5-flash:streamGenerateContent?alt=sse"
+    )
+    assert is_native_gemini_route(route_with_query) is True, "Route with query params must match action suffix"
+
+    assert is_native_gemini_route("/v1/chat/completions") is False
+    assert is_native_gemini_route("/openai/deployments/gemini-2.0-flash/chat/completions") is False
+    assert (
+        is_native_gemini_route("/vertex_ai/v1/projects/proj/locations/us/publishers/anthropic/models/claude:rawPredict")
+        is False
+    )
