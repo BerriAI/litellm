@@ -4755,12 +4755,36 @@ class Logging(LiteLLMLoggingBaseClass):
         on_cancelled_async: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         if not self._claim_failure_log_mask():
+            await self._keep_failure_log_masked(on_cancelled, on_cancelled_async)
             return
         maskers: Final = self._failure_log_maskers()
         if not maskers:
             return
         mask: Final = asyncio.create_task(self._mask_failure_log_request_with(maskers))
         self._failure_log_mask = mask
+        await self._await_failure_log_mask(mask, on_cancelled, on_cancelled_async)
+
+    async def _keep_failure_log_masked(
+        self,
+        on_cancelled: Callable[[], None] | None,
+        on_cancelled_async: Callable[[], Awaitable[None]] | None,
+    ) -> None:
+        mask: Final = self._failure_log_mask
+        if mask is None:
+            return
+        if not mask.done() and mask.get_loop() is asyncio.get_running_loop():
+            await self._await_failure_log_mask(mask, on_cancelled, on_cancelled_async)
+        if not mask.done() or mask.cancelled():
+            self._redact_failure_log_request()
+            return
+        self._log_failure_with_messages(self.model_call_details, self._failure_logged_messages)
+
+    async def _await_failure_log_mask(
+        self,
+        mask: "asyncio.Task[None]",
+        on_cancelled: Callable[[], None] | None,
+        on_cancelled_async: Callable[[], Awaitable[None]] | None,
+    ) -> None:
         try:
             await asyncio.shield(mask)
         except asyncio.CancelledError:

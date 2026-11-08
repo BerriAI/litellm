@@ -9136,7 +9136,7 @@ async def test_failure_log_still_goes_out_masked_when_the_caller_is_cancelled_mi
     assert recorder.logged == [(_MASKED_LOG, _MASKED_LOG)]
 
 
-def _async_failure_logging(call_id: str, guardrail: CustomGuardrail) -> LitellmLogging:
+def _async_failure_logging(call_id: str, *callbacks: CustomLogger) -> LitellmLogging:
     logging_obj: Final = LitellmLogging(
         model="gpt-4o-mini",
         messages=copy.deepcopy(_RAW_LOG),
@@ -9145,10 +9145,86 @@ def _async_failure_logging(call_id: str, guardrail: CustomGuardrail) -> LitellmL
         start_time=datetime.datetime(2026, 1, 1),
         litellm_call_id=call_id,
         function_id=call_id,
-        dynamic_async_failure_callbacks=[guardrail],
+        dynamic_async_failure_callbacks=list(callbacks),
     )
     logging_obj.update_environment_variables(litellm_params={"acompletion": True, "metadata": {}}, optional_params={})
     return logging_obj
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mask_finishes_first", [False, True])
+async def test_a_failure_logged_with_the_raw_prompt_written_back_after_a_cancelled_mask_still_logs_it_masked(
+    monkeypatch: pytest.MonkeyPatch, mask_finishes_first: bool
+) -> None:
+    guardrail: Final = _BlockingNameMaskingGuardrail()
+    recorder, _ = _register_failure_logging(monkeypatch, guardrail)
+    logging_obj: Final = _async_failure_logging("disconnected-mid-mask", guardrail, recorder)
+    cancelled_mask: Final = asyncio.create_task(logging_obj.async_mask_failure_log_request())
+    await asyncio.wait_for(guardrail.scanning.wait(), timeout=10)
+    cancelled_mask.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await cancelled_mask
+
+    async def log_the_request_failure() -> None:
+        logging_obj.model_call_details["messages"] = copy.deepcopy(_RAW_LOG)
+        await logging_obj.async_failure_handler(_bad_key_error(), "tb")
+
+    if mask_finishes_first:
+        guardrail.release.set()
+        await asyncio.wait_for(_until(lambda: guardrail.scans == 1), timeout=10)
+    request_failure: Final = asyncio.create_task(log_the_request_failure())
+    await asyncio.sleep(0)
+    guardrail.release.set()
+    await asyncio.wait_for(request_failure, timeout=10)
+
+    assert recorder.logged == [(_MASKED_LOG, _MASKED_LOG)]
+
+
+def test_a_failure_logged_after_the_loop_running_its_mask_shut_down_is_redacted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    guardrail: Final = _BlockingNameMaskingGuardrail()
+    recorder, _ = _register_failure_logging(monkeypatch, guardrail)
+    logging_obj: Final = _async_failure_logging("shut-down-mid-mask", guardrail, recorder)
+
+    async def start_the_mask_and_shut_down() -> None:
+        _first_caller: Final = asyncio.create_task(logging_obj.async_mask_failure_log_request())
+        await asyncio.wait_for(guardrail.scanning.wait(), timeout=10)
+
+    async def log_the_request_failure() -> None:
+        logging_obj.model_call_details["messages"] = copy.deepcopy(_RAW_LOG)
+        await logging_obj.async_failure_handler(_bad_key_error(), "tb")
+
+    asyncio.run(start_the_mask_and_shut_down())
+    asyncio.run(log_the_request_failure())
+
+    assert recorder.logged == [(_REDACTED_LOG, _REDACTED_LOG)]
+
+
+def test_a_failure_logged_while_another_loop_is_still_masking_it_is_redacted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    guardrail: Final = _BlockingNameMaskingGuardrail()
+    recorder, _ = _register_failure_logging(monkeypatch, guardrail)
+    logging_obj: Final = _async_failure_logging("other-loop-mask", guardrail, recorder)
+    masking_loop: Final = asyncio.new_event_loop()
+    masking_thread: Final = threading.Thread(target=masking_loop.run_forever, daemon=True)
+    masking_thread.start()
+    first_caller: Final = asyncio.run_coroutine_threadsafe(logging_obj.async_mask_failure_log_request(), masking_loop)
+    asyncio.run(asyncio.wait_for(_until(guardrail.scanning.is_set), timeout=10))
+
+    async def log_the_request_failure() -> None:
+        logging_obj.model_call_details["messages"] = copy.deepcopy(_RAW_LOG)
+        await logging_obj.async_failure_handler(_bad_key_error(), "tb")
+
+    asyncio.run(log_the_request_failure())
+    _ = masking_loop.call_soon_threadsafe(guardrail.release.set)
+    first_caller.result(timeout=10)
+    _ = masking_loop.call_soon_threadsafe(masking_loop.stop)
+    masking_thread.join(timeout=10)
+    masking_loop.close()
+
+    assert recorder.logged == [(_REDACTED_LOG, _REDACTED_LOG)]
 
 
 async def _cancel_failure_dispatch_mid_mask(
