@@ -1,8 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { TerminologyProvider } from "@/contexts/TerminologyContext";
 import GuardrailGarden from "./guardrail_garden";
 import { ALL_CARDS } from "./guardrail_garden_data";
+
+const uiConfig = vi.hoisted(() => ({ data: undefined as { use_si_terminology?: boolean } | undefined }));
+
+vi.mock("@/app/(dashboard)/hooks/uiConfig/useUIConfig", () => ({
+  useUIConfig: () => ({ data: uiConfig.data }),
+}));
 
 vi.mock("./guardrail_garden_detail", () => ({
   __esModule: true,
@@ -21,6 +28,7 @@ const DECISION_MODEL_CARDS = ALL_CARDS.filter((c) => c.category === "decision_mo
 describe("GuardrailGarden", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    uiConfig.data = undefined;
   });
 
   const renderGarden = () => render(<GuardrailGarden accessToken="test-token" onGuardrailCreated={vi.fn()} />);
@@ -112,6 +120,26 @@ describe("GuardrailGarden", () => {
     if (otherPartner) {
       expect(screen.queryByText(otherPartner.name)).not.toBeInTheDocument();
     }
+  });
+
+  it.each([
+    [true, "SI"],
+    [false, "AI"],
+  ])("should match the wording a card shows when SI terminology is %s", (useSi, shownTerm) => {
+    uiConfig.data = { use_si_terminology: useSi };
+    const card = ALL_CARDS.find((c) => c.description.startsWith("AI security platform protecting"));
+    expect(card).toBeDefined();
+    render(
+      <TerminologyProvider>
+        <GuardrailGarden accessToken="test-token" onGuardrailCreated={vi.fn()} />
+      </TerminologyProvider>,
+    );
+
+    fireEvent.change(screen.getByPlaceholderText("Search guardrails"), {
+      target: { value: `${shownTerm} security platform protecting` },
+    });
+
+    expect(screen.getByText(card!.name)).toBeInTheDocument();
   });
 
   it("should show an empty result set for a query that matches nothing", async () => {

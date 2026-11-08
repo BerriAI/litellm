@@ -6,16 +6,20 @@
 # +-------------------------------------------------------------+
 import os
 import uuid
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Final, Literal, Optional
 
 import httpx
 from fastapi import HTTPException
+from pydantic import TypeAdapter
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
+from litellm.litellm_core_utils.core_helpers import decoded_json_object
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
@@ -26,6 +30,13 @@ from litellm.types.utils import GenericGuardrailAPIInputs, ModelResponse
 
 if TYPE_CHECKING:
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
+
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
+class _OnyxGuardVerdict(TypedDict, total=False):
+    allowed: ReadOnly[bool]
+    violated_rules: ReadOnly[Sequence[str]]
 
 
 class OnyxGuardrail(CustomGuardrail):
@@ -66,7 +77,7 @@ class OnyxGuardrail(CustomGuardrail):
         payload: object,
         input_type: Literal["request", "response"],
         conversation_id: str,
-    ) -> dict:
+    ) -> _OnyxGuardVerdict:
         """
         Call external Onyx Guard server for validation
         """
@@ -82,8 +93,8 @@ class OnyxGuardrail(CustomGuardrail):
             },
         )
         response.raise_for_status()
-        result: Final = response.json()
-        if not result.get("allowed", True):
+        result: Final[_OnyxGuardVerdict] = response.json()
+        if not decoded_json_object(_DECODED_JSON.validate_python(result)).get("allowed", True):
             detection_message = "Unknown violation"
             if "violated_rules" in result:
                 detection_message = ", ".join(result["violated_rules"])
@@ -115,7 +126,7 @@ class OnyxGuardrail(CustomGuardrail):
             try:
                 response: Final = ModelResponse(**request_data)
                 parsed: Final = response.json()
-                payload = parsed.get("response", {})
+                payload = _DECODED_JSON.validate_python(parsed.get("response", {}))
             except Exception as e:
                 verbose_proxy_logger.error(
                     "Error in converting request_data to ModelResponse: %s",

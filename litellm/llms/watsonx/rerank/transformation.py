@@ -30,6 +30,7 @@ _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_i
 _JSON_OBJECTS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=ConfigDict(hide_input_in_errors=True))
 _OPTIONAL_INT: Final[TypeAdapter[int | None]] = TypeAdapter(int | None)
 _STR: Final = TypeAdapter(str)
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class IBMWatsonXRerankConfig(IBMWatsonXMixin, BaseRerankConfig):
@@ -170,7 +171,7 @@ class IBMWatsonXRerankConfig(IBMWatsonXMixin, BaseRerankConfig):
         Transform IBM watsonx.ai rerank response to LiteLLM RerankResponse format
         """
         try:
-            raw_response_json: Final = raw_response.json()
+            raw_response_json: Final = _DECODED_JSON.validate_python(raw_response.json())
         except Exception as e:
             raise self.get_error_class(
                 error_message=f"Failed to parse response: {e}",

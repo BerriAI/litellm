@@ -107,10 +107,14 @@ def _features(row: ModelGroupInfoProxy) -> tuple[str, ...]:
     The hub's feature control has always been a multi-select over the `supports_*` flags.
     One boolean filter per flag would AND them, which is the opposite of what it does.
     """
+    return _enabled_features(row.model_dump())
+
+
+def _enabled_features(fields: Mapping[str, object]) -> tuple[str, ...]:
     return tuple(
         sorted(
             name.removeprefix(FEATURE_PREFIX)
-            for name, value in row.model_dump().items()
+            for name, value in fields.items()
             if name.startswith(FEATURE_PREFIX) and value is True
         )
     )

@@ -130,6 +130,30 @@ def test_finalize_pops_key_and_installs_rules():
         set_fallback_generalizations(previous)
 
 
+def test_alias_of_rows_are_served_as_their_target_and_dangling_ones_are_dropped(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    raw: Final = {
+        "real": {"litellm_provider": "openai", "mode": "chat", "input_cost_per_token": 1e-6},
+        "other": {"litellm_provider": "openai", "mode": "chat", "aliases": ["twin-latest"]},
+        "real-latest": {"alias_of": "real"},
+        "twin-latest": {"alias_of": "real"},
+        "ghost-latest": {"alias_of": "ghost"},
+        "chain-latest": {"alias_of": "real-latest"},
+        "listed-latest": {"alias_of": "missing", "aliases": ["extra"]},
+    }
+    with caplog.at_level("WARNING"):
+        finalized: Final = _finalize_model_cost_map(raw)
+    assert finalized["real-latest"] == finalized["real"]
+    assert "alias_of" not in finalized["real"]
+    assert set(finalized) == {"real", "other", "real-latest", "twin-latest"}
+    assert finalized["real-latest"]["litellm_provider"] == "openai"
+    assert finalized["twin-latest"] == finalized["other"]
+    assert {"ghost-latest", "chain-latest", "listed-latest", "twin-latest"} == {
+        record.getMessage().split("'")[1] for record in caplog.records
+    }
+
+
 def test_finalize_with_no_block_clears_rules():
     previous = list(get_fallback_generalization_rules())
     try:
@@ -399,9 +423,10 @@ async def test_refetch_shrunk_map_fails_integrity_not_swapped_in():
 
 
 @pytest.mark.asyncio
-async def test_refetch_respects_local_env_override(monkeypatch):
-    """LITELLM_LOCAL_MODEL_COST_MAP=True short-circuits to the bundled backup, zero HTTP."""
-    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+@pytest.mark.parametrize("flag", ["LITELLM_LOCAL_MODEL_COST_MAP", "LITELLM_OFFLINE_MODE"])
+async def test_refetch_respects_local_env_override(monkeypatch, flag):
+    """LITELLM_LOCAL_MODEL_COST_MAP=True or LITELLM_OFFLINE_MODE=True short-circuits to the bundled backup, zero HTTP."""
+    monkeypatch.setenv(flag, "True")
 
     def _fail(request):
         raise AssertionError("no HTTP request should be made when local map is forced")
@@ -708,9 +733,10 @@ def test_boot_load_falls_back_when_urlsplit_rejects_the_url():
     assert "invalid URL" in (source["fallback_reason"] or "")
 
 
-def test_boot_load_respects_local_env_override(monkeypatch):
-    """LITELLM_LOCAL_MODEL_COST_MAP=True still short-circuits to the backup with zero HTTP."""
-    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+@pytest.mark.parametrize("flag", ["LITELLM_LOCAL_MODEL_COST_MAP", "LITELLM_OFFLINE_MODE"])
+def test_boot_load_respects_local_env_override(monkeypatch, flag):
+    """LITELLM_LOCAL_MODEL_COST_MAP=True or LITELLM_OFFLINE_MODE=True still short-circuits to the backup with zero HTTP."""
+    monkeypatch.setenv(flag, "True")
 
     def _fail(request):
         raise AssertionError("no HTTP request should be made when local map is forced")
@@ -804,6 +830,7 @@ def _vcr_outcome_gate(request, vcr):
     yield
     record_vcr_outcome(request, vcr)
 
+
 @pytest.fixture(scope="session")
 def event_loop():
     try:
@@ -812,6 +839,7 @@ def event_loop():
         loop = asyncio.new_event_loop()
     yield loop
     loop.close()
+
 
 @pytest.fixture(scope="function")
 def setup_and_teardown(event_loop):
@@ -846,6 +874,7 @@ def setup_and_teardown(event_loop):
     if pending:
         event_loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
 
+
 _SCALAR_DEFAULTS = {
     "num_retries": getattr(litellm, "num_retries", None),
     "set_verbose": getattr(litellm, "set_verbose", False),
@@ -859,6 +888,7 @@ _SCALAR_DEFAULTS = {
     "api_key": getattr(litellm, "api_key", None),
     "cohere_key": getattr(litellm, "cohere_key", None),
 }
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestCheckIsValidDict:
@@ -883,6 +913,7 @@ class TestCheckIsValidDict:
     def test_should_accept_non_empty_dict(self):
         """Non-empty dict should pass."""
         assert GetModelCostMap._check_is_valid_dict({"model": {}}) is True
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestCheckModelCountNotReduced:
@@ -938,6 +969,7 @@ class TestCheckModelCountNotReduced:
             is True
         )
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestValidateModelCostMap:
     """Unit tests for validate_model_cost_map (combines both checks)."""
@@ -973,6 +1005,7 @@ class TestValidateModelCostMap:
             GetModelCostMap.validate_model_cost_map(fetched_map=fetched, backup_model_count=100, min_model_count=10)
             is True
         )
+
 
 def _fetch_with_single_outcome(monkeypatch, outcome):
     from litellm.litellm_core_utils import get_model_cost_map as module
@@ -1049,6 +1082,7 @@ class TestGetModelCostMapFallback:
         assert isinstance(result, dict)
         assert len(result) > 0
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestBackupModelCostMapExists:
     """Validates the local backup file is always present and valid."""
@@ -1063,6 +1097,7 @@ class TestBackupModelCostMapExists:
         """The backup must contain a reasonable number of models."""
         backup = GetModelCostMap.load_local_model_cost_map()
         assert len(backup) > 100, f"Backup has only {len(backup)} models, expected > 100"
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestBadHostedModelCostMap:
@@ -1128,11 +1163,13 @@ class TestBadHostedModelCostMap:
         finally:
             litellm.model_cost = original
 
+
 @pytest.fixture()
 def _vcr_outcome_gate_local_testing(request, vcr):
     install_live_call_probe(request, vcr)
     yield
     record_vcr_outcome(request, vcr)
+
 
 @pytest.fixture(scope="function")
 def isolate_litellm_state():
@@ -1186,6 +1223,7 @@ def isolate_litellm_state():
             setattr(litellm, attr, original_value)
     _invalidate_model_cost_lowercase_map()
 
+
 _SCALAR_DEFAULTS_local_testing = {
     "num_retries": getattr(litellm, "num_retries", None),
     "num_retries_per_request": getattr(litellm, "num_retries_per_request", None),
@@ -1205,6 +1243,7 @@ _SCALAR_DEFAULTS_local_testing = {
     "api_base": getattr(litellm, "api_base", None),
     "api_key": getattr(litellm, "api_key", None),
 }
+
 
 @pytest.fixture(scope="module")
 def setup_and_teardown_local_testing():
@@ -1228,6 +1267,7 @@ def setup_and_teardown_local_testing():
             litellm.in_memory_llm_clients_cache.flush_cache()
     yield
 
+
 @pytest.mark.usefixtures(
     "_vcr_outcome_gate_local_testing",
     "isolate_litellm_state",
@@ -1238,6 +1278,7 @@ def test_get_model_cost_map():
         print(litellm.get_model_cost_map(url="fake-url"))
     except Exception as e:
         pytest.fail(f"An exception occurred: {e}")
+
 
 @pytest.mark.usefixtures(
     "_vcr_outcome_gate_local_testing",
