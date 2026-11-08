@@ -17,6 +17,7 @@ PARENT = {
     "user_api_key": "sk-hash",
     "user_api_key_hash": "sk-hash",
     "user_api_key_team_id": "team-1",
+    "user_api_key_project_id": "project-1",
     "user_api_key_budget_reservation": {"amount": 1.0},
     "user_api_key_auth": {"api_key": "sk-hash", "budget_reservation": {"amount": 1.0}},
     "routing_decision": {"router_model_name": "my-router"},
@@ -45,6 +46,7 @@ def test_sanitized_forwardable_metadata_keeps_only_identity_and_always_stamps():
     assert result[INTERNAL_CALL_ORIGIN_METADATA_KEY] == SHADOW_EVAL_ROUTER_CALL_ORIGIN
     assert result["user_api_key"] == "sk-hash"
     assert result["user_api_key_team_id"] == "team-1"
+    assert result["user_api_key_project_id"] == "project-1"
     assert result["user_api_key_auth"] == {"api_key": "sk-hash"}
     assert "routing_decision" not in result
     assert "headers" not in result
@@ -53,6 +55,41 @@ def test_sanitized_forwardable_metadata_keeps_only_identity_and_always_stamps():
     assert sanitized_forwardable_call_metadata({}, SHADOW_EVAL_ROUTER_CALL_ORIGIN) == {
         INTERNAL_CALL_ORIGIN_METADATA_KEY: SHADOW_EVAL_ROUTER_CALL_ORIGIN
     }
+
+
+def test_sanitized_metadata_carries_what_the_spend_path_reads_from_a_rows_own_metadata():
+    """The proxy's cost callback, agent ledger, per-session cap and per-model budget limiter read the ids they bill
+    against and the budgets they check straight from the row's metadata, and look the key up again only when the
+    user id is missing; a sub-call's row must carry all of them or its spend skips that budget (the project's, the
+    agent's and the per-model ones, before this test)."""
+    caller = {
+        "user_api_key": "sk-hash",
+        "user_api_key_user_id": "user-1",
+        "user_api_key_team_id": "team-1",
+        "user_api_key_org_id": "org-1",
+        "user_api_key_project_id": "project-1",
+        "user_api_key_end_user_id": "end-user-1",
+        "agent_id": "agent-1",
+        "billing_agent_id": "agent-1",
+        "actor_agent_id": "agent-1",
+        "target_agent_id": None,
+        "session_id": "session-1",
+        "litellm_session_id_generated": True,
+        "user_api_key_model_max_budget": {"judge": {"budget_limit": 1.0, "budget_duration": "1d"}},
+        "user_api_key_team_model_max_budget": {},
+        "user_api_key_user_model_max_budget": None,
+        "user_api_key_end_user_model_max_budget": None,
+        "user_api_key_team_member_model_max_budget": None,
+    }
+    per_call_state = {
+        "routing_decision": {"router_model_name": "my-router"},
+        "_pre_call_executed_guardrails": ["scan"],
+        "user_api_key_budget_reservation": {"amount": 1.0},
+        "user_api_key_max_budget": 10.0,
+        "headers": {"x-request-id": "abc"},
+    }
+    result = sanitized_forwardable_call_metadata({**caller, **per_call_state}, SHADOW_EVAL_ROUTER_CALL_ORIGIN)
+    assert result == {**caller, INTERNAL_CALL_ORIGIN_METADATA_KEY: SHADOW_EVAL_ROUTER_CALL_ORIGIN}
 
 
 class TestSubCallMetadataSanitization:

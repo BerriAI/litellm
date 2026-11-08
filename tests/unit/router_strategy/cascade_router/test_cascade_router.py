@@ -1182,6 +1182,85 @@ async def test_the_verifier_call_carries_the_requests_tags_not_the_cheap_deploym
     assert call["metadata"]["tags"] == ["team-x"]
 
 
+async def test_the_verifier_call_carries_the_callers_identity_and_budgets_so_its_spend_is_checked_like_the_request(
+    monkeypatch,
+):
+    """The verifier's spend row is billed on its own; the proxy reads the ids it bills against (project and agent
+    among them), the session its per-session cap counts, and the per-model budgets its limiter checks from the row's
+    own metadata, and does not look the key up again when the user id is already there."""
+    seen = _verifier_calls(monkeypatch)
+    router = _priced_router(verifier_model="judge", verifier_kind="chat", min_chars=2)
+    caller = {
+        "user_api_key": "sk-caller",
+        "user_api_key_user_id": "user-1",
+        "user_api_key_team_id": "team-1",
+        "user_api_key_project_id": "project-1",
+        "agent_id": "agent-1",
+        "billing_agent_id": "agent-1",
+        "session_id": "session-1",
+        "user_api_key_model_max_budget": {"judge": {"budget_limit": 1.0, "budget_duration": "1d"}},
+    }
+    await router.acompletion(model="cascade", messages=MESSAGES, metadata={**caller, "routing_decision": {"x": 1}})
+    (call,) = seen
+    assert {k: call["metadata"][k] for k in caller} == caller
+    assert "routing_decision" not in call["metadata"]
+
+
+async def test_the_verifier_row_logs_to_the_requests_own_callbacks(monkeypatch):
+    """The proxy puts the key's or team's own callbacks and their credentials on the request as top-level kwargs;
+    the verifier logs a row of its own, so its call carries them and the request's own callback sees the verifier's
+    row."""
+    from litellm.types.utils import TRUSTED_CALLBACK_VARS_FIELD
+
+    seen = _verifier_calls(monkeypatch)
+    recorder = _Recorder()
+    router = _priced_router(verifier_model="judge", verifier_kind="chat", min_chars=2)
+    logging_settings = {
+        "success_callback": [recorder],
+        "langfuse_public_key": "pk-team",
+        TRUSTED_CALLBACK_VARS_FIELD: {"langfuse_public_key": "pk-team"},
+    }
+    await router.acompletion(model="cascade", messages=MESSAGES, **logging_settings)
+    await _flush_logging()
+    (call,) = seen
+    assert {k: call[k] for k in logging_settings} == logging_settings
+    assert "cascade_verifier" in [event["origin"] for event in recorder.events]
+
+
+async def test_the_chat_verifier_neither_retries_nor_falls_back_like_the_decision_verifier(monkeypatch):
+    """A verifier is advisory: `on_verifier_error` says what its failure means. A Router fallback on the verifier
+    group would instead answer the yes/no question with a stronger, pricier model and hide the failure."""
+    import litellm as litellm_mod
+
+    calls: dict[str, int] = {}
+    original = litellm_mod.acompletion
+
+    async def capture(**kwargs):
+        name = kwargs["metadata"].get("deployment_model_name")
+        calls[name] = calls.get(name, 0) + 1
+        return await original(**kwargs)
+
+    monkeypatch.setattr(litellm_mod, "acompletion", capture)
+    router = _priced_router(
+        verifier_model="judge-down",
+        verifier_kind="chat",
+        min_chars=2,
+        on_verifier_error="accept",
+        fallbacks=[{"judge-down": ["strong"]}],
+        extra_deployments=[
+            {
+                "model_name": "judge-down",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "x", "mock_response": Exception("down")},
+                "model_info": {"id": "judge-down"},
+            }
+        ],
+    )
+    response = await router.acompletion(model="cascade", messages=MESSAGES)
+    record = response._hidden_params["cascade"]
+    assert record["path"] == "cheap" and record["verifier_error"] == "InternalServerError"
+    assert calls == {"cheap": 1, "judge-down": 1}
+
+
 async def test_a_verifier_errors_text_stays_out_of_the_decision_and_the_log(monkeypatch):
     """A provider error can echo the prompt or the answer: the decision records the error's class only (as the
     auto-router records its classifier's) and the warning names the class, so a message-logging opt-out holds."""

@@ -25,6 +25,7 @@ from litellm.constants import (
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
     MANAGED_BACKGROUND_RESPONSE_METADATA_KEY,
     NON_INFERENCE_CALL_TYPES,
+    SESSION_ID_GENERATED_METADATA_KEY,
 )
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import initialize_standard_callback_dynamic_params
@@ -59,20 +60,38 @@ _USER_API_KEY_AUTH_KEY: Final = "user_api_key_auth"
 
 FORWARDABLE_IDENTITY_METADATA_KEYS: Final = frozenset(
     {
+        # who the caller is: the ids a spend row is billed against
         "user_api_key",
         "user_api_key_hash",
         "user_api_key_alias",
         "user_api_key_team_id",
         "user_api_key_org_id",
+        "user_api_key_project_id",
         "user_api_key_user_id",
         "user_api_key_end_user_id",
+        "agent_id",
+        "actor_agent_id",
+        "target_agent_id",
+        "billing_agent_id",
+        "session_id",
+        SESSION_ID_GENERATED_METADATA_KEY,  # with the session id: whether the proxy minted it for this request
+        # the caller's per-model budgets, which the post-call limiter checks a row against
+        "user_api_key_model_max_budget",
+        "user_api_key_team_model_max_budget",
+        "user_api_key_user_model_max_budget",
+        "user_api_key_end_user_model_max_budget",
+        "user_api_key_team_member_model_max_budget",
         _USER_API_KEY_AUTH_KEY,
     }
 )
-"""The caller-identity subset a detached sub-call needs to be attributed and
-budget-checked like the request that spawned it. Everything else on the parent's metadata
-(routing decision, guardrail state, logging payload) describes the parent call and would
-be a lie on a sub-call that runs after it returned."""
+"""What the proxy stamped on the request about its caller, for a detached sub-call to be
+attributed and budget-checked like the request that spawned it: the ids the cost callback
+bills a spend row against (key, user, team, org, project, end user, agent, session) and the
+per-model budgets the post-call limiter checks. The spend path reads all of these from each
+row's own metadata and looks the key up again only when the user id is missing. Everything
+else on the parent's metadata (routing decision, guardrail state, logging payload, budget
+reservation) describes the parent call and would be a lie on a sub-call that runs after it
+returned."""
 
 
 def is_background_response(response: object) -> bool:

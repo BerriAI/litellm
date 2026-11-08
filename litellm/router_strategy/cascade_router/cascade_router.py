@@ -39,6 +39,7 @@ from litellm.constants import (
     ROUTER_BUDGET_ATTRIBUTED_SPEND_CALL_DETAIL_KEY,
     ROUTING_REQUEST_TAGS_METADATA_KEY,
 )
+from litellm.litellm_core_utils.initialize_dynamic_callback_params import initialize_standard_callback_dynamic_params
 from litellm.litellm_core_utils.internal_call_metadata import (
     IO_TOKEN_RESERVATION_KEYS,
     effective_turn_off_message_logging,
@@ -49,6 +50,7 @@ from litellm.router_strategy.cascade_router.config import CascadeRouterConfig
 from litellm.types.router import PreRoutingHookResponse
 from litellm.types.utils import (
     CASCADE_VERIFIER_CALL_ORIGIN,
+    TRUSTED_CALLBACK_VARS_FIELD,
     Choices,
     CostBreakdown,
     ModelResponse,
@@ -89,6 +91,10 @@ _METADATA_BUCKETS: Final = ("metadata", "litellm_metadata")
 # LiteLLM-owned request kwargs that are the request's policies, not its credentials or routing: they hold on every
 # call the cascade makes for the request (the strong leg, the verifier) as they held on the cheap call.
 REQUEST_POLICY_PARAMS: Final = ("guardrails", "allowed_model_region", "turn_off_message_logging", "no-log", "cache")
+# The request's logging settings, which the proxy puts on it as top-level kwargs: the key's or team's own callbacks
+# and the callbacks' credentials. The verifier logs a row of its own, so its call carries them and its row reaches the
+# request's own callbacks too; the strong leg logs under the request's own logging object and needs none of this.
+REQUEST_CALLBACK_LIST_PARAMS: Final = ("success_callback", "failure_callback")
 # Stamps that describe the request rather than the leg that answered it; the strong leg's own routing rewrites
 # them (its group, a fresh fallback count) and they are put back whatever the leg's outcome.
 _REQUEST_IDENTITY_STAMPS: Final = ("model_group", "model_group_alias", "original_model_group", "attempted_fallbacks")
@@ -269,6 +275,30 @@ def request_policy_kwargs(
     if privacy is not None:
         policies["turn_off_message_logging"] = privacy
     return policies
+
+
+def request_logging_kwargs(
+    request_kwargs: Mapping[str, object],
+) -> dict[str, object]:  # mutable-ok: unpacked into a call
+    """The request's logging settings as its own callbacks resolve them, for a call that logs a row of its own:
+    the callbacks' credentials and opt-outs, the key's or team's callback lists, and the proxy's trusted-vars stamp."""
+    credentials: Final = {
+        key: value
+        for key, value in initialize_standard_callback_dynamic_params(dict(request_kwargs)).items()
+        if value is not None
+    }
+    callback_lists: Final = {
+        key: list(cast("Iterable[object]", value))  # cast-ok: a callback list; copied, `function_setup` pops off it
+        for key in REQUEST_CALLBACK_LIST_PARAMS
+        if isinstance(value := request_kwargs.get(key), list)
+    }
+    trusted: Final = request_kwargs.get(TRUSTED_CALLBACK_VARS_FIELD)
+    stamp: Final = (
+        {TRUSTED_CALLBACK_VARS_FIELD: cast("Mapping[str, object]", trusted)}  # cast-ok: the proxy's own stamp
+        if isinstance(trusted, Mapping)
+        else {}
+    )
+    return {**credentials, **callback_lists, **stamp}
 
 
 def forwarded_request_params(
@@ -914,8 +944,10 @@ class CascadeRouter:
         call_kwargs: Final[dict[str, Any]] = {  # mutable-ok: unpacked into the verifier call
             "metadata": metadata,
             # the verifier's own call and row carry the request and the cheap answer: the request's region
-            # restriction, logging opt-outs, cache policy and guardrails hold for it
+            # restriction, logging opt-outs, cache policy and guardrails hold for it, and its row reaches the
+            # request's own callbacks
             **request_policy_kwargs(parent),
+            **request_logging_kwargs(parent),
             **parent_session_kwargs(parent),
         }
         prompt: Final = f"Request:\n{question}\n\nAnswer:\n{answer}"
@@ -971,6 +1003,8 @@ class CascadeRouter:
             max_tokens=2,
             temperature=0,
             drop_params=True,  # reasoning models reject temperature; a dropped param beats a failed verifier
+            num_retries=0,  # as the decision verifier: the verifier is advisory, `on_verifier_error` says what its
+            disable_fallbacks=True,  # failure means, and a fallback would bill a stronger model for a yes/no
             **call_kwargs,
         )
         if not isinstance(chat_response, ModelResponse):
