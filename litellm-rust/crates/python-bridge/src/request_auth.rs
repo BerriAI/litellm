@@ -386,3 +386,27 @@ pub(crate) fn request_auth_budget_alert_plan(
     let facts: core::budget_alerts::Facts = from_py(facts)?;
     to_py(py, &py.detach(move || core::budget_alerts::plan(&facts)))
 }
+
+#[pyfunction]
+pub(crate) fn request_auth_model_attribution(
+    py: Python<'_>,
+    facts: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    let facts: core::model_attribution::Facts = from_py(facts)?;
+    to_py(
+        py,
+        &py.detach(move || core::model_attribution::decide(&facts)),
+    )
+}
+
+#[pyfunction]
+pub(crate) fn request_auth_fallback_candidate(
+    py: Python<'_>,
+    facts: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    let facts: core::fallback_candidate::Facts = from_py(facts)?;
+    let decision = py
+        .detach(move || core::fallback_candidate::decide(&facts))
+        .map_err(map_error)?;
+    to_py(py, &decision)
+}
