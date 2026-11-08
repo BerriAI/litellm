@@ -5,6 +5,7 @@ pub mod budget_context;
 pub mod budget_pricing;
 pub mod common_budgets;
 pub mod credential;
+pub mod end_user_context;
 mod error;
 mod key;
 pub mod model_budget_data;

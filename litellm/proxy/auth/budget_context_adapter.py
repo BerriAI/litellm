@@ -161,13 +161,13 @@ async def _end_user_row(
 
 
 async def resolve_default_end_user_budget(
-    prisma_client: PrismaClient,
+    prisma_client: PrismaClient | None,
     user_api_key_cache: UserApiKeyCache,
     key_end_user_budget_id: str | None,
     parent_otel_span: Span | None = None,
 ) -> LiteLLM_BudgetTable | None:
     return await _end_user_row(
-        core.EndUserFacts("Default", False, None, prisma_client is not None, key_end_user_budget_id),  # pyright: ignore[reportUnnecessaryComparison]  # legacy callers can pass absent database clients at runtime
+        core.EndUserFacts("Default", False, None, prisma_client is not None, key_end_user_budget_id),
         EndUserIO(prisma_client, user_api_key_cache, parent_otel_span),
         None,
     )
