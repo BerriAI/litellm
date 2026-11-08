@@ -167,3 +167,51 @@ def test_provider_500_failure_rows_count_deepseek_v4_prompt_tokens_with_deepseek
         short: Final = _failure_row_prompt_tokens(gateway, model, key, SHORT_TEXT)
         assert wire.drain()
     assert_counted_with_deepseek(chinese - short, chinese_minus_short)
+
+
+COMPACTION_INSTRUCTIONS: Final[JsonValue] = {"role": "system", "content": "answer briefly"}
+COMPACTED_HISTORY: Final[tuple[JsonValue, ...]] = (
+    {"role": "user", "content": "a long turn " * 200},
+    {"role": "assistant", "content": "a long reply " * 200},
+)
+COMPACTION_ITEM: Final[JsonValue] = {
+    "type": "compaction",
+    "encrypted_content": json.dumps({"type": "compaction", "content": "the cat is named Biscuit"}),
+}
+TURN_AFTER_COMPACTION: Final[JsonValue] = {"role": "user", "content": "what is the cat's name?"}
+
+
+def _failed_responses_prompt_tokens(gateway: Gateway, model: str, key: str, items: list[JsonValue]) -> int:
+    failed: Final = gateway.request("POST", "/v1/responses", {"model": model, "input": items}, key=key)
+    assert failed.status_code == 500 and "synthetic provider outage" in failed.text, failed.text
+    rows: Final = eventually(
+        lambda: read_rows(
+            'SELECT status, prompt_tokens FROM "LiteLLM_SpendLogs" WHERE request_id=%s',
+            (failed.headers["x-litellm-call-id"],),
+        ),
+        lambda values: len(values) == 1,
+        seconds=70,
+    )
+    assert rows[0]["status"] == "failure", rows
+    prompt_tokens: Final = rows[0]["prompt_tokens"]
+    assert isinstance(prompt_tokens, int) and prompt_tokens > 0, rows
+    return prompt_tokens
+
+
+def test_a_failed_responses_request_counts_its_input_from_the_newest_compaction_item(gateway: Gateway) -> None:
+    with wire_server(_provider_500) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(api_base=wire.url + "/v1", num_retries=0)
+        key: Final = scenario.key(models=[model])
+        resent: Final = _failed_responses_prompt_tokens(
+            gateway, model, key, [COMPACTION_INSTRUCTIONS, *COMPACTED_HISTORY, COMPACTION_ITEM, TURN_AFTER_COMPACTION]
+        )
+        compacted: Final = _failed_responses_prompt_tokens(
+            gateway, model, key, [COMPACTION_INSTRUCTIONS, COMPACTION_ITEM, TURN_AFTER_COMPACTION]
+        )
+        uncompacted: Final = _failed_responses_prompt_tokens(
+            gateway, model, key, [COMPACTION_INSTRUCTIONS, *COMPACTED_HISTORY, TURN_AFTER_COMPACTION]
+        )
+        assert len(wire.drain()) == 3
+
+    assert resent == compacted
+    assert resent < uncompacted

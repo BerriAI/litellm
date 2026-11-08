@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final
+from urllib.parse import quote
 
 import click
 import requests
@@ -177,7 +178,7 @@ class SpendLogsFetcher:
             return DebugFailure(f"Unexpected {uri} response: {e}")
 
     def payload(self, request_id: str) -> RequestResponsePayload | None | DebugFailure:
-        uri: Final = f"/spend/logs/ui/{request_id}"
+        uri: Final = f"/spend/logs/ui/{quote(request_id, safe='')}"
         raw: Final = self._get(uri)
         if isinstance(raw, DebugFailure):
             return raw

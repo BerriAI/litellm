@@ -131,14 +131,17 @@ def test_superbot_supported_endpoints():
         "moderations": False,
         "batches": False,
         "rerank": False,
-        "a2a": False,
-        "interactions": False,
     }
     backup_path = Path(litellm.__file__).parent / "provider_endpoints_support_backup.json"
     root_path = Path(litellm.__file__).parent.parent / "provider_endpoints_support.json"
 
-    assert json.loads(backup_path.read_text())["providers"]["superbot-gg"]["endpoints"] == expected
-    assert json.loads(root_path.read_text())["providers"]["superbot-gg"]["endpoints"] == expected
+    backup: Final = json.loads(backup_path.read_text())["providers"]["superbot-gg"]["endpoints"]
+    root: Final = json.loads(root_path.read_text())["providers"]["superbot-gg"]["endpoints"]
+
+    assert backup == root
+    # The remaining flags are derived by scripts/generate_provider_endpoints_support.py
+    # from the cost map and the endpoint bridge table, so they are not asserted here.
+    assert {endpoint: root[endpoint] for endpoint in expected} == expected
 
 
 @pytest.mark.parametrize(
@@ -157,7 +160,7 @@ def test_superbot_models_are_priced_in_both_cost_maps(model_id: str, context: in
         assert row["mode"] == "chat"
         assert row["max_input_tokens"] == context
         assert row["max_output_tokens"] == 131_072
-        assert row["max_tokens"] == 131_072
+        assert "max_tokens" not in row
         assert row["input_cost_per_token"] == pytest.approx(1.0e-6)
         assert row["output_cost_per_token"] == pytest.approx(5.0e-6)
         assert row["cache_read_input_token_cost"] == pytest.approx(5.0e-8)

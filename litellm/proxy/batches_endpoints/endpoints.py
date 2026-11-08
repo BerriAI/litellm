@@ -9,13 +9,14 @@ import os
 from collections.abc import Mapping, MutableMapping
 from datetime import datetime
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, cast
+from typing import TYPE_CHECKING, Final, Literal, Protocol, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Request, Response
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.batches.main import CancelBatchRequest, RetrieveBatchRequest
+from litellm.litellm_core_utils.core_helpers import attribute_or_none, has_attributes, iter_items
 from litellm.litellm_core_utils.hidden_params import get_hidden_params, set_hidden_param
 from litellm.llms.openai.workload_identity import resolve_openai_workload_identity_config
 from litellm.proxy._types import *
@@ -48,7 +49,6 @@ from litellm.proxy.openai_files_endpoints.common_utils import (  # noqa: F401  #
     BATCH_CREATE_HIDDEN_PARAM,
     _is_base64_encoded_unified_file_id,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     add_deployment_model_info,
-    add_internal_model_credentials,
     apply_team_provider_credentials,
     authorize_model_for_key,
     batch_cost_poller_is_active,
@@ -81,6 +81,18 @@ if TYPE_CHECKING:
     from prisma.models import LiteLLM_ManagedObjectTable
 
 router: Final = APIRouter()
+
+
+class _UserBatchLister(Protocol):
+    async def list_user_batches(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        limit: int | None = None,
+        after: str | None = None,
+        provider: str | None = None,
+        target_model_names: str | None = None,
+        llm_router: Router | None = None,
+    ) -> Mapping[str, object]: ...
 
 
 def _hidden_param_string(hidden_params: Mapping[str, object], key: str) -> str:
@@ -621,7 +633,7 @@ async def retrieve_batch(
         unified_model_id: Final = get_model_id_from_unified_batch_id(unified_batch_id) if unified_batch_id else None
         if unified_model_id is not None:
             resolved_unified_model: Final = (
-                llm_router.resolve_model_name_from_model_id(unified_model_id) if llm_router is not None else None
+                llm_router.registry().resolve(unified_model_id, kind="from_id") if llm_router is not None else None
             )
             await authorize_model_for_key(
                 model_id=resolved_unified_model or unified_model_id,
@@ -748,13 +760,6 @@ async def retrieve_batch(
                 raise HTTPException(
                     status_code=500,
                     detail={"error": "LLM Router not initialized. Ensure models added to proxy."},
-                )
-
-            if unified_batch_id:
-                add_internal_model_credentials(
-                    data=data,
-                    llm_router=llm_router,
-                    model_id=unified_model_id,
                 )
 
             response = await llm_router.aretrieve_batch(**data)
@@ -925,9 +930,9 @@ async def list_batches(
 
         # Try to use managed objects table for listing batches (returns encoded IDs).
         managed_files_obj: Final = proxy_logging_obj.get_proxy_hook("managed_files")
-        if managed_files_obj is not None and hasattr(managed_files_obj, "list_user_batches"):
+        if managed_files_obj is not None and has_attributes(managed_files_obj, _UserBatchLister, "list_user_batches"):
             verbose_proxy_logger.debug("Using managed objects table for batch listing")
-            response = await cast(Any, managed_files_obj).list_user_batches(
+            response = await managed_files_obj.list_user_batches(
                 user_api_key_dict=user_api_key_dict,
                 limit=limit,
                 after=after,
@@ -957,9 +962,9 @@ async def list_batches(
 
             # Encode batch IDs in the list response so clients can use
             # them for retrieve/cancel/file downloads through the proxy.
-            response_data: Final = getattr(response, "data", None)
+            response_data: Final = attribute_or_none(response, "data")
             if response_data:
-                for batch in response_data:
+                for batch in iter_items(response_data):
                     encode_batch_response_ids(batch, model=model_param)
 
             verbose_proxy_logger.debug("Listed batches using model: %s", model_param)
@@ -1130,7 +1135,7 @@ async def cancel_batch(
         unified_model_id: Final = get_model_id_from_unified_batch_id(unified_batch_id) if unified_batch_id else None
         if unified_model_id is not None:
             resolved_unified_model: Final = (
-                llm_router.resolve_model_name_from_model_id(unified_model_id) if llm_router is not None else None
+                llm_router.registry().resolve(unified_model_id, kind="from_id") if llm_router is not None else None
             )
             await authorize_model_for_key(
                 model_id=resolved_unified_model or unified_model_id,

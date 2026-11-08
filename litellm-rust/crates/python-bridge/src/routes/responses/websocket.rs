@@ -1,6 +1,8 @@
-use litellm_inference_responses::websocket::ResponsesWebSocketConnection as RustResponsesWebSocketConnection;
 use pyo3::prelude::*;
 use serde_json::Value;
+
+use litellm_http::ClientVariant;
+use litellm_inference_responses::websocket::ResponsesWebSocketConnection as RustResponsesWebSocketConnection;
 
 use crate::{
     errors::route_error_to_pyerr,
@@ -25,10 +27,12 @@ impl ResponsesWebSocketConnection {
     ) -> PyResult<Bound<'py, PyAny>> {
         let headers = marshal_headers(headers)?;
         let timeout = optional_timeout(timeout_seconds);
+        let client = crate::http::host_client(py, ClientVariant::WebSocket)?;
         crate::execution::run_async_value(py, async move {
-            let inner = RustResponsesWebSocketConnection::connect_url(&url, &headers, timeout)
-                .await
-                .map_err(route_error_to_pyerr)?;
+            let inner =
+                RustResponsesWebSocketConnection::connect_url(&client, &url, &headers, timeout)
+                    .await
+                    .map_err(route_error_to_pyerr)?;
             Ok(ResponsesWebSocketConnection { inner })
         })
     }

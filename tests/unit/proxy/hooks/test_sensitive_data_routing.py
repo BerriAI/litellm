@@ -8,13 +8,14 @@ All subsequent requests in the same session are routed to the same model.
 
 import asyncio
 import logging
+import uuid
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from litellm._internal_context import current_service_target
 from litellm.caching.caching import DualCache
-from litellm.caching.redis_cache import _redis_circuit_breaker_guard
 from litellm.exceptions import SensitiveDataRouteException
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
@@ -23,10 +24,12 @@ from litellm.integrations.custom_guardrail import (
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.hooks.sensitive_data_routing import (
     DEFAULT_SENSITIVE_ROUTING_TTL,
-    SENSITIVE_ROUTING_CACHE_PREFIX,
     PROXY_SensitiveDataRoutingHandler,
 )
-from litellm.proxy.utils import InternalUsageCache
+from litellm.redis.stores.connection import RedisStores
+from litellm.redis.stores.sensitive_route_pins import SensitiveRoutePinStore
+from litellm.redis.store_settings import RedisBreakerSettings, RedisStoreSettings
+from litellm.rust_bridge._native import NativeRedisBreaker, NativeRedisClient
 
 
 class MockInternalUsageCache:
@@ -42,6 +45,33 @@ class MockInternalUsageCache:
     async def async_set_cache(self, key: str, value: Any, ttl: int = 3600, **kwargs):
         self._cache[key] = value
         self._ttls[key] = ttl
+
+
+class RecordingRoutePins:
+    """The native pin store's handle, recording what the hook asks of it and under which service target."""
+
+    def __init__(self) -> None:
+        self.pins: dict[tuple[str, str], str] = {}
+        self.calls: list[tuple[str, str, str, float]] = []
+        self.targets: list[str | None] = []
+
+    async def get(self, tenant: str, session_id: str, default_ttl_seconds: float) -> str | None:
+        self.targets.append(current_service_target())
+        self.calls.append(("get", tenant, session_id, default_ttl_seconds))
+        return self.pins.get((tenant, session_id))
+
+    async def set(self, tenant: str, session_id: str, model: str, ttl_seconds: float) -> None:
+        self.targets.append(current_service_target())
+        self.calls.append(("set", tenant, session_id, ttl_seconds))
+        self.pins[(tenant, session_id)] = model
+
+
+def recorded_handler() -> tuple[PROXY_SensitiveDataRoutingHandler, RecordingRoutePins]:
+    pins = RecordingRoutePins()
+    handler = PROXY_SensitiveDataRoutingHandler(
+        internal_usage_cache=MockInternalUsageCache(), route_pins=SensitiveRoutePinStore(pins)
+    )
+    return handler, pins
 
 
 class TestSensitiveDataRoutingHandler:
@@ -71,23 +101,7 @@ class TestSensitiveDataRoutingHandler:
     async def test_session_pin_reads_and_writes_are_targeted_as_sensitive_route_pins(self, user_api_key_dict):
         """The pin read on every request used to surface as a bare ``redis.get`` in the trace; the hook
         declares its key family so the span reads ``redis.get sensitive_route_pins``."""
-        from litellm._internal_context import current_service_target
-
-        class TargetRecordingCache(MockInternalUsageCache):
-            def __init__(self):
-                super().__init__()
-                self.targets: list[str | None] = []
-
-            async def async_get_cache(self, key: str, **kwargs):
-                self.targets.append(current_service_target())
-                return await super().async_get_cache(key, **kwargs)
-
-            async def async_set_cache(self, key: str, value: Any, ttl: int = 3600, **kwargs):
-                self.targets.append(current_service_target())
-                await super().async_set_cache(key, value, ttl=ttl, **kwargs)
-
-        cache = TargetRecordingCache()
-        handler = PROXY_SensitiveDataRoutingHandler(internal_usage_cache=cache)
+        handler, pins = recorded_handler()
         await handler.set_session_routing(
             session_id="s-1", model="on-premise-model", user_api_key_dict=user_api_key_dict, guardrail_name="g"
         )
@@ -95,8 +109,20 @@ class TestSensitiveDataRoutingHandler:
         await handler.async_pre_call_hook(
             user_api_key_dict=user_api_key_dict, cache=MagicMock(), data=data, call_type="completion"
         )
-        assert cache.targets == ["sensitive_route_pins"] * len(cache.targets) and len(cache.targets) >= 2
+        assert pins.targets == ["sensitive_route_pins"] * len(pins.targets) and len(pins.targets) >= 2
         assert current_service_target() is None
+
+    @pytest.mark.asyncio
+    async def test_pins_are_written_and_read_with_the_routing_ttl_under_the_requests_tenant(self, monkeypatch):
+        monkeypatch.setenv("LITELLM_SENSITIVE_ROUTING_TTL", "120")
+        handler, pins = recorded_handler()
+        key = UserAPIKeyAuth(api_key="hashed-key")
+
+        await handler.set_session_routing(session_id="s-1", model="on-premise-model", user_api_key_dict=key)
+        routed = await handler._get_routed_model("s-1", key)
+
+        assert routed == "on-premise-model"
+        assert pins.calls == [("set", "hashed-key", "s-1", 120), ("get", "hashed-key", "s-1", 120)]
 
     def test_get_session_id_from_metadata(self):
         data = {"metadata": {"session_id": "session-from-metadata"}}
@@ -428,24 +454,16 @@ class TestStickySessionRouting:
 
 
 class TestCacheKeyAndTTL:
-    def test_cache_prefix_constant(self):
-        assert SENSITIVE_ROUTING_CACHE_PREFIX == "sensitive_route"
-
     def test_default_ttl_constant(self):
         assert DEFAULT_SENSITIVE_ROUTING_TTL == 3600
 
-    def test_make_cache_key_format(self):
-        cache = MockInternalUsageCache()
-        handler = PROXY_SensitiveDataRoutingHandler(internal_usage_cache=cache)
-        key = handler._make_cache_key("test-session-123", "hashed-key")
-        assert key == "{sensitive_route:hashed-key:test-session-123}:model"
+    @pytest.mark.asyncio
+    async def test_a_pin_is_scoped_to_the_tenant_that_set_it(self):
+        handler = PROXY_SensitiveDataRoutingHandler(internal_usage_cache=MockInternalUsageCache())
+        await handler.set_session_routing("shared-session", "on-premise-model", UserAPIKeyAuth(api_key="key-a"))
 
-    def test_make_cache_key_is_tenant_scoped(self):
-        cache = MockInternalUsageCache()
-        handler = PROXY_SensitiveDataRoutingHandler(internal_usage_cache=cache)
-        key_a = handler._make_cache_key("shared-session", "key-a")
-        key_b = handler._make_cache_key("shared-session", "key-b")
-        assert key_a != key_b
+        assert await handler._get_routed_model("shared-session", UserAPIKeyAuth(api_key="key-a")) == "on-premise-model"
+        assert await handler._get_routed_model("shared-session", UserAPIKeyAuth(api_key="key-b")) is None
 
     def test_resolve_tenant_prefers_api_key(self):
         tenant = PROXY_SensitiveDataRoutingHandler._resolve_tenant(
@@ -549,103 +567,6 @@ class TestSensitiveDataRouteExceptionStr:
         )
         assert str(exc) == "Custom error message"
         assert exc.message == "Custom error message"
-
-
-class TestRedisCache:
-    @pytest.fixture
-    def handler_with_redis(self):
-        cache = MockInternalUsageCache()
-        mock_redis = AsyncMock()
-        cache.dual_cache.redis_cache = mock_redis
-        return PROXY_SensitiveDataRoutingHandler(internal_usage_cache=cache)
-
-    @pytest.mark.asyncio
-    async def test_get_routed_model_from_redis(self, handler_with_redis):
-        handler_with_redis.internal_usage_cache.dual_cache.redis_cache.async_get_cache = AsyncMock(
-            return_value="redis-model"
-        )
-        result = await handler_with_redis._get_routed_model("session-123", UserAPIKeyAuth(api_key="hashed-key"))
-        assert result == "redis-model"
-
-    @pytest.mark.asyncio
-    async def test_get_routed_model_backfills_in_memory_after_redis_hit(self, handler_with_redis):
-        cache_key = "{sensitive_route:hashed-key:session-123}:model"
-        key = UserAPIKeyAuth(api_key="hashed-key")
-        handler_with_redis.internal_usage_cache.dual_cache.redis_cache.async_get_cache = AsyncMock(
-            return_value="on-premise-model"
-        )
-        handler_with_redis.internal_usage_cache.dual_cache.redis_cache.async_get_ttl = AsyncMock(return_value=120)
-
-        first = await handler_with_redis._get_routed_model("session-123", key)
-        assert first == "on-premise-model"
-        assert handler_with_redis.internal_usage_cache._cache[cache_key] == ("on-premise-model")
-
-        handler_with_redis.internal_usage_cache.dual_cache.redis_cache.async_get_cache = AsyncMock(
-            side_effect=Exception("Redis went down")
-        )
-        second = await handler_with_redis._get_routed_model("session-123", key)
-        assert second == "on-premise-model"
-
-    @pytest.mark.asyncio
-    async def test_backfill_uses_remaining_redis_ttl(self, handler_with_redis):
-        cache_key = "{sensitive_route:hashed-key:session-123}:model"
-        key = UserAPIKeyAuth(api_key="hashed-key")
-        handler_with_redis.internal_usage_cache.dual_cache.redis_cache.async_get_cache = AsyncMock(
-            return_value="on-premise-model"
-        )
-        handler_with_redis.internal_usage_cache.dual_cache.redis_cache.async_get_ttl = AsyncMock(return_value=42)
-
-        await handler_with_redis._get_routed_model("session-123", key)
-
-        assert handler_with_redis.internal_usage_cache._ttls[cache_key] == 42
-
-    @pytest.mark.asyncio
-    async def test_backfill_falls_back_to_full_ttl_when_redis_ttl_missing(self, handler_with_redis):
-        cache_key = "{sensitive_route:hashed-key:session-123}:model"
-        key = UserAPIKeyAuth(api_key="hashed-key")
-        handler_with_redis.internal_usage_cache.dual_cache.redis_cache.async_get_cache = AsyncMock(
-            return_value="on-premise-model"
-        )
-        handler_with_redis.internal_usage_cache.dual_cache.redis_cache.async_get_ttl = AsyncMock(return_value=None)
-
-        await handler_with_redis._get_routed_model("session-123", key)
-
-        assert handler_with_redis.internal_usage_cache._ttls[cache_key] == handler_with_redis.ttl
-
-    @pytest.mark.asyncio
-    async def test_get_routed_model_redis_fallback_on_error(self, handler_with_redis):
-        handler_with_redis.internal_usage_cache.dual_cache.redis_cache.async_get_cache = AsyncMock(
-            side_effect=Exception("Redis connection error")
-        )
-        handler_with_redis.internal_usage_cache._cache["{sensitive_route:hashed-key:session-123}:model"] = (
-            "fallback-model"
-        )
-        result = await handler_with_redis._get_routed_model("session-123", UserAPIKeyAuth(api_key="hashed-key"))
-        assert result == "fallback-model"
-
-    @pytest.mark.asyncio
-    async def test_set_session_routing_with_redis(self, handler_with_redis):
-        handler_with_redis.internal_usage_cache.dual_cache.redis_cache.async_set_cache = AsyncMock()
-        await handler_with_redis.set_session_routing(
-            session_id="session-456",
-            model="on-premise-model",
-            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
-            guardrail_name="test-guardrail",
-        )
-        handler_with_redis.internal_usage_cache.dual_cache.redis_cache.async_set_cache.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_set_session_routing_redis_fallback_on_error(self, handler_with_redis):
-        handler_with_redis.internal_usage_cache.dual_cache.redis_cache.async_set_cache = AsyncMock(
-            side_effect=Exception("Redis connection error")
-        )
-        await handler_with_redis.set_session_routing(
-            session_id="session-789",
-            model="on-premise-model",
-            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
-        )
-        cache_key = "{sensitive_route:hashed-key:session-789}:model"
-        assert handler_with_redis.internal_usage_cache._cache[cache_key] == "on-premise-model"
 
 
 class TestPreCallHookEdgeCases:
@@ -1002,30 +923,26 @@ class TestPreCallHookDeferredRouting:
         assert metrics_kwargs["error_type"] is None
 
 
-class _OpenBreakerRedis:
-    def __init__(self) -> None:
-        from litellm.caching.redis_cache import RedisCircuitBreaker
-
-        self._circuit_breaker = RedisCircuitBreaker(failure_threshold=3, recovery_timeout=60)
-        for _ in range(3):
-            self._circuit_breaker.record_failure()
-
-    @_redis_circuit_breaker_guard
-    async def async_get_cache(self, key, **kwargs):
-        raise AssertionError("never reached")
-
-    @_redis_circuit_breaker_guard
-    async def async_set_cache(self, key, value, **kwargs):
-        raise AssertionError("never reached")
-
-
 @pytest.mark.asyncio
 async def test_an_open_circuit_breaker_keeps_session_routing_in_memory_without_a_warning(caplog):
-    cache = DualCache(redis_cache=_OpenBreakerRedis())  # pyright: ignore[reportArgumentType]  # duck-typed Redis double
-    handler = PROXY_SensitiveDataRoutingHandler(internal_usage_cache=InternalUsageCache(cache))
+    redis_kwargs = {"host": f"open-breaker-{uuid.uuid4()}.invalid", "port": 1, "socket_timeout": 0.2}
+    breaker = RedisBreakerSettings(failure_threshold=1, recovery_timeout=60.0, timeout_min_duration=5.0)
+    opened = NativeRedisBreaker.shared(redis_kwargs, breaker)
+    opened.failed(False)
+    client = NativeRedisClient.connect(
+        RedisStoreSettings(redis_kwargs=redis_kwargs, namespace=None, default_ttl=60, breaker=breaker)
+    )
+    handler = PROXY_SensitiveDataRoutingHandler(
+        internal_usage_cache=MockInternalUsageCache(),
+        route_pins=SensitiveRoutePinStore(RedisStores(client).sensitive_route_pins()),
+    )
+    for _ in range(200):
+        if any("circuit breaker OPENED" in record.getMessage() for record in caplog.records):
+            break
+        await asyncio.sleep(0.01)
     caplog.clear()
 
-    with caplog.at_level(logging.DEBUG, logger="LiteLLM Proxy"):
+    with caplog.at_level(logging.DEBUG, logger="LiteLLM"):
         await handler.set_session_routing("quiet-session", "safe-model")
         routed = await handler._get_routed_model("quiet-session", None)
 

@@ -6,8 +6,18 @@ pub enum Error {
     Environment,
     #[error("MCP host does not yet support configured setting {0}")]
     McpSetting(String),
+    #[error("MCP host does not yet support guardrails or policies")]
+    McpGuardrails,
     #[error(transparent)]
     Mcp(#[from] litellm_gateway_mcp::ConnectError),
-    #[error("MCP requires a configured master key")]
+    #[error(transparent)]
+    Config(#[from] litellm_config::Error),
+    #[error(transparent)]
+    Redis(#[from] litellm_redis_resolve::Error),
+    #[error("Redis setting {setting} is not plain data")]
+    RedisNotPlainData { setting: String },
+    #[error(transparent)]
+    RedisConnect(#[from] litellm_redis_connect::Error),
+    #[error("MCP requires working gateway authentication")]
     Auth(#[from] litellm_gateway_auth::Error),
 }

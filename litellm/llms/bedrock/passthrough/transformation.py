@@ -3,7 +3,7 @@ from collections.abc import Callable, Iterator, Mapping, Sequence
 from functools import partial
 from itertools import chain
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Optional, cast
+from typing import TYPE_CHECKING, ClassVar, Final, Optional, cast
 
 import httpx
 from httpx import Response
@@ -14,6 +14,9 @@ from litellm.constants import AWS_ERROR_TYPE_HEADER
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig, PassthroughStreamCollector
 from litellm.llms.bedrock.chat.converse_to_openai import as_json_array, as_json_object
+from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
+    bedrock_invoke_guardrail_headers,
+)
 from litellm.types.llms.openai import ChatCompletionSystemMessage, ChatCompletionUserMessage
 from litellm.types.utils import ModelResponseStream
 
@@ -29,6 +32,7 @@ from ..request_metadata import (
     merge_bedrock_invoke_headers,
     resolve_bedrock_request_metadata,
 )
+from ..web_identity_session_policy import BEDROCK_AGENT_RUNTIME_SESSION_POLICY, WebIdentitySessionPolicy
 
 if TYPE_CHECKING:
     from botocore.eventstream import EventStreamMessage
@@ -42,6 +46,9 @@ if TYPE_CHECKING:
 BEDROCK_STREAMING_ACTIONS: Final = frozenset({"invoke-with-response-stream", "converse-stream"})
 _BEDROCK_CONVERSE_ACTIONS: Final = frozenset({"converse", "converse-stream"})
 _BEDROCK_INVOKE_ACTIONS: Final = frozenset({"invoke", "invoke-with-response-stream"})
+_BEDROCK_INVOKE_GUARDRAIL_HEADERS: Final = frozenset(
+    {"x-amzn-bedrock-guardrailidentifier", "x-amzn-bedrock-guardrailversion", "x-amzn-bedrock-trace"}
+)
 
 
 def _bedrock_endpoint_action(endpoint: str) -> str:
@@ -121,6 +128,31 @@ def _with_invoke_request_metadata(
 ) -> tuple[Mapping[str, str], Mapping[str, object]]:
     owned_names, metadata_headers = bedrock_request_metadata_headers(litellm_params)
     return merge_bedrock_invoke_headers(dict(headers), (), metadata_headers, owned_names), body
+
+
+def _converse_guardrail_config(action: str, guardrail_config: object) -> object:
+    fields: Final = as_json_object(guardrail_config)
+    if action == "converse-stream" or fields is None:
+        return guardrail_config
+    return {key: value for key, value in fields.items() if key != "streamProcessingMode"}
+
+
+def _with_deployment_guardrail(
+    action: str,
+    headers: Mapping[str, str],
+    body: Mapping[str, object],
+    guardrail_config: object,
+) -> tuple[Mapping[str, str], Mapping[str, object]]:
+    if guardrail_config is None:
+        return headers, body
+    if action in _BEDROCK_CONVERSE_ACTIONS:
+        return headers, {**body, "guardrailConfig": _converse_guardrail_config(action, guardrail_config)}
+    if action in _BEDROCK_INVOKE_ACTIONS:
+        guardrail_headers: Final = tuple(bedrock_invoke_guardrail_headers(guardrail_config).items())
+        return merge_bedrock_invoke_headers(
+            dict(headers), (), guardrail_headers, _BEDROCK_INVOKE_GUARDRAIL_HEADERS
+        ), body
+    return headers, body
 
 
 def _is_cache_point(entry: object) -> bool:
@@ -348,6 +380,10 @@ class BedrockEventStreamCollector:
         return _build_logged_response(self._chunks.chunks(), litellm_logging_obj)
 
 
+class BedrockAgentRuntimeAWS(BaseAWSLLM):
+    _web_identity_session_policy: ClassVar[WebIdentitySessionPolicy] = BEDROCK_AGENT_RUNTIME_SESSION_POLICY
+
+
 class BedrockPassthroughConfig(BaseAWSLLM, BedrockModelInfo, BedrockEventStreamDecoderBase, BasePassthroughConfig):
     def get_error_class(
         self,
@@ -453,11 +489,14 @@ class BedrockPassthroughConfig(BaseAWSLLM, BedrockModelInfo, BedrockEventStreamD
             body=_converse_body_to_send(body) if action in _BEDROCK_CONVERSE_ACTIONS else body,
             litellm_params=litellm_params,
         )
+        guarded_headers, guarded_body = _with_deployment_guardrail(
+            action, signed_headers, signed_body, litellm_params.get("guardrailConfig")
+        )
         return self._sign_request(
             service_name="bedrock",
-            headers=dict(signed_headers),
+            headers=dict(guarded_headers),
             optional_params=optional_params,
-            request_data=dict(signed_body),
+            request_data=dict(guarded_body),
             api_base=api_base,
             model=model,
             api_key=self.get_bedrock_bearer_token(optional_params),
