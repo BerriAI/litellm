@@ -5284,9 +5284,7 @@ class TestHandleLLMApiExceptionProviderOverload:
         assert proxy_exc.type == "internal_server_error"
         assert proxy_exc.to_dict()["code"] == "500"
 
-    async def test_openai_route_answers_wrapped_provider_overload_as_503(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_openai_route_answers_wrapped_provider_overload_as_503(self, monkeypatch: pytest.MonkeyPatch) -> None:
         original: Final = InternalServerError(
             message="Overloaded",
             llm_provider="anthropic",
@@ -5516,6 +5514,43 @@ class TestAsyncStreamingDataGeneratorFastPath:
         hook_spy.assert_awaited_once()
 
         ProxyLogging._callback_capabilities_cache.clear()
+
+    async def test_opt_in_header_injects_cost_while_global_flag_is_off(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(litellm, "include_cost_in_streaming_usage", False)
+        monkeypatch.setattr(litellm, "callbacks", [])
+        ProxyLogging._callback_capabilities_cache.clear()
+        usage_frame: Final = (
+            b'data: {"object":"chat.completion.chunk","choices":[],'
+            b'"usage":{"prompt_tokens":11,"completion_tokens":4,"total_tokens":15}}\n\n'
+        )
+
+        async def frames() -> AsyncGenerator[bytes, None]:
+            yield usage_frame
+
+        async def stream(headers: dict[str, str]) -> list[object]:
+            return [
+                c
+                async for c in ProxyBaseLLMRequestProcessing.async_streaming_data_generator(
+                    response=frames(),
+                    user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
+                    request_data={"model": "gpt-4o-mini", "proxy_server_request": {"headers": headers}},
+                    proxy_logging_obj=ProxyLogging(user_api_key_cache=MagicMock()),
+                    serialize_chunk=ProxyBaseLLMRequestProcessing.return_sse_chunk,
+                    serialize_error=lambda e: "data: error\n\n",
+                )
+            ]
+
+        plain: Final = await stream({})
+        opted_in: Final = await stream({"x-litellm-include-cost-in-streaming-usage": "true"})
+        declined: Final = await stream({"x-litellm-include-cost-in-streaming-usage": "false"})
+        ProxyLogging._callback_capabilities_cache.clear()
+
+        assert plain == [usage_frame]
+        assert declined == [usage_frame]
+        assert isinstance(opted_in[0], bytes)
+        payload: Final = json.loads(opted_in[0].decode("utf-8").split("data:", 1)[1].strip())
+        assert payload["usage"]["cost"] > 0
+        assert payload["usage"]["total_tokens"] == 15
 
 
 class TestDisconnectGatherCleanup:
@@ -10821,6 +10856,23 @@ class TestProcessChunkWithCostInjection:
         assert result != chunk
         assert result.endswith(b"\n\n")
         payload = json.loads(result.decode("utf-8").split("data:", 1)[1].strip())
+        assert payload["usage"]["cost"] > 0
+
+    def test_request_header_opts_a_frame_into_cost_while_global_flag_is_off(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(litellm, "include_cost_in_streaming_usage", False)
+        chunk: Final = (
+            b'data: {"object":"chat.completion.chunk","choices":[],'
+            b'"usage":{"prompt_tokens":11,"completion_tokens":4,"total_tokens":15}}\n\n'
+        )
+
+        assert ProxyBaseLLMRequestProcessing.process_chunk_with_cost_injection(chunk, "gpt-4o-mini") == chunk
+        injected: Final = ProxyBaseLLMRequestProcessing.process_chunk_with_cost_injection(
+            chunk, "gpt-4o-mini", request_headers={"X-LiteLLM-Include-Cost-In-Streaming-Usage": "True"}
+        )
+
+        payload: Final = json.loads(injected.decode("utf-8").split("data:", 1)[1].strip())
         assert payload["usage"]["cost"] > 0
 
     def test_chunk_ending_in_partial_frame_passes_through_byte_identical(self, monkeypatch):

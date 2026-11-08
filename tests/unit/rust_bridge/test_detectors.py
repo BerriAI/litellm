@@ -352,6 +352,14 @@ def test_stream_cost_injection_needs_a_stream(monkeypatch: pytest.MonkeyPatch) -
     assert not messages_detectors.stream_cost_injection(call())
 
 
+def test_stream_cost_injection_reads_the_request_header_the_proxy_reads(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "include_cost_in_streaming_usage", False)
+    opted_in: Final = {"proxy_server_request": {"headers": {"x-litellm-include-cost-in-streaming-usage": "true"}}}
+    assert messages_detectors.stream_cost_injection(call(stream=True, **opted_in))
+    assert not messages_detectors.stream_cost_injection(call(**opted_in))
+    assert not messages_detectors.stream_cost_injection(call(stream=True, proxy_server_request={"headers": {}}))
+
+
 def test_foundry_beta_row_reads_the_api_base_the_anthropic_handler_reads(monkeypatch: pytest.MonkeyPatch) -> None:
     for name in ("ANTHROPIC_API_BASE", "ANTHROPIC_BASE_URL"):
         monkeypatch.delenv(name, raising=False)
