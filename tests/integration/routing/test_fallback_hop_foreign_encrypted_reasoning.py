@@ -303,7 +303,7 @@ def scenario_api_base(scenario: Scenario, scenario_id: str, response: StoredResp
 def deployment(
     scenario: Scenario,
     group: str,
-    api_base: str,
+    api_base: str | None,
     *,
     order: int | None,
     model: str = RESPONSES_MODEL,
@@ -316,7 +316,7 @@ def deployment(
             "litellm_params": {
                 "model": model,
                 "api_key": PROVIDER_KEY,
-                "api_base": api_base,
+                **({} if api_base is None else {"api_base": api_base}),
                 **({} if order is None else {"order": order}),
                 **extra_params,
             },
@@ -860,6 +860,38 @@ def test_hop_inside_one_encryption_boundary_keeps_the_reasoning(gateway: Gateway
         assert answer.status == 200, answer.text
         assert answer.headers.get("x-litellm-model-id") == order_two, (order_one, answer.headers)
         bodies: Final = bodies_for(observed(gateway), shared)
+        assert [body.get("input") for body in bodies] == [history(mark), history(mark)], bodies
+
+
+def test_hop_between_same_key_deployments_on_the_providers_default_endpoint_keeps_the_reasoning(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    shared: Final = f"default-{uuid.uuid4().hex[:12]}"
+    with (
+        scratch_database() as database,
+        owned_proxy_process(
+            gateway,
+            tmp_path,
+            {"DATABASE_URL": database, "OPENAI_BASE_URL": f"{gateway.upstream_url}/{shared}"},
+            remove_environment=("DIRECT_URL", "DATABASE_URL_READ_REPLICA", "OPENAI_API_BASE"),
+        ) as owned,
+        owned.gateway.scenario() as scenario,
+    ):
+        owned.gateway.post("/config/update", {"router_settings": {"num_retries": 0}})
+        one: Final = scenario_api_base(scenario, f"{shared}-o1", failing()).rsplit("/", 1)[-1]
+        two: Final = scenario_api_base(scenario, f"{shared}-o2", healthy_json()).rsplit("/", 1)[-1]
+        order_one: Final = deployment(
+            scenario, shared, None, order=1, extra_params={"extra_headers": {"x-scripted-scenario": one}}
+        )
+        order_two: Final = deployment(
+            scenario, shared, None, order=2, extra_params={"extra_headers": {"x-scripted-scenario": two}}
+        )
+        mark: Final = marker()
+        answer: Final = responses_answer(
+            owned.gateway, HTTPX, Target(shared, frozenset({order_one, order_two})), history(mark)
+        )
+        assert_served_by(answer, order_two)
+        bodies: Final = bodies_for(observed(owned.gateway), shared)
         assert [body.get("input") for body in bodies] == [history(mark), history(mark)], bodies
 
 

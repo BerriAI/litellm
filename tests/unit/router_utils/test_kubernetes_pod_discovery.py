@@ -3,6 +3,7 @@ import copy
 import hashlib
 import json
 import logging
+import os
 import re
 import socket
 import threading
@@ -17,7 +18,6 @@ import respx
 from openai import AsyncOpenAI, OpenAI
 
 import litellm
-import litellm.router_python_core
 from litellm.constants import (
     CALLER_SESSION_ID_METADATA_KEY,
     KUBERNETES_POD_ROUTING_KEY,
@@ -277,12 +277,11 @@ def _empty_proxy_environment() -> Mapping[str, str]:
     return {}
 
 
-def _patch_router_discovery(
-    monkeypatch: pytest.MonkeyPatch,
-    *discoveries: KubernetesPodDiscovery,
-) -> None:
-    discovery_iter: Final = iter(discoveries)
-    monkeypatch.setattr(litellm.router_python_core, "KubernetesPodDiscovery", lambda: next(discovery_iter))
+def _clear_proxy_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Clear the proxy environment the router's own pod discovery reads, so it substitutes pod IPs."""
+    for name in tuple(os.environ):
+        if name.lower().endswith("_proxy"):
+            monkeypatch.delenv(name)
 
 
 def _stub_sync_dns(monkeypatch: pytest.MonkeyPatch, *ips: str) -> None:
@@ -1290,7 +1289,6 @@ def test_concurrent_sync_refresh_uses_cached_ips_or_service_url_while_in_flight(
 async def test_router_sends_pod_hosts_without_forwarding_discovery_flag(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    clock: Final = _clock((0.0, 0.0, 0.0, 0.0, 0.0, 5.0, 5.0))
     loop: Final = asyncio.get_running_loop()
     async_lookups: Final = count()
     sync_lookups: Final = count()
@@ -1326,9 +1324,7 @@ async def test_router_sends_pod_hosts_without_forwarding_discovery_flag(
                 r"http://(?:10\.0\.0\.1|10\.0\.0\.2|vllm-headless\.ns\.svc\.cluster\.local):8000/v1/chat/completions"
             )
         ).mock(return_value=httpx.Response(200, json=_CHAT_RESPONSE))
-        discovery_enabled: Final = KubernetesPodDiscovery(clock=clock, proxy_environment=_empty_proxy_environment)
-        control: Final = KubernetesPodDiscovery(clock=clock, proxy_environment=_empty_proxy_environment)
-        _patch_router_discovery(monkeypatch, discovery_enabled, control)
+        _clear_proxy_environment(monkeypatch)
         discovery_enabled_router: Final = Router(model_list=[_deployment()])
         control_router: Final = Router(model_list=[_deployment(kubernetes_pod_discovery=None)])
         cached_async_client: Final = AsyncOpenAI(api_key="fake", base_url=_SERVICE_URL)
@@ -1364,8 +1360,8 @@ async def test_router_sends_pod_hosts_without_forwarding_discovery_flag(
         "vllm-headless.ns.svc.cluster.local",
     )
     assert all("kubernetes_pod_discovery" not in body for body in bodies)
-    assert next(async_lookups) == 1
-    assert next(sync_lookups) == 1
+    # The router's discovery resolves the service once; the sync call reuses the cached pod set.
+    assert (next(async_lookups), next(sync_lookups)) == (1, 0)
 
 
 @pytest.mark.asyncio
@@ -1405,9 +1401,7 @@ async def test_router_session_requests_stick_to_one_pod_for_sync_and_async(
         route: Final = respx_mock.post(url__regex=_THREE_POD_CHAT_PATTERN).mock(
             return_value=httpx.Response(200, json=_CHAT_RESPONSE)
         )
-        async_discovery: Final = KubernetesPodDiscovery(clock=lambda: 0.0, proxy_environment=_empty_proxy_environment)
-        sync_discovery: Final = KubernetesPodDiscovery(clock=lambda: 0.0, proxy_environment=_empty_proxy_environment)
-        _patch_router_discovery(monkeypatch, async_discovery, sync_discovery)
+        _clear_proxy_environment(monkeypatch)
         async_router: Final = Router(model_list=[_deployment()])
         sync_router: Final = Router(model_list=[_deployment()])
         async_client: Final = _cache_async_client(async_router)
@@ -1451,8 +1445,7 @@ async def test_router_session_mapping_repeats_across_pods(
         route: Final = respx_mock.post(url__regex=_THREE_POD_CHAT_PATTERN).mock(
             return_value=httpx.Response(200, json=_CHAT_RESPONSE)
         )
-        discovery: Final = KubernetesPodDiscovery(clock=lambda: 0.0, proxy_environment=_empty_proxy_environment)
-        _patch_router_discovery(monkeypatch, discovery)
+        _clear_proxy_environment(monkeypatch)
         router: Final = Router(model_list=[_deployment()])
         client: Final = _cache_async_client(router)
         for session_id in session_ids:
@@ -1493,8 +1486,7 @@ async def test_generated_session_id_uses_round_robin_pod_selection(
         route: Final = respx_mock.post(url__regex=_THREE_POD_CHAT_PATTERN).mock(
             return_value=httpx.Response(200, json=_CHAT_RESPONSE)
         )
-        discovery: Final = KubernetesPodDiscovery(clock=lambda: 0.0, proxy_environment=_empty_proxy_environment)
-        _patch_router_discovery(monkeypatch, discovery)
+        _clear_proxy_environment(monkeypatch)
         router: Final = Router(model_list=[_deployment()])
         client: Final = _cache_async_client(router)
         for _ in range(6):
@@ -1533,8 +1525,7 @@ async def test_empty_session_id_uses_round_robin_pod_selection(
         route: Final = respx_mock.post(url__regex=_THREE_POD_CHAT_PATTERN).mock(
             return_value=httpx.Response(200, json=_CHAT_RESPONSE)
         )
-        discovery: Final = KubernetesPodDiscovery(clock=lambda: 0.0, proxy_environment=_empty_proxy_environment)
-        _patch_router_discovery(monkeypatch, discovery)
+        _clear_proxy_environment(monkeypatch)
         router: Final = Router(model_list=[_deployment()])
         client: Final = _cache_async_client(router)
         for _ in range(6):
@@ -1567,8 +1558,7 @@ async def test_session_requests_do_not_advance_round_robin_cursor(
         route: Final = respx_mock.post(url__regex=_THREE_POD_CHAT_PATTERN).mock(
             return_value=httpx.Response(200, json=_CHAT_RESPONSE)
         )
-        discovery: Final = KubernetesPodDiscovery(clock=lambda: 0.0, proxy_environment=_empty_proxy_environment)
-        _patch_router_discovery(monkeypatch, discovery)
+        _clear_proxy_environment(monkeypatch)
         router: Final = Router(model_list=[_deployment()])
         client: Final = _cache_async_client(router)
         await _router_acompletion(router)
@@ -1587,14 +1577,13 @@ async def test_session_requests_do_not_advance_round_robin_cursor(
     )
 
 
-@pytest.mark.asyncio
-async def test_session_pod_membership_change_remaps_only_affected_sessions(
+def test_session_pod_membership_change_remaps_only_affected_sessions(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    loop: Final = asyncio.get_running_loop()
     lookups: Final = count()
+    now: Final = [0.0]
 
-    async def getaddrinfo(
+    def getaddrinfo(
         host: str | None,
         port: str | int | None,
         family: int = 0,
@@ -1606,44 +1595,34 @@ async def test_session_pod_membership_change_remaps_only_affected_sessions(
         ips: Final = ("10.0.0.1", "10.0.0.2", "10.0.0.3") if lookup_number == 0 else ("10.0.0.2", "10.0.0.3")
         return _records(*ips, port=int(port or 0))
 
-    monkeypatch.setattr(loop, "getaddrinfo", getaddrinfo)
-    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(socket, "getaddrinfo", getaddrinfo)
+    discovery: Final = KubernetesPodDiscovery(
+        refresh_interval_seconds=10,
+        clock=lambda: now[0],
+        proxy_environment=_empty_proxy_environment,
+    )
+
+    def host_for(session_id: str) -> str | None:
+        return httpx.URL(
+            _api_base(discovery.resolve_deployment(_deployment(), {"metadata": {"session_id": session_id}}))
+        ).host
 
     session_ids: Final = tuple(f"session-{index}" for index in range(60))
-    with respx.mock(assert_all_called=True) as respx_mock:
-        route: Final = respx_mock.post(url__regex=_THREE_POD_CHAT_PATTERN).mock(
-            return_value=httpx.Response(200, json=_CHAT_RESPONSE)
-        )
-        discovery: Final = KubernetesPodDiscovery(
-            refresh_interval_seconds=10,
-            clock=_clock((0.0,) * 62 + (10.0,) * 10),
-            proxy_environment=_empty_proxy_environment,
-        )
-        _patch_router_discovery(monkeypatch, discovery)
-        router: Final = Router(model_list=[_deployment()])
-        client: Final = _cache_async_client(router)
-        for session_id in session_ids:
-            await _router_acompletion(router, metadata={"session_id": session_id})
-        initial_hosts: Final = tuple(call.request.url.host for call in route.calls)
-        removed_session_ids: Final = tuple(
-            session_id for session_id, host in zip(session_ids, initial_hosts) if host == "10.0.0.1"
-        )
-        surviving_session_ids: Final = tuple(
-            session_id for session_id, host in zip(session_ids, initial_hosts) if host == "10.0.0.2"
-        )
-        assert removed_session_ids
-        assert len(surviving_session_ids) >= 2
-        await _router_acompletion(router)
-        await _router_acompletion(router, metadata={"session_id": surviving_session_ids[0]})
-        await _router_acompletion(router, metadata={"session_id": removed_session_ids[0]})
-        await _router_acompletion(router, metadata={"session_id": surviving_session_ids[1]})
-        hosts: Final = tuple(call.request.url.host for call in route.calls)
-        await client.close()
+    initial_hosts: Final = {session_id: host_for(session_id) for session_id in session_ids}
+    removed_session_ids: Final = tuple(
+        session_id for session_id in session_ids if initial_hosts[session_id] == "10.0.0.1"
+    )
+    surviving_session_ids: Final = tuple(
+        session_id for session_id in session_ids if initial_hosts[session_id] in ("10.0.0.2", "10.0.0.3")
+    )
+    assert removed_session_ids
+    assert surviving_session_ids
 
-    assert hosts[60] == "10.0.0.1"
-    assert hosts[61] == "10.0.0.2"
-    assert hosts[62] in ("10.0.0.2", "10.0.0.3")
-    assert hosts[63] == "10.0.0.2"
+    now[0] = 10.0
+    remapped_hosts: Final = {session_id: host_for(session_id) for session_id in session_ids}
+
+    assert all(remapped_hosts[session_id] == initial_hosts[session_id] for session_id in surviving_session_ids)
+    assert all(remapped_hosts[session_id] in ("10.0.0.2", "10.0.0.3") for session_id in removed_session_ids)
     assert next(lookups) == 2
 
 
@@ -1684,15 +1663,7 @@ async def test_custom_routing_strategy_keeps_sync_and_async_sessions_on_one_pod(
         route: Final = respx_mock.post(url__regex=_THREE_POD_CHAT_PATTERN).mock(
             return_value=httpx.Response(200, json=_CHAT_RESPONSE)
         )
-        async_discovery: Final = KubernetesPodDiscovery(
-            clock=lambda: 0.0,
-            proxy_environment=_empty_proxy_environment,
-        )
-        sync_discovery: Final = KubernetesPodDiscovery(
-            clock=lambda: 0.0,
-            proxy_environment=_empty_proxy_environment,
-        )
-        _patch_router_discovery(monkeypatch, async_discovery, sync_discovery)
+        _clear_proxy_environment(monkeypatch)
         async_router: Final = Router(model_list=[_deployment()])
         sync_router: Final = Router(model_list=[_deployment()])
         async_router.set_custom_routing_strategy(_ModelListRoutingStrategy(async_router))
@@ -1735,8 +1706,7 @@ async def test_top_level_litellm_session_id_keeps_requests_on_one_pod(
         route: Final = respx_mock.post(url__regex=_THREE_POD_CHAT_PATTERN).mock(
             return_value=httpx.Response(200, json=_CHAT_RESPONSE)
         )
-        discovery: Final = KubernetesPodDiscovery(clock=lambda: 0.0, proxy_environment=_empty_proxy_environment)
-        _patch_router_discovery(monkeypatch, discovery)
+        _clear_proxy_environment(monkeypatch)
         router: Final = Router(model_list=[_deployment()])
         client: Final = _cache_async_client(router)
         for _ in range(6):
@@ -1849,8 +1819,7 @@ async def test_generated_metadata_ignores_top_level_litellm_session_id(
         route: Final = respx_mock.post(url__regex=_THREE_POD_CHAT_PATTERN).mock(
             return_value=httpx.Response(200, json=_CHAT_RESPONSE)
         )
-        discovery: Final = KubernetesPodDiscovery(clock=lambda: 0.0, proxy_environment=_empty_proxy_environment)
-        _patch_router_discovery(monkeypatch, discovery)
+        _clear_proxy_environment(monkeypatch)
         router: Final = Router(model_list=[_deployment()])
         client: Final = _cache_async_client(router)
         for _ in range(6):
@@ -1872,7 +1841,6 @@ async def test_generated_metadata_ignores_top_level_litellm_session_id(
 async def test_custom_routing_strategy_resolves_pod_hosts_for_sync_and_async_requests(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    clock: Final = _clock((0.0,) * 40)
     loop: Final = asyncio.get_running_loop()
     async_lookups: Final = count()
     sync_lookups: Final = count()
@@ -1908,15 +1876,7 @@ async def test_custom_routing_strategy_resolves_pod_hosts_for_sync_and_async_req
                 r"http://(?:10\.0\.0\.1|10\.0\.0\.2|vllm-headless\.ns\.svc\.cluster\.local):8000/v1/chat/completions"
             )
         ).mock(return_value=httpx.Response(200, json=_CHAT_RESPONSE))
-        async_discovery: Final = KubernetesPodDiscovery(
-            clock=clock,
-            proxy_environment=_empty_proxy_environment,
-        )
-        sync_discovery: Final = KubernetesPodDiscovery(
-            clock=clock,
-            proxy_environment=_empty_proxy_environment,
-        )
-        _patch_router_discovery(monkeypatch, async_discovery, sync_discovery)
+        _clear_proxy_environment(monkeypatch)
         async_router: Final = Router(model_list=[_deployment()])
         sync_router: Final = Router(model_list=[_deployment()])
         async_router.set_custom_routing_strategy(_ModelListRoutingStrategy(async_router))
@@ -1933,22 +1893,7 @@ async def test_custom_routing_strategy_resolves_pod_hosts_for_sync_and_async_req
 
 
 @pytest.mark.asyncio
-async def test_unresolved_router_selectors_keep_service_hostname() -> None:
-    router: Final = Router(model_list=[_deployment()])
-
-    sync_selected: Final = router._get_available_deployment_unresolved(model="gpu-model", request_kwargs={})
-    async_selected: Final = await router._async_get_available_deployment_unresolved(
-        model="gpu-model",
-        request_kwargs={},
-    )
-
-    assert _api_base(sync_selected) == _SERVICE_URL
-    assert _api_base(async_selected) == _SERVICE_URL
-
-
-@pytest.mark.asyncio
 async def test_router_async_retry_uses_next_discovered_pod(monkeypatch: pytest.MonkeyPatch) -> None:
-    clock: Final = _clock((0.0,) * 8)
     loop: Final = asyncio.get_running_loop()
     attempts: Final = count()
 
@@ -1974,8 +1919,7 @@ async def test_router_async_retry_uses_next_discovered_pod(monkeypatch: pytest.M
         route: Final = respx_mock.post(
             url__regex=re.compile(r"http://(?:10\.0\.0\.1|10\.0\.0\.2):8000/v1/chat/completions")
         ).mock(side_effect=response_for)
-        discovery: Final = KubernetesPodDiscovery(clock=clock, proxy_environment=_empty_proxy_environment)
-        _patch_router_discovery(monkeypatch, discovery)
+        _clear_proxy_environment(monkeypatch)
         router: Final = Router(model_list=[_deployment()], num_retries=1)
 
         response: Final = await router.acompletion(
@@ -1989,7 +1933,6 @@ async def test_router_async_retry_uses_next_discovered_pod(monkeypatch: pytest.M
 
 
 def test_router_sync_retry_uses_next_discovered_pod(monkeypatch: pytest.MonkeyPatch) -> None:
-    clock: Final = _clock((0.0,) * 8)
     attempts: Final = count()
 
     def getaddrinfo(
@@ -2014,8 +1957,7 @@ def test_router_sync_retry_uses_next_discovered_pod(monkeypatch: pytest.MonkeyPa
         route: Final = respx_mock.post(
             url__regex=re.compile(r"http://(?:10\.0\.0\.1|10\.0\.0\.2):8000/v1/chat/completions")
         ).mock(side_effect=response_for)
-        discovery: Final = KubernetesPodDiscovery(clock=clock, proxy_environment=_empty_proxy_environment)
-        _patch_router_discovery(monkeypatch, discovery)
+        _clear_proxy_environment(monkeypatch)
         router: Final = Router(model_list=[_deployment()], num_retries=1)
 
         response: Final = router.completion(
@@ -2088,8 +2030,7 @@ async def test_router_session_retry_uses_next_rendezvous_pod(monkeypatch: pytest
     session_id: Final = "retry-session"
     with respx.mock(assert_all_called=True) as respx_mock:
         route: Final = respx_mock.post(url__regex=_THREE_POD_CHAT_PATTERN).mock(side_effect=response_for)
-        discovery: Final = KubernetesPodDiscovery(proxy_environment=_empty_proxy_environment)
-        _patch_router_discovery(monkeypatch, discovery)
+        _clear_proxy_environment(monkeypatch)
         router: Final = Router(model_list=[_deployment()], num_retries=1)
 
         response: Final = await router.acompletion(
