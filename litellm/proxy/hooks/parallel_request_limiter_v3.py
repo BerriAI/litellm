@@ -1389,6 +1389,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         skip_tpm_check: bool = False,
         parallel_slot_id: str | None = None,
         skip_parallel_check: bool = False,
+        defer_parallel_check: bool = False,
     ) -> RateLimitResponse:
         """
         Check if any of the rate limit descriptors should be rate limited.
@@ -1408,6 +1409,11 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             skip_parallel_check: If True, ``max_parallel_requests`` gauges are
                 neither checked nor acquired, for a call that runs inside a
                 request already holding its slot.
+            defer_parallel_check: If True, ``max_parallel_requests`` gauges are
+                checked in read-only mode without acquiring a slot. The caller
+                is expected to run a separate admission-time check later; this
+                flag lets the proxy gate skip the fail-fast 503 on pre-call for
+                model groups that queue traffic through the router scheduler.
 
         ``max_parallel_requests`` descriptors are enforced by the dedicated
         concurrency-gauge path (``_check_parallel_request_gauges``), never by
@@ -1457,7 +1463,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             if windowed_response["overall_code"] == "OVER_LIMIT":
                 return windowed_response
 
-        if not gauges or skip_parallel_check:
+        if not gauges or skip_parallel_check or defer_parallel_check:
             return windowed_response
 
         gauge_response: Final = await self._check_parallel_request_gauges(
@@ -3949,6 +3955,10 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             parallel_slot_id: Final = self._resolve_parallel_slot_id(
                 reuses_request_slot, parallel_gauges, deferred_parallel_slot_check, requested_model
             )
+            # When the model group is allowlisted for parallel queueing, _resolve_parallel_slot_id
+            # returns None and the proxy skips slot acquisition. The router runs a deferred
+            # admission-time check instead, so the proxy gate must not fail-fast here.
+            defer_parallel_check: Final = parallel_slot_id is None and deferred_parallel_slot_check is not None
 
             first_pass_descriptors: Final = (
                 descriptors
@@ -3963,6 +3973,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 skip_tpm_check=self.tpm_reservation_enabled,
                 parallel_slot_id=parallel_slot_id,
                 skip_parallel_check=reuses_request_slot,
+                defer_parallel_check=defer_parallel_check,
             )
 
             if response["overall_code"] == "OVER_LIMIT":

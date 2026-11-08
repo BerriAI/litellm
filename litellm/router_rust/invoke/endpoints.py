@@ -1109,6 +1109,20 @@ class _Handler:
     __name__: str
 
 
+@dataclasses.dataclass(frozen=True, slots=True)
+class _DeferredLimits:
+    """`_DeploymentSlotLimits` over a single `MaxParallelRequestsLimit`."""
+
+    limit: object
+
+    def slots(self, deployment_id: str) -> tuple[int, int] | None:
+        from litellm.router_utils.client_initalization_utils import MaxParallelRequestsLimit
+
+        if isinstance(self.limit, MaxParallelRequestsLimit):
+            return self.limit.in_flight, self.limit.max_parallel_requests
+        return None
+
+
 def _session_with_model(session: object, model_name: str) -> Mapping[str, object]:
     if not isinstance(session, Mapping):
         return {}
@@ -1965,13 +1979,17 @@ class RustEndpoints:
                 return []
             return list(healthy) if isinstance(healthy, Sequence) else [healthy]
 
+        selected: Final
         try:
-            selected: Final = await self._core.select(model, dict(request), kind="healthy")
+            selected = await self._core.select(model, dict(request), kind="healthy")
         except Exception:  # noqa: BLE001
-            selected = []
+            selected: Final = []  # rebind-ok: the select failure path
         healthy_list: Final = list(selected) if isinstance(selected, Sequence) else ([selected] if selected else [])
         deployment_id: Final = (
-            as_dict(healthy_list[0].get("model_info")).get("id") if healthy_list else None
+            str(as_dict(healthy_list[0].get("model_info")).get("id"))
+            if healthy_list
+            and as_dict(healthy_list[0].get("model_info")).get("id") is not None
+            else None
         )
         queued_key: Final = model if deployment_id is None else f"{model}:{deployment_id}"
 
@@ -1982,6 +2000,21 @@ class RustEndpoints:
             timeout=self._core.resolved.timeout,  # pyright: ignore[reportArgumentType]  # the router timeout
             get_healthy_deployments=healthy_deployments,
         )
+        if deployment_id is not None and healthy_list:
+            from litellm.router_rust.invoke.slots import max_parallel_requests_limit
+            from litellm.router_utils.client_initalization_utils import MaxParallelRequestsLimit
+            from litellm.scheduler import DeferredParallelSlotCheck
+
+            limit: Final = max_parallel_requests_limit(
+                self._core, healthy_list[0], {}
+            )
+            if isinstance(limit, MaxParallelRequestsLimit):
+                DeferredParallelSlotCheck(
+                    model_group=model,
+                    limits={str(deployment_id): _DeferredLimits(limit)},
+                    deployment_id=str(deployment_id),
+                    deferred=True,
+                )()
         try:
             response: Final = await run()
         except Exception as error:
