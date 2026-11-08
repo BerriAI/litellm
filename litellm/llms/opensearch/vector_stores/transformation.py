@@ -3,7 +3,7 @@ import json
 import re
 from collections.abc import Mapping, Sequence
 from functools import partial
-from typing import TYPE_CHECKING, Final, Literal, NoReturn
+from typing import TYPE_CHECKING, ClassVar, Final, Literal, NoReturn
 from urllib.parse import quote, urlsplit
 
 import httpx
@@ -19,6 +19,7 @@ from litellm.llms.base_llm.vector_store.transformation import (
     VectorStoreEmbeddingExecutor,
 )
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, SignsRequestsWithAWS, sign_aws_json_post
+from litellm.llms.bedrock.web_identity_session_policy import OPENSEARCH_SESSION_POLICY, WebIdentitySessionPolicy
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.bedrock import AwsAuthParams
 from litellm.types.router import GenericLiteLLMParams
@@ -208,9 +209,13 @@ def _search_result(hit: _Hit, params: _OpenSearchParams) -> VectorStoreSearchRes
     )
 
 
+class _OpenSearchAWS(BaseAWSLLM):
+    _web_identity_session_policy: ClassVar[WebIdentitySessionPolicy] = OPENSEARCH_SESSION_POLICY
+
+
 class OpenSearchVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig, SignsRequestsWithAWS):
     def __init__(self, aws: BaseAWSLLM | None = None) -> None:
-        self._aws: Final = aws if aws is not None else BaseAWSLLM()
+        self._aws: Final = aws if aws is not None else _OpenSearchAWS()
 
     def get_auth_credentials(self, litellm_params: Mapping[str, object]) -> BaseVectorStoreAuthCredentials:
         return BaseVectorStoreAuthCredentials()
