@@ -1,3 +1,4 @@
+from tests.unit._auth.test_fallback_candidate import reference as candidate_reference
 from collections.abc import Callable
 from typing import Final
 
@@ -166,5 +167,9 @@ def _first_usable_fallback(
     target: Final = targets[0]
     return VetTeamMemberFallback(
         target=target,
-        resume=lambda usable: found(target) if usable else _first_usable_fallback(targets[1:], found, exhausted),
+        resume=lambda facts: (
+            found(target)
+            if candidate_reference(facts).usable
+            else _first_usable_fallback(targets[1:], found, exhausted)
+        ),
     )

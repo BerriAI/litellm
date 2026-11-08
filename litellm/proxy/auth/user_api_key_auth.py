@@ -24,7 +24,7 @@ from starlette.exceptions import WebSocketException
 
 import litellm
 from litellm._auth import access as access_policy
-from litellm._auth import admission, auth_context
+from litellm._auth import admission, auth_context, common_flow
 from litellm._auth.budget_pricing import ExemptionFacts
 from litellm._auth.credential import (
     PresentedKeys,
@@ -61,9 +61,11 @@ from litellm._auth.decision import (
 from litellm._auth.driver import drive, drive_model_budgets, drive_team_member_model_budgets
 from litellm._auth.failure import NativeAuthFailure
 from litellm._auth.fallback_access import FallbackAuthorizationFacts, fallback_authorization
+from litellm._auth.fallback_candidate import FallbackCandidateFacts
 from litellm._auth.key_model_access import KeyAndFallbackModelAccessFacts, key_and_fallback_model_access
 from litellm._auth.model_budget_data import ModelBudgetEntity, ModelBudgetSnapshot
 from litellm._auth.runtime import get_auth_core, scheme_credential, select_api_key, select_websocket_api_key
+from litellm._auth.rust_core import expired
 from litellm._internal_context import service_target
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm._service_logger import ServiceLogging
@@ -997,111 +999,22 @@ class _TeamMemberModelBudgetEffects:
             for candidate, fallback_model in resolved
         )
 
-    async def vet_team_member_fallback(self, target: FallbackTarget) -> bool:
-        llm_router: Final = self._llm_router
-        user_id: Final = self._valid_token.user_id
-        team_id: Final = self._valid_token.team_id
-        if llm_router is None or user_id is None or team_id is None:
-            return False
-        prisma_client, user_api_key_cache, proxy_logging_obj = self._resolved_dependencies()
-        try:
-            team_membership: Final = await get_team_membership(
-                user_id=user_id,
-                team_id=team_id,
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-                proxy_logging_obj=proxy_logging_obj,
-            )
-        except NativeAuthFailure:
-            raise
-        except Exception:  # noqa: BLE001  # membership lookup failures must not authorize a fallback
-            return False
-        try:
-            return await self._is_usable_fallback(
-                target, llm_router, team_membership, prisma_client, user_api_key_cache, proxy_logging_obj
-            )
-        except NativeAuthFailure:
-            raise
-        except Exception:  # noqa: BLE001  # A candidate check failure must not escape the fail-closed walk.
-            verbose_proxy_logger.warning(
-                "Skipping fallback candidate %s after a budget or authorization check error",
-                target.model.replace("\r", "").replace("\n", ""),
-                exc_info=True,
-            )
-            return False
+    async def vet_team_member_fallback(self, target: FallbackTarget) -> FallbackCandidateFacts:
+        from litellm.proxy.auth.fallback_candidate_adapter import read_fallback_candidate_facts
 
-    async def _is_usable_fallback(
-        self,
-        target: FallbackTarget,
-        llm_router: litellm.Router,
-        team_membership: LiteLLM_TeamMembership | None,
-        prisma_client: PrismaClient | None,
-        user_api_key_cache: UserApiKeyCache,
-        proxy_logging_obj: ProxyLogging,
-    ) -> bool:
-        if (
-            litellm.block_requests_for_models_without_pricing
-            and RouteChecks.is_llm_api_route(route=self._route)
-            and _unpriced_models_in_request(model=target.served_model, llm_router=llm_router)
-        ):
-            return False
-        if self._end_user_object is not None and self._end_user_object.models:
-            can_customer_access_model(
-                model=target.model,
-                end_user_object=self._end_user_object,
-                llm_router=llm_router,
-                valid_token=self._valid_token,
-            )
-        if not is_model_cost_zero(
-            model=target.served_model, llm_router=llm_router
-        ) and not await _is_within_all_fallback_model_budgets(
+        return await read_fallback_candidate_facts(
+            target=target,
             valid_token=self._valid_token,
-            model_max_budget_limiter=self._limiter,
-            models=tuple(
-                dict.fromkeys(
-                    (
-                        target.requested,
-                        target.model,
-                        target.served_model,
-                        llm_router.registry().resolve(target.served_model),
-                    )
-                )
-            ),
-        ):
-            return False
-        if not await _is_fallback_model_authorized(
-            model=target.model,
-            valid_token=self._valid_token,
-            llm_model_list=self._llm_model_list,
-            llm_router=llm_router,
+            limiter=self._limiter,
+            llm_router=self._llm_router,
+            route=self._route,
+            project_object=self._project_object,
+            team_object=self._team_object,
+            end_user_object=self._end_user_object,
             prisma_client=self._prisma_client,
-            team_object=self._team_object,
-            team_membership=team_membership,
-            project_object=self._project_object,
-            refuse_agent_keys=True,
-        ):
-            return False
-        self._valid_token.matched_model_access_groups = []
-        matched_groups: Final = await stamp_matched_model_access_groups(
-            model=target.model,
-            valid_token=self._valid_token,
-            team_object=self._team_object,
-            project_object=self._project_object,
-            llm_router=llm_router,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            proxy_logging_obj=proxy_logging_obj,
-            team_membership=team_membership,
-            team_membership_loaded=True,
+            user_api_key_cache=self._user_api_key_cache,
+            proxy_logging_obj=self._proxy_logging_obj,
         )
-        self._valid_token.matched_model_access_groups = list(matched_groups)
-        if matched_groups:
-            await _model_access_group_max_budget_check(
-                matched_model_access_groups=list(matched_groups),
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-            )
-        return True
 
     async def reroute_team_member_request(self, model: str) -> None:
         _reroute_request(self._request_data, self._request, model)
@@ -4718,8 +4631,14 @@ async def _run_post_custom_auth_checks(
     )
 
     # 1. Look up end_user object from DB if end_user_id is set
+    custom_facts: Final = common_flow.CustomFacts(
+        valid_token.end_user_id,
+        False,
+        bool(general_settings.get("custom_auth_run_common_checks", False)),
+    )
+    custom_plan: Final = common_flow.custom(custom_facts)
     end_user_object = None
-    if valid_token.end_user_id is not None:
+    if custom_plan.read_end_user:
         valid_token, end_user_object = await _lookup_end_user_and_apply_budget(
             valid_token=valid_token,
             route=route,
@@ -4732,19 +4651,15 @@ async def _run_post_custom_auth_checks(
         # gate skips it for custom-auth deployments unless
         # custom_auth_run_common_checks is set. Enforce it here on that path
         # so an over-budget end user can't keep making requests.
-        if end_user_object is not None and not general_settings.get("custom_auth_run_common_checks", False):
+        if common_flow.custom(replace(custom_facts, end_user_present=end_user_object is not None)).check_end_user:
+            assert end_user_object is not None
             await check_end_user_budget(end_user_obj=end_user_object, route=route)
 
     # 2. Check token expiry
     if valid_token.expires is not None:
         current_time: Final = datetime.now(timezone.utc)
-        if isinstance(valid_token.expires, datetime):
-            expiry_time = valid_token.expires
-        else:
-            expiry_time = datetime.fromisoformat(valid_token.expires)
-        if expiry_time.tzinfo is None or expiry_time.tzinfo.utcoffset(expiry_time) is None:
-            expiry_time = expiry_time.replace(tzinfo=timezone.utc)
-        if expiry_time < current_time:
+        expiry_time: Final = _aware_expiry(valid_token.expires)
+        if expired(expiry_time, current_time):
             raise ProxyException(
                 message=f"Authentication Error - Expired Key. Key Expiry time {expiry_time} and current time {current_time}",
                 type=ProxyErrorTypes.expired_key,
@@ -4752,7 +4667,7 @@ async def _run_post_custom_auth_checks(
                 param=(abbreviate_api_key(api_key=valid_token.token) if valid_token.token else ""),
             )
 
-    if general_settings.get("custom_auth_run_common_checks", False):
+    if custom_plan.check_model_access:
         await enforce_key_and_fallback_model_access(
             valid_token=valid_token,
             request_data=request_data,
@@ -4776,7 +4691,9 @@ async def _run_post_custom_auth_checks(
     # be refused under custom auth and served under the other two.
     skip_budget_checks: Final = (
         is_model_cost_zero(model=current_model, llm_router=llm_router)
-        if current_model is not None and llm_router is not None
+        if common_flow.custom(
+            replace(custom_facts, model_present=current_model is not None, router_present=llm_router is not None)
+        ).read_pricing
         else False
     )
 

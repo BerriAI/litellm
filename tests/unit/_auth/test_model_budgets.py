@@ -1,3 +1,5 @@
+from litellm._auth.fallback_candidate import FallbackCandidateFacts
+from tests.unit._auth.raw_answers import candidate_read
 from dataclasses import dataclass, replace
 from typing import Final
 
@@ -222,10 +224,10 @@ class FakeTeamMemberRequest:
         self._record("fallbacks", model)
         return self.targets if self.targets is not None else tuple(_target(fallback) for fallback in self.fallbacks)
 
-    async def vet_team_member_fallback(self, target: FallbackTarget) -> bool:
+    async def vet_team_member_fallback(self, target: FallbackTarget) -> FallbackCandidateFacts:
         self._record("vet", target.model)
         self.vetted = (*self.vetted, target)
-        return target.model not in self.unusable
+        return candidate_read(target.model, target.model not in self.unusable)
 
     async def reroute_team_member_request(self, model: str) -> None:
         self._record("reroute", model)

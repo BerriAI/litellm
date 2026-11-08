@@ -5,6 +5,7 @@ from typing import Protocol, TypeAlias
 
 from litellm._auth.budget_pricing import ExemptionFacts
 from litellm._auth.fallback_access import FallbackAuthorizationFacts
+from litellm._auth.fallback_candidate import FallbackCandidateFacts
 from litellm._auth.key_model_access import KeyAndFallbackModelAccessFacts
 from litellm._auth.model_access import ModelAccessDecision
 from litellm._auth.model_budget_data import ModelBudgetSnapshot
@@ -428,7 +429,7 @@ class ReadTeamMemberFallbacks:
 @dataclass(frozen=True, slots=True)
 class VetTeamMemberFallback:
     target: FallbackTarget
-    resume: "Callable[[bool], TeamMemberStep]"
+    resume: "Callable[[FallbackCandidateFacts], TeamMemberStep]"
 
 
 @dataclass(frozen=True, slots=True)

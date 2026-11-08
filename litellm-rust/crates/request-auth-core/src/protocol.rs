@@ -297,6 +297,7 @@ pub enum Node {
 pub enum Answer {
     ModelAccess(crate::key_model_access::Facts),
     FallbackAccess(crate::fallback_access::Facts),
+    Candidate(crate::fallback_candidate::Facts),
     Unit,
     Bool(bool),
     Exemption(crate::budget_pricing::ExemptionFacts),
@@ -332,6 +333,7 @@ macro_rules! answer {
 answer!(bool, Bool);
 answer!(crate::key_model_access::Facts, ModelAccess);
 answer!(crate::fallback_access::Facts, FallbackAccess);
+answer!(crate::fallback_candidate::Facts, Candidate);
 answer!(crate::budget_pricing::ExemptionFacts, Exemption);
 answer!(Option<PresentedKey>, Presented);
 answer!(KeyFacts, Key);

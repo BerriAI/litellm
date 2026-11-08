@@ -10,6 +10,53 @@ use pyo3::{
 type ProjectedStep = (Py<PyAny>, Option<NativeAuthContinuation>);
 
 #[pyfunction]
+pub(crate) fn request_auth_reservation(
+    py: Python<'_>,
+    facts: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    let facts: core::reservation::Facts = from_py(facts)?;
+    to_py(py, &py.detach(move || core::reservation::decide(facts)))
+}
+
+#[pyfunction]
+pub(crate) fn request_auth_common_flow(
+    py: Python<'_>,
+    facts: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    let facts: core::common_flow::Facts = from_py(facts)?;
+    to_py(py, &py.detach(move || core::common_flow::plan(facts)))
+}
+
+#[pyfunction]
+pub(crate) fn request_auth_common_budget_scopes(
+    py: Python<'_>,
+    facts: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    let facts: core::common_flow::BudgetFacts = from_py(facts)?;
+    to_py(py, &py.detach(move || core::common_flow::budgets(facts)))
+}
+
+#[pyfunction]
+pub(crate) fn request_auth_custom_flow(
+    py: Python<'_>,
+    facts: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    let facts: core::common_flow::CustomFacts = from_py(facts)?;
+    to_py(py, &py.detach(move || core::common_flow::custom(facts)))
+}
+
+#[pyfunction]
+pub(crate) fn request_auth_expired(
+    py: Python<'_>,
+    expires: &Bound<'_, PyAny>,
+    now: &Bound<'_, PyAny>,
+) -> PyResult<bool> {
+    let expires: core::protocol::DateTime = from_py(expires)?;
+    let now: core::protocol::DateTime = from_py(now)?;
+    py.detach(move || expires.before(&now)).map_err(map_error)
+}
+
+#[pyfunction]
 pub(crate) fn request_auth_context(
     py: Python<'_>,
     facts: &Bound<'_, PyAny>,

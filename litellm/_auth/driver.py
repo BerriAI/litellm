@@ -51,6 +51,7 @@ from litellm._auth.decision import (
     VetTeamMemberFallback,
 )
 from litellm._auth.fallback_access import FallbackAuthorizationFacts
+from litellm._auth.fallback_candidate import FallbackCandidateFacts
 from litellm._auth.key_model_access import KeyAndFallbackModelAccessFacts
 
 
@@ -73,7 +74,7 @@ class TeamMemberModelBudgetHandler(Protocol):
 
     async def read_team_member_fallbacks(self, model: str) -> tuple[FallbackTarget, ...]: ...
 
-    async def vet_team_member_fallback(self, target: FallbackTarget) -> bool: ...
+    async def vet_team_member_fallback(self, target: FallbackTarget) -> FallbackCandidateFacts: ...
 
     async def reroute_team_member_request(self, model: str) -> None: ...
 

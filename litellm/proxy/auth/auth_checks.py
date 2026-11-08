@@ -1,3 +1,5 @@
+from litellm._auth import common_flow
+
 # What is this?
 ## Common auth checks between jwt + key based auth
 """
@@ -13,12 +15,12 @@ import asyncio
 import re
 import time
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from functools import partial
 from itertools import chain
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Generic, Literal, NoReturn, Optional, Protocol, TypeAlias
+from typing import TYPE_CHECKING, Any, Final, Generic, Literal, NoReturn, Optional, Protocol, TypeAlias, assert_never
 
 from fastapi import HTTPException, Request, status
 from pydantic import BaseModel, TypeAdapter, ValidationError
@@ -35,7 +37,6 @@ from litellm.constants import (
     CLI_SESSION_KEY_PREFIX,
     DEFAULT_ACCESS_GROUP_CACHE_TTL,
     DEFAULT_IN_MEMORY_TTL,
-    EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE,
     END_USER_RESTRICTED_REGISTRY_MAX_SIZE,
     INVALID_API_KEY_ERROR_MESSAGE,
     LITELLM_PROXY_MASTER_KEY_ALIAS,
@@ -1085,21 +1086,32 @@ async def common_checks(
         request_body=_typed_request_body(request_body),
     )
 
-    membership_user_id: Final = (
-        valid_token.user_id if valid_token is not None and (bool(_model) or not skip_all_budget_checks) else None
+    flow_facts: Final = common_flow.Facts(
+        model_present=bool(_model),
+        skip_budgets=skip_all_budget_checks,
+        team_present=team_object is not None,
+        user_present=user_object is not None,
+        token_present=valid_token is not None,
+        user_id=valid_token.user_id if valid_token is not None else None,
+        agent_id=None,
+        customer_present=False,
+        customer_models=(),
     )
-    team_membership_loaded: Final = team_object is not None and membership_user_id is not None
-    loaded_team_membership: Final = (
-        await get_team_membership(
+    flow: Final = common_flow.plan(flow_facts)
+    membership_user_id: Final = valid_token.user_id if valid_token is not None else None
+    team_membership_loaded: Final = flow.membership
+    loaded_team_membership: Final[LiteLLM_TeamMembership | None]
+    if flow.membership:
+        assert membership_user_id is not None and team_object is not None
+        loaded_team_membership = await get_team_membership(
             user_id=membership_user_id,
             team_id=team_object.team_id,
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
             proxy_logging_obj=proxy_logging_obj,
         )
-        if team_object is not None and membership_user_id is not None
-        else None
-    )
+    else:
+        loaded_team_membership = None
 
     unpriced_models: Final = (
         _unpriced_models_in_request(model=_model, llm_router=llm_router)
@@ -1122,7 +1134,8 @@ async def common_checks(
         raise Exception(f"Team={team_object.team_id} is blocked. Update via `/team/unblock` if you're an admin.")
 
     # 2. If team can call model (or key's access_group_ids grant it)
-    if _model and team_object:
+    if flow.team_models:
+        assert _model is not None and team_object is not None
         with tracer.trace("litellm.proxy.auth.common_checks.can_team_access_model"):
             try:
                 await can_team_access_model(
@@ -1145,7 +1158,8 @@ async def common_checks(
                     raise
 
     # 2.2. If team member has per-member model scope, enforce it
-    if _model and team_object and valid_token and valid_token.user_id:
+    if flow.member_models:
+        assert _model is not None and team_object is not None and valid_token is not None
         with tracer.trace("litellm.proxy.auth.common_checks.check_team_member_model_access"):
             await check_team_member_model_access(
                 model=_model,
@@ -1161,7 +1175,10 @@ async def common_checks(
             )
 
     # Require trace id for agent keys when agent has require_trace_id_on_calls_by_agent
-    if valid_token is not None and valid_token.agent_id:
+    if common_flow.plan(
+        replace(flow_facts, agent_id=valid_token.agent_id if valid_token is not None else None)
+    ).agent_trace:
+        assert valid_token is not None and valid_token.agent_id is not None
         from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
         from litellm.proxy.litellm_pre_call_utils import get_chain_id_from_headers
 
@@ -1238,7 +1255,8 @@ async def common_checks(
     )
 
     ## 2.1 If user can call model (if personal key)
-    if _model and team_object is None and user_object is not None:
+    if flow.user_models:
+        assert _model is not None and user_object is not None
         with tracer.trace("litellm.proxy.auth.common_checks.can_user_call_model"):
             await can_user_call_model(
                 model=_model,
@@ -1247,7 +1265,15 @@ async def common_checks(
                 key_model_aliases=key_model_aliases_for_auth_check(valid_token),
             )
 
-    if end_user_object is not None and end_user_object.models:
+    customer_plan: Final = common_flow.plan(
+        replace(
+            flow_facts,
+            customer_present=end_user_object is not None,
+            customer_models=tuple(end_user_object.models or ()) if end_user_object is not None else (),
+        )
+    )
+    if customer_plan.customer_models:
+        assert end_user_object is not None
         with tracer.trace("litellm.proxy.auth.common_checks.can_customer_call_model"):
             if _model:
                 can_customer_access_model(
@@ -1334,59 +1360,72 @@ async def common_checks(
         # of one sequential await per scope. return_exceptions lets every scope
         # settle, then the first error in scope-priority order propagates exactly
         # as the sequential path raised.
-        budget_check_coros: Final = tuple(
-            coro
-            for coro in (
-                team_max_budget_check(
-                    team_object=team_object,
-                    proxy_logging_obj=proxy_logging_obj,
-                    valid_token=valid_token,
-                ),
-                _team_multi_budget_check(team_object=team_object),
-                _virtual_key_multi_budget_check(valid_token=valid_token) if valid_token is not None else None,
-                _team_soft_budget_check(
-                    team_object=team_object,
-                    proxy_logging_obj=proxy_logging_obj,
-                    valid_token=valid_token,
-                ),
-                organization_max_budget_check(
-                    valid_token=valid_token,
-                    team_object=team_object,
-                    prisma_client=prisma_client,
-                    user_api_key_cache=user_api_key_cache,
-                    proxy_logging_obj=proxy_logging_obj,
-                ),
-                _tag_max_budget_check(
-                    request_body=request_body,
-                    prisma_client=prisma_client,
-                    user_api_key_cache=user_api_key_cache,
-                    proxy_logging_obj=proxy_logging_obj,
-                    valid_token=valid_token,
-                ),
-                _model_access_group_max_budget_check(
-                    matched_model_access_groups=matched_model_access_groups,
-                    prisma_client=prisma_client,
-                    user_api_key_cache=user_api_key_cache,
-                )
-                if matched_model_access_groups
-                else None,
-                _user_max_budget_check(),
-                _check_team_member_budget(
-                    team_object=team_object,
-                    user_object=user_object,
-                    valid_token=valid_token,
-                    prisma_client=prisma_client,
-                    user_api_key_cache=user_api_key_cache,
-                    proxy_logging_obj=proxy_logging_obj,
-                    team_membership=loaded_team_membership,
-                    team_membership_loaded=team_membership_loaded,
-                ),
-                check_end_user_budget(end_user_obj=end_user_object, route=route)
-                if end_user_object is not None and end_user_object.litellm_budget_table is not None
-                else None,
+        async def _check_common_budget(scope: common_flow.BudgetScope) -> None:
+            match scope:
+                case "Team":
+                    await team_max_budget_check(
+                        team_object=team_object, proxy_logging_obj=proxy_logging_obj, valid_token=valid_token
+                    )
+                case "TeamWindows":
+                    await _team_multi_budget_check(team_object=team_object)
+                case "KeyWindows":
+                    assert valid_token is not None
+                    await _virtual_key_multi_budget_check(valid_token=valid_token)
+                case "TeamSoft":
+                    await _team_soft_budget_check(
+                        team_object=team_object, proxy_logging_obj=proxy_logging_obj, valid_token=valid_token
+                    )
+                case "Organization":
+                    await organization_max_budget_check(
+                        valid_token=valid_token,
+                        team_object=team_object,
+                        prisma_client=prisma_client,
+                        user_api_key_cache=user_api_key_cache,
+                        proxy_logging_obj=proxy_logging_obj,
+                    )
+                case "Tags":
+                    await _tag_max_budget_check(
+                        request_body=request_body,
+                        prisma_client=prisma_client,
+                        user_api_key_cache=user_api_key_cache,
+                        proxy_logging_obj=proxy_logging_obj,
+                        valid_token=valid_token,
+                    )
+                case "Groups":
+                    await _model_access_group_max_budget_check(
+                        matched_model_access_groups=matched_model_access_groups,
+                        prisma_client=prisma_client,
+                        user_api_key_cache=user_api_key_cache,
+                    )
+                case "User":
+                    await _user_max_budget_check()
+                case "Member":
+                    await _check_team_member_budget(
+                        team_object=team_object,
+                        user_object=user_object,
+                        valid_token=valid_token,
+                        prisma_client=prisma_client,
+                        user_api_key_cache=user_api_key_cache,
+                        proxy_logging_obj=proxy_logging_obj,
+                        team_membership=loaded_team_membership,
+                        team_membership_loaded=team_membership_loaded,
+                    )
+                case "Customer":
+                    assert end_user_object is not None
+                    await check_end_user_budget(end_user_obj=end_user_object, route=route)
+                case _:
+                    assert_never(scope)
+
+        budget_scopes: Final = common_flow.budgets(
+            common_flow.BudgetFacts(
+                token_present=valid_token is not None,
+                group_count=len(matched_model_access_groups),
+                customer_present=end_user_object is not None,
+                customer_budget_present=end_user_object is not None
+                and end_user_object.litellm_budget_table is not None,
             )
-            if coro is not None
         )
+        budget_check_coros: Final = tuple(_check_common_budget(scope) for scope in budget_scopes)
 
         with tracer.trace("litellm.proxy.auth.common_checks.budget_checks"):
             budget_results: Final = await asyncio.gather(*budget_check_coros, return_exceptions=True)
@@ -5232,56 +5271,20 @@ async def collect_matched_model_access_groups(
     team_membership: LiteLLM_TeamMembership | None = None,
     team_membership_loaded: bool = False,
 ) -> tuple[str, ...]:
-    """
-    The budgeted model access groups that authorized this request, sorted and deduplicated.
+    from litellm.proxy.auth import model_attribution_adapter
 
-    A group is charged only when its name appears on an allowlist the caller was granted -- key,
-    team, team-member scope, project or org -- *and* that group serves the requested model. Asking
-    for a model that merely belongs to a group attributes nothing, because nothing about the caller
-    named the group.
-
-    Levels are unioned, never ranked: a team granted ``*`` whose member is scoped to one group is
-    still a caller gated by that group. An unrestricted allowlist (empty, ``*``) names no group and
-    so contributes nothing.
-
-    The whole walk is gated on the budget registry, because collecting every match costs a full scan
-    of each allowlist where the plain access check stops at the first hit. An empty registry means no
-    group carries a budget, so there is nothing to attribute and no work worth doing.
-    """
-    if model is None or valid_token is None or llm_router is None or prisma_client is None:
-        return ()
-
-    registry: Final = await _load_model_access_group_registry(
+    return await model_attribution_adapter.collect_matched_model_access_groups(
+        model=model,
+        valid_token=valid_token,
+        team_object=team_object,
+        project_object=project_object,
+        llm_router=llm_router,
         prisma_client=prisma_client,
         user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+        team_membership=team_membership,
+        team_membership_loaded=team_membership_loaded,
     )
-    if registry is not None and not registry:
-        return ()
-
-    covering_groups: Final = _model_access_groups_serving_model(
-        model=model,
-        llm_router=llm_router,
-        team_id=valid_token.team_id,
-    )
-    budgeted_groups: Final = covering_groups if registry is None else covering_groups & registry
-    if not budgeted_groups:
-        return ()
-
-    granted: Final = frozenset(
-        granted_model
-        for granted_models in await _granted_model_lists(
-            valid_token=valid_token,
-            team_object=team_object,
-            project_object=project_object,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            proxy_logging_obj=proxy_logging_obj,
-            team_membership=team_membership,
-            team_membership_loaded=team_membership_loaded,
-        )
-        for granted_model in granted_models
-    )
-    return tuple(sorted(budgeted_groups & granted))
 
 
 async def stamp_matched_model_access_groups(
@@ -5296,34 +5299,20 @@ async def stamp_matched_model_access_groups(
     team_membership: LiteLLM_TeamMembership | None = None,
     team_membership_loaded: bool = False,
 ) -> tuple[str, ...]:
-    """Record the groups that authorized this request on its auth object, for the post-call spend
-    writer and the reservation counters, and hand them back for the budget check."""
-    if valid_token is None:
-        return ()
+    from litellm.proxy.auth import model_attribution_adapter
 
-    try:
-        matched: Final = await collect_matched_model_access_groups(
-            model=model,
-            valid_token=valid_token,
-            team_object=team_object,
-            project_object=project_object,
-            llm_router=llm_router,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            proxy_logging_obj=proxy_logging_obj,
-            team_membership=team_membership,
-            team_membership_loaded=team_membership_loaded,
-        )
-    except NativeAuthFailure:
-        raise
-    except Exception as e:  # noqa: BLE001  # fail-safe: attribution is spend telemetry, it must never break auth
-        verbose_proxy_logger.debug("model access group attribution failed: %s", e)
-        return ()
-    if not matched:
-        return ()
-    matched_groups: Final = list(matched)
-    valid_token.matched_model_access_groups = matched_groups  # rebind-ok: request-scoped carrier for the writer
-    return matched
+    return await model_attribution_adapter.stamp_matched_model_access_groups(
+        model=model,
+        valid_token=valid_token,
+        team_object=team_object,
+        project_object=project_object,
+        llm_router=llm_router,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+        team_membership=team_membership,
+        team_membership_loaded=team_membership_loaded,
+    )
 
 
 async def can_key_call_model(
@@ -6562,81 +6551,13 @@ async def virtual_key_max_budget_alert_check(
     proxy_logging_obj: ProxyLogging,
     user_obj: LiteLLM_UserTable | None = None,
 ) -> None:
-    """
-    Triggers a budget alert if the token has reached EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE
-    (default 80%) of its max budget.
-    This is a warning alert before the token actually exceeds the max budget.
+    from litellm.proxy.auth import budget_alert_adapter
 
-    """
-
-    if valid_token.max_budget is not None and valid_token.spend is not None and valid_token.spend > 0:
-        owner_email: Final = user_obj.user_email if user_obj else None
-        alert_email_config: Final[dict[str, list[str]] | None] = _merge_budget_alert_email_configs(
-            global_cfg=litellm.default_key_max_budget_alert_emails,
-            per_key_cfg=(valid_token.metadata or {}).get("max_budget_alert_emails"),
-        )
-
-        if isinstance(alert_email_config, dict) and alert_email_config:
-            # New path: only create task if spend has crossed the lowest threshold
-            min_pct: Final = min(
-                (int(k) for k in alert_email_config if k.isdigit()),
-                default=None,
-            )
-            if min_pct is None or valid_token.spend < valid_token.max_budget * (min_pct / 100.0):
-                return
-
-            call_info = CallInfo(
-                token=valid_token.token,
-                spend=valid_token.spend,
-                max_budget=valid_token.max_budget,
-                soft_budget=valid_token.soft_budget,
-                user_id=valid_token.user_id,
-                team_id=valid_token.team_id,
-                team_alias=valid_token.team_alias,
-                organization_id=valid_token.org_id,
-                user_email=owner_email,
-                key_alias=valid_token.key_alias,
-                event_group=Litellm_EntityType.KEY,
-                max_budget_alert_emails=alert_email_config,
-            )
-            asyncio.create_task(
-                proxy_logging_obj.budget_alerts(
-                    type="max_budget_alert",
-                    user_info=call_info,
-                )
-            )
-        else:
-            # Old path: existing single 80% threshold — completely unchanged
-            alert_threshold: Final = valid_token.max_budget * EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE
-
-            if valid_token.spend >= alert_threshold and valid_token.spend < valid_token.max_budget:
-                verbose_proxy_logger.debug(
-                    "Reached Max Budget Alert Threshold for token %s, spend %s, max_budget %s, alert_threshold %s",
-                    valid_token.token,
-                    valid_token.spend,
-                    valid_token.max_budget,
-                    alert_threshold,
-                )
-                call_info = CallInfo(
-                    token=valid_token.token,
-                    spend=valid_token.spend,
-                    max_budget=valid_token.max_budget,
-                    soft_budget=valid_token.soft_budget,
-                    user_id=valid_token.user_id,
-                    team_id=valid_token.team_id,
-                    team_alias=valid_token.team_alias,
-                    organization_id=valid_token.org_id,
-                    user_email=owner_email,
-                    key_alias=valid_token.key_alias,
-                    event_group=Litellm_EntityType.KEY,
-                )
-
-                asyncio.create_task(
-                    proxy_logging_obj.budget_alerts(
-                        type="max_budget_alert",
-                        user_info=call_info,
-                    )
-                )
+    return await budget_alert_adapter.virtual_key_max_budget_alert_check(
+        valid_token=valid_token,
+        proxy_logging_obj=proxy_logging_obj,
+        user_obj=user_obj,
+    )
 
 
 _virtual_key_max_budget_alert_check: Final = virtual_key_max_budget_alert_check
@@ -6677,27 +6598,19 @@ def team_member_max_budget_alert_check(
     spend: float,
     max_budget: float,
 ) -> None:
-    raw_config: Final = team_metadata.get(TEAM_MEMBER_MAX_BUDGET_ALERT_EMAILS_KEY) if team_metadata else None
-    alert_email_config: Final = _merge_budget_alert_email_configs(
-        global_cfg=None, per_key_cfg=_valid_alert_threshold_config(raw_config)
-    )
-    if not alert_email_config or spend <= 0:
-        return
-    min_pct: Final = min(int(pct) for pct in alert_email_config)
-    if spend < max_budget * (min_pct / 100.0):
-        return
-    call_info: Final = CallInfo(
-        spend=spend,
-        max_budget=max_budget,
-        user_id=user_id,
+    from litellm.proxy.auth import budget_alert_adapter
+
+    return budget_alert_adapter.team_member_max_budget_alert_check(
         team_id=team_id,
         team_alias=team_alias,
+        team_metadata=team_metadata,
         organization_id=organization_id,
+        user_id=user_id,
         user_email=user_email,
-        event_group=Litellm_EntityType.TEAM_MEMBER,
-        max_budget_alert_emails=alert_email_config,
+        proxy_logging_obj=proxy_logging_obj,
+        spend=spend,
+        max_budget=max_budget,
     )
-    asyncio.create_task(proxy_logging_obj.budget_alerts(type="max_budget_alert", user_info=call_info))
 
 
 _team_member_max_budget_alert_check: Final = team_member_max_budget_alert_check

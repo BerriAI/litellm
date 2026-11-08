@@ -207,7 +207,12 @@ fn first_usable(
         Effect::VetTeamMemberFallback {
             target: target.clone(),
         },
-        move |usable: bool| {
+        move |facts: crate::fallback_candidate::Facts| {
+            let crate::fallback_candidate::Decision::Complete { usable, .. } =
+                crate::fallback_candidate::decide(&facts)?
+            else {
+                return Err(Error::InvalidAnswer);
+            };
             if !usable {
                 return first_usable(rest, exceeded, found);
             }

@@ -101,7 +101,7 @@ _ANSWER_TYPES: Final = {
     "ReadTeamMemberModelBudgetScope": "TeamScope",
     "CheckTeamMemberModelBudget": "ModelBudgetData",
     "ReadTeamMemberFallbacks": "Targets",
-    "VetTeamMemberFallback": "Bool",
+    "VetTeamMemberFallback": "Candidate",
 }
 
 
@@ -197,6 +197,11 @@ def field_value(value: object, name: str) -> object:
 @native_boundary
 def encode_facts(value: object) -> Wire:
     return _Projection().encode(value)
+
+
+@native_boundary
+def expired(expires: datetime, now: datetime) -> bool:
+    return _native.request_auth_expired(encode_facts(expires), encode_facts(now))
 
 
 def public_type(kind: str) -> Callable[..., object]:
