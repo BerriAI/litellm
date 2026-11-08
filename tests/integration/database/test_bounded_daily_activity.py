@@ -1,15 +1,11 @@
-from collections.abc import Mapping
 from datetime import date, datetime, timedelta, timezone
 from hashlib import sha256
 from typing import Final
 from uuid import uuid4
 
-import psycopg
 import pytest
 from integration._support.actors import ManagementDatabase
 from integration._support.client import Gateway
-from psycopg import sql
-from pydantic import TypeAdapter
 
 from litellm.litellm_core_utils.ptu_pricing import PTU_COST_ATTRIBUTION_ENV_VAR
 from litellm.repositories.bounded_daily_activity import BoundedDailyActivityRepository
@@ -190,16 +186,8 @@ async def test_bounded_activity_routes_keep_exact_totals_and_scoped_permissions(
                 )
                 if include_today == "true":
                     assert bounded_today.json()["metadata"]["total_api_requests"] == 11
-            schemas: Final = TypeAdapter(tuple[Mapping[str, str], ...]).validate_python(
-                await repository.database.query_raw("SELECT current_schema() AS name")
-            )
-            assert gateway.database_url is not None
-            with psycopg.connect(gateway.database_url) as blocker:
-                blocker.execute(
-                    sql.SQL("LOCK TABLE {} IN ACCESS EXCLUSIVE MODE").format(
-                        sql.Identifier(schemas[0]["name"], "LiteLLM_DailyUserSpend")
-                    )
-                )
+            async with db.prisma.db.tx(timeout=timedelta(seconds=10)) as blocker:
+                await blocker.execute_raw('LOCK TABLE "LiteLLM_DailyUserSpend" IN ACCESS EXCLUSIVE MODE')
                 busy: Final = gateway.request("GET", path, params={**query, "bounded": "true"})
                 assert busy.status_code == 503 and busy.headers["Retry-After"] == "5"
             assert gateway.request("GET", path, params={**query, "bounded": "true"}).status_code == 200
