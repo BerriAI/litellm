@@ -103,9 +103,9 @@ function listResponse(query: URLSearchParams) {
   const emptyPage = { data: [], total: 0, limit: 25, offset };
   if (empty) return json(emptyPage);
   const next = { ...SPEND_ISSUE, id: "second-page", scope_label: "Second key", title: "Second key spend increased" };
-  let data = offset === 0 ? [SPEND_ISSUE, RETIREMENT_ISSUE] : [next];
+  const candidates = offset === 0 ? [SPEND_ISSUE, RETIREMENT_ISSUE] : [next];
   const family = query.get("family");
-  if (family) data = data.filter((issue) => issue.family === family);
+  const data = family ? candidates.filter((issue) => issue.family === family) : candidates;
   const page = { data, total: family ? data.length : 26, limit: 25, offset };
   return json(page);
 }
