@@ -2,12 +2,14 @@ import os
 import sys
 import time
 import webbrowser
-from collections.abc import Callable, Mapping, Sequence
-from typing import Any, Final, Protocol, TypeVar
+from collections.abc import Callable, Generator, Mapping, Sequence
+from contextlib import contextmanager
+from typing import Any, Final, NoReturn, Protocol, TypeVar
 from urllib.parse import urlencode
 
 import click
 import requests
+from filelock import Timeout
 from pydantic import ConfigDict, TypeAdapter
 from rich.console import Console
 from rich.table import Table
@@ -30,13 +32,15 @@ from litellm.litellm_core_utils.cli_keyring import (
 from litellm.litellm_core_utils.cli_token_utils import (
     CliTokenRecord,
     CredentialNotCleared,
+    CredentialNotLoaded,
     CredentialNotRecorded,
     CredentialNotSaved,
     SecretSave,
     clear_cli_token,
+    cli_token_lock,
     get_cli_token_file_path,
     is_cli_token_fresh,
-    load_cli_token,
+    read_cli_token,
     save_cli_token,
 )
 
@@ -225,13 +229,14 @@ def context_secret_vault(ctx: click.Context) -> SecretVault:
 
 
 def load_token(*, vault: SecretVault = SYSTEM_KEYRING) -> Mapping[str, object] | None:
-    """The stored credential as a plain mapping, with the secret resolved out of the vault.
-
-    The PKCE renewal and revocation helpers read records by field name, so this is the
-    shape they get; the keychain split lives underneath, in `load_cli_token`.
-    """
-    record: Final = load_cli_token(vault=vault)
-    return None if record is None else record.model_dump(exclude_none=True)
+    """Read a stored credential, reporting lock failures separately from a missing login."""
+    match read_cli_token(vault=vault):
+        case CliTokenRecord() as record:
+            return record.model_dump(exclude_none=True)
+        case CredentialNotLoaded(detail=detail):
+            _raise_credential_error(detail)
+        case None:
+            return None
 
 
 def save_token(record: CliTokenData, *, vault: SecretVault = SYSTEM_KEYRING) -> SecretSave:
@@ -286,11 +291,16 @@ def get_stored_api_key(
         requests.Session(),
         reload=_renewal_reader(vault),
         warn=_warn,
+        lock_failure=_raise_credential_error,
     )
 
 
 def _warn(message: str) -> None:
     click.echo(message, err=True)
+
+
+def _raise_credential_error(message: str) -> NoReturn:
+    raise click.ClickException(message)
 
 
 def _login_command(renews: bool) -> str:
@@ -852,6 +862,22 @@ def _finish_login(base_url: str, api_key: str, config_claude: bool, stored: Secr
     show_commands()
 
 
+@contextmanager
+def _locked_credentials() -> Generator[None, None, None]:
+    try:
+        lock: Final = cli_token_lock()
+        lock.acquire()
+    except (OSError, Timeout) as error:
+        raise click.ClickException(
+            "Could not lock the CLI credential store. No credential operation was started"
+        ) from error
+    try:
+        yield
+    finally:
+        lock.release()
+
+
+@_locked_credentials()
 def _replace_stored_token(record: CliTokenData, http: Http, vault: SecretVault) -> SecretSave:
     previous: Final = load_token(vault=vault)
     stored: Final = save_token(record, vault=vault)
@@ -989,6 +1015,7 @@ def login(ctx: click.Context, config_claude: bool, pkce: bool | None) -> None:
 
 @click.command(name="logout")
 @click.pass_context
+@_locked_credentials()
 def logout(ctx: click.Context):
     """Logout and clear stored authentication"""
     vault: Final = context_secret_vault(ctx)
@@ -1067,8 +1094,10 @@ def print_token(ctx: click.Context):
         click.echo(keychain_unreadable_notice(vault), err=True)
         sys.exit(1)
 
+    stored_key: Final = token_data.get("key")
+    fresh_stored_key: Final = stored_key if isinstance(stored_key, str) and is_cli_token_fresh(token_data) else None
     api_key: Final = (
-        ctx_obj.get("api_key")
+        ctx_obj.get("api_key") or fresh_stored_key
         if issued_for_this_server and ctx_obj.get("api_key_from_token_file")
         else fresh_api_key(
             token_data,
@@ -1076,6 +1105,7 @@ def print_token(ctx: click.Context):
             requests.Session(),
             reload=_renewal_reader(vault),
             warn=_warn,
+            lock_failure=_raise_credential_error,
         )
     )
     if not api_key:
