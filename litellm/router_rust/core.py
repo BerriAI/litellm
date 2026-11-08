@@ -4180,28 +4180,40 @@ class _Selection:
                     raise RuntimeError(f"router-core returned an unknown step {other!r}")
 
 
+def _refused_pick_traceback(error: BaseException) -> str:
+    import traceback
+
+    return "Traceback (most recent call last):\n" + "".join(
+        traceback.format_exception(type(error), error, error.__traceback__)
+    )
+
+
 def _log_refused_pick(request: Mapping[str, object], error: BaseException) -> None:
     """A refused pick is logged to the request's logging object (`_async_get_available_deployment`)."""
     dispatch: Final[object] = getattr(request.get("litellm_logging_obj"), "dispatch_failure_handlers", None)
     if not callable(dispatch):
         return
-    import asyncio
-    import traceback
-
-    trace: Final = "Traceback (most recent call last):\n" + "".join(
-        traceback.format_exception(type(error), error, error.__traceback__)
+    pending: Final[object] = dispatch(
+        exception=error, traceback_exception=_refused_pick_traceback(error), prefer_async_handlers=True
     )
-    pending: Final[object] = dispatch(exception=error, traceback_exception=trace, prefer_async_handlers=True)
     if inspect.isawaitable(pending):
         _ = asyncio.ensure_future(pending)
 
 
-async def _log_masked_refused_pick(request: Mapping[str, object], error: BaseException) -> None:
-    mask: Final[object] = getattr(request.get("litellm_logging_obj"), "async_mask_failure_log_request", None)
-    masking: Final[object] = mask(on_cancelled=partial(_log_refused_pick, request, error)) if callable(mask) else None
-    if inspect.isawaitable(masking):
-        await masking
-    _log_refused_pick(request, error)
+async def _log_refused_pick_before_fallback(request: Mapping[str, object], error: Exception) -> None:
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    logging_obj: Final = request.get("litellm_logging_obj")
+    if not isinstance(logging_obj, Logging) or not logging_obj.masks_failure_log:
+        _log_refused_pick(request, error)
+        return
+    trace: Final = _refused_pick_traceback(error)
+    log_sync_failure: Final = partial(logging_obj.failure_handler, error, trace, for_async_request=True)
+    await logging_obj.async_mask_failure_log_request(
+        on_cancelled=log_sync_failure, on_cancelled_async=partial(logging_obj.async_failure_handler, error, trace)
+    )
+    log_sync_failure()
+    await logging_obj.async_failure_handler(error, trace)
 
 
 def _log_refused_image_pick(request: Mapping[str, object], error: BaseException) -> None:
@@ -5228,7 +5240,7 @@ class _Driver:
                     except Exception as refused:  # noqa: BLE001  # handed to the Rust call loop as the attempt's failure
                         # Only `_acompletion` hands the check its logging object.
                         if self._plan.kind == "chat":
-                            await _log_masked_refused_pick(self._request, refused)
+                            await _log_refused_pick_before_fallback(self._request, refused)
                         return await self._refused(step, deployment, call, refused)
                 first_to_log: Final = not failure_already_logged(call.kwargs, "async_failure")
                 logs_failure = first_to_log  # rebind-ok: whether a failure here is this attempt's to log

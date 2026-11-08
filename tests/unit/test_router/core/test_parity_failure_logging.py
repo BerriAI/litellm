@@ -8,7 +8,6 @@ routed response, typed ``model_info`` read back, ``routing_strategy_args`` as a 
 """
 
 import asyncio
-import contextlib
 from collections.abc import Mapping
 from datetime import datetime, time, timezone
 from typing import ClassVar, Final
@@ -345,52 +344,57 @@ async def test_a_refused_pre_call_check_is_dispatched_on_chat_only(make_core: Ma
     assert embedding_logging.dispatched == []
 
 
-class _MaskerSlowerThanTheFallback(CustomGuardrail):
+class _PromptMasker(CustomGuardrail):
     masks_logged_request: ClassVar[bool] = True
 
-    def __init__(self, fallback_ran: asyncio.Event) -> None:
-        super().__init__(guardrail_name="slow-masker", event_hook=GuardrailEventHooks.logging_only, default_on=True)
-        self._fallback_ran: Final = fallback_ran
+    def __init__(self) -> None:
+        super().__init__(guardrail_name="prompt-masker", event_hook=GuardrailEventHooks.logging_only, default_on=True)
 
     async def async_logging_hook(
         self, kwargs: dict[str, object], result: object, call_type: str
     ) -> tuple[dict[str, object], object]:
-        with contextlib.suppress(asyncio.TimeoutError):
-            await asyncio.wait_for(self._fallback_ran.wait(), timeout=0.2)
-        return kwargs, result
+        await asyncio.sleep(0)
+        return {**kwargs, "messages": [{"role": "user", "content": "<MASKED>"}]}, result
 
 
-class _FailureModelIds(CustomLogger):
+def _model_and_prompt(kwargs: Mapping[str, object]) -> tuple[object, object]:
+    payload: Final = kwargs["standard_logging_object"]
+    assert isinstance(payload, Mapping)
+    return payload["model_id"], payload["messages"]
+
+
+class _AsyncFailureLogs(CustomLogger):
     def __init__(self) -> None:
         super().__init__()
-        self.logged: Final[list[object]] = []  # mutable-ok: each failure log's model id, in order
+        self.logged: Final[list[tuple[object, object]]] = []  # mutable-ok: each failure log, in order
 
     async def async_log_failure_event(
         self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
     ) -> None:
-        payload: Final = kwargs["standard_logging_object"]
-        assert isinstance(payload, Mapping)
-        self.logged.append(payload["model_id"])
+        self.logged.append(_model_and_prompt(kwargs))
 
 
-async def _until_logged(failures: _FailureModelIds) -> None:
-    while not failures.logged:
+async def _until_logged(*logs: list[tuple[object, object]]) -> None:
+    while not all(logs):
         await asyncio.sleep(0.01)
 
 
 @pytest.mark.asyncio
-async def test_a_refused_picks_failure_log_names_it_while_a_masking_guardrail_outlasts_the_fallback(
+async def test_a_refused_picks_failure_log_is_masked_and_names_it_although_the_fallback_reuses_the_logging_object(
     make_core: MakeCore, host: ScriptedHost
 ) -> None:
     class RefuseA1(CustomLogger):
         async def async_pre_call_check(self, deployment: dict, parent_otel_span: object) -> dict | None:  # pyright: ignore[reportIncompatibleMethodOverride]
             if deployment["model_info"]["id"] == "a1":
                 raise rate_limit(message="gate says no")
-            await asyncio.sleep(0)
             return None
 
-    fallback_ran: Final = asyncio.Event()
-    failures: Final = _FailureModelIds()
+    async_logs: Final = _AsyncFailureLogs()
+    sync_logs: Final[list[tuple[object, object]]] = []  # mutable-ok: each failure log, in order
+
+    def sync_failure_log(kwargs: dict[str, object], *_: object) -> None:
+        sync_logs.append(_model_and_prompt(kwargs))
+
     logging_obj: Final = Logging(
         model="a",
         messages=list(MESSAGES),
@@ -399,7 +403,8 @@ async def test_a_refused_picks_failure_log_names_it_while_a_masking_guardrail_ou
         start_time=datetime.now(tz=timezone.utc),
         litellm_call_id="c",
         function_id="f",
-        dynamic_async_failure_callbacks=[_MaskerSlowerThanTheFallback(fallback_ran), failures],
+        dynamic_failure_callbacks=[sync_failure_log],
+        dynamic_async_failure_callbacks=[_PromptMasker(), async_logs],
     )
     metadata: Final[dict[str, object]] = {}  # mutable-ok: the caller's own dict
     logging_obj.update_environment_variables(
@@ -410,7 +415,6 @@ async def test_a_refused_picks_failure_log_names_it_while_a_masking_guardrail_ou
         logging_obj.update_environment_variables(
             model="b", user=None, optional_params={}, litellm_params={"metadata": request["metadata"]}
         )
-        fallback_ran.set()
 
     host.lists["callbacks"].append(RefuseA1())
     host.answer("openai/b1", fallback_takes_over_the_logging_object)
@@ -419,9 +423,11 @@ async def test_a_refused_picks_failure_log_names_it_while_a_masking_guardrail_ou
     )
 
     _ = await complete(core, "a", litellm_logging_obj=logging_obj, metadata=metadata)
-    await asyncio.wait_for(_until_logged(failures), timeout=5)
+    await asyncio.wait_for(_until_logged(async_logs.logged, sync_logs), timeout=5)
 
-    assert failures.logged == ["a1"]
+    masked_refusal: Final = ("a1", [{"role": "user", "content": "<MASKED>"}])
+    assert async_logs.logged == [masked_refusal]
+    assert sync_logs == [masked_refusal]
 
 
 # --- provider failures ----------------------------------------------------------------------------
