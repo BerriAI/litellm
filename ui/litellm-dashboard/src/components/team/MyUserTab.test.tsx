@@ -70,7 +70,9 @@ describe("MyUserTab", () => {
     renderWithProviders(<MyUserTab teamId="team-1" />);
 
     expect(screen.getByText("Current Period Spend (USD)")).toBeInTheDocument();
-    expect(screen.getByText("Jun 15 - Jul 15, 2026 UTC (resets Jul 15, 2026 12:00 UTC)")).toBeInTheDocument();
+    expect(
+      screen.getByText("Jun 15, 2026 12:00 - Jul 15, 2026 12:00 UTC (resets Jul 15, 2026 12:00 UTC)"),
+    ).toBeInTheDocument();
     expect(screen.queryByText(/cycle/i)).not.toBeInTheDocument();
   });
 });

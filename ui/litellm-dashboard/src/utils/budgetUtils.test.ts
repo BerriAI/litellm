@@ -79,9 +79,9 @@ describe("describeBudgetResetSchedule", () => {
   });
 
   it("subtracts the exact duration for day and week windows", () => {
-    expect(describeBudgetResetSchedule("7d", utcIso(2026, 6, 15)).period).toBe("Jul 8 - Jul 15, 2026 UTC");
-    expect(describeBudgetResetSchedule("2w", utcIso(2026, 6, 15)).period).toBe("Jul 1 - Jul 15, 2026 UTC");
-    expect(describeBudgetResetSchedule("weekly", utcIso(2026, 6, 15)).period).toBe("Jul 8 - Jul 15, 2026 UTC");
+    expect(describeBudgetResetSchedule("7d", utcIso(2026, 6, 15, 0)).period).toBe("Jul 8 - Jul 15, 2026 UTC");
+    expect(describeBudgetResetSchedule("2w", utcIso(2026, 6, 15, 0)).period).toBe("Jul 1 - Jul 15, 2026 UTC");
+    expect(describeBudgetResetSchedule("weekly", utcIso(2026, 6, 15, 0)).period).toBe("Jul 8 - Jul 15, 2026 UTC");
   });
 
   it("shows the proxy's UTC month window to a viewer whose local date is a day behind", () => {
@@ -92,11 +92,20 @@ describe("describeBudgetResetSchedule", () => {
   });
 
   it("clamps month windows to the last day of a shorter month", () => {
-    expect(describeBudgetResetSchedule("1mo", utcIso(2026, 2, 31)).period).toBe("Feb 28 - Mar 31, 2026 UTC");
+    expect(describeBudgetResetSchedule("1mo", utcIso(2026, 2, 31, 0)).period).toBe("Feb 28 - Mar 31, 2026 UTC");
   });
 
   it("spells out both years when the period crosses a year boundary", () => {
-    expect(describeBudgetResetSchedule("30d", utcIso(2027, 0, 10)).period).toBe("Dec 10, 2026 - Jan 10, 2027 UTC");
+    expect(describeBudgetResetSchedule("30d", utcIso(2027, 0, 10, 0)).period).toBe("Dec 10, 2026 - Jan 10, 2027 UTC");
+  });
+
+  it("keeps the clock times when the reset is not at midnight UTC, as on a proxy set to Asia/Kolkata", () => {
+    expect(describeBudgetResetSchedule("1d", "2026-11-08T18:30:00Z").period).toBe(
+      "Nov 7, 2026 18:30 - Nov 8, 2026 18:30 UTC",
+    );
+    expect(describeBudgetResetSchedule("30d", "2026-11-30T18:30:00Z").period).toBe(
+      "Oct 30, 2026 18:30 - Nov 30, 2026 18:30 UTC",
+    );
   });
 
   it("keeps both clock times when an hourly window crosses midnight", () => {
@@ -114,7 +123,7 @@ describe("describeBudgetResetSchedule", () => {
   });
 
   it("falls back to a one day window for a duration the proxy would not recognise", () => {
-    expect(describeBudgetResetSchedule("fortnightly", utcIso(2026, 6, 15)).period).toBe("Jul 14 - Jul 15, 2026 UTC");
+    expect(describeBudgetResetSchedule("fortnightly", utcIso(2026, 6, 15, 0)).period).toBe("Jul 14 - Jul 15, 2026 UTC");
   });
 
   it("shows no period when the reset date is unparseable", () => {

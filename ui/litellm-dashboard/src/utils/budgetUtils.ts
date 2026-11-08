@@ -64,9 +64,11 @@ export function getBudgetPeriodStart(budgetDuration: string, resetAt: Dayjs): Da
   }
 }
 
+const isMidnight = (instant: Dayjs): boolean => instant.isSame(instant.startOf("day"));
+
 export function formatBudgetPeriod(start: Dayjs, end: Dayjs): string {
   const windowSeconds = end.diff(start, "second");
-  if (windowSeconds < 24 * 60 * 60) {
+  if (windowSeconds < 24 * 60 * 60 || !isMidnight(start) || !isMidnight(end)) {
     const time = windowSeconds < 60 ? "HH:mm:ss" : "HH:mm";
     const endFormat = start.isSame(end, "day") ? time : `MMM D, YYYY ${time}`;
     return `${start.format(`MMM D, YYYY ${time}`)} - ${end.format(endFormat)}`;
