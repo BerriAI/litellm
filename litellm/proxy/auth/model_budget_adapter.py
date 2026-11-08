@@ -40,7 +40,7 @@ def _entry(name: str, raw: object) -> ModelBudgetEntry:
     try:
         config: Final = BudgetConfig.model_validate(raw)
         seconds: Final = duration_in_seconds(config.budget_duration) if config.budget_duration is not None else None
-    except Exception:
+    except Exception:  # noqa: BLE001  # preserve malformed entry fallthrough
         return ModelBudgetEntry(name, None, None, None)
     return ModelBudgetEntry(name, config.max_budget, config.budget_duration, seconds)
 

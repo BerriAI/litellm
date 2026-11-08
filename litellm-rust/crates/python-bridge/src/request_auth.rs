@@ -213,3 +213,15 @@ pub(crate) fn request_auth_scheme_credential(value: &str) -> Option<String> {
 pub(crate) fn request_auth_litellm_header_token(value: &str) -> String {
     credential::litellm_header_token(value)
 }
+
+#[pyfunction]
+pub(crate) fn request_auth_budget_exemption(
+    py: Python<'_>,
+    facts: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    let facts: core::budget_pricing::ExemptionFacts = from_py(facts)?;
+    to_py(
+        py,
+        &py.detach(move || core::budget_pricing::exemption(&facts)),
+    )
+}
