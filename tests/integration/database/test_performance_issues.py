@@ -935,6 +935,21 @@ async def test_opt_in_controls_performance_without_stopping_model_retirements(db
         assert (await store.list_issues(kind="performance")).total == 0
         assert (await store.list_issues(kind="model_deprecation")).total == 1
         assert (await store.performance_monitoring()).incidents_used == 0
+        expired_id: Final = "retention-fixture"
+        await prisma.writer_db.query_raw(
+            """INSERT INTO "LiteLLM_Issue"
+                (id,cohort_key,kind,family,status,active,scope_type,scope_id,
+                 first_seen,last_seen,updated_at,record)
+            SELECT $1,$1,kind,family,'resolved',false,scope_type,scope_id,
+                first_seen,last_seen,TIMESTAMP '2000-01-01',
+                record || jsonb_build_object('id',$1::text,'cohort_key',$1::text)
+            FROM "LiteLLM_Issue" WHERE kind='model_deprecation' LIMIT 1 RETURNING id""",
+            expired_id,
+        )
+        assert await store.get_issue(expired_id) is not None
+        await job._run(_NOW + timedelta(minutes=30))
+        assert await store.get_issue(expired_id) is None
+        assert (await store.list_issues(kind="model_deprecation")).total == 1
         await store.set_performance_monitoring(True)
         await job._run(_NOW + timedelta(hours=1))
         performance: Final = await store.list_issues(kind="performance")

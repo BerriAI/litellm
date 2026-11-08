@@ -10,6 +10,7 @@ from typing import (
 
 from pydantic import BaseModel, TypeAdapter
 
+from litellm._logging import verbose_proxy_logger
 from litellm.models.team import LiteLLM_TeamTable
 from litellm.proxy.common_utils.model_deprecation import deprecation_alert_state_key
 from litellm.repositories.usage_alerts import AlertDatabase, UsageAlertsRepository
@@ -141,7 +142,10 @@ class IssuesRepository:
 
     async def publish_performance_issues(self, inputs: tuple[IssueInput, ...], enterprise: bool) -> tuple[Issue, ...]:
         if len(inputs) > 10 or any(item.kind != "performance" for item in inputs):
-            raise ValueError("Publish at most ten Performance alerts at a time")
+            verbose_proxy_logger.warning(
+                "Skipped invalid Performance alert batch, expected at most ten Performance alerts"
+            )
+            return ()
         return await self._upsert_issues(inputs, False, None, monitoring=True, enterprise=enterprise)
 
     async def upsert_issues(

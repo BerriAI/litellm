@@ -232,6 +232,9 @@ class PerformanceIssueProjector:
     async def monitoring(self) -> PerformanceMonitoring:
         return await self._store.performance_monitoring(self._enterprise_access())
 
+    async def prune(self) -> None:
+        await self._store.prune(limit=10)
+
     async def run_pending(
         self, now: datetime, work: UsageAlertProjectionWork, rules: UsageAlertsRepository, deadline: float
     ) -> bool:
@@ -250,7 +253,6 @@ class PerformanceIssueProjector:
             if (next_position := await self._projection_page(position, work, observed_at)) is None:
                 await self._store.complete_projection(work.day, position.version)
                 await self.notify(deadline)
-                await self._store.prune()
                 if position.version != work.version:
                     await rules.save_projection_cursor(UsageAlertProjectionCursor(version=work.version, day=work.day))
                     return False

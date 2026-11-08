@@ -205,6 +205,8 @@ class UsageAlertJob:
             await self._work(now, deadline)
 
     async def _work(self, now: datetime, deadline: float) -> None:
+        await self._performance_projection.prune()
+        await self._store.prune(limit=10)
         if self._deprecation_projection is not None:
             await self._deprecation_projection(now)
         monitoring: Final = await self._performance_projection.monitoring()
@@ -223,7 +225,6 @@ class UsageAlertJob:
             await self._performance_projection.notify(deadline)
         elif await self._performance_projection.run_pending(now, work, self._store, deadline):
             await self._store.finish_projection_work(work)
-        await self._store.prune()
 
     @staticmethod
     def _position(rule: UsageAlertRule, target: date) -> UsageAlertProgress:

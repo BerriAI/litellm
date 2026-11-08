@@ -1406,6 +1406,12 @@ async def test_performance_trial_is_atomic_and_survives_restart_and_retention(db
         assert not (await store.performance_monitoring()).enabled
         assert await store.publish_performance_issues(inputs[:4], enterprise=False) == ()
         assert (await store.set_performance_monitoring(True)).can_detect
+        assert await store.publish_performance_issues(inputs, enterprise=False) == ()
+        assert await store.publish_performance_issues(
+            (inputs[0].model_copy(update={"kind": "model_deprecation"}),), enterprise=False
+        ) == ()
+        assert (await store.performance_monitoring()).incidents_used == 0
+        assert await store.get_issue(inputs[0].id) is None
         batches: Final = await asyncio.gather(
             store.publish_performance_issues(inputs[:4], enterprise=False),
             store.publish_performance_issues(inputs[4:8], enterprise=False),
