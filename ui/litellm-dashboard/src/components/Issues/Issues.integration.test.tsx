@@ -29,6 +29,7 @@ let detail: Issue;
 let refreshBarrier: Promise<void> | undefined;
 let holdReads = false;
 let failList = false;
+let byteLimitedPage = false;
 let failActivity = false;
 let staleStatus = false;
 let empty = false;
@@ -79,6 +80,14 @@ function activity() {
 function listResponse(query: URLSearchParams) {
   if (failList) return json({ detail: "Unavailable" }, 503);
   const offset = Number(query.get("offset") ?? 0);
+  if (byteLimitedPage) {
+    const data = Array.from({ length: Math.min(2, 6 - offset) }, (_, index) => ({
+      ...SPEND_ISSUE,
+      id: `wide-${offset + index}`,
+      scope_label: `Wide key ${offset + index}`,
+    }));
+    return json({ data, total: 6, limit: 2, offset });
+  }
   const emptyPage = { data: [], total: 0, limit: 25, offset };
   if (empty) return json(emptyPage);
   const next = { ...SPEND_ISSUE, id: "second-page", scope_label: "Second key", title: "Second key spend increased" };
@@ -109,6 +118,7 @@ describe("unified issue investigations", () => {
     refreshBarrier = undefined;
     holdReads = false;
     failList = false;
+    byteLimitedPage = false;
     failActivity = false;
     staleStatus = false;
     empty = false;
@@ -170,6 +180,21 @@ describe("unified issue investigations", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+  });
+
+  it("adapts pagination to the server byte budget without skipping alerts", async () => {
+    byteLimitedPage = true;
+    renderWithProviders(<IssuesInbox />);
+    await screen.findByRole("heading", { name: /Wide key 0/ });
+    await waitFor(() =>
+      expect(calls.some((call) => call.path === "/issues" && call.query.get("limit") === "2")).toBe(true),
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Go to next page" }));
+    await screen.findByRole("heading", { name: /Wide key 2/ });
+    await userEvent.click(screen.getByRole("button", { name: "Go to next page" }));
+    await screen.findByRole("heading", { name: /Wide key 4/ });
+    expect(screen.getByRole("button", { name: "Go to next page" })).toBeDisabled();
+    expect(calls.some((call) => call.path === "/issues" && call.query.get("offset") === "4")).toBe(true);
   });
 
   it("shows retirement and key spend in one server-paginated inbox with issue destinations", async () => {

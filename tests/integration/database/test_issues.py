@@ -4,6 +4,7 @@ from collections.abc import AsyncGenerator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta, timezone
 from hashlib import sha256
+from itertools import chain
 from typing import Final, cast  # noqa: TID251  # Generated Prisma query_raw has narrower overloads
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from uuid import uuid4
@@ -97,6 +98,40 @@ async def _remove_issues(db: ManagementDatabase, ids: tuple[str, ...]) -> None:
     await _query(db, 'DELETE FROM "LiteLLM_IssueDelivery" WHERE issue_id=ANY($1::text[]) RETURNING id', list(ids))
     await _query(db, 'DELETE FROM "LiteLLM_IssueSignal" WHERE issue_id=ANY($1::text[]) RETURNING source_id', list(ids))
     await _query(db, 'DELETE FROM "LiteLLM_Issue" WHERE id=ANY($1::text[]) RETURNING id', list(ids))
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_issue_pages_bound_payload_bytes_without_losing_details_or_pagination(db: ManagementDatabase) -> None:
+    store: Final = IssuesRepository.from_prisma(db.prisma)
+    owner: Final = "page-budget-" + uuid4().hex
+    pairs: Final = tuple(
+        IssueModelPair(provider=owner, model=str(index).zfill(4) + "\U0001f680" * 1020) for index in range(100)
+    )
+    cohort: Final = IssueCohort(scope_type="provider", scope_id=owner, model_pairs=pairs)
+    inputs: Final = tuple(_issue(cohort) for _ in range(6))
+    identifiers: Final = tuple(item.id for item in inputs)
+    try:
+        await store.upsert_issues(inputs)
+        first: Final = await store.list_issues(scope_type="provider", scope_id=owner, limit=100)
+        assert 0 < len(first.data) < len(inputs)
+        assert len(first.model_dump_json().encode()) < 2 * 1048576
+        assert first.limit == len(first.data) and first.total == len(inputs)
+        pages: Final = tuple(
+            [
+                await store.list_issues(scope_type="provider", scope_id=owner, limit=first.limit, offset=offset)
+                for offset in range(0, len(inputs), first.limit)
+            ]
+        )
+        seen: Final = tuple(chain.from_iterable(tuple(item.id for item in page.data) for page in pages))
+        assert len(seen) == len(set(seen)) == len(inputs)
+        assert set(seen) == set(identifiers)
+        for page in pages:
+            assert all(item.cohort.model_pairs == pairs for item in page.data)
+            assert len(page.model_dump_json().encode()) < 2 * 1048576
+        detail: Final = await store.get_issue(identifiers[0])
+        assert detail is not None and detail.cohort == cohort
+    finally:
+        await _remove_issues(db, identifiers)
 
 
 @pytest.mark.asyncio(loop_scope="session")

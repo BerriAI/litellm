@@ -152,7 +152,7 @@ class Issue(IssueInput, frozen=True):
 class IssueList(BaseModel, frozen=True):
     data: tuple[Issue, ...]
     total: int
-    limit: int
+    limit: int = Field(description="Effective page size, reduced for large records. Continue at offset + limit.")
     offset: int
 
 
