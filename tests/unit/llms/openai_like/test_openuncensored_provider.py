@@ -153,3 +153,15 @@ def test_openuncensored_model_missing_from_cost_map_uses_provider_defaults() -> 
 
     assert supports_function_calling("openuncensored/a-model-not-in-the-cost-map") is True
     assert supports_reasoning("openuncensored/a-model-not-in-the-cost-map") is True
+
+
+def test_openuncensored_never_sends_the_openai_key(monkeypatch: pytest.MonkeyPatch, local_model_cost_map: None) -> None:
+    """Without an Open Uncensored key, the call fails instead of falling back to OPENAI_API_KEY."""
+    monkeypatch.delenv("OPENUNCENSORED_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "fake-openai-key-must-not-leak")
+    monkeypatch.setenv("OPENAI_ORGANIZATION", "org-must-not-leak")
+    with respx.mock(assert_all_called=False) as upstream:
+        route: Final = upstream.post(f"{_API_BASE}/chat/completions").respond(200, json={})
+        with pytest.raises(litellm.AuthenticationError, match="OPENUNCENSORED_API_KEY"):
+            litellm.completion(model=_MODEL, messages=[{"role": "user", "content": "hi"}])
+    assert not route.called
