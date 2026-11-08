@@ -8810,6 +8810,7 @@ def test_validate_tool_choice_cursor_format():
         {"type": "function"},
         {"name": "lookup_fruit"},
         {"type": "web_search_tool"},
+        {"type": ["web_search"]},
     ],
 )
 def test_validate_tool_choice_invalid_dict_is_a_400(tool_choice):

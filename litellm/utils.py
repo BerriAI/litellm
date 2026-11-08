@@ -9758,9 +9758,12 @@ def validate_chat_completion_tool_choice(
             )
 
         # Standard OpenAI format: {"type": "function", "function": {...}}
+        forces_hosted_tool: Final[bool] = (
+            isinstance(tool_choice_type, str) and tool_choice_type in HOSTED_TOOL_CHOICE_TYPES
+        )
         if (
             tool_choice_type != "allowed_tools"
-            and tool_choice_type not in HOSTED_TOOL_CHOICE_TYPES
+            and not forces_hosted_tool
             and (tool_choice_type is None or tool_choice.get("function") is None)
         ):
             raise BadRequestError(
