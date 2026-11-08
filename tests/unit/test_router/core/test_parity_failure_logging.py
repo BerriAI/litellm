@@ -8,15 +8,17 @@ routed response, typed ``model_info`` read back, ``routing_strategy_args`` as a 
 """
 
 import asyncio
+import contextlib
 from collections.abc import Mapping
 from datetime import datetime, time, timezone
-from typing import Final
+from typing import ClassVar, Final
 
 import pytest
 from pydantic_core import to_jsonable_python
 
 import litellm
 from litellm.constants import PROXY_REJECTED_BEFORE_ROUTING_KEY
+from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.proxy.spend_tracking.spend_tracking_utils import (
@@ -24,6 +26,7 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (
 )
 from litellm.router_api import ChangeSet
 from litellm.router_core import RouterCore
+from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.router import AllowedFailsPolicy, RouterRateLimitError
 from tests.unit.test_router.core.fallbacks_helpers import (
     MESSAGES,
@@ -340,6 +343,85 @@ async def test_a_refused_pre_call_check_is_dispatched_on_chat_only(make_core: Ma
         await core.aembedding(model="a", input="hi", litellm_logging_obj=embedding_logging)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]  # an endpoint
     await _let_tasks_run()
     assert embedding_logging.dispatched == []
+
+
+class _MaskerSlowerThanTheFallback(CustomGuardrail):
+    masks_logged_request: ClassVar[bool] = True
+
+    def __init__(self, fallback_ran: asyncio.Event) -> None:
+        super().__init__(guardrail_name="slow-masker", event_hook=GuardrailEventHooks.logging_only, default_on=True)
+        self._fallback_ran: Final = fallback_ran
+
+    async def async_logging_hook(
+        self, kwargs: dict[str, object], result: object, call_type: str
+    ) -> tuple[dict[str, object], object]:
+        with contextlib.suppress(asyncio.TimeoutError):
+            await asyncio.wait_for(self._fallback_ran.wait(), timeout=0.2)
+        return kwargs, result
+
+
+class _FailureModelIds(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.logged: Final[list[object]] = []  # mutable-ok: each failure log's model id, in order
+
+    async def async_log_failure_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        payload: Final = kwargs["standard_logging_object"]
+        assert isinstance(payload, Mapping)
+        self.logged.append(payload["model_id"])
+
+
+async def _until_logged(failures: _FailureModelIds) -> None:
+    while not failures.logged:
+        await asyncio.sleep(0.01)
+
+
+@pytest.mark.asyncio
+async def test_a_refused_picks_failure_log_names_it_while_a_masking_guardrail_outlasts_the_fallback(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    class RefuseA1(CustomLogger):
+        async def async_pre_call_check(self, deployment: dict, parent_otel_span: object) -> dict | None:  # pyright: ignore[reportIncompatibleMethodOverride]
+            if deployment["model_info"]["id"] == "a1":
+                raise rate_limit(message="gate says no")
+            await asyncio.sleep(0)
+            return None
+
+    fallback_ran: Final = asyncio.Event()
+    failures: Final = _FailureModelIds()
+    logging_obj: Final = Logging(
+        model="a",
+        messages=list(MESSAGES),
+        stream=False,
+        call_type="acompletion",
+        start_time=datetime.now(tz=timezone.utc),
+        litellm_call_id="c",
+        function_id="f",
+        dynamic_async_failure_callbacks=[_MaskerSlowerThanTheFallback(fallback_ran), failures],
+    )
+    metadata: Final[dict[str, object]] = {}  # mutable-ok: the caller's own dict
+    logging_obj.update_environment_variables(
+        model="a", user=None, optional_params={}, litellm_params={"metadata": metadata}
+    )
+
+    def fallback_takes_over_the_logging_object(**request: object) -> None:  # kwargs-ok: the scripted request
+        logging_obj.update_environment_variables(
+            model="b", user=None, optional_params={}, litellm_params={"metadata": request["metadata"]}
+        )
+        fallback_ran.set()
+
+    host.lists["callbacks"].append(RefuseA1())
+    host.answer("openai/b1", fallback_takes_over_the_logging_object)
+    core: Final = make_core(
+        model_list=[deployment("a", "a1"), deployment("b", "b1")], num_retries=0, fallbacks=[{"a": ["b"]}]
+    )
+
+    _ = await complete(core, "a", litellm_logging_obj=logging_obj, metadata=metadata)
+    await asyncio.wait_for(_until_logged(failures), timeout=5)
+
+    assert failures.logged == ["a1"]
 
 
 # --- provider failures ----------------------------------------------------------------------------

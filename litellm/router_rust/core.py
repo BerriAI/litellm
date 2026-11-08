@@ -4196,6 +4196,14 @@ def _log_refused_pick(request: Mapping[str, object], error: BaseException) -> No
         _ = asyncio.ensure_future(pending)
 
 
+async def _log_masked_refused_pick(request: Mapping[str, object], error: BaseException) -> None:
+    mask: Final[object] = getattr(request.get("litellm_logging_obj"), "async_mask_failure_log_request", None)
+    masking: Final[object] = mask(on_cancelled=partial(_log_refused_pick, request, error)) if callable(mask) else None
+    if inspect.isawaitable(masking):
+        await masking
+    _log_refused_pick(request, error)
+
+
 def _log_refused_image_pick(request: Mapping[str, object], error: BaseException) -> None:
     """``_aimage_generation``'s refused pick, for a request with no logging object of its own."""
     from litellm._uuid import uuid
@@ -5220,7 +5228,7 @@ class _Driver:
                     except Exception as refused:  # noqa: BLE001  # handed to the Rust call loop as the attempt's failure
                         # Only `_acompletion` hands the check its logging object.
                         if self._plan.kind == "chat":
-                            _log_refused_pick(self._request, refused)
+                            await _log_masked_refused_pick(self._request, refused)
                         return await self._refused(step, deployment, call, refused)
                 first_to_log: Final = not failure_already_logged(call.kwargs, "async_failure")
                 logs_failure = first_to_log  # rebind-ok: whether a failure here is this attempt's to log
