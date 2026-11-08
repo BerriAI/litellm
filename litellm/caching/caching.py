@@ -26,7 +26,7 @@ from litellm._internal_context import current_service_target, service_target
 from litellm._logging import verbose_logger
 from litellm.constants import CACHED_STREAMING_CHUNK_DELAY
 from litellm.integrations.otel.runtime import phase_span
-from litellm.litellm_core_utils.core_helpers import get_metadata_variable_name_from_kwargs, require_attributes
+from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.litellm_core_utils.model_param_helper import (
     ModelParamHelper,
     embeds_thought_signature_in_tool_call_id,
@@ -455,30 +455,26 @@ class Cache:
         fields: Final = self._cache_tenant_scope_fields()
         metadata_sources: Final = tuple(
             _TENANT_METADATA.validate_python(raw)
-            for source in sources
-            if isinstance(raw := source.get(get_metadata_variable_name_from_kwargs(source)), Mapping)
-        )
-        auth_sources: Final = tuple(
-            _TENANT_METADATA.validate_python(raw)
             for source, key in product(sources, ("litellm_metadata", "metadata"))
             if isinstance(raw := source.get(key), Mapping)
         )
-        metadata: Final = next(
-            (source for source in auth_sources if source.get("user_api_key_auth") is not None),
-            next((source for source in metadata_sources if any(field in source for field in fields)), None),
+        auth: Final = next(
+            (source["user_api_key_auth"] for source in metadata_sources if source.get("user_api_key_auth") is not None),
+            None,
         )
-        if metadata is None:
-            return ""
-        auth: Final = metadata.get("user_api_key_auth")
+        flattened: Final = {
+            field: next((source[field] for source in metadata_sources if field in source), None)
+            for field in (*self._SEMANTIC_CACHE_TENANT_SCOPE_FIELDS, self._SEMANTIC_CACHE_END_USER_SCOPE_FIELD)
+        }
         identity: Final = (
             _CacheTenantIdentity.model_validate(auth, from_attributes=True)
             if auth is not None
             else _CacheTenantIdentity.model_validate(
                 {
-                    "api_key": metadata.get("user_api_key"),
-                    "team_id": metadata.get("user_api_key_team_id"),
-                    "org_id": metadata.get("user_api_key_org_id"),
-                    "end_user_id": metadata.get("user_api_key_end_user_id"),
+                    "api_key": flattened["user_api_key"],
+                    "team_id": flattened["user_api_key_team_id"],
+                    "org_id": flattened["user_api_key_org_id"],
+                    "end_user_id": flattened["user_api_key_end_user_id"],
                 }
             )
         )

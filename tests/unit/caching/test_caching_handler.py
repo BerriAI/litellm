@@ -61,6 +61,47 @@ from litellm.caching.caching_handler import _PENDING_CACHE_WRITES
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cache_key", (None, 1, 0, {}, {"name": "entry"}, [], ["entry"], True))
+async def test_invalid_request_cache_keys_skip_existing_entries(
+    monkeypatch: pytest.MonkeyPatch, cache_key: object
+) -> None:
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    monkeypatch.setattr(litellm, "cache", cache)
+    request: Final[dict[str, object]] = {
+        "model": "gpt-5.4",
+        "messages": [{"role": "user", "content": "hello"}],
+        "metadata": {"user_api_key": "key-a"},
+    }
+    stored: Final = {"choices": [{"message": {"role": "assistant", "content": "stored"}}]}
+    cache.add_cache(stored, **request)
+    handler: Final = LLMCachingHandler(
+        original_function=litellm.acompletion, request_kwargs=request, start_time=datetime(2026, 1, 1)
+    )
+    assert await handler._retrieve_from_cache(CallTypes.acompletion.value, request, ()) == stored
+    assert (
+        await handler._retrieve_from_cache(CallTypes.acompletion.value, {**request, "cache_key": cache_key}, ()) is None
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cache_key", ("named-entry", ""))
+async def test_string_request_cache_keys_preserve_entries(monkeypatch: pytest.MonkeyPatch, cache_key: str) -> None:
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    monkeypatch.setattr(litellm, "cache", cache)
+    request: Final[dict[str, object]] = {
+        "model": "gpt-5.4",
+        "cache_key": cache_key,
+        "metadata": {"user_api_key": "key-a"},
+    }
+    stored: Final = {"choices": [{"message": {"role": "assistant", "content": "stored"}}]}
+    cache.add_cache(stored, **request)
+    handler: Final = LLMCachingHandler(
+        original_function=litellm.acompletion, request_kwargs=request, start_time=datetime(2026, 1, 1)
+    )
+    assert await handler._retrieve_from_cache(CallTypes.acompletion.value, request, ()) == stored
+
+
 def setup_cache():
     # Set up the cache
     cache = Cache(type=LiteLLMCacheType.LOCAL)

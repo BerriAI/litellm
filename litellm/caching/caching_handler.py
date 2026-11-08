@@ -297,9 +297,10 @@ def create_cache_write_task(write_factory: Callable[[], Awaitable[None]]) -> "as
     return task
 
 
-def _request_cache_key(request_kwargs: Mapping[str, Any]) -> str | None:
+def _request_cache_key(request_kwargs: Mapping[str, object]) -> str | None:
     """Read the caller-supplied ``cache_key`` off the request kwargs."""
-    return request_kwargs.get("cache_key", None)
+    value: Final = request_kwargs.get("cache_key")
+    return value if isinstance(value, str) else None
 
 
 def _set_cached_hidden_param(response: object, key: str, value: object) -> None:
@@ -984,12 +985,15 @@ class LLMCachingHandler:
         else:
             request_kwargs: Final = new_kwargs.copy()
             request_cache_key: Final = _request_cache_key(request_kwargs)
+            if "cache_key" in request_kwargs and request_cache_key is None:
+                self.preset_cache_key = None
+                return None
             request_kwargs.pop("cache_key", None)
             if litellm.cache.supports_async() is True:
                 ## check if dual cache is supported ##
                 self.preset_cache_key = (
                     litellm.cache.scope_cache_key(request_cache_key, request_kwargs)
-                    if request_cache_key
+                    if request_cache_key is not None
                     else litellm.cache.get_cache_key(**request_kwargs)
                 )
                 with response_cache_phase("get"):
@@ -1001,7 +1005,7 @@ class LLMCachingHandler:
             else:  # fallback for caches that don't support async
                 self.preset_cache_key = (
                     litellm.cache.scope_cache_key(request_cache_key, request_kwargs)
-                    if request_cache_key
+                    if request_cache_key is not None
                     else litellm.cache.get_cache_key(**request_kwargs)
                 )
                 with response_cache_phase("get"):
