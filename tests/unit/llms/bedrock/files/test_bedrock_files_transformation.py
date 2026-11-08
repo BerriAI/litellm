@@ -2963,6 +2963,33 @@ class TestBedrockFileContentFromTheStoredBucket:
         assert route.call_count == 1
         assert response.content == b"{}"
 
+    @pytest.mark.parametrize(
+        "stored_file_id",
+        [
+            "s3://team-a-bucket/tenant/litellm-batch-outputs/job-1/input.jsonl.out",
+            "s3://team-a-bucket/tenant/litellm-bedrock-files-nova-1.jsonl",
+            "s3://team-a-bucket/tenant/deeper/litellm-bedrock-files/nova-1.jsonl",
+        ],
+    )
+    def test_file_written_under_a_prefixed_request_bucket_is_read_back_from_it(self, stored_file_id: str) -> None:
+        import httpx
+        import respx
+
+        from litellm.litellm_core_utils.cloud_storage_security import stored_s3_bucket_kwargs
+
+        url: Final = f"https://s3.us-west-2.amazonaws.com/{stored_file_id.removeprefix('s3://')}"
+        with respx.mock:
+            route: Final = respx.get(url).mock(return_value=httpx.Response(200, content=b"{}"))
+            litellm.file_content(
+                file_id=stored_file_id,
+                custom_llm_provider="bedrock",
+                s3_bucket_name="model-bucket",
+                **stored_s3_bucket_kwargs(stored_file_id),
+                **self.CREDENTIALS,
+            )
+
+        assert route.call_count == 1
+
     def test_file_under_the_model_bucket_prefix_keeps_its_url_when_a_stored_bucket_is_passed(self) -> None:
         import httpx
         import respx

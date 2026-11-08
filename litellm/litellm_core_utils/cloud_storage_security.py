@@ -21,12 +21,23 @@ STORED_S3_BUCKET_PARAM: Final = "stored_s3_bucket_name"
 
 
 def stored_s3_bucket_kwargs(stored_file_id: str) -> Mapping[str, str]:
-    """The bucket of an ``s3://`` file id LiteLLM recorded itself, as the param that lets Bedrock read it back.
+    """The bucket (and any prefix before LiteLLM's own path) of an ``s3://`` file id LiteLLM recorded itself,
+    as the param that lets Bedrock read it back.
 
     Only pass ids from LiteLLM's own records (managed file rows, provider batch responses), never one a caller sent.
     """
-    bucket: Final = stored_file_id.removeprefix("s3://").split("/", 1)[0] if stored_file_id.startswith("s3://") else ""
-    return {STORED_S3_BUCKET_PARAM: bucket} if bucket else {}
+    if not stored_file_id.startswith("s3://"):
+        return {}
+    bucket, _, object_key = stored_file_id.removeprefix("s3://").partition("/")
+    if not bucket:
+        return {}
+    segments: Final = object_key.split("/")
+    prefix_depth: Final = next(
+        (depth for depth in range(len(segments)) if "/".join(segments[depth:]).startswith(BEDROCK_MANAGED_S3_PREFIXES)),
+        0,
+    )
+    prefix: Final = "/".join(segments[:prefix_depth])
+    return {STORED_S3_BUCKET_PARAM: f"{bucket}/{prefix}" if prefix else bucket}
 
 
 MAX_FILE_ID_DECODE_PASSES: Final = 8
