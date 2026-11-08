@@ -9,6 +9,6 @@ export const migrationUrlParsers = {
 };
 
 export function migrationHref(model?: string) {
-  const base = `${uiHref("alerts")}?type=model-deprecations`;
+  const base = `${uiHref("alerts")}?kind=model_deprecation`;
   return model ? `${base}&model=${encodeURIComponent(model)}` : base;
 }

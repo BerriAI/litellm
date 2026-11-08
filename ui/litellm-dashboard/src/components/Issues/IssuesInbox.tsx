@@ -57,9 +57,9 @@ export default function IssuesInbox() {
   const client = useQueryClient();
   const [params, setParams] = useQueryStates(issueRouteParsers);
   const table = useUrlTableState(TABLE_STATE);
-  const status = params.status ?? params.state ?? params.usage_status ?? "open";
-  const family = params.family ?? (params.type === "model-deprecations" ? "retirement" : undefined);
-  const kind = params.type === "usage" && !family ? ("performance" as const) : undefined;
+  const status = params.status ?? "open";
+  const family = params.family ?? undefined;
+  const kind = family ? undefined : params.kind ?? undefined;
   const queryOptions = {
     status,
     family,
@@ -86,13 +86,13 @@ export default function IssuesInbox() {
     } else if (query.data && pageIndex > lastPage) onPaginationChange({ pageIndex: lastPage, pageSize });
   }, [query.data, pageIndex, pageSize, lastPage, onPaginationChange]);
   const changeStatus = (next: IssueStatus) => {
-    void setParams({ status: next, state: null, usage_status: null });
+    void setParams({ status: next });
     table.onPaginationChange({ ...table.pagination, pageIndex: 0 });
   };
   const changeFamily = (next: string) => {
     void setParams({
       family: next === "all" || next === "performance" ? null : (next as AlertFamily),
-      type: next === "performance" ? "usage" : null,
+      kind: next === "performance" ? "performance" : null,
     });
     table.onPaginationChange({ ...table.pagination, pageIndex: 0 });
   };
@@ -126,12 +126,12 @@ export default function IssuesInbox() {
           <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 border-b px-4 py-3">
             <select
               aria-label="Alert type"
-              value={family ?? kind ?? "all"}
+              value={family ?? (kind === "model_deprecation" ? "retirement" : kind) ?? "all"}
               onChange={(event) => changeFamily(event.target.value)}
               className="h-8 rounded-md border border-input bg-background px-2 text-xs"
             >
               <option value="all">All alert types</option>
-              {kind && <option value="performance">All performance types</option>}
+              <option value="performance">All performance types</option>
               {ISSUE_FAMILIES.map((value) => (
                 <option key={value} value={value}>
                   {FAMILY_LABELS[value]}

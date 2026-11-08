@@ -298,8 +298,8 @@ describe("unified issue investigations", () => {
     expect(screen.getByRole("link", { name: "Upgrade to Enterprise" })).toBeVisible();
   });
 
-  it("keeps old performance list links usable", async () => {
-    renderWithProviders(<IssuesInbox />, { searchParams: "type=usage&usage_status=resolved" });
+  it("uses the same kind and status filters in the URL and API", async () => {
+    renderWithProviders(<IssuesInbox />, { searchParams: "kind=performance&status=resolved" });
     await screen.findByRole("link", { name: "Spend on Checkout key rose to 20× normal" });
     const request = calls.find((call) => call.path === "/alerts");
     expect(request?.query.get("kind")).toBe("performance");
@@ -573,7 +573,7 @@ describe("unified issue investigations", () => {
     );
     expect(screen.getByRole("link", { name: "Migration details" })).toHaveAttribute(
       "href",
-      "/ui/alerts?type=model-deprecations&model=provider%2Fretiring-model",
+      "/ui/alerts?kind=model_deprecation&model=provider%2Fretiring-model",
     );
     expect(screen.getByRole("link", { name: "View model activity" })).toHaveAttribute(
       "href",
