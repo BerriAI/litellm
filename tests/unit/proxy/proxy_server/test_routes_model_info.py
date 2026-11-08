@@ -370,7 +370,13 @@ def test_saved_model_pages_preserve_database_totals(
         for index in range(60)
     ]
     mock_prisma.db.litellm_proxymodeltable.count.return_value = 60
-    mock_prisma.db.litellm_proxymodeltable.find_many.side_effect = lambda where, take: rows[:take]
+    def stored_page(
+        where: Mapping[str, object], take: int, order: Mapping[str, object] | None = None
+    ) -> list[LiteLLM_ProxyModelTable]:
+        candidates: Final = rows if order == {"model_id": "asc"} or take > 50 else rows[10:] + rows[:10]
+        return candidates[:take]
+
+    mock_prisma.db.litellm_proxymodeltable.find_many.side_effect = stored_page
     monkeypatch.setattr(proxy_server, "prisma_client", mock_prisma)
     monkeypatch.setattr(proxy_server, "llm_router", None if router_absent else litellm.Router(model_list=[]))
 

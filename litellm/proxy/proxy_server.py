@@ -17097,6 +17097,7 @@ async def _fetch_db_models_for_search(
         db_models_raw = await ModelRepository(prisma_client).table.find_many(
             where=db_where_condition,
             take=take_limit,
+            order={"model_id": "asc"},
         )
 
     # Scope BYOK rows to the caller's allowed teams so non-admin callers
