@@ -50,6 +50,10 @@ mod _native {
         request_auth_personal_budget,
         request_auth_personal_models,
         request_auth_owner_teams,
+        request_auth_team_override,
+        request_auth_model_helpers,
+        request_auth_personal_owner,
+        request_auth_personal_model_request,
     };
     #[pymodule_export]
     use crate::router::{RouterCall, RouterCoreHandle};

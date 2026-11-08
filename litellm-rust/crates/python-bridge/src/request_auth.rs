@@ -245,3 +245,31 @@ pub(crate) fn request_auth_owner_teams(py: Python<'_>, facts: &Bound<'_, PyAny>)
     let decision = py.detach(move || core::owner_teams::decide(&facts)).map_err(map_error)?;
     to_py(py, &decision)
 }
+
+#[pyfunction]
+pub(crate) fn request_auth_team_override(py: Python<'_>, facts: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
+    let facts: core::team_override::Facts = from_py(facts)?;
+    let decision = py.detach(move || core::team_override::decide(&facts)).map_err(map_error)?;
+    to_py(py, &decision)
+}
+
+#[pyfunction]
+pub(crate) fn request_auth_model_helpers(py: Python<'_>, facts: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
+    let facts: core::model_helpers::Facts = from_py(facts)?;
+    let decision = py.detach(move || core::model_helpers::decide(&facts)).map_err(map_error)?;
+    to_py(py, &decision)
+}
+
+#[pyfunction]
+pub(crate) fn request_auth_personal_owner(py: Python<'_>, facts: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
+    let facts: core::personal_owner::Facts = from_py(facts)?;
+    let decision = py.detach(move || core::personal_owner::decide(&facts)).map_err(map_error)?;
+    to_py(py, &decision)
+}
+
+#[pyfunction]
+pub(crate) fn request_auth_personal_model_request(py: Python<'_>, facts: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
+    let facts: core::personal_model_request::Facts = from_py(facts)?;
+    let decision = py.detach(move || core::personal_model_request::decide(&facts)).map_err(map_error)?;
+    to_py(py, &decision)
+}
