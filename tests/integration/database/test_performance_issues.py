@@ -240,7 +240,7 @@ async def test_key_spend_issue_consolidates_traffic_and_uses_fresh_days(db: Mana
         assert original.comparisons[0].baseline_value == 1
         assert original.comparisons[1].observed_value == 50000
         assert original.comparisons[1].threshold is None
-        expected_days = tuple(_DAY - timedelta(days=offset) for offset in range(7, -1, -1))
+        expected_days: Final = tuple(_DAY - timedelta(days=offset) for offset in range(7, -1, -1))
         assert tuple(point.day for point in original.comparisons[0].history) == expected_days
         assert tuple(point.value for point in original.comparisons[0].history) == (1,) * 7 + (50,)
         assert tuple(point.value for point in original.comparisons[1].history) == (1000,) * 7 + (50000,)
@@ -860,8 +860,10 @@ async def test_projection_resume_keeps_spend_and_traffic_in_one_episode(db: Mana
         restarted: Final = UsageAlertJob.from_prisma(prisma, SlackAlerting(alerting=[], alert_types=[]))
         assert restarted._performance_projection is not None
         assert not await restarted._performance_projection.run_pending(
-            _NOW + timedelta(hours=1), latest, restarted._store, asyncio.get_running_loop().time() + 10
+            _NOW + timedelta(hours=1), latest, restarted._store, asyncio.get_running_loop().time() + 60
         )
+        resumed: Final = await restarted._store.projection_cursor(latest)
+        assert resumed.version == latest.version and resumed.step == 0
         assert await restarted._performance_projection.run_pending(
             _NOW + timedelta(hours=2), latest, restarted._store, asyncio.get_running_loop().time() + 60
         )

@@ -1,4 +1,5 @@
 from datetime import date, datetime, timedelta, timezone
+from typing import Final
 
 import pytest
 
@@ -140,11 +141,11 @@ def test_retirement_candidates_are_bounded_and_preserve_alias_choice() -> None:
 
 
 def test_retirement_keeps_recorded_daily_usage_in_the_saved_issue() -> None:
-    points = (
+    points: Final = (
         UsageAlertMetricPoint(day=NOW.date() - timedelta(days=2), value=670),
         UsageAlertMetricPoint(day=NOW.date(), value=30),
     )
-    recorded = usage().model_copy(update={"daily_requests": points})
+    recorded: Final = usage().model_copy(update={"daily_requests": points})
     issue = used_deprecation_issues(deprecation_candidates((model(),)), {recorded.model: recorded}, {}, NOW)[0]
     assert issue.deprecation is not None
     assert issue.deprecation.daily_requests == points
