@@ -289,14 +289,52 @@ fn serving_the_refused_model<'a>(
     refused: &'a str,
     healthy: &'a [Arc<Deployment>],
 ) -> impl Iterator<Item = String> + 'a {
-    let model = snapshot
-        .registry
-        .deployment(refused)
-        .map(|deployment| deployment_model(&deployment));
+    let model = healthy
+        .iter()
+        .find(|d| d.id == refused)
+        .map(|d| deployment_model(d))
+        .or_else(|| {
+            snapshot
+                .registry
+                .deployment(refused)
+                .map(|deployment| deployment_model(&deployment))
+        });
     healthy
         .iter()
         .filter(move |d| d.id == refused || model.as_ref() == Some(&deployment_model(d)))
         .map(|d| d.id.clone())
+}
+
+fn context_window_refusal(failed: &Failed) -> Option<Failed> {
+    match &*failed.error {
+        Error::Attempt(failure) if failure.is_a("ContextWindowExceededError") => Some(Failed {
+            error: Box::new(Error::Attempt(failure.clone())),
+            deployment_id: failed.deployment_id.clone(),
+            routed: failed.routed.clone(),
+            served_as: failed.served_as.clone(),
+        }),
+        _ => None,
+    }
+}
+
+/// `fallback_lookup_groups`: the group a pre-routing hook selected, the group being served, then
+/// the group the request was for.
+fn fallback_lookup<'a>(
+    routed: Option<&'a str>,
+    served_as: Option<&'a str>,
+    target: &'a Target,
+    request: &'a RouterRequest,
+) -> Vec<&'a str> {
+    let mut lookup: Vec<&str> = routed.into_iter().collect();
+    for group in served_as
+        .into_iter()
+        .chain([target.group.as_str(), request.model.as_str()])
+    {
+        if !lookup.contains(&group) {
+            lookup.push(group);
+        }
+    }
+    lookup
 }
 
 impl Core {
@@ -775,17 +813,7 @@ impl Core {
         let failure = retried_failure(error);
         let is_a = |name: &str| failure.as_ref().is_some_and(|f| f.is_a(name));
         let lists = Lists::of(snapshot, request);
-        // `fallback_lookup_groups`: the group a pre-routing hook selected, the group being served,
-        // then the group the request was for.
-        let mut lookup: Vec<&str> = routed.into_iter().collect();
-        for group in served_as
-            .into_iter()
-            .chain([target.group.as_str(), request.model.as_str()])
-        {
-            if !lookup.contains(&group) {
-                lookup.push(group);
-            }
-        }
+        let lookup = fallback_lookup(routed, served_as, target, request);
         // `order_model_group`: the pre-routing selection's order levels, else the level's own.
         let order_group = routed.unwrap_or(target.group.as_str());
         let chain = |list: &Fallbacks| {
@@ -987,6 +1015,11 @@ impl Core {
             .flatten();
         let policy_applies = policy_retries.is_some();
         num_retries = policy_retries.unwrap_or(num_retries);
+        let refusal = if policy_applies {
+            None
+        } else {
+            context_window_refusal(&failed)
+        };
         drop(first_failure);
         // `_async_get_healthy_deployments` finds no group for a deployment id, so a call by id
         // counts no deployments when deciding whether to retry.
@@ -1021,32 +1054,41 @@ impl Core {
             // keeps going, else `should_retry_this_error` decides (it raises when nothing is
             // healthy).
             let Some(failure) = retried_failure(&failed.error) else {
-                return Err(failed);
+                return Err(refusal.unwrap_or(failed));
             };
             let refused_by = failure
                 .failed_deployment_id
                 .as_ref()
                 .or(failed.deployment_id.as_ref());
-            if let Some(refused) = refused_by
-                && !policy_applies
-                && failure.is_a("ContextWindowExceededError")
-            {
-                let serving: Vec<String> =
-                    serving_the_refused_model(snapshot, refused, &healthy_deployments)
-                        .filter(|id| !inputs.skipped_ids.contains(id))
-                        .collect();
-                inputs.skipped_ids.extend(serving);
-            }
-            let untried = refused_by.map_or(0, |refused| {
-                healthy_deployments
-                    .iter()
-                    .filter(|d| d.id != *refused && !inputs.skipped_ids.contains(&d.id))
-                    .count()
-            });
+            let untried = match refused_by {
+                Some(refused) if !policy_applies && failure.is_a("ContextWindowExceededError") => {
+                    let serving: Vec<String> =
+                        serving_the_refused_model(snapshot, refused, &healthy_deployments)
+                            .filter(|id| !inputs.skipped_ids.contains(id))
+                            .collect();
+                    inputs.skipped_ids.extend(serving);
+                    self.untried(snapshot, op, request, &target.group, &inputs)
+                        .await
+                }
+                _ => 0,
+            };
+            let lookup = fallback_lookup(
+                failed.routed.as_deref(),
+                failed.served_as.as_deref(),
+                target,
+                request,
+            );
             if !policy_applies
-                && !self.should_retry(snapshot, request, &failure, (healthy, untried), all)
+                && !self.should_retry(
+                    snapshot,
+                    request,
+                    &failure,
+                    &lookup,
+                    (healthy, untried),
+                    all,
+                )
             {
-                return Err(failed);
+                return Err(refusal.unwrap_or(failed));
             }
             let uncounted = request.uncounted_retries.filter(|_| !policy_applies);
             if retry == 0 && uncounted.is_none() {
@@ -1061,15 +1103,15 @@ impl Core {
                     model: target.group.clone(),
                     cause: RetryCause::of(&failed.error),
                 });
-                return Err(Failed {
+                return Err(refusal.unwrap_or(Failed {
                     error: Box::new(Error::Attempt(AttemptError::host_raised(&["Exception"]))),
                     deployment_id: None,
                     routed: None,
                     served_as: None,
-                });
+                }));
             }
             if num_retries == 0 {
-                return Err(failed);
+                return Err(refusal.unwrap_or(failed));
             }
             if retry == 0 {
                 self.log_retry(target, at, 0, &failed.error);
@@ -1087,7 +1129,7 @@ impl Core {
                     .iter()
                     .all(|d| inputs.skipped_ids.contains(&d.id))
             {
-                return Err(failed);
+                return Err(refusal.unwrap_or(failed));
             }
             let delay = self.time_to_sleep(
                 snapshot,
@@ -1130,7 +1172,7 @@ impl Core {
                     return Ok(response);
                 }
                 Err(next) if next.error.attempt().is_some_and(|f| f.agentic_followup) => {
-                    return Err(next);
+                    return Err(refusal.unwrap_or(next));
                 }
                 Err(next) => {
                     self.pick_failed(at, target, &next.error);
@@ -1138,7 +1180,25 @@ impl Core {
                 }
             }
         }
-        Err(failed)
+        Err(refusal.unwrap_or(failed))
+    }
+
+    async fn untried(
+        &self,
+        snapshot: &RouterStateSnapshot,
+        op: &Op,
+        request: &RouterRequest,
+        group: &str,
+        inputs: &SelectInputs,
+    ) -> usize {
+        self.candidates(snapshot, op, request, group, inputs)
+            .await
+            .map_or(0, |c| {
+                c.healthy
+                    .iter()
+                    .filter(|d| !inputs.skipped_ids.contains(&d.id))
+                    .count()
+            })
     }
 
     /// `error` is a pick's: reported as it happens, whatever the level then does with it.
@@ -1203,6 +1263,7 @@ impl Core {
         snapshot: &RouterStateSnapshot,
         request: &RouterRequest,
         failure: &AttemptError,
+        lookup: &[&str],
         (healthy, untried): (usize, usize),
         all: usize,
     ) -> bool {
@@ -1213,7 +1274,9 @@ impl Core {
                 healthy,
                 untried,
                 all,
-                has_context_window_fallbacks: lists.context_window.is_some(),
+                has_context_window_fallbacks: lists
+                    .context_window
+                    .is_some_and(|list| list.lookup_groups(lookup, lists.keys).is_some()),
                 has_content_policy_fallbacks: lists.content_policy.is_some(),
                 has_regular_fallbacks: lists.has_regular(),
             },

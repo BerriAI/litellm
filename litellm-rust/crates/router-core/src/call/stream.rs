@@ -10,7 +10,7 @@ use std::sync::Arc;
 use serde::Deserialize;
 
 use super::{
-    Failed, FallbackChain, FallbackHop, Lists, Target, Tried, group_members,
+    Failed, FallbackChain, FallbackHop, Lists, Target, Tried, fallback_lookup, group_members,
     serving_the_refused_model,
 };
 use crate::{
@@ -247,34 +247,39 @@ impl Router {
             .or(origin.deployment_id.as_deref());
         let (budget, policy_applies) =
             stream_retry_budget(&snapshot, &request, &origin, failure.kind);
-        let skipped_ids: Vec<String> = match refused_by {
-            Some(refused) if !policy_applies && failure.is_a("ContextWindowExceededError") => {
-                serving_the_refused_model(&snapshot, refused, &healthy_deployments).collect()
-            }
-            _ => Vec::new(),
-        };
-        let untried = refused_by.map_or(0, |refused| {
-            healthy_deployments
-                .iter()
-                .filter(|d| d.id != refused && !skipped_ids.contains(&d.id))
-                .count()
-        });
-        let inputs = SelectInputs {
+        let refusal = (!policy_applies && failure.is_a("ContextWindowExceededError"))
+            .then(|| failure.clone());
+        let mut inputs = SelectInputs {
             target_order: target.order,
             requested: Some(target.group.clone()),
             fallback_hop: at.level > 0,
-            skipped_ids,
             ..SelectInputs::default()
         };
+        let untried = match refused_by {
+            Some(refused) if refusal.is_some() => {
+                inputs.skipped_ids =
+                    serving_the_refused_model(&snapshot, refused, &healthy_deployments).collect();
+                self.core
+                    .untried(&snapshot, &op, &request, &target.group, &inputs)
+                    .await
+            }
+            _ => 0,
+        };
+        let lookup = fallback_lookup(origin.routed.as_deref(), None, &target, &request);
         let mut last = failure;
         for attempt in origin.attempted_retries..budget {
             if last.agentic_followup {
                 break;
             }
             if !policy_applies
-                && !self
-                    .core
-                    .should_retry(&snapshot, &request, &last, (healthy, untried), all)
+                && !self.core.should_retry(
+                    &snapshot,
+                    &request,
+                    &last,
+                    &lookup,
+                    (healthy, untried),
+                    all,
+                )
             {
                 break;
             }
@@ -320,11 +325,11 @@ impl Router {
                             break;
                         }
                     }
-                    other => return Err(other),
+                    other => return Err(refusal.map_or(other, Error::Attempt)),
                 },
             }
         }
-        Err(Error::Attempt(last))
+        Err(Error::Attempt(refusal.unwrap_or(last)))
     }
 }
 

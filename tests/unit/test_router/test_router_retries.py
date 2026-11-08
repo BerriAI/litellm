@@ -439,7 +439,7 @@ def test_raise_context_window_exceeded_error():
 
 def test_raise_context_window_exceeded_error_no_retry():
     """
-    Do not Retry Context Window Exceeded Error, when context_window_fallbacks is None
+    Do not retry a Context Window Exceeded Error when no other healthy deployment is left to try
     """
     context_window_error = litellm.ContextWindowExceededError(
         message="Context window exceeded",

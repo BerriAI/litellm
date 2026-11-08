@@ -65,7 +65,8 @@ pub struct RetryContext {
     pub healthy: usize,
     pub untried: usize,
     pub all: usize,
-    /// `context_window_fallbacks is not None`.
+    /// A `context_window_fallbacks` chain matches the failed group
+    /// (`context_window_fallback_model_group`).
     pub has_context_window_fallbacks: bool,
     /// `content_policy_fallbacks is not None`.
     pub has_content_policy_fallbacks: bool,
