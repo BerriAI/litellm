@@ -174,7 +174,7 @@ from litellm.proxy.common_utils.callback_utils import (
     normalize_callback_names,
     process_callback,
 )
-from litellm.proxy.common_utils.db_model_utils import strip_env_refs_for_team_model
+from litellm.proxy.common_utils.db_model_utils import team_model_params_are_allowed
 from litellm.proxy.common_utils.realtime_utils import (  # noqa: F401, RUF100  # legacy module exports
     _realtime_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     realtime_request_body,
@@ -5922,6 +5922,10 @@ def _configured_db_callbacks(litellm_settings: Mapping[str, object], setting_key
     return tuple((setting_key, callback) for callback in callbacks if isinstance(callback, str))
 
 
+_REJECTED_DB_MODEL_PARAM: Final = object()
+_DB_MODEL_PARAMS: Final = TypeAdapter(Mapping[str, object])
+
+
 class ProxyConfig:
     """
     Abstraction class on top of config loading/updating logic. Gives us one place to control all config updating logic.
@@ -7961,15 +7965,23 @@ class ProxyConfig:
         return frozenset(combined_id_list) | kept_config_ids
 
     def _resolve_db_litellm_param(
-        self, key: str, value: object, model_info: Mapping[str, object] | BaseModel | None = None
+        self,
+        key: str,
+        value: object,
+        model_info: Mapping[str, object] | BaseModel | None = None,
     ) -> object:
         decrypted_value: Final = (
             decrypt_value_helper(value=value, key=key, return_original_value=True) if isinstance(value, str) else value
         )
-        scoped_value: Final = strip_env_refs_for_team_model({key: decrypted_value}, model_info)[key]
-        if isinstance(scoped_value, str) and scoped_value.startswith("os.environ/") and not holds_secret_pointer(key):
-            return get_secret(scoped_value)
-        return scoped_value
+        if not team_model_params_are_allowed({key: decrypted_value}, model_info):
+            return _REJECTED_DB_MODEL_PARAM
+        if (
+            isinstance(decrypted_value, str)
+            and decrypted_value.startswith("os.environ/")
+            and not holds_secret_pointer(key)
+        ):
+            return get_secret(decrypted_value)
+        return decrypted_value
 
     def _add_deployment(self, db_models: list) -> int:
         """
@@ -7991,8 +8003,17 @@ class ProxyConfig:
             if isinstance(_litellm_params, dict):
                 _model_info = self.get_model_info_with_id(model=m, db_model=True)
                 # decrypt values
-                for k, v in _litellm_params.items():
-                    _litellm_params[k] = self._resolve_db_litellm_param(key=k, value=v, model_info=_model_info)
+                _litellm_params = {
+                    k: self._resolve_db_litellm_param(key=k, value=v, model_info=_model_info)
+                    for k, v in _DB_MODEL_PARAMS.validate_python(_litellm_params).items()
+                }
+                if any(value is _REJECTED_DB_MODEL_PARAM for value in _litellm_params.values()):
+                    verbose_proxy_logger.warning(
+                        "Skipping deployment %s: scoped parameters require explicit values", m.model_name
+                    )
+                    if _model_info.id is not None and llm_router.registry().deployment(_model_info.id) is not None:
+                        llm_router.apply(ChangeSet(delete=[_model_info.id]))
+                    continue
                 _litellm_params = LiteLLM_Params.model_validate(_litellm_params)
 
             else:
@@ -8026,8 +8047,15 @@ class ProxyConfig:
             if isinstance(_litellm_params, dict):
                 _model_info = self.get_model_info_with_id(model=m)
                 # decrypt values
-                for k, v in _litellm_params.items():
-                    _litellm_params[k] = self._resolve_db_litellm_param(key=k, value=v, model_info=_model_info)
+                _litellm_params = {
+                    k: self._resolve_db_litellm_param(key=k, value=v, model_info=_model_info)
+                    for k, v in _DB_MODEL_PARAMS.validate_python(_litellm_params).items()
+                }
+                if any(value is _REJECTED_DB_MODEL_PARAM for value in _litellm_params.values()):
+                    verbose_proxy_logger.warning(
+                        "Skipping deployment %s: scoped parameters require explicit values", m.model_name
+                    )
+                    continue
                 _litellm_params = LiteLLM_Params.model_validate(_litellm_params)
             else:
                 verbose_proxy_logger.error(

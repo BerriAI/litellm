@@ -3692,9 +3692,8 @@ def test_ProxyConfig__add_deployment_keeps_team_settings_scoped(monkeypatch: pyt
         "litellm.proxy.proxy_server.decrypt_value_helper",
         lambda value, key, return_original_value: value,
     )
-    fake_router = MagicMock()
-    fake_router.apply = MagicMock(return_value=ApplyResult(version=1, upserted=[True]))
-    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", fake_router)
+    router: Final = litellm.Router(model_list=[])
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
     pc = ProxyConfig()
     db_model = SimpleNamespace(
         model_id="model-1",
@@ -3709,11 +3708,8 @@ def test_ProxyConfig__add_deployment_keeps_team_settings_scoped(monkeypatch: pyt
     )
 
     added = pc._add_deployment(db_models=[db_model])
-    (deployment,) = fake_router.apply.call_args.args[0].upsert
-
-    assert added == 1
-    assert deployment.litellm_params.api_key == ""
-    assert deployment.litellm_params.api_base == "https://api.openai.com"
+    assert added == 0
+    assert router.registry().deployment("model-1") is None
 
 
 def test_ProxyConfig__resolve_db_litellm_param_skips_non_string_values(monkeypatch):
@@ -4037,14 +4033,18 @@ def test_ProxyConfig_decrypt_model_list_from_db_keeps_decrypted_team_settings_sc
 
     out = pc.decrypt_model_list_from_db(new_models=[m])
 
-    assert out[0]["litellm_params"]["api_key"] == ""
-    assert out[0]["litellm_params"]["api_base"] == "https://api.openai.com"
+    assert out == []
 
 
 @pytest.mark.parametrize("initial_load", (False, True))
 @pytest.mark.parametrize("team_id", (None, "team-1"))
+@pytest.mark.parametrize("setting", ("api_key", "api_base", "dataSources"))
 def test_db_model_parameters_keep_scope_through_decryption_and_router_loading(
-    monkeypatch: pytest.MonkeyPatch, initial_load: bool, team_id: str | None
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    initial_load: bool,
+    team_id: str | None,
+    setting: str,
 ) -> None:
     monkeypatch.setenv("LITELLM_SALT_KEY", "test-model-settings-salt")
     monkeypatch.setenv("LITELLM_TEST_MODEL_ENDPOINT", "https://api.openai.com/v1")
@@ -4056,34 +4056,72 @@ def test_db_model_parameters_keep_scope_through_decryption_and_router_loading(
         litellm_params={
             "model": "openai/gpt-4o-mini",
             "api_key": "test-key",
-            "api_base": encrypt_value_helper(value=reference),
-            "dataSources": [{"parameters": {"endpoint": reference, "key": reference}}],
+            "api_base": "https://api.openai.com/v1",
             "max_tokens": 42,
+            **{
+                setting: [{"parameters": {"endpoint": reference}}]
+                if setting == "dataSources"
+                else encrypt_value_helper(value=reference)
+            },
         },
         blocked=False,
     )
     router: Final = litellm.Router(model_list=[])
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
     config: Final = ProxyConfig()
-    expected_endpoint: Final = "" if team_id is not None else "https://api.openai.com/v1"
-    expected_nested: Final = "" if team_id is not None else reference
+    siblings: Final = [
+        SimpleNamespace(
+            model_id=name,
+            model_name=name,
+            model_info={"id": name, "team_id": team_id},
+            litellm_params={"model": "openai/gpt-4o-mini", "api_key": "literal-key"},
+            blocked=False,
+        )
+        for name in ("valid-before", "valid-after")
+    ]
+    stored_params: Final = dict(db_model.litellm_params)
+    rows: Final = [siblings[0], db_model, siblings[1]]
+    expected_ids: Final = (
+        {"valid-before", "valid-after"} if team_id is not None else {"valid-before", "scoped-settings", "valid-after"}
+    )
 
     if initial_load:
-        models: Final = config.decrypt_model_list_from_db([db_model])
-        assert models[0]["litellm_params"]["api_base"] == expected_endpoint
-        router.apply(ChangeSet(upsert=[Deployment.model_validate(models[0])]))
+        models: Final = config.decrypt_model_list_from_db(rows)
+        assert {model["model_info"]["id"] for model in models} == expected_ids
+        router.apply(ChangeSet(upsert=[Deployment.model_validate(model) for model in models]))
     else:
-        assert config._add_deployment([db_model]) == 1
+        router.apply(
+            ChangeSet(
+                upsert=[
+                    Deployment(
+                        model_name="scoped-settings",
+                        litellm_params={"model": "openai/gpt-4o-mini", "api_key": "old-key"},
+                        model_info={"id": "scoped-settings", "team_id": team_id},
+                    )
+                ]
+            )
+        )
+        assert config._add_deployment(rows) == len(expected_ids)
+
+    assert router.registry().deployment("valid-before") is not None
+    assert router.registry().deployment("valid-after") is not None
+    assert db_model.litellm_params == stored_params
 
     deployment: Final = router.registry().deployment("scoped-settings")
-    assert deployment is not None
-    assert deployment.litellm_params.api_base == expected_endpoint
-    assert deployment.litellm_params.api_key == "test-key"
-    assert deployment.litellm_params.max_tokens == 42
-    assert deployment.litellm_params.model_extra is not None
-    assert deployment.litellm_params.model_extra["dataSources"] == [
-        {"parameters": {"endpoint": expected_nested, "key": expected_nested}}
-    ]
+    if team_id is not None:
+        assert deployment is None
+        assert "Skipping deployment scoped-settings" in caplog.text
+    else:
+        assert deployment is not None
+        assert deployment.litellm_params.api_base == "https://api.openai.com/v1"
+        assert deployment.litellm_params.api_key == (
+            "https://api.openai.com/v1" if setting == "api_key" else "test-key"
+        )
+        assert deployment.litellm_params.max_tokens == 42
+        if setting == "dataSources":
+            assert deployment.litellm_params.model_extra is not None
+            assert deployment.litellm_params.model_extra["dataSources"] == [{"parameters": {"endpoint": reference}}]
+    assert reference not in caplog.text
 
 
 def test_ProxyConfig_decrypt_model_list_from_db_invalid_params_skips():

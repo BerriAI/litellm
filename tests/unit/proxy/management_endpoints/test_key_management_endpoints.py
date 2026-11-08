@@ -51,6 +51,7 @@ from litellm.proxy.auth.auth_checks import (
 )
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import AuthCacheInvalidationSubscriber
+from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_if_encrypted_with, encrypt_value_helper
 from litellm.proxy.common_utils.user_api_key_cache import (
     UserApiKeyCache,
     budget_windows_absent_cache_key,
@@ -9775,12 +9776,15 @@ async def test_key_does_not_override_explicit_budget_duration():
 
 
 @pytest.mark.asyncio
-@patch(
-    "litellm.proxy.management_endpoints.key_management_endpoints.rotate_mcp_server_credentials_master_key"
-)
+@pytest.mark.parametrize("team_id", (None, "team-1"))
+@pytest.mark.parametrize("setting", ("literal-key", "os.environ/ROTATION_TEST_KEY"))
+@patch("litellm.proxy.management_endpoints.key_management_endpoints.rotate_mcp_server_credentials_master_key")
 async def test_rotate_master_key_reencrypts_model_params_in_place(
-    mock_rotate_mcp,
-):
+    mock_rotate_mcp: AsyncMock,
+    monkeypatch: pytest.MonkeyPatch,
+    team_id: str | None,
+    setting: str,
+) -> None:
     """
     Regression test for: master key rotation wipes every non-credential column
     on LiteLLM_ProxyModelTable. Rotation used to rebuild the table via
@@ -9801,19 +9805,30 @@ async def test_rotate_master_key_reencrypts_model_params_in_place(
     mock_prisma_client = AsyncMock()
     mock_prisma_client.db = MagicMock()
 
-    # Mock model table — return one model
-    mock_model = MagicMock()
-    mock_model.model_id = "model-1"
-    mock_model.model_name = "test-model"
-    mock_model.litellm_params = (
-        '{"model": "openai/gpt-4", "api_key": "sk-encrypted-old"}'
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-old-master-key")
+    monkeypatch.setenv("ROTATION_TEST_KEY", "configured-key")
+    monkeypatch.setenv("ROTATION_TEST_BASE", "https://api.openai.com/v1")
+    plain_params: Final = {
+        "model": "openai/gpt-4o-mini",
+        "api_key": setting,
+        "api_base": "os.environ/ROTATION_TEST_BASE",
+        "custom_null": None,
+        "options": [{"setting": setting, "enabled": False}],
+        "max_tokens": 42,
+    }
+    stored_params: Final = {
+        key: encrypt_value_helper(value=value) if isinstance(value, str) else value
+        for key, value in plain_params.items()
+    }
+    mock_model: Final = SimpleNamespace(
+        model_id="model-1",
+        model_name="test-model",
+        model_info={"id": "model-1", "team_id": team_id},
+        litellm_params=stored_params,
+        created_by="admin",
+        updated_by="admin",
     )
-    mock_model.model_info = '{"id": "model-1"}'
-    mock_model.created_by = "admin"
-    mock_model.updated_by = "admin"
-    mock_prisma_client.db.litellm_proxymodeltable.find_many = AsyncMock(
-        return_value=[mock_model]
-    )
+    mock_prisma_client.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[mock_model])
 
     # Mock transaction context manager
     mock_tx = AsyncMock()
@@ -9832,25 +9847,10 @@ async def test_rotate_master_key_reencrypts_model_params_in_place(
     mock_prisma_client.db.litellm_config.find_many = AsyncMock(return_value=[])
 
     # Mock credentials table — no credentials
-    mock_prisma_client.db.litellm_credentialstable.find_many = AsyncMock(
-        return_value=[]
-    )
+    mock_prisma_client.db.litellm_credentialstable.find_many = AsyncMock(return_value=[])
 
     # Mock MCP rotation
     mock_rotate_mcp.return_value = None
-
-    # Mock proxy_config
-    mock_proxy_config = MagicMock()
-    mock_proxy_config.decrypt_model_list_from_db.return_value = [
-        {
-            "model_name": "test-model",
-            "litellm_params": {
-                "model": "openai/gpt-4",
-                "api_key": "sk-decrypted-key",
-            },
-            "model_info": {"id": "model-1"},
-        }
-    ]
 
     user_api_key_dict = UserAPIKeyAuth(
         user_role=LitellmUserRoles.PROXY_ADMIN,
@@ -9858,16 +9858,12 @@ async def test_rotate_master_key_reencrypts_model_params_in_place(
         user_id="test-user",
     )
 
-    with patch(
-        "litellm.proxy.proxy_server.proxy_config",
-        mock_proxy_config,
-    ):
-        await rotate_master_key(
-            prisma_client=mock_prisma_client,
-            user_api_key_dict=user_api_key_dict,
-            current_master_key="sk-old-master-key",
-            new_master_key="sk-new-master-key",
-        )
+    await rotate_master_key(
+        prisma_client=mock_prisma_client,
+        user_api_key_dict=user_api_key_dict,
+        current_master_key="sk-old-master-key",
+        new_master_key="sk-new-master-key",
+    )
 
     # Rotation must never rewrite whole rows: no delete + recreate
     mock_tx.litellm_proxymodeltable.delete_many.assert_not_called()
@@ -9876,9 +9872,9 @@ async def test_rotate_master_key_reencrypts_model_params_in_place(
     mock_tx.litellm_proxymodeltable.update_many.assert_called_once()
     call_args = mock_tx.litellm_proxymodeltable.update_many.call_args
 
-    assert call_args.kwargs["where"] == {
-        "model_id": "model-1"
-    }, "the re-encrypted params must land on the same row, keyed by model_id"
+    assert call_args.kwargs["where"] == {"model_id": "model-1"}, (
+        "the re-encrypted params must land on the same row, keyed by model_id"
+    )
 
     update_data = call_args.kwargs["data"]
     assert set(update_data.keys()) == {"litellm_params"}, (
@@ -9888,14 +9884,16 @@ async def test_rotate_master_key_reencrypts_model_params_in_place(
 
     import prisma
 
-    assert isinstance(
-        update_data["litellm_params"], prisma.Json
-    ), f"litellm_params should be prisma.Json for update_many(), got {type(update_data['litellm_params'])}"
+    assert isinstance(update_data["litellm_params"], prisma.Json), (
+        f"litellm_params should be prisma.Json for update_many(), got {type(update_data['litellm_params'])}"
+    )
     reencrypted_params = update_data["litellm_params"].data
-    assert set(reencrypted_params.keys()) >= {"model", "api_key"}
-    assert (
-        reencrypted_params["api_key"] != "sk-decrypted-key"
-    ), "api_key must be stored re-encrypted under the new master key, not in plaintext"
+    decoded: Final = {
+        key: decrypt_if_encrypted_with(value, "sk-new-master-key") if isinstance(value, str) else value
+        for key, value in reencrypted_params.items()
+    }
+    assert decoded == plain_params
+    assert mock_model.litellm_params == stored_params
 
 
 @pytest.mark.asyncio
