@@ -38,7 +38,7 @@ def client() -> Iterator[tuple[TestClient, UserAPIKeyAuth]]:
 
 IDENTITY = {"model": "anthropic/claude-sonnet-4-5", "deprecation_date": "2026-11-30"}
 UPDATE = {**IDENTITY, "status": "resolved", "last_seen_date": "2026-11-04", "last_seen_requests": 123}
-PATH = "/alerting/model-deprecations/state"
+PATH = "/alerts/model-deprecations/state"
 
 
 def test_new_alert_is_open(client: tuple[TestClient, UserAPIKeyAuth]) -> None:
@@ -109,7 +109,7 @@ def test_tags_are_scoped_to_model_dates_and_the_visible_keys(client: tuple[TestC
         table=SimpleNamespace(group_by=grouped)
     )
     response = http.get(
-        "/alerting/model-deprecations/tags",
+        "/alerts/model-deprecations/tags",
         params={
             "model": "openai/gpt-4-turbo",
             "api_keys": ["reporting-one", "reporting-two"],
@@ -146,7 +146,7 @@ def test_tag_access_matches_alert_visibility(
         table=SimpleNamespace(group_by=grouped)
     )
     response = http.get(
-        "/alerting/model-deprecations/tags",
+        "/alerts/model-deprecations/tags",
         params={"model": "test-model", "api_keys": ["one"], "start_date": "2026-10-06", "end_date": "2026-11-04"},
     )
     assert response.status_code == expected
@@ -168,7 +168,7 @@ def test_tag_query_rejects_more_than_100_keys_before_database_access(client: tup
         table=SimpleNamespace(group_by=grouped)
     )
     response = http.get(
-        "/alerting/model-deprecations/tags",
+        "/alerts/model-deprecations/tags",
         params={
             "model": "test-model",
             "api_keys": [f"reporting-{index}" for index in range(101)],

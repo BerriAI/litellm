@@ -123,9 +123,9 @@ class AlertInput(BaseModel, frozen=True):
         if self.range_start > self.range_end:
             raise ValueError("range_start must not follow range_end")
         if (self.kind == "model_deprecation") != (self.deprecation is not None):
-            raise ValueError("Model deprecation issues require deprecation details")
+            raise ValueError("Model deprecation alerts require deprecation details")
         if (self.kind == "model_deprecation") != (self.family == "retirement"):
-            raise ValueError("Only model deprecation issues use the retirement family")
+            raise ValueError("Only model deprecation alerts use the retirement family")
         if self.observed_at.tzinfo is None:
             raise ValueError("observed_at must include a timezone")
         return self
@@ -139,7 +139,7 @@ class Alert(AlertInput, frozen=True):
     scope_label: str | None = None
     active: bool = True
     can_update_status: bool | None = Field(
-        default=None, description="Current reader's status permission, evaluated by the issue-detail endpoint"
+        default=None, description="Current reader's status permission, evaluated by the alert detail endpoint"
     )
     can_view_activity: bool | None = Field(
         default=None, description="Current reader's permission to inspect Activity, keys, users and impact"
