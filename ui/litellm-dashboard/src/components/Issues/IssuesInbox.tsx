@@ -1,6 +1,6 @@
 import { useQueryStates } from "nuqs";
 import { useEffect } from "react";
-import { ChevronRight, RefreshCw } from "lucide-react";
+import { RefreshCw } from "lucide-react";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { DataTablePagination, useUrlTableState } from "@/components/shared/DataTable";
 import { PageTabs, PageTabsContent, PageTabsList, PageTabsTrigger } from "@/components/shared/Page";
@@ -21,29 +21,31 @@ import {
   useIssues,
 } from "./issueApi";
 import { issueRouteParsers } from "./issueRoute";
+import IssueHistoryChart from "./IssueHistoryChart";
+import IssueStatusActions from "./IssueStatusActions";
 
 const TABLE_STATE = { sortFields: [], defaultSort: { id: "", desc: false }, defaultPageSize: 25, filterColumns: [] };
 function AlertEntry({ issue }: { issue: Issue }) {
   const impact = issueImpactText(issue);
   return (
-    <li>
-      <a
-        href={issueHref(issue.id)}
-        aria-labelledby={`alert-${issue.id}`}
-        className="group flex items-start gap-4 px-4 py-5 transition-colors hover:bg-muted/40 focus-visible:outline-2 focus-visible:outline-ring focus-visible:outline-offset-[-2px] sm:px-5"
-      >
-        <div className="min-w-0 flex-1 space-y-1.5">
-          <h2 id={`alert-${issue.id}`} className="break-words text-sm font-medium leading-6">
+    <li className="grid gap-4 px-4 py-5 sm:px-5 lg:grid-cols-[minmax(0,1fr)_220px] lg:gap-8">
+      <div className="min-w-0 space-y-3">
+        <a
+          href={issueHref(issue.id)}
+          aria-labelledby={`alert-${issue.id}`}
+          className="block space-y-1.5 rounded-sm focus-visible:outline-2 focus-visible:outline-ring"
+        >
+          <h2 id={`alert-${issue.id}`} className="break-words text-base font-medium leading-6 hover:underline">
             {issueHeadline(issue)}
           </h2>
           <p className="break-words text-sm leading-6 text-muted-foreground">{issueComparisonText(issue)}</p>
           {impact && <p className="text-xs text-muted-foreground">{impact}</p>}
-        </div>
-        <ChevronRight
-          aria-hidden="true"
-          className="mt-1 size-4 shrink-0 text-muted-foreground group-hover:text-foreground"
-        />
-      </a>
+        </a>
+        <IssueStatusActions issue={issue} globalAccess />
+      </div>
+      <div className="hidden self-center lg:block">
+        <IssueHistoryChart issue={issue} compact />
+      </div>
     </li>
   );
 }

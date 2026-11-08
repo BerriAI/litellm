@@ -25,6 +25,14 @@ export const SPEND_ISSUE: Issue = {
       baseline_start: "2026-10-28",
       baseline_end: "2026-11-03",
       baseline_sample_days: 5,
+      history: [
+        { day: "2026-10-28", value: 20 },
+        { day: "2026-10-29", value: 25 },
+        { day: "2026-10-30", value: 30 },
+        { day: "2026-11-01", value: 35 },
+        { day: "2026-11-03", value: 40 },
+        { day: "2026-11-04", value: 600 },
+      ],
     },
     {
       metric: "requests",
@@ -35,6 +43,7 @@ export const SPEND_ISSUE: Issue = {
       baseline_start: "2026-10-28",
       baseline_end: "2026-11-03",
       baseline_sample_days: 4,
+      history: [],
     },
   ],
   impact: { keys: 1, models: 2, teams: 1 },
@@ -69,6 +78,7 @@ export const RETIREMENT_ISSUE: Issue = {
     requests: 18432,
     last_used_date: "2026-11-04",
     last_day_requests: 123,
+    daily_requests: [],
     model: {
       model_name: "support",
       litellm_model: "provider/retiring-model",
