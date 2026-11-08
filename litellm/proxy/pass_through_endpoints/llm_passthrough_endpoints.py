@@ -1620,7 +1620,7 @@ async def bedrock_proxy_route(
         )
 
     from litellm.llms.bedrock.base_aws_llm import run_aws_signing, sign_aws_json_post
-    from litellm.llms.bedrock.chat import BedrockConverseLLM
+    from litellm.llms.bedrock.passthrough.transformation import BedrockAgentRuntimeAWS
 
     aws_region_name: Final = await run_aws_signing(get_secret_str, secret_name="AWS_REGION_NAME")
     base_target_url: Final = f"https://bedrock-agent-runtime.{aws_region_name}.{get_aws_dns_suffix(aws_region_name)}"
@@ -1637,7 +1637,7 @@ async def bedrock_proxy_route(
         path=HttpPassThroughEndpointHelpers.join_base_and_endpoint_path(base_url, encoded_endpoint)
     )
 
-    bedrock_llm: Final = BedrockConverseLLM()
+    agent_runtime_aws: Final = BedrockAgentRuntimeAWS()
     # Assuming the body contains JSON data, parse it
     try:
         data: Final = await _json_request_body(request)
@@ -1645,7 +1645,7 @@ async def bedrock_proxy_route(
         raise HTTPException(status_code=400, detail={"error": e})
     prepped: Final = await run_aws_signing(
         sign_aws_json_post,
-        get_credentials=bedrock_llm.get_credentials,
+        get_credentials=agent_runtime_aws.get_credentials,
         service_name="bedrock",
         aws_region_name=aws_region_name,
         url=str(updated_url),
@@ -1716,6 +1716,7 @@ async def comprehend_medical_proxy_route(
     """
     from .llm_provider_handlers.comprehend_medical_passthrough_logging_handler import (
         COMPREHEND_MEDICAL_SUPPORTED_OPERATIONS,
+        ComprehendMedicalAWS,
     )
 
     if operation not in COMPREHEND_MEDICAL_SUPPORTED_OPERATIONS:
@@ -1744,12 +1745,12 @@ async def comprehend_medical_proxy_route(
     if "stream" in data:
         raise HTTPException(status_code=400, detail="'stream' is not a Comprehend Medical request member")
 
-    from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, run_aws_signing, sign_aws_json_post
+    from litellm.llms.bedrock.base_aws_llm import run_aws_signing, sign_aws_json_post
 
     target_url: Final = f"https://comprehendmedical.{aws_region_name}.{get_aws_dns_suffix(aws_region_name)}/"
     prepped: Final = await run_aws_signing(
         sign_aws_json_post,
-        get_credentials=partial(BaseAWSLLM().get_credentials, aws_region_name=aws_region_name),
+        get_credentials=partial(ComprehendMedicalAWS().get_credentials, aws_region_name=aws_region_name),
         service_name="comprehendmedical",
         aws_region_name=aws_region_name,
         url=target_url,
@@ -1973,6 +1974,7 @@ async def transcribe_proxy_route(
         TRANSCRIBE_OWNED_JOB_OPERATIONS,
         TRANSCRIBE_PRICED_OPERATION,
         TRANSCRIBE_TARGET_PREFIX,
+        TranscribeAWS,
         TranscribeRefusal,
         transcribe_admin_only_refusal,
         transcribe_cost_per_second,
@@ -2038,12 +2040,12 @@ async def transcribe_proxy_route(
     if access_refusal is not None:
         raise HTTPException(status_code=access_refusal.status_code, detail=access_refusal.detail)
 
-    from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, run_aws_signing, sign_aws_json_post
+    from litellm.llms.bedrock.base_aws_llm import run_aws_signing, sign_aws_json_post
 
     target_url: Final = f"https://transcribe.{aws_region_name}.{get_aws_dns_suffix(aws_region_name)}/"
     prepped: Final = await run_aws_signing(
         sign_aws_json_post,
-        get_credentials=partial(BaseAWSLLM().get_credentials, aws_region_name=aws_region_name),
+        get_credentials=partial(TranscribeAWS().get_credentials, aws_region_name=aws_region_name),
         service_name="transcribe",
         aws_region_name=aws_region_name,
         url=target_url,
