@@ -5986,6 +5986,7 @@ def completion(
                             model=model,
                             custom_llm_provider=custom_llm_provider,
                             model_info=deployment_model_info,
+                            base_model=base_model,
                         ),
                         MappingProxyType(
                             {

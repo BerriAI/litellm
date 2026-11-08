@@ -312,24 +312,40 @@ def declared_prompt_caching(model_info: Mapping[str, object] | None) -> bool | N
     return declared if isinstance(declared, bool) else None
 
 
+def _marks_a_developer_message(message: AllMessageValues) -> bool:
+    return message["role"] == "developer" and ("cache_control" in message or bool(_cache_control_values(message)))
+
+
+def _cost_map_caches_prompts(models: Iterable[str], custom_llm_provider: str | None) -> bool:
+    from litellm.utils import supports_prompt_caching
+
+    return any(supports_prompt_caching(model=name, custom_llm_provider=custom_llm_provider) for name in models)
+
+
 def developer_messages_for_a_prompt_caching_model(
     messages: Sequence[AllMessageValues],
     *,
     model: str,
     custom_llm_provider: str | None,
     model_info: Mapping[str, object] | None,
+    base_model: object,
 ) -> Sequence[AllMessageValues]:
-    from litellm.utils import supports_prompt_caching
-
-    if not _carries_a_developer_cache_control(messages):
+    if not any(map(_marks_a_developer_message, messages)):
         return messages
     declared: Final = declared_prompt_caching(model_info)
     caches_prompts: Final = (
         declared
         if declared is not None
-        else supports_prompt_caching(model=model, custom_llm_provider=custom_llm_provider)
+        else _cost_map_caches_prompts(
+            dict.fromkeys(name for name in (base_model, model) if isinstance(name, str) and name), custom_llm_provider
+        )
     )
-    return messages if caches_prompts else _without_developer_cache_controls(messages)
+    if caches_prompts:
+        return messages
+    return [
+        with_cache_control(message, dropped_cache_control) if message["role"] == "developer" else message
+        for message in messages
+    ]
 
 
 def _first_marked_index(value: object) -> int | None:
