@@ -2380,6 +2380,7 @@ class JWTAuthManager:
             route=route, request_method=request_method, jwt_handler=jwt_handler
         )
         any_team_resolved = False
+        first_permitted_candidate: tuple[str, LiteLLM_TeamTable] | None = None
         for candidate_team_id in user_team_ids:
             try:
                 team_object = await get_team_object(
@@ -2391,6 +2392,8 @@ class JWTAuthManager:
                     team_id_upsert=team_id_upsert,
                 )
             except HTTPException:
+                continue
+            if team_object is None:
                 continue
             any_team_resolved = True
             if requested_model:
@@ -2404,6 +2407,10 @@ class JWTAuthManager:
                 except ProxyException:
                     continue
             if not team_route_allowed:
+                continue
+            if not requested_model and not JWTAuthManager._team_has_discovery_entitlements(team_object=team_object):
+                if first_permitted_candidate is None:
+                    first_permitted_candidate = (candidate_team_id, team_object)
                 continue
             verbose_proxy_logger.debug(
                 "JWT DB team fallback: resolved team_id=%s from user DB membership",
@@ -2424,6 +2431,27 @@ class JWTAuthManager:
                 )
             return candidate_team_id, team_object, None
 
+        if first_permitted_candidate is not None:
+            fallback_team_id, fallback_team_obj = first_permitted_candidate
+            verbose_proxy_logger.debug(
+                "JWT DB team fallback: resolved fallback team_id=%s from user DB membership",
+                fallback_team_id,
+            )
+            if user_id:
+                return (
+                    fallback_team_id,
+                    fallback_team_obj,
+                    await get_team_membership(
+                        user_id=user_id,
+                        team_id=fallback_team_id,
+                        prisma_client=prisma_client,
+                        user_api_key_cache=user_api_key_cache,
+                        parent_otel_span=parent_otel_span,
+                        proxy_logging_obj=proxy_logging_obj,
+                    ),
+                )
+            return fallback_team_id, fallback_team_obj, None
+
         if enforce_team_based_model_access:
             if requested_model and any_team_resolved:
                 raise HTTPException(
@@ -2439,6 +2467,31 @@ class JWTAuthManager:
                 detail=("User is not a member of any team. Add the user to a team via the LiteLLM UI or API."),
             )
         return None, None, None
+
+    @staticmethod
+    def _team_has_discovery_entitlements(team_object: LiteLLM_TeamTable | None) -> bool:
+        """
+        Return True when a team carries model grants (excluding 'no-default-models'),
+        access_group_ids, or object_permission so modelless discovery requests
+        (e.g. /v1/models, /v1/mcp/tools) prefer an entitled team over an empty
+        organizational/department team (#50596, #50598).
+        """
+        if team_object is None:
+            return False
+        team_models = [
+            m
+            for m in (getattr(team_object, "models", None) or [])
+            if m != "no-default-models"
+        ]
+        if team_models:
+            return True
+        if getattr(team_object, "access_group_ids", None):
+            return True
+        if getattr(team_object, "object_permission_id", None) or getattr(
+            team_object, "object_permission", None
+        ):
+            return True
+        return False
 
     @staticmethod
     def _is_team_route_allowed(
