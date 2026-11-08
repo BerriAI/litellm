@@ -65,7 +65,7 @@ describe("deprecation alert API wiring", () => {
     renderWithProviders(<AlertsHost />);
     expect(await screen.findByText("1 alerts")).toBeInTheDocument();
     expect(backgroundFetchClient.GET).toHaveBeenLastCalledWith(
-      "/alerting/model-deprecations/state",
+      "/alerts/model-deprecations/state",
       expect.objectContaining({
         params: { query: { model: model.litellm_model, deprecation_date: model.deprecation_date } },
       }),
