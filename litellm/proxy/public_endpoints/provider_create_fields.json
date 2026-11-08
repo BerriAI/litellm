@@ -3603,7 +3603,7 @@
       {
         "key": "api_base",
         "label": "API Base",
-        "placeholder": "https://pool.linkrra.com/v1",
+        "placeholder": "https://synap.linkrra.com/v1",
         "tooltip": null,
         "required": false,
         "field_type": "text",
