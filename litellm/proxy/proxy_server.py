@@ -17038,6 +17038,7 @@ async def _fetch_db_models_for_search(
     model_name: str | None = None,
     blocked: bool | None = None,
     allowed_team_ids: AbstractSet[str] | None = None,
+    access_group: str | None = None,
 ) -> tuple[list[dict[str, object]], int]:
     """
     Run the bounded DB query that backs `/v2/model/info?search=`. Returns
@@ -17081,8 +17082,9 @@ async def _fetch_db_models_for_search(
             excluded_ids=db_model_ids_in_router,
             allowed_team_ids=allowed_team_ids,
             take=take_limit,
+            access_group=access_group,
         )
-        if allowed_team_ids is not None
+        if allowed_team_ids is not None or access_group is not None
         else None
     )
     db_models_total_count: Final = (
@@ -17129,6 +17131,7 @@ async def _apply_search_filter_to_models(
     sort_by: str | None = None,
     model_name: str | None = None,
     blocked: bool | None = None,
+    access_group: str | None = None,
 ) -> tuple[list[dict[str, object]], int | None]:
     """
     Apply search filter to models, querying database for additional matching models.
@@ -17157,6 +17160,8 @@ async def _apply_search_filter_to_models(
             exactly instead of the substring, and is skipped when the
             substring cannot occur in it, otherwise rows from other model
             groups leak into the result and the count.
+        access_group: Match this group in router and database rows before
+            counting and limiting the saved-model page.
 
     Returns:
         Tuple of (filtered_models, total_count). total_count is None if not searching.
@@ -17194,6 +17199,7 @@ async def _apply_search_filter_to_models(
         for m in all_models
         if _model_matches_search(m)
         and _matches_routing_status(m, blocked)
+        and (access_group is None or _model_in_access_group(m, access_group))
         and not _is_byok_outside_caller_teams(m.get("model_info") or {})
     ]
 
@@ -17233,6 +17239,7 @@ async def _apply_search_filter_to_models(
                 model_name=model_name,
                 blocked=blocked,
                 allowed_team_ids=allowed_team_ids,
+                access_group=access_group,
             )
             search_total_count = router_models_count + db_models_total_count
         except Exception as e:
@@ -17905,6 +17912,7 @@ async def model_info_v2(
             sort_by=sortBy,
             model_name=model,
             blocked=blocked,
+            access_group=access_group if isinstance(access_group, str) else None,
         )
 
     if user_models_only:
@@ -17997,7 +18005,7 @@ async def model_info_v2(
         or include_team_models
         or exclude_auto_routers is True
         or wildcard_only is True
-        or isinstance(access_group, str)
+        or (modelId is not None and isinstance(access_group, str))
         else search_total_count + added_agents_count
     )
 

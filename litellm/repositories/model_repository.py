@@ -39,9 +39,11 @@ _MODEL_SEARCH_WHERE: Final = """
 WHERE (($1::text IS NULL AND model_name ILIKE $2) OR model_name = $1)
   AND ($3::boolean IS NULL OR blocked = $3)
   AND model_id NOT IN (SELECT jsonb_array_elements_text($4::jsonb))
-  AND (model_info ->> 'team_id' IS NULL
+  AND ($5::jsonb IS NULL OR model_info ->> 'team_id' IS NULL
        OR (jsonb_typeof(model_info -> 'team_id') = 'string'
            AND model_info ->> 'team_id' IN (SELECT jsonb_array_elements_text($5::jsonb))))
+  AND ($6::text IS NULL OR (jsonb_typeof(model_info -> 'access_groups') = 'array'
+       AND model_info -> 'access_groups' ? $6::text))
 """
 
 
@@ -141,8 +143,9 @@ class ModelRepository(BaseRepository[LiteLLM_ProxyModelTable]):
         model_name: str | None,
         blocked: bool | None,
         excluded_ids: Set[str],
-        allowed_team_ids: Set[str],
+        allowed_team_ids: Set[str] | None,
         take: int,
+        access_group: str | None = None,
     ) -> tuple[Sequence[LiteLLM_ProxyModelTable], int]:
         """Read stored parameter values without applying the serving or decryption paths."""
         database: Final = require_attributes(self._connected_client(), _ModelReadClient, "db").db
@@ -151,7 +154,8 @@ class ModelRepository(BaseRepository[LiteLLM_ProxyModelTable]):
             f"%{search}%",
             blocked,
             json.dumps(sorted(excluded_ids)),
-            json.dumps(sorted(allowed_team_ids)),
+            json.dumps(sorted(allowed_team_ids)) if allowed_team_ids is not None else None,
+            access_group,
         )
         counts: Final = await database.query_raw(
             'SELECT COUNT(*) AS total FROM "LiteLLM_ProxyModelTable" ' + _MODEL_SEARCH_WHERE, *arguments
@@ -159,7 +163,7 @@ class ModelRepository(BaseRepository[LiteLLM_ProxyModelTable]):
         total: Final = _ModelCount.model_validate(counts[0]).total
         records: Final = (
             await database.query_raw(
-                'SELECT * FROM "LiteLLM_ProxyModelTable" ' + _MODEL_SEARCH_WHERE + " ORDER BY model_id LIMIT $6",
+                'SELECT * FROM "LiteLLM_ProxyModelTable" ' + _MODEL_SEARCH_WHERE + " ORDER BY model_id LIMIT $7",
                 *arguments,
                 take,
             )

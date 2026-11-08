@@ -392,6 +392,83 @@ def test_saved_model_pages_preserve_database_totals(
     assert [model["model_info"]["id"] for model in second.json()["data"]] == [row.model_id for row in rows[50:]]
 
 
+@pytest.mark.parametrize("access_group", (None, "sales-team", "missing"))
+@pytest.mark.parametrize("router_populated", (False, True))
+@pytest.mark.parametrize("search", ("", "saved"))
+def test_saved_model_access_group_filter_precedes_database_page(
+    client: TestClient,
+    auth_as: Callable[[], AbstractContextManager[object]],
+    monkeypatch: pytest.MonkeyPatch,
+    mock_prisma: MagicMock,
+    access_group: str | None,
+    router_populated: bool,
+    search: str,
+) -> None:
+    rows: Final = [
+        LiteLLM_ProxyModelTable(
+            model_id=f"saved-{index:03}",
+            model_name=f"saved-{index:03}",
+            model_info={
+                "id": f"saved-{index:03}",
+                "team_id": "owner-team",
+                "access_groups": ["sales-team"] if index >= 60 else ["other"],
+            },
+            litellm_params={"model": "openai/gpt-4o-mini", "api_base": "os.environ/SAVED_MODEL_ENDPOINT"},
+        )
+        for index in range(63)
+    ]
+
+    def stored_page(
+        *, where: Mapping[str, object], take: int, order: Mapping[str, object]
+    ) -> list[LiteLLM_ProxyModelTable]:
+        return rows[:take]
+
+    def query_raw(query: str, *args: object) -> list[dict[str, object]]:
+        selected: Final = [row for row in rows if args[5] is None or args[5] in row.model_info["access_groups"]]
+        return (
+            [{"total": len(selected)}]
+            if query.startswith("SELECT COUNT")
+            else [row.model_dump() for row in selected[: int(str(args[6]))]]
+        )
+
+    mock_prisma.db.litellm_proxymodeltable.find_many.side_effect = stored_page
+    mock_prisma.db.litellm_proxymodeltable.count.return_value = len(rows)
+    mock_prisma.db.query_raw = AsyncMock(side_effect=query_raw)
+    models: Final = (
+        [
+            {
+                "model_name": name,
+                "model_info": {"id": name, "access_groups": [group]},
+                "litellm_params": {"model": "openai/gpt-4o-mini"},
+            }
+            for name, group in (("saved-live-sales", "sales-team"), ("saved-live-other", "other"))
+        ]
+        if router_populated
+        else []
+    )
+    monkeypatch.setattr(proxy_server, "prisma_client", mock_prisma)
+    monkeypatch.setattr(proxy_server, "llm_router", litellm.Router(model_list=models))
+    params: Final = {
+        "size": "1",
+        "search": search,
+        **({"access_group": access_group} if access_group is not None else {}),
+    }
+    with auth_as():
+        first: Final = client.get("/v2/model/info", params={**params, "page": "1"})
+        second: Final = client.get("/v2/model/info", params={**params, "page": "2"})
+
+    expected: Final = [
+        model["model_info"]["id"]
+        for model in models
+        if access_group is None or access_group in model["model_info"]["access_groups"]
+    ] + [row.model_id for row in rows if access_group is None or access_group in row.model_info["access_groups"]]
+    assert first.status_code == second.status_code == 200, (first.text, second.text)
+    assert first.json()["total_count"] == second.json()["total_count"] == len(expected)
+    assert first.json()["total_pages"] == second.json()["total_pages"] == len(expected)
+    assert [model["model_info"]["id"] for model in first.json()["data"]] == expected[:1]
+    assert [model["model_info"]["id"] for model in second.json()["data"]] == expected[1:2]
+
+
 @pytest.mark.parametrize("blocked", (None, False, True))
 @pytest.mark.parametrize("agent_present", (False, True))
 def test_hidden_agents_do_not_inflate_saved_model_totals(
@@ -2512,7 +2589,7 @@ async def test_model_info_v2_query_sentinel_does_not_filter(monkeypatch, mixed_a
 
 
 @pytest.fixture
-def access_group_router(monkeypatch):
+def access_group_router(monkeypatch, mock_prisma):
     """Router with one sales-team deployment, one wildcard sales-team deployment and one ungrouped one."""
     model_list = [
         {
@@ -2531,25 +2608,16 @@ def access_group_router(monkeypatch):
             "model_info": {"id": "plain-1", "db_model": False},
         },
     ]
-    from unittest.mock import AsyncMock
-
-    router = route_entry_points_to_stubs(MagicMock())
-    router.model_list = model_list
+    router = litellm.Router(model_list=model_list)
     monkeypatch.setattr(proxy_server, "llm_router", router)
     monkeypatch.setattr(proxy_server, "llm_model_list", model_list)
-    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+    monkeypatch.setattr(proxy_server, "prisma_client", mock_prisma)
     monkeypatch.setattr(proxy_server, "user_model", None)
-    monkeypatch.setattr(proxy_server.proxy_config, "get_config", AsyncMock(return_value={}))
-    monkeypatch.setattr(
-        proxy_server,
-        "_apply_search_filter_to_models",
-        AsyncMock(side_effect=lambda all_models, **kw: (all_models, len(all_models))),
+    monkeypatch.setattr(proxy_server, "proxy_config", proxy_server.ProxyConfig())
+    monkeypatch.setattr(agent_registry, "global_agent_registry", agent_registry.AgentRegistry())
+    mock_prisma.db.query_raw = AsyncMock(
+        side_effect=lambda query, *args: [{"total": 0}] if query.startswith("SELECT COUNT") else []
     )
-    monkeypatch.setattr(proxy_server, "_enrich_model_info_with_litellm_data", lambda model, **kw: model)
-
-    import litellm.proxy.agent_endpoints.model_list_helpers as mlh
-
-    monkeypatch.setattr(mlh, "append_agents_to_model_info", AsyncMock(side_effect=lambda models, **kw: models))
     yield router
 
 
