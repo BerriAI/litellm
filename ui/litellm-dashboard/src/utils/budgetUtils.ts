@@ -17,11 +17,13 @@ export function formatBudgetResetTime(iso: string | null | undefined, t: TFuncti
   return `${timestamp} UTC`;
 }
 
+const isMidnight = (instant: Dayjs): boolean => instant.isSame(instant.startOf("day"));
+
 export function formatBudgetResetUtc(iso: string | null | undefined): string | null {
   if (!iso) return null;
   const resetDate = dayjs.utc(iso);
   if (!resetDate.isValid()) return null;
-  return resetDate.format("MMM D, YYYY");
+  return resetDate.format(isMidnight(resetDate) ? "MMM D, YYYY" : "MMM D, YYYY HH:mm");
 }
 
 export interface BudgetResetSchedule {
@@ -63,8 +65,6 @@ export function getBudgetPeriodStart(budgetDuration: string, resetAt: Dayjs): Da
       return resetAt.subtract(value, "second");
   }
 }
-
-const isMidnight = (instant: Dayjs): boolean => instant.isSame(instant.startOf("day"));
 
 export function formatBudgetPeriod(start: Dayjs, end: Dayjs): string {
   const windowSeconds = end.diff(start, "second");

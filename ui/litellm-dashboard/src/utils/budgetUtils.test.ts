@@ -25,6 +25,11 @@ describe("formatBudgetResetUtc", () => {
     process.env.TZ = "America/Los_Angeles";
     expect(formatBudgetResetUtc("2026-10-20T00:00:00Z")).toBe("Oct 20, 2026");
   });
+
+  it("adds the UTC clock time when the reset is not at midnight UTC", () => {
+    process.env.TZ = "America/Los_Angeles";
+    expect(formatBudgetResetUtc("2026-11-30T18:30:00Z")).toBe("Nov 30, 2026 18:30");
+  });
 });
 
 describe("formatBudgetResetTime", () => {
@@ -99,12 +104,12 @@ describe("describeBudgetResetSchedule", () => {
     expect(describeBudgetResetSchedule("30d", utcIso(2027, 0, 10, 0)).period).toBe("Dec 10, 2026 - Jan 10, 2027 UTC");
   });
 
-  it("keeps the clock times when the reset is not at midnight UTC, as on a proxy set to Asia/Kolkata", () => {
+  it("keeps the clock times when the reset is not at midnight UTC", () => {
     expect(describeBudgetResetSchedule("1d", "2026-11-08T18:30:00Z").period).toBe(
       "Nov 7, 2026 18:30 - Nov 8, 2026 18:30 UTC",
     );
-    expect(describeBudgetResetSchedule("30d", "2026-11-30T18:30:00Z").period).toBe(
-      "Oct 30, 2026 18:30 - Nov 30, 2026 18:30 UTC",
+    expect(describeBudgetResetSchedule("30d", "2026-12-01T09:00:00Z").period).toBe(
+      "Nov 1, 2026 09:00 - Dec 1, 2026 09:00 UTC",
     );
   });
 
