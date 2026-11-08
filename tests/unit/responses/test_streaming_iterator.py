@@ -22,8 +22,10 @@ from pydantic_core import PydanticSerializationError
 import litellm
 from litellm.exceptions import MidStreamFallbackError
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.core_helpers import UPSTREAM_USAGE_COST, billed_usage_cost
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
+from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.responses.streaming_iterator import (
     CachedResponsesAPIStreamingIterator,
     MockResponsesAPIStreamingIterator,
@@ -412,6 +414,20 @@ async def test_complete_stream_still_ends_normally(trailer):
 
     assert seen[-1] == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
     assert logging_obj.async_failure_handler.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_event_without_a_type_reaches_the_caller_instead_of_ending_the_stream():
+    iterator: Final = _make_iterator(
+        sse_events=[_CREATED_EVENT, _sse_event({"note": "hook output without a type"})],
+        logging_obj=_failure_tracking_logging_obj(),
+        config=OpenAIResponsesAPIConfig(),
+    )
+
+    await iterator.__anext__()
+    untyped: Final = await iterator.__anext__()
+
+    assert untyped.model_extra == {"note": "hook output without a type"}
 
 
 @pytest.mark.parametrize("trailing_error", _TRAILING_ERRORS, ids=type)
@@ -955,7 +971,7 @@ def _capture_dispatch(logged: list):
     return _dispatch
 
 
-def _headers_config(*, transform_hidden_params: Optional[dict] = None) -> Mock:
+def _headers_config(*, transform_hidden_params: dict | None = None, usage: dict | None = None) -> Mock:
     """Config whose completed event carries a real ResponsesAPIResponse, so the logging copy
     performs a genuine model_dump/model_validate round trip."""
     mock_config = Mock(spec=BaseResponsesAPIConfig)
@@ -973,6 +989,7 @@ def _headers_config(*, transform_hidden_params: Optional[dict] = None) -> Mock:
             parallel_tool_calls=False,
             tool_choice="auto",
             tools=[],
+            usage=usage,
         )
         if transform_hidden_params is not None:
             response._hidden_params.update(transform_hidden_params)
@@ -1068,6 +1085,36 @@ async def test_streaming_logging_copy_preserves_transform_hidden_params():
     assert iterator.completed_response is not logged[0]
     # only the header keys travel: response_cost would short-circuit the cost calculator
     assert "response_cost" not in hidden_params
+
+
+@pytest.mark.asyncio
+async def test_streaming_logging_copy_keeps_the_stamped_bill_as_litellms_own():
+    """The terminal event's usage.cost is litellm's bill. The logging copy must carry upstream_usage_cost
+    beside it, or the spend row reads that bill back as an upstream charge (input 0, output total)."""
+    logging_obj = _logging_obj_stub()
+    logging_obj.response_cost_calculator.return_value = 0.00039
+    logged: list[object] = []
+    logging_obj.dispatch_success_handlers = _capture_dispatch(logged)
+    logging_obj._on_deferred_stream_complete = None
+
+    iterator = _make_header_iterator(
+        headers={},
+        config=_headers_config(usage={"input_tokens": 1840, "output_tokens": 412, "total_tokens": 2252}),
+        logging_obj=logging_obj,
+    )
+    async for _ in iterator:
+        pass
+
+    assert len(logged) == 1
+    event: Final = logged[0]
+    assert isinstance(event, ResponseCompletedEvent), event
+    logging_response: Final = event.response
+    assert logging_response is not iterator.completed_response.response
+    assert logging_response.usage is not None
+    assert logging_response.usage.cost == 0.00039
+    assert logging_response._hidden_params[UPSTREAM_USAGE_COST] is None
+    assert logging_response._hidden_params["response_cost"] == 0.00039
+    assert billed_usage_cost(logging_response, "openai") is None
 
 
 @pytest.mark.asyncio
@@ -2835,3 +2882,54 @@ async def test_websocket_turns_logging_survives_garbage_collection(terminal_even
     await _run_websocket_turn(logger, terminal_event)
 
     assert await _logging_tasks_left_after_garbage_collection(logger) == 1
+
+
+@pytest.mark.parametrize(
+    "output",
+    [
+        [
+            {
+                "type": "message",
+                "id": "msg_seq",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "hello world", "annotations": []}],
+            }
+        ],
+        [
+            {
+                "type": "reasoning",
+                "id": "rs_seq",
+                "summary": [{"type": "summary_text", "text": "thinking about it"}],
+            },
+            {
+                "type": "function_call",
+                "id": "fc_seq",
+                "call_id": "call_seq",
+                "name": "lookup",
+                "arguments": '{"id":1}',
+            },
+        ],
+    ],
+    ids=["message", "reasoning_and_tool"],
+)
+def test_synthetic_stream_serializes_every_event_position_from_zero(output: list[dict[str, object]]):
+    transformed: Final = ResponsesAPIResponse.model_validate(
+        {
+            "id": "resp_seq",
+            "created_at": 1741476542,
+            "status": "completed",
+            "model": "claude-sonnet-5-5",
+            "object": "response",
+            "output": output,
+        }
+    )
+
+    events: Final = streaming_module.build_synthetic_response_events(
+        transformed=transformed,
+        logging_obj=None,
+        chunk_size=5,
+    )
+
+    payloads: Final = tuple(json.loads(event.model_dump_json()) for event in events)
+    assert [payload.get("sequence_number") for payload in payloads] == list(range(len(payloads)))
