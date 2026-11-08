@@ -9,12 +9,16 @@ from typing_extensions import assert_never
 import litellm
 from litellm.exceptions import UnsupportedParamsError
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
+from litellm.types.utils import LlmProviders
 
 BridgedEndpoint: TypeAlias = Literal["/v1/responses", "/v1/messages", "/v1/completions"]
 
 
 _STRINGS: Final = TypeAdapter(tuple[str, ...])
 _AUDIO_PARAMS: Final = ("audio", "modalities")
+_GEMINI_PROVIDERS: Final = frozenset(
+    provider.value for provider in (LlmProviders.GEMINI, LlmProviders.VERTEX_AI, LlmProviders.VERTEX_AI_BETA)
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,7 +66,7 @@ def bridged_audio_output_request(
     request: Mapping[str, object], model: str, custom_llm_provider: str | None
 ) -> Mapping[str, object] | AudioOutputRefusal:
     display_name: Final = "/".join(part for part in (custom_llm_provider, model) if part)
-    if litellm.utils.is_gemini_tts_model(model):
+    if custom_llm_provider in _GEMINI_PROVIDERS and litellm.utils.is_gemini_tts_model(model):
         return AudioOnlyModel(model=display_name, custom_llm_provider=custom_llm_provider)
     params: Final = _requested_audio_params(request)
     if not params:

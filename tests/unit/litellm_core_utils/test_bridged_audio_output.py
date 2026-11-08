@@ -12,6 +12,8 @@ from litellm.caching.llm_caching_handler import LLMClientCache
 GEMINI_API: Final = "https://generativelanguage.googleapis.com/"
 VOICE_API: Final = "https://voice.test/v1"
 TTS_MODEL: Final = "gemini/gemini-3.8-flash-tts"
+TTS_MODELS: Final = (TTS_MODEL, "vertex_ai/gemini-3.8-flash-tts", "vertex_ai_beta/gemini-3.8-flash-tts")
+TTS_NAMED_GATEWAY_MODEL: Final = "custom_openai/gemini-3.8-flash-tts"
 SINGER_MODEL: Final = "gemini/litellm-test-singer"
 VOICE_MODEL: Final = "custom_openai/litellm-test-voice"
 UNLISTED_MODEL: Final = "custom_openai/litellm-test-unlisted"
@@ -119,17 +121,31 @@ def _sent_body(route: respx.Route) -> dict[str, object]:
 
 @pytest.mark.respx(assert_all_called=False)
 @pytest.mark.parametrize(("bridge", "endpoint"), BRIDGES)
+@pytest.mark.parametrize("tts_model", TTS_MODELS)
 async def test_tts_model_is_refused_before_any_upstream_call(
-    respx_mock: respx.MockRouter, bridge: Bridge, endpoint: str
+    respx_mock: respx.MockRouter, bridge: Bridge, endpoint: str, tts_model: str
 ) -> None:
-    upstream: Final = _upstream(respx_mock, GEMINI_API, SPOKEN_REPLY)
+    upstream: Final = respx_mock.post().mock(return_value=httpx.Response(200, json=SPOKEN_REPLY))
 
     with pytest.raises(litellm.UnsupportedParamsError) as refusal:
-        await bridge(TTS_MODEL, drop_params=True)
+        await bridge(tts_model, drop_params=True)
 
     assert refusal.value.status_code == 400
-    assert f"{TTS_MODEL} returns audio, which {endpoint} cannot carry. Call /v1/chat/completions" in str(refusal.value)
+    assert f"{tts_model} returns audio, which {endpoint} cannot carry. Call /v1/chat/completions" in str(refusal.value)
     assert upstream.call_count == 0
+
+
+@pytest.mark.respx(assert_all_called=True)
+@pytest.mark.parametrize("bridge", SURFACES)
+async def test_tts_named_model_on_another_provider_still_reaches_upstream(
+    respx_mock: respx.MockRouter, bridge: Bridge
+) -> None:
+    upstream: Final = _upstream(respx_mock, VOICE_API, TEXT_REPLY)
+
+    reply: Final = await bridge(TTS_NAMED_GATEWAY_MODEL, api_base=VOICE_API)
+
+    assert upstream.call_count == 1
+    assert "Hello" in str(reply)
 
 
 @pytest.mark.respx(assert_all_called=True)
