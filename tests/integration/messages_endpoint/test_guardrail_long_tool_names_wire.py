@@ -14,7 +14,7 @@ from integration._support.ports import allocate_port
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
 
-from litellm.llms.anthropic.pass_through.adapters.transformation import truncate_tool_name
+from litellm.llms.anthropic.messages.adapters.transformation import truncate_tool_name
 
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 _JSON_OBJECTS: Final = TypeAdapter(list[dict[str, JsonValue]])

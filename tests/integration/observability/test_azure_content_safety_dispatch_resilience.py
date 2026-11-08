@@ -8,11 +8,13 @@ from typing import Final
 
 import httpx
 import pytest
+from integration._support.budget import readiness_seconds
 from integration._support.client import Gateway, Scenario, eventually
 from integration._support.database import read_rows
 from integration._support.redis_process import owned_redis
 from integration._support.wire import Wire, wire_server
 from integration._support.ports import allocate_port
+from integration._support.process import graceful_stop_seconds
 from integration.observability.azure_dispatch_support import (
     ATTACK_MARKER,
     AzureBehavior,
@@ -406,7 +408,7 @@ def test_x3_killing_one_worker_leaves_the_other_serving(
                 _assert_spend(response.headers["x-litellm-call-id"], response.text)
 
 
-@pytest.mark.timeout(180)
+@pytest.mark.timeout(2 * readiness_seconds(2) + 2 * graceful_stop_seconds() + 120)
 def test_x4_proxy_restart_preserves_completed_spend_rows(
     gateway: Gateway, tmp_path: Path
 ) -> None:

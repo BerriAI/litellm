@@ -2,6 +2,8 @@ import React from "react";
 import { CircleAlert, Info } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { z } from "zod";
+import type { TFunction } from "i18next";
+import { useTranslation } from "react-i18next";
 import { MCPServer, MCPUserEnvVarsStatus, MCPUserEnvVarSpec } from "@/components/mcp_tools/types";
 import { clearMCPUserEnvVars, getMCPUserEnvVars, storeMCPUserEnvVars } from "@/components/networking";
 import { toast } from "@/lib/toast";
@@ -40,10 +42,15 @@ interface UserEnvVarsFormProps {
   onSubmit: (values: Record<string, string>) => void;
 }
 
-const buildSchema = (required: readonly MCPUserEnvVarSpec[]) =>
+const buildSchema = (required: readonly MCPUserEnvVarSpec[], t: TFunction) =>
   z.object(
     Object.fromEntries(
-      required.map((spec) => [spec.name, spec.is_set ? z.string() : z.string().min(1, `${spec.name} is required`)]),
+      required.map((spec) => [
+        spec.name,
+        spec.is_set
+          ? z.string()
+          : z.string().min(1, t("mcpServers.userEnvVarsModal.form.required", { name: spec.name })),
+      ]),
     ),
   );
 
@@ -51,7 +58,8 @@ const emptyValues = (required: readonly MCPUserEnvVarSpec[]): Record<string, str
   Object.fromEntries(required.map((spec) => [spec.name, ""]));
 
 const UserEnvVarsForm: React.FC<UserEnvVarsFormProps> = ({ required, isSaving, onCancel, onClear, onSubmit }) => {
-  const form = useZodForm(buildSchema(required), { defaultValues: emptyValues(required) });
+  const { t } = useTranslation();
+  const form = useZodForm(buildSchema(required, t), { defaultValues: emptyValues(required) });
 
   return (
     <form onSubmit={form.handleSubmit(onSubmit)}>
@@ -65,7 +73,7 @@ const UserEnvVarsForm: React.FC<UserEnvVarsFormProps> = ({ required, isSaving, o
             label={
               <span className="flex items-center gap-2">
                 <span className="font-mono text-sm font-semibold">{spec.name}</span>
-                {spec.is_set && <Badge variant="secondary">Set</Badge>}
+                {spec.is_set && <Badge variant="secondary">{t("mcpServers.userEnvVarsModal.form.setBadge")}</Badge>}
               </span>
             }
           >
@@ -74,7 +82,9 @@ const UserEnvVarsForm: React.FC<UserEnvVarsFormProps> = ({ required, isSaving, o
                 {...field}
                 disabled={isSaving}
                 placeholder={
-                  spec.is_set ? "Enter a new value to overwrite" : spec.description || `Enter your ${spec.name}`
+                  spec.is_set
+                    ? t("mcpServers.userEnvVarsModal.form.overwritePlaceholder")
+                    : spec.description || t("mcpServers.userEnvVarsModal.form.placeholder", { name: spec.name })
                 }
               />
             )}
@@ -84,15 +94,15 @@ const UserEnvVarsForm: React.FC<UserEnvVarsFormProps> = ({ required, isSaving, o
       <div className="mt-6 flex items-center justify-end gap-2 border-t border-border pt-2">
         {onClear && (
           <Button type="button" variant="destructive" className="mr-auto" onClick={onClear} disabled={isSaving}>
-            Clear
+            {t("mcpServers.userEnvVarsModal.form.clear")}
           </Button>
         )}
         <Button type="button" variant="outline" onClick={onCancel} disabled={isSaving}>
-          Cancel
+          {t("mcpServers.userEnvVarsModal.form.cancel")}
         </Button>
         <Button type="submit" disabled={isSaving}>
           {isSaving && <UiLoadingSpinner className="mr-2 size-4" />}
-          Save Credentials
+          {t("mcpServers.userEnvVarsModal.form.save")}
         </Button>
       </div>
     </form>
@@ -107,6 +117,7 @@ const UserEnvVarsForm: React.FC<UserEnvVarsFormProps> = ({ required, isSaving, o
  * description as the placeholder.
  */
 const UserEnvVarsModal: React.FC<UserEnvVarsModalProps> = ({ server, open, accessToken, onClose, onSaved }) => {
+  const { t } = useTranslation();
   const queryClient = useQueryClient();
   const [confirmingClear, setConfirmingClear] = React.useState(false);
   const close = () => {
@@ -128,12 +139,14 @@ const UserEnvVarsModal: React.FC<UserEnvVarsModalProps> = ({ server, open, acces
     mutationFn: (values: Record<string, string>) => storeMCPUserEnvVars(accessToken!, server!.server_id, values),
     onSuccess: (saved) => {
       queryClient.setQueryData(queryKey, saved);
-      toast.success("Credentials saved");
+      toast.success(t("mcpServers.userEnvVarsModal.toasts.saved"));
       onSaved?.(saved);
       close();
     },
     onError: (err) => {
-      toast.fromError(`Failed to save env vars: ${err instanceof Error ? err.message : String(err)}`);
+      toast.fromError(
+        t("mcpServers.userEnvVarsModal.toasts.saveFailed", { error: err instanceof Error ? err.message : String(err) }),
+      );
     },
   });
 
@@ -141,12 +154,16 @@ const UserEnvVarsModal: React.FC<UserEnvVarsModalProps> = ({ server, open, acces
     mutationFn: () => clearMCPUserEnvVars(accessToken!, server!.server_id),
     onSuccess: (cleared) => {
       queryClient.setQueryData(queryKey, cleared);
-      toast.success("Credentials cleared");
+      toast.success(t("mcpServers.userEnvVarsModal.toasts.cleared"));
       onSaved?.(cleared);
       close();
     },
     onError: (err) => {
-      toast.fromError(`Failed to clear env vars: ${err instanceof Error ? err.message : String(err)}`);
+      toast.fromError(
+        t("mcpServers.userEnvVarsModal.toasts.clearFailed", {
+          error: err instanceof Error ? err.message : String(err),
+        }),
+      );
     },
   });
 
@@ -159,7 +176,8 @@ const UserEnvVarsModal: React.FC<UserEnvVarsModalProps> = ({ server, open, acces
     saveMutation.mutate(trimmed);
   };
 
-  const displayName = server?.server_name || server?.alias || server?.server_id || "MCP Server";
+  const displayName =
+    server?.server_name || server?.alias || server?.server_id || t("mcpServers.userEnvVarsModal.fallbackServerName");
   const required = status?.required ?? [];
   const isSaving = saveMutation.isPending || clearMutation.isPending;
   const canClear = !!server && !!accessToken && required.some((spec) => spec.is_set);
@@ -173,8 +191,8 @@ const UserEnvVarsModal: React.FC<UserEnvVarsModalProps> = ({ server, open, acces
       <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[520px]">
         <DialogHeader>
           <div className="flex items-center gap-2">
-            <DialogTitle className="text-base font-semibold">Set your credentials</DialogTitle>
-            <StatusBadge tone="info" label="Per-user" />
+            <DialogTitle className="text-base font-semibold">{t("mcpServers.userEnvVarsModal.title")}</DialogTitle>
+            <StatusBadge tone="info" label={t("mcpServers.userEnvVarsModal.perUserBadge")} />
           </div>
           <span className="text-xs text-muted-foreground">{displayName}</span>
         </DialogHeader>
@@ -187,20 +205,16 @@ const UserEnvVarsModal: React.FC<UserEnvVarsModalProps> = ({ server, open, acces
           ) : isError ? (
             <Alert variant="error">
               <CircleAlert />
-              <AlertTitle>Failed to load env vars</AlertTitle>
+              <AlertTitle>{t("mcpServers.userEnvVarsModal.loadFailed")}</AlertTitle>
             </Alert>
           ) : required.length === 0 ? (
             <Alert variant="info">
               <Info />
-              <AlertTitle>No per-user fields configured for this server.</AlertTitle>
+              <AlertTitle>{t("mcpServers.userEnvVarsModal.noFields")}</AlertTitle>
             </Alert>
           ) : (
             <>
-              <span className="block text-sm text-muted-foreground">
-                These values are private to you. Your admin configured this MCP server to require these per-user
-                credentials. Saved values are never shown back; leave an already-set field blank to keep it, or enter a
-                value to set or change it.
-              </span>
+              <span className="block text-sm text-muted-foreground">{t("mcpServers.userEnvVarsModal.intro")}</span>
               <UserEnvVarsForm
                 required={required}
                 isSaving={isSaving}
@@ -214,18 +228,17 @@ const UserEnvVarsModal: React.FC<UserEnvVarsModalProps> = ({ server, open, acces
         <AlertDialog open={confirmingClear} onOpenChange={(opened) => !opened && setConfirmingClear(false)}>
           <AlertDialogContent>
             <AlertDialogHeader>
-              <AlertDialogTitle>Clear saved credentials</AlertDialogTitle>
+              <AlertDialogTitle>{t("mcpServers.userEnvVarsModal.clearDialog.title")}</AlertDialogTitle>
               <AlertDialogDescription>
-                This deletes every per-user value you saved for {displayName}. Your next MCP request to this server
-                fails until you set them again.
+                {t("mcpServers.userEnvVarsModal.clearDialog.description", { server: displayName })}
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
               <Button variant="outline" onClick={() => setConfirmingClear(false)}>
-                Cancel
+                {t("mcpServers.userEnvVarsModal.clearDialog.cancel")}
               </Button>
               <Button variant="destructive" onClick={confirmClear}>
-                Clear credentials
+                {t("mcpServers.userEnvVarsModal.clearDialog.confirm")}
               </Button>
             </AlertDialogFooter>
           </AlertDialogContent>

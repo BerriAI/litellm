@@ -9,6 +9,7 @@ from urllib.parse import unquote
 import httpx
 from pydantic import JsonValue, TypeAdapter
 
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
@@ -103,8 +104,8 @@ class ScaleDownChatConfig(BaseConfig):
         base: Final = _root(api_base or _trusted_root())
         operation: Final = _operation(model)
         if operation in DECISIONS_MODELS:
-            return f"{base}/v1/scaledown"
-        return f"{base}{NATIVE_PATHS[operation]}"
+            return join_api_base(base, "v1/scaledown")
+        return join_api_base(base, NATIVE_PATHS[operation])
 
     def get_supported_openai_params(self, model: str) -> list[str]:  # mutable-ok: BaseConfig signature
         operation: Final = _operation(model)

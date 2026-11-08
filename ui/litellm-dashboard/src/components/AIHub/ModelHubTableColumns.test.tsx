@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { DataTable } from "@/components/shared/DataTable";
@@ -18,11 +18,11 @@ const mockModel: ModelHubData = {
   is_public_model_group: true,
 };
 
-function renderTable(data: ModelHubData[], onModelClick = vi.fn()) {
+function renderTable(data: ModelHubData[], onModelClick = vi.fn(), showProviderLogos = false) {
   render(
     <DataTable
       data={data}
-      columns={getModelHubTableColumns({ onModelClick })}
+      columns={getModelHubTableColumns({ onModelClick, showProviderLogos })}
       getRowId={(model, index) => model.model_group || String(index)}
       sortingMode="client"
       size="compact"
@@ -35,6 +35,21 @@ describe("getModelHubTableColumns", () => {
   it("renders the model row", () => {
     renderTable([mockModel]);
     expect(screen.getByText("gpt-4o")).toBeInTheDocument();
+    expect(within(screen.getByRole("button", { name: "gpt-4o" })).queryByAltText("")).not.toBeInTheDocument();
+  });
+
+  it("should show the provider logo beside the model name only when opted in", async () => {
+    const user = userEvent.setup();
+    const onModelClick = renderTable([mockModel], vi.fn(), true);
+    const modelButton = screen.getByRole("button", { name: /^gpt-4o(?: |$)/ });
+    expect(within(modelButton).getByAltText("")).toBeInTheDocument();
+    expect(modelButton).toHaveTextContent("OpenAI");
+    expect(screen.getByRole("columnheader", { name: "Model" })).toBeInTheDocument();
+    expect(screen.queryByRole("columnheader", { name: "Provider" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("columnheader", { name: "Public" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("columnheader", { name: "Tags" })).not.toBeInTheDocument();
+    await user.click(modelButton);
+    expect(onModelClick).toHaveBeenCalledWith(mockModel);
   });
 
   it("shows the legacy evaluation mode as decisions", () => {

@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use axum::{
     Json, Router,
-    extract::{Path, Query, Request, State},
+    extract::{Request, State},
     http::request::Parts,
     middleware::{self, Next},
     response::{IntoResponse, Response},
@@ -12,7 +12,11 @@ use rmcp::{model::*, transport::streamable_http_server::StreamableHttpServerConf
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 
-use crate::{Context, Error, McpServer, Operation, Operations, ToolCatalog, server::ServerScope};
+use crate::{
+    Context, Error, McpServer, Operation, Operations, ToolCatalog,
+    request::{self, Path, Query},
+    server::ServerScope,
+};
 
 pub struct HttpConfig {
     pub allowed_hosts: Vec<String>,
@@ -132,16 +136,16 @@ struct ToolCall {
 async fn rest_call(
     State(operations): State<Arc<dyn Operations>>,
     parts: Parts,
-    Json(call): Json<ToolCall>,
+    request::Json(call): request::Json<ToolCall>,
 ) -> Result<impl IntoResponse, Error> {
     let server = call
         .server_id
         .filter(|id| !id.is_empty())
-        .ok_or_else(|| Error::InvalidRequest("server_id is required in request body".into()))?;
+        .ok_or(Error::MissingField("server_id"))?;
     let name = call
         .name
         .filter(|name| !name.is_empty())
-        .ok_or_else(|| Error::InvalidRequest("name is required in request body".into()))?;
+        .ok_or(Error::MissingField("name"))?;
     let params =
         CallToolRequestParams::new(name).with_arguments(call.arguments.unwrap_or_default());
     let context = Context {

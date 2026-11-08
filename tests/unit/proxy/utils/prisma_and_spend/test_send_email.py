@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import threading
 from typing import Any
+from unittest.mock import Mock
 
 import pytest
 
@@ -27,11 +28,12 @@ def _smtp_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.mark.asyncio
 async def test_send_email_dispatches_via_smtp(in_memory_smtp: Any) -> None:
-    await send_email(
+    delivered = await send_email(
         receiver_email="to@invalid",
         subject="Hello",
         html="<p>body</p>",
     )
+    assert delivered is True
     assert len(in_memory_smtp.sent) == 1
     sent = in_memory_smtp.sent[0]
     pinned = {
@@ -153,5 +155,24 @@ async def test_send_email_smtp_failure_is_swallowed(
     does not raise so a failing email never blocks the proxy.
     """
     in_memory_smtp.raise_on_send = RuntimeError("smtp boom")
-    await send_email(receiver_email="to@invalid", subject="Hi", html="<p>x</p>")
+    delivered = await send_email(receiver_email="to@invalid", subject="Hi", html="<p>x</p>")
+    assert delivered is False
     assert in_memory_smtp.sent == []
+
+
+@pytest.mark.asyncio
+async def test_should_send_plain_text_and_html_as_multipart_alternative(monkeypatch: pytest.MonkeyPatch) -> None:
+    transport = Mock()
+    monkeypatch.setattr("litellm.proxy.utils._send_smtp_message", transport)
+    assert (
+        await send_email(
+            receiver_email="to@invalid", subject="Retirement", html="<p>Model retirement</p>", text="Model retirement"
+        )
+        is True
+    )
+    message = transport.call_args.kwargs["email_message"]
+    assert message.get_content_type() == "multipart/alternative"
+    parts = tuple(part for part in message.walk() if not part.is_multipart())
+    assert tuple(part.get_content_type() for part in parts) == ("text/plain", "text/html")
+    assert parts[0].get_payload(decode=True).decode() == "Model retirement"
+    assert parts[1].get_payload(decode=True).decode() == "<p>Model retirement</p>"
