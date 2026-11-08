@@ -70,11 +70,24 @@ class TestCompleteURL:
         )
         assert url == "https://vpce.example.com/openai/v1/responses"
 
-    @pytest.mark.parametrize("api_base", API_BASES_BEHIND_A_RUNTIME_ENDPOINT)
-    def test_env_runtime_endpoint_wins_over_api_base_like_converse(self, monkeypatch, api_base):
+    def test_env_runtime_endpoint_is_used_without_api_base(self, monkeypatch):
+        monkeypatch.setenv("AWS_BEDROCK_RUNTIME_ENDPOINT", "https://env-egress.example.com/")
+        url = _cfg().get_complete_url(None, {"aws_region_name": "us-east-1"})
+        assert url == "https://env-egress.example.com/openai/v1/responses"
+
+    @pytest.mark.parametrize(
+        "api_base", ["https://signing-host.example.com", "https://signing-host.example.com/openai/v1/chat/completions"]
+    )
+    def test_api_base_wins_over_env_runtime_endpoint(self, monkeypatch, api_base):
         monkeypatch.setenv("AWS_BEDROCK_RUNTIME_ENDPOINT", "https://env-egress.example.com/")
         url = _cfg().get_complete_url(api_base, {"aws_region_name": "us-east-1"})
-        assert url == "https://env-egress.example.com/openai/v1/responses"
+        assert url == "https://signing-host.example.com/openai/v1/responses"
+
+    def test_empty_runtime_endpoint_counts_as_unset(self):
+        url = _cfg().get_complete_url(
+            "https://signing-host.example.com", {"aws_region_name": "us-east-1", "aws_bedrock_runtime_endpoint": ""}
+        )
+        assert url == "https://signing-host.example.com/openai/v1/responses"
 
 
 class TestAuth:
