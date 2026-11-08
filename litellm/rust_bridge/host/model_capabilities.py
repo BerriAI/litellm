@@ -7,9 +7,21 @@ from typing import Final, TypeAlias
 import litellm
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 
-# What a cached answer was computed from: the requested model and provider, the model map
-# object, its mutation generation and size, and the identity of each entry the lookups read.
-_Fingerprint: TypeAlias = tuple[str, str | None, int, int, int, tuple[int, ...]]
+
+class _Held:
+    __slots__ = ("value",)
+
+    def __init__(self, value: object) -> None:
+        self.value = value
+
+    def __hash__(self) -> int:
+        return id(self.value)
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, _Held) and other.value is self.value
+
+
+_Fingerprint: TypeAlias = tuple[str, str | None, _Held, int, int, tuple[_Held, ...]]
 
 
 def _resolved_provider(model: str, custom_llm_provider: str | None) -> tuple[str, str]:
@@ -22,7 +34,9 @@ def _resolved_provider(model: str, custom_llm_provider: str | None) -> tuple[str
 
 def _fingerprint(model: str, custom_llm_provider: str | None, resolved_model: str, provider: str) -> _Fingerprint:
     """Changes whenever an answer could: ``register_model`` bumps the generation, and replacing
-    any entry the probes look up (``litellm.model_cost[key] = ...``) changes that entry's identity."""
+    any entry the probes look up (``litellm.model_cost[key] = ...``) changes that entry's identity.
+    The key holds the entries it names, so a cached answer's entries are never freed and their
+    addresses never reused."""
     from litellm.llms.anthropic.common_utils import AnthropicModelInfo
     from litellm.utils import get_model_cost_mutation_generation
 
@@ -37,10 +51,10 @@ def _fingerprint(model: str, custom_llm_provider: str | None, resolved_model: st
     return (
         model,
         custom_llm_provider,
-        id(model_cost),
+        _Held(model_cost),
         get_model_cost_mutation_generation(),
         len(model_cost),
-        tuple(id(model_cost.get(key)) for key in keys),
+        tuple(_Held(model_cost.get(key)) for key in keys),
     )
 
 

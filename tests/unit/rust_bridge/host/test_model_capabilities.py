@@ -141,3 +141,17 @@ def test_register_model_is_observed_after_a_cached_answer() -> None:
 
     assert before["supports_reasoning"] is False
     assert after["supports_reasoning"] is True
+
+
+def test_the_cache_key_holds_the_entries_it_names(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.rust_bridge.host.model_capabilities import _fingerprint  # pyright: ignore[reportPrivateUsage]
+
+    model: Final = "claude-test-held-entry"
+    _flag_model(monkeypatch, model, supports_reasoning=True)
+    entry: Final = litellm.model_cost[model]  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # the model map is an untyped dict of rows
+    held: Final = _fingerprint(model, "anthropic", model, "anthropic")
+    _flag_model(monkeypatch, model, supports_reasoning=True)
+    same_content: Final = _fingerprint(model, "anthropic", model, "anthropic")
+
+    assert any(h.value is entry for h in held[5])
+    assert held != same_content

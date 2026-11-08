@@ -709,7 +709,6 @@ class RustOptionalChecks:
 
         candidates: Final = [str(id) for id in step.get("candidates") or ()]  # pyright: ignore[reportGeneralTypeIssues, reportUnknownVariableType, reportUnknownArgumentType]  # the step's id list
         if not self._opt.has_filters():
-            # No callback would narrow or rank them: skip reading every candidate's deployment back.
             return (list(dict.fromkeys(candidates)), None), None
         records: Final = self._records_of(candidates)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownVariableType]  # RustCore's deployment dicts
         narrowed: Final = _request_with_failed_ids(request, step)
