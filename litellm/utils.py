@@ -10399,6 +10399,7 @@ class ProviderConfigManager:
             LlmProviders.AZURE_AI,
             LlmProviders.EU_JEV,
             LlmProviders.PARALLEL_AI,
+            LlmProviders.VERCEL_AI_GATEWAY,
         ):
             configs: Final = {
                 LlmProviders.EMPIRIOLABS: litellm.EmpirioLabsDecisionsConfig,
@@ -10407,6 +10408,7 @@ class ProviderConfigManager:
                 LlmProviders.AZURE_AI: litellm.AzureAIDecisionsConfig,
                 LlmProviders.EU_JEV: litellm.EuJevDecisionsConfig,
                 LlmProviders.PARALLEL_AI: litellm.ParallelAIDecisionsConfig,
+                LlmProviders.VERCEL_AI_GATEWAY: litellm.VercelAIGatewayDecisionsConfig,
             }
             return configs[provider]()
         return None

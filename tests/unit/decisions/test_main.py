@@ -4905,3 +4905,55 @@ def test_hosted_vllm_systemone_maps_image_rejection_to_bad_request(
 
     assert caught.value.status_code == 400
     assert route.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_vercel_ai_gateway_decisions_send_the_gateway_key_to_the_gateway_and_price_the_call(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.delenv("VERCEL_AI_GATEWAY_API_BASE", raising=False)
+    monkeypatch.setenv("VERCEL_AI_GATEWAY_API_KEY", "gateway-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "unrelated-openai-key")
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://openai.example")
+    route: Final = respx_mock.post("https://ai-gateway.vercel.sh/v1/decisions").respond(
+        json={
+            "model": "openai/gpt-6-luna-decisions",
+            "answers": [{"type": "predicate", "name": "is_defect", "probability": 0.9}],
+            "usage": {"input_tokens": _INPUT_TOKENS, "output_tokens": 0, "total_tokens": _INPUT_TOKENS},
+        }
+    )
+
+    response: Final = await litellm.adecisions(
+        model="vercel_ai_gateway/openai/gpt-6-luna-decisions",
+        input="The package arrived broken.",
+        questions=[{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
+    )
+
+    assert route.calls.last.request.headers["authorization"] == "Bearer gateway-key"
+    assert json.loads(route.calls.last.request.content) == {
+        "model": "openai/gpt-6-luna-decisions",
+        "input": "The package arrived broken.",
+        "questions": [{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
+    }
+    assert response.answers[0].probability == 0.9
+    input_rate: Final = litellm.model_cost["vercel_ai_gateway/openai/gpt-6-luna-decisions"]["input_cost_per_token"]
+    assert input_rate > 0
+    assert litellm.completion_cost(completion_response=response) == pytest.approx(_INPUT_TOKENS * input_rate)
+
+
+@pytest.mark.asyncio
+async def test_vercel_ai_gateway_decisions_never_fall_back_to_the_openai_key(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.delenv("VERCEL_AI_GATEWAY_API_KEY", raising=False)
+    monkeypatch.delenv("VERCEL_OIDC_TOKEN", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "unrelated-openai-key")
+
+    with pytest.raises(litellm.AuthenticationError):
+        await litellm.adecisions(
+            model="vercel_ai_gateway/openai/gpt-6-luna-decisions",
+            input="review",
+            questions=[{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
+        )
+
+    assert len(respx_mock.calls) == 0
