@@ -22,7 +22,12 @@ from litellm.litellm_core_utils.single_flight import SingleFlight, single_flight
 from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.custom_httpx.http_handler import HTTPHandler, MaskedHTTPStatusError
-from litellm.llms.openai.common_utils import BaseOpenAILLM, OpenAIAsyncHTTPClient, OpenAIHTTPClient
+from litellm.llms.openai.common_utils import (
+    BaseOpenAILLM,
+    OpenAIAsyncHTTPClient,
+    OpenAIHTTPClient,
+    ssl_verify_from_params,
+)
 from litellm.secret_managers.get_azure_ad_token_provider import (
     get_azure_ad_token_provider,
     single_flight_bearer_token_provider,
@@ -742,8 +747,12 @@ class BaseAzureLLM(BaseOpenAILLM):
         model: str | None = None,
     ) -> AzureOpenAI | AsyncAzureOpenAI | OpenAI | AsyncOpenAI | None:
         openai_client: AzureOpenAI | AsyncAzureOpenAI | OpenAI | AsyncOpenAI | None = None
+        ssl_verify: Final = ssl_verify_from_params(
+            litellm_params,  # pyright: ignore[reportUnknownArgumentType]  # untyped dict
+        )
         client_initialization_params: Final[dict] = locals()
         client_initialization_params["is_async"] = _is_async
+        client_initialization_params["ssl_verify"] = ssl_verify
         _lp: Final = litellm_params or {}
         _ad_provider: Final = _lp.get("azure_ad_token_provider")
         _ad_token: Final = _lp.get("azure_ad_token")
@@ -942,10 +951,13 @@ class BaseAzureLLM(BaseOpenAILLM):
             "azure_ad_token_provider": azure_ad_token_provider,
         }
         # init http client + SSL Verification settings
+        ssl_verify: Final = ssl_verify_from_params(
+            litellm_params,  # pyright: ignore[reportUnknownArgumentType]  # untyped dict
+        )
         if is_async is True:
-            azure_client_params["http_client"] = self._get_async_http_client()
+            azure_client_params["http_client"] = self._get_async_http_client(ssl_verify=ssl_verify)
         else:
-            azure_client_params["http_client"] = self._get_sync_http_client()
+            azure_client_params["http_client"] = self._get_sync_http_client(ssl_verify=ssl_verify)
 
         azure_client_params["max_retries"] = max_retries
         if timeout is not None:
