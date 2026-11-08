@@ -32,6 +32,7 @@ from litellm.litellm_core_utils.cli_token_utils import (
     CredentialNotCleared,
     CredentialNotRecorded,
     CredentialNotSaved,
+    LoginRecordNotMoved,
     SecretSave,
     clear_cli_token,
     get_cli_token_file_path,
@@ -1064,6 +1065,12 @@ def logout(ctx: click.Context):
         case CredentialNotCleared(detail=detail):
             click.echo(f"Your credential is still in {path}, which could not be removed: {detail}.")
             click.echo("Delete that file, or make the directory writable and run 'lite logout' again.")
+        case LoginRecordNotMoved(detail=detail):
+            click.echo(f"Not logged out. {path} could not be moved aside: {detail}.")
+            click.echo(
+                "Keep that file, since 'lite logout' needs it to revoke a login your OS keychain may still hold. "
+                "Make its directory writable and run 'lite logout' again."
+            )
         case SecretStranded():
             click.echo(STRANDED_CREDENTIAL_MESSAGE)
             click.echo("Unlock your keychain and run 'lite logout' again to clear it.")

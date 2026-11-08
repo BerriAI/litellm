@@ -1984,7 +1984,8 @@ class TestPkceLogoutCommand:
             result = self.runner.invoke(logout, obj={"secret_vault": unlocked})
 
         assert locked_logout.exit_code == 0, locked_logout.output
-        assert "could not be removed" in locked_logout.output
+        assert "Not logged out" in locked_logout.output
+        assert "Delete that file" not in locked_logout.output
         assert result.output == "Logged out successfully. Authentication token cleared.\n"
         assert unlocked.blob is None
         assert [post for session in _FakeSession.instances for post in session.posts] == [

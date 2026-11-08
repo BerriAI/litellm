@@ -31,6 +31,7 @@ from litellm.litellm_core_utils.cli_token_utils import (
     CredentialNotCleared,
     CredentialNotRecorded,
     CredentialNotSaved,
+    LoginRecordNotMoved,
     clear_cli_token,
     get_cli_token_file_path,
     get_litellm_gateway_api_key,
@@ -1036,7 +1037,7 @@ class TestClearCliToken:
         path.parent.chmod(0o500)
         try:
             assert clear_cli_token(vault=vault) == KeyringUnreachable()
-            assert isinstance(clear_cli_token(vault=vault), CredentialNotCleared)
+            assert isinstance(clear_cli_token(vault=vault), LoginRecordNotMoved)
         finally:
             path.parent.chmod(0o700)
 

@@ -82,9 +82,21 @@ class CredentialNotCleared:
     detail: str
 
 
+@dataclass(frozen=True, slots=True)
+class LoginRecordNotMoved:
+    """The token file of a login the keychain kept could not be moved aside as the note.
+
+    The file holds no secret, but it is the record a later logout pairs with the keychain entry to
+    revoke that login, so deleting it would leave the login live. It stays until its directory
+    takes the rename.
+    """
+
+    detail: str
+
+
 SecretSave: TypeAlias = SecretWrite | CredentialNotSaved | CredentialNotRecorded
 
-SecretClear: TypeAlias = SecretErase | CredentialNotCleared
+SecretClear: TypeAlias = SecretErase | CredentialNotCleared | LoginRecordNotMoved
 
 
 class CliTokenRecord(LiteLLMBaseModel):
@@ -255,7 +267,9 @@ def clear_cli_token(*, vault: SecretVault = SYSTEM_KEYRING) -> SecretClear:
     return SecretErased() if settled else outcome
 
 
-def _end_the_local_login(outcome: SecretErase, record: CliTokenRecord | None) -> CredentialNotCleared | None:
+def _end_the_local_login(
+    outcome: SecretErase, record: CliTokenRecord | None
+) -> CredentialNotCleared | LoginRecordNotMoved | None:
     if _names_a_login_the_keychain_kept(outcome, record):
         return _move_token_file_to_note()
     left_on_disk: Final = _remove_token_file_or_its_secret(record)
@@ -271,7 +285,7 @@ def _names_a_login_the_keychain_kept(outcome: SecretErase, record: CliTokenRecor
             return False
 
 
-def _move_token_file_to_note() -> CredentialNotCleared | None:
+def _move_token_file_to_note() -> LoginRecordNotMoved | None:
     """Turn the token file of a login the keychain could not be asked to end into the note that ends it later.
 
     The file holds no secret, so it is already the record a later logout or login pairs with the
@@ -282,7 +296,7 @@ def _move_token_file_to_note() -> CredentialNotCleared | None:
     try:
         os.replace(get_cli_token_file_path(), _keychain_not_cleared_note_path())
     except OSError as error:
-        return CredentialNotCleared(str(error))
+        return LoginRecordNotMoved(str(error))
     return None
 
 
