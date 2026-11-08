@@ -220,3 +220,20 @@ def test_only_proxy_admins_create_a_user_whose_key_references_a_credential(gatew
         )
         assert single.status_code == 403, single.text
         assert "litellm_credential_name" in single.text, single.text
+
+        delegate_key: Final = scenario.key(
+            user_id=scenario.user(user_role="internal_user"), allowed_routes=["/management/v1/users/bulk"]
+        )
+        bulk: Final = rig.proxy.request(
+            "POST",
+            "/management/v1/users/bulk",
+            {
+                "users": [
+                    {"user_id": "user-" + uuid.uuid4().hex, "auto_create_key": True, "metadata": referencing_metadata}
+                ]
+            },
+            key=delegate_key,
+        )
+        assert bulk.status_code == 200, bulk.text
+        assert [row["success"] for row in bulk.json()["data"]] == [False], bulk.text
+        assert "litellm_credential_name" in bulk.json()["data"][0]["error"], bulk.text
