@@ -1319,7 +1319,9 @@ def test_cache_control_hook_never_counts_fewer_marks_than_anthropic_receives_aft
         pytest.param("invoke/us.anthropic.claude-opus-5-5", "claude-opus-5-5", id="provider-left-out-of-the-params"),
         pytest.param("anthropic/my-claude-alias", "my-claude-alias", id="model-the-cost-map-does-not-know"),
         pytest.param(
-            "anthropic/my-unreadable-claude-alias", "my-unreadable-claude-alias", id="cost-map-entry-the-lookup-cannot-read"
+            "anthropic/my-unreadable-claude-alias",
+            "my-unreadable-claude-alias",
+            id="cost-map-entry-the-lookup-cannot-read",
         ),
     ],
 )
@@ -1406,7 +1408,10 @@ _SECOND_SEARCH_CALL: Final = {**_SEARCH_CALL, "id": "srvtoolu_02Search"}
 
 
 _CLIENT_MARKED_CONVERSATION: Final = (
-    {"role": "system", "content": [{"type": "text", "text": "Handbook", "prompt_cache_breakpoint": {"mode": "explicit"}}]},
+    {
+        "role": "system",
+        "content": [{"type": "text", "text": "Handbook", "prompt_cache_breakpoint": {"mode": "explicit"}}],
+    },
     {"role": "user", "content": [{"type": "text", "text": "First", "prompt_cache_breakpoint": {"mode": "explicit"}}]},
     {"role": "assistant", "content": "First answer"},
     {"role": "user", "content": "Second"},
@@ -1495,7 +1500,9 @@ def test_tool_config_injection_point_leaves_client_prompt_cache_breakpoints_on_c
         pytest.param("openai/gpt-5.6", {"api_base": "https://gateway.example.com/v1"}, id="reads-them"),
         pytest.param("openai/gpt-4o", {}, id="openai-model-that-predates-them"),
         pytest.param("hosted_vllm/qwen3", {"api_base": "http://vllm.example.com/v1"}, id="self-hosted"),
-        pytest.param("azure_ai/qa-unflagged-gpt", {"api_base": "https://qa.services.ai.azure.com/models"}, id="foundry"),
+        pytest.param(
+            "azure_ai/qa-unflagged-gpt", {"api_base": "https://qa.services.ai.azure.com/models"}, id="foundry"
+        ),
     ],
 )
 def test_cache_control_injection_points_keep_client_prompt_cache_breakpoints_on_a_route_that_does_not_translate_them(
@@ -1832,11 +1839,14 @@ def test_cache_control_hook_does_not_overwrite_existing_cache_control():
         ([{"type": "thinking", "thinking": "hm", "signature": "s"}], []),
         ([{"type": "text", "text": "Checking."}, "not a content block"], [0]),
     ],
-    ids=["text-before-trailing-redacted-thinking", "redacted-thinking-only", "signed-thinking-only", "text-before-a-string"],
+    ids=[
+        "text-before-trailing-redacted-thinking",
+        "redacted-thinking-only",
+        "signed-thinking-only",
+        "text-before-a-string",
+    ],
 )
-def test_assistant_injection_never_marks_a_thinking_part(
-    content: list[dict[str, str] | str], marked_parts: list[int]
-):
+def test_assistant_injection_never_marks_a_thinking_part(content: list[dict[str, str] | str], marked_parts: list[int]):
     """Claude 400s a cache_control on a thinking or redacted_thinking block, and Bedrock Converse 400s a cache
     point after reasoning, so the breakpoint goes on the last part that can carry one."""
     messages: Final[list[AllMessageValues]] = [
@@ -5193,7 +5203,6 @@ def test_cache_control_hook_injects_next_to_a_malformed_message_instead_of_raisi
     ]
 
 
-
 def test_system_injection_point_filling_the_cap_without_a_developer_message_logs_no_limit_warning(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ):
@@ -5301,6 +5310,7 @@ def test_developer_prompt_caching_check_answers_without_a_model_lookup(custom_ll
     assert lookups.called is False
     assert list(checked) == [developer, question]
     assert injected == [developer, question]
+
 
 _SHARED_FOUNDRY_MODEL: Final = "azure_ai/qa-shared-gpt-deployment"
 _SIBLING_BREAKPOINT_FLAGS: Final = MappingProxyType(
@@ -5632,7 +5642,9 @@ async def test_a_wildcard_deployments_prompt_cache_flag_leaves_each_matched_mode
         await _send_unmarked_system_prompt(router, model, "acompletion")
         return b"prompt_cache_options" in chat.calls.last.request.content
 
-    assert {model: await sends_prompt_cache_options(model) for model in ("openai/gpt-4.1-qa", "openai/gpt-99.0-qa")} == {
+    assert {
+        model: await sends_prompt_cache_options(model) for model in ("openai/gpt-4.1-qa", "openai/gpt-99.0-qa")
+    } == {
         "openai/gpt-4.1-qa": False,
         "openai/gpt-99.0-qa": True,
     }
@@ -5763,7 +5775,9 @@ def test_a_gateway_deployment_declaring_the_flag_picks_openais_dialect_for_a_mod
     ] == [True, False]
 
 
-def test_a_gateway_deployment_declaring_the_flag_picks_openais_dialect_when_its_model_info_lists_that_provider() -> None:
+def test_a_gateway_deployment_declaring_the_flag_picks_openais_dialect_when_its_model_info_lists_that_provider() -> (
+    None
+):
     assert [
         AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint(
             "qa-self-hosted-gpt",
@@ -5773,10 +5787,9 @@ def test_a_gateway_deployment_declaring_the_flag_picks_openais_dialect_when_its_
         for listed_provider in ("hosted_vllm", "openrouter")
     ] == [True, False]
 
+
 def test_a_custom_handler_provider_declaring_the_flag_keeps_the_anthropic_mark() -> None:
-    litellm.register_model(
-        {"qa-custom-handler/qa-model": {"litellm_provider": "qa-custom-handler", "mode": "chat"}}
-    )
+    litellm.register_model({"qa-custom-handler/qa-model": {"litellm_provider": "qa-custom-handler", "mode": "chat"}})
 
     assert (
         AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint(
@@ -5978,7 +5991,9 @@ def test_cache_control_hook_reads_a_non_string_answer_id_as_answering_no_tool_ca
     )
 
 
-_DEVELOPER_PREFIX: Final = "Policy handbook rule 8.3: record every backup decision in the tracker within 4 business days."
+_DEVELOPER_PREFIX: Final = (
+    "Policy handbook rule 8.3: record every backup decision in the tracker within 4 business days."
+)
 _CLAUDE_ON_CONVERSE: Final = "bedrock/converse/us.anthropic.claude-haiku-5-5"
 _OFFLINE_AWS_CREDENTIALS: Final[Mapping[str, str]] = MappingProxyType(
     {
@@ -6174,7 +6189,9 @@ def test_system_injection_point_leaves_a_developer_prompt_unmarked_when_its_mark
             {"role": "developer", "content": [{"type": "text", "text": _DEVELOPER_PREFIX}]},
             {
                 "role": "user",
-                "content": [question_part if question_mark is None else {**question_part, "cache_control": question_mark}],
+                "content": [
+                    question_part if question_mark is None else {**question_part, "cache_control": question_mark}
+                ],
             },
         ],
         tools=[dict(_WEATHER_TOOL) if tool_mark is None else {**_WEATHER_TOOL, "cache_control": tool_mark}],
@@ -6207,7 +6224,9 @@ _TOOL_WITH_A_CACHE_CONTROL_ARGUMENT: Final = MappingProxyType(
     ("developer_mark", "points"),
     [
         pytest.param(dict(_ONE_HOUR), None, id="client_mark"),
-        pytest.param(None, [{"location": "message", "role": "system", "control": dict(_ONE_HOUR)}], id="injection_point"),
+        pytest.param(
+            None, [{"location": "message", "role": "system", "control": dict(_ONE_HOUR)}], id="injection_point"
+        ),
     ],
 )
 def test_one_hour_developer_prompt_stays_cached_beside_a_tool_argument_named_cache_control(
@@ -6242,9 +6261,15 @@ _FIVE_MINUTE_TOOL: Final = MappingProxyType({**_WEATHER_TOOL, "cache_control": d
 @pytest.mark.parametrize(
     ("outside_fields", "keeps_the_mark"),
     [
-        pytest.param({"tools": [dict(_TOOL_WITH_A_CACHE_CONTROL_ARGUMENT)]}, True, id="tool_argument_named_cache_control"),
         pytest.param(
-            {"tools": [{**_WEATHER_TOOL, "function": {**_WEATHER_TOOL["function"], "cache_control": dict(_FIVE_MINUTES)}}]},
+            {"tools": [dict(_TOOL_WITH_A_CACHE_CONTROL_ARGUMENT)]}, True, id="tool_argument_named_cache_control"
+        ),
+        pytest.param(
+            {
+                "tools": [
+                    {**_WEATHER_TOOL, "function": {**_WEATHER_TOOL["function"], "cache_control": dict(_FIVE_MINUTES)}}
+                ]
+            },
             False,
             id="mark_under_the_tool_function",
         ),
@@ -6312,7 +6337,9 @@ def _server_search_replaying(results_field: str) -> dict[str, object]:
                     "messages": [
                         {
                             "role": "user",
-                            "content": [{"type": "text", "text": "Which rule covers backups?", "cache_control": dict(_ONE_HOUR)}],
+                            "content": [
+                                {"type": "text", "text": "Which rule covers backups?", "cache_control": dict(_ONE_HOUR)}
+                            ],
                         }
                     ]
                 }
@@ -6346,7 +6373,9 @@ def test_system_injection_point_marks_a_developer_prompt_for_openai_prompt_cache
                 "object": "chat.completion",
                 "created": 0,
                 "model": "gpt-5.6",
-                "choices": [{"index": 0, "message": {"role": "assistant", "content": "Rule 8.3."}, "finish_reason": "stop"}],
+                "choices": [
+                    {"index": 0, "message": {"role": "assistant", "content": "Rule 8.3."}, "finish_reason": "stop"}
+                ],
                 "usage": {"prompt_tokens": 30, "completion_tokens": 4, "total_tokens": 34},
             },
         )
@@ -6550,7 +6579,9 @@ async def test_system_injection_point_leaves_a_developer_prompt_for_a_routed_gem
                 "object": "chat.completion",
                 "created": 0,
                 "model": "gemini-3.8-flash",
-                "choices": [{"index": 0, "message": {"role": "assistant", "content": "Rule 8.3."}, "finish_reason": "stop"}],
+                "choices": [
+                    {"index": 0, "message": {"role": "assistant", "content": "Rule 8.3."}, "finish_reason": "stop"}
+                ],
                 "usage": {"prompt_tokens": 30, "completion_tokens": 4, "total_tokens": 34},
             },
         )
@@ -6586,7 +6617,9 @@ def test_system_injection_point_marks_a_developer_prompt_for_a_gateway_alias_wit
                 "object": "chat.completion",
                 "created": 0,
                 "model": "claude-haiku-5-5",
-                "choices": [{"index": 0, "message": {"role": "assistant", "content": "Rule 8.3."}, "finish_reason": "stop"}],
+                "choices": [
+                    {"index": 0, "message": {"role": "assistant", "content": "Rule 8.3."}, "finish_reason": "stop"}
+                ],
                 "usage": {"prompt_tokens": 30, "completion_tokens": 4, "total_tokens": 34},
             },
         )
