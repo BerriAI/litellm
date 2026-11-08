@@ -1,4 +1,5 @@
 import asyncio
+import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta, timezone
@@ -7,12 +8,15 @@ from typing import Final
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from uuid import uuid4
 
+import httpx
 import pytest
 from integration._support.actors import ManagementDatabase
 from integration._support.prisma_clients import connected_proxy_prisma
 
 from litellm import Router
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
+from litellm.integrations.SlackAlerting.usage_alerts import UsageAlertDelivery
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy.common_utils.model_deprecation import RouterDeprecationSource
 from litellm.proxy.spend_tracking.deprecation_issues import DeprecationIssueProjector
 from litellm.proxy.spend_tracking.usage_alert_job import UsageAlertJob
@@ -157,8 +161,7 @@ async def test_retirement_usage_omits_oversized_models_before_materialization(db
 @asynccontextmanager
 async def _isolated(db: ManagementDatabase) -> AsyncIterator[PrismaClient]:
     schema: Final = "issue_test_" + uuid4().hex
-    assert db.gateway.database_url is not None
-    parsed: Final = urlsplit(db.gateway.database_url)
+    parsed: Final = urlsplit(db.gateway.database_url or os.environ["DATABASE_URL"])
     query: Final = {**dict(parse_qsl(parsed.query)), "schema": schema}
     url: Final = urlunsplit(parsed._replace(query=urlencode(query)))
     await db.prisma.writer_db.execute_raw(f'CREATE SCHEMA "{schema}"')
@@ -956,3 +959,175 @@ async def test_opt_in_controls_performance_without_stopping_model_retirements(db
         assert performance.total > 0
         assert (await store.list_issues(kind="model_deprecation")).total == 1
         assert (await store.performance_monitoring()).incidents_used == performance.total
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_slack_retry_only_repeats_the_failed_destination(db: ManagementDatabase) -> None:
+    paths: Final[list[str]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        paths.append(request.url.path)
+        return httpx.Response(503 if request.url.path == "/two" and paths.count("/two") == 1 else 200)
+
+    handler: Final = AsyncHTTPHandler(transport=httpx.MockTransport(respond))
+    try:
+        async with _isolated(db) as prisma:
+            await _seed(prisma)
+            rules: Final = UsageAlertsRepository.from_prisma(prisma)
+            assert (
+                await rules.save_rule(
+                    UsageAlertRuleInput(
+                        name="Project spend",
+                        scope_type="key",
+                        scope_id=_KEY_A,
+                        metric="spend",
+                        direction="increase",
+                        notification_channels=("slack",),
+                    ),
+                    "qa-admin",
+                )
+                is not None
+            )
+            assert (
+                await rules.save_rule(
+                    UsageAlertRuleInput(
+                        name="Another project rule",
+                        scope_type="key",
+                        scope_id=_KEY_A,
+                        metric="spend",
+                        direction="increase",
+                        notification_channels=("slack",),
+                    ),
+                    "qa-admin",
+                )
+                is not None
+            )
+            slack: Final = SlackAlerting(
+                alerting=["slack"],
+                alert_types=[],
+                async_http_handler=handler,
+                alert_to_webhook_url={
+                    "usage_alerts": [
+                        "https://hooks.example.com/one",
+                        "https://hooks.example.com/two",
+                        "https://hooks.example.com/one",
+                    ]
+                },
+            )
+            job: Final = UsageAlertJob.from_prisma(prisma, slack)
+            await job._run(_NOW)
+            assert paths == ["/one", "/two"] or paths == ["/two", "/one"]
+            await prisma.writer_db.query_raw(
+                'UPDATE "LiteLLM_IssueDelivery" SET next_attempt=CURRENT_TIMESTAMP WHERE NOT sent RETURNING id'
+            )
+            retry: Final = (await IssuesRepository.from_prisma(prisma).pending_deliveries())[0]
+            assert (
+                await rules.save_rule(
+                    UsageAlertRuleInput.model_validate(
+                        retry.rule.model_dump(include=set(UsageAlertRuleInput.model_fields))
+                    ).model_copy(update={"enabled": False}),
+                    "qa-admin",
+                    retry.rule,
+                )
+                is not None
+            )
+            await job._performance_projection.notify()
+            assert paths.count("/one") == 1 and paths.count("/two") == 2
+            assert await IssuesRepository.from_prisma(prisma).pending_deliveries() == ()
+            records: Final = await prisma.writer_db.query_raw(
+                'SELECT record::text AS value FROM "LiteLLM_IssueDelivery"'
+            )
+            assert all("hooks.example.com" not in row["value"] for row in records)
+    finally:
+        await handler.close()
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_cancelled_email_receipt_survives_a_different_delivery(
+    db: ManagementDatabase, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    accepted: Final = asyncio.Event()
+    release: Final = asyncio.Event()
+    messages: Final[list[bytes]] = []
+
+    async def smtp(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        writer.write(b"220 example.com ready\r\n")
+        await writer.drain()
+        try:
+            while command := await reader.readline():
+                if command.upper().startswith(b"DATA"):
+                    writer.write(b"354 End with a dot\r\n")
+                    await writer.drain()
+                    messages.append(await reader.readuntil(b"\r\n.\r\n"))
+                    accepted.set()
+                    await release.wait()
+                    writer.write(b"250 Accepted\r\n")
+                elif command.upper().startswith(b"QUIT"):
+                    writer.write(b"221 Closing\r\n")
+                    break
+                else:
+                    writer.write(b"250 OK\r\n")
+                await writer.drain()
+        finally:
+            writer.close()
+            await writer.wait_closed()
+
+    server: Final = await asyncio.start_server(smtp, "127.0.0.1", 0)
+    monkeypatch.setenv("SMTP_HOST", "127.0.0.1")
+    monkeypatch.setenv("SMTP_PORT", str(server.sockets[0].getsockname()[1]))
+    monkeypatch.setenv("SMTP_SENDER_EMAIL", "alerts@example.com")
+    monkeypatch.setenv("SMTP_TLS", "False")
+    monkeypatch.setenv("SMTP_USE_SSL", "False")
+    for name in ("SMTP_TIMEOUT", "SMTP_USERNAME", "SMTP_PASSWORD"):
+        monkeypatch.delenv(name, raising=False)
+    try:
+        async with _isolated(db) as prisma:
+            await _seed(prisma)
+            rules: Final = UsageAlertsRepository.from_prisma(prisma)
+            assert (
+                await rules.save_rule(
+                    UsageAlertRuleInput(
+                        name="Project spend",
+                        scope_type="key",
+                        scope_id=_KEY_A,
+                        metric="spend",
+                        direction="increase",
+                        notification_channels=("email",),
+                        email_recipients=("qa@example.com",),
+                    ),
+                    "qa-admin",
+                )
+                is not None
+            )
+            job: Final = UsageAlertJob.from_prisma(prisma, SlackAlerting(alerting=[], alert_types=[]))
+            await job._run(_NOW)
+            store: Final = IssuesRepository.from_prisma(prisma)
+            await prisma.writer_db.query_raw(
+                'UPDATE "LiteLLM_IssueDelivery" SET next_attempt=CURRENT_TIMESTAMP WHERE NOT sent RETURNING id'
+            )
+            pending: Final = (await store.pending_deliveries())[0]
+            delivery: Final = UsageAlertDelivery(SlackAlerting(alerting=["email"], alert_types=[]), store)
+            sending: Final = asyncio.create_task(delivery.send_issue(pending))
+            await asyncio.wait_for(accepted.wait(), 10)
+            sending.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await sending
+            release.set()
+            retained: Final = UsageAlertDelivery._email_task
+            assert retained is not None
+            await asyncio.wait_for(asyncio.shield(retained), 10)
+            different: Final = pending.model_copy(
+                update={"delivery": pending.delivery.model_copy(update={"id": "another-delivery"})}
+            )
+            assert await delivery.send_issue(different)
+            assert await store.pending_delivery(pending.delivery.id) is None
+            assert len(messages) == 2
+    finally:
+        release.set()
+        server.close()
+        await server.wait_closed()
+        if UsageAlertDelivery._email_task is not None:
+            await asyncio.wait_for(asyncio.shield(UsageAlertDelivery._email_task), 10)
+        UsageAlertDelivery._email_task = None
+        UsageAlertDelivery._email_key = None
+        UsageAlertDelivery._email_store = None

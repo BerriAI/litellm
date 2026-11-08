@@ -49,6 +49,8 @@ ScopeId: TypeAlias = Annotated[str | None, Query(min_length=1, max_length=1024)]
 def _allows_write(grant: str, route: str) -> bool:
     if grant == "info_routes":
         return False
+    if route == grant or route.startswith(grant + "/"):
+        return True
     paths: Final = (
         TypeAdapter(tuple[str, ...]).validate_python(LiteLLMRoutes[grant].value)
         if grant in LiteLLMRoutes.__members__

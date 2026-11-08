@@ -690,7 +690,7 @@ class IssuesRepository:
                 SELECT r.record AS rule,a.record AS alert FROM "LiteLLM_IssueDeliveryRule" b
                 JOIN "LiteLLM_UsageAlertRule" r ON r.id=b.rule_id
                 JOIN "LiteLLM_UsageAlertIncident" a ON a.id=b.source_id AND a.rule_id=r.id
-                WHERE b.delivery_id=d.id AND r.enabled AND NOT r.deleted AND a.breached AND a.status='open'
+                WHERE b.delivery_id=COALESCE(d.record->>'parent_delivery_id',d.id) AND r.enabled AND NOT r.deleted AND a.breached AND a.status='open'
                     AND (r.record->'notification_channels') ? (d.record->>'channel')
                     AND (d.record->>'channel'<>'email' OR
                         (jsonb_array_length(d.record->'email_recipients')>0

@@ -30,6 +30,7 @@ let refreshBarrier: Promise<void> | undefined;
 let holdReads = false;
 let failList = false;
 let byteLimitedPage = false;
+let mixedPageSizes = false;
 let failActivity = false;
 let staleStatus = false;
 let empty = false;
@@ -89,6 +90,16 @@ function listResponse(query: URLSearchParams) {
     }));
     return json({ data, total: 6, limit: 2, offset });
   }
+  if (mixedPageSizes) {
+    const limit = Math.min(Number(query.get("limit") ?? 25), offset < 25 ? 25 : 2);
+    const data = Array.from({ length: Math.min(limit, 30 - offset) }, (_, index) => ({
+      ...SPEND_ISSUE,
+      id: `mixed-${offset + index}`,
+      scope_label: `Mixed key ${offset + index}`,
+    }));
+    const page = { data, total: 30, limit, offset };
+    return json(page);
+  }
   const emptyPage = { data: [], total: 0, limit: 25, offset };
   if (empty) return json(emptyPage);
   const next = { ...SPEND_ISSUE, id: "second-page", scope_label: "Second key", title: "Second key spend increased" };
@@ -120,6 +131,7 @@ describe("unified issue investigations", () => {
     holdReads = false;
     failList = false;
     byteLimitedPage = false;
+    mixedPageSizes = false;
     failActivity = false;
     staleStatus = false;
     empty = false;
@@ -198,6 +210,33 @@ describe("unified issue investigations", () => {
     await screen.findByRole("heading", { name: /Wide key 4/ });
     expect(screen.getByRole("button", { name: "Go to next page" })).toBeDisabled();
     expect(calls.some((call) => call.path === "/issues" && call.query.get("offset") === "4")).toBe(true);
+  });
+
+  it.each([false, true])("preserves the exact offset when later pages shrink (deep link %s)", async (deepLink) => {
+    mixedPageSizes = true;
+    const onUrlUpdate = vi.fn();
+    renderWithProviders(<IssuesInbox />, { searchParams: deepLink ? "page=2" : "", onUrlUpdate });
+    if (!deepLink) {
+      await screen.findByRole("heading", { name: "Spend on Mixed key 0 rose to 20× normal" });
+      await userEvent.click(screen.getByRole("button", { name: "Go to next page" }));
+    }
+    await waitFor(() =>
+      expect(
+        calls
+          .filter((call) => call.path === "/issues")
+          .at(-1)
+          ?.query.get("limit"),
+      ).toBe("1"),
+    );
+    expect(await screen.findByRole("heading", { name: "Spend on Mixed key 25 rose to 20× normal" })).toBeVisible();
+    expect(screen.queryByRole("heading", { name: "Spend on Mixed key 24 rose to 20× normal" })).not.toBeInTheDocument();
+    expect(onUrlUpdate.mock.calls.at(-1)?.[0].queryString).toContain("page=26");
+    await userEvent.click(screen.getByRole("button", { name: "Go to next page" }));
+    expect(await screen.findByRole("heading", { name: "Spend on Mixed key 26 rose to 20× normal" })).toBeVisible();
+    await userEvent.click(screen.getByRole("button", { name: "Go to previous page" }));
+    expect(await screen.findByRole("heading", { name: "Spend on Mixed key 25 rose to 20× normal" })).toBeVisible();
+    await userEvent.click(screen.getByRole("button", { name: "Go to first page" }));
+    expect(await screen.findByRole("heading", { name: "Spend on Mixed key 0 rose to 20× normal" })).toBeVisible();
   });
 
   it("shows retirement and key spend in one server-paginated inbox with issue destinations", async () => {

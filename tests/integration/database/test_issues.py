@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 from collections.abc import AsyncGenerator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta, timezone
@@ -406,16 +407,8 @@ async def test_issue_activity_bounds_models_without_losing_totals(gateway: Gatew
         )
         assert non_key.model_breakdown is None and non_key.metadata == bounded.metadata
         assert len(non_key.results) == 3
-        schemas: Final = TypeAdapter(tuple[Mapping[str, str], ...]).validate_python(
-            await _query(db, "SELECT current_schema() AS name")
-        )
-        assert gateway.database_url is not None
-        with psycopg.connect(gateway.database_url) as blocker:
-            blocker.execute(
-                sql.SQL("LOCK TABLE {} IN ACCESS EXCLUSIVE MODE").format(
-                    sql.Identifier(schemas[0]["name"], "LiteLLM_DailyUserSpend")
-                )
-            )
+        async with db.prisma.writer_db.tx(timeout=timedelta(seconds=10)) as blocker:
+            await blocker.execute_raw('LOCK TABLE "LiteLLM_DailyUserSpend" IN ACCESS EXCLUSIVE MODE')
             busy: Final = gateway.request("GET", f"/issues/{issue.id}/activity")
             assert busy.status_code == 503 and busy.headers["Retry-After"] == "5"
         assert gateway.request("GET", f"/issues/{issue.id}/activity").status_code == 200
@@ -654,8 +647,7 @@ class _Blocked(BaseModel, frozen=True):
 
 @asynccontextmanager
 async def _family_database(db: ManagementDatabase) -> AsyncGenerator[Prisma]:
-    url: Final = db.gateway.database_url
-    assert url is not None
+    url: Final = db.gateway.database_url or os.environ["DATABASE_URL"]
     schema: Final = f"issues_{uuid4().hex}"
     parsed: Final = urlsplit(url)
     scoped: Final = urlunsplit(parsed._replace(query=urlencode({**dict(parse_qsl(parsed.query)), "schema": schema})))

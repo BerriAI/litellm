@@ -6,7 +6,7 @@ import pytest
 from fastapi import HTTPException
 
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.alerting_endpoints.usage_alerts import require_scope, require_write_access
+from litellm.proxy.alerting_endpoints.usage_alerts import _allows_write, require_scope, require_write_access
 from litellm.repositories.usage_alerts import UsageAlertsRepository, activity_path
 from litellm.types.proxy.auth.user_roles import LitellmUserRoles
 
@@ -20,6 +20,19 @@ class NoDatabase:
 @pytest.mark.parametrize("key_type", [None, "default", "management"])
 def test_info_grants_do_not_authorize_mutations(role: LitellmUserRoles, key_type: str | None) -> None:
     user: Final = UserAPIKeyAuth(user_role=role, key_type=key_type, allowed_routes=["info_routes", "openai_routes"])
+    with pytest.raises(HTTPException) as error:
+        require_write_access(user, "/usage/alert-rules/example")
+    assert error.value.status_code == 403
+
+
+@pytest.mark.parametrize("grant", ["management_routes", "/usage", "/usage/alert-rules", "/usage/*"])
+def test_explicit_route_grants_authorize_alert_mutations(grant: str) -> None:
+    assert _allows_write(grant, "/usage/alert-rules/example") is True
+
+
+@pytest.mark.parametrize("grant", ["/usag", "/usage/alert-rule", "/usage/alerts"])
+def test_route_grants_require_a_complete_path_segment(grant: str) -> None:
+    user: Final = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, allowed_routes=[grant])
     with pytest.raises(HTTPException) as error:
         require_write_access(user, "/usage/alert-rules/example")
     assert error.value.status_code == 403

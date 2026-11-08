@@ -78,10 +78,11 @@ export default function IssuesInbox() {
   const { onPaginationChange } = table;
   useEffect(() => {
     if (query.data && query.data.limit < pageSize) {
-      onPaginationChange({
-        pageIndex: Math.floor((pageIndex * pageSize) / query.data.limit),
-        pageSize: query.data.limit,
-      });
+      const offset = pageIndex * pageSize;
+      const limit = query.data.limit;
+      const alignedSize =
+        Array.from({ length: limit }, (_, index) => limit - index).find((size) => offset % size === 0) ?? 1;
+      onPaginationChange({ pageIndex: offset / alignedSize, pageSize: alignedSize });
     } else if (query.data && pageIndex > lastPage) onPaginationChange({ pageIndex: lastPage, pageSize });
   }, [query.data, pageIndex, pageSize, lastPage, onPaginationChange]);
   const changeStatus = (next: IssueStatus) => {
