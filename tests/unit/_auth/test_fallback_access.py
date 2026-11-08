@@ -60,3 +60,22 @@ def test_key_denial_wins_before_later_scopes() -> None:
     )
     assert decision.denial is not None
     assert decision.denial.object_type == "key"
+
+
+@pytest.mark.parametrize(
+    ("facts", "kind"),
+    (
+        (FallbackAuthorizationFacts(), "ReadKey"),
+        (FallbackAuthorizationFacts(refuse_agent_keys=True, agent_id="agent"), "Deny"),
+        (replace(_BASE, team_present=True), "ReadTeam"),
+        (replace(_BASE, embedded_team_grants=("model",)), "ReadEmbeddedTeam"),
+        (replace(_BASE, member_grants=("model",)), "ReadMember"),
+        (replace(_BASE, project_grants=("model",)), "ReadProject"),
+        (replace(_BASE, key=GroupedModelScope(_DENY), team_present=True, member_grants=("model",)), "Deny"),
+        (replace(_BASE, member=_DENY, project_grants=("model",)), "Deny"),
+    ),
+)
+def test_later_scope_projection_is_requested_only_after_prior_allow(
+    facts: FallbackAuthorizationFacts, kind: str
+) -> None:
+    assert fallback_authorization(facts).kind == kind

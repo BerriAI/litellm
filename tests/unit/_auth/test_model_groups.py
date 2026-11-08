@@ -1,5 +1,5 @@
 from dataclasses import replace
-from typing import Final
+from typing import Final, Literal
 
 import pytest
 
@@ -30,7 +30,9 @@ def test_group_ownership_boundary(
 @pytest.mark.parametrize("kind", ("Missing", "Failed"))
 @pytest.mark.parametrize("check_db_only", (False, True))
 @pytest.mark.parametrize("strict_errors", (False, True))
-def test_strict_lookup_errors_stop_before_next_group(kind, check_db_only: bool, strict_errors: bool) -> None:
+def test_strict_lookup_errors_stop_before_next_group(
+    kind: Literal["Missing", "Failed"], check_db_only: bool, strict_errors: bool
+) -> None:
     decision: Final = resource_group_decision(
         replace(
             _BASE,

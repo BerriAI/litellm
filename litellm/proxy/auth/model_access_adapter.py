@@ -52,7 +52,7 @@ def _provider(model: str) -> ModelProvider | None:
     try:
         stripped, provider, _, _ = litellm.get_llm_provider(model=model)
         return ModelProvider(stripped, provider)
-    except Exception:
+    except Exception:  # noqa: BLE001  # provider inference failure leaves the raw provider fact absent
         return None
 
 
@@ -135,7 +135,7 @@ def raise_model_denial(
         case "Allow":
             return True
         case "Depth":
-            raise Exception(
+            raise Exception(  # noqa: TRY002  # preserve the legacy depth failure type and envelope
                 f"Unable to parse model, max fallback depth exceeded - received model: {decision.model if decision.model is not None else model}"
             )
         case "NoAgentModels":

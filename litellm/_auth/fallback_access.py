@@ -16,7 +16,7 @@ class GroupedModelScope:
 
 @dataclass(frozen=True, slots=True)
 class FallbackAuthorizationFacts:
-    key: GroupedModelScope
+    key: GroupedModelScope | None = None
     refuse_agent_keys: bool = False
     agent_id: str | None = None
     team: GroupedModelScope | None = None
@@ -24,11 +24,26 @@ class FallbackAuthorizationFacts:
     assigned_models: tuple[str, ...] | None = None
     member: ModelAccessFacts | None = None
     project: ModelAccessFacts | None = None
+    team_present: bool = False
+    embedded_team_grants: tuple[str, ...] = ()
+    member_grants: tuple[str, ...] = ()
+    project_grants: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
 class FallbackAuthorizationDecision:
-    kind: Literal["Allow", "Deny", "ReadKeyGroups", "ReadTeamGroups", "ReadAssignedGroups"]
+    kind: Literal[
+        "Allow",
+        "Deny",
+        "ReadKey",
+        "ReadTeam",
+        "ReadEmbeddedTeam",
+        "ReadMember",
+        "ReadProject",
+        "ReadKeyGroups",
+        "ReadTeamGroups",
+        "ReadAssignedGroups",
+    ]
     denial: ModelAccessDecision | None = None
 
 

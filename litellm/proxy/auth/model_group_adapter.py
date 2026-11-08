@@ -66,7 +66,7 @@ async def _read(group_id: str, resource_field: ResourceField, check_db_only: boo
         )
     except AccessGroupNotFoundError as error:
         return GroupRead(GroupLookup("Missing"), error)
-    except Exception as error:
+    except Exception as error:  # noqa: BLE001  # native strict-error policy decides whether to rethrow this lookup failure
         return GroupRead(GroupLookup("Failed"), error)
 
 

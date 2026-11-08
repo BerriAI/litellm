@@ -2,15 +2,17 @@
 
 pub mod credential;
 mod error;
-mod key;
-mod model_budgets;
-pub mod patterns;
-pub mod route_access;
-pub mod org_routes;
-pub mod model_access;
-pub mod model_groups;
 pub mod fallback_access;
+mod key;
+pub mod key_model_access;
+pub mod model_access;
+mod model_budgets;
+pub mod model_groups;
+pub mod org_routes;
+pub mod patterns;
 pub mod protocol;
+pub mod route_access;
+pub mod unpriced_models;
 
 pub use error::Error;
 pub use key::{start, start_resolved_key};

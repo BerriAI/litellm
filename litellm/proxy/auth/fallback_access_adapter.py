@@ -1,4 +1,4 @@
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from typing import Final
 
 from litellm._auth.fallback_access import FallbackAuthorizationFacts, GroupedModelScope, fallback_authorization
@@ -8,6 +8,16 @@ from litellm.proxy.auth.model_access_adapter import object_model_grants, project
 from litellm.proxy.auth.model_group_adapter import get_authorized_resources_from_key_access_groups
 from litellm.repositories.prisma_protocols import DatabaseClient
 from litellm.router_api import RegistryReader
+
+
+@dataclass(frozen=True, slots=True)
+class _Sources:
+    model: str
+    token: UserAPIKeyAuth
+    router: RegistryReader | None
+    prisma: DatabaseClient | None
+    team: LiteLLM_TeamTable | None
+    project: LiteLLM_ProjectTable | None
 
 
 async def load_fallback_authorization_facts(
@@ -20,92 +30,104 @@ async def load_fallback_authorization_facts(
     refuse_agent_keys: bool = False,
     team_object: LiteLLM_TeamTable | None = None,
 ) -> FallbackAuthorizationFacts:
-    from litellm.proxy.auth.auth_checks import key_model_aliases_for_auth_check
-
-    aliases: Final = key_model_aliases_for_auth_check(valid_token)
-    key_grants: Final = key_model_grants(
-        object_model_grants(valid_token), valid_token.team_id, tuple(valid_token.team_models or ())
-    )
-    member_grants: Final = (
-        tuple(team_membership.litellm_budget_table.allowed_models or ())
-        if team_membership is not None and team_membership.litellm_budget_table is not None
-        else ()
-    )
     facts: Final = FallbackAuthorizationFacts(
-        key=GroupedModelScope(
-            project_model_facts(
-                model, llm_router, key_grants, valid_token.team_model_aliases, valid_token.team_id, aliases, "key"
-            ),
-            tuple(valid_token.access_group_ids or ()),
-        ),
         refuse_agent_keys=refuse_agent_keys,
         agent_id=valid_token.agent_id,
-        team=GroupedModelScope(
-            project_model_facts(
-                model,
-                llm_router,
-                team_object.models,
-                valid_token.team_model_aliases,
-                team_object.team_id,
-                aliases,
-                "team",
-            ),
-            tuple(team_object.access_group_ids or ()),
-        )
-        if team_object is not None
-        else None,
-        embedded_team=project_model_facts(
-            model,
-            llm_router,
-            valid_token.team_models or (),
-            valid_token.team_model_aliases,
-            valid_token.team_id,
-            aliases,
-            "team",
-        )
-        if team_object is None
-        else None,
-        member=project_model_facts(
-            model, llm_router, member_grants, team_id=valid_token.team_id, key_model_aliases=aliases, object_type="team"
-        ),
-        project=project_model_facts(
-            model,
-            llm_router,
-            project_object.models,
-            team_id=project_object.team_id,
-            key_model_aliases=aliases,
-            object_type="project",
-        )
-        if project_object is not None
-        else None,
+        team_present=team_object is not None,
+        embedded_team_grants=tuple(valid_token.team_models or ()),
+        member_grants=tuple(team_membership.litellm_budget_table.allowed_models or ())
+        if team_membership is not None and team_membership.litellm_budget_table is not None
+        else (),
+        project_grants=tuple(project_object.models) if project_object is not None else (),
     )
-    return await _load_groups(facts, valid_token, team_object, prisma_client)
+    return await _read(facts, _Sources(model, valid_token, llm_router, prisma_client, team_object, project_object))
 
 
-async def _load_groups(
-    facts: FallbackAuthorizationFacts,
-    token: UserAPIKeyAuth,
-    team: LiteLLM_TeamTable | None,
-    prisma: DatabaseClient | None,
-) -> FallbackAuthorizationFacts:
-    from litellm.proxy.auth.auth_checks import get_models_from_access_groups
+async def _read(facts: FallbackAuthorizationFacts, source: _Sources) -> FallbackAuthorizationFacts:
+    from litellm.proxy.auth.auth_checks import get_models_from_access_groups, key_model_aliases_for_auth_check
 
     decision: Final = fallback_authorization(facts)
     match decision.kind:
         case "Allow" | "Deny":
             return facts
-        case "ReadKeyGroups":
-            models: Final = await get_models_from_access_groups(facts.key.group_ids, prisma_client=prisma)
-            return await _load_groups(
-                replace(facts, key=replace(facts.key, group_models=tuple(models))), token, team, prisma
+        case "ReadKey":
+            grants: Final = key_model_grants(
+                object_model_grants(source.token), source.token.team_id, tuple(source.token.team_models or ())
             )
+            key: Final = GroupedModelScope(
+                project_model_facts(
+                    source.model,
+                    source.router,
+                    grants,
+                    source.token.team_model_aliases,
+                    source.token.team_id,
+                    key_model_aliases_for_auth_check(source.token),
+                    "key",
+                ),
+                tuple(source.token.access_group_ids or ()),
+            )
+            return await _read(replace(facts, key=key), source)
+        case "ReadTeam":
+            if source.team is None:
+                raise RuntimeError("missing fallback team source")
+            team: Final = GroupedModelScope(
+                project_model_facts(
+                    source.model,
+                    source.router,
+                    source.team.models,
+                    source.token.team_model_aliases,
+                    source.team.team_id,
+                    key_model_aliases_for_auth_check(source.token),
+                    "team",
+                ),
+                tuple(source.team.access_group_ids or ()),
+            )
+            return await _read(replace(facts, team=team), source)
+        case "ReadEmbeddedTeam":
+            embedded: Final = project_model_facts(
+                source.model,
+                source.router,
+                facts.embedded_team_grants,
+                source.token.team_model_aliases,
+                source.token.team_id,
+                key_model_aliases_for_auth_check(source.token),
+                "team",
+            )
+            return await _read(replace(facts, embedded_team=embedded), source)
+        case "ReadMember":
+            member: Final = project_model_facts(
+                source.model,
+                source.router,
+                facts.member_grants,
+                team_id=source.token.team_id,
+                key_model_aliases=key_model_aliases_for_auth_check(source.token),
+                object_type="team",
+            )
+            return await _read(replace(facts, member=member), source)
+        case "ReadProject":
+            if source.project is None:
+                raise RuntimeError("missing fallback project source")
+            project: Final = project_model_facts(
+                source.model,
+                source.router,
+                facts.project_grants,
+                team_id=source.project.team_id,
+                key_model_aliases=key_model_aliases_for_auth_check(source.token),
+                object_type="project",
+            )
+            return await _read(replace(facts, project=project), source)
+        case "ReadKeyGroups":
+            if facts.key is None:
+                raise RuntimeError("missing fallback key scope")
+            models: Final = await get_models_from_access_groups(facts.key.group_ids, prisma_client=source.prisma)
+            return await _read(replace(facts, key=replace(facts.key, group_models=tuple(models))), source)
         case "ReadTeamGroups":
             if facts.team is None:
-                raise RuntimeError("fallback requested missing team")
-            team_models: Final = await get_models_from_access_groups(facts.team.group_ids, prisma_client=prisma)
-            return await _load_groups(
-                replace(facts, team=replace(facts.team, group_models=tuple(team_models))), token, team, prisma
-            )
+                raise RuntimeError("missing fallback team scope")
+            team_models: Final = await get_models_from_access_groups(facts.team.group_ids, prisma_client=source.prisma)
+            return await _read(replace(facts, team=replace(facts.team, group_models=tuple(team_models))), source)
         case "ReadAssignedGroups":
-            assigned: Final = await get_authorized_resources_from_key_access_groups(token, team, "access_model_names")
-            return await _load_groups(replace(facts, assigned_models=tuple(assigned)), token, team, prisma)
+            assigned: Final = await get_authorized_resources_from_key_access_groups(
+                source.token, source.team, "access_model_names"
+            )
+            return await _read(replace(facts, assigned_models=tuple(assigned)), source)
