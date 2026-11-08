@@ -52,6 +52,18 @@ _OPENAI_PREFIX: Final = "openai/"
 _INPUT_SIZE_FIELDS: Final = ("messages", "prompt", "input", "query", "documents", "tools", "tool_choice")
 
 
+def _cheap_payload_size(val: object) -> int:
+    if isinstance(val, str):
+        return len(val)
+    if isinstance(val, (int, float, bool)):
+        return 10
+    if isinstance(val, Mapping):
+        return sum(len(str(k)) + _cheap_payload_size(v) for k, v in val.items())
+    if isinstance(val, (list, tuple, set)):
+        return sum(_cheap_payload_size(item) for item in val)
+    return len(str(val))
+
+
 def _approximate_gemini_part_size(part: Mapping[str, object]) -> int:
     if "inlineData" in part or "inline_data" in part or "fileData" in part or "file_data" in part:
         return 0
@@ -70,7 +82,7 @@ def _approximate_gemini_part_size(part: Mapping[str, object]) -> int:
     ):
         val = part.get(key)
         if val is not None:
-            return len(str(val))
+            return _cheap_payload_size(val)
     return 0
 
 
@@ -307,6 +319,35 @@ def _extract_gemini_part_text(part: Mapping[str, object]) -> str | None:
     return None
 
 
+_GEMINI_BUILTIN_RETRIEVAL_TOOL_KEYS: Final = frozenset(
+    {
+        "urlContext",
+        "url_context",
+        "googleSearch",
+        "google_search",
+        "googleSearchRetrieval",
+        "google_search_retrieval",
+        "vertexRetrieval",
+        "vertex_retrieval",
+        "enterpriseWebSearch",
+        "enterprise_web_search",
+        "googleMaps",
+        "google_maps",
+        "retrieval",
+    }
+)
+
+
+def _has_gemini_retrieval_tool(tools: object) -> bool:
+    if isinstance(tools, Mapping):
+        return any(key in tools for key in _GEMINI_BUILTIN_RETRIEVAL_TOOL_KEYS)
+    if isinstance(tools, list):
+        for tool in tools:
+            if isinstance(tool, Mapping) and any(key in tool for key in _GEMINI_BUILTIN_RETRIEVAL_TOOL_KEYS):
+                return True
+    return False
+
+
 def _extract_gemini_text(request_body: Mapping[str, object]) -> str | None:
     extra_body = request_body.get("extra_body")
     if isinstance(extra_body, Mapping):
@@ -352,6 +393,8 @@ def _extract_gemini_text(request_body: Mapping[str, object]) -> str | None:
 
     tools = request_body.get("tools")
     if tools is not None:
+        if _has_gemini_retrieval_tool(tools):
+            return None
         try:
             texts.append(json.dumps(tools))
         except Exception:

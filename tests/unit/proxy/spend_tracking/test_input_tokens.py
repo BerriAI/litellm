@@ -389,8 +389,22 @@ def test_approximate_input_size_skips_gemini_media_data() -> None:
             }
         ],
     }
-    # Sizing should only account for "Short prompt", not the 100,000 characters of inline media data
-    assert _approximate_input_size(body) < 1_000
+    assert _approximate_input_size(body) < 1_000, (
+        "Sizing should only account for Short prompt, not 100k chars of inline media data"
+    )
+
+
+def test_approximate_gemini_part_size_cheap_payload_sizing() -> None:
+    from litellm.proxy.spend_tracking.input_tokens import _approximate_gemini_part_size
+
+    part: Final = {
+        "functionResponse": {
+            "name": "large_output",
+            "response": {"results": [{"id": i, "data": "item" * 10} for i in range(100)]},
+        }
+    }
+    size = _approximate_gemini_part_size(part)
+    assert size > 1_000, "Should size nested functionResponse payloads"
 
 
 def test_count_input_tokens_for_model_gemini_extra_body_overrides_return_none() -> None:
@@ -413,20 +427,55 @@ def test_count_input_tokens_for_model_gemini_extra_body_overrides_return_none() 
     assert count_input_tokens_for_model(request_body=body_tools_override, model="gpt-4o") is None
 
 
+@pytest.mark.parametrize(
+    "retrieval_tool",
+    (
+        {"urlContext": {}},
+        {"url_context": {}},
+        {"googleSearch": {}},
+        {"google_search": {}},
+        {"googleSearchRetrieval": {}},
+        {"vertexRetrieval": {}},
+        {"enterpriseWebSearch": {}},
+    ),
+)
+def test_count_input_tokens_for_model_gemini_builtin_retrieval_returns_none(retrieval_tool: dict) -> None:
+    body: Final = {
+        "contents": [{"role": "user", "parts": [{"text": "What is on this website?"}]}],
+        "tools": [retrieval_tool],
+    }
+    assert (
+        count_input_tokens_for_model(
+            request_body=body, model="gpt-4o", route="/vertex_ai/models/gemini-pro:generateContent"
+        )
+        is None
+    ), "Built-in retrieval tools fetch external uncounted input, so must return None for max fallback"
+
+
+def test_count_input_tokens_for_model_gemini_function_declarations_counted() -> None:
+    body: Final = {
+        "contents": [{"role": "user", "parts": [{"text": "What is the weather?"}]}],
+        "tools": [{"functionDeclarations": [{"name": "get_weather", "description": "Get current weather"}]}],
+    }
+    tokens = count_input_tokens_for_model(
+        request_body=body, model="gpt-4o", route="/vertex_ai/models/gemini-pro:generateContent"
+    )
+    assert tokens is not None, "Function declarations without retrieval tools should be tokenized"
+    assert tokens > 5, "Tokens should account for prompt and function declaration schema"
+
+
 def test_count_input_tokens_for_model_responses_route_ignores_unrelated_contents() -> None:
     long_input: Final = "This is a long input prompt for Responses endpoint " * 10
     body: Final = {
         "input": long_input,
         "contents": "Hi",
     }
-    # For /v1/responses route, the billable input is 'input', not the decoy 'contents'
     tokens = count_input_tokens_for_model(request_body=body, model="gpt-4o", route="/v1/responses")
-    assert tokens is not None
-    assert tokens > 20
+    assert tokens is not None, "Responses route should count input tokens"
+    assert tokens > 20, "For /v1/responses route, the billable input is 'input', not the decoy 'contents'"
 
-    # Without route, input field still takes precedence over contents
     tokens_no_route = count_input_tokens_for_model(request_body=body, model="gpt-4o")
-    assert tokens_no_route == tokens
+    assert tokens_no_route == tokens, "Default route precedence should count input field over contents"
 
 
 def test_count_input_tokens_for_model_native_gemini_route_counts_contents() -> None:
@@ -434,21 +483,19 @@ def test_count_input_tokens_for_model_native_gemini_route_counts_contents() -> N
         "contents": [{"role": "user", "parts": [{"text": "Hello Gemini native"}]}],
         "input": "decoy",
     }
-    # On native Gemini route, contents is counted and decoy input is ignored
     tokens = count_input_tokens_for_model(
         request_body=body, model="gpt-4o", route="/vertex_ai/models/gemini-pro:generateContent"
     )
-    assert tokens is not None
-    assert tokens > 0
+    assert tokens is not None, "Native Gemini route should count contents"
+    assert tokens > 0, "On native Gemini route, contents is counted and decoy input is ignored"
 
 
 def test_count_input_tokens_for_model_gemini_preserves_whitespace() -> None:
     whitespace_text: Final = ("\n\t \n " * 100) + "Hi"
     body: Final = {"contents": [{"role": "user", "parts": [{"text": whitespace_text}]}]}
     tokens = count_input_tokens_for_model(request_body=body, model="gpt-4o")
-    assert tokens is not None
-    # Whitespace tokens must be preserved, not stripped to 1 token
-    assert tokens > 10
+    assert tokens is not None, "Input token count should not be None"
+    assert tokens > 10, "Whitespace tokens must be preserved, not stripped to 1 token"
 
 
 def test_count_input_tokens_for_model_azure_deployment_route_ignores_gemini_name() -> None:
@@ -456,12 +503,10 @@ def test_count_input_tokens_for_model_azure_deployment_route_ignores_gemini_name
         "messages": [{"role": "user", "content": "A long message with lots of tokens " * 10}],
         "contents": "Hi",
     }
-    # Azure OpenAI deployment route with gemini model name must still be treated as chat completions
     route: Final = "/openai/deployments/gemini-2.0-flash/chat/completions"
     tokens = count_input_tokens_for_model(request_body=body, model="gpt-4o", route=route)
-    assert tokens is not None
-    # Must count the long message tokens, not the 1 token from contents
-    assert tokens > 20
+    assert tokens is not None, "Azure deployment route should count tokens"
+    assert tokens > 20, "Must count the long message tokens, not the 1 token from contents"
 
 
 def test_count_input_tokens_for_model_vertex_claude_raw_predict_counts_messages() -> None:
@@ -472,5 +517,5 @@ def test_count_input_tokens_for_model_vertex_claude_raw_predict_counts_messages(
         "/vertex_ai/v1/projects/my-project/locations/us-east5/publishers/anthropic/models/claude-3-5-sonnet:rawPredict"
     )
     tokens = count_input_tokens_for_model(request_body=body, model="gpt-4o", route=route)
-    assert tokens is not None
-    assert tokens > 20
+    assert tokens is not None, "Vertex Claude rawPredict route should count tokens"
+    assert tokens > 20, "Must count Anthropic messages on rawPredict endpoints"
