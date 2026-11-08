@@ -544,3 +544,42 @@ def test_is_native_gemini_route_matches_endpoint_action_suffix() -> None:
         is_native_gemini_route("/vertex_ai/v1/projects/proj/locations/us/publishers/anthropic/models/claude:rawPredict")
         is False
     )
+
+
+def test_count_input_tokens_for_model_gemini_counts_response_schema() -> None:
+    schema: Final = {
+        "type": "object",
+        "properties": {
+            "name": {"type": "string"},
+            "age": {"type": "integer"},
+            "biography": {"type": "string", "description": "A long detailed life history " * 5},
+        },
+        "required": ["name", "age"],
+    }
+    body_prompt_only: Final = {"contents": [{"role": "user", "parts": [{"text": "Hello"}]}]}
+    tokens_prompt = count_input_tokens_for_model(request_body=body_prompt_only, model="gpt-4o")
+    assert tokens_prompt is not None, "Prompt tokens should be counted"
+
+    body_with_schema: Final = {
+        "contents": [{"role": "user", "parts": [{"text": "Hello"}]}],
+        "generationConfig": {"responseSchema": schema},
+    }
+    tokens_schema = count_input_tokens_for_model(request_body=body_with_schema, model="gpt-4o")
+    assert tokens_schema is not None, "Request with responseSchema should be counted"
+    assert tokens_schema > tokens_prompt, "Response schema must contribute billable input tokens to reservation"
+
+    body_snake: Final = {
+        "contents": [{"role": "user", "parts": [{"text": "Hello"}]}],
+        "generation_config": {"response_schema": schema},
+    }
+    assert count_input_tokens_for_model(request_body=body_snake, model="gpt-4o") == tokens_schema, (
+        "Snake case response_schema should yield identical token count"
+    )
+
+    body_extra_schema: Final = {
+        "contents": [{"role": "user", "parts": [{"text": "Hello"}]}],
+        "extra_body": {"responseSchema": schema},
+    }
+    assert count_input_tokens_for_model(request_body=body_extra_schema, model="gpt-4o") is None, (
+        "extra_body schema override must return None to preserve fallback"
+    )

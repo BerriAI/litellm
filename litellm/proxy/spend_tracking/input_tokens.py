@@ -115,6 +115,9 @@ def _approximate_input_size(request_body: Mapping[str, object]) -> int:
     sys_inst = request_body.get("systemInstruction") or request_body.get("system_instruction")
     if sys_inst is not None:
         size += _approximate_gemini_payload_size(sys_inst)
+    response_schema = _extract_gemini_response_schema(request_body)
+    if response_schema is not None:
+        size += _cheap_payload_size(response_schema)
     return size
 
 
@@ -348,6 +351,27 @@ def _has_gemini_retrieval_tool(tools: object) -> bool:
     return False
 
 
+_GEMINI_RESPONSE_SCHEMA_KEYS: Final = (
+    "responseSchema",
+    "response_schema",
+    "responseJsonSchema",
+    "response_json_schema",
+)
+
+
+def _extract_gemini_response_schema(request_body: Mapping[str, object]) -> object | None:
+    for key in _GEMINI_RESPONSE_SCHEMA_KEYS:
+        if key in request_body:
+            return request_body[key]
+    for config_key in ("generationConfig", "generation_config", "config"):
+        cfg = request_body.get(config_key)
+        if isinstance(cfg, Mapping):
+            for key in _GEMINI_RESPONSE_SCHEMA_KEYS:
+                if key in cfg:
+                    return cfg[key]
+    return None
+
+
 def _extract_gemini_text(request_body: Mapping[str, object]) -> str | None:
     extra_body = request_body.get("extra_body")
     if isinstance(extra_body, Mapping):
@@ -360,6 +384,13 @@ def _extract_gemini_text(request_body: Mapping[str, object]) -> str | None:
                 "tools",
                 "cachedContent",
                 "cached_content",
+                "responseSchema",
+                "response_schema",
+                "responseJsonSchema",
+                "response_json_schema",
+                "generationConfig",
+                "generation_config",
+                "config",
             )
         ):
             return None
@@ -399,6 +430,16 @@ def _extract_gemini_text(request_body: Mapping[str, object]) -> str | None:
             texts.append(json.dumps(tools))
         except Exception:
             return None
+
+    response_schema = _extract_gemini_response_schema(request_body)
+    if response_schema is not None:
+        if isinstance(response_schema, str):
+            texts.append(response_schema)
+        else:
+            try:
+                texts.append(json.dumps(response_schema))
+            except Exception:
+                return None
 
     contents = request_body.get("contents")
     if isinstance(contents, list):
