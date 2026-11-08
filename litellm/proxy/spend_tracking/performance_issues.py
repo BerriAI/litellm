@@ -232,8 +232,8 @@ class PerformanceIssueProjector:
     async def monitoring(self) -> PerformanceMonitoring:
         return await self._store.performance_monitoring(self._enterprise_access())
 
-    async def prune(self) -> None:
-        await self._store.prune(limit=10)
+    async def prune(self) -> bool:
+        return await self._store.prune(limit=10)
 
     async def run_pending(
         self, now: datetime, work: UsageAlertProjectionWork, rules: UsageAlertsRepository, deadline: float

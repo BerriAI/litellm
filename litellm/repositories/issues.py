@@ -751,11 +751,12 @@ class IssuesRepository:
             error,
         )
 
-    async def prune(self, retention_days: int = 90, limit: int = 500) -> None:
+    async def prune(self, retention_days: int = 90, limit: int = 500) -> bool:
         if not 1 <= limit <= 500 or retention_days < 1:
             raise ValueError("Retention and cleanup batch must be bounded positive values")
-        await self.database.query_raw(
-            """WITH expired AS MATERIALIZED (
+        rows: Final = TypeAdapter(tuple[_Count, ...]).validate_python(
+            await self.database.query_raw(
+                """WITH expired AS MATERIALIZED (
                 SELECT id FROM "LiteLLM_Issue" WHERE status<>'open'
                     AND updated_at<CURRENT_TIMESTAMP-make_interval(days=>$1::int)
                 ORDER BY updated_at,id LIMIT $2
@@ -779,7 +780,10 @@ class IssuesRepository:
                 DELETE FROM "LiteLLM_Issue" i WHERE id IN(SELECT id FROM expired)
                     AND NOT EXISTS(SELECT 1 FROM "LiteLLM_IssueSignal" s WHERE s.issue_id=i.id)
                     AND NOT EXISTS(SELECT 1 FROM "LiteLLM_IssueDelivery" d WHERE d.issue_id=i.id) RETURNING id
-            ) SELECT count(*)::int AS count FROM removed""",
-            retention_days,
-            limit,
+            ) SELECT ((SELECT count(*) FROM removed)+(SELECT count(*) FROM signals)
+                +(SELECT count(*) FROM bindings)+(SELECT count(*) FROM deliveries))::int AS count""",
+                retention_days,
+                limit,
+            )
         )
+        return rows[0].count > 0

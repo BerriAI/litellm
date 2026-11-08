@@ -834,16 +834,17 @@ class UsageAlertsRepository:
         )
         return tuple(UsageAlert.model_validate(row.record) for row in rows)
 
-    async def prune(self, retention_days: int = 90, limit: int = 500) -> None:
-        await self.database.query_raw(
+    async def prune(self, retention_days: int = 90, limit: int = 500) -> bool:
+        incidents: Final = await self.database.query_raw(
             """DELETE FROM "LiteLLM_UsageAlertIncident" WHERE id IN (SELECT id FROM "LiteLLM_UsageAlertIncident" WHERE status<>'open' AND updated_at<CURRENT_TIMESTAMP-($1::int * INTERVAL '1 day') ORDER BY updated_at LIMIT $2) RETURNING id""",
             retention_days,
             limit,
         )
-        await self.database.query_raw(
+        checkpoints: Final = await self.database.query_raw(
             """DELETE FROM "LiteLLM_UsageAlertCheckpoint" WHERE id IN (SELECT id FROM "LiteLLM_UsageAlertCheckpoint" WHERE completed AND expires_at<CURRENT_TIMESTAMP-INTERVAL '45 days' ORDER BY expires_at LIMIT $1) RETURNING id""",
             limit,
         )
+        return bool(incidents or checkpoints)
 
     async def team_role(self, team_id: str, user_id: str) -> str | None:
         rows: Final = TypeAdapter(tuple[Mapping[str, str], ...]).validate_python(
