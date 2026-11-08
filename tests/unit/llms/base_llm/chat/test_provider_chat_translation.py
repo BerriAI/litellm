@@ -874,12 +874,6 @@ def test_a_developer_cache_control_is_kept_only_within_the_four_mark_limit(
     assert _request_body(route)["system"] == (marked_system if keeps_developer_mark else unmarked_system)
 
 
-_WEATHER_TOOL: Final[Mapping[str, JsonValue]] = {
-    "type": "function",
-    "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {}}},
-}
-
-
 @pytest.mark.parametrize(
     ("case", "marked_system", "unmarked_system"), [_ANTHROPIC_SYSTEMS, _BEDROCK_CONVERSE_SYSTEMS]
 )
