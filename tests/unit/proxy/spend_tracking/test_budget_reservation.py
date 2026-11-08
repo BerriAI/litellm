@@ -602,21 +602,48 @@ def test_fixed_budget_window_requires_duration_and_reset_boundary(window: object
 def test_requested_output_tokens_gemini_generation_config() -> None:
     from litellm.proxy.spend_tracking.budget_reservation import _requested_output_tokens
 
-    body_camel: Final = {"generationConfig": {"maxOutputTokens": 4096}}
+    body_camel: Final = {"contents": [], "generationConfig": {"maxOutputTokens": 4096}}
     assert _requested_output_tokens(body_camel) == 4096
 
-    body_snake: Final = {"generationConfig": {"max_output_tokens": 2048}}
+    body_snake: Final = {"contents": [], "generationConfig": {"max_output_tokens": 2048}}
     assert _requested_output_tokens(body_snake) == 2048
 
-    body_config: Final = {"config": {"maxOutputTokens": 1024}}
+    body_config: Final = {"contents": [], "config": {"maxOutputTokens": 1024}}
     assert _requested_output_tokens(body_config) == 1024
+
+    # Non-native route with messages ignores generationConfig so client cannot artificially reduce reservation
+    body_chat: Final = {"messages": [{"role": "user", "content": "hi"}], "generationConfig": {"maxOutputTokens": 1}}
+    assert _requested_output_tokens(body_chat, route="/v1/chat/completions") is None
+
+    # Native route honors generationConfig
+    assert _requested_output_tokens(body_camel, route="/vertex_ai/models/gemini-pro:generateContent") == 4096
+
+    # Decoy generationConfig with small value cannot reduce higher config cap
+    body_decoy: Final = {
+        "contents": [],
+        "config": {"maxOutputTokens": 65536},
+        "generationConfig": {"maxOutputTokens": 1},
+    }
+    assert _requested_output_tokens(body_decoy) == 65536
 
 
 def test_output_multiplier_gemini_candidate_count() -> None:
     from litellm.proxy.spend_tracking.budget_reservation import _get_output_multiplier
 
-    body_cand: Final = {"generationConfig": {"candidateCount": 4}}
+    body_cand: Final = {"contents": [], "generationConfig": {"candidateCount": 4}}
     assert _get_output_multiplier(body_cand) == 4
 
-    body_config_cand: Final = {"config": {"candidate_count": 2}}
+    body_config_cand: Final = {"contents": [], "config": {"candidate_count": 2}}
     assert _get_output_multiplier(body_config_cand) == 2
+
+    # Non-native chat completions route ignores generationConfig candidateCount
+    body_chat: Final = {"messages": [{"role": "user", "content": "hi"}], "generationConfig": {"candidateCount": 5}}
+    assert _get_output_multiplier(body_chat, route="/v1/chat/completions") == 1
+
+    # Decoy generationConfig cannot reduce higher candidate count
+    body_decoy: Final = {
+        "contents": [],
+        "config": {"candidateCount": 8},
+        "generationConfig": {"candidateCount": 1},
+    }
+    assert _get_output_multiplier(body_decoy) == 8

@@ -232,68 +232,120 @@ def _served_by_openai(deployment: object) -> bool:
     return served_provider == "openai"
 
 
+def _extract_gemini_part_text(part: Mapping[str, object]) -> str | None:
+    if not isinstance(part, Mapping):
+        return None
+    if isinstance(part.get("text"), str):
+        return part["text"]
+    for key in ("functionResponse", "function_response"):
+        if key in part:
+            val = part[key]
+            try:
+                return json.dumps(val) if val is not None else ""
+            except Exception:
+                return None
+    for key in ("functionCall", "function_call"):
+        if key in part:
+            val = part[key]
+            try:
+                return json.dumps(val) if val is not None else ""
+            except Exception:
+                return None
+    for key in ("executableCode", "executable_code"):
+        if key in part:
+            val = part[key]
+            try:
+                return json.dumps(val) if val is not None else ""
+            except Exception:
+                return None
+    for key in ("codeExecutionResult", "code_execution_result"):
+        if key in part:
+            val = part[key]
+            try:
+                return json.dumps(val) if val is not None else ""
+            except Exception:
+                return None
+    return None
+
+
 def _extract_gemini_text(request_body: Mapping[str, object]) -> str | None:
     texts: list[str] = []
 
     sys_inst = request_body.get("systemInstruction") or request_body.get("system_instruction")
-    if isinstance(sys_inst, dict):
+    if isinstance(sys_inst, Mapping):
         parts = sys_inst.get("parts")
         if isinstance(parts, list):
             for part in parts:
-                if isinstance(part, dict) and isinstance(part.get("text"), str):
-                    texts.append(part["text"])
+                if isinstance(part, Mapping):
+                    part_text = _extract_gemini_part_text(part)
+                    if part_text is None:
+                        return None
+                    texts.append(part_text)
+                elif isinstance(part, str):
+                    texts.append(part)
+                else:
+                    return None
         elif isinstance(sys_inst.get("text"), str):
             texts.append(sys_inst["text"])
+        else:
+            return None
     elif isinstance(sys_inst, str):
         texts.append(sys_inst)
+    elif sys_inst is not None:
+        return None
 
     tools = request_body.get("tools")
     if tools is not None:
         try:
             texts.append(json.dumps(tools))
         except Exception:
-            pass
+            return None
 
     contents = request_body.get("contents")
     if isinstance(contents, list):
         for item in contents:
-            if isinstance(item, dict):
+            if isinstance(item, Mapping):
                 parts = item.get("parts")
                 if isinstance(parts, list):
                     for part in parts:
-                        if not isinstance(part, dict):
-                            continue
-                        if isinstance(part.get("text"), str):
-                            texts.append(part["text"])
-                        elif "functionResponse" in part:
-                            try:
-                                texts.append(json.dumps(part["functionResponse"]))
-                            except Exception:
-                                pass
-                        elif "functionCall" in part:
-                            try:
-                                texts.append(json.dumps(part["functionCall"]))
-                            except Exception:
-                                pass
-                        elif "inlineData" in part or "inline_data" in part or "fileData" in part or "file_data" in part:
+                        if isinstance(part, Mapping):
+                            part_text = _extract_gemini_part_text(part)
+                            if part_text is None:
+                                return None
+                            texts.append(part_text)
+                        elif isinstance(part, str):
+                            texts.append(part)
+                        else:
                             return None
                 elif isinstance(item.get("text"), str):
                     texts.append(item["text"])
+                else:
+                    return None
             elif isinstance(item, str):
                 texts.append(item)
-    elif isinstance(contents, dict):
+            else:
+                return None
+    elif isinstance(contents, Mapping):
         parts = contents.get("parts")
         if isinstance(parts, list):
             for part in parts:
-                if isinstance(part, dict):
-                    if isinstance(part.get("text"), str):
-                        texts.append(part["text"])
-                    elif "inlineData" in part or "inline_data" in part or "fileData" in part or "file_data" in part:
+                if isinstance(part, Mapping):
+                    part_text = _extract_gemini_part_text(part)
+                    if part_text is None:
                         return None
+                    texts.append(part_text)
+                elif isinstance(part, str):
+                    texts.append(part)
+                else:
+                    return None
         elif isinstance(contents.get("text"), str):
             texts.append(contents["text"])
+        else:
+            return None
     elif isinstance(contents, str):
         texts.append(contents)
+    elif contents is not None:
+        return None
 
     combined = " ".join(texts).strip()
     return combined if combined else None

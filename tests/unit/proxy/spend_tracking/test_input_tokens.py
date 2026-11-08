@@ -323,3 +323,36 @@ def test_count_input_tokens_for_model_gemini_inline_data_returns_none() -> None:
         ],
     }
     assert count_input_tokens_for_model(request_body=body, model="gpt-4o") is None
+
+
+def test_count_input_tokens_for_model_gemini_executable_code() -> None:
+    body: Final = {
+        "contents": [
+            {
+                "role": "model",
+                "parts": [{"executableCode": {"language": "PYTHON", "code": "print('hello world')"}}],
+            },
+            {
+                "role": "user",
+                "parts": [{"codeExecutionResult": {"outcome": "OUTCOME_OK", "output": "hello world\n"}}],
+            },
+        ],
+    }
+    tokens: Final = count_input_tokens_for_model(request_body=body, model="gpt-4o")
+    assert tokens is not None
+    assert tokens > 0
+
+
+def test_count_input_tokens_for_model_gemini_unrecognized_part_returns_none() -> None:
+    body: Final = {
+        "contents": [
+            {
+                "role": "user",
+                "parts": [
+                    {"text": "Calculate something"},
+                    {"unrecognizedFutureBillablePart": {"foo": "bar"}},
+                ],
+            }
+        ],
+    }
+    assert count_input_tokens_for_model(request_body=body, model="gpt-4o") is None
