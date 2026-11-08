@@ -12,6 +12,7 @@ from uuid import NAMESPACE_URL, uuid5
 from litellm._logging import verbose_proxy_logger
 from litellm.models.issues import IssueStore
 from litellm.proxy.spend_tracking.daily_usage_alerts import DailyComparison, compare_daily_usage, metric_value
+from litellm.repositories.analytics_budget import AnalyticsCapacityError
 from litellm.repositories.provider_latency import ProviderLatencyEvidence, ProviderLatencyRepository
 from litellm.repositories.usage_alert_metrics import (
     DailyAlertMetrics,
@@ -250,6 +251,8 @@ class PerformanceIssueProjector:
         observed_at: Final = position.observed_at or now.replace(microsecond=now.microsecond // 1000 * 1000)
         projection_deadline: Final = deadline - min(2, max(0, deadline - asyncio.get_running_loop().time()) / 4)
         while asyncio.get_running_loop().time() < projection_deadline:
+            if not (await self.monitoring()).enabled:
+                return False
             if (next_position := await self._projection_page(position, work, observed_at)) is None:
                 await self._store.complete_projection(work.day, position.version)
                 await self.notify(deadline)
@@ -710,6 +713,8 @@ class PerformanceIssueProjector:
             item.cohort_key: item
             for item in await self._store.publish_performance_issues(inputs, self._enterprise_access())
         }
+        if len(saved) < len(inputs) and not (await self.monitoring()).enabled:
+            raise AnalyticsCapacityError("Performance monitoring paused before this page was published")
         admitted: Final = tuple(
             candidate for candidate in candidates if targets[candidate.source.alert.id].issue.cohort_key in saved
         )

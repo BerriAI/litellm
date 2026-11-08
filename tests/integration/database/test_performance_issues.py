@@ -1208,3 +1208,37 @@ async def test_large_custom_rule_scope_does_not_starve_other_scopes_on_resume(db
             _DAY.isoformat(),
         )
         assert completed == [{"count": 20}]
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_paused_projection_preserves_unpublished_pages_for_resume(db: ManagementDatabase) -> None:
+    async with _isolated(db) as prisma:
+        await _seed(prisma)
+        job: Final = UsageAlertJob.from_prisma(
+            prisma, SlackAlerting(alerting=[], alert_types=[]), enterprise_access=lambda: True
+        )
+        await job._store.ensure_default_rules(job._defaults)
+        await job._evaluate(_DAY, asyncio.get_running_loop().time() + 60)
+        work: Final = await job._store.pending_projection_work()
+        projector: Final = job._performance_projection
+        assert work is not None and projector is not None
+        store: Final = IssuesRepository.from_prisma(prisma)
+        before: Final = await job._store.projection_cursor(work)
+        await store.set_performance_monitoring(False)
+        assert not await projector.run_pending(_NOW, work, job._store, asyncio.get_running_loop().time() + 60)
+        assert await job._store.projection_cursor(work) == before
+        assert not await store.projection_completed(work.day, work.version)
+        assert (await store.list_issues()).total == 0
+        sources: Final = await store.active_signals(_DAY, scope_type="key", metric="spend", limit=10)
+        assert sources
+        from litellm.repositories.analytics_budget import AnalyticsCapacityError
+
+        with pytest.raises(AnalyticsCapacityError, match="paused"):
+            await projector._project_page(sources, "key", _DAY, _NOW)
+        assert await job._store.projection_cursor(work) == before
+        await store.set_performance_monitoring(True)
+        assert await projector.run_pending(_NOW, work, job._store, asyncio.get_running_loop().time() + 60)
+        page: Final = await store.list_issues()
+        assert page.total == 1 and page.data[0].family == "spend"
+        signals: Final = await store.list_signals(page.data[0].id)
+        assert any(signal.performance is not None and signal.performance.metric == "requests" for signal in signals.data)
