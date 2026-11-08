@@ -228,6 +228,35 @@ describe("unified issue investigations", () => {
     expect(screen.getByText(/enough recorded usage history/)).toBeInTheDocument();
   });
 
+  it("resolves directly from the feed without fetching individual alerts", async () => {
+    renderWithProviders(<IssuesInbox />);
+    await screen.findByRole("link", { name: "Spend on Checkout key rose to 20× normal" });
+    const feed = screen.getByRole("list", { name: "Alerts", exact: true });
+    await userEvent.click(within(feed).getAllByRole("button", { name: "Mark resolved" })[0]);
+    await waitFor(() =>
+      expect(calls.some((call) => call.method === "PATCH" && call.path === `/issues/${SPEND_ISSUE.id}`)).toBe(true),
+    );
+    expect(
+      calls.filter(
+        (call) => call.method === "GET" && call.path.startsWith("/issues/") && !call.path.endsWith("/families"),
+      ),
+    ).toHaveLength(0);
+    expect(calls.find((call) => call.method === "PATCH")?.body).toEqual({
+      status: "resolved",
+      expected_status: "open",
+    });
+  });
+
+  it("leaves missing history unavailable instead of fabricating a chart", async () => {
+    detail = {
+      ...SPEND_ISSUE,
+      comparisons: SPEND_ISSUE.comparisons?.map((comparison) => ({ ...comparison, history: [] })),
+    };
+    renderWithProviders(<IssueDetail id={detail.id} />);
+    expect(await screen.findByText(/Daily history was not saved/)).toBeInTheDocument();
+    expect(screen.queryByRole("figure")).not.toBeInTheDocument();
+  });
+
   it("explains the change and links to entity Activity without loading investigation data", async () => {
     const user = userEvent.setup();
     renderWithProviders(<IssueDetail id={SPEND_ISSUE.id} />);
@@ -235,7 +264,7 @@ describe("unified issue investigations", () => {
       await screen.findByRole("heading", { name: "Spend on Checkout key rose to 20× normal" }),
     ).toBeInTheDocument();
     expect(screen.getByText("$600.00 on Nov 4, 2026 UTC, compared with the usual $30.00.")).toBeInTheDocument();
-    expect(screen.getByRole("figure", { name: "Spend comparison" })).toBeInTheDocument();
+    expect(screen.getByRole("figure", { name: "Daily spend" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "View key activity" })).toHaveAttribute(
       "href",
       "/ui/api-keys?key=reporting-test-id&detail_tab=activity&activity_from=2026-10-28&activity_to=2026-11-04",
@@ -355,7 +384,8 @@ describe("unified issue investigations", () => {
     renderWithProviders(<IssuesInbox />);
     await screen.findByRole("link", { name: "Spend on Checkout key rose to 20× normal" });
     renderWithProviders(<IssueDetail id={SPEND_ISSUE.id} />);
-    await screen.findByRole("button", { name: "Mark resolved" });
+    const context = within(await screen.findByRole("complementary", { name: "Alert context" }));
+    await context.findByRole("button", { name: "Mark resolved" });
     const fetchBefore = vi.mocked(globalThis.fetch).getMockImplementation()!;
     let resume: (() => void) | undefined;
     const stalled = new Promise<void>((resolve) => {
@@ -367,9 +397,9 @@ describe("unified issue investigations", () => {
       return fetchBefore(input, init);
     });
     try {
-      await user.click(screen.getByRole("button", { name: "Mark resolved" }));
-      expect(await screen.findByRole("button", { name: "Reopen" })).toBeInTheDocument();
-      expect(screen.queryByRole("button", { name: "Mark resolved" })).not.toBeInTheDocument();
+      await user.click(context.getByRole("button", { name: "Mark resolved" }));
+      expect(await context.findByRole("button", { name: "Reopen" })).toBeInTheDocument();
+      expect(context.queryByRole("button", { name: "Mark resolved" })).not.toBeInTheDocument();
     } finally {
       await act(async () => {
         resume?.();
