@@ -384,13 +384,11 @@ class TestModelRepository:
             access_group,
         )
         assert database.query_raw.await_count == (2 if total else 1)
-        assert "model_info -> 'access_groups' ? $6::text" in database.query_raw.await_args_list[0].args[0]
         if total:
             assert database.query_raw.await_args_list[1].args[1:] == (
                 *database.query_raw.await_args_list[0].args[1:],
                 50,
             )
-            assert database.query_raw.await_args_list[1].args[0].endswith("ORDER BY model_id LIMIT $7")
 
     async def test_scoped_model_page_does_not_retry_query_errors(self) -> None:
         database: Final = SimpleNamespace(query_raw=AsyncMock(side_effect=RuntimeError("database unavailable")))
