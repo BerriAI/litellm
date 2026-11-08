@@ -252,10 +252,13 @@ def _message_cache_controls(message: object) -> tuple[object, ...]:
     fields: Final = as_str_mapping(message)
     if fields is None:
         return ()
+    provider_fields: Final = as_str_mapping(fields.get("provider_specific_fields")) or MappingProxyType({})
     return (
         _own_cache_control(fields)
         + _each_cache_control(_own_cache_control, fields.get("content"))
         + _each_cache_control(_own_cache_control, fields.get("tool_calls"))
+        + _each_cache_control(_own_cache_control, provider_fields.get("web_search_results"))
+        + _each_cache_control(_own_cache_control, provider_fields.get("tool_results"))
     )
 
 
@@ -267,8 +270,12 @@ def _tool_cache_controls(tool: object) -> tuple[object, ...]:
 def _request_cache_controls(fields: Mapping[str, object]) -> tuple[object, ...]:
     extra_body: Final = as_str_mapping(fields.get("extra_body")) or MappingProxyType({})
     top_level: Final = extra_body.get("cache_control", fields.get("cache_control"))
-    return (() if top_level is None else (top_level,)) + _each_cache_control(
-        _tool_cache_controls, extra_body["tools"] if "tools" in extra_body else fields.get("tools")
+    return (
+        (() if top_level is None else (top_level,))
+        + _each_cache_control(
+            _tool_cache_controls, extra_body["tools"] if "tools" in extra_body else fields.get("tools")
+        )
+        + _each_cache_control(_message_cache_controls, extra_body.get("messages"))
     )
 
 
