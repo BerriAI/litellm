@@ -873,6 +873,14 @@ def test_non_admin_key_allowed_apply_guardrail_without_explicit_allowlist(route,
     request = MagicMock(spec=Request)
     request.query_params = {}
 
+    assert (
+        RouteChecks.is_virtual_key_allowed_to_call_route(
+            route=route,
+            valid_token=valid_token,
+        )
+        is True
+    )
+
     RouteChecks.non_proxy_admin_allowed_routes_check(
         user_obj=user_obj,
         _user_role=LitellmUserRoles.INTERNAL_USER.value,
