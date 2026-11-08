@@ -335,6 +335,33 @@ describe("unified issue investigations", () => {
     expect(await screen.findByRole("button", { name: "Reopen" })).toBeInTheDocument();
   });
 
+  it("shows the saved status while dependent refreshes are stalled", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<IssuesInbox />);
+    await screen.findByRole("link", { name: SPEND_ISSUE.title });
+    renderWithProviders(<IssueDetail id={SPEND_ISSUE.id} />);
+    await screen.findByRole("button", { name: "Mark resolved" });
+    const fetchBefore = vi.mocked(globalThis.fetch).getMockImplementation()!;
+    let resume: (() => void) | undefined;
+    const stalled = new Promise<void>((resolve) => {
+      resume = resolve;
+    });
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const request = input instanceof Request ? input : new Request(input, init);
+      if (request.method === "GET" && new URL(request.url).pathname.startsWith("/issues")) await stalled;
+      return fetchBefore(input, init);
+    });
+    try {
+      await user.click(screen.getByRole("button", { name: "Mark resolved" }));
+      expect(await screen.findByRole("button", { name: "Reopen" })).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Mark resolved" })).not.toBeInTheDocument();
+    } finally {
+      await act(async () => {
+        resume?.();
+      });
+    }
+  });
+
   it("uses the same retirement source/provenance while keeping migration details available", async () => {
     detail = RETIREMENT_ISSUE;
     renderWithProviders(<IssueDetail id={detail.id} />);

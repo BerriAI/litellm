@@ -2,6 +2,8 @@ import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useQueryStates } from "nuqs";
 import { ArrowLeft, Copy } from "lucide-react";
+import { useCurrentUser } from "@/app/(dashboard)/hooks/currentUser/useCurrentUser";
+import { getProxyBaseUrl } from "@/components/networking";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { Button } from "@/components/ui/button";
 import AdvancedDatePicker from "@/components/shared/advanced_date_picker";
@@ -40,15 +42,18 @@ function resourceHref(issue: Issue): string | undefined {
 }
 
 function IssueStatusActions({ issue }: { issue: Issue }) {
-  const { isViewOnly } = useAuthorized();
+  const { isViewOnly, accessToken } = useAuthorized();
+  const { data: user } = useCurrentUser(accessToken);
   const client = useQueryClient();
   const mutation = useMutation({
     mutationFn: (status: IssueStatus) => updateIssueStatus(issue, status),
-    onSuccess: () =>
-      Promise.all([
+    onSuccess: (updated) => {
+      client.setQueryData(["issues", getProxyBaseUrl(), user?.user_id, user?.user_role, "detail", issue.id], updated);
+      return Promise.all([
         client.invalidateQueries({ queryKey: ["issues"] }),
         client.invalidateQueries({ queryKey: ["deprecationAlerts"] }),
-      ]),
+      ]);
+    },
   });
   const inactiveRetirement = issue.kind === "model_deprecation" && issue.active === false;
   if (isViewOnly || issue.can_update_status !== true) return null;
