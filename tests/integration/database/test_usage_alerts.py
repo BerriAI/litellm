@@ -536,3 +536,24 @@ async def test_reported_model_search_preserves_exact_identity_and_cursor(
             assert gateway.request("GET", "/alerts/models", key=key).status_code == 403
     finally:
         await db.prisma.writer_db.execute_raw('DELETE FROM "LiteLLM_DailyUserSpend" WHERE api_key=$1', prefix)
+
+
+@pytest.mark.asyncio(loop_scope="session")
+@pytest.mark.parametrize("roles", (("user", "admin"), ("admin", "user"), ("user",)))
+async def test_duplicate_team_membership_preserves_admin_access(
+    db: ManagementDatabase, roles: tuple[str, ...]
+) -> None:
+    import json
+
+    repository: Final = UsageAlertsRepository.from_prisma(db.prisma)
+    identity: Final = "duplicate-role-" + uuid4().hex
+    await repository.database.query_raw(
+        'INSERT INTO "LiteLLM_TeamTable" (team_id,members_with_roles) VALUES ($1,$2::jsonb)',
+        identity,
+        json.dumps(tuple({"user_id": identity, "role": role} for role in roles)),
+    )
+    try:
+        assert await repository.team_role(identity, identity) == ("admin" if "admin" in roles else "user")
+        assert await repository.team_role(identity, "outsider") is None
+    finally:
+        await repository.database.query_raw('DELETE FROM "LiteLLM_TeamTable" WHERE team_id=$1', identity)
