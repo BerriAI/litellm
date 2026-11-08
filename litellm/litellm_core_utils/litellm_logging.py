@@ -614,6 +614,7 @@ _ORPHANED_FAILURE_LOG_TASKS: Final[set["asyncio.Future[None]"]] = set()  # mutab
 
 
 _ABSENT: Final = object()
+_NO_LOGGED_DETAILS: Final[Mapping[str, object]] = MappingProxyType({})
 _LOGGED_PROMPT_PATHS: Final = (
     ("messages",),
     ("input",),
@@ -641,9 +642,14 @@ def _with_prompt_copy_replaced(
     details: Mapping[str, object], path: Sequence[str], raw: object, replacement: object
 ) -> Mapping[str, object]:
     containers: Final = tuple(itertools.accumulate(path, _logged_field, initial=details))
-    if containers[-1] != raw:
+    logged_copy: Final = containers[-1]
+    if logged_copy is _ABSENT or logged_copy is None or logged_copy == replacement:
         return details
-    rebuilt: Final = functools.reduce(_with_field, reversed(tuple(zip(containers, path))), replacement)
+    rebuilt: Final = functools.reduce(
+        _with_field,
+        reversed(tuple(zip(containers, path))),
+        replacement if logged_copy == raw else redacted_request_entries(_NO_LOGGED_DETAILS)[path[-1]],
+    )
     return cast(Mapping[str, object], rebuilt)  # cast-ok: the outermost rebuilt container is details
 
 

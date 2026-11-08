@@ -9456,6 +9456,48 @@ async def test_failure_log_masks_the_prompt_copies_a_proxy_rejection_logs(
     assert messages == _RAW_LOG
 
 
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("no_global_callbacks")
+@pytest.mark.parametrize("sync", [True, False])
+async def test_failure_log_redacts_a_request_body_prompt_that_differs_from_the_masked_one(sync: bool) -> None:
+    templated_messages: Final = [{"role": "system", "content": "Answer briefly"}, *copy.deepcopy(_RAW_LOG)]
+    recorder: Final = _ProxyRequestRecorder()
+    failures: Final = _FailureLogRecorder()
+    logging_obj: Final = LitellmLogging(
+        model="gpt-4o-mini",
+        messages=templated_messages,
+        stream=False,
+        call_type="completion" if sync else "acompletion",
+        start_time=datetime.datetime(2026, 1, 1),
+        litellm_call_id="templated-proxy-rejection",
+        function_id="templated-proxy-rejection",
+        dynamic_failure_callbacks=[_NameMaskingGuardrail(), recorder, failures],
+        dynamic_async_failure_callbacks=[_NameMaskingGuardrail(), recorder, failures],
+    )
+    logging_obj.update_environment_variables(
+        litellm_params={
+            "metadata": {},
+            "proxy_server_request": {"url": "/chat/completions", "body": {"messages": copy.deepcopy(_RAW_LOG)}},
+        },
+        optional_params={},
+    )
+    error: Final = litellm.RateLimitError("429", "openai", "gpt-4o-mini")
+
+    if sync:
+        await asyncio.to_thread(logging_obj.failure_handler, error, "tb")
+    else:
+        await logging_obj.async_failure_handler(error, "tb")
+
+    assert len(recorder.request_copies) == 1
+    _, proxy_server_request = recorder.request_copies[0]
+    assert cast(dict[str, object], proxy_server_request)["body"] == {"messages": _REDACTED_LOG}
+    lifted: Final = logging_obj.failure_logged_proxy_server_request(
+        {"url": "/chat/completions", "body": {"messages": copy.deepcopy(_RAW_LOG)}}
+    )
+    assert lifted["body"] == {"messages": _REDACTED_LOG}
+    assert failures.logged == [([templated_messages[0], *_MASKED_LOG], [templated_messages[0], *_MASKED_LOG])]
+
+
 async def _fail_once_the_mask_outlasts_its_time_bound(
     clock: _SkippableClockLoop, guardrail: _BlockingNameMaskingGuardrail, recorder: _FailureLogRecorder
 ) -> None:
