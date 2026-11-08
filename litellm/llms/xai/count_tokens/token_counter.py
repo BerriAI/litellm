@@ -11,6 +11,11 @@ from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationEr
 import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import XAI_API_BASE
+from litellm.litellm_core_utils.prompt_templates.chat_template_tools import (
+    ChatTemplateToolSection,
+    chat_template_tool_section,
+)
+from litellm.litellm_core_utils.token_counter import chat_template_tool_schemas
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.anthropic.messages.adapters.transformation import LiteLLMAnthropicMessagesAdapter
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
@@ -81,16 +86,26 @@ def _turn(label: str, messages: Iterable[_Message]) -> str:
     return f"{label}: " + "\n".join(message.text for message in messages) + _SEPARATOR
 
 
+def _tool_text(tools: Sequence[Mapping[str, object]] | None, tool_section: ChatTemplateToolSection | None) -> str:
+    if not tools:
+        return ""
+    if tool_section is None:
+        return f"System: {json.dumps(list(tools), ensure_ascii=False)}{_SEPARATOR}"
+    schemas: Final = chat_template_tool_schemas(tools, tool_section)
+    return "" if schemas is None else f"{schemas}\n"
+
+
 def rendered_grok_prompt(
-    messages: Sequence[Mapping[str, object]], tools: Sequence[Mapping[str, object]] | None
+    messages: Sequence[Mapping[str, object]],
+    tools: Sequence[Mapping[str, object]] | None,
+    tool_section: ChatTemplateToolSection | None = None,
 ) -> str | None:
     try:
         parsed: Final = _MESSAGES.validate_python(messages)
     except ValidationError:
         return None
-    tool_turn: Final = (f"System: {json.dumps(list(tools), ensure_ascii=False)}{_SEPARATOR}",) if tools else ()
     turns: Final = (_turn(label, grouped) for label, grouped in groupby(parsed, key=lambda message: message.label))
-    return "".join((*tool_turn, *turns))
+    return _tool_text(tools, tool_section) + "".join(turns)
 
 
 def _openai_shape(
@@ -179,7 +194,7 @@ class XAITokenCounter(BaseTokenCounter):
             return None
         model: Final = model_to_use.removeprefix(f"{LlmProviders.XAI.value}/")
         shaped: Final = _openai_shape(model, messages, tools, system, messages_format)
-        text: Final = None if shaped is None else rendered_grok_prompt(*shaped)
+        text: Final = None if shaped is None else rendered_grok_prompt(*shaped, chat_template_tool_section(model))
         if not text:
             return None
         litellm_params: Final = _LITELLM_PARAMS.validate_python((deployment or {}).get("litellm_params") or {})

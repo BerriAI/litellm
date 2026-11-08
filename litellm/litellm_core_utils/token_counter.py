@@ -1166,22 +1166,26 @@ def _without_false_strict(function: Mapping[str, object]) -> Mapping[str, object
     return {key: value for key, value in function.items() if key != "strict" or value}
 
 
-def _count_chat_template_tools(
-    count_function: TokenCounterFunction,
-    tools: Sequence[object],
-    includes_system_message: bool,
-    tool_section: ChatTemplateToolSection,
-) -> int:
+def chat_template_tool_schemas(tools: Sequence[object], tool_section: ChatTemplateToolSection) -> str | None:
     named_functions: Final = tuple(_named_function_definitions(tools))
     functions: Final = (
         tuple(map(_without_false_strict, named_functions))
         if tool_section.renders_strict_only_when_true
         else named_functions
     )
-    if not functions:
+    return tool_section.render_tool_schemas(functions) if functions else None
+
+
+def _count_chat_template_tools(
+    count_function: TokenCounterFunction,
+    tools: Sequence[object],
+    includes_system_message: bool,
+    tool_section: ChatTemplateToolSection,
+) -> int:
+    schemas: Final = chat_template_tool_schemas(tools, tool_section)
+    if schemas is None:
         return 0
     system_turn_tokens: Final = 0 if includes_system_message else tool_section.implicit_system_turn_tokens
-    schemas: Final = tool_section.render_tool_schemas(functions)
     return tool_section.preamble_tokens + system_turn_tokens + count_function(schemas)
 
 

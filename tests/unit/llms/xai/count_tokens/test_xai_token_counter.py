@@ -109,6 +109,38 @@ async def test_anthropic_request_renders_tools_and_system_ahead_of_the_turns() -
 
 
 @pytest.mark.parametrize(
+    ("model", "rendered_tool"),
+    [
+        ("grok-4-1-fast-reasoning", '{"name":"quote","description":"Stock quote","parameters":{"type":"object"}}'),
+        ("grok-4.3", '{"name": "quote", "description": "Stock quote", "parameters": {"type": "object"}}'),
+    ],
+)
+@pytest.mark.asyncio
+async def test_tools_go_to_xai_as_the_models_chat_template_renders_them(model: str, rendered_tool: str) -> None:
+    xai: Final = _XAI(_tokens(9))
+
+    await _counter(xai).count_tokens(
+        model_to_use=model,
+        messages=[{"role": "user", "content": "price?"}],
+        contents=None,
+        deployment=XAI_DEPLOYMENT,
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "quote",
+                    "description": "Stock quote",
+                    "parameters": {"type": "object"},
+                    "strict": False,
+                },
+            }
+        ],
+    )
+
+    assert xai.texts == (f"{rendered_tool}\nHuman: price?<|separator|>\n\n",)
+
+
+@pytest.mark.parametrize(
     "deployment",
     [
         AZURE_DEPLOYMENT,
