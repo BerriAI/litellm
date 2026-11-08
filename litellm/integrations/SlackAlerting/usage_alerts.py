@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import json
 import os
+from contextvars import Context
 from html import escape
 from itertools import islice
 from typing import TYPE_CHECKING, ClassVar, Final
@@ -13,6 +14,7 @@ from uuid import NAMESPACE_URL, uuid5
 from httpx import Response
 from pydantic import TypeAdapter
 
+from litellm._logging import verbose_proxy_logger
 from litellm.models.issues import IssueStore
 from litellm.types.integrations.slack_alerting import AlertType
 from litellm.types.proxy.issues import AlertDeliveryBinding, AlertDeliveryInput, AlertPendingDelivery
@@ -163,7 +165,7 @@ class UsageAlertDelivery:
                 if cls._email_key == key:
                     cls._clear_email(previous)
                     return previous.result()
-        task: Final = asyncio.create_task(cls._send_email(recipient, subject, html))
+        task: Final = Context().run(asyncio.create_task, self._send_email_with_receipt(key, recipient, subject, html))
         cls._email_task = task
         cls._email_key = key
         cls._email_store = self._store
@@ -177,6 +179,14 @@ class UsageAlertDelivery:
             raise
         else:
             cls._clear_email(task)
+
+    async def _send_email_with_receipt(self, key: str, recipient: str, subject: str, html: str) -> None:
+        await self._send_email(recipient, subject, html)
+        if self._store is not None:
+            try:
+                await asyncio.wait_for(self._store.mark_delivery_sent(key), timeout=1)
+            except Exception:  # noqa: BLE001  # retain the successful send so the next delivery can retry its receipt
+                verbose_proxy_logger.warning("Alert email receipt deferred after a successful send")
 
     @classmethod
     def _clear_email(cls, task: asyncio.Task[None]) -> None:

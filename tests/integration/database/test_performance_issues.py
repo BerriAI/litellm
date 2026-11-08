@@ -566,6 +566,9 @@ async def test_provider_issue_keeps_an_independent_noisy_key_and_recovers_from_f
                 _DAY.isoformat(),
                 noisy,
             )
+        await job._run(_NOW + timedelta(days=1))
+        pending: Final = await issues.get_issue(provider.id)
+        assert pending is not None and pending.active, "Partial accounting must not resolve a provider alert"
         await _coverage(prisma, _DAY + timedelta(days=1))
         await job._run(_NOW + timedelta(days=1))
         recovered: Final = await issues.get_issue(provider.id)
@@ -693,7 +696,7 @@ async def test_disabled_primary_requires_another_eligible_healthy_source_to_reco
             if item.family == "spend" and item.cohort.scope_id == _KEY_A
         )
         assert await job._store.save_rule(definition.model_copy(update={"enabled": False}), None, custom)
-        await issues.recover_issues(_DAY)
+        await issues.recover_issues(_DAY, (issue.id,))
         unchanged: Final = await issues.get_issue(issue.id)
         assert unchanged is not None and unchanged.active
         await _next_day(prisma, _DAY + timedelta(days=1), 1, 1)
@@ -1062,6 +1065,9 @@ async def test_cancelled_email_receipt_survives_a_different_delivery(
             retained: Final = UsageAlertDelivery._email_task
             assert retained is not None
             await asyncio.wait_for(asyncio.shield(retained), 10)
+            assert await store.pending_delivery(pending.delivery.id) is None, (
+                "A cancelled send must persist its successful receipt without another delivery"
+            )
             different: Final = pending.model_copy(
                 update={"delivery": pending.delivery.model_copy(update={"id": "another-delivery"})}
             )

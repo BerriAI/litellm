@@ -733,7 +733,7 @@ class UsageAlertsRepository:
     async def team_role(self, team_id: str, user_id: str) -> str | None:
         rows: Final = TypeAdapter(tuple[Mapping[str, str], ...]).validate_python(
             await self.database.query_raw(
-                """SELECT member->>'role' AS role FROM "LiteLLM_TeamTable", jsonb_array_elements(members_with_roles) member WHERE team_id=$1 AND member->>'user_id'=$2 LIMIT 1""",
+                """SELECT member->>'role' AS role FROM "LiteLLM_TeamTable", jsonb_array_elements(members_with_roles) member WHERE team_id=$1 AND member->>'user_id'=$2 ORDER BY (member->>'role'='admin') DESC NULLS LAST LIMIT 1""",
                 team_id,
                 user_id,
             )
