@@ -48,10 +48,12 @@ from litellm.llms.bedrock.embed.embedding import BedrockEmbedding
 from litellm.llms.bedrock.files.handler import BedrockFilesHandler
 from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
 from litellm.llms.bedrock.web_identity_session_policy import WebIdentitySessionPolicy, _SessionPolicyStatement
+from litellm.llms.opensearch.vector_stores.transformation import OpenSearchVectorStoreConfig
 from litellm.llms.s3_vectors.vector_stores.transformation import S3VectorsVectorStoreConfig
 from litellm.llms.sagemaker.chat.transformation import SagemakerChatConfig
 from litellm.llms.sagemaker.completion.handler import SagemakerLLM
 from litellm.rag.ingestion.s3_vectors_ingestion import S3VectorsRAGIngestion
+from litellm.types.router import GenericLiteLLMParams
 
 # Actions the Claude Platform on AWS service is documented to call.
 # Source: AWS IAM action reference + the #27678 surface area.
@@ -555,6 +557,47 @@ class TestEachCallerGetsItsOwnCeiling:
             stmt["Condition"].get("StringEquals") == {"aws:CalledViaLast": "bedrock.amazonaws.com"}
             for stmt in granting
         )
+
+
+_OPENSEARCH_ENDPOINT_ACTIONS: Final = MappingProxyType(
+    {
+        "https://search-docs-abc123.us-east-1.es.amazonaws.com": "es:ESHttpPost",
+        "https://abc123.us-east-1.aoss.amazonaws.com": "aoss:APIAccessAll",
+    }
+)
+
+
+def _opensearch_policy(api_base: str) -> WebIdentitySessionPolicy:
+    sts: Final = _sts_mock()
+    with (
+        patch("boto3.client", return_value=sts),
+        patch("litellm.llms.bedrock.base_aws_llm.get_secret", return_value="oidc-jwt-token"),
+    ):
+        OpenSearchVectorStoreConfig().validate_environment(
+            {},
+            GenericLiteLLMParams(
+                api_base=api_base,
+                aws_web_identity_token="oidc/google/litellm",
+                aws_role_name="arn:aws:iam::123456789012:role/litellm-role",
+                aws_session_name=f"opensearch-{api_base}",
+                aws_region_name="us-east-1",
+            ),
+        )
+    return _SESSION_POLICY_ADAPTER.validate_python(
+        json.loads(sts.assume_role_with_web_identity.call_args.kwargs["Policy"])
+    )
+
+
+class TestOpenSearchSearchGetsItsOwnCeiling:
+    @pytest.mark.parametrize(("api_base", "action"), sorted(_OPENSEARCH_ENDPOINT_ACTIONS.items()))
+    def test_search_action_is_granted_by_the_opensearch_ceiling(self, api_base: str, action: str):
+        assert action in _granted_actions(_opensearch_policy(api_base))
+
+    @pytest.mark.parametrize("api_base", sorted(_OPENSEARCH_ENDPOINT_ACTIONS))
+    def test_opensearch_ceiling_grants_only_opensearch_services(self, api_base: str):
+        allowed: Final = frozenset(_service(action) for action in _OPENSEARCH_ENDPOINT_ACTIONS.values())
+        extra: Final = sorted(a for a in _granted_actions(_opensearch_policy(api_base)) if _service(a) not in allowed)
+        assert not extra, f"the OpenSearch session policy also grants {extra}"
 
 
 class TestWebIdentityCredentialCacheIsPerCeiling:
