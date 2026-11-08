@@ -8623,6 +8623,11 @@
     }
   },
   "shared": {
+    "resourceActivity": {
+      "title": "Activity",
+      "ownUsage": "Showing your usage only.",
+      "modelScope": "Usage for {{model}} across deployments of this model."
+    },
     "credentialOptions": {
       "none": "None"
     },

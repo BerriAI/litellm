@@ -1,3 +1,4 @@
+import ResourceActivity from "@/components/UsagePage/ResourceActivity";
 import type { ParseKeys } from "i18next";
 import React, { useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -94,7 +95,7 @@ export default function UserInfoView({
   const { t } = useTranslation();
   const { premiumUser, userId: signedInUserId } = useAuthorized();
   const canViewAutoRouterUsage = hasProxyWideSpendView(userRole);
-  const canViewSavings = canViewAutoRouterUsage || (Boolean(userId.trim()) && userId === signedInUserId);
+  const canViewUserUsage = canViewAutoRouterUsage || (Boolean(userId.trim()) && userId === signedInUserId);
   const activityDateRange = useActivityDateRange();
   const [userData, setUserData] = useState<UserInfoV2Response | null>(null);
   const [teamDetails, setTeamDetails] = useState<TeamDisplayInfo[]>([]);
@@ -107,7 +108,7 @@ export default function UserInfoView({
   const [invitationLinkData, setInvitationLinkData] = useState<InvitationLink | null>(null);
   const [baseUrl, setBaseUrl] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<string>(initialTab === 1 ? "details" : "overview");
-  const hiddenSavingsTab = activeTab === "savings" && !canViewSavings;
+  const hiddenUsageTab = (activeTab === "savings" || activeTab === "activity") && !canViewUserUsage;
   const hiddenRouterTab = activeTab === "auto-router-usage" && !canViewAutoRouterUsage;
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
   const [isTeamsExpanded, setIsTeamsExpanded] = useState(false);
@@ -490,7 +491,7 @@ export default function UserInfoView({
       />
 
       <Tabs
-        value={hiddenSavingsTab || hiddenRouterTab ? "overview" : activeTab}
+        value={hiddenUsageTab || hiddenRouterTab ? "overview" : activeTab}
         onValueChange={(v: unknown) => setActiveTab(String(v))}
         className="gap-0"
       >
@@ -501,7 +502,12 @@ export default function UserInfoView({
           <TabsTrigger value="details" className="flex-none data-active:text-primary after:bg-primary">
             {t("users.userInfo.tabs.details")}
           </TabsTrigger>
-          {canViewSavings && (
+          {canViewUserUsage && (
+            <TabsTrigger value="activity" className="flex-none data-active:text-primary after:bg-primary">
+              {t("shared.resourceActivity.title")}
+            </TabsTrigger>
+          )}
+          {canViewUserUsage && (
             <TabsTrigger value="savings" className="flex-none data-active:text-primary after:bg-primary">
               {t("users.userInfo.tabs.savings")}
             </TabsTrigger>
@@ -512,6 +518,12 @@ export default function UserInfoView({
             </TabsTrigger>
           )}
         </TabsList>
+
+        {canViewUserUsage && (
+          <TabsContent value="activity">
+            <ResourceActivity scope="user" id={userId} />
+          </TabsContent>
+        )}
 
         {/* Overview Panel */}
         <TabsContent value="overview" keepMounted>
@@ -731,7 +743,7 @@ export default function UserInfoView({
             )}
           </Card>
         </TabsContent>
-        {canViewSavings && (
+        {canViewUserUsage && (
           <TabsContent value="savings">
             {activeTab === "savings" &&
               (userId.trim() ? (

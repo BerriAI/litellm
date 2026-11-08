@@ -1,3 +1,4 @@
+import ResourceActivity from "@/components/UsagePage/ResourceActivity";
 import { useModelCostMap } from "@/app/(dashboard)/hooks/models/useModelCostMap";
 import { useModelHub, useModelsInfo } from "@/app/(dashboard)/hooks/models/useModels";
 import { useQueryClient } from "@tanstack/react-query";
@@ -615,6 +616,9 @@ export default function ModelInfoView({
           <TabsTrigger value="overview" className="flex-none rounded-none px-4 py-2">
             {t("modelInfoView.tabs.overview")}
           </TabsTrigger>
+          <TabsTrigger value="activity" className="flex-none rounded-none px-4 py-2">
+            {t("shared.resourceActivity.title")}
+          </TabsTrigger>
           <TabsTrigger value="raw" className="flex-none rounded-none px-4 py-2">
             {t("modelInfoView.tabs.rawJson")}
           </TabsTrigger>
@@ -749,6 +753,10 @@ export default function ModelInfoView({
                 <p className="text-sm">{t("modelInfoView.loading")}</p>
               )}
             </Card>
+          </TabsContent>
+
+          <TabsContent value="activity">
+            <ResourceActivity scope="model" id={modelData.litellm_model_name} />
           </TabsContent>
 
           <TabsContent value="raw" keepMounted>
