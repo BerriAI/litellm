@@ -131,26 +131,29 @@ def test_resolve_model_budget():
     assert resolve_model_budget(model="non-existent", model_max_budget=model_max_budget) is None
 
 
-# Test is_key_within_model_budget
 @pytest.mark.asyncio
-async def test_is_key_within_model_budget(budget_limiter):
-    # Mock user API key dict
-    user_api_key = UserAPIKeyAuth(
+@pytest.mark.parametrize("spend", (50.0, 100.0, 150.0))
+async def test_is_key_within_model_budget(
+    budget_limiter: PROXY_VirtualKeyModelMaxBudgetLimiter,
+    spend: float,
+) -> None:
+    user_api_key: Final = UserAPIKeyAuth(
         token="test-key",
         key_alias="test-alias",
         model_max_budget={"gpt-4": {"budget_limit": 100.0, "time_period": "1d"}},
     )
-
-    # Test when model is within budget
-    with patch.object(budget_limiter, "_get_spend_for_model_budget", return_value=50.0):
-        assert await budget_limiter.is_key_within_model_budget(user_api_key, "gpt-4") is True
-
-    # Test when model exceeds budget
-    with patch.object(budget_limiter, "_get_spend_for_model_budget", return_value=150.0):
+    counter: Final = model_budget_spend_cache_key(
+        entity_type=Litellm_EntityType.KEY,
+        entity_id="test-key",
+        budget_model="gpt-4",
+        budget_duration="1d",
+    )
+    await budget_limiter.dual_cache.async_set_cache(key=counter, value=spend)
+    if spend >= 100.0:
         with pytest.raises(litellm.BudgetExceededError):
             await budget_limiter.is_key_within_model_budget(user_api_key, "gpt-4")
-
-    # Test model not in budget config
+    else:
+        assert await budget_limiter.is_key_within_model_budget(user_api_key, "gpt-4") is True
     assert await budget_limiter.is_key_within_model_budget(user_api_key, "non-existent") is True
 
 
@@ -224,38 +227,26 @@ async def test_async_log_success_event_uses_per_model_budget_duration(budget_lim
         assert call_kwargs["response_cost"] == 0.05
 
 
-# Test is_end_user_within_model_budget
 @pytest.mark.asyncio
-async def test_is_end_user_within_model_budget(budget_limiter):
-    # Test when model is within budget
-    with patch.object(budget_limiter, "_get_spend_for_model_budget", return_value=50.0):
-        assert (
-            await budget_limiter.is_end_user_within_model_budget(
-                "test-user",
-                {"gpt-4": {"budget_limit": 100.0, "time_period": "1d"}},
-                "gpt-4",
-            )
-            is True
-        )
-
-    # Test when model exceeds budget
-    with patch.object(budget_limiter, "_get_spend_for_model_budget", return_value=150.0):
-        with pytest.raises(litellm.BudgetExceededError):
-            await budget_limiter.is_end_user_within_model_budget(
-                "test-user",
-                {"gpt-4": {"budget_limit": 100.0, "time_period": "1d"}},
-                "gpt-4",
-            )
-
-    # Test model not in budget config
-    assert (
-        await budget_limiter.is_end_user_within_model_budget(
-            "test-user",
-            {"gpt-4": {"budget_limit": 100.0, "time_period": "1d"}},
-            "non-existent",
-        )
-        is True
+@pytest.mark.parametrize("spend", (50.0, 100.0, 150.0))
+async def test_is_end_user_within_model_budget(
+    budget_limiter: PROXY_VirtualKeyModelMaxBudgetLimiter,
+    spend: float,
+) -> None:
+    counter: Final = model_budget_spend_cache_key(
+        entity_type=Litellm_EntityType.END_USER,
+        entity_id="test-user",
+        budget_model="gpt-4",
+        budget_duration="1d",
     )
+    await budget_limiter.dual_cache.async_set_cache(key=counter, value=spend)
+    budgets: Final = {"gpt-4": {"budget_limit": 100.0, "time_period": "1d"}}
+    if spend >= 100.0:
+        with pytest.raises(litellm.BudgetExceededError):
+            await budget_limiter.is_end_user_within_model_budget("test-user", budgets, "gpt-4")
+    else:
+        assert await budget_limiter.is_end_user_within_model_budget("test-user", budgets, "gpt-4") is True
+    assert await budget_limiter.is_end_user_within_model_budget("test-user", budgets, "non-existent") is True
 
 
 # Test _get_spend_for_model_budget for the end-user scope

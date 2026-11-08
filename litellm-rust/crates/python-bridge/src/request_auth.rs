@@ -493,3 +493,84 @@ pub(crate) fn request_auth_owner_teams(
         .map_err(map_error)?;
     to_py(py, &decision)
 }
+
+#[pyfunction]
+pub(crate) fn request_auth_context_models(
+    py: Python<'_>,
+    facts: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    let facts: core::budget_context::ModelCheckFacts = from_py(facts)?;
+    to_py(
+        py,
+        &py.detach(move || core::budget_context::model_checks(&facts)),
+    )
+}
+
+#[pyfunction]
+pub(crate) fn request_auth_context_end_user(
+    py: Python<'_>,
+    facts: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    let facts: core::budget_context::EndUserFacts = from_py(facts)?;
+    to_py(
+        py,
+        &py.detach(move || core::budget_context::end_user_source(&facts)),
+    )
+}
+
+#[pyfunction]
+pub(crate) fn request_auth_context_token(
+    py: Python<'_>,
+    facts: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    let facts: core::budget_context::TokenDefaultsFacts = from_py(facts)?;
+    to_py(
+        py,
+        &py.detach(move || core::budget_context::token_assignments(&facts)),
+    )
+}
+
+#[pyfunction]
+pub(crate) fn request_auth_context_member(
+    py: Python<'_>,
+    facts: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    let facts: core::budget_context::MemberFacts = from_py(facts)?;
+    to_py(
+        py,
+        &py.detach(move || core::budget_context::member_source(&facts)),
+    )
+}
+
+#[pyfunction]
+pub(crate) fn request_auth_context_temporary(
+    py: Python<'_>,
+    facts: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    let facts: core::budget_context::TemporaryFacts = from_py(facts)?;
+    to_py(
+        py,
+        &py.detach(move || core::budget_context::temporary(&facts)),
+    )
+}
+
+#[pyfunction]
+pub(crate) fn request_auth_context_throttle(
+    py: Python<'_>,
+    facts: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    let facts: core::budget_context::ThrottleFacts = from_py(facts)?;
+    to_py(
+        py,
+        &py.detach(move || core::budget_context::throttle(&facts)),
+    )
+}
+
+#[pyfunction]
+pub(crate) fn request_auth_context_percentage(
+    py: Python<'_>,
+    facts: &Bound<'_, PyAny>,
+) -> PyResult<Option<f64>> {
+    let facts: core::budget_context::NumericFacts = from_py(facts)?;
+    Ok(py.detach(move || core::budget_context::percentage(&facts)))
+}

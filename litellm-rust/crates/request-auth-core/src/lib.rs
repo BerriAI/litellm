@@ -6,6 +6,7 @@ pub mod agent_access;
 pub mod agent_grants;
 pub mod auth_context;
 pub mod budget_alerts;
+pub mod budget_context;
 pub mod budget_pricing;
 pub mod common_budgets;
 pub mod common_flow;
