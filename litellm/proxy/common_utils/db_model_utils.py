@@ -27,20 +27,26 @@ def reencrypt_db_model_params(litellm_params: Mapping[str, object], new_key: str
 def team_model_params_are_allowed(
     litellm_params: Mapping[str, object], model_info: Mapping[str, object] | BaseModel | None
 ) -> bool:
+    return team_model_params_env_reference_field(litellm_params, model_info) is None
+
+
+def team_model_params_env_reference_field(
+    litellm_params: Mapping[str, object], model_info: Mapping[str, object] | BaseModel | None
+) -> str | None:
     info: Final = model_info.model_dump() if isinstance(model_info, BaseModel) else model_info
     if info is None or info.get("team_id") is None:
-        return True
+        return None
 
-    # A private queue keeps deep traversal linear without recursion or input mutation
-    pending: Final = deque[object]((litellm_params,))
+    pending: Final = deque[tuple[str, object]](_MAPPING.validate_python(litellm_params).items())
     while pending:
-        match pending.popleft():
+        field, candidate = pending.popleft()
+        match candidate:
             case str() as value if value.startswith("os.environ/"):
-                return False
+                return field
             case Mapping() as value:
-                pending.extend(_MAPPING.validate_python(value).values())
+                pending.extend((field, nested) for nested in _MAPPING.validate_python(value).values())
             case list() as value:
-                pending.extend(_SEQUENCE.validate_python(value))
+                pending.extend((field, nested) for nested in _SEQUENCE.validate_python(value))
             case _:
                 pass
-    return True
+    return None
