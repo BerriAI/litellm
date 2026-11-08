@@ -1754,8 +1754,8 @@ class Logging(LiteLLMLoggingBaseClass):
                         try:
                             details_to_log = copy.deepcopy(self.model_call_details)
                         except Exception:
-                            details_to_log = self.model_call_details
-                        if litellm.turn_off_message_logging:
+                            details_to_log = self.model_call_details.copy()
+                        if should_redact_message_logging(self.model_call_details):
                             # make a copy of the _model_Call_details and log it
                             details_to_log.pop("messages", None)
                             details_to_log.pop("input", None)
@@ -1919,8 +1919,8 @@ class Logging(LiteLLMLoggingBaseClass):
                         try:
                             details_to_log = copy.deepcopy(self.model_call_details)
                         except Exception:
-                            details_to_log = self.model_call_details
-                        if litellm.turn_off_message_logging:
+                            details_to_log = self.model_call_details.copy()
+                        if should_redact_message_logging(self.model_call_details):
                             # make a copy of the _model_Call_details and log it
                             details_to_log.pop("messages", None)
                             details_to_log.pop("input", None)
