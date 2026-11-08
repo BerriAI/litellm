@@ -15,6 +15,7 @@ import { getProxyBaseUrl } from "@/components/networking";
 import { METRIC_LABELS, RuleInput, SCOPE_LABELS, UsageRule } from "./usageAlertApi";
 import UsageRuleForm from "./UsageRuleForm";
 import IssueFamilySettings from "@/components/Issues/IssueFamilySettings";
+import PerformanceMonitoring from "@/components/Issues/PerformanceMonitoring";
 import { uiHref } from "@/utils/uiHref";
 
 function editorTitle(rule: UsageRule | null | undefined): string {
@@ -100,6 +101,7 @@ export default function UsageRules({ accessToken }: { accessToken: string | null
           />
         ) : (
           <>
+            <PerformanceMonitoring accessToken={accessToken} settings />
             <IssueFamilySettings accessToken={accessToken} />
             <a
               className="text-sm text-primary hover:underline"

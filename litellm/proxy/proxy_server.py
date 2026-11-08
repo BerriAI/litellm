@@ -11683,6 +11683,7 @@ class ProxyStartupEvent:
         usage_alert_job: Final = UsageAlertJob.from_prisma(
             prisma_client,
             proxy_logging_obj.slack_alerting_instance,
+            enterprise_access=lambda: premium_user is True,
             deprecation_projection=DeprecationIssueProjector.from_prisma(
                 prisma_client, RouterDeprecationSource(lambda: llm_router)
             ).run,

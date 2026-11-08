@@ -29,6 +29,7 @@ from litellm.types.proxy.issues import (
     IssueScope,
     IssueSignal,
     IssueSignalList,
+    PerformanceMonitoring,
 )
 from litellm.types.proxy.usage_alert_defaults import DEFAULT_USAGE_RULE_IDS, PerformanceIssueFamily
 from litellm.types.proxy.usage_alerts import UsageAlertMetric, UsageAlertStatus
@@ -51,6 +52,13 @@ class _Count(BaseModel, frozen=True):
 
 class _Identifier(BaseModel, frozen=True):
     id: str
+
+
+class _MonitoringRow(BaseModel, frozen=True):
+    record: PerformanceMonitoring
+
+
+_MONITORING_KEY: Final = "performance_alert_monitoring"
 
 
 _ACK: Final = "CASE WHEN jsonb_typeof(c.param_value)='string' THEN (c.param_value#>>'{}')::jsonb ELSE c.param_value END"
@@ -108,11 +116,50 @@ class IssuesRepository:
     def from_prisma(cls, prisma: "PrismaClient") -> "IssuesRepository":
         return cls(cast(AlertDatabase, prisma.writer_db))  # cast-ok: generated Prisma delegate implements query_raw
 
+    async def performance_monitoring(self, enterprise: bool = False) -> PerformanceMonitoring:
+        rows: Final = TypeAdapter(tuple[_MonitoringRow, ...]).validate_python(
+            await self.database.query_raw(
+                'SELECT param_value AS record FROM "LiteLLM_Config" WHERE param_name=$1', _MONITORING_KEY
+            )
+        )
+        current: Final = rows[0].record if rows else PerformanceMonitoring()
+        return current.model_copy(update={"incident_limit": None if enterprise else 5})
+
+    async def set_performance_monitoring(self, enabled: bool, enterprise: bool = False) -> PerformanceMonitoring:
+        rows: Final = TypeAdapter(tuple[_MonitoringRow, ...]).validate_python(
+            await self.database.query_raw(
+                """INSERT INTO "LiteLLM_Config" AS c (param_name,param_value)
+                VALUES ($1,jsonb_build_object('enabled',$2::boolean,'incidents_used',0))
+                ON CONFLICT(param_name) DO UPDATE SET
+                    param_value=jsonb_set(c.param_value,'{enabled}',to_jsonb($2::boolean))
+                RETURNING param_value AS record""",
+                _MONITORING_KEY,
+                enabled,
+            )
+        )
+        return rows[0].record.model_copy(update={"incident_limit": None if enterprise else 5})
+
+    async def publish_performance_issues(self, inputs: tuple[IssueInput, ...], enterprise: bool) -> tuple[Issue, ...]:
+        if len(inputs) > 10 or any(item.kind != "performance" for item in inputs):
+            raise ValueError("Publish at most ten Performance alerts at a time")
+        return await self._upsert_issues(inputs, False, None, monitoring=True, enterprise=enterprise)
+
     async def upsert_issues(
         self,
         inputs: tuple[IssueInput, ...],
         reopen: bool = False,
         status: UsageAlertStatus | None = None,
+    ) -> tuple[Issue, ...]:
+        return await self._upsert_issues(inputs, reopen, status)
+
+    async def _upsert_issues(
+        self,
+        inputs: tuple[IssueInput, ...],
+        reopen: bool,
+        status: UsageAlertStatus | None,
+        *,
+        monitoring: bool = False,
+        enterprise: bool = False,
     ) -> tuple[Issue, ...]:
         if not inputs:
             return ()
@@ -121,8 +168,21 @@ class IssuesRepository:
         payload: Final = tuple(_issue_payload(item, status) for item in inputs)
         rows: Final = TypeAdapter(tuple[_IssueRow, ...]).validate_python(
             await self.database.query_raw(
-                f"""WITH incoming AS (
+                f"""WITH settings AS MATERIALIZED (
+                SELECT param_value FROM "LiteLLM_Config" WHERE $3::boolean AND param_name=$4 FOR UPDATE
+            ), incoming AS (
                 SELECT x->'record' AS record,x->>'ack_key' AS ack_key FROM jsonb_array_elements($1::jsonb) x
+            ), ranked AS (
+                SELECT incoming.*,EXISTS(SELECT 1 FROM "LiteLLM_Issue" i WHERE i.id=incoming.record->>'id') AS existing,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY EXISTS(SELECT 1 FROM "LiteLLM_Issue" i WHERE i.id=incoming.record->>'id')
+                        ORDER BY record->>'id') AS position
+                FROM incoming
+            ), eligible AS (
+                SELECT record,ack_key FROM ranked WHERE NOT $3::boolean OR EXISTS (
+                    SELECT 1 FROM settings WHERE (param_value->>'enabled')::boolean AND
+                        ($5::boolean OR existing OR position<=5-COALESCE((param_value->>'incidents_used')::int,0))
+                )
             ), changed AS (
                 INSERT INTO "LiteLLM_Issue" AS old
                     (id,cohort_key,kind,family,scope_type,scope_id,status,ack_key,record,first_seen,last_seen,updated_at)
@@ -130,7 +190,7 @@ class IssuesRepository:
                     record->'cohort'->>'scope_type',record->'cohort'->>'scope_id',record->>'status',ack_key,record,
                     (record->>'observed_at')::timestamptz AT TIME ZONE 'UTC',
                     (record->>'observed_at')::timestamptz AT TIME ZONE 'UTC',
-                    (record->>'observed_at')::timestamptz AT TIME ZONE 'UTC' FROM incoming
+                    (record->>'observed_at')::timestamptz AT TIME ZONE 'UTC' FROM eligible
                 ON CONFLICT(id) DO UPDATE SET
                     record=CASE WHEN old.kind='model_deprecation' AND (
                         EXCLUDED.last_seen > old.last_seen OR (EXCLUDED.last_seen = old.last_seen AND
@@ -145,13 +205,22 @@ class IssuesRepository:
                     updated_at=GREATEST(old.updated_at,EXCLUDED.last_seen)
                 WHERE old.kind=EXCLUDED.kind AND old.cohort_key=EXCLUDED.cohort_key
                     AND old.scope_type=EXCLUDED.scope_type AND old.scope_id IS NOT DISTINCT FROM EXCLUDED.scope_id
-                RETURNING *
+                RETURNING *,xmax=0 AS inserted
+            ), counted AS (
+                UPDATE "LiteLLM_Config" c SET param_value=jsonb_set(c.param_value,'{{incidents_used}}',
+                    to_jsonb(LEAST(5,COALESCE((settings.param_value->>'incidents_used')::int,0)+
+                        (SELECT COUNT(*)::int FROM changed WHERE inserted))))
+                FROM settings WHERE c.param_name=$4 AND EXISTS(SELECT 1 FROM changed WHERE inserted)
+                RETURNING c.param_name
             ) SELECT {_RECORD} AS record FROM changed i LEFT JOIN "LiteLLM_Config" c ON c.param_name=i.ack_key""",
                 json.dumps(payload),
                 reopen,
+                monitoring,
+                _MONITORING_KEY,
+                enterprise,
             )
         )
-        if len(rows) != len(inputs):
+        if not monitoring and len(rows) != len(inputs):
             raise ValueError("An issue ID already belongs to another cohort")
         return tuple(row.record for row in rows)
 

@@ -1393,3 +1393,76 @@ async def test_family_settings_expose_projection_backlog_without_delayed_rules(d
                 WHERE id='performance-dirty:2026-11-04' RETURNING id"""
         )
         assert not (await store.family_settings()).projection_pending
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_performance_trial_is_atomic_and_survives_restart_and_retention(db: ManagementDatabase) -> None:
+    store: Final = IssuesRepository.from_prisma(db.prisma)
+    inputs: Final = tuple(_issue(IssueCohort(scope_type="key", scope_id=f"trial-{n}")) for n in range(12))
+    await _query(
+        db, 'DELETE FROM "LiteLLM_Config" WHERE param_name=$1 RETURNING param_name', "performance_alert_monitoring"
+    )
+    try:
+        assert not (await store.performance_monitoring()).enabled
+        assert await store.publish_performance_issues(inputs[:4], enterprise=False) == ()
+        assert (await store.set_performance_monitoring(True)).can_detect
+        batches: Final = await asyncio.gather(
+            store.publish_performance_issues(inputs[:4], enterprise=False),
+            store.publish_performance_issues(inputs[4:8], enterprise=False),
+        )
+        admitted: Final = tuple(issue for batch in batches for issue in batch)
+        assert len(admitted) == 5, (tuple(len(batch) for batch in batches), await store.performance_monitoring())
+        assert len({issue.id for issue in admitted}) == 5
+        assert (await store.performance_monitoring()).incidents_used == 5
+        repeat: Final = tuple(item for item in inputs if item.id in {issue.id for issue in admitted})
+        assert len(await store.publish_performance_issues(repeat, enterprise=False)) == 5
+        assert (await store.performance_monitoring()).incidents_used == 5
+        await _remove_issues(db, (admitted[0].id,))
+        restarted: Final = IssuesRepository.from_prisma(db.prisma)
+        await restarted.set_performance_monitoring(False)
+        assert not (await restarted.set_performance_monitoring(True)).can_detect
+        assert await restarted.publish_performance_issues(inputs[8:], enterprise=False) == ()
+        assert len(await restarted.publish_performance_issues(inputs[8:], enterprise=True)) == 4
+        assert (await restarted.performance_monitoring(enterprise=True)).can_detect
+        assert (await restarted.performance_monitoring()).incidents_used == 5
+        await restarted.set_performance_monitoring(False)
+        assert await restarted.publish_performance_issues(inputs[:1], enterprise=True) == ()
+    finally:
+        await _remove_issues(db, tuple(item.id for item in inputs))
+        await _query(
+            db, 'DELETE FROM "LiteLLM_Config" WHERE param_name=$1 RETURNING param_name', "performance_alert_monitoring"
+        )
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_monitoring_api_requires_admin_write_access(gateway: Gateway, db: ManagementDatabase) -> None:
+    store: Final = IssuesRepository.from_prisma(db.prisma)
+    lease: Final = UsageAlertsRepository.from_prisma(db.prisma)
+    owner: Final = str(uuid4())
+    assert await lease.claim_job(owner)
+    try:
+        await store.set_performance_monitoring(False)
+        with gateway.scenario() as scenario:
+            viewer: Final = scenario.user(user_role="proxy_admin_viewer")
+            member: Final = scenario.user(user_role="internal_user")
+            admin: Final = scenario.user(user_role="proxy_admin")
+            viewer_key: Final = scenario.key(user_id=viewer, key_type="read_only")
+            member_key: Final = scenario.key(user_id=member, key_type="management")
+            info_key: Final = scenario.key(user_id=admin, allowed_routes=["info_routes"])
+            assert gateway.request("GET", "/issues/monitoring", key=viewer_key).status_code == 200
+            for key in (viewer_key, member_key, info_key):
+                denied: Final = gateway.request("PATCH", "/issues/monitoring", {"enabled": True}, key=key)
+                assert denied.status_code == 403, denied.text
+            assert not (await store.performance_monitoring()).enabled
+            enabled: Final = gateway.request("PATCH", "/issues/monitoring", {"enabled": True})
+            assert enabled.status_code == 200, enabled.text
+            assert enabled.json()["enabled"] is True
+            assert gateway.get("/issues/monitoring")["enabled"] is True
+            invalid: Final = gateway.request("PATCH", "/issues/monitoring", {"enabled": True, "incidents_used": 0})
+            assert invalid.status_code == 422, invalid.text
+            paused: Final = gateway.request("PATCH", "/issues/monitoring", {"enabled": False})
+            assert paused.status_code == 200, paused.text
+            assert not (await store.performance_monitoring()).enabled
+    finally:
+        await store.set_performance_monitoring(False)
+        await lease.release_job(owner)

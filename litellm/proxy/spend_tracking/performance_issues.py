@@ -2,7 +2,7 @@
 
 import asyncio
 from collections import OrderedDict
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Callable, Mapping
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from itertools import chain, groupby, islice
@@ -34,6 +34,7 @@ from litellm.types.proxy.issues import (
     IssueProjectionSignal,
     IssueSignal,
     IssueSignalGroupingReason,
+    PerformanceMonitoring,
 )
 from litellm.types.proxy.usage_alert_defaults import (
     PerformanceIssueFamily,
@@ -204,13 +205,18 @@ class PerformanceIssueProjector:
         metrics: UsageAlertMetricsRepository,
         providers: ProviderLatencyRepository,
         delivery: IssueDelivery,
+        enterprise_access: Callable[[], bool] = lambda: False,
     ) -> None:
         self._store = store
         self._metrics = metrics
         self._providers = providers
         self._delivery = delivery
+        self._enterprise_access = enterprise_access
         self._provider_rule: UsageAlertRule | None = None
         self._provider_cache: OrderedDict[str, _ProviderGroup | None] = OrderedDict()  # mutable-ok: max 32 providers
+
+    async def monitoring(self) -> PerformanceMonitoring:
+        return await self._store.performance_monitoring(self._enterprise_access())
 
     async def run_pending(
         self, now: datetime, work: UsageAlertProjectionWork, rules: UsageAlertsRepository, deadline: float
@@ -684,7 +690,13 @@ class PerformanceIssueProjector:
             item.model_copy(update={"id": existing[key].id}) if key in existing else item
             for key, item in distinct.items()
         )
-        saved: Final = {item.cohort_key: item for item in await self._store.upsert_issues(inputs)}
+        saved: Final = {
+            item.cohort_key: item
+            for item in await self._store.publish_performance_issues(inputs, self._enterprise_access())
+        }
+        admitted: Final = tuple(
+            candidate for candidate in candidates if targets[candidate.source.alert.id].issue.cohort_key in saved
+        )
         await self._store.add_signal_batch(
             tuple(
                 IssueSignal(
@@ -695,12 +707,12 @@ class PerformanceIssueProjector:
                     grouping_reason=targets[candidate.source.alert.id].reason,
                     explanation=targets[candidate.source.alert.id].explanation,
                 )
-                for candidate in candidates
+                for candidate in admitted
             )
         )
         bindings: Final = chain.from_iterable(
             _bindings(candidate, saved[targets[candidate.source.alert.id].issue.cohort_key].id)
-            for candidate in candidates
+            for candidate in admitted
         )
         while batch := tuple(islice(bindings, 10)):
             await self._store.queue_deliveries(batch)

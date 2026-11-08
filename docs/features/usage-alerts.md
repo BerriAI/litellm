@@ -4,7 +4,30 @@ The Alerts page combines model retirements with daily Performance alerts. Open a
 
 Performance comparisons cover completed UTC days. Retirement issues show recent model usage and the provider's retirement schedule, including today's usage when present.
 
-This feature requires a database. Apply the normal LiteLLM database migrations when deploying a version that includes usage alerts. The API and dashboard use the same persisted rules and incidents; no enterprise license is required.
+This feature requires a database. Apply the normal LiteLLM database migrations when deploying a version that includes usage alerts. The API and dashboard use the same persisted rules and incidents. Performance monitoring is off until a gateway administrator enables it. Model-deprecation alerts and resource Activity do not require Performance activation.
+
+## Enable Performance alerts
+
+Open **Alerts** and select **Enable performance alerts**. The gateway registers the default policies and schedules a bounded background check. You do not need to choose thresholds or notification destinations first. Resources without enough recorded history wait for a baseline.
+
+Five grouped Performance incidents are included per gateway database. Additional signals, notification retries, and repeated detections of the same active incident do not consume another incident. A new breach after recovery is a new incident. The counter survives restarts, pausing, and alert retention.
+
+After the fifth incident, new Performance comparisons pause. Already captured work and queued delivery can finish within the same resource limits. Saved alerts, their Activity, and API reads remain available under normal retention and access rules. Paused monitoring does not establish that a resource has recovered. A valid Enterprise license removes the incident limit; it does not increase worker time, memory, or database budgets. Model-deprecation alerts do not consume this allowance.
+
+Only a gateway administrator can activate or pause monitoring. Set `LITELLM_API_BASE` to the gateway base URL and `LITELLM_MANAGEMENT_KEY` to an administrator management credential, then use the same API as the dashboard:
+
+```bash
+curl -X PATCH "$LITELLM_API_BASE/issues/monitoring" \
+  -H "Authorization: Bearer $LITELLM_MANAGEMENT_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"enabled":true}'
+curl "$LITELLM_API_BASE/issues/monitoring" \
+  -H "Authorization: Bearer $LITELLM_MANAGEMENT_KEY"
+```
+
+The response reports `enabled`, `incidents_used`, and `incident_limit`. A null limit means Enterprise access. When `incidents_used` equals the numeric limit, new comparisons are paused even if the saved `enabled` preference is true. Sending `{"enabled":false}` pauses Performance without deleting rules or resetting the allowance. Admin viewers can read the state but cannot change it.
+
+Email and Slack remain optional. Configure their transports and rule destinations separately if you want outbound notifications.
 
 ## Start with the defaults
 
@@ -24,7 +47,7 @@ Open **Alerts → Settings** to enable or disable a family or adjust its thresho
 
 ## When checks run
 
-An initial check is scheduled shortly after startup, followed by hourly wakeups. The evaluator checks the latest completed UTC day after a one-hour grace period. A successful aggregate flush after the grace period is required before either direction is finalized. Completed rule versions are skipped on later wakeups. These are daily comparisons, not rolling hourly alerts.
+Model-retirement checks start shortly after startup. Enabling Performance schedules its first check without a restart, followed by hourly wakeups. Disabled Performance monitoring does not register default rules or scan daily aggregates. The evaluator checks the latest completed UTC day after a one-hour grace period. A successful aggregate flush after the grace period is required before either direction is finalized. Completed rule versions are skipped on later wakeups. These are daily comparisons, not rolling hourly alerts.
 
 Each run has a shared 60-second work budget, including up to five seconds for model-retirement checks. Performance evaluation reads existing daily aggregates in pages of 10 entities, with a short pause between pages. Proxy replicas share a database lease for this job. It adds no request-time counters or per-request database writes.
 

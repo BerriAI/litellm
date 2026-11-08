@@ -30,6 +30,22 @@ IssueSignalGroupingReason: TypeAlias = Literal[
 ]
 
 
+class PerformanceMonitoringUpdate(BaseModel, frozen=True):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    enabled: bool
+
+
+class PerformanceMonitoring(BaseModel, frozen=True):
+    enabled: bool = False
+    incidents_used: int = Field(default=0, ge=0, le=5)
+    incident_limit: int | None = 5
+
+    @property
+    def can_detect(self) -> bool:
+        return self.enabled and (self.incident_limit is None or self.incidents_used < self.incident_limit)
+
+
 class IssueModelPair(BaseModel, frozen=True):
     model_config = ConfigDict(frozen=True, extra="forbid")
 

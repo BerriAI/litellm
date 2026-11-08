@@ -8420,6 +8420,24 @@ export interface paths {
         patch: operations["update_issue_family_issues_families__family__patch"];
         trace?: never;
     };
+    "/issues/monitoring": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Performance Monitoring */
+        get: operations["get_performance_monitoring_issues_monitoring_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Set Performance Monitoring */
+        patch: operations["set_performance_monitoring_issues_monitoring_patch"];
+        trace?: never;
+    };
     "/issues/{issue_id}": {
         parameters: {
             query?: never;
@@ -42669,6 +42687,29 @@ export interface components {
             /** User Id */
             user_id: string;
         };
+        /** PerformanceMonitoring */
+        PerformanceMonitoring: {
+            /**
+             * Enabled
+             * @default false
+             */
+            enabled: boolean;
+            /**
+             * Incident Limit
+             * @default 5
+             */
+            incident_limit: number | null;
+            /**
+             * Incidents Used
+             * @default 0
+             */
+            incidents_used: number;
+        };
+        /** PerformanceMonitoringUpdate */
+        PerformanceMonitoringUpdate: {
+            /** Enabled */
+            enabled: boolean;
+        };
         /**
          * PiiAction
          * @enum {string}
@@ -66395,6 +66436,59 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["IssueFamilySetting"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_performance_monitoring_issues_monitoring_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PerformanceMonitoring"];
+                };
+            };
+        };
+    };
+    set_performance_monitoring_issues_monitoring_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PerformanceMonitoringUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PerformanceMonitoring"];
                 };
             };
             /** @description Validation Error */

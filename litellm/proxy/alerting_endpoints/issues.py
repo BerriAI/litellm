@@ -2,7 +2,7 @@
 
 from collections.abc import Generator
 from contextlib import contextmanager
-from datetime import date
+from datetime import date, datetime, timezone
 from typing import Final
 
 from fastapi import APIRouter, HTTPException
@@ -36,6 +36,8 @@ from litellm.types.proxy.issues import (
     IssueScope,
     IssueSignalList,
     IssueUpdate,
+    PerformanceMonitoring,
+    PerformanceMonitoringUpdate,
 )
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     DailyActivityKeyPageResponse,
@@ -155,6 +157,34 @@ async def list_issues(
         user, require_repository(alerts), "model" if scope_type == "provider" else scope_type, scope_id, write=False
     )
     return await require_issues(repository).list_issues(kind, family, status, scope_type, scope_id, limit, offset)
+
+
+@router.get("/monitoring", response_model=PerformanceMonitoring)
+async def get_performance_monitoring(
+    user: User, repository: IssuesRepositoryDep, alerts: UsageAlertsRepositoryDep
+) -> PerformanceMonitoring:
+    from litellm.proxy.proxy_server import premium_user
+
+    await require_scope(user, require_repository(alerts), "deployment", None, write=False)
+    return await require_issues(repository).performance_monitoring(premium_user is True)
+
+
+@router.patch("/monitoring", response_model=PerformanceMonitoring)
+async def set_performance_monitoring(
+    data: PerformanceMonitoringUpdate, user: User, repository: IssuesRepositoryDep, alerts: UsageAlertsRepositoryDep
+) -> PerformanceMonitoring:
+    from litellm.proxy.proxy_server import (
+        premium_user,
+        scheduler,  # pyright: ignore[reportUnknownVariableType]  # legacy scheduler initialized during startup
+    )
+    from litellm.proxy.spend_tracking.usage_alert_job import USAGE_ALERT_JOB_ID
+
+    require_write_access(user, "/issues/monitoring")
+    await require_scope(user, require_repository(alerts), "deployment", None, write=True)
+    saved: Final = await require_issues(repository).set_performance_monitoring(data.enabled, premium_user is True)
+    if saved.can_detect and scheduler is not None and scheduler.get_job(USAGE_ALERT_JOB_ID) is not None:  # pyright: ignore[reportUnknownMemberType]  # APScheduler has no parameter stubs
+        scheduler.modify_job(USAGE_ALERT_JOB_ID, next_run_time=datetime.now(timezone.utc))  # pyright: ignore[reportUnknownMemberType]  # APScheduler has no parameter stubs
+    return saved
 
 
 @router.get("/families", response_model=IssueFamilyList)

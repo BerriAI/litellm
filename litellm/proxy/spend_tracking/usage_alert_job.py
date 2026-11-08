@@ -139,6 +139,7 @@ class UsageAlertJob:
         slack: "SlackAlerting",
         *,
         deprecation_projection: Callable[[datetime], Awaitable[None]] | None = None,
+        enterprise_access: Callable[[], bool] = lambda: False,
     ) -> "UsageAlertJob":
         database: Final = BoundedAnalyticsDatabase(
             cast(AnalyticsDatabase, prisma.writer_db),  # cast-ok: generated Prisma transaction delegate
@@ -162,6 +163,7 @@ class UsageAlertJob:
                 metrics,
                 ProviderLatencyRepository(database),
                 delivery,
+                enterprise_access,
             ),
         )
 
@@ -205,14 +207,18 @@ class UsageAlertJob:
     async def _work(self, now: datetime, deadline: float) -> None:
         if self._deprecation_projection is not None:
             await self._deprecation_projection(now)
-        if not self._defaults_registered:
-            await self._store.ensure_default_rules(self._defaults)
-            self._defaults_registered = True
-        target: Final = completed_day(now)
-        await self._store.ensure_projection_work(target)
-        await self._evaluate(
-            target, asyncio.get_running_loop().time() + max(0, deadline - asyncio.get_running_loop().time()) * 0.65
-        )
+        monitoring: Final = await self._performance_projection.monitoring()
+        if not monitoring.enabled:
+            return
+        if monitoring.can_detect:
+            if not self._defaults_registered:
+                await self._store.ensure_default_rules(self._defaults)
+                self._defaults_registered = True
+            target: Final = completed_day(now)
+            await self._store.ensure_projection_work(target)
+            await self._evaluate(
+                target, asyncio.get_running_loop().time() + max(0, deadline - asyncio.get_running_loop().time()) * 0.65
+            )
         if (work := await self._store.pending_projection_work()) is None:
             await self._performance_projection.notify(deadline)
         elif await self._performance_projection.run_pending(now, work, self._store, deadline):

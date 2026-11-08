@@ -21,6 +21,7 @@ import {
   useIssues,
 } from "./issueApi";
 import { issueRouteParsers } from "./issueRoute";
+import PerformanceMonitoring from "./PerformanceMonitoring";
 
 const TABLE_STATE = { sortFields: [], defaultSort: { id: "", desc: false }, defaultPageSize: 25, filterColumns: [] };
 const columns: ColumnDef<Issue>[] = [
@@ -111,6 +112,7 @@ export default function IssuesInbox() {
       onValueChange={(next) => changeStatus(next as IssueStatus)}
       className="min-h-0 flex-1 gap-3"
     >
+      <PerformanceMonitoring accessToken={accessToken} readOnly={isViewOnly} />
       <PageTabsList>
         {ISSUE_STATUSES.map((value) => (
           <PageTabsTrigger key={value} value={value} className="capitalize">

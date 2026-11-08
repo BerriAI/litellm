@@ -125,6 +125,8 @@ describe("unified issue investigations", () => {
         return json({ user_id: auth.userId, user_role: auth.userRole === "Admin" ? "proxy_admin" : "internal_user" });
       if (url.pathname === "/issues/foreign-issue") return json({ detail: "Forbidden private-project metadata" }, 403);
       if (url.pathname === "/issues") return listResponse(url.searchParams);
+      if (url.pathname === "/issues/monitoring")
+        return json({ enabled: true, incidents_used: 0, incident_limit: null });
       if (url.pathname === "/issues/families") return json(families);
       if (url.pathname === "/issues/families/spend") return json(FAMILY_SETTINGS.data[0]);
       if (url.pathname.endsWith("/activity"))

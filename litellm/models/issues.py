@@ -20,6 +20,7 @@ from litellm.types.proxy.issues import (
     IssueScope,
     IssueSignal,
     IssueSignalList,
+    PerformanceMonitoring,
 )
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     DailyActivityKeyPageResponse,
@@ -30,6 +31,14 @@ from litellm.types.proxy.usage_alerts import UsageAlertMetric, UsageAlertStatus
 
 
 class IssueStore(Protocol):
+    async def performance_monitoring(self, enterprise: bool = False) -> PerformanceMonitoring: ...
+
+    async def set_performance_monitoring(self, enabled: bool, enterprise: bool = False) -> PerformanceMonitoring: ...
+
+    async def publish_performance_issues(
+        self, inputs: tuple[IssueInput, ...], enterprise: bool
+    ) -> tuple[Issue, ...]: ...
+
     async def get_issue(self, issue_id: str) -> Issue | None: ...
 
     async def team_activity_access(self, team_id: str, user_id: str) -> LiteLLM_TeamTable | None: ...
