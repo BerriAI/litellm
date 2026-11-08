@@ -521,4 +521,180 @@ describe("RoutingDecisionCard", () => {
     render(<RoutingDecisionCard decision={{ cause: "some_future_cause", routed_model: "m" }} />);
     expect(screen.getByText("some_future_cause")).toBeInTheDocument();
   });
+
+  it("displays stall escalation with repeated tool call reason and original tier", () => {
+    render(
+      <RoutingDecisionCard
+        decision={{
+          ...heuristic,
+          tier: "MEDIUM",
+          stall_escalated: true,
+          stall_escalation_reason: "repeated_tool_call",
+          stall_escalation_original_tier: "SIMPLE",
+        }}
+      />,
+    );
+    expect(screen.getByText("Stall escalation")).toBeInTheDocument();
+    expect(screen.getByText("Repeated tool call")).toBeInTheDocument();
+    expect(screen.getByText("(from SIMPLE)")).toBeInTheDocument();
+  });
+
+  it("displays stall escalation with repeated tool error reason and original tier", () => {
+    render(
+      <RoutingDecisionCard
+        decision={{
+          ...heuristic,
+          tier: "COMPLEX",
+          stall_escalated: true,
+          stall_escalation_reason: "repeated_tool_error",
+          stall_escalation_original_tier: "MEDIUM",
+        }}
+      />,
+    );
+    expect(screen.getByText("Stall escalation")).toBeInTheDocument();
+    expect(screen.getByText("Repeated tool error")).toBeInTheDocument();
+    expect(screen.getByText("(from MEDIUM)")).toBeInTheDocument();
+  });
+
+  it("displays stall escalation when signals are undefined or empty", () => {
+    render(
+      <RoutingDecisionCard
+        decision={{
+          cause: "heuristic_scorer",
+          tier: "MEDIUM",
+          stall_escalated: true,
+          stall_escalation_reason: "repeated_tool_call",
+          stall_escalation_original_tier: "SIMPLE",
+          signals: undefined,
+        }}
+      />,
+    );
+    expect(screen.getByText("Stall escalation")).toBeInTheDocument();
+    expect(screen.getByText("Repeated tool call")).toBeInTheDocument();
+    expect(screen.getByText("(from SIMPLE)")).toBeInTheDocument();
+    expect(screen.queryByText("Signals")).not.toBeInTheDocument();
+  });
+
+  it("displays stall escalation when signals array is empty", () => {
+    render(
+      <RoutingDecisionCard
+        decision={{
+          cause: "heuristic_scorer",
+          tier: "MEDIUM",
+          stall_escalated: true,
+          stall_escalation_reason: "repeated_tool_error",
+          stall_escalation_original_tier: "SIMPLE",
+          signals: [],
+        }}
+      />,
+    );
+    expect(screen.getByText("Stall escalation")).toBeInTheDocument();
+    expect(screen.getByText("Repeated tool error")).toBeInTheDocument();
+    expect(screen.getByText("(from SIMPLE)")).toBeInTheDocument();
+    expect(screen.queryByText("Signals")).not.toBeInTheDocument();
+  });
+
+  it("omits the stall escalation row when stall_escalated is absent", () => {
+    render(<RoutingDecisionCard decision={heuristic} />);
+    expect(screen.queryByText("Stall escalation")).not.toBeInTheDocument();
+  });
+
+  it("omits the stall escalation row when stall_escalated is false", () => {
+    render(
+      <RoutingDecisionCard
+        decision={{
+          ...heuristic,
+          stall_escalated: false,
+          stall_escalation_reason: "repeated_tool_call",
+          stall_escalation_original_tier: "SIMPLE",
+        }}
+      />,
+    );
+    expect(screen.queryByText("Stall escalation")).not.toBeInTheDocument();
+  });
+
+  it("handles stall_escalated without reason or original tier gracefully", () => {
+    render(
+      <RoutingDecisionCard
+        decision={{
+          ...heuristic,
+          tier: "MEDIUM",
+          stall_escalated: true,
+        }}
+      />,
+    );
+    expect(screen.getByText("Stall escalation")).toBeInTheDocument();
+    expect(screen.getByText("Yes")).toBeInTheDocument();
+    expect(screen.queryByText(/from/)).not.toBeInTheDocument();
+  });
+
+  it("handles stall_escalated with only original tier gracefully", () => {
+    render(
+      <RoutingDecisionCard
+        decision={{
+          ...heuristic,
+          tier: "MEDIUM",
+          stall_escalated: true,
+          stall_escalation_original_tier: "SIMPLE",
+        }}
+      />,
+    );
+    expect(screen.getByText("Stall escalation")).toBeInTheDocument();
+    expect(screen.getByText("Yes")).toBeInTheDocument();
+    expect(screen.getByText("(from SIMPLE)")).toBeInTheDocument();
+  });
+
+  it("handles stall_escalated with only reason gracefully", () => {
+    render(
+      <RoutingDecisionCard
+        decision={{
+          ...heuristic,
+          tier: "MEDIUM",
+          stall_escalated: true,
+          stall_escalation_reason: "repeated_tool_call",
+        }}
+      />,
+    );
+    expect(screen.getByText("Stall escalation")).toBeInTheDocument();
+    expect(screen.getByText("Repeated tool call")).toBeInTheDocument();
+    expect(screen.queryByText(/from/)).not.toBeInTheDocument();
+  });
+
+  it("keeps keyword escalation and stall escalation semantically separate", () => {
+    render(
+      <RoutingDecisionCard
+        decision={{
+          ...heuristic,
+          tier: "COMPLEX",
+          escalated: true,
+          escalation_keyword: "URGENT",
+          stall_escalated: true,
+          stall_escalation_reason: "repeated_tool_call",
+          stall_escalation_original_tier: "MEDIUM",
+        }}
+      />,
+    );
+    expect(screen.getByText("Escalated")).toBeInTheDocument();
+    expect(screen.getByText('Yes, keyword "URGENT"')).toBeInTheDocument();
+    expect(screen.getByText("Stall escalation")).toBeInTheDocument();
+    expect(screen.getByText("Repeated tool call")).toBeInTheDocument();
+    expect(screen.getByText("(from MEDIUM)")).toBeInTheDocument();
+  });
+
+  it("falls back to the raw string for an unrecognized stall reason", () => {
+    render(
+      <RoutingDecisionCard
+        decision={{
+          ...heuristic,
+          tier: "MEDIUM",
+          stall_escalated: true,
+          stall_escalation_reason: "custom_detected_loop" as unknown as "repeated_tool_call",
+          stall_escalation_original_tier: "SIMPLE",
+        }}
+      />,
+    );
+    expect(screen.getByText("Stall escalation")).toBeInTheDocument();
+    expect(screen.getByText("custom_detected_loop")).toBeInTheDocument();
+    expect(screen.getByText("(from SIMPLE)")).toBeInTheDocument();
+  });
 });

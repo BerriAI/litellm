@@ -374,7 +374,7 @@ def test_cost_tags_include_present_categories_and_dimensions(logger: DataDogLLMO
         model_group="premium-models",
     )
 
-    assert payload["tags"][-8:] == [
+    assert payload["tags"][-9:] == [
         "team:platform",
         "user:user_42",
         "key_alias:primary_key",
@@ -383,6 +383,7 @@ def test_cost_tags_include_present_categories_and_dimensions(logger: DataDogLLMO
         "router_cause:high_complexity",
         "router_escalated:true",
         "routed_model:openai/gpt-5",
+        "router_stall_escalated:false",
     ]
     assert payload["meta"]["metadata"]["_dd"]["cost_tags"] == [
         "team",
@@ -393,6 +394,7 @@ def test_cost_tags_include_present_categories_and_dimensions(logger: DataDogLLMO
         "router_cause",
         "router_escalated",
         "routed_model",
+        "router_stall_escalated",
     ]
 
 
@@ -438,6 +440,9 @@ def test_router_fields_are_flattened(logger: DataDogLLMObsLogger) -> None:
     assert payload["meta"]["metadata"]["router_cause"] == "high_complexity"
     assert payload["meta"]["metadata"]["router_score"] == 0.91
     assert payload["meta"]["metadata"]["router_escalated"] is True
+    assert payload["meta"]["metadata"]["router_stall_escalated"] is False
+    assert "router_stall_escalation_reason" not in payload["meta"]["metadata"]
+    assert "router_stall_escalation_original_tier" not in payload["meta"]["metadata"]
     assert payload["meta"]["metadata"]["router_signals"] == ["secret prompt text"]
     assert payload["meta"]["metadata"]["routed_model"] == "openai/gpt-5"
 
@@ -447,7 +452,9 @@ def test_a_context_escalated_route_reports_as_escalated(logger: DataDogLLMObsLog
     payload = build(logger, metadata={"routing_decision": {"tier": "premium", "context_escalated": True}})
 
     assert payload["meta"]["metadata"]["router_escalated"] is True
+    assert payload["meta"]["metadata"]["router_stall_escalated"] is False
     assert "router_escalated:true" in payload["tags"]
+    assert "router_stall_escalated:false" in payload["tags"]
 
 
 def test_a_routed_request_that_did_not_escalate_reports_false(logger: DataDogLLMObsLogger) -> None:
@@ -455,15 +462,172 @@ def test_a_routed_request_that_did_not_escalate_reports_false(logger: DataDogLLM
     payload = build(logger, metadata={"routing_decision": {"tier": "simple", "cause": "heuristic_scorer"}})
 
     assert payload["meta"]["metadata"]["router_escalated"] is False
+    assert payload["meta"]["metadata"]["router_stall_escalated"] is False
     assert "router_escalated:false" in payload["tags"]
+    assert "router_stall_escalated:false" in payload["tags"]
     assert "router_escalated" in payload["meta"]["metadata"]["_dd"]["cost_tags"]
+    assert "router_stall_escalated" in payload["meta"]["metadata"]["_dd"]["cost_tags"]
 
 
 def test_a_request_that_never_reached_a_router_has_no_router_fields(logger: DataDogLLMObsLogger) -> None:
     payload = build(logger, model_group="premium-models")
 
     assert "router_escalated" not in payload["meta"]["metadata"]
+    assert "router_stall_escalated" not in payload["meta"]["metadata"]
     assert not any(tag.startswith("router_") for tag in payload["tags"])
+
+
+def test_a_stall_escalated_route_exports_all_stall_fields(logger: DataDogLLMObsLogger) -> None:
+    payload = build(
+        logger,
+        metadata={
+            "routing_decision": {
+                "tier": "medium",
+                "cause": "keyword_rule",
+                "stall_escalated": True,
+                "stall_escalation_reason": "repeated_tool_error",
+                "stall_escalation_original_tier": "SIMPLE",
+                "routed_model": "openai/gpt-4o",
+            }
+        },
+        model_group="medium-models",
+    )
+
+    metadata: Final = payload["meta"]["metadata"]
+    assert metadata["router_escalated"] is True
+    assert metadata["router_stall_escalated"] is True
+    assert metadata["router_stall_escalation_reason"] == "repeated_tool_error"
+    assert metadata["router_stall_escalation_original_tier"] == "SIMPLE"
+    assert "router_escalated:true" in payload["tags"]
+    assert "router_stall_escalated:true" in payload["tags"]
+    assert "router_stall_escalation_reason:repeated_tool_error" in payload["tags"]
+    assert "router_stall_escalation_original_tier:simple" in payload["tags"]
+
+
+def test_stall_only_escalation_marks_aggregate_escalated_true(logger: DataDogLLMObsLogger) -> None:
+    payload = build(
+        logger,
+        metadata={
+            "routing_decision": {
+                "tier": "medium",
+                "cause": "heuristic_scorer",
+                "stall_escalated": True,
+                "stall_escalation_reason": "repeated_tool_call",
+                "stall_escalation_original_tier": "SIMPLE",
+            }
+        },
+    )
+
+    assert payload["meta"]["metadata"]["router_escalated"] is True
+    assert payload["meta"]["metadata"]["router_stall_escalated"] is True
+
+
+def test_keyword_only_escalation_leaves_stall_escalated_false(logger: DataDogLLMObsLogger) -> None:
+    payload = build(
+        logger,
+        metadata={
+            "routing_decision": {
+                "tier": "reasoning",
+                "cause": "keyword_rule",
+                "escalated": True,
+            }
+        },
+    )
+
+    assert payload["meta"]["metadata"]["router_escalated"] is True
+    assert payload["meta"]["metadata"]["router_stall_escalated"] is False
+    assert "router_stall_escalation_reason" not in payload["meta"]["metadata"]
+    assert "router_stall_escalation_original_tier" not in payload["meta"]["metadata"]
+
+
+def test_combined_keyword_context_and_stall_escalation(logger: DataDogLLMObsLogger) -> None:
+    payload = build(
+        logger,
+        metadata={
+            "routing_decision": {
+                "tier": "reasoning",
+                "cause": "keyword_rule",
+                "escalated": True,
+                "context_escalated": True,
+                "stall_escalated": True,
+                "stall_escalation_reason": "repeated_tool_call",
+                "stall_escalation_original_tier": "SIMPLE",
+                "routed_model": "openai/o1",
+            }
+        },
+    )
+
+    metadata: Final = payload["meta"]["metadata"]
+    assert metadata["router_escalated"] is True
+    assert metadata["router_stall_escalated"] is True
+    assert metadata["router_stall_escalation_reason"] == "repeated_tool_call"
+    assert metadata["router_stall_escalation_original_tier"] == "SIMPLE"
+
+
+def test_cost_tags_include_stall_dimension_fields(logger: DataDogLLMObsLogger) -> None:
+    payload = build(
+        logger,
+        metadata={
+            "user_api_key_user_id": "User 42",
+            "user_api_key_alias": "Primary Key",
+            "team_alias": "Platform Team",
+            "routing_decision": {
+                "tier": "medium",
+                "cause": "keyword_rule",
+                "score": 0.85,
+                "stall_escalated": True,
+                "stall_escalation_reason": "repeated_tool_error",
+                "stall_escalation_original_tier": "SIMPLE",
+                "routed_model": "openai/gpt-4o",
+            },
+        },
+        model_group="medium-models",
+    )
+
+    assert "router_stall_escalated:true" in payload["tags"]
+    assert "router_stall_escalation_reason:repeated_tool_error" in payload["tags"]
+    assert "router_stall_escalation_original_tier:simple" in payload["tags"]
+    cost_tags: Final = payload["meta"]["metadata"]["_dd"]["cost_tags"]
+    assert "router_stall_escalated" in cost_tags
+    assert "router_stall_escalation_reason" in cost_tags
+    assert "router_stall_escalation_original_tier" in cost_tags
+
+
+def test_redacted_payload_keeps_stall_provenance_and_drops_prompt_signals(logger: DataDogLLMObsLogger) -> None:
+    with patch.dict(os.environ, {"DD_API_KEY": "k", "DD_SITE": "us5.datadoghq.com"}, clear=True):
+        with patch("asyncio.create_task"):
+            redacted_logger = DataDogLLMObsLogger(turn_off_message_logging=True)
+    result = json.loads(
+        safe_dumps(
+            redacted_logger.create_llm_obs_payload(
+                build_payload(
+                    metadata={
+                        "routing_decision": {
+                            "tier": "medium",
+                            "cause": "keyword_rule",
+                            "signals": ["secret prompt text"],
+                            "matched_keyword": "deploy to k8s",
+                            "stall_escalated": True,
+                            "stall_escalation_reason": "repeated_tool_error",
+                            "stall_escalation_original_tier": "SIMPLE",
+                        }
+                    }
+                ),
+                datetime(2026, 9, 1, 12, 0, 0),
+                datetime(2026, 9, 1, 12, 0, 2),
+            )
+        )
+    )
+
+    metadata: Final = result["meta"]["metadata"]
+    assert metadata["router_tier"] == "medium"
+    assert metadata["router_escalated"] is True
+    assert metadata["router_stall_escalated"] is True
+    assert metadata["router_stall_escalation_reason"] == "repeated_tool_error"
+    assert metadata["router_stall_escalation_original_tier"] == "SIMPLE"
+    assert "router_signals" not in metadata
+    assert "matched_keyword" not in metadata
+    assert "routing_decision" not in metadata
 
 
 def test_redacted_payload_keeps_metrics_and_removes_sensitive_fields(logger: DataDogLLMObsLogger) -> None:

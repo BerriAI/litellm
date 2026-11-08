@@ -50,6 +50,9 @@ export interface RoutingDecision {
     predicted_tier: string;
     request_type: string;
   };
+  stall_escalated?: boolean;
+  stall_escalation_reason?: "repeated_tool_call" | "repeated_tool_error";
+  stall_escalation_original_tier?: string;
 }
 
 const ROUTER_TYPE_LABELS: Record<string, ParseKeys> = {
@@ -182,6 +185,41 @@ function describeEscalation(escalated: boolean, keyword: string | undefined, t: 
     : t("logs.detail.routing.escalation.requested");
 }
 
+function describeStallReason(reason: string | undefined, t: TFunction): string | null {
+  if (!reason) return null;
+  switch (reason) {
+    case "repeated_tool_call":
+      return t("logs.detail.routing.stallReason.repeated_tool_call");
+    case "repeated_tool_error":
+      return t("logs.detail.routing.stallReason.repeated_tool_error");
+    default:
+      return reason;
+  }
+}
+
+function StallEscalationRow({
+  stallEscalated,
+  stallEscalationReason,
+  stallEscalationOriginalTier,
+}: {
+  stallEscalated?: boolean;
+  stallEscalationReason?: string;
+  stallEscalationOriginalTier?: string;
+}) {
+  const { t } = useTranslation();
+  if (!stallEscalated) return null;
+  return (
+    <Row label={t("logs.detail.routing.stallEscalation")}>
+      <span>{describeStallReason(stallEscalationReason, t) ?? t("logs.detail.routing.escalation.yes")}</span>
+      {stallEscalationOriginalTier && (
+        <span className="ml-2 text-muted-foreground">
+          ({t("logs.detail.routing.stallOriginalTier", { tier: stallEscalationOriginalTier })})
+        </span>
+      )}
+    </Row>
+  );
+}
+
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="flex gap-3 py-1 text-sm">
@@ -287,6 +325,9 @@ export function RoutingDecisionCard({
     signals,
     escalated,
     escalation_keyword: escalationKeyword,
+    stall_escalated: stallEscalated,
+    stall_escalation_reason: stallEscalationReason,
+    stall_escalation_original_tier: stallEscalationOriginalTier,
     tier_boundaries: tierBoundaries,
     heuristic_v2_forecast: forecast,
   } = decision;
@@ -357,6 +398,12 @@ export function RoutingDecisionCard({
         {escalated !== undefined && (
           <Row label={t("logs.detail.routing.escalated")}>{describeEscalation(escalated, escalationKeyword, t)}</Row>
         )}
+
+        <StallEscalationRow
+          stallEscalated={stallEscalated}
+          stallEscalationReason={stallEscalationReason}
+          stallEscalationOriginalTier={stallEscalationOriginalTier}
+        />
 
         {forecast && (
           <div className="mt-3 border-t pt-3">

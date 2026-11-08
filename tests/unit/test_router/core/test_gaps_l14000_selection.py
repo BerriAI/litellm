@@ -427,13 +427,52 @@ async def test_the_routing_decision_keeps_its_prompt_signals_by_default(make_cor
 
 @pytest.mark.asyncio
 async def test_redacted_message_logging_drops_the_prompt_quoting_routing_decision_fields(make_core: MakeCore) -> None:
-    core: Final = make_core(model_list=_tiered())
+    core: Final = make_core(
+        model_list=_tiered(
+            complexity_router_config={
+                "tiers": dict(TIERS),
+                "stall_escalation_enabled": True,
+                "keyword_tier_rules": [{"keywords": ["deploy to k8s"], "tier": "SIMPLE"}],
+            }
+        )
+    )
+    stalled_messages: Final[list[dict[str, object]]] = [
+        {
+            "role": "assistant",
+            "content": [{"type": "tool_use", "id": "call-0", "name": "bash", "input": {"cmd": "run_0"}}],
+        },
+        {
+            "role": "user",
+            "content": [{"type": "tool_result", "tool_use_id": "call-0", "is_error": True, "content": "fail"}],
+        },
+        {
+            "role": "assistant",
+            "content": [{"type": "tool_use", "id": "call-1", "name": "bash", "input": {"cmd": "run_1"}}],
+        },
+        {
+            "role": "user",
+            "content": [{"type": "tool_result", "tool_use_id": "call-1", "is_error": True, "content": "fail"}],
+        },
+        {
+            "role": "assistant",
+            "content": [{"type": "tool_use", "id": "call-2", "name": "bash", "input": {"cmd": "run_2"}}],
+        },
+        {
+            "role": "user",
+            "content": [{"type": "tool_result", "tool_use_id": "call-2", "is_error": True, "content": "fail"}],
+        },
+        {"role": "user", "content": "please deploy to k8s now"},
+    ]
     request: Final[dict[str, object]] = {"standard_callback_dynamic_params": {"turn_off_message_logging": True}}
-    await core.select("smart", request, messages=MESSAGES)  # pyright: ignore[reportCallIssue]
+    await core.select("smart", request, messages=stalled_messages)  # pyright: ignore[reportCallIssue]
     decision: Final = _metadata(request)["routing_decision"]
     assert isinstance(decision, Mapping)
     assert "signals" not in decision
-    assert (decision["router_model_name"], decision["tier"], decision["routed_model"]) == ("smart", "SIMPLE", "small")
+    assert "matched_keyword" not in decision
+    assert decision.get("stall_escalated") is True
+    assert decision.get("stall_escalation_reason") == "repeated_tool_error"
+    assert decision.get("stall_escalation_original_tier") == "SIMPLE"
+    assert (decision["router_model_name"], decision["tier"], decision["routed_model"]) == ("smart", "MEDIUM", "big")
 
 
 @pytest.mark.asyncio
