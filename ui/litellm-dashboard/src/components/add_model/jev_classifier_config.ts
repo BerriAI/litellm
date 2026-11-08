@@ -1,4 +1,5 @@
 import { z } from "zod";
+import i18n from "@/i18n/i18n";
 import type { ClassifierType } from "./classifier_types";
 
 export const OSS_CLASSIFIER_MODELS = {
@@ -52,7 +53,7 @@ export const jevClassifierConfigSchema = z
   .refine(
     (config) => config.deployment_name !== undefined || isSupportedClassifierModel(config.provider, config.model),
     {
-      error: "Select a supported classifier model, or enter ai_decide or a bare Databricks serving endpoint name",
+      error: () => i18n.t("addModel.jevClassifierConfig.errors.unsupportedModel"),
       path: ["model"],
     },
   );

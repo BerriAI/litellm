@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Final
 
 import httpx
 from pydantic import TypeAdapter
@@ -28,6 +28,7 @@ from litellm.router_utils.cooldown_handlers import (
     _first_present,  # pyright: ignore[reportPrivateUsage] - shared internal helper, used across router_utils
     cast_exception_status_to_int,
     is_advisor_orchestration_failure,
+    is_caller_entra_credential_failure,
     is_caller_scoped_auth_failure,
     is_caller_timeout_408,
     is_stream_stall,
@@ -129,6 +130,14 @@ def _trigger_cooldown_for_failed_deployment(
         if is_caller_scoped_auth_failure(deployment, exception_status):
             verbose_router_logger.debug(
                 "Not triggering cooldown for fallback deployment %s: caller-scoped OAuth authentication failure.",
+                deployment_id,
+            )
+            return
+        if is_caller_entra_credential_failure(
+            deployment, ctx.default_litellm_params(), model_call_details, exception_status, exception
+        ):
+            verbose_router_logger.debug(
+                "Not triggering cooldown for fallback deployment %s: Entra ID rejected a credential the caller sent.",
                 deployment_id,
             )
             return
@@ -623,6 +632,8 @@ def get_fallback_model_group(
     ## check for specific model group-specific fallbacks
     for idx, item in enumerate(fallbacks):
         if isinstance(item, dict):
+            if not item:
+                continue  # an empty entry names no group: the next entries still apply
             fallback_key = next(iter(item))
             if fallback_key == model_group:  # check exact match
                 fallback_model_group = item[model_group]
@@ -787,7 +798,7 @@ async def run_async_fallback(
     fallback_depth: int,
     include_fallback_errors: bool = False,
     **kwargs,
-) -> Any:
+) -> object:
     """
     Loops through all the fallback model groups and calls kwargs["original_function"] with the arguments and keyword arguments provided.
 

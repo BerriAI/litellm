@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { visibleMenuGroups, type MenuGroup, menuGroups } from "@/components/leftnav";
 import { toSiTerminology } from "@/lib/terminology";
+import { effectiveSessionRole, isViewOnlySessionRole } from "@/utils/roles";
 import { flattenNavItems, matchNavItems, paletteScopeForRoute, shortcutLabel, type PaletteNavItem } from "./utils";
 
 describe("paletteScopeForRoute", () => {
@@ -47,6 +48,35 @@ describe("visibleMenuGroups", () => {
     isOrgAdmin: false,
     isTeamAdmin: false,
   };
+
+  it.each(["internal_user", "internal_user_viewer", "proxy_admin", "proxy_admin_viewer", "org_admin"])(
+    "keeps Skills reachable for the %s session",
+    (role) => {
+      const visible = visibleMenuGroups(menuGroups, {
+        ...context,
+        userRole: effectiveSessionRole(role),
+        isViewOnly: isViewOnlySessionRole(role),
+      });
+
+      expect(flattenNavItems(visible).find(({ route }) => route === "skills")).toMatchObject({
+        label: "Skills Hub",
+        route: "skills",
+      });
+    },
+  );
+
+  it.each(["internal_user", "internal_user_viewer"])("respects the Skills page allowlist for %s", (role) => {
+    const skillsContext = {
+      ...context,
+      userRole: effectiveSessionRole(role),
+      isViewOnly: isViewOnlySessionRole(role),
+    };
+    const allowed = visibleMenuGroups(menuGroups, { ...skillsContext, enabledPagesInternalUsers: ["skills"] });
+    const hidden = visibleMenuGroups(menuGroups, { ...skillsContext, enabledPagesInternalUsers: ["api-keys"] });
+
+    expect(flattenNavItems(allowed).map(({ route }) => route)).toEqual(["skills"]);
+    expect(flattenNavItems(hidden).map(({ route }) => route)).toEqual(["api-keys"]);
+  });
 
   it("applies the internal-user page allowlist", () => {
     const visible = visibleMenuGroups(menuGroups, {

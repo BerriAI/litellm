@@ -7,10 +7,10 @@ import json
 from collections.abc import Coroutine
 from typing import Final, Literal, cast, overload
 
-from litellm.litellm_core_utils.prompt_templates.common_utils import (
+from litellm.litellm_core_utils.prompt_templates.factory import parse_mime_type
+from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
     get_image_mime_type_from_url,
 )
-from litellm.litellm_core_utils.prompt_templates.factory import parse_mime_type
 from litellm.litellm_core_utils.reasoning_effort_utils import (
     reasoning_effort_from_thinking,
 )

@@ -3,6 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { SettingsIcon } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import ModelSelector from "@/components/common_components/ModelSelector";
 
 interface ModelConfigCardProps {
@@ -24,6 +25,7 @@ const ModelConfigCard: React.FC<ModelConfigCardProps> = ({
   onTemperatureChange,
   onMaxTokensChange,
 }) => {
+  const { t } = useTranslation();
   const [showConfig, setShowConfig] = useState(false);
 
   return (
@@ -34,19 +36,19 @@ const ModelConfigCard: React.FC<ModelConfigCardProps> = ({
 
       <Button type="button" variant="outline" onClick={() => setShowConfig(!showConfig)} className="gap-2">
         <SettingsIcon size={16} />
-        <span>Parameters</span>
+        <span>{t("prompts.modelConfig.parameters")}</span>
       </Button>
 
       <Dialog open={showConfig} onOpenChange={setShowConfig}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Model Parameters</DialogTitle>
+            <DialogTitle>{t("prompts.modelConfig.title")}</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
             <div>
               <div className="flex items-center justify-between mb-2">
                 <label htmlFor="prompt-temperature" className="text-sm text-foreground">
-                  Temperature
+                  {t("prompts.modelConfig.temperature")}
                 </label>
                 <Input
                   id="prompt-temperature"
@@ -63,7 +65,7 @@ const ModelConfigCard: React.FC<ModelConfigCardProps> = ({
             <div>
               <div className="flex items-center justify-between mb-2">
                 <label htmlFor="prompt-max-tokens" className="text-sm text-foreground">
-                  Max Tokens
+                  {t("prompts.modelConfig.maxTokens")}
                 </label>
                 <Input
                   id="prompt-max-tokens"
