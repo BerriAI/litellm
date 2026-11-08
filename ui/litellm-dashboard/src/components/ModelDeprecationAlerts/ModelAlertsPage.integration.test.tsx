@@ -50,8 +50,8 @@ describe("model migration impact", () => {
         body: request.method === "PUT" ? await request.clone().json() : null,
       };
       calls.push(call);
-      if (url.pathname === "/alerting/model-deprecations/tags") return apiResponse([]);
-      if (request.method === "PUT" && url.pathname === "/alerting/model-deprecations/state")
+      if (url.pathname === "/alerts/model-deprecations/tags") return apiResponse([]);
+      if (request.method === "PUT" && url.pathname === "/alerts/model-deprecations/state")
         return apiResponse({ status: "resolved" });
       if (url.pathname.endsWith("/aggregated/keys")) {
         const offset = Number(url.searchParams.get("offset") || 0);
@@ -111,7 +111,7 @@ describe("model migration impact", () => {
     };
     await waitFor(() =>
       expect(
-        calls.find((call) => call.method === "PUT" && call.path === "/alerting/model-deprecations/state")?.body,
+        calls.find((call) => call.method === "PUT" && call.path === "/alerts/model-deprecations/state")?.body,
       ).toEqual(expectedAcknowledgement),
     );
 
