@@ -1652,7 +1652,7 @@ class RustEndpoints:
                     raise TypeError(
                         "_generic_api_call_with_fallbacks() missing 1 required positional argument: 'model'"
                     )
-                return self._core.call_sync(plan, kwargs, _SINGLE_ATTEMPT)
+                return self._core.call_sync(plan, kwargs, None if name in _SYNC_RETRIED else _SINGLE_ATTEMPT)
             provider_kwargs: dict[  # mutable-ok: the request kwargs the Python router mutates in place  # rebind-ok: rebound as the Python router rebinds it
                 str, object
             ] = (
@@ -2465,6 +2465,8 @@ class RustEndpoints:
 
 
 _SINGLE_ATTEMPT: Final[Mapping[str, object]] = MappingProxyType({"num_retries": 0, "disable_fallbacks": True})
+# The sync endpoints whose walk honors the router's `num_retries` and `fallbacks` like their async twin (#49938).
+_SYNC_RETRIED: Final = frozenset({"responses"})
 
 
 async def _answers_none(*_args: object, **_kwargs: object) -> None:  # kwargs-ok: any request
