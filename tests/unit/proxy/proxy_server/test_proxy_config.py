@@ -4124,10 +4124,11 @@ def test_db_model_parameters_keep_scope_through_decryption_and_router_loading(
     assert reference not in caplog.text
 
 
-def test_ProxyConfig_decrypt_model_list_from_db_invalid_params_skips():
+@pytest.mark.parametrize("management_read", (False, True))
+def test_ProxyConfig_decrypt_model_list_from_db_invalid_params_skips(management_read: bool) -> None:
     pc = ProxyConfig()
     bad = SimpleNamespace(model_id="m-1", model_name="x", model_info={}, litellm_params="not-a-dict")
-    out = pc.decrypt_model_list_from_db(new_models=[bad])
+    out = pc.decrypt_model_list_from_db(new_models=[bad], _for_management_read=management_read)
     # Invalid entries skipped — empty list returned.
     assert out == []
 

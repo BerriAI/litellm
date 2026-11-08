@@ -8040,6 +8040,22 @@ class ProxyConfig:
         return added_models
 
     def decrypt_model_list_from_db(self, new_models: list, *, _for_management_read: bool = False) -> list:
+        if _for_management_read:
+            return [
+                {
+                    "model_name": _UNTYPED_VALUE.validate_python(getattr(m, "model_name", None)),
+                    "litellm_params": decrypt_db_model_params(
+                        _DB_MODEL_PARAMS.validate_python(
+                            params.model_dump() if isinstance(params, BaseModel) else params
+                        )
+                    ),
+                    "model_info": self.get_model_info_with_id(model=m).model_dump(exclude_none=True),
+                }
+                for m in new_models
+                if isinstance(
+                    params := _UNTYPED_VALUE.validate_python(getattr(m, "litellm_params", None)), (dict, BaseModel)
+                )
+            ]
         _model_list: Final[list[Mapping[str, object]]] = []
         for m in new_models:
             _litellm_params = m.litellm_params
@@ -8047,17 +8063,6 @@ class ProxyConfig:
                 _litellm_params = _litellm_params.model_dump()
             if isinstance(_litellm_params, dict):
                 _model_info = self.get_model_info_with_id(model=m)
-                if _for_management_read:
-                    _model_list.append(
-                        {
-                            "model_name": m.model_name,
-                            "litellm_params": decrypt_db_model_params(
-                                _DB_MODEL_PARAMS.validate_python(_litellm_params)
-                            ),
-                            "model_info": _model_info.model_dump(exclude_none=True),
-                        }
-                    )
-                    continue
                 # decrypt values
                 _litellm_params = {
                     k: self._resolve_db_litellm_param(key=k, value=v, model_info=_model_info)
