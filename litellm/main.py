@@ -549,8 +549,11 @@ async def acompletion(
     from litellm.integrations.anthropic_cache_control_hook import (
         AnthropicCacheControlHook,
     )
+    from litellm.litellm_core_utils.core_helpers import as_str_mapping
     from litellm.types.llms.openai import AllMessageValues
 
+    caller_kwargs: Final = cast("Mapping[str, object]", kwargs)  # cast-ok: acompletion takes untyped kwargs
+    caller_model_info: Final = as_str_mapping(caller_kwargs.get("model_info"))
     AnthropicCacheControlHook.maybe_seed_default_injection_points(
         non_default_params=kwargs,
         messages=cast(list[AllMessageValues], messages),  # cast-ok: acompletion types messages as a bare List
@@ -559,6 +562,8 @@ async def acompletion(
         tools=tools,
         enable_prompt_caching=cast(bool | None, kwargs.get("enable_prompt_caching")),  # cast-ok: untyped kwargs
         api_base=kwargs.get("api_base") or base_url,
+        model_info=caller_model_info,
+        base_model=caller_kwargs.get("base_model") or (caller_model_info or {}).get("base_model"),
     )
 
     if isinstance(litellm_logging_obj, LiteLLMLoggingObj) and (
@@ -5522,6 +5527,8 @@ def completion(
         tools=tools,
         enable_prompt_caching=cast(bool | None, kwargs.get("enable_prompt_caching")),  # cast-ok: untyped kwargs
         api_base=kwargs.get("api_base") or base_url,
+        model_info=cast(object, model_info),  # cast-ok: untyped kwargs
+        base_model=cast(object, base_model),  # cast-ok: untyped kwargs
     )
 
     if isinstance(litellm_logging_obj, LiteLLMLoggingObj) and (
