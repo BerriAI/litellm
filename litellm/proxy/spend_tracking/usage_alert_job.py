@@ -229,18 +229,19 @@ class UsageAlertJob:
     async def _evaluate(self, target: date, deadline: float) -> None:
         cursor = await self._store.work_cursor()  # rebind-ok: durable round-robin position
         exhausted: Final[set[int]] = set()  # mutable-ok: at most the 10 scope/config phases in this invocation
-        phase_progress = False  # rebind-ok: whether a page advanced in the current phase
+        progressed: Final[set[int]] = set()  # mutable-ok: at most one progress flag per scope/config phase
         while asyncio.get_running_loop().time() < deadline and len(exhausted) < 10:
             if cursor.phase in exhausted:
-                cursor = UsageAlertWorkCursor(phase=(cursor.phase + 1) % 10)
+                cursor = cursor.advance(cursor.after_id)
                 continue
             phase: int = cursor.phase
             cursor, advanced, finished = await self._evaluation_page(cursor, target)
-            phase_progress = phase_progress or advanced
+            if advanced:
+                progressed.add(phase)
             if finished:
-                if not phase_progress:
+                if phase not in progressed:
                     exhausted.add(phase)
-                phase_progress = False
+                progressed.discard(phase)
             await self._store.save_work_cursor(cursor)
             await asyncio.sleep(0.01)
 
@@ -252,7 +253,7 @@ class UsageAlertJob:
         limit: Final = 8 if wildcard else 10
         rules: Final = await self._store.enabled_rule_page(scope, wildcard, cursor.after_id, limit=limit)
         if not rules:
-            return UsageAlertWorkCursor(phase=(cursor.phase + 1) % 10), False, True
+            return cursor.advance(None), False, True
         # Keep one date/cursor per page. A newly edited rule cannot rewind another rule.
         position: Final = self._position(rules[0], target)
         selected: Final = tuple(
@@ -271,8 +272,8 @@ class UsageAlertJob:
         due: Final = tuple(rule for rule in selected if rule.id not in complete)
         advanced: Final = bool(due) and await self._attempt_scope_page(due, position.day, wildcard)
         if len(rules) < limit and len(selected) == len(rules):
-            return UsageAlertWorkCursor(phase=(cursor.phase + 1) % 10), advanced, True
-        return UsageAlertWorkCursor(phase=cursor.phase, after_id=selected[-1].id), advanced, False
+            return cursor.advance(None), advanced, True
+        return cursor.advance(selected[-1].id), advanced, False
 
     async def _attempt_scope_page(self, rules: tuple[UsageAlertRule, ...], target: date, wildcard: bool) -> bool:
         try:

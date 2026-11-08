@@ -682,9 +682,14 @@ async def test_reported_model_search_preserves_exact_identity_and_cursor(
     prefix: Final = f"reported-{uuid4().hex}"
     initial: Final = await repository.list_reported_models(prefix, None, 1)
     assert initial.data == ()
-    models: Final = (f"{prefix}/first", f"{prefix}/literal%quote'", f"{prefix}/second")
+    models: Final = (
+        f"{prefix}/first",
+        f"{prefix}/literal%quote'",
+        f"{prefix}/second",
+        prefix + "/z" + "x" * (1022 - len(prefix)),
+    )
     try:
-        for index, model in enumerate((*models, models[0])):
+        for index, model in enumerate((*models, models[0], prefix + "/aaa" + "x" * 1025)):
             await db.prisma.writer_db.execute_raw(
                 'INSERT INTO "LiteLLM_DailyUserSpend" (id,date,api_key,model,updated_at) VALUES ($1,$2,$3,$4,CURRENT_TIMESTAMP)',
                 f"{prefix}-{index}",
@@ -706,7 +711,9 @@ async def test_reported_model_search_preserves_exact_identity_and_cursor(
         second: Final = await repository.list_reported_models(prefix, first.next_cursor, 1)
         third: Final = await repository.list_reported_models(prefix, second.next_cursor, 1)
         assert second.data[0].scope_id == models[1] and third.data[0].scope_id == models[2]
-        assert third.next_cursor is None
+        fourth: Final = await repository.list_reported_models(prefix, third.next_cursor, 1)
+        assert fourth.data[0].scope_id == models[3] and len(fourth.data[0].scope_id) == 1024
+        assert fourth.next_cursor is None
         literal: Final = await repository.list_reported_models(f"{prefix}/literal%quote'", None, 20)
         assert tuple(option.scope_id for option in literal.data) == (models[1],)
         assert literal.data[0].label == models[1]

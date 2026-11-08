@@ -649,7 +649,7 @@ class UsageAlertsRepository:
         rows: Final = TypeAdapter(tuple[_ModelIdentity, ...]).validate_python(
             await self.database.query_raw(
                 """SELECT DISTINCT model FROM "LiteLLM_DailyUserSpend"
-                WHERE date >= $1 AND date <= $2 AND model IS NOT NULL AND model <> ''
+                WHERE date >= $1 AND date <= $2 AND model IS NOT NULL AND length(model) BETWEEN 1 AND 1024
                     AND ($3::text IS NULL OR strpos(lower(model),lower($3))>0)
                     AND ($4::text IS NULL OR model>$4)
                 ORDER BY model LIMIT $5""",

@@ -1,7 +1,7 @@
 """Daily usage alert rules and incidents shared by the API and evaluator."""
 
 from datetime import date, datetime
-from typing import Literal, TypeAlias
+from typing import Annotated, Final, Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from typing_extensions import Self
@@ -75,7 +75,18 @@ class UsageAlertProgress(BaseModel, frozen=True):
 
 class UsageAlertWorkCursor(BaseModel, frozen=True):
     phase: int = Field(default=0, ge=0, lt=10)
-    after_id: str | None = None
+    after_id: str | None = Field(default=None, max_length=200)
+    positions: tuple[Annotated[str, Field(max_length=200)] | None, ...] = Field(
+        default=(None,) * 10, min_length=10, max_length=10
+    )
+
+    def advance(self, after_id: str | None) -> "UsageAlertWorkCursor":
+        phase: Final = (self.phase + 1) % 10
+        return UsageAlertWorkCursor(
+            phase=phase,
+            after_id=self.positions[phase],
+            positions=tuple(after_id if index == self.phase else value for index, value in enumerate(self.positions)),
+        )
 
 
 class UsageAlertProjectionWork(BaseModel, frozen=True):
