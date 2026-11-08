@@ -1,6 +1,7 @@
 from dataclasses import dataclass, replace
 from typing import Final, Literal, TypeAlias
 
+from litellm._auth.failure import NativeAuthFailure
 from litellm._auth.model_groups import GroupLookup, GroupResources, ResourceGroupFacts, resource_group_decision
 from litellm.proxy._types import LiteLLM_TeamTable, UserAPIKeyAuth
 
@@ -64,6 +65,8 @@ async def _read(group_id: str, resource_field: ResourceField, check_db_only: boo
                 ),
             )
         )
+    except NativeAuthFailure:
+        raise
     except AccessGroupNotFoundError as error:
         return GroupRead(GroupLookup("Missing"), error)
     except Exception as error:  # noqa: BLE001  # native strict-error policy decides whether to rethrow this lookup failure

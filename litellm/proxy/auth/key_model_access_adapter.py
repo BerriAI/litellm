@@ -5,6 +5,7 @@ from typing import Final
 from fastapi import Request
 from pydantic import BaseModel, Field
 
+from litellm._auth.failure import NativeAuthFailure
 from litellm._auth.fallback_access import GroupedModelScope
 from litellm._auth.key_model_access import KeyAndFallbackModelAccessFacts, key_and_fallback_model_access
 from litellm._auth.model_access import key_model_grants
@@ -88,7 +89,9 @@ async def _route(name: str, source: _Sources) -> Exception | None:
             user_model=None,
             route_type="acompletion",
         )
-    except Exception as error:
+    except NativeAuthFailure:
+        raise
+    except Exception as error:  # noqa: BLE001  # native policy sequences a legacy routing IO failure before rethrowing
         return error
     return None
 

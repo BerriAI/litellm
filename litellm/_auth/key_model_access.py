@@ -3,6 +3,7 @@ from typing import Final, Literal
 
 from pydantic import TypeAdapter
 
+from litellm._auth.failure import native_boundary
 from litellm._auth.fallback_access import GroupedModelScope
 from litellm._auth.model_access import ModelAccessDecision
 from litellm.rust_bridge import _native
@@ -39,5 +40,6 @@ class KeyAndFallbackModelAccessDecision:
 _DECISION: Final = TypeAdapter(KeyAndFallbackModelAccessDecision)
 
 
+@native_boundary
 def key_and_fallback_model_access(facts: KeyAndFallbackModelAccessFacts) -> KeyAndFallbackModelAccessDecision:
     return _DECISION.validate_python(_native.request_auth_key_model_access(asdict(facts)))

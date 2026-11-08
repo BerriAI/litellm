@@ -79,6 +79,7 @@ pub enum Decision {
         model: String,
     },
     ReadGroups,
+    ReadScope,
 }
 
 impl Decision {
@@ -292,6 +293,10 @@ pub enum Request {
         facts: Facts,
         present: bool,
     },
+    UserPrecheck {
+        present: bool,
+        grants: Vec<String>,
+    },
     Customer(Facts),
     Agent {
         facts: Facts,
@@ -394,6 +399,15 @@ pub fn decide(request: Request) -> Result<Response, Error> {
                 Decision::NoDefaultModels
             } else {
                 check(&facts)?
+            }
+        }
+        Request::UserPrecheck { present, grants } => {
+            if !present {
+                Decision::Allow
+            } else if grants.iter().any(|grant| grant == "no-default-models") {
+                Decision::NoDefaultModels
+            } else {
+                Decision::ReadScope
             }
         }
         Request::Customer(facts) => {
@@ -576,6 +590,23 @@ pub fn decide(request: Request) -> Result<Response, Error> {
 mod tests {
     use super::*;
     use rstest::rstest;
+
+    #[rstest]
+    #[case::absent(false, vec!["no-default-models"], Decision::Allow)]
+    #[case::restricted(true, vec!["no-default-models"], Decision::NoDefaultModels)]
+    #[case::empty(true, vec![], Decision::ReadScope)]
+    #[case::grants(true, vec!["model"], Decision::ReadScope)]
+    fn user_precheck(#[case] present: bool, #[case] grants: Vec<&str>, #[case] expected: Decision) {
+        let response = decide(Request::UserPrecheck {
+            present,
+            grants: grants.into_iter().map(str::to_owned).collect(),
+        })
+        .unwrap();
+        let Response::Decision(decision) = response else {
+            panic!("expected decision")
+        };
+        assert_eq!(decision, expected);
+    }
 
     #[rstest]
     #[case::empty(vec![], true)]

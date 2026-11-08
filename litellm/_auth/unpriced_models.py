@@ -3,6 +3,7 @@ from typing import Final, Literal
 
 from pydantic import TypeAdapter
 
+from litellm._auth.failure import native_boundary
 from litellm.rust_bridge import _native
 
 
@@ -47,5 +48,6 @@ class UnpricedModelDecision:
 _DECISION: Final = TypeAdapter(UnpricedModelDecision)
 
 
+@native_boundary
 def unpriced_model(facts: UnpricedModelFacts) -> UnpricedModelDecision:
     return _DECISION.validate_python(_native.request_auth_unpriced_model(asdict(facts)))
