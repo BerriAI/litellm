@@ -134,7 +134,7 @@ async fn a_stream_that_fails_after_opening_ends_with_the_responses_error_event()
     let text = std::str::from_utf8(&body).unwrap();
     let frame = text
         .strip_prefix(RESPONSE_CREATED)
-        .and_then(|rest| rest.strip_prefix("event: error\ndata: "))
+        .and_then(|rest| rest.strip_prefix("\n\nevent: error\ndata: "))
         .unwrap_or_else(|| panic!("the delivered event then one error frame, got {text:?}"));
     let error: serde_json::Value = serde_json::from_str(frame.trim_end()).unwrap();
     assert_eq!(error["type"], "error");

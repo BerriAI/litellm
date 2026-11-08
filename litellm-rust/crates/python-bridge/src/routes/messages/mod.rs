@@ -7,6 +7,21 @@ use pyo3::prelude::*;
 use super::NativeCall;
 
 fn run_messages(py: Python<'_>, call: NativeCall<'_>, asynchronous: bool) -> PyResult<Py<PyAny>> {
+    let request = call.resolved()?;
+    let model: String = request
+        .get_item("model")?
+        .ok_or_else(|| pyo3::exceptions::PyTypeError::new_err("messages requires a model"))?
+        .extract()?;
+    let provider: String = py
+        .import("litellm.rust_bridge.host.routes.messages")?
+        .getattr("request_provider")?
+        .call1((&request,))?
+        .extract()?;
+    if !litellm_inference_messages::supports_messages_provider(&model, Some(&provider)) {
+        return Err(crate::errors::RustBridgeDeclined::new_err(format!(
+            "messages provider {provider} has no native adapter"
+        )));
+    }
     let (arguments, hooks) =
         crate::routes::call_hooks(py, LoggingOperation::Messages, &call, asynchronous)?;
     crate::routes::run_public_call(

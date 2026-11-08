@@ -4320,6 +4320,7 @@ dependencies = [
  "thiserror 2.0.19",
  "time",
  "tokio",
+ "unicode-general-category",
  "url",
 ]
 

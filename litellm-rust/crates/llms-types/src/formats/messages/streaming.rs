@@ -169,6 +169,9 @@ mod tests {
         "type": "message_delta", "delta": {"stop_reason": "end_turn", "future_delta": 42},
         "usage": {"output_tokens": 7, "future_usage": true}
     }))]
+    #[case::large_index(json!({"type":"content_block_stop","index":u64::MAX}))]
+    #[case::large_usage(json!({"type":"message_stop","usage":{"input_tokens":u64::MAX,"output_tokens":9_007_199_254_740_993_u64,"future_usage":null}}))]
+    #[case::partial_json(json!({"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"x\":"}}))]
     #[case::error(json!({
         "type": "error", "error": {"type": "future_error", "message": "failed", "future": 42}
     }))]
@@ -197,6 +200,14 @@ mod tests {
     #[rstest]
     #[case::invalid_index(json!({"type": "content_block_stop", "index": "zero"}))]
     #[case::missing_delta(json!({"type": "content_block_delta", "index": 0}))]
+    #[case::negative_index(json!({"type":"content_block_stop","index":-1}))]
+    #[case::fractional_index(json!({"type":"content_block_stop","index":0.5}))]
+    #[case::null_index(json!({"type":"content_block_stop","index":null}))]
+    #[case::unknown_delta(json!({"type":"content_block_delta","index":0,"delta":{"type":"future_delta","text":"x"}}))]
+    #[case::tool_fragment_not_text(json!({"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":{"x":1}}}))]
+    #[case::negative_usage(json!({"type":"message_stop","usage":{"output_tokens":-1}}))]
+    #[case::fractional_usage(json!({"type":"message_delta","delta":{},"usage":{"input_tokens":0.5}}))]
+    #[case::error_without_message(json!({"type":"error","error":{"type":"api_error"}}))]
     #[case::unknown_event(json!({"type": "future_event"}))]
     fn malformed_or_unrecognized_events_remain_rejected(#[case] wire: Value) {
         assert!(serde_json::from_value::<MessagesStreamEvent>(wire).is_err());

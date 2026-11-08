@@ -40,11 +40,15 @@ impl Protocol for TestProtocol {
 }
 
 #[rstest]
-#[case::complete(false)]
-#[case::failed(true)]
+#[case::complete(false, "event: custom\ndata: first\n\n")]
+#[case::failed_after_frame(true, "event: custom\ndata: first\n\n")]
+#[case::failed_during_frame(true, "event: custom\ndata: partial")]
 #[tokio::test]
-async fn sse_preserves_encoded_chunks_and_uses_the_supplied_error_format(#[case] fail: bool) {
-    let first = Bytes::from_static(b"event: custom\ndata: first\n\n");
+async fn sse_preserves_encoded_chunks_and_delimits_the_supplied_error_frame(
+    #[case] fail: bool,
+    #[case] prefix: &'static str,
+) {
+    let first = Bytes::from_static(prefix.as_bytes());
     let last = Bytes::from_static(b"data: [DONE]\n\n");
     let machine =
         hosted_call::<TestProtocol, _, _>((), None, move |(), _, _, _observations| async move {
@@ -70,14 +74,12 @@ async fn sse_preserves_encoded_chunks_and_uses_the_supplied_error_format(#[case]
     assert_eq!(response.headers()[CONTENT_TYPE], "text/event-stream");
     assert_eq!(errors.load(Ordering::SeqCst), 0);
     let body = to_bytes(response.into_body(), 1024).await.unwrap();
-    assert_eq!(
-        body,
-        if fail {
-            "event: custom\ndata: first\n\nevent: custom_error\ndata: Call(Upstream)\n\n"
-        } else {
-            "event: custom\ndata: first\n\ndata: [DONE]\n\n"
-        }
-    );
+    let expected = if fail {
+        format!("{prefix}\n\nevent: custom_error\ndata: Call(Upstream)\n\n")
+    } else {
+        format!("{prefix}data: [DONE]\n\n")
+    };
+    assert_eq!(body.as_ref(), expected.as_bytes());
     assert_eq!(errors.load(Ordering::SeqCst), usize::from(fail));
 }
 

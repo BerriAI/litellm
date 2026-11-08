@@ -388,8 +388,13 @@ fn compact_edit_from_openai(entry: &Map<String, Value>) -> Option<ContextEdit> {
     }
     let trigger = entry
         .get("compact_threshold")
-        .and_then(Value::as_f64)
-        .map(|threshold| json!({"type": "input_tokens", "value": threshold as i64}));
+        .and_then(|threshold| match threshold {
+            Value::Number(number) if number.is_i64() || number.is_u64() => Some(threshold.clone()),
+            Value::Number(number) => number.as_f64().map(|number| json!(number as i64)),
+            Value::Bool(value) => Some(json!(u8::from(*value))),
+            _ => None,
+        })
+        .map(|threshold| json!({"type": "input_tokens", "value": threshold}));
     let passthrough = entry
         .iter()
         .filter(|(key, _)| !matches!(key.as_str(), "type" | "compact_threshold"))
@@ -700,6 +705,26 @@ mod tests {
     #[case::compaction_threshold(
         json!([{"type": "compaction", "compact_threshold": 200000}]),
         Some(json!({"edits": [{"type": "compact_20260112", "trigger": {"type": "input_tokens", "value": 200000}}]}))
+    )]
+    #[case::threshold_above_float_precision(
+        json!([{"type": "compaction", "compact_threshold": 9_007_199_254_740_993_u64}]),
+        Some(json!({"edits": [{"type": "compact_20260112", "trigger": {"type": "input_tokens", "value": 9_007_199_254_740_993_u64}}]}))
+    )]
+    #[case::threshold_unsigned_maximum(
+        json!([{"type": "compaction", "compact_threshold": u64::MAX}]),
+        Some(json!({"edits": [{"type": "compact_20260112", "trigger": {"type": "input_tokens", "value": u64::MAX}}]}))
+    )]
+    #[case::threshold_signed_minimum(
+        json!([{"type": "compaction", "compact_threshold": i64::MIN}]),
+        Some(json!({"edits": [{"type": "compact_20260112", "trigger": {"type": "input_tokens", "value": i64::MIN}}]}))
+    )]
+    #[case::true_threshold_matches_python_int(
+        json!([{"type": "compaction", "compact_threshold": true}]),
+        Some(json!({"edits": [{"type": "compact_20260112", "trigger": {"type": "input_tokens", "value": 1}}]}))
+    )]
+    #[case::false_threshold_matches_python_int(
+        json!([{"type": "compaction", "compact_threshold": false}]),
+        Some(json!({"edits": [{"type": "compact_20260112", "trigger": {"type": "input_tokens", "value": 0}}]}))
     )]
     #[case::other_keys_pass_through(
         json!([{"type": "compaction", "compact_threshold": 150000, "instructions": "Focus on preserving code snippets"}]),

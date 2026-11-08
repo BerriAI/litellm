@@ -13,7 +13,7 @@ import os
 import sys
 import threading
 import warnings
-from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Iterator, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator, Awaitable, Callable, Iterator, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import CodeType, FrameType, MappingProxyType, SimpleNamespace
@@ -52,6 +52,7 @@ from litellm.router_rust.invoke.streaming import (
     MAX_BUFFERED_PRE_CONTENT_ANTHROPIC_CHUNKS,
     MAX_HELD_PRE_OUTPUT_RESPONSES_EVENTS,
     FallbackAwareAnthropicMessagesStream,
+    StreamAttempt,
     _stream_commits_now,
     _anthropic_stream_error_is_gateway_verdict,
     _stream_fallback_error_for_raised,
@@ -20331,3 +20332,103 @@ def test_router_warns_when_a_deployment_enforces_endpoints_without_a_list(caplog
 
     assert "Deployment 'embed-from-config' sets enforce_supported_endpoints without" in caplog.text
     assert "Deployment 'embed-from-api' sets enforce_supported_endpoints without" in caplog.text
+
+
+class _PartitionedMessagesSSE(httpx.AsyncByteStream):
+    def __init__(self, chunks: tuple[bytes, ...]) -> None:
+        self._chunks: Final = chunks
+        self.reads = 0
+        self.closes = 0
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        for chunk in self._chunks:
+            self.reads += 1
+            yield chunk
+
+    async def aclose(self) -> None:
+        self.closes += 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("isolate_litellm_state", "_router_httpx_transport")
+@pytest.mark.parametrize("split_at", [0, 12, 24, 50], ids=["whole", "event-name", "event-end", "data"])
+@pytest.mark.parametrize("newline", [b"\n", b"\r\n"], ids=["lf", "crlf"])
+async def test_messages_stream_preserves_generated_content_across_partitions_before_a_retryable_error(
+    respx_mock: respx.MockRouter, split_at: int, newline: bytes
+) -> None:
+    content: Final = _anthropic_messages_content_chunk("original").replace(b"\n", newline)
+    chunks: Final = (
+        _anthropic_messages_message_start_chunk().replace(b"\n", newline),
+        *((content[:split_at], content[split_at:]) if split_at else (content,)),
+        _anthropic_messages_overloaded_error_chunk().replace(b"\n", newline),
+    )
+    route: Final = respx_mock.post("https://messages-partitions.test/v1/messages").mock(
+        side_effect=lambda _: httpx.Response(
+            200, headers={"content-type": "text/event-stream"}, stream=_PartitionedMessagesSSE(chunks)
+        )
+    )
+    router: Final = Router(
+        model_list=[{
+            "model_name": "messages",
+            "litellm_params": {
+                "model": "anthropic/claude-sonnet-5-5", "api_key": "fake-key",
+                "api_base": "https://messages-partitions.test",
+            },
+        }],
+        num_retries=1,
+        retry_after=0,
+        disable_cooldowns=True,
+    )
+    stream: Final = await router.aanthropic_messages(
+        model="messages", messages=[{"role": "user", "content": "hello"}], max_tokens=64, stream=True
+    )
+    received: Final = b"".join([chunk async for chunk in stream])
+
+    assert received == b"".join(chunks)
+    assert route.call_count == 1
+
+
+@pytest.fixture
+def _messages_stream_attempt() -> Iterator[StreamAttempt]:
+    from litellm.router_config import build_router_config
+    from litellm.router_python_host import python_host
+    from litellm.router_rust.core import RustCore
+
+    core: Final = RustCore.build(build_router_config({"num_retries": 0}), python_host)
+    try:
+        yield StreamAttempt(
+            core=core, op="aanthropic_messages", request={}, kwargs={}, group="messages",
+            order=None, depth=0, level=0, deployment_id=None, attempted_retries=0,
+        )
+    finally:
+        core.retire()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("read_first", [False, True], ids=["unread", "started"])
+async def test_messages_stream_close_releases_its_source_once_without_reading_more(
+    _messages_stream_attempt: StreamAttempt, read_first: bool
+) -> None:
+    first: Final = _anthropic_messages_message_start_chunk()
+    source: Final = _PartitionedMessagesSSE((first, _anthropic_messages_content_chunk("unread")))
+
+    async def frames() -> AsyncGenerator[bytes, None]:
+        try:
+            async for chunk in source:
+                yield chunk
+        finally:
+            await source.aclose()
+
+    stream: Final = FallbackAwareAnthropicMessagesStream(frames(), source, _messages_stream_attempt)
+    assert source.reads == source.closes == 0
+    if read_first:
+        assert await anext(stream) == first
+    await stream.aclose()
+    await stream.aclose()
+
+    assert source.reads == int(read_first)
+    assert source.closes == 1
+    with pytest.raises(StopAsyncIteration):
+        await anext(stream)
+    assert source.reads == int(read_first)
+    assert source.closes == 1

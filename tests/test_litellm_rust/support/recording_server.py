@@ -10,6 +10,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Final
 
 
+@dataclass(frozen=True, slots=True)
+class NativeEntry:
+    api_base: str | None
+    declined: bool
+
+
 @dataclass
 class RecordedRequest:
     method: str
@@ -45,6 +51,7 @@ class RecordingServer:
     responses: list[ResponseSpec]
     default_response: ResponseSpec
     expected_requests: int | None = 1
+    native_entries: list[NativeEntry] = field(default_factory=list)
 
     @property
     def base_url(self) -> str:

@@ -72,6 +72,12 @@ pub(crate) fn messages_provider(provider: LlmProviders, model: &str) -> Option<M
     Some(MessagesProvider { provider, config })
 }
 
+pub fn supports_messages_provider(model: &str, custom_llm_provider: Option<&str>) -> bool {
+    litellm_inference::provider::resolve_llm_provider(model, custom_llm_provider, "messages")
+        .ok()
+        .is_some_and(|provider| messages_provider(provider.provider, provider.model).is_some())
+}
+
 pub(super) fn string_headers(
     extra_headers: Option<Map<String, Value>>,
 ) -> Result<Vec<(String, String)>, Error> {
@@ -84,7 +90,7 @@ mod tests {
 
     use rstest::rstest;
 
-    use super::{messages_provider, string_headers};
+    use super::{messages_provider, string_headers, supports_messages_provider};
     use crate::Error;
     use litellm_core_utils::get_llm_provider_logic::LlmProviders;
 
@@ -111,6 +117,19 @@ mod tests {
         #[case] model: &str,
     ) {
         assert!(messages_provider(provider, model).is_none());
+    }
+
+    #[rstest]
+    #[case::anthropic("anthropic/claude-test", None, true)]
+    #[case::inferred_bare_model("claude-test", Some("anthropic"), true)]
+    #[case::generic_passthrough("openai/gpt-5", None, false)]
+    #[case::vertex_non_claude("vertex_ai/gemini", None, false)]
+    fn admission_requires_a_native_adapter(
+        #[case] model: &str,
+        #[case] provider: Option<&str>,
+        #[case] supported: bool,
+    ) {
+        assert_eq!(supports_messages_provider(model, provider), supported);
     }
 
     #[test]

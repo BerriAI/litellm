@@ -53,6 +53,7 @@ where
     }
 
     fn encode_stream_error(&self, error: Error<P::Error>) -> Bytes {
-        (self.stream_error)(error)
+        let frame = (self.stream_error)(error);
+        Bytes::from([b"\n\n".as_slice(), frame.as_ref()].concat())
     }
 }

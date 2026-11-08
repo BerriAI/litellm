@@ -1111,6 +1111,8 @@ class FallbackAwareAnthropicMessagesStream:
             getattr(source_iterator, "_hidden_params", None) or {}
         )
         self._followed_source_params: object = None
+        self._started: bool = False
+        self._closed: bool = False
 
     @property
     def has_buffered_provider_output(self) -> bool:
@@ -1154,10 +1156,18 @@ class FallbackAwareAnthropicMessagesStream:
         return self
 
     async def __anext__(self) -> bytes:
+        self._started = True
         return await self._async_generator.__anext__()
 
     async def aclose(self) -> None:
+        from litellm.llms.anthropic.messages.native.streaming_iterator import aclose_if_supported
+
+        if self._closed:
+            return
         await self._async_generator.aclose()
+        self._closed = True
+        if not self._started:
+            await aclose_if_supported(self._source_iterator)
 
     def merge_fallback_hidden_params(
         self, fallback_hidden_params: Mapping[str, object], fallback_headers: Mapping[str, object]
@@ -1295,15 +1305,13 @@ def wrap_anthropic_stream(
                 if _anthropic_stream_forwards_ping_live(chunk, has_generated_content):
                     yield chunk
                     continue
-                if _stream_commits_now(chunk, has_generated_content, len(buffered)):
-                    has_generated_content = True
-                # A transport can split one SSE data line across byte chunks, so pre-content detection
-                # parses the held frames plus the current chunk.
                 parse_window = (
                     b"".join(c for c in (*buffered, chunk) if isinstance(c, (bytes, bytearray)))  # pyright: ignore[reportUnnecessaryIsInstance]  # bridge-path chunks are not always bytes
                     if not has_generated_content and isinstance(chunk, (bytes, bytearray))  # pyright: ignore[reportUnnecessaryIsInstance]  # see above
                     else chunk
                 )
+                if _stream_commits_now(parse_window, has_generated_content, len(buffered)):
+                    has_generated_content = True
                 error_event = parse_anthropic_error_event(parse_window)
                 bridged_failure = _bridged_stream_failure(source_iterator) if error_event is not None else None
                 if bridged_failure is not None:

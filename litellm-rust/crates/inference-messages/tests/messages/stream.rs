@@ -477,16 +477,36 @@ async fn the_timeout_covers_a_stalled_stream_error_body(call: MessagesCall) {
 
 #[rstest]
 #[tokio::test]
-async fn the_sdk_yields_a_body_error_once_after_delivered_chunks(call: MessagesCall) {
+async fn the_sdk_yields_a_body_error_once_after_delivered_chunks(
+    call: MessagesCall,
+    #[values(false, true)] cached: bool,
+) {
+    use litellm_cache_memory::InMemoryCache;
+    use litellm_cache_response::{CacheScope, ResponseCache, ScopedCache};
+    use litellm_host::lifecycle::{CallEvent, ExecutionEvent, FailureOrigin};
+
     let (base, connection) = stalling_upstream().await;
-    let response = messages_route(no_secrets())
+    let observations = support::Observations::default();
+    let route = messages_route(no_secrets());
+    let route = if cached {
+        route.with_cache(ScopedCache::new(
+            Arc::new(ResponseCache::new(Arc::new(InMemoryCache::new(
+                Some(100),
+                Some(Duration::from_secs(60)),
+            )))),
+            CacheScope::Shared,
+        ))
+    } else {
+        route
+    };
+    let response = route
         .execute(
             MessagesCall {
                 timeout: Some(Duration::from_millis(300)),
                 ..streaming(call, base)
             },
             &(),
-            None,
+            Some(observations.sender.clone()),
         )
         .await
         .unwrap();
@@ -507,6 +527,18 @@ async fn the_sdk_yields_a_body_error_once_after_delivered_chunks(call: MessagesC
     assert!(!error.is_request(), "{error:?}");
     assert_eq!(error.upstream_response(), None);
     assert!(chunks.next().await.is_none());
+    drop(chunks);
+    assert!(matches!(
+        observations.lock().unwrap().as_slice(),
+        [
+            CallEvent::Started { .. },
+            CallEvent::Execution(ExecutionEvent::ResultReady { .. }),
+            CallEvent::Failed {
+                origin: FailureOrigin::Call,
+                ..
+            }
+        ]
+    ));
     tokio::time::timeout(Duration::from_secs(5), connection)
         .await
         .expect("the failed stream closes its upstream connection")
