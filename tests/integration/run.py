@@ -101,6 +101,7 @@ def main() -> int:
     parser.add_argument("--shard-index", type=int, default=int(os.environ.get("INTEGRATION_CASE_SHARD_INDEX", "0")))
     parser.add_argument("--shard-files", type=Path)
     parser.add_argument("--list", action="store_true", help="print selected candidate files and exit")
+    parser.add_argument("--coverage", action="store_true", help="collect coverage for this run")
     parser.add_argument("files", nargs="*", help="run only these files, or pytest node ids inside them, of the group")
     options: Final = parser.parse_intermixed_args()
     root: Final = Path(__file__).resolve().parents[2]
@@ -141,6 +142,7 @@ def main() -> int:
             "-m",
             "pytest",
             *selection.nodes,
+            *(("--cov=litellm", f"--cov-report=xml:{output / 'coverage.xml'}") if options.coverage else ()),
             "-vv",
             "-rs",
             "--strict-markers",
