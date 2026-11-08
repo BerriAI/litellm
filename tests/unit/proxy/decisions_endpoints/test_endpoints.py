@@ -1887,3 +1887,59 @@ def test_proxy_routes_ollama_decisions_with_optional_authentication(
         else [{"type": "predicate", "name": "is_defect", "probability": 0.9}]
     )
     assert response.json()["answers"] == expected
+
+
+def test_proxy_decisions_dispatches_vercel_ai_gateway_deployment(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.delenv("VERCEL_AI_GATEWAY_API_BASE", raising=False)
+    monkeypatch.setenv("VERCEL_AI_GATEWAY_API_KEY", "gateway-key")
+    deployment_router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gateway-decider",
+                "litellm_params": {"model": "vercel_ai_gateway/openai/gpt-6-luna-decisions"},
+                "model_info": {"mode": "evaluation"},
+            }
+        ]
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", deployment_router)
+    upstream: Final = respx_mock.post("https://ai-gateway.vercel.sh/v1/decisions").respond(
+        json={
+            "model": "openai/gpt-6-luna-decisions",
+            "answers": [{"type": "predicate", "name": "is_defect", "probability": 0.9}],
+            "usage": {
+                "input_tokens": _INPUT_TOKENS,
+                "output_tokens": _OUTPUT_TOKENS,
+                "total_tokens": _INPUT_TOKENS + _OUTPUT_TOKENS,
+            },
+        }
+    )
+
+    response: Final = client.post(
+        "/v1/decisions",
+        json={
+            "model": "gateway-decider",
+            "input": "The package arrived broken.",
+            "questions": [{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["answers"] == [{"type": "predicate", "name": "is_defect", "probability": 0.9}]
+    assert upstream.called
+    assert str(upstream.calls.last.request.url) == "https://ai-gateway.vercel.sh/v1/decisions"
+    assert upstream.calls.last.request.headers["authorization"] == "Bearer gateway-key"
+    assert json.loads(upstream.calls.last.request.content) == {
+        "model": "openai/gpt-6-luna-decisions",
+        "input": "The package arrived broken.",
+        "questions": [{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
+    }
+    gateway_cost: Final = litellm.model_cost["vercel_ai_gateway/openai/gpt-6-luna-decisions"]
+    expected_cost: Final = _INPUT_TOKENS * float(gateway_cost["input_cost_per_token"]) + _OUTPUT_TOKENS * float(
+        gateway_cost["output_cost_per_token"]
+    )
+    assert expected_cost > 0
+    assert float(response.headers["x-litellm-response-cost"]) == pytest.approx(expected_cost)
