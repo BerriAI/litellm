@@ -1132,3 +1132,44 @@ async def test_cancelled_email_receipt_survives_a_different_delivery(
         UsageAlertDelivery._email_task = None
         UsageAlertDelivery._email_key = None
         UsageAlertDelivery._email_store = None
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_large_custom_rule_scope_does_not_starve_other_scopes_on_resume(db: ManagementDatabase) -> None:
+    from litellm.types.proxy.usage_alerts import UsageAlertWorkCursor
+
+    async with _isolated(db) as prisma:
+        await _seed(prisma)
+        store: Final = UsageAlertsRepository.from_prisma(prisma)
+        key_rule: Final = await store.save_rule(
+            UsageAlertRuleInput(
+                name="Project spend", scope_type="key", scope_id=_KEY_A, metric="spend", direction="increase"
+            ),
+            "qa-user",
+        )
+        team_rule: Final = await store.save_rule(
+            UsageAlertRuleInput(
+                name="Team spend", scope_type="team", scope_id="team", metric="spend", direction="increase"
+            ),
+            "qa-admin",
+        )
+        assert key_rule is not None and team_rule is not None
+        await prisma.writer_db.query_raw(
+            """INSERT INTO "LiteLLM_UsageAlertRule" (id,scope_type,scope_id,enabled,record)
+            SELECT 'custom-'||lpad(n::text,6,'0'),scope_type,scope_id,enabled,
+                record||jsonb_build_object('id','custom-'||lpad(n::text,6,'0'))
+            FROM "LiteLLM_UsageAlertRule",generate_series(1,1000) n WHERE id=$1 RETURNING id""",
+            key_rule.id,
+        )
+        await store.save_work_cursor(UsageAlertWorkCursor(phase=3))
+        for _ in range(12):
+            job: Final = UsageAlertJob.from_prisma(prisma, SlackAlerting(alerting=[], alert_types=[]))
+            cursor, _, _ = await job._evaluation_page(await store.work_cursor(), _DAY)
+            await store.save_work_cursor(cursor)
+        assert await store.completed_rule_ids((team_rule,), _DAY) == frozenset((team_rule.id,))
+        completed: Final = await prisma.writer_db.query_raw(
+            """SELECT COUNT(*)::int AS count FROM "LiteLLM_UsageAlertRule"
+            WHERE scope_type='key' AND record->>'last_evaluated_day'=$1""",
+            _DAY.isoformat(),
+        )
+        assert completed == [{"count": 20}]
