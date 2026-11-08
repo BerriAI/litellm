@@ -43,7 +43,7 @@ class DailyComparison:
     breached: bool
 
 
-def _value(metric: str, rows: Sequence[DailyAlertMetrics], days: int) -> float | None:
+def metric_value(metric: str, rows: Sequence[DailyAlertMetrics], days: int) -> float | None:
     if metric == "latency":
         timed: Final = sum(row.timed_requests for row in rows)
         return sum(row.response_time_ms for row in rows) / timed if timed else None
@@ -88,8 +88,8 @@ def compare_daily_usage(
         baseline_timed: Final = sum(row.timed_requests for row in history) / sample_days
         if baseline_timed < rule.min_requests or sum(row.timed_requests for row in current) < rule.min_requests:
             return None
-    baseline: Final = _value(rule.metric, history, sample_days)
-    observed: Final = _value(rule.metric, current, 1)
+    baseline: Final = metric_value(rule.metric, history, sample_days)
+    observed: Final = metric_value(rule.metric, current, 1)
     if baseline is None or baseline < 0 or observed is None:
         return None
     if baseline == 0:

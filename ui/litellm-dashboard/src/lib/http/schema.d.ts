@@ -35352,6 +35352,11 @@ export interface components {
              */
             direction: "increase" | "decrease";
             /**
+             * History
+             * @default []
+             */
+            history: components["schemas"]["UsageAlertMetricPoint"][];
+            /**
              * Metric
              * @enum {string}
              */
@@ -35363,6 +35368,11 @@ export interface components {
         };
         /** IssueDeprecation */
         IssueDeprecation: {
+            /**
+             * Daily Requests
+             * @default []
+             */
+            daily_requests: components["schemas"]["UsageAlertMetricPoint"][];
             /** Last Day Requests */
             last_day_requests: number;
             /**
@@ -51906,6 +51916,16 @@ export interface components {
             offset: number;
             /** Total */
             total: number;
+        };
+        /** UsageAlertMetricPoint */
+        UsageAlertMetricPoint: {
+            /**
+             * Day
+             * Format: date
+             */
+            day: string;
+            /** Value */
+            value?: number | null;
         };
         /** UsageAlertModelList */
         UsageAlertModelList: {

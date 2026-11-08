@@ -216,7 +216,9 @@ WITH activity AS MATERIALIZED (
         AND {_bounded_identity("model", "model")}
     GROUP BY model
 )
-SELECT totals.*, latest.last_used_date, latest.last_day_requests, COALESCE(teams.teams, 0) AS teams
+SELECT totals.*, latest.last_used_date, latest.last_day_requests, COALESCE(teams.teams, 0) AS teams,
+    (SELECT jsonb_agg(jsonb_build_object('day',d.date,'value',d.requests) ORDER BY d.date)
+     FROM daily d WHERE d.model=totals.model) AS daily_requests
 FROM totals JOIN latest USING (model) LEFT JOIN teams USING (model) ORDER BY model
 """
 

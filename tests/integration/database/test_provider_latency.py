@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, timedelta
 from uuid import uuid4
 
 import pytest
@@ -89,6 +89,10 @@ async def test_provider_latency_requires_established_within_model_regressions(db
         assert evidence.comparison.observed_value == 3000
         assert evidence.comparison.baseline_value == 600
         assert evidence.comparison.baseline_sample_days == 7
+        assert tuple(point.day for point in evidence.comparison.history) == tuple(
+            day - timedelta(days=offset) for offset in range(7, -1, -1)
+        )
+        assert tuple(point.value for point in evidence.comparison.history) == (600,) * 7 + (3000,)
         assert (evidence.impact.keys, evidence.impact.users, evidence.impact.teams) == (2, 1, 2)
         assert (evidence.impact.measured_keys, evidence.impact.measured_models) == (2, 2)
         assert evidence.impact.requests == 400

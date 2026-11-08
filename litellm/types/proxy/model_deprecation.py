@@ -7,6 +7,7 @@ from typing import Final, Literal
 from pydantic import ConfigDict, Field
 
 from litellm.types.llms.base import LiteLLMBaseModel
+from litellm.types.proxy.usage_alerts import UsageAlertMetricPoint
 
 DEFAULT_DEPRECATION_WARN_DAYS: Final = 30
 
@@ -121,6 +122,7 @@ class ModelDeprecationUsage(LiteLLMBaseModel):
     requests: int = Field(ge=0)
     last_used_date: date
     last_day_requests: int = Field(ge=0)
+    daily_requests: tuple[UsageAlertMetricPoint, ...] = Field(default=(), max_length=30)
     keys: int = Field(ge=0)
     users: int = Field(ge=0)
     teams: int = Field(ge=0)
