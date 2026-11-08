@@ -421,7 +421,9 @@ async def test_get_current_spend_fail_closed_allows_authoritative_fallback(monke
 
 
 @pytest.mark.asyncio
-async def test_get_current_spend_fail_closed_admits_team_member_without_membership_row(monkeypatch):
+async def test_get_current_spend_fail_closed_admits_team_member_without_membership_row(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """A team member under a default member budget has no LiteLLM_TeamMembership
     row until spend is persisted. The DB answering "no row" is a verified zero,
     not an unreadable spend, so fail-closed must admit the request."""
@@ -429,24 +431,28 @@ async def test_get_current_spend_fail_closed_admits_team_member_without_membersh
 
     _spend_counters(monkeypatch, fail=True)
     monkeypatch.setattr(ps, "general_settings", {"fail_closed_budget_enforcement": True})
-    table = SimpleNamespace(find_unique=AsyncMock(return_value=None))
+    table: Final = SimpleNamespace(find_unique=AsyncMock(return_value=None))
     monkeypatch.setattr(ps, "prisma_client", SimpleNamespace(db=SimpleNamespace(litellm_teammembership=table)))
 
-    result = await ps.get_current_spend(counter_key="spend:team_member:u1:t1", fallback_spend=0.0, max_budget=100.0)
+    result: Final = await ps.get_current_spend(
+        counter_key="spend:team_member:u1:t1", fallback_spend=0.0, max_budget=100.0
+    )
 
     assert result == 0.0
     table.find_unique.assert_awaited_with(where={"user_id_team_id": {"user_id": "u1", "team_id": "t1"}})
 
 
 @pytest.mark.asyncio
-async def test_get_current_spend_fail_closed_rejects_team_member_when_membership_read_fails(monkeypatch):
+async def test_get_current_spend_fail_closed_rejects_team_member_when_membership_read_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from types import SimpleNamespace
 
     from fastapi import HTTPException
 
     _spend_counters(monkeypatch, fail=True)
     monkeypatch.setattr(ps, "general_settings", {"fail_closed_budget_enforcement": True})
-    table = SimpleNamespace(find_unique=AsyncMock(side_effect=RuntimeError("db down")))
+    table: Final = SimpleNamespace(find_unique=AsyncMock(side_effect=RuntimeError("db down")))
     monkeypatch.setattr(ps, "prisma_client", SimpleNamespace(db=SimpleNamespace(litellm_teammembership=table)))
 
     with pytest.raises(HTTPException) as exc:
@@ -1630,9 +1636,7 @@ async def test_update_cache_moves_this_workers_global_proxy_spend_to_the_shared_
 async def test_update_cache_keeps_the_newest_global_proxy_spend_when_redis_replies_out_of_order() -> None:
     held_increment_applied: Final = asyncio.Event()
     held_reply_released: Final = asyncio.Event()
-    cache, _ = shared_cache(
-        _SharedSpend(10.0, held=0.25, applied=held_increment_applied, released=held_reply_released)
-    )
+    cache, _ = shared_cache(_SharedSpend(10.0, held=0.25, applied=held_increment_applied, released=held_reply_released))
     cache.set_cache(key=GLOBAL_PROXY_SPEND_CACHE_KEY, value=10.0, local_only=True)
 
     async def _request(response_cost: float) -> None:

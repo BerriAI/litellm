@@ -149,7 +149,7 @@ class SpendCounterReseed:
             verbose_proxy_logger.exception("SpendCounterReseed.from_db: failed for %s", counter_key)
             return None
         if row is None:
-            return 0.0 if counter_key.startswith(TEAM_MEMBER_COUNTER_PREFIX) else None
+            return 0.0 if SpendCounterReseed._is_unambiguous_team_member_counter(counter_key) else None
         return float(getattr(row, "spend", 0.0) or 0.0)
 
     @staticmethod
@@ -199,6 +199,13 @@ class SpendCounterReseed:
         if row is None:
             return None
         return float(row.spend or 0.0)
+
+    @staticmethod
+    def _is_unambiguous_team_member_counter(counter_key: str) -> bool:
+        return (
+            counter_key.startswith(TEAM_MEMBER_COUNTER_PREFIX)
+            and counter_key[len(TEAM_MEMBER_COUNTER_PREFIX) :].count(":") == 1
+        )
 
     @staticmethod
     def _is_key_or_team_window_counter(counter_key: str) -> bool:

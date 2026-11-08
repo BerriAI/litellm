@@ -461,6 +461,16 @@ async def test_from_db_reads_a_missing_team_membership_row_as_zero_spend():
 
 
 @pytest.mark.asyncio
+async def test_from_db_keeps_none_for_a_missing_row_when_the_team_member_key_is_ambiguous():
+    prisma: Final = _FakePrismaClient(team_membership_row=None)
+
+    assert await SpendCounterReseed.from_db(prisma_client=prisma, counter_key="spend:team_member:u1:team:prod") is None
+    assert prisma.db.litellm_teammembership.where_clauses == [
+        {"user_id_team_id": {"user_id": "u1:team", "team_id": "prod"}}
+    ]
+
+
+@pytest.mark.asyncio
 async def test_from_db_reads_an_existing_team_membership_row():
     prisma: Final = _FakePrismaClient(team_membership_row=SimpleNamespace(spend=4.5))
 
