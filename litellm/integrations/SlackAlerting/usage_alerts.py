@@ -117,7 +117,7 @@ class UsageAlertDelivery:
         if previous is not None:
             if not previous.done():
                 raise RuntimeError("An alert email is still in flight; retry later")
-            if cls._email_key == key:
+            if cls._email_key == key and not previous.cancelled() and previous.exception() is None:
                 cls._email_task = None
                 cls._email_key = None
                 return previous.result()
@@ -125,10 +125,12 @@ class UsageAlertDelivery:
         cls._email_task = task
         cls._email_key = key
         task.add_done_callback(cls._email_finished)
-        await asyncio.shield(task)
-        if cls._email_task is task:
-            cls._email_task = None
-            cls._email_key = None
+        try:
+            await asyncio.shield(task)
+        finally:
+            if task.done() and cls._email_task is task:
+                cls._email_task = None
+                cls._email_key = None
 
     @staticmethod
     async def _send_email(recipient: str, subject: str, html: str) -> None:

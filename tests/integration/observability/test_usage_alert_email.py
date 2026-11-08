@@ -139,7 +139,10 @@ async def test_cancelled_smtp_attempt_retains_only_one_send(monkeypatch: pytest.
 
 
 @pytest.mark.asyncio
-async def test_smtp_greeting_over_two_seconds_still_delivers(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("fail_first", (False, True))
+async def test_smtp_greeting_over_two_seconds_still_delivers(
+    monkeypatch: pytest.MonkeyPatch, fail_first: bool
+) -> None:
     messages: Final[list[bytes]] = []
 
     async def slow_greeting(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
@@ -152,7 +155,7 @@ async def test_smtp_greeting_over_two_seconds_still_delivers(monkeypatch: pytest
                     writer.write(b"354 End with a dot\r\n")
                     await writer.drain()
                     messages.append(await reader.readuntil(b"\r\n.\r\n"))
-                    writer.write(b"250 Accepted\r\n")
+                    writer.write(b"451 Retry later\r\n" if fail_first and len(messages) == 1 else b"250 Accepted\r\n")
                 elif command.upper().startswith(b"QUIT"):
                     writer.write(b"221 Closing\r\n")
                     break
@@ -179,8 +182,13 @@ async def test_smtp_greeting_over_two_seconds_still_delivers(monkeypatch: pytest
         }
     )
     try:
-        assert await UsageAlertDelivery(SlackAlerting(alerting=["email"], alert_types=[])).send_issue(pending)
-        assert len(messages) == 1 and b"View alert" in messages[0] and b"View source activity" in messages[0]
+        delivery: Final = UsageAlertDelivery(SlackAlerting(alerting=["email"], alert_types=[]))
+        if fail_first:
+            with pytest.raises(smtplib.SMTPDataError):
+                await delivery.send_issue(pending)
+        assert await delivery.send_issue(pending)
+        assert len(messages) == (2 if fail_first else 1)
+        assert b"View alert" in messages[-1] and b"View source activity" in messages[-1]
     finally:
         server.close()
         await server.wait_closed()
