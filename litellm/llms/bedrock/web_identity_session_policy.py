@@ -86,10 +86,10 @@ def _encryption_through(service: _KmsViaService, actions: tuple[str, ...]) -> _S
 _OBJECT_ENCRYPTION: Final = ("kms:GenerateDataKey", "kms:Decrypt")
 
 BEDROCK_SESSION_POLICY: Final = _policy(
-    _allow_over_any_transport("BedrockInvokeLiteLLM", ("bedrock:InvokeModel",)),
     _allow(
         "BedrockLiteLLM",
         (
+            "bedrock:InvokeModel",
             "bedrock:InvokeModelWithResponseStream",
             "bedrock:CountTokens",
             "bedrock:Rerank",
@@ -132,8 +132,12 @@ BEDROCK_SESSION_POLICY: Final = _policy(
     _allow("BedrockMantleLiteLLM", ("bedrock-mantle:CreateInference", "bedrock-mantle:CountTokens")),
 )
 
+BEDROCK_REALTIME_SESSION_POLICY: Final = _policy(
+    _allow_over_any_transport("BedrockRealtimeLiteLLM", ("bedrock:InvokeModel", "bedrock:ApplyGuardrail")),
+)
+
 BEDROCK_EMBEDDING_SESSION_POLICY: Final = _policy(
-    _allow("BedrockEmbeddingLiteLLM", ("bedrock:InvokeModel", "bedrock:GetAsyncInvoke")),
+    _allow("BedrockEmbeddingLiteLLM", ("bedrock:InvokeModel", "bedrock:ApplyGuardrail", "bedrock:GetAsyncInvoke")),
     _allow(
         "BedrockS3LiteLLM",
         ("s3:GetObject", "s3:PutObject"),
@@ -152,13 +156,19 @@ BEDROCK_AGENT_RUNTIME_SESSION_POLICY: Final = _policy(
             "bedrock:InvokeAgent",
             "bedrock:InvokeInlineAgent",
             "bedrock:InvokeFlow",
+            "bedrock:StartFlowExecution",
+            "bedrock:StopFlowExecution",
             "bedrock:Retrieve",
             "bedrock:RetrieveAndGenerate",
             "bedrock:GenerateQuery",
             "bedrock:GetKnowledgeBase",
+            "bedrock:GetDocumentContent",
+            "bedrock:CheckIngestedDocumentAcl",
+            "bedrock:GetIngestedDocumentAcl",
             "bedrock:Rerank",
             "bedrock:OptimizePrompt",
             "bedrock:InvokeModel",
+            "bedrock:ApplyGuardrail",
             "bedrock:GetInferenceProfile",
         ),
     ),

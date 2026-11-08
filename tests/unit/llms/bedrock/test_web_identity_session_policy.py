@@ -40,6 +40,7 @@ from typing import Final, TypeAlias
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from botocore.session import get_session
 from pydantic import TypeAdapter
 
 from litellm.integrations.s3_v2 import S3Logger
@@ -53,6 +54,7 @@ from litellm.llms.bedrock.files.handler import BedrockFilesHandler
 from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
 from litellm.llms.bedrock.model_listing import BedrockModelLister
 from litellm.llms.bedrock.passthrough.transformation import BedrockAgentRuntimeAWS
+from litellm.llms.bedrock.realtime.handler import BedrockRealtime
 from litellm.llms.bedrock.web_identity_session_policy import WebIdentitySessionPolicy, _SessionPolicyStatement
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.llms.opensearch.vector_stores.transformation import OpenSearchVectorStoreConfig
@@ -61,6 +63,7 @@ from litellm.llms.sagemaker.chat.handler import SagemakerChatHandler
 from litellm.llms.sagemaker.chat.transformation import SagemakerChatConfig
 from litellm.llms.sagemaker.completion.handler import SagemakerLLM
 from litellm.proxy.common_utils.load_config_utils import s3_object_reader
+from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import _is_bedrock_agent_runtime_route
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.comprehend_medical_passthrough_logging_handler import (
     COMPREHEND_MEDICAL_SUPPORTED_OPERATIONS,
     ComprehendMedicalAWS,
@@ -136,6 +139,12 @@ def _captured_policy() -> WebIdentitySessionPolicy:
 
 def _granted_actions(policy: WebIdentitySessionPolicy) -> frozenset[str]:
     return frozenset(itertools.chain.from_iterable(stmt["Action"] for stmt in policy["Statement"]))
+
+
+def _invoke_model_grants_over_any_transport(policy: WebIdentitySessionPolicy) -> tuple[_SessionPolicyStatement, ...]:
+    return tuple(
+        stmt for stmt in policy["Statement"] if "bedrock:InvokeModel" in stmt["Action"] and "Condition" not in stmt
+    )
 
 
 def _statement_by_sid(policy: WebIdentitySessionPolicy, sid: str) -> _SessionPolicyStatement:
@@ -379,16 +388,6 @@ class TestPolicyTransportConditions:
             "statements LiteLLM calls directly must not require aws:CalledViaLast, or OIDC auth 403s on those routes"
         )
 
-    def test_invoke_model_is_granted_without_requiring_secure_transport(self):
-        granting: Final = tuple(
-            stmt for stmt in _captured_policy()["Statement"] if "bedrock:InvokeModel" in stmt["Action"]
-        )
-        assert any("Condition" not in stmt for stmt in granting), (
-            "Bedrock authorizes the Nova Sonic bidirectional stream as bedrock:InvokeModel with aws:SecureTransport "
-            "false (live probe on amazon.nova-2-sonic-v1:0, 2026-11-08), "
-            "so a TLS-only grant denies every realtime session"
-        )
-
 
 _STS_SESSION_POLICY_PLAINTEXT_LIMIT: Final = 2048
 
@@ -494,6 +493,7 @@ _CALLER_ROUTE_ACTIONS: Final[MappingProxyType[str, _CallerAndActions]] = Mapping
             BedrockEmbedding,
             (
                 "bedrock:InvokeModel",
+                "bedrock:ApplyGuardrail",
                 "bedrock:GetAsyncInvoke",
                 "s3:GetObject",
                 "s3:PutObject",
@@ -501,19 +501,26 @@ _CALLER_ROUTE_ACTIONS: Final[MappingProxyType[str, _CallerAndActions]] = Mapping
                 "kms:Decrypt",
             ),
         ),
+        "bedrock realtime": (BedrockRealtime, ("bedrock:InvokeModel", "bedrock:ApplyGuardrail")),
         "bedrock agent runtime passthrough": (
             BedrockAgentRuntimeAWS,
             (
                 "bedrock:InvokeAgent",
                 "bedrock:InvokeInlineAgent",
                 "bedrock:InvokeFlow",
+                "bedrock:StartFlowExecution",
+                "bedrock:StopFlowExecution",
                 "bedrock:Retrieve",
                 "bedrock:RetrieveAndGenerate",
                 "bedrock:GenerateQuery",
                 "bedrock:GetKnowledgeBase",
+                "bedrock:GetDocumentContent",
+                "bedrock:CheckIngestedDocumentAcl",
+                "bedrock:GetIngestedDocumentAcl",
                 "bedrock:Rerank",
                 "bedrock:OptimizePrompt",
                 "bedrock:InvokeModel",
+                "bedrock:ApplyGuardrail",
                 "bedrock:GetInferenceProfile",
                 "sqlworkbench:GetSqlRecommendations",
             ),
@@ -870,6 +877,71 @@ class TestOpenSearchSearchGetsItsOwnCeiling:
         allowed: Final = frozenset(_service(action) for action in _OPENSEARCH_ENDPOINT_ACTIONS.values())
         extra: Final = sorted(a for a in _granted_actions(_opensearch_policy(api_base)) if _service(a) not in allowed)
         assert not extra, f"the OpenSearch session policy also grants {extra}"
+
+
+class TestInvokeModelTransport:
+    def test_chat_ceiling_grants_invoke_model_only_over_tls(self):
+        (policy,) = _policies_sent_to_sts((BedrockConverseLLM(),), session_name="chat-transport")
+        assert "bedrock:InvokeModel" in _granted_actions(policy)
+        assert not _invoke_model_grants_over_any_transport(policy)
+
+    def test_realtime_ceiling_grants_invoke_model_over_any_transport_and_nothing_else(self):
+        (policy,) = _policies_sent_to_sts((BedrockRealtime(),), session_name="realtime-transport")
+        assert _invoke_model_grants_over_any_transport(policy), (
+            "Bedrock authorizes the Nova Sonic bidirectional stream as bedrock:InvokeModel with aws:SecureTransport "
+            "false (live probe on amazon.nova-2-sonic-v1:0, 2026-11-08), "
+            "so a TLS-only grant denies every realtime session"
+        )
+        assert _granted_actions(policy) == frozenset({"bedrock:InvokeModel", "bedrock:ApplyGuardrail"})
+
+
+_MODEL_INVOKING_CALLERS: Final[MappingProxyType[str, Callable[[], BaseAWSLLM]]] = MappingProxyType(
+    {
+        "bedrock chat": BedrockConverseLLM,
+        **{
+            route: make_caller
+            for route, (make_caller, actions) in _CALLER_ROUTE_ACTIONS.items()
+            if "bedrock:InvokeModel" in actions
+        },
+    }
+)
+
+
+class TestEnforcedGuardrails:
+    @pytest.mark.parametrize(("route", "make_caller"), sorted(_MODEL_INVOKING_CALLERS.items()))
+    def test_every_grant_to_invoke_models_also_grants_apply_guardrail(
+        self, route: str, make_caller: Callable[[], BaseAWSLLM]
+    ):
+        (policy,) = _policies_sent_to_sts((make_caller(),), session_name=f"guardrail-{route}")
+        invoking: Final = tuple(stmt for stmt in policy["Statement"] if "bedrock:InvokeModel" in stmt["Action"])
+        assert invoking
+        assert all("bedrock:ApplyGuardrail" in stmt["Action"] for stmt in invoking), (
+            f"{route} can invoke models but not apply an account or organization enforced guardrail, "
+            "which Bedrock answers with AccessDenied"
+        )
+
+
+def _agent_runtime_operations_the_passthrough_signs_and_forwards() -> tuple[str, ...]:
+    service_model: Final = get_session().get_service_model("bedrock-agent-runtime")
+    http_bindings: Final = tuple(
+        (name, service_model.operation_model(name).http) for name in service_model.operation_names
+    )
+    return tuple(
+        name
+        for name, http in http_bindings
+        if http["method"] == "POST" and _is_bedrock_agent_runtime_route(f"{http['requestUri'].lstrip('/')}/")
+    )
+
+
+class TestAgentRuntimePassThroughCeiling:
+    def test_ceiling_grants_every_post_operation_the_passthrough_forwards(self):
+        operations: Final = _agent_runtime_operations_the_passthrough_signs_and_forwards()
+        (policy,) = _policies_sent_to_sts((BedrockAgentRuntimeAWS(),), session_name="agent-runtime-operations")
+        assert operations
+        missing: Final = _ungranted(tuple(f"bedrock:{operation}" for operation in operations), policy)
+        assert not missing, (
+            f"the agent runtime pass-through forwards {sorted(missing)}, which its ceiling does not grant"
+        )
 
 
 class TestWebIdentityCredentialCacheIsPerCeiling:
