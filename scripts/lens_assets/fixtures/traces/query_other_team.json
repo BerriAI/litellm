@@ -1,0 +1,46 @@
+{
+  "resourceSpans": [
+    {
+      "resource": {
+        "attributes": [
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "fixture"
+            }
+          }
+        ]
+      },
+      "scopeSpans": [
+        {
+          "scope": {
+            "name": "fixture"
+          },
+          "spans": [
+            {
+              "traceId": "01010101010101010101010101010101",
+              "spanId": "0505050505050505",
+              "parentSpanId": "",
+              "name": "other-team",
+              "kind": 1,
+              "startTimeUnixNano": "1735689602000000000",
+              "endTimeUnixNano": "1735689603000000000",
+              "attributes": [
+                {
+                  "key": "gen_ai.response.id",
+                  "value": {
+                    "stringValue": "response-shared"
+                  }
+                }
+              ],
+              "status": {
+                "code": 1,
+                "message": ""
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

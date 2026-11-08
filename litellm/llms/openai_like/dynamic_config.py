@@ -2,12 +2,16 @@
 Dynamic configuration class generator for JSON-based providers.
 """
 
-from typing import Any, Coroutine, List, Literal, Optional, Tuple, Union, overload
+from collections.abc import Coroutine, Mapping
+from typing import TYPE_CHECKING, Final, Literal, overload
+
+from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     handle_messages_with_content_list_to_str_conversion,
 )
+from litellm.litellm_core_utils.url_utils import ensure_api_route, join_api_base
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.llms.openai_like.chat.transformation import OpenAILikeChatConfig
 from litellm.secret_managers.main import get_secret_str
@@ -15,32 +19,53 @@ from litellm.types.llms.openai import AllMessageValues
 
 from .json_loader import SimpleProviderConfig
 
+if TYPE_CHECKING:
+    from litellm.llms.openai_like.responses.transformation import OpenAILikeResponsesConfig
+
+_PAID_SEARCH_TOOLS: Final = frozenset({"web_search", "web_search_image", "image_search"})
+_PAYLOAD_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+_TOOL_USAGE_ADAPTER: Final[TypeAdapter[Mapping[str, int]]] = TypeAdapter(Mapping[str, int])
+
+
+def web_search_requests_from_tool_usage(payload: object) -> int | None:
+    """
+    Billable search calls in a parsed OpenAI-compatible chat response whose usage carries a
+    tool_usage {tool_name: count} map, as EmpirioLabs reports built-in tool invocations.
+    Free tools (code_interpreter, web_extractor) are not counted.
+    """
+    try:
+        body: Final = _PAYLOAD_ADAPTER.validate_python(payload)
+        usage: Final = _PAYLOAD_ADAPTER.validate_python(body.get("usage"))
+        tool_usage: Final = _TOOL_USAGE_ADAPTER.validate_python(usage.get("tool_usage"), strict=True)
+    except ValidationError:
+        return None
+    calls: Final = sum(count for tool, count in tool_usage.items() if tool in _PAID_SEARCH_TOOLS and count > 0)
+    return calls if calls > 0 else None
+
 
 def create_config_class(provider: SimpleProviderConfig):
     """Generate config class dynamically from JSON configuration"""
 
     # Choose base class
-    base_class: type = (
-        OpenAIGPTConfig if provider.base_class == "openai_gpt" else OpenAILikeChatConfig
-    )
+    base_class: Final[type] = OpenAIGPTConfig if provider.base_class == "openai_gpt" else OpenAILikeChatConfig
 
-    class JSONProviderConfig(base_class):  # type: ignore[valid-type,misc]
+    class JSONProviderConfig(base_class):
         @overload
         def _transform_messages(
-            self, messages: List[AllMessageValues], model: str, is_async: Literal[True]
-        ) -> Coroutine[Any, Any, List[AllMessageValues]]: ...
+            self, messages: list[AllMessageValues], model: str, is_async: Literal[True]
+        ) -> Coroutine[object, object, list[AllMessageValues]]: ...
 
         @overload
         def _transform_messages(
             self,
-            messages: List[AllMessageValues],
+            messages: list[AllMessageValues],
             model: str,
             is_async: Literal[False] = False,
-        ) -> List[AllMessageValues]: ...
+        ) -> list[AllMessageValues]: ...
 
         def _transform_messages(
-            self, messages: List[AllMessageValues], model: str, is_async: bool = False
-        ) -> Union[List[AllMessageValues], Coroutine[Any, Any, List[AllMessageValues]]]:
+            self, messages: list[AllMessageValues], model: str, is_async: bool = False
+        ) -> list[AllMessageValues] | Coroutine[object, object, list[AllMessageValues]]:
             """Transform messages based on special_handling config"""
 
             # Handle content list to string conversion if configured
@@ -48,17 +73,22 @@ def create_config_class(provider: SimpleProviderConfig):
                 messages = handle_messages_with_content_list_to_str_conversion(messages)
 
             if is_async:
-                return super()._transform_messages(
-                    messages=messages, model=model, is_async=True
-                )
+                return super()._transform_messages(messages=messages, model=model, is_async=True)
             else:
-                return super()._transform_messages(
-                    messages=messages, model=model, is_async=False
-                )
+                return super()._transform_messages(messages=messages, model=model, is_async=False)
+
+        def _should_preserve_cache_control_for_endpoint(
+            self,
+            custom_llm_provider: str | None,
+            api_base: str | None,
+        ) -> bool:
+            return provider.special_handling.get(
+                "preserve_cache_control", False
+            ) or super()._should_preserve_cache_control_for_endpoint(custom_llm_provider, api_base)
 
         def _get_openai_compatible_provider_info(
-            self, api_base: Optional[str], api_key: Optional[str]
-        ) -> Tuple[Optional[str], Optional[str]]:
+            self, api_base: str | None, api_key: str | None
+        ) -> tuple[str | None, str | None]:
             """Get API base and key from JSON config"""
 
             # Resolve base URL
@@ -69,44 +99,45 @@ def create_config_class(provider: SimpleProviderConfig):
                 resolved_base = provider.base_url
 
             # Resolve API key
-            resolved_key = api_key or get_secret_str(provider.api_key_env)
+            resolved_key: Final = api_key or get_secret_str(provider.api_key_env)
 
             return resolved_base, resolved_key
 
+        def get_openai_compatible_provider_info(
+            self,
+            api_base: str | None,
+            api_key: str | None,
+        ) -> tuple[str | None, str | None]:
+            return self._get_openai_compatible_provider_info(api_base, api_key)
+
         def get_complete_url(
             self,
-            api_base: Optional[str],
-            api_key: Optional[str],
+            api_base: str | None,
+            api_key: str | None,
             model: str,
             optional_params: dict,
             litellm_params: dict,
-            stream: Optional[bool] = None,
+            stream: bool | None = None,
         ) -> str:
             """Build complete URL for the API endpoint"""
             if not api_base:
                 api_base = provider.base_url
 
-            if api_base is None:
-                raise ValueError(f"api_base is required for provider {provider.slug}")
-
-            if not api_base.endswith("/chat/completions"):
-                api_base = f"{api_base}/chat/completions"
-
-            return api_base
+            if isinstance(api_base, str):
+                return ensure_api_route(api_base, "chat/completions")
+            raise ValueError(f"api_base is required for provider {provider.slug}")
 
         def get_supported_openai_params(self, model: str) -> list:
             """Get supported OpenAI params, excluding tool-related params for models
             that don't support function calling."""
-            from litellm.utils import supports_function_calling
+            from litellm.utils import supports_function_calling, supports_reasoning
 
-            supported_params = super().get_supported_openai_params(model=model)
+            supported_params: Final = super().get_supported_openai_params(model=model)
 
-            _supports_fc = supports_function_calling(
-                model=model, custom_llm_provider=provider.slug
-            )
+            _supports_fc: Final = supports_function_calling(model=model, custom_llm_provider=provider.slug)
 
             if not _supports_fc:
-                tool_params = [
+                tool_params: Final = [
                     "tools",
                     "tool_choice",
                     "function_call",
@@ -117,9 +148,14 @@ def create_config_class(provider: SimpleProviderConfig):
                     if param in supported_params:
                         supported_params.remove(param)
                 verbose_logger.debug(
-                    f"Model {model} on provider {provider.slug} does not support "
-                    f"function calling — removed tool-related params from supported params."
+                    "Model %s on provider %s does not support function calling — removed tool-related params from supported params.",
+                    model,
+                    provider.slug,
                 )
+
+            _supports_reasoning: Final = supports_reasoning(model=model, custom_llm_provider=provider.slug)
+            if _supports_reasoning and "reasoning_effort" not in supported_params:
+                supported_params.append("reasoning_effort")
 
             return supported_params
 
@@ -132,7 +168,7 @@ def create_config_class(provider: SimpleProviderConfig):
         ) -> dict:
             """Apply parameter mappings and constraints"""
 
-            supported_params = self.get_supported_openai_params(model)
+            supported_params: Final = self.get_supported_openai_params(model)
 
             # Apply supported params
             for param, value in non_default_params.items():
@@ -145,7 +181,7 @@ def create_config_class(provider: SimpleProviderConfig):
             # Apply temperature constraints if present
             if "temperature" in optional_params:
                 temp = optional_params["temperature"]
-                constraints = provider.constraints
+                constraints: Final = provider.constraints
 
                 # Clamp to max
                 if "temperature_max" in constraints:
@@ -157,7 +193,7 @@ def create_config_class(provider: SimpleProviderConfig):
 
                 # Special case: temperature_min_with_n_gt_1
                 if "temperature_min_with_n_gt_1" in constraints:
-                    n = optional_params.get("n", 1)
+                    n: Final = optional_params.get("n", 1)
                     if n > 1 and temp < constraints["temperature_min_with_n_gt_1"]:
                         temp = constraints["temperature_min_with_n_gt_1"]
 
@@ -165,17 +201,36 @@ def create_config_class(provider: SimpleProviderConfig):
 
             return optional_params
 
+        def transform_parsed_response_dict(
+            self,
+            parsed_response: dict[str, object],  # mutable-ok: BaseConfig signature
+        ) -> dict[str, object]:  # mutable-ok: BaseConfig signature
+            """
+            Carry the provider's usage.tool_usage search count as usage.server_tool_use.web_search_requests,
+            the field the built-in tool cost path bills per call.
+            """
+            repaired: Final = _PAYLOAD_ADAPTER.validate_python(
+                super().transform_parsed_response_dict(parsed_response)  # pyright: ignore[reportUnknownMemberType]  # base_class is picked at runtime
+            )
+            if not provider.special_handling.get("web_search_requests_from_tool_usage"):
+                return {**repaired}
+            web_search_requests: Final = web_search_requests_from_tool_usage(repaired)
+            if web_search_requests is None:
+                return {**repaired}
+            usage: Final = _PAYLOAD_ADAPTER.validate_python(repaired["usage"])
+            return {**repaired, "usage": {**usage, "server_tool_use": {"web_search_requests": web_search_requests}}}
+
         @property
-        def custom_llm_provider(self) -> Optional[str]:
+        def custom_llm_provider(self) -> str | None:
             return provider.slug
 
     return JSONProviderConfig
 
 
-_responses_config_cache: dict = {}
+_responses_config_cache: Final[dict[str, "type[OpenAILikeResponsesConfig]"]] = {}
 
 
-def create_responses_config_class(provider: SimpleProviderConfig):
+def create_responses_config_class(provider: SimpleProviderConfig) -> "type[OpenAILikeResponsesConfig]":
     """Generate a Responses API config class dynamically from JSON configuration.
 
     Parallel to create_config_class() but for /v1/responses endpoints.
@@ -192,24 +247,24 @@ def create_responses_config_class(provider: SimpleProviderConfig):
 
     class JSONProviderResponsesConfig(OpenAILikeResponsesConfig):
         @property
-        def custom_llm_provider(self):  # type: ignore[override]
+        def custom_llm_provider(self):
             return provider.slug
 
         def validate_environment(
             self,
             headers: dict,
             model: str,
-            litellm_params: Optional[GenericLiteLLMParams],
+            litellm_params: GenericLiteLLMParams | None,
         ) -> dict:
             litellm_params = litellm_params or GenericLiteLLMParams()
-            api_key = litellm_params.api_key or get_secret_str(provider.api_key_env)
+            api_key: Final = litellm_params.api_key or get_secret_str(provider.api_key_env)
             if api_key:
                 headers["Authorization"] = f"Bearer {api_key}"
             return headers
 
         def get_complete_url(
             self,
-            api_base: Optional[str],
+            api_base: str | None,
             litellm_params: dict,
         ) -> str:
             if not api_base:
@@ -218,16 +273,14 @@ def create_responses_config_class(provider: SimpleProviderConfig):
                 if not api_base:
                     api_base = provider.base_url
 
-            if api_base is None:
-                raise ValueError(f"api_base is required for provider {provider.slug}")
-
-            api_base = api_base.rstrip("/")
-            return f"{api_base}/responses"
+            if isinstance(api_base, str):
+                return join_api_base(api_base, "responses")
+            raise ValueError(f"api_base is required for provider {provider.slug}")
 
         def transform_responses_api_request(
             self,
             model: str,
-            input: Union[str, ResponseInputParam],
+            input: str | ResponseInputParam,
             response_api_optional_request_params: dict,
             litellm_params: GenericLiteLLMParams,
             headers: dict,

@@ -1,91 +1,47 @@
 /**
  * TypeScript types for Claude Code Marketplace
- * Matches backend API types from /litellm/types/proxy/claude_code_endpoints.py
+ * API request/response shapes are synced from the generated OpenAPI types in @/lib/http/schema.
  */
 
+import type { components, operations } from "@/lib/http/schema";
+
 export interface PluginSource {
-  source: "github" | "url" | "git-subdir";
+  source: "github" | "url" | "git-subdir" | "archive";
   repo?: string; // Format: "org/repo" for GitHub
   url?: string; // Full URL for other sources
   path?: string; // Subdirectory path for git-subdir
+  sha256?: string;
 }
 
-export interface PluginAuthor {
-  name: string;
-  email?: string;
-}
+export type PluginAuthor = components["schemas"]["PluginAuthor"];
 
-export interface Plugin {
-  id: string;
-  name: string; // kebab-case
-  version?: string; // semantic version
-  description?: string;
-  source: PluginSource;
-  author?: PluginAuthor;
-  homepage?: string;
-  keywords?: string[];
-  category?: string;
-  domain?: string;
-  namespace?: string;
-  enabled: boolean;
-  created_at?: string;
-  updated_at?: string;
-  created_by?: string;
-}
+export type Plugin = components["schemas"]["PluginListItem"];
+export type PluginListItem = Plugin;
+export type ListPluginsResponse = components["schemas"]["ListPluginsResponse"];
+export type PluginDownloadEvent = components["schemas"]["PluginDownloadEvent"];
+export type PluginDownloadsResponse = components["schemas"]["PluginDownloadsResponse"];
 
-export interface PluginListItem {
-  id: string;
-  name: string;
-  version?: string;
-  description?: string;
-  source: PluginSource;
-  author?: PluginAuthor;
-  homepage?: string;
-  keywords?: string[];
-  category?: string;
-  domain?: string;
-  namespace?: string;
-  enabled: boolean;
-  created_at?: string;
-  updated_at?: string;
-  created_by?: string;
-}
+export type SkillRegisterRequest = Omit<components["schemas"]["RegisterPluginRequest"], "version"> & {
+  version?: components["schemas"]["RegisterPluginRequest"]["version"];
+};
 
-export interface ListPluginsResponse {
-  plugins: PluginListItem[];
-  count: number;
-}
+export type SkillListQuery = NonNullable<operations["list_skills_skill_hub_skills_get"]["parameters"]["query"]>;
 
-export interface RegisterPluginRequest {
-  name: string;
-  source: PluginSource;
-  version?: string;
-  description?: string;
-  author?: PluginAuthor;
-  homepage?: string;
-  keywords?: string[];
-  category?: string;
-  domain?: string;
-  namespace?: string;
-}
+export type SkillHubSkill = components["schemas"]["SkillHubSkill"];
+export type SkillMetadata = components["schemas"]["SkillHubMetadata"];
+export type SkillImport = Omit<components["schemas"]["ImportSkillRequest"], "ref"> &
+  Partial<Pick<components["schemas"]["ImportSkillRequest"], "ref">>;
+export type SkillMutationResponse = SkillHubSkill | components["schemas"]["SkillHubPendingSkill"];
+export type SkillSubmission = components["schemas"]["SkillHubSubmission"];
 
-export interface RegisterPluginResponse {
-  plugin: Plugin;
-  action: "created" | "updated";
-  message: string;
-}
+export const isPendingSkill = (
+  response: SkillMutationResponse,
+): response is components["schemas"]["SkillHubPendingSkill"] =>
+  "status" in response && response.status === "pending_review";
 
 // Public marketplace types
-export interface MarketplacePluginEntry {
-  name: string;
-  source: PluginSource;
-  version?: string;
-  description?: string;
-  author?: PluginAuthor;
-  homepage?: string;
-  keywords?: string[];
-  category?: string;
-}
+export type MarketplacePluginEntry = Pick<Plugin, "name" | "source"> &
+  Partial<Pick<Plugin, "version" | "description" | "author" | "homepage" | "keywords" | "category">>;
 
 export interface MarketplaceOwner {
   name: string;
@@ -93,7 +49,7 @@ export interface MarketplaceOwner {
 }
 
 export interface MarketplaceResponse {
-  name: string; // Marketplace name (e.g., "litellm")
+  name: string;
   owner: MarketplaceOwner;
   plugins: MarketplacePluginEntry[];
 }
@@ -103,21 +59,4 @@ export interface CategoryTab {
   key: string;
   label: string;
   count: number;
-}
-
-export interface PluginFormData {
-  name: string;
-  sourceType: "github" | "url" | "git-subdir";
-  repo: string;
-  url: string;
-  path: string;
-  version: string;
-  description: string;
-  authorName: string;
-  authorEmail: string;
-  homepage: string;
-  category: string;
-  keywords: string; // Comma-separated string, will be split into array
-  domain: string;
-  namespace: string;
 }

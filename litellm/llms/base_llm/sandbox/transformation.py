@@ -6,15 +6,16 @@ returns whatever the sandbox produced. The lifecycle is create container ->
 run code -> delete container; `code_interpreter_tool` combines all three.
 """
 
-from typing import Any, Union
+import builtins
+from typing import Final
 
 import httpx
-
 from pydantic import Field, PrivateAttr
 
+from litellm.llms.custom_httpx.sse_lines import aiter_sse_lines
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
 
-SANDBOX_MAX_OUTPUT_BYTES = 10 * 1024 * 1024
+SANDBOX_MAX_OUTPUT_BYTES: Final = 10 * 1024 * 1024
 
 
 class ContainerHandle(LiteLLMPydanticObjectBase):
@@ -28,14 +29,22 @@ class ContainerHandle(LiteLLMPydanticObjectBase):
 
     _hidden_params: dict = PrivateAttr(default_factory=dict)
 
+    @property
+    def hidden_params(self) -> dict[str, builtins.object]:  # mutable-ok: API requires mutation
+        return self._hidden_params
+
+    @hidden_params.setter
+    def hidden_params(self, hidden_params: dict[str, builtins.object]) -> None:  # mutable-ok: API requires mutation
+        self._hidden_params = hidden_params
+
 
 class CodeExecutionResult(LiteLLMPydanticObjectBase):
     """Passthrough of the sandbox's own execution output."""
 
     stdout: str = ""
     stderr: str = ""
-    results: list[dict[str, Any]] = Field(default_factory=list)
-    error: dict[str, Any] | None = None
+    results: list[dict[str, object]] = Field(default_factory=list)
+    error: dict[str, object] | None = None
     execution_count: int | None = None
     object: str = "code_execution"
 
@@ -43,14 +52,20 @@ class CodeExecutionResult(LiteLLMPydanticObjectBase):
 
     _hidden_params: dict = PrivateAttr(default_factory=dict)
 
+    @property
+    def hidden_params(self) -> dict[str, builtins.object]:  # mutable-ok: API requires mutation
+        return self._hidden_params
+
+    @hidden_params.setter
+    def hidden_params(self, hidden_params: dict[str, builtins.object]) -> None:  # mutable-ok: API requires mutation
+        self._hidden_params = hidden_params
+
 
 class BaseSandboxConfig:
     """Provider-agnostic sandbox operations."""
 
     def validate_environment(self, api_key: str | None = None, **kwargs) -> str:
-        raise NotImplementedError(
-            "validate_environment must be implemented by provider"
-        )
+        raise NotImplementedError("validate_environment must be implemented by provider")
 
     async def acreate_sandbox(
         self,
@@ -66,7 +81,7 @@ class BaseSandboxConfig:
     async def arun_code(
         self,
         *,
-        container: Union[ContainerHandle, str],
+        container: ContainerHandle | str,
         code: str,
         api_key: str | None = None,
         **kwargs,
@@ -76,21 +91,20 @@ class BaseSandboxConfig:
     async def adelete_sandbox(
         self,
         *,
-        container: Union[ContainerHandle, str],
+        container: ContainerHandle | str,
         api_key: str | None = None,
         **kwargs,
     ) -> bool:
         raise NotImplementedError("adelete_sandbox must be implemented by provider")
 
     async def _read_capped_lines(self, response: httpx.Response) -> list[str]:
-        lines: list[str] = []
+        lines: Final[list[str]] = []
         total = 0
-        async for line in response.aiter_lines():
+        async for line in aiter_sse_lines(response.aiter_text()):
             total += len(line.encode("utf-8"))
             if total > SANDBOX_MAX_OUTPUT_BYTES:
                 raise ValueError(
-                    f"Sandbox output exceeded {SANDBOX_MAX_OUTPUT_BYTES} bytes; aborting "
-                    "to avoid unbounded memory use."
+                    f"Sandbox output exceeded {SANDBOX_MAX_OUTPUT_BYTES} bytes; aborting to avoid unbounded memory use."
                 )
             lines.append(line)
         return lines

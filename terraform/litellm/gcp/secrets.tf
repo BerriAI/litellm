@@ -63,3 +63,37 @@ resource "google_secret_manager_secret_version" "ui_password" {
   secret      = google_secret_manager_secret.ui_password[0].id
   secret_data = var.ui_password
 }
+
+resource "google_secret_manager_secret" "billing_metrics_client_secret" {
+  count = local.billing_metrics_client_secret_enabled ? 1 : 0
+
+  secret_id = "${local.name}-billing-metrics-client-secret"
+  labels    = local.labels
+  replication {
+    auto {}
+  }
+}
+
+resource "google_secret_manager_secret_version" "billing_metrics_client_secret" {
+  count = local.billing_metrics_client_secret_enabled ? 1 : 0
+
+  secret      = google_secret_manager_secret.billing_metrics_client_secret[0].id
+  secret_data = var.billing_metrics_client_secret
+}
+
+resource "google_secret_manager_secret" "metrics_run_monitoring" {
+  count = local.metrics_enabled ? 1 : 0
+
+  secret_id = "${local.name}-gateway-run-monitoring"
+  labels    = local.labels
+  replication {
+    auto {}
+  }
+}
+
+resource "google_secret_manager_secret_version" "metrics_run_monitoring" {
+  count = local.metrics_enabled ? 1 : 0
+
+  secret      = google_secret_manager_secret.metrics_run_monitoring[0].id
+  secret_data = local.metrics_run_monitoring_yaml
+}

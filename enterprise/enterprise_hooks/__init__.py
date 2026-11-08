@@ -1,15 +1,15 @@
 from typing import Dict, Literal, Type, Union
 
-from litellm_enterprise.proxy.hooks.managed_files import _PROXY_LiteLLMManagedFiles
+from litellm_enterprise.proxy.hooks.managed_files import PROXY_LiteLLMManagedFiles
 from litellm_enterprise.proxy.hooks.managed_vector_stores import (
-    _PROXY_LiteLLMManagedVectorStores,
+    PROXY_LiteLLMManagedVectorStores,
 )
 
 from litellm.integrations.custom_logger import CustomLogger
 
 ENTERPRISE_PROXY_HOOKS: Dict[str, Type[CustomLogger]] = {
-    "managed_files": _PROXY_LiteLLMManagedFiles,
-    "managed_vector_stores": _PROXY_LiteLLMManagedVectorStores,
+    "managed_files": PROXY_LiteLLMManagedFiles,
+    "managed_vector_stores": PROXY_LiteLLMManagedVectorStores,
 }
 
 

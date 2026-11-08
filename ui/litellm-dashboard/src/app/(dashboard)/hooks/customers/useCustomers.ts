@@ -1,42 +1,38 @@
-import { allEndUsersCall } from "@/components/networking";
-import { useQuery } from "@tanstack/react-query";
-import { createQueryKeys } from "../common/queryKeysFactory";
+import { useQueries } from "@tanstack/react-query";
+import { $api } from "@/lib/http/api";
 import { all_admin_roles } from "@/utils/roles";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-const customersKeys = createQueryKeys("customers");
+import type { components } from "@/lib/http/schema";
 
-export interface Customer {
-  user_id: string;
-  alias?: string | null;
-  spend: number;
-  blocked: boolean;
-  allowed_model_region?: string | null;
-  default_model?: string | null;
-  budget_id?: string | null;
-  litellm_budget_table?: {
-    budget_id: string;
-    max_budget?: number | null;
-    soft_budget?: number | null;
-    max_parallel_requests?: number | null;
-    tpm_limit?: number | null;
-    rpm_limit?: number | null;
-    model_max_budget?: Record<string, unknown> | null;
-    budget_duration?: string | null;
-    budget_reset_at?: string | null;
-    created_at: string;
-    created_by: string;
-    updated_at: string;
-    updated_by: string;
-  } | null;
-}
+export type EndUser = components["schemas"]["CustomerResponse"];
 
-export type CustomersResponse = Customer[];
-
-export const useCustomers = () => {
+export const useCustomers = (pageSize: number = 20, search?: string) => {
   const { accessToken, userRole } = useAuthorized();
-  return useQuery<CustomersResponse>({
-    queryKey: customersKeys.list({}),
-    queryFn: async () => await allEndUsersCall(accessToken!),
+  const options = {
+    pageParamName: "page",
+    initialPageParam: 1,
+    getNextPageParam: (lastPage: EndUser[], _pages: EndUser[][], lastPageParam: unknown) =>
+      lastPage.length === pageSize && typeof lastPageParam === "number" ? lastPageParam + 1 : undefined,
     enabled: Boolean(accessToken) && all_admin_roles.includes(userRole!),
+  };
+  return $api.useInfiniteQuery(
+    "get",
+    "/customer/list",
+    { params: { query: { page_size: pageSize, ...(search ? { search } : {}) } } },
+    options,
+  );
+};
+
+export const useCustomerLookups = (customerIds: readonly string[]) => {
+  const { accessToken, userRole } = useAuthorized();
+  return useQueries({
+    queries: Array.from(new Set(customerIds)).map((endUserId) =>
+      $api.queryOptions(
+        "get",
+        "/customer/info",
+        { params: { query: { end_user_id: endUserId } } },
+        { enabled: Boolean(accessToken) && all_admin_roles.includes(userRole!) },
+      ),
+    ),
   });
 };

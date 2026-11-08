@@ -5,7 +5,7 @@ Used to get the DataDogLogger for a given request.
 Handles Key/Team Based Datadog Logging, following the same pattern as LangFuseHandler.
 """
 
-from typing import TYPE_CHECKING, Any, Dict, Optional, TypedDict
+from typing import TYPE_CHECKING, Any, Final, TypedDict
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.litellm_logging import StandardCallbackDynamicParams
@@ -19,10 +19,10 @@ else:
 
 
 class DatadogLoggingConfig(TypedDict):
-    dd_api_key: Optional[str]
-    dd_site: Optional[str]
-    dd_agent_host: Optional[str]
-    dd_agent_port: Optional[str]
+    dd_api_key: str | None
+    dd_site: str | None
+    dd_agent_host: str | None
+    dd_agent_port: str | None
 
 
 class DataDogHandler:
@@ -42,10 +42,10 @@ class DataDogHandler:
         The global (env-var based) DataDogLogger is managed separately by
         _init_custom_logger_compatible_class via _in_memory_loggers.
         """
-        _credentials = DataDogHandler.get_dynamic_datadog_logging_config(
+        _credentials: Final = DataDogHandler.get_dynamic_datadog_logging_config(
             standard_callback_dynamic_params=standard_callback_dynamic_params,
         )
-        credentials_dict = dict(_credentials)
+        credentials_dict: Final = dict(_credentials)
 
         # check if datadog logger is already cached
         temp_datadog_logger = in_memory_dynamic_logger_cache.get_cache(
@@ -54,18 +54,16 @@ class DataDogHandler:
 
         # if not cached, create a new datadog logger and cache it
         if temp_datadog_logger is None:
-            temp_datadog_logger = (
-                DataDogHandler._create_datadog_logger_from_credentials(
-                    credentials=credentials_dict,
-                    in_memory_dynamic_logger_cache=in_memory_dynamic_logger_cache,
-                )
+            temp_datadog_logger = DataDogHandler._create_datadog_logger_from_credentials(
+                credentials=credentials_dict,
+                in_memory_dynamic_logger_cache=in_memory_dynamic_logger_cache,
             )
 
         return temp_datadog_logger
 
     @staticmethod
     def _create_datadog_logger_from_credentials(
-        credentials: Dict,
+        credentials: dict,
         in_memory_dynamic_logger_cache: DynamicLoggingCache,
     ) -> DataDogLogger:
         """
@@ -73,11 +71,8 @@ class DataDogHandler:
         """
         # When the destination is caller-supplied (dd_agent_host/dd_site), never fall back to the
         # proxy's DD_API_KEY env var, otherwise it would be sent to a team-controlled host.
-        allow_env_credentials = (
-            credentials.get("dd_agent_host") is None
-            and credentials.get("dd_site") is None
-        )
-        datadog_logger = DataDogLogger(
+        allow_env_credentials: Final = credentials.get("dd_agent_host") is None and credentials.get("dd_site") is None
+        datadog_logger: Final = DataDogLogger(
             dd_api_key=credentials.get("dd_api_key"),
             dd_site=credentials.get("dd_site"),
             dd_agent_host=credentials.get("dd_agent_host"),
@@ -89,9 +84,7 @@ class DataDogHandler:
             service_name="datadog",
             logging_obj=datadog_logger,
         )
-        verbose_logger.debug(
-            "Datadog: Created and cached new DataDogLogger for team-scoped credentials"
-        )
+        verbose_logger.debug("Datadog: Created and cached new DataDogLogger for team-scoped credentials")
         return datadog_logger
 
     @staticmethod

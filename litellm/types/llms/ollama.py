@@ -1,16 +1,8 @@
-import json
-from typing import Any, List, Optional, Union
-
-from pydantic import BaseModel
 from typing_extensions import (
-    Protocol,
+    NotRequired,
+    ReadOnly,
     Required,
-    Self,
     TypedDict,
-    TypeGuard,
-    get_origin,
-    override,
-    runtime_checkable,
 )
 
 
@@ -22,19 +14,20 @@ class OllamaToolCallFunction(
 
 
 class OllamaToolCall(TypedDict):
+    id: NotRequired[ReadOnly[str]]
     function: OllamaToolCallFunction
 
 
 class OllamaVisionModelObject(TypedDict):
     prompt: str
-    images: List[str]
+    images: list[str]
 
 
 class OllamaChatCompletionMessage(TypedDict, total=False):
     role: Required[str]
     content: str
     thinking: str
-    images: List[str]
-    tool_calls: List[OllamaToolCall]
+    images: list[str]
+    tool_calls: list[OllamaToolCall]
     tool_name: str
     tool_call_id: str

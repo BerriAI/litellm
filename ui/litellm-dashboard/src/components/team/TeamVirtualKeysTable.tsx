@@ -1,41 +1,42 @@
-// TO-DO: Standardize tables eventually
-
 "use client";
 import { useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
+import { useTeamMemberBudgets } from "@/app/(dashboard)/hooks/teams/useTeamMemberBudgets";
+import { teamMemberBudgetGate } from "@/components/shared/InheritedBudgetHint";
+import { SimpleTooltip } from "@/components/ui/tooltip";
+import {
+  DateCell,
+  ENTITY_CELL_TITLE_CLASSES,
+  IdCell,
+  IdentityCell,
+  MoneyCell,
+  UserPopoverCell,
+} from "@/components/shared/table_cells";
+import {
+  DataTable,
+  DataTableFilterDrawer,
+  DataTableFilterField,
+  DataTableSortHeader,
+  DataTableMultiSortHeader,
+  DataTableToolbar,
+} from "@/components/shared/DataTable";
+import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
+import { orgDetailHref, userDetailHref } from "@/utils/entityLinks";
+import { DEFAULT_PROXY_ADMIN_USER_ID } from "@/utils/sentinels";
+import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
-import { ChevronDownIcon, ChevronRightIcon, ChevronUpIcon, SwitchVerticalIcon } from "@heroicons/react/outline";
-import {
-  ColumnDef,
-  flexRender,
-  getCoreRowModel,
-  PaginationState,
-  SortingState,
-  useReactTable,
-} from "@tanstack/react-table";
-import {
-  Badge,
-  Button,
-  Icon,
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeaderCell,
-  TableRow,
-  Text,
-} from "@tremor/react";
-import { InfoCircleOutlined } from "@ant-design/icons";
-import { Popover, Skeleton, Tooltip, Typography } from "antd";
+import { useDebouncedValue } from "@tanstack/react-pacer/debouncer";
+import { ColumnDef, ColumnFiltersState, OnChangeFn, PaginationState, SortingState } from "@tanstack/react-table";
+import { ChevronDown, ChevronRight } from "lucide-react";
 import DefaultProxyAdminTag from "../common_components/DefaultProxyAdminTag";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
+import { deriveKeyModelScope } from "../key_scope";
+import { KEY_RATE_LIMIT_SORT_FIELDS } from "../key_team_helpers/key_sorting";
 import { KeyResponse, Team } from "../key_team_helpers/key_list";
-import FilterComponent, { FilterOption } from "../molecules/filter";
 import { Organization } from "../networking";
 import KeyInfoView from "../templates/key_info_view";
-import { useQuery } from "@tanstack/react-query";
-import { fetchTeamFilterOptions } from "../key_team_helpers/filter_helpers";
-import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
 interface TeamVirtualKeysTableProps {
   teamId: string;
@@ -47,21 +48,33 @@ interface TeamVirtualKeysTableProps {
  * TeamVirtualKeysTable – variant of VirtualKeysTable scoped to a single team.
  * Displays all virtual keys belonging to the team with same format and styling.
  */
+const DEFAULT_SORTING: SortingState = [{ id: "created_at", desc: true }];
+
 export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVirtualKeysTableProps) {
-  const { accessToken } = useAuthorized();
+  const { t } = useTranslation();
   const [selectedKey, setSelectedKey] = useState<KeyResponse | null>(null);
-  const [sorting, setSorting] = useState<SortingState>([{ id: "created_at", desc: true }]);
+  const [sorting, setSorting] = useState<SortingState>(DEFAULT_SORTING);
   const [tablePagination, setTablePagination] = useState<PaginationState>({
     pageIndex: 0,
     pageSize: 50,
   });
-  const [filters, setFilters] = useState<Record<string, string>>({
-    "Organization ID": "",
-    "Key Alias": "",
-    "User ID": "",
-    "Sort By": "created_at",
-    "Sort Order": "desc",
-  });
+  const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [searchInput, setSearchInput] = useState("");
+  const [searchQuery] = useDebouncedValue(searchInput, { wait: DEBOUNCE_WAIT_MS });
+
+  const handleSearchChange = useCallback((value: string) => {
+    setSearchInput(value);
+    setTablePagination((prev) => ({ ...prev, pageIndex: 0 }));
+  }, []);
+
+  const getFilterValue = useCallback(
+    (columnId: string): string | undefined => {
+      const entry = columnFilters.find((filter) => filter.id === columnId);
+      return typeof entry?.value === "string" && entry.value.trim() ? entry.value.trim() : undefined;
+    },
+    [columnFilters],
+  );
 
   const sortBy = sorting.length > 0 ? sorting[0].id : "created_at";
   const sortOrder = sorting.length > 0 ? (sorting[0].desc ? "desc" : "asc") : "desc";
@@ -69,32 +82,27 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
   const pageIndex = tablePagination.pageIndex;
   const pageSize = tablePagination.pageSize;
 
-  const {
-    data: keys,
-    isPending: isLoading,
-    isFetching,
-    refetch,
-  } = useKeys(pageIndex + 1, pageSize, {
+  const keyListOptions = {
     teamID: teamId,
-    organizationID: filters["Organization ID"]?.trim() || undefined,
-    selectedKeyAlias: filters["Key Alias"]?.trim() || undefined,
-    userID: filters["User ID"]?.trim() || undefined,
+    search: searchQuery.trim() || undefined,
+    userID: getFilterValue("user_id"),
+    keyHash: getFilterValue("key_hash"),
     sortBy: sortBy || undefined,
     sortOrder: sortOrder || undefined,
     expand: "user",
-  });
+  };
 
-  const displayKeys = useMemo(() => {
-    const kList = keys?.keys || [];
-    const orgId = organization?.organization_id;
-    if (!orgId) return kList;
-    return kList.map((k: KeyResponse) => ({
-      ...k,
-      organization_id: (k.organization_id ?? k.org_id) || orgId,
-    }));
-  }, [keys?.keys, organization?.organization_id]);
+  const { data: keys, isPending: isLoading, isFetching, refetch } = useKeys(pageIndex + 1, pageSize, keyListOptions);
 
-  const pageCount = keys?.total_pages ?? 0;
+  const displayKeys = useMemo(() => keys?.keys ?? [], [keys?.keys]);
+
+  const teamMemberBudgetTeamIds = useMemo(
+    () => (displayKeys.some((key) => key.max_budget == null && Boolean(key.user_id)) ? [teamId] : []),
+    [displayKeys, teamId],
+  );
+  const teamMemberBudgets = useTeamMemberBudgets(teamMemberBudgetTeamIds);
+
+  const rowCount = keys?.total_count ?? 0;
   const [expandedAccordions, setExpandedAccordions] = useState<Record<string, boolean>>({});
 
   const currentTeam: Team = useMemo(
@@ -115,18 +123,6 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
     [teamId, teamAlias, organization],
   );
 
-  const teamFilterOptionsQuery = useQuery({
-    queryKey: ["teamFilterOptions", teamId, accessToken],
-    queryFn: async () => fetchTeamFilterOptions(accessToken, teamId),
-    enabled: !!accessToken && !!teamId,
-    staleTime: 30000, // 30 seconds - align with useKeys
-  });
-  const teamFilterOptions = teamFilterOptionsQuery.data || {
-    keyAliases: [],
-    organizationIds: [],
-    userIds: [],
-  };
-
   const handleStorageChange = useCallback(() => {
     refetch?.();
   }, [refetch]);
@@ -136,395 +132,370 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
     return () => window.removeEventListener("storage", handleStorageChange);
   }, [handleStorageChange]);
 
-  const handleFilterChange = useCallback((newFilters: Record<string, string>, skipDebounce = false) => {
-    setFilters((prev) => ({
-      ...prev,
-      "Organization ID": newFilters["Organization ID"] ?? prev["Organization ID"],
-      "Key Alias": newFilters["Key Alias"] ?? prev["Key Alias"],
-      "User ID": newFilters["User ID"] ?? prev["User ID"],
-      "Sort By": newFilters["Sort By"] ?? prev["Sort By"] ?? "created_at",
-      "Sort Order": newFilters["Sort Order"] ?? prev["Sort Order"] ?? "desc",
-    }));
-    if (!skipDebounce) {
-      setTablePagination((prev) => ({ ...prev, pageIndex: 0 }));
-    }
-  }, []);
-
-  const handleFilterReset = useCallback(() => {
-    setFilters({
-      "Organization ID": "",
-      "Key Alias": "",
-      "User ID": "",
-      "Sort By": "created_at",
-      "Sort Order": "desc",
-    });
+  const handleColumnFiltersChange = useCallback<OnChangeFn<ColumnFiltersState>>((updaterOrValue) => {
+    setColumnFilters(updaterOrValue);
     setTablePagination((prev) => ({ ...prev, pageIndex: 0 }));
   }, []);
-
-  const filterOptions: FilterOption[] = useMemo(
-    () => [
-      {
-        name: "Organization ID",
-        label: "Organization ID",
-        isSearchable: true,
-        searchFn: async (searchText: string) => {
-          const { organizationIds } = teamFilterOptions;
-          if (!organizationIds.length) return [];
-          const lower = searchText.toLowerCase();
-          const filtered = lower ? organizationIds.filter((id) => id.toLowerCase().includes(lower)) : organizationIds;
-          return filtered.map((id) => ({ label: id, value: id }));
-        },
-      },
-      {
-        name: "Key Alias",
-        label: "Key Alias",
-        isSearchable: true,
-        searchFn: async (searchText: string) => {
-          const { keyAliases } = teamFilterOptions;
-          const lower = searchText.toLowerCase();
-          const filtered = lower ? keyAliases.filter((alias) => alias.toLowerCase().includes(lower)) : keyAliases;
-          return filtered.map((alias) => ({ label: alias, value: alias }));
-        },
-      },
-      {
-        name: "User ID",
-        label: "User ID",
-        isSearchable: true,
-        searchFn: async (searchText: string) => {
-          const { userIds } = teamFilterOptions;
-          const lower = searchText.toLowerCase();
-          const filtered = lower
-            ? userIds.filter((u) => u.id.toLowerCase().includes(lower) || u.email.toLowerCase().includes(lower))
-            : userIds;
-          return filtered.map((u) => ({
-            label: u.email ? `${u.id} (${u.email})` : u.id,
-            value: u.id,
-          }));
-        },
-      },
-    ],
-    [teamFilterOptions],
-  );
 
   const columns: ColumnDef<KeyResponse>[] = useMemo(
     () => [
       {
         id: "token",
         accessorKey: "token",
-        header: "Key ID",
-        size: 100,
+        meta: { title: t("teams.virtualKeysTable.columns.keyId") },
+        header: ({ column }) => (
+          <DataTableSortHeader
+            column={column}
+            title={t("teams.virtualKeysTable.columns.keyId")}
+            variant="header-cycle"
+          />
+        ),
+        size: 120,
         enableSorting: true,
-        cell: (info) => {
-          const value = info.getValue() as string;
-          const width = info.cell.column.getSize();
-          return (
-            <Tooltip title={value}>
-              <Button
-                size="xs"
-                variant="light"
-                className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left overflow-hidden truncate block"
-                style={{ maxWidth: width, overflow: "hidden" }}
-                onClick={() => setSelectedKey(info.row.original)}
-              >
-                {value ?? "-"}
-              </Button>
-            </Tooltip>
-          );
-        },
+        cell: (info) => (
+          <IdCell value={info.getValue() as string | null} onClick={() => setSelectedKey(info.row.original)} />
+        ),
       },
       {
         id: "key_alias",
         accessorKey: "key_alias",
-        header: "Key Alias",
+        meta: { title: t("teams.virtualKeysTable.columns.keyAlias") },
+        header: ({ column }) => (
+          <DataTableSortHeader
+            column={column}
+            title={t("teams.virtualKeysTable.columns.keyAlias")}
+            variant="header-cycle"
+          />
+        ),
         size: 150,
         enableSorting: true,
         cell: (info) => {
           const value = info.getValue() as string;
-          const width = info.cell.column.getSize();
           return (
-            <Tooltip title={value}>
-              <span className="font-mono text-xs truncate block" style={{ maxWidth: width, overflow: "hidden" }}>
-                {value ?? "-"}
-              </span>
-            </Tooltip>
+            <SimpleTooltip content={value}>
+              <span className="block max-w-full truncate font-mono text-xs">{value ?? "-"}</span>
+            </SimpleTooltip>
           );
         },
       },
       {
         id: "key_name",
         accessorKey: "key_name",
-        header: "Secret Key",
+        header: t("teams.virtualKeysTable.columns.secretKey"),
         size: 120,
         enableSorting: false,
         cell: (info) => <span className="font-mono text-xs">{info.getValue() as string}</span>,
       },
       {
         id: "organization_id",
-        accessorKey: "organization_id",
-        header: "Organization ID",
+        accessorFn: (key) => (key.organization_id ?? key.org_id) || organization?.organization_id || null,
+        header: t("teams.virtualKeysTable.columns.organizationId"),
         size: 140,
         enableSorting: false,
-        cell: (info) => (info.getValue() ? info.renderValue() : "-"),
+        cell: (info) => {
+          const orgId = info.getValue() as string | null;
+          if (!orgId) return "-";
+          return (
+            <SimpleTooltip content={orgId}>
+              <IdentityCell title={orgId} titleClassName={ENTITY_CELL_TITLE_CLASSES} href={orgDetailHref(orgId)} />
+            </SimpleTooltip>
+          );
+        },
       },
       {
         id: "user_email",
         accessorKey: "user",
-        header: "User Email",
+        header: t("teams.virtualKeysTable.columns.userEmail"),
         size: 160,
         enableSorting: false,
         cell: (info) => {
           const user = info.getValue() as { user_email?: string } | undefined;
           const value = user?.user_email;
-          const width = info.cell.column.getSize();
+          const userId = info.row.original.user_id;
           return (
-            <Tooltip title={value}>
-              <span className="font-mono text-xs truncate block" style={{ maxWidth: width, overflow: "hidden" }}>
-                {value ?? "-"}
-              </span>
-            </Tooltip>
+            <SimpleTooltip content={value}>
+              <IdentityCell
+                title={value ?? "-"}
+                titleClassName={ENTITY_CELL_TITLE_CLASSES}
+                href={value && userId ? userDetailHref(userId) : undefined}
+              />
+            </SimpleTooltip>
           );
         },
       },
       {
         id: "user_id",
         accessorKey: "user_id",
-        header: "User ID",
+        header: t("teams.virtualKeysTable.columns.userId"),
         size: 70,
         enableSorting: false,
         cell: (info) => {
           const userId = info.getValue() as string | null;
-          const displayValue = userId === "default_user_id" ? "Default Proxy Admin" : userId;
-          const width = info.cell.column.getSize();
+          if (userId === DEFAULT_PROXY_ADMIN_USER_ID) {
+            return <DefaultProxyAdminTag userId={userId} />;
+          }
           return (
-            <Tooltip title={displayValue}>
-              <span className="font-mono text-xs truncate block" style={{ maxWidth: width, overflow: "hidden" }}>
-                {displayValue ?? "-"}
-              </span>
-            </Tooltip>
+            <SimpleTooltip content={userId}>
+              <IdentityCell
+                title={userId ?? "-"}
+                titleClassName={ENTITY_CELL_TITLE_CLASSES}
+                href={userId ? userDetailHref(userId) : undefined}
+              />
+            </SimpleTooltip>
           );
         },
       },
       {
         id: "created_at",
         accessorKey: "created_at",
-        header: "Created At",
+        meta: { title: t("teams.virtualKeysTable.columns.createdAt") },
+        header: ({ column }) => (
+          <DataTableSortHeader
+            column={column}
+            title={t("teams.virtualKeysTable.columns.createdAt")}
+            variant="header-cycle"
+          />
+        ),
         size: 120,
         enableSorting: true,
-        cell: (info) => {
-          const value = info.getValue();
-          return value ? new Date(value as string).toLocaleDateString() : "-";
-        },
+        cell: (info) => <DateCell value={info.getValue() as string | null} precision="date" />,
       },
       {
         id: "created_by",
         accessorKey: "created_by",
-        header: "Created By",
-        size: 70,
+        header: t("teams.virtualKeysTable.columns.createdBy"),
+        size: 130,
         enableSorting: false,
         cell: (info) => {
           const userId = info.getValue() as string | null;
           if (!userId) return "-";
           const { created_by_user } = info.row.original;
-          const userAlias = created_by_user?.user_alias ?? null;
-          const userEmail = created_by_user?.user_email ?? null;
-          const isDefaultAdmin = userId === "default_user_id";
-          const displayValue = userAlias || userEmail || userId;
-          const width = info.cell.column.getSize();
-
-          const popoverContent = (
-            <div className="flex flex-col gap-2 text-xs min-w-[200px] max-w-[300px]">
-              {[
-                { label: "User Alias", value: userAlias },
-                { label: "User Email", value: userEmail },
-                { label: "User ID", value: userId },
-              ].map(({ label, value }) => (
-                <div key={label} className="flex flex-col min-w-0">
-                  <span className="text-gray-400">{label}</span>
-                  {value ? (
-                    <Typography.Text className="font-mono text-xs" ellipsis={{ tooltip: value }} copyable>
-                      {value}
-                    </Typography.Text>
-                  ) : (
-                    <span className="font-mono">-</span>
-                  )}
-                </div>
-              ))}
-            </div>
-          );
-
-          if (isDefaultAdmin && !userAlias && !userEmail) {
-            return (
-              <Popover content={popoverContent} trigger="hover" placement="bottomLeft">
-                <span className="cursor-default">
-                  <DefaultProxyAdminTag userId={userId} />
-                </span>
-              </Popover>
-            );
-          }
-
           return (
-            <Popover content={popoverContent} trigger="hover" placement="bottomLeft">
-              <span
-                className="font-mono text-xs truncate block cursor-default"
-                style={{ maxWidth: width, overflow: "hidden" }}
-              >
-                {displayValue}
-              </span>
-            </Popover>
+            <UserPopoverCell
+              userAlias={created_by_user?.user_alias ?? null}
+              userEmail={created_by_user?.user_email ?? null}
+              userId={userId}
+              width={130}
+            />
           );
         },
       },
       {
         id: "updated_at",
         accessorKey: "updated_at",
-        header: "Updated At",
+        meta: { title: t("teams.virtualKeysTable.columns.updatedAt") },
+        header: ({ column }) => (
+          <DataTableSortHeader
+            column={column}
+            title={t("teams.virtualKeysTable.columns.updatedAt")}
+            variant="header-cycle"
+          />
+        ),
         size: 120,
         enableSorting: true,
-        cell: (info) => {
-          const value = info.getValue();
-          return value ? new Date(value as string).toLocaleDateString() : "Never";
-        },
+        cell: (info) => (
+          <DateCell
+            value={info.getValue() as string | null}
+            precision="date"
+            fallback={t("teams.virtualKeysTable.dates.never")}
+          />
+        ),
       },
       {
         id: "last_active",
         accessorKey: "last_active",
-        header: () => (
-          <span className="flex items-center gap-1">
-            Last Active
-            <Popover
-              content="This is a new field and is not backfilled. Only new key usage will update this value."
-              trigger="hover"
-            >
-              <InfoCircleOutlined className="text-gray-400 text-xs cursor-help" />
-            </Popover>
-          </span>
+        meta: { title: t("teams.virtualKeysTable.columns.lastActive") },
+        header: ({ column }) => (
+          <DataTableSortHeader column={column} title={t("teams.virtualKeysTable.columns.lastActive")} />
         ),
         size: 130,
-        enableSorting: false,
-        cell: (info) => {
-          const value = info.getValue();
-          if (!value) return "Unknown";
-          const date = new Date(value as string);
-          return (
-            <Tooltip title={date.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "long" })}>
-              <span>{date.toLocaleDateString()}</span>
-            </Tooltip>
-          );
-        },
+        enableSorting: true,
+        sortDescFirst: false,
+        cell: (info) => (
+          <DateCell
+            value={info.getValue() as string | null}
+            precision="date"
+            fallback={t("teams.virtualKeysTable.dates.unknown")}
+          />
+        ),
       },
       {
         id: "expires",
         accessorKey: "expires",
-        header: "Expires",
+        meta: { title: t("teams.virtualKeysTable.columns.expires") },
+        header: ({ column }) => (
+          <DataTableSortHeader column={column} title={t("teams.virtualKeysTable.columns.expires")} />
+        ),
         size: 120,
-        enableSorting: false,
-        cell: (info) => {
-          const value = info.getValue();
-          return value ? new Date(value as string).toLocaleDateString() : "Never";
-        },
+        enableSorting: true,
+        sortDescFirst: false,
+        cell: (info) => (
+          <DateCell
+            value={info.getValue() as string | null}
+            precision="date"
+            fallback={t("teams.virtualKeysTable.dates.never")}
+          />
+        ),
       },
       {
         id: "spend",
         accessorKey: "spend",
-        header: "Spend (USD)",
+        meta: { title: t("teams.virtualKeysTable.columns.spend"), numeric: true },
+        header: ({ column }) => (
+          <DataTableSortHeader
+            column={column}
+            title={t("teams.virtualKeysTable.columns.spend")}
+            variant="header-cycle"
+          />
+        ),
         size: 100,
         enableSorting: true,
-        cell: (info) => formatNumberWithCommas(info.getValue() as number, 4),
+        cell: (info) => <MoneyCell value={info.getValue() as number | null} decimals={4} />,
+      },
+      {
+        id: "total_spend",
+        accessorKey: "total_spend",
+        meta: { title: t("teams.virtualKeysTable.columns.lifetimeSpend"), numeric: true },
+        header: ({ column }) => (
+          <DataTableSortHeader column={column} title={t("teams.virtualKeysTable.columns.lifetimeSpend")} />
+        ),
+        size: 130,
+        enableSorting: true,
+        sortDescFirst: true,
+        cell: (info) => <MoneyCell value={info.getValue() as number | null | undefined} showZero />,
       },
       {
         id: "max_budget",
         accessorKey: "max_budget",
-        header: "Budget (USD)",
-        size: 110,
+        meta: { title: t("teams.virtualKeysTable.columns.budget"), numeric: true },
+        header: ({ column }) => (
+          <DataTableSortHeader
+            column={column}
+            title={t("teams.virtualKeysTable.columns.budget")}
+            variant="header-cycle"
+          />
+        ),
+        size: 160,
         enableSorting: true,
         cell: (info) => {
-          const maxBudget = info.getValue() as number | null;
-          if (maxBudget === null) return "Unlimited";
-          return `$${formatNumberWithCommas(maxBudget)}`;
+          const key = info.row.original;
+          const memberGate =
+            key.max_budget == null
+              ? teamMemberBudgetGate(teamMemberBudgets[teamId], key.user_id, key.user?.user_email)
+              : null;
+
+          return memberGate ? (
+            <span className="block w-full whitespace-nowrap text-right tabular-nums">
+              ${formatNumberWithCommas(memberGate.maxBudget, 0)}{" "}
+              <span className="text-muted-foreground">{t("teams.virtualKeysTable.budget.teamMember")}</span>
+            </span>
+          ) : (
+            <MoneyCell
+              value={info.getValue() as number | null}
+              decimals={0}
+              emptyText={t("teams.virtualKeysTable.budget.unlimited")}
+              showZero
+            />
+          );
         },
       },
       {
         id: "budget_reset_at",
         accessorKey: "budget_reset_at",
-        header: "Budget Reset",
+        meta: { title: t("teams.virtualKeysTable.columns.budgetReset") },
+        header: ({ column }) => (
+          <DataTableSortHeader column={column} title={t("teams.virtualKeysTable.columns.budgetReset")} />
+        ),
         size: 130,
-        enableSorting: false,
-        cell: (info) => {
-          const value = info.getValue();
-          return value ? new Date(value as string).toLocaleString() : "Never";
-        },
+        enableSorting: true,
+        sortDescFirst: false,
+        cell: (info) => (
+          <DateCell value={info.getValue() as string | null} fallback={t("teams.virtualKeysTable.dates.never")} />
+        ),
       },
       {
         id: "models",
         accessorKey: "models",
-        header: "Models",
+        header: t("teams.virtualKeysTable.columns.models"),
         size: 200,
         enableSorting: false,
         cell: (info) => {
           const models = info.getValue() as string[];
+          const scope = deriveKeyModelScope(info.row.original.allowed_routes, info.row.original.key_type);
+          const emptyModelsBadge = !scope.hasModelAccess ? (
+            <SimpleTooltip content={t("teams.virtualKeysTable.models.noModelAccessTooltip", { scope: scope.label })}>
+              <Badge variant="secondary" className="mb-1">
+                {t("teams.virtualKeysTable.models.noModelAccess")}
+              </Badge>
+            </SimpleTooltip>
+          ) : (
+            <Badge variant="destructive" className="mb-1">
+              {t("teams.virtualKeysTable.models.allProxyModels")}
+            </Badge>
+          );
           return (
             <div className="flex flex-col py-2">
               {Array.isArray(models) ? (
                 <div className="flex flex-col">
                   {models.length === 0 ? (
-                    <Badge size="xs" className="mb-1" color="red">
-                      <Text>All Proxy Models</Text>
-                    </Badge>
+                    emptyModelsBadge
                   ) : (
                     <>
                       <div className="flex items-start">
                         {models.length > 3 && (
-                          <div>
-                            <Icon
-                              icon={expandedAccordions[info.row.id] ? ChevronDownIcon : ChevronRightIcon}
-                              className="cursor-pointer"
-                              size="xs"
-                              onClick={() =>
-                                setExpandedAccordions((prev) => ({
-                                  ...prev,
-                                  [info.row.id]: !prev[info.row.id],
-                                }))
-                              }
-                            />
-                          </div>
+                          <button
+                            type="button"
+                            aria-label={
+                              expandedAccordions[info.row.id]
+                                ? t("teams.virtualKeysTable.models.collapse")
+                                : t("teams.virtualKeysTable.models.expand")
+                            }
+                            className="rounded-sm text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                            onClick={() =>
+                              setExpandedAccordions((prev) => ({
+                                ...prev,
+                                [info.row.id]: !prev[info.row.id],
+                              }))
+                            }
+                          >
+                            {expandedAccordions[info.row.id] ? (
+                              <ChevronDown className="size-4" />
+                            ) : (
+                              <ChevronRight className="size-4" />
+                            )}
+                          </button>
                         )}
                         <div className="flex flex-wrap gap-1">
                           {models.slice(0, 3).map((model, index) =>
                             model === "all-proxy-models" ? (
-                              <Badge key={index} size="xs" color="red">
-                                <Text>All Proxy Models</Text>
+                              <Badge key={index} variant="destructive">
+                                {t("teams.virtualKeysTable.models.allProxyModels")}
                               </Badge>
                             ) : (
-                              <Badge key={index} size="xs" color="blue">
-                                <Text>
-                                  {model.length > 30
-                                    ? `${getModelDisplayName(model).slice(0, 30)}...`
-                                    : getModelDisplayName(model)}
-                                </Text>
+                              <Badge key={index}>
+                                {model.length > 30
+                                  ? `${getModelDisplayName(model).slice(0, 30)}...`
+                                  : getModelDisplayName(model)}
                               </Badge>
                             ),
                           )}
                           {models.length > 3 && !expandedAccordions[info.row.id] && (
-                            <Badge size="xs" color="gray" className="cursor-pointer">
-                              <Text>
-                                +{models.length - 3} {models.length - 3 === 1 ? "more model" : "more models"}
-                              </Text>
+                            <Badge variant="secondary">
+                              {t("teams.virtualKeysTable.models.more", { count: models.length - 3 })}
                             </Badge>
                           )}
                           {expandedAccordions[info.row.id] && (
                             <div className="flex flex-wrap gap-1">
                               {models.slice(3).map((model, index) =>
                                 model === "all-proxy-models" ? (
-                                  <Badge key={index + 3} size="xs" color="red">
-                                    <Text>All Proxy Models</Text>
+                                  <Badge key={index + 3} variant="destructive">
+                                    {t("teams.virtualKeysTable.models.allProxyModels")}
                                   </Badge>
                                 ) : (
-                                  <Badge key={index + 3} size="xs" color="blue">
-                                    <Text>
-                                      {model.length > 30
-                                        ? `${getModelDisplayName(model).slice(0, 30)}...`
-                                        : getModelDisplayName(model)}
-                                    </Text>
+                                  <Badge key={index + 3}>
+                                    {model.length > 30
+                                      ? `${getModelDisplayName(model).slice(0, 30)}...`
+                                      : getModelDisplayName(model)}
                                   </Badge>
                                 ),
                               )}
@@ -542,59 +513,37 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
       },
       {
         id: "rate_limits",
-        header: "Rate Limits",
+        meta: { title: t("teams.virtualKeysTable.columns.rateLimits") },
+        header: ({ table }) => <DataTableMultiSortHeader table={table} fields={KEY_RATE_LIMIT_SORT_FIELDS} />,
         size: 140,
         enableSorting: false,
         cell: ({ row }) => {
           const key = row.original;
           return (
             <div>
-              <div>TPM: {key.tpm_limit !== null ? key.tpm_limit : "Unlimited"}</div>
-              <div>RPM: {key.rpm_limit !== null ? key.rpm_limit : "Unlimited"}</div>
+              <div>
+                {t("teams.virtualKeysTable.rateLimits.tpm")}
+                {key.tpm_limit !== null ? key.tpm_limit : t("teams.virtualKeysTable.rateLimits.unlimited")}
+              </div>
+              <div>
+                {t("teams.virtualKeysTable.rateLimits.rpm")}
+                {key.rpm_limit !== null ? key.rpm_limit : t("teams.virtualKeysTable.rateLimits.unlimited")}
+              </div>
             </div>
           );
         },
       },
     ],
-    [expandedAccordions],
+    [expandedAccordions, teamMemberBudgets, teamId, organization?.organization_id, t],
   );
 
-  const handleSortingChange = useCallback(
-    (updaterOrValue: React.SetStateAction<SortingState>) => {
-      const newSorting = typeof updaterOrValue === "function" ? updaterOrValue(sorting) : updaterOrValue;
-      setSorting(newSorting);
-      if (newSorting?.length > 0) {
-        const sortState = newSorting[0];
-        handleFilterChange(
-          {
-            "Sort By": sortState.id,
-            "Sort Order": sortState.desc ? "desc" : "asc",
-          },
-          true,
-        );
-      }
-    },
-    [sorting, handleFilterChange],
-  );
-
-  const table = useReactTable({
-    data: displayKeys,
-    columns,
-    columnResizeMode: "onChange",
-    columnResizeDirection: "ltr",
-    state: { sorting, pagination: tablePagination },
-    onSortingChange: handleSortingChange,
-    onPaginationChange: setTablePagination,
-    getCoreRowModel: getCoreRowModel(),
-    // getSortedRowModel not needed — manualSorting: true delegates sorting to the server
-    enableSorting: true,
-    manualSorting: true, // Server sorts via useKeys. Avoid redundant client-side sort
-    manualPagination: true,
-    pageCount: pageCount,
-  });
+  const handleSortingChange = useCallback((updaterOrValue: React.SetStateAction<SortingState>) => {
+    setSorting(updaterOrValue);
+    setTablePagination((prev) => ({ ...prev, pageIndex: 0 }));
+  }, []);
 
   return (
-    <div className="w-full h-full overflow-hidden">
+    <div className="w-full">
       {selectedKey ? (
         <KeyInfoView
           keyId={selectedKey.token}
@@ -604,175 +553,71 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
           onDelete={refetch}
         />
       ) : (
-        <div className="border-b py-4 flex-1 overflow-hidden">
-          <div className="w-full mb-6">
-            <FilterComponent
-              options={filterOptions}
-              onApplyFilters={handleFilterChange}
-              initialValues={filters}
-              onResetFilters={handleFilterReset}
-            />
-          </div>
-
-          <div className="flex items-center justify-end w-full mb-4">
-            <div className="inline-flex items-center gap-2">
-              {isLoading || isFetching ? (
-                <Skeleton.Node active style={{ width: 74, height: 20 }} />
-              ) : (
-                <span className="text-sm text-gray-700">
-                  Page {pageIndex + 1} of {table.getPageCount()}
-                </span>
-              )}
-
-              {isLoading || isFetching ? (
-                <Skeleton.Button active size="small" style={{ width: 84, height: 30 }} />
-              ) : (
-                <button
-                  onClick={() => table.previousPage()}
-                  disabled={isLoading || isFetching || !table.getCanPreviousPage()}
-                  className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+        <div className="py-4">
+          <DataTable
+            data={displayKeys}
+            columns={columns}
+            sortingMode="server"
+            sorting={sorting}
+            onSortingChange={handleSortingChange}
+            paginationMode="server"
+            pagination={tablePagination}
+            onPaginationChange={setTablePagination}
+            rowCount={rowCount}
+            filterMode="server"
+            columnFilters={columnFilters}
+            onColumnFiltersChange={handleColumnFiltersChange}
+            enableColumnResizing
+            columnResizeMode="onChange"
+            isLoading={isLoading || isFetching}
+            loadingMessage={t("teams.virtualKeysTable.loading")}
+            size="compact"
+            toolbar={(table) => (
+              <>
+                <DataTableToolbar
+                  table={table}
+                  searchValue={searchInput}
+                  onSearchChange={handleSearchChange}
+                  searchPlaceholder={t("teams.virtualKeysTable.searchPlaceholder")}
+                  onRefresh={() => refetch?.()}
+                  isRefreshing={isFetching}
+                  onOpenFilters={() => setFiltersOpen(true)}
+                  filterLabels={{
+                    user_id: t("teams.virtualKeysTable.filters.userId"),
+                    key_hash: t("teams.virtualKeysTable.filters.keyId"),
+                  }}
+                />
+                <DataTableFilterDrawer
+                  table={table}
+                  open={filtersOpen}
+                  onOpenChange={setFiltersOpen}
+                  title={t("teams.virtualKeysTable.filters.title")}
+                  description={t("teams.virtualKeysTable.filters.description", {
+                    team: teamAlias ?? t("teams.virtualKeysTable.filters.thisTeam"),
+                  })}
                 >
-                  Previous
-                </button>
-              )}
-
-              {isLoading || isFetching ? (
-                <Skeleton.Button active size="small" style={{ width: 58, height: 30 }} />
-              ) : (
-                <button
-                  onClick={() => table.nextPage()}
-                  disabled={isLoading || isFetching || !table.getCanNextPage()}
-                  className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  Next
-                </button>
-              )}
-            </div>
-          </div>
-          <div className="h-[75vh] overflow-auto">
-            <div className="rounded-lg custom-border relative">
-              <div className="overflow-x-auto">
-                <Table className="[&_td]:py-0.5 [&_th]:py-1" style={{ width: table.getCenterTotalSize() }}>
-                  <TableHead>
-                    {table.getHeaderGroups().map((headerGroup) => (
-                      <TableRow key={headerGroup.id}>
-                        {headerGroup.headers.map((header) => (
-                          <TableHeaderCell
-                            key={header.id}
-                            data-header-id={header.id}
-                            className={`py-1 h-8 relative hover:bg-gray-50 ${
-                              header.id === "actions"
-                                ? "sticky right-0 bg-white shadow-[-4px_0_8px_-6px_rgba(0,0,0,0.1)]"
-                                : ""
-                            }`}
-                            style={{
-                              width: header.getSize(),
-                              position: "relative",
-                              cursor: header.column.getCanSort() ? "pointer" : "default",
-                            }}
-                            onMouseEnter={() => {
-                              const resizer = document.querySelector(`[data-header-id="${header.id}"] .resizer`);
-                              if (resizer) (resizer as HTMLElement).style.opacity = "0.5";
-                            }}
-                            onMouseLeave={() => {
-                              const resizer = document.querySelector(`[data-header-id="${header.id}"] .resizer`);
-                              if (resizer && !header.column.getIsResizing())
-                                (resizer as HTMLElement).style.opacity = "0";
-                            }}
-                            onClick={header.column.getCanSort() ? header.column.getToggleSortingHandler() : undefined}
-                          >
-                            <div className="flex items-center justify-between gap-2">
-                              <div className="flex items-center">
-                                {header.isPlaceholder
-                                  ? null
-                                  : flexRender(header.column.columnDef.header, header.getContext())}
-                              </div>
-                              {header.id !== "actions" && header.column.getCanSort() && (
-                                <div className="w-4">
-                                  {header.column.getIsSorted() ? (
-                                    {
-                                      asc: <ChevronUpIcon className="h-4 w-4 text-blue-500" />,
-                                      desc: <ChevronDownIcon className="h-4 w-4 text-blue-500" />,
-                                    }[header.column.getIsSorted() as string]
-                                  ) : (
-                                    <SwitchVerticalIcon className="h-4 w-4 text-gray-400" />
-                                  )}
-                                </div>
-                              )}
-                              <div
-                                onDoubleClick={() => header.column.resetSize()}
-                                onMouseDown={header.getResizeHandler()}
-                                onTouchStart={header.getResizeHandler()}
-                                className={`resizer ${table.options.columnResizeDirection} ${
-                                  header.column.getIsResizing() ? "isResizing" : ""
-                                }`}
-                                style={{
-                                  position: "absolute",
-                                  right: 0,
-                                  top: 0,
-                                  height: "100%",
-                                  width: "5px",
-                                  background: header.column.getIsResizing() ? "#3b82f6" : "transparent",
-                                  cursor: "col-resize",
-                                  userSelect: "none",
-                                  touchAction: "none",
-                                  opacity: header.column.getIsResizing() ? 1 : 0,
-                                }}
-                              />
-                            </div>
-                          </TableHeaderCell>
-                        ))}
-                      </TableRow>
-                    ))}
-                  </TableHead>
-                  <TableBody>
-                    {isLoading || isFetching ? (
-                      <TableRow>
-                        <TableCell colSpan={columns.length} className="h-8 text-center">
-                          <div className="text-center text-gray-500">
-                            <p>Loading keys...</p>
-                          </div>
-                        </TableCell>
-                      </TableRow>
-                    ) : displayKeys.length > 0 ? (
-                      table.getRowModel().rows.map((row) => (
-                        <TableRow key={row.id} className="h-8">
-                          {row.getVisibleCells().map((cell) => (
-                            <TableCell
-                              key={cell.id}
-                              style={{
-                                width: cell.column.getSize(),
-                                maxWidth: "8-x",
-                                whiteSpace: "pre-wrap",
-                                overflow: "hidden",
-                              }}
-                              className={`py-0.5 max-h-8 overflow-hidden text-ellipsis whitespace-nowrap ${
-                                cell.column.id === "models" &&
-                                Array.isArray(cell.getValue()) &&
-                                (cell.getValue() as string[]).length > 3
-                                  ? "px-0"
-                                  : ""
-                              }`}
-                            >
-                              {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                            </TableCell>
-                          ))}
-                        </TableRow>
-                      ))
-                    ) : (
-                      <TableRow>
-                        <TableCell colSpan={columns.length} className="h-8 text-center">
-                          <div className="text-center text-gray-500">
-                            <p>No keys found</p>
-                          </div>
-                        </TableCell>
-                      </TableRow>
-                    )}
-                  </TableBody>
-                </Table>
-              </div>
-            </div>
-          </div>
+                  {({ get, set }) => (
+                    <>
+                      <DataTableFilterField label={t("teams.virtualKeysTable.filters.userId")}>
+                        <Input
+                          value={(get("user_id") as string) ?? ""}
+                          onChange={(event) => set("user_id", event.target.value)}
+                          placeholder={t("teams.virtualKeysTable.filters.userIdPlaceholder")}
+                        />
+                      </DataTableFilterField>
+                      <DataTableFilterField label={t("teams.virtualKeysTable.filters.keyId")}>
+                        <Input
+                          value={(get("key_hash") as string) ?? ""}
+                          onChange={(event) => set("key_hash", event.target.value)}
+                          placeholder={t("teams.virtualKeysTable.filters.keyIdPlaceholder")}
+                        />
+                      </DataTableFilterField>
+                    </>
+                  )}
+                </DataTableFilterDrawer>
+              </>
+            )}
+          />
         </div>
       )}
     </div>

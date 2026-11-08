@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from typing import Final
+
 from fastapi import status
 
+from litellm.constants import INVALID_API_KEY_ERROR_MESSAGE
 from litellm.proxy._types import ProxyErrorTypes, ProxyException
 
 
@@ -11,16 +14,12 @@ class IdentityResolutionError(Exception):
 
 class NoDatabaseConnectionError(IdentityResolutionError):
     def __init__(self) -> None:
-        super().__init__(
-            "No DB Connected. See - https://docs.litellm.ai/docs/proxy/virtual_keys"
-        )
+        super().__init__("No DB Connected. See - https://docs.litellm.ai/docs/proxy/virtual_keys")
 
 
 class KeyNotInCacheError(IdentityResolutionError):
     def __init__(self, hashed_token: str) -> None:
-        super().__init__(
-            f"Key doesn't exist in cache + check_cache_only=True. key={hashed_token}."
-        )
+        super().__init__(f"Key doesn't exist in cache + check_cache_only=True. key={hashed_token}.")
 
 
 class KeyNotFoundError(IdentityResolutionError, ProxyException):
@@ -31,11 +30,10 @@ class KeyNotFoundError(IdentityResolutionError, ProxyException):
     """
 
     def __init__(self, hashed_token: str) -> None:
+        self.hashed_token: Final = hashed_token
         ProxyException.__init__(
             self,
-            message="Authentication Error, Invalid proxy server token passed. key={}, not found in db. Create key via `/key/generate` call.".format(
-                hashed_token
-            ),
+            message=INVALID_API_KEY_ERROR_MESSAGE,
             type=ProxyErrorTypes.token_not_found_in_db,
             param="key",
             code=status.HTTP_401_UNAUTHORIZED,
@@ -44,7 +42,4 @@ class KeyNotFoundError(IdentityResolutionError, ProxyException):
 
 class PrincipalMissingSourceKeyError(IdentityResolutionError):
     def __init__(self) -> None:
-        super().__init__(
-            "Principal carries no source key; it was not produced by "
-            "IdentityStore.resolve"
-        )
+        super().__init__("Principal carries no source key; it was not produced by IdentityStore.resolve")

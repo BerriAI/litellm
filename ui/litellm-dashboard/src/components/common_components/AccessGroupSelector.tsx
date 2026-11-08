@@ -1,8 +1,10 @@
 import React from "react";
-import { Select, Skeleton } from "antd";
-import { TeamOutlined } from "@ant-design/icons";
-import { Text } from "@tremor/react";
+import { useTranslation } from "react-i18next";
+import { Users } from "lucide-react";
+import { Skeleton } from "@/components/ui/skeleton";
+import { MultiSelect, type MultiSelectOption } from "@/components/shared/MultiSelect";
 import { useAccessGroups, AccessGroupResponse } from "@/app/(dashboard)/hooks/accessGroups/useAccessGroups";
+import i18n from "@/i18n/i18n";
 
 export interface AccessGroupSelectorProps {
   value?: string[];
@@ -13,8 +15,6 @@ export interface AccessGroupSelectorProps {
   className?: string;
   showLabel?: boolean;
   labelText?: string;
-  /** Allow clearing the selection */
-  allowClear?: boolean;
 }
 
 /**
@@ -23,19 +23,18 @@ export interface AccessGroupSelectorProps {
  * - Displays the **access_group_name** in the dropdown.
  * - Returns an array of **access_group_id** values.
  * - Always multi-select since users can assign multiple access groups.
- * - Integrates with Ant Design `<Form.Item>` out of the box via `value` / `onChange`.
  */
 const AccessGroupSelector: React.FC<AccessGroupSelectorProps> = ({
   value,
   onChange,
-  placeholder = "Select access groups",
+  placeholder = i18n.t("accessGroupSelector.placeholder"),
   disabled = false,
   style,
   className,
   showLabel = false,
-  labelText = "Access Group",
-  allowClear = true,
+  labelText = i18n.t("accessGroupSelector.label"),
 }) => {
+  const { t } = useTranslation();
   const { data: accessGroups, isLoading, isError } = useAccessGroups();
 
   // ── Loading skeleton ─────────────────────────────────────────────────────
@@ -43,60 +42,41 @@ const AccessGroupSelector: React.FC<AccessGroupSelectorProps> = ({
     return (
       <div>
         {showLabel && (
-          <Text className="font-medium block mb-2 text-gray-700 flex items-center">
-            <TeamOutlined className="mr-2" /> {labelText}
-          </Text>
+          <p className="mb-2 flex items-center text-sm font-medium text-foreground">
+            <Users className="mr-2 size-4" /> {labelText}
+          </p>
         )}
-        <Skeleton.Input active block style={{ height: 32, ...style }} />
+        <Skeleton className="h-8 w-full" style={style} />
       </div>
     );
   }
 
   // ── Build options ────────────────────────────────────────────────────────
-  const options = (accessGroups ?? []).map((group: AccessGroupResponse) => ({
-    label: (
-      <span>
-        <span className="font-medium">{group.access_group_name}</span>{" "}
-        <span className="text-gray-400 text-xs">({group.access_group_id})</span>
-      </span>
-    ),
+  const options: MultiSelectOption[] = (accessGroups ?? []).map((group: AccessGroupResponse) => ({
+    label: group.access_group_name,
     value: group.access_group_id,
-    selectedLabel: group.access_group_name,
-    searchText: `${group.access_group_name} ${group.access_group_id}`,
+    description: group.access_group_id,
   }));
 
   // ── Render ───────────────────────────────────────────────────────────────
   return (
     <div>
       {showLabel && (
-        <Text className="font-medium block mb-2 text-gray-700 flex items-center">
-          <TeamOutlined className="mr-2" /> {labelText}
-        </Text>
+        <p className="mb-2 flex items-center text-sm font-medium text-foreground">
+          <Users className="mr-2 size-4" /> {labelText}
+        </p>
       )}
-      <Select
-        mode="multiple"
-        value={value}
-        placeholder={placeholder}
-        onChange={onChange}
-        disabled={disabled}
-        allowClear={allowClear}
-        showSearch
-        style={{ width: "100%", ...style }}
-        className={`rounded-md ${className ?? ""}`}
-        notFoundContent={
-          isError ? <span className="text-red-500">Failed to load access groups</span> : "No access groups found"
-        }
-        filterOption={(input, option) => {
-          const searchText = options.find((opt) => opt.value === option?.value)?.searchText ?? "";
-          return searchText.toLowerCase().includes(input.toLowerCase());
-        }}
-        optionLabelProp="selectedLabel"
-        options={options.map((opt) => ({
-          label: opt.label,
-          value: opt.value,
-          selectedLabel: opt.selectedLabel,
-        }))}
-      />
+      <div style={style}>
+        <MultiSelect
+          options={options}
+          value={value}
+          onValueChange={onChange ?? (() => {})}
+          placeholder={placeholder}
+          emptyText={isError ? t("accessGroupSelector.loadFailed") : t("accessGroupSelector.empty")}
+          disabled={disabled}
+          className={`w-full rounded-md ${className ?? ""}`}
+        />
+      </div>
     </div>
   );
 };

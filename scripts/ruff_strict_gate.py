@@ -1,10 +1,17 @@
 #!/usr/bin/env python3
-"""Total-count gate for the strict ruff rules in ruff-strict.toml.
+"""Delta-vs-base gate for the strict ruff rules in ruff-strict.toml.
 
-Each rule has a hard ceiling (baseline + slack) in ruff-strict-budget.json. The
-gate counts each rule across the whole tree and fails when a rule is both over
-its ceiling and higher than the base it merges into, so a change is blamed for
-the violations it adds, never for drift that already exists in the base.
+Each rule is counted across the whole tree at HEAD and at the merge-base with
+the branch this change merges into, and the gate fails only when a rule grew
+past the merge-base count, so a change is blamed for the violations it adds,
+never for drift that already sits in the base. There is no committed budget: the merge-base count is the
+ceiling, so it moves only when the base branch does.
+
+The merge-base counts come from scripts/lint_base_counts.py: the disk cache,
+then the CI artifact published for that commit, then a ruff pass over a
+detached worktree at the merge-base under the current ruff configs.
+``--emit-counts-dir`` writes HEAD's counts as the file that artifact is built
+from.
 """
 
 import argparse
@@ -15,16 +22,26 @@ import subprocess
 import sys
 import tempfile
 from collections import Counter
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
-from typing import NamedTuple
+from typing import Final, NamedTuple
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
-STRICT_CONFIG = REPO_ROOT / "ruff-strict.toml"
-BUDGET_PATH = REPO_ROOT / "ruff-strict-budget.json"
-TARGET = "litellm"
-DEFAULT_BASE = "origin/litellm_internal_staging"
+from lint_base_counts import (
+    Checker,
+    base_counts_cached,
+    emit_counts,
+    evaluate,
+    head_sha,
+    resolve_base_point,
+    sha256_of,
+)
 
-_HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
+REPO_ROOT: Final = Path(__file__).resolve().parent.parent
+STRICT_CONFIG: Final = REPO_ROOT / "ruff-strict.toml"
+BASE_CONFIG: Final = REPO_ROOT / "ruff.toml"
+TARGET: Final = "litellm"
+
+_HUNK: Final = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
 
 
 class Violation(NamedTuple):
@@ -33,19 +50,22 @@ class Violation(NamedTuple):
     code: str
 
 
-class Breach(NamedTuple):
-    rule: str
-    total: int
-    cap: int
-    added: int
-
-
-def _run(cmd: list, cwd: Path = REPO_ROOT) -> str:
-    proc = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
+def _run(cmd: Sequence[str], cwd: Path = REPO_ROOT) -> str:
+    proc: Final = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
     if proc.returncode not in (0, 1):
         sys.stderr.write(proc.stderr)
         raise SystemExit(f"{cmd[0]} exited {proc.returncode}")
     return proc.stdout
+
+
+def ruff_version() -> str:
+    return _run(["ruff", "--version"]).strip()
+
+
+def checker_identity(
+    strict_config: Path = STRICT_CONFIG, base_config: Path = BASE_CONFIG, version: Callable[[], str] = ruff_version
+) -> Checker:
+    return Checker("ruff-strict", (sha256_of(strict_config), sha256_of(base_config), version()))
 
 
 def _ruff_json(cwd: Path, config: Path) -> list:
@@ -56,7 +76,7 @@ def _ruff_json(cwd: Path, config: Path) -> list:
     return json.loads(raw or "[]")
 
 
-def head_violations() -> list:
+def head_violations() -> list[Violation]:
     out = []
     for item in _ruff_json(REPO_ROOT, STRICT_CONFIG):
         name = Path(item["filename"])
@@ -70,35 +90,26 @@ def head_violations() -> list:
     return out
 
 
-def count_by_rule(violations: list) -> dict:
+def count_by_rule(violations: Sequence[Violation]) -> dict[str, int]:
     return dict(Counter(v.code for v in violations))
 
 
-def base_counts(ref: str) -> dict:
-    parent = Path(tempfile.mkdtemp(prefix="ruff_base_"))
-    worktree = parent / "wt"
+def base_counts(ref: str) -> dict[str, int]:
+    parent: Final = Path(tempfile.mkdtemp(prefix="ruff_base_"))
+    worktree: Final = parent / "wt"
     try:
         _run(["git", "worktree", "add", "--detach", str(worktree), ref])
-        shutil.copy(STRICT_CONFIG, worktree / "ruff-strict.toml")
-        items = _ruff_json(worktree, worktree / "ruff-strict.toml")
+        shutil.copy(BASE_CONFIG, worktree / BASE_CONFIG.name)
+        shutil.copy(STRICT_CONFIG, worktree / STRICT_CONFIG.name)
+        items: Final = _ruff_json(worktree, worktree / STRICT_CONFIG.name)
         return dict(Counter(item["code"] for item in items))
     finally:
         _run(["git", "worktree", "remove", "--force", str(worktree)])
         shutil.rmtree(parent, ignore_errors=True)
 
 
-def evaluate(head: dict, base: dict, budget: dict) -> list:
-    breaches = []
-    for rule, spec in budget.items():
-        cap = spec["baseline"] + spec["slack"]
-        total = head.get(rule, 0)
-        if total > cap and total > base.get(rule, 0):
-            breaches.append(Breach(rule, total, cap, total - base.get(rule, 0)))
-    return sorted(breaches)
-
-
-def parse_changed_lines(diff_text: str) -> dict:
-    changed: dict = {}
+def parse_changed_lines(diff_text: str) -> dict[str, set[int]]:
+    changed: dict[str, set[int]] = {}
     path = None
     for line in diff_text.splitlines():
         if line.startswith("+++ b/"):
@@ -110,52 +121,49 @@ def parse_changed_lines(diff_text: str) -> dict:
     return changed
 
 
-def introduced(violations: list, changed: dict) -> list:
+def introduced(violations: Sequence[Violation], changed: Mapping[str, set[int]]) -> list[Violation]:
     return [v for v in violations if v.line in changed.get(v.file, set())]
 
 
 def cmd_check(base: str) -> None:
-    budget = json.loads(BUDGET_PATH.read_text())
-    head = head_violations()
-    base_point = _run(["git", "merge-base", base, "HEAD"]).strip() or base
-    breaches = evaluate(count_by_rule(head), base_counts(base_point), budget)
+    head: Final = head_violations()
+    base_point: Final = resolve_base_point(base)
+    breaches: Final = evaluate(count_by_rule(head), base_counts_cached(checker_identity(), base_point, base_counts))
     if not breaches:
-        print(f"OK: every strict rule is within its codebase ceiling (base {base})")
+        print(f"OK: no strict rule grew past its merge-base count (base {base})")
         return
-    new = introduced(
-        head,
-        parse_changed_lines(
-            _run(["git", "diff", base_point, "--unified=0", "--no-color", "--", TARGET])
-        ),
-    )
-    print(f"FAIL: strict-rule totals exceed their ceiling (base {base}):")
+    diff: Final = _run(["git", "diff", base_point, "--unified=0", "--no-color", "--", TARGET])
+    new: Final = introduced(head, parse_changed_lines(diff))
+    print(f"FAIL: strict-rule totals grew past their merge-base count (base {base}):")
     for breach in breaches:
-        print(
-            f"  {breach.rule}: total {breach.total} over cap {breach.cap} (this change added {breach.added})"
-        )
+        print(f"  {breach.rule}: total {breach.total} over ceiling {breach.ceiling} (this change added {breach.added})")
         for violation in sorted(v for v in new if v.code == breach.rule):
             print(f"    {violation.file}:{violation.line}")
     print(
-        "Reduce the new violations or remove an equal number elsewhere; the ceiling is baseline + slack in ruff-strict-budget.json."
+        "Reduce the new violations or remove an equal number elsewhere; the ceiling is the merge-base count."
     )
     raise SystemExit(1)
 
 
-def cmd_update() -> None:
-    budget = json.loads(BUDGET_PATH.read_text())
-    head = count_by_rule(head_violations())
-    for rule in budget:
-        budget[rule]["baseline"] = head.get(rule, 0)
-    BUDGET_PATH.write_text(json.dumps(budget, indent=2, sort_keys=True) + "\n")
-    print("Re-captured per-rule baselines from the current tree")
-
-
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--base", default=DEFAULT_BASE)
-    parser.add_argument("--update", action="store_true")
-    args = parser.parse_args()
-    cmd_update() if args.update else cmd_check(args.base)
+    parser: Final = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--base", help="Comparison ref (default: origin's current default branch)")
+    parser.add_argument(
+        "--emit-counts-dir",
+        type=Path,
+        help="Write HEAD's per-rule counts to this directory as a base-counts artifact instead of gating",
+    )
+    args: Final = parser.parse_args()
+    from default_branch import resolve_base_ref
+    from gate_slot_lock import held_slot
+
+    if args.emit_counts_dir is not None:
+        with held_slot():
+            emit_counts(checker_identity(), count_by_rule(head_violations()), args.emit_counts_dir, head_sha())
+        return
+    base_ref: Final = resolve_base_ref(args.base, REPO_ROOT)
+    with held_slot():
+        cmd_check(base_ref)
 
 
 if __name__ == "__main__":

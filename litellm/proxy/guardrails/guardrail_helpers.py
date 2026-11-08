@@ -1,26 +1,22 @@
 import os
 import sys
-from typing import Dict
+from typing import Final
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.proxy_server import LiteLLM_TeamTable, UserAPIKeyAuth
 from litellm.types.guardrails import *
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 
 
-def can_modify_guardrails(team_obj: Optional[LiteLLM_TeamTable]) -> bool:
+def can_modify_guardrails(team_obj: LiteLLM_TeamTable | None) -> bool:
     if team_obj is None:
         return True
 
-    team_metadata = team_obj.metadata or {}
+    team_metadata: Final = team_obj.metadata or {}
 
-    if team_metadata.get("guardrails", None) is not None and isinstance(
-        team_metadata.get("guardrails"), Dict
-    ):
+    if team_metadata.get("guardrails", None) is not None and isinstance(team_metadata.get("guardrails"), dict):
         if team_metadata.get("guardrails", {}).get("modify_guardrails", None) is False:
             return False
 
@@ -35,13 +31,13 @@ async def should_proceed_based_on_metadata(data: dict, guardrail_name: str) -> b
         if "guardrails" in data["metadata"]:
             # expect users to pass
             # guardrails: { prompt_injection: true, rail_2: false }
-            request_guardrails = data["metadata"]["guardrails"]
+            request_guardrails: Final = data["metadata"]["guardrails"]
             verbose_proxy_logger.debug(
                 "Guardrails %s passed in request - checking which to apply",
                 request_guardrails,
             )
 
-            requested_callback_names = []
+            requested_callback_names: Final = []
 
             # v1 implementation of this
             if isinstance(request_guardrails, dict):
@@ -56,16 +52,12 @@ async def should_proceed_based_on_metadata(data: dict, guardrail_name: str) -> b
                         continue
 
                     # lookup the guardrail in guardrail_name_config_map
-                    guardrail_item: GuardrailItem = litellm.guardrail_name_config_map[
-                        _guardrail_name
-                    ]
+                    guardrail_item: GuardrailItem = litellm.guardrail_name_config_map[_guardrail_name]
 
                     guardrail_callbacks = guardrail_item.callbacks
                     requested_callback_names.extend(guardrail_callbacks)
 
-                verbose_proxy_logger.debug(
-                    "requested_callback_names %s", requested_callback_names
-                )
+                verbose_proxy_logger.debug("requested_callback_names %s", requested_callback_names)
                 if guardrail_name in requested_callback_names:
                     return True
 
@@ -75,9 +67,7 @@ async def should_proceed_based_on_metadata(data: dict, guardrail_name: str) -> b
     return True
 
 
-async def should_proceed_based_on_api_key(
-    user_api_key_dict: UserAPIKeyAuth, guardrail_name: str
-) -> bool:
+async def should_proceed_based_on_api_key(user_api_key_dict: UserAPIKeyAuth, guardrail_name: str) -> bool:
     """
     checks if this guardrail should be applied to this call
     """
@@ -105,9 +95,7 @@ async def should_proceed_based_on_api_key(
                 continue
 
             # lookup the guardrail in guardrail_name_config_map
-            guardrail_item: GuardrailItem = litellm.guardrail_name_config_map[
-                _guardrail_name
-            ]
+            guardrail_item: GuardrailItem = litellm.guardrail_name_config_map[_guardrail_name]
 
             guardrail_callbacks = guardrail_item.callbacks
             if guardrail_name in guardrail_callbacks:

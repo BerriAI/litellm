@@ -7,17 +7,19 @@ this hook manages:
 2. Checking incoming requests for existing routing overrides
 3. Applying sticky routing so all subsequent requests in a session go to the same model
 
-Works across multiple proxy instances via DualCache (in-memory + Redis).
+Works across multiple proxy instances via the native sensitive route pin store (in-memory + Redis).
 """
 
 import os
-from typing import TYPE_CHECKING, Any, Optional, Union
+from typing import TYPE_CHECKING, Any, Final
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_guardrail import get_session_id_from_request_data
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.redis.stores.connection import connect
+from litellm.redis.stores.sensitive_route_pins import SensitiveRoutePinStore
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import InternalUsageCache as _InternalUsageCache
@@ -27,8 +29,7 @@ else:
     InternalUsageCache = Any
 
 
-SENSITIVE_ROUTING_CACHE_PREFIX = "sensitive_route"
-DEFAULT_SENSITIVE_ROUTING_TTL = 3600
+DEFAULT_SENSITIVE_ROUTING_TTL: Final = 3600
 
 
 class _PROXY_SensitiveDataRoutingHandler(CustomLogger):
@@ -40,8 +41,10 @@ class _PROXY_SensitiveDataRoutingHandler(CustomLogger):
     model field if a routing override exists for the session.
     """
 
-    def __init__(self, internal_usage_cache: InternalUsageCache):
-        self.internal_usage_cache = internal_usage_cache
+    def __init__(self, internal_usage_cache: InternalUsageCache, route_pins: SensitiveRoutePinStore | None = None):
+        self.route_pins: Final = route_pins or SensitiveRoutePinStore(
+            connect(internal_usage_cache.dual_cache.redis_cache).sensitive_route_pins()
+        )
         self.ttl = int(
             os.getenv(
                 "LITELLM_SENSITIVE_ROUTING_TTL",
@@ -49,11 +52,8 @@ class _PROXY_SensitiveDataRoutingHandler(CustomLogger):
             )
         )
 
-    def _make_cache_key(self, session_id: str, tenant: str) -> str:
-        return f"{{{SENSITIVE_ROUTING_CACHE_PREFIX}:{tenant}:{session_id}}}:model"
-
     @staticmethod
-    def _resolve_tenant(user_api_key_dict: Optional[UserAPIKeyAuth]) -> str:
+    def _resolve_tenant(user_api_key_dict: UserAPIKeyAuth | None) -> str:
         """
         Identify the authenticated principal the routing override belongs to.
 
@@ -66,7 +66,7 @@ class _PROXY_SensitiveDataRoutingHandler(CustomLogger):
             return "default"
         if user_api_key_dict.api_key:
             return user_api_key_dict.api_key
-        principal = [
+        principal: Final = [
             f"{label}:{value}"
             for label, value in (
                 ("user", user_api_key_dict.user_id),
@@ -77,53 +77,16 @@ class _PROXY_SensitiveDataRoutingHandler(CustomLogger):
         ]
         return "|".join(principal) if principal else "default"
 
-    async def _get_routed_model(
-        self, session_id: str, user_api_key_dict: Optional[UserAPIKeyAuth]
-    ) -> Optional[str]:
+    async def _get_routed_model(self, session_id: str, user_api_key_dict: UserAPIKeyAuth | None) -> str | None:
         """Get the model this session should be routed to, if any."""
-        cache_key = self._make_cache_key(
-            session_id, self._resolve_tenant(user_api_key_dict)
-        )
-
-        if self.internal_usage_cache.dual_cache.redis_cache is not None:
-            try:
-                result = await self.internal_usage_cache.dual_cache.redis_cache.async_get_cache(
-                    key=cache_key
-                )
-                if result is not None:
-                    routed_model = str(result)
-                    remaining_ttl = await self.internal_usage_cache.dual_cache.redis_cache.async_get_ttl(
-                        key=cache_key
-                    )
-                    await self.internal_usage_cache.async_set_cache(
-                        key=cache_key,
-                        value=routed_model,
-                        ttl=remaining_ttl if remaining_ttl is not None else self.ttl,
-                        litellm_parent_otel_span=None,
-                        local_only=True,
-                    )
-                    return routed_model
-            except Exception as e:
-                verbose_proxy_logger.warning(
-                    "SensitiveDataRoutingHandler: Redis GET failed, falling back to in-memory: %s",
-                    str(e),
-                )
-
-        result = await self.internal_usage_cache.async_get_cache(
-            key=cache_key,
-            litellm_parent_otel_span=None,
-            local_only=True,
-        )
-        if result is not None:
-            return str(result)
-        return None
+        return await self.route_pins.get(self._resolve_tenant(user_api_key_dict), session_id, self.ttl)
 
     async def set_session_routing(
         self,
         session_id: str,
         model: str,
-        user_api_key_dict: Optional[UserAPIKeyAuth] = None,
-        guardrail_name: Optional[str] = None,
+        user_api_key_dict: UserAPIKeyAuth | None = None,
+        guardrail_name: str | None = None,
     ) -> None:
         """
         Store a routing override for a session.
@@ -132,10 +95,6 @@ class _PROXY_SensitiveDataRoutingHandler(CustomLogger):
         route the session to a specific model. The override is scoped to the
         requesting principal so sessions from different tenants cannot collide.
         """
-        cache_key = self._make_cache_key(
-            session_id, self._resolve_tenant(user_api_key_dict)
-        )
-
         verbose_proxy_logger.info(
             "SensitiveDataRoutingHandler: Setting session routing session_id=%s model=%s guardrail=%s ttl=%s",
             session_id,
@@ -143,27 +102,7 @@ class _PROXY_SensitiveDataRoutingHandler(CustomLogger):
             guardrail_name,
             self.ttl,
         )
-
-        if self.internal_usage_cache.dual_cache.redis_cache is not None:
-            try:
-                await self.internal_usage_cache.dual_cache.redis_cache.async_set_cache(
-                    key=cache_key,
-                    value=model,
-                    ttl=self.ttl,
-                )
-            except Exception as e:
-                verbose_proxy_logger.warning(
-                    "SensitiveDataRoutingHandler: Redis SET failed, falling back to in-memory: %s",
-                    str(e),
-                )
-
-        await self.internal_usage_cache.async_set_cache(
-            key=cache_key,
-            value=model,
-            ttl=self.ttl,
-            litellm_parent_otel_span=None,
-            local_only=True,
-        )
+        await self.route_pins.set(self._resolve_tenant(user_api_key_dict), session_id, model, self.ttl)
 
     async def async_pre_call_hook(
         self,
@@ -171,20 +110,20 @@ class _PROXY_SensitiveDataRoutingHandler(CustomLogger):
         cache: DualCache,
         data: dict,
         call_type: str,
-    ) -> Optional[Union[Exception, str, dict]]:
+    ) -> Exception | str | dict | None:
         """
         Before each LLM call, check if this session has a routing override.
         If so, modify the request's model field.
         """
-        session_id = get_session_id_from_request_data(data)
+        session_id: Final = get_session_id_from_request_data(data)
         if session_id is None:
             return None
 
-        routed_model = await self._get_routed_model(session_id, user_api_key_dict)
+        routed_model: Final = await self._get_routed_model(session_id, user_api_key_dict)
         if routed_model is None:
             return None
 
-        original_model = data.get("model")
+        original_model: Final = data.get("model")
         if original_model == routed_model:
             return None
 
@@ -198,9 +137,12 @@ class _PROXY_SensitiveDataRoutingHandler(CustomLogger):
 
         data["model"] = routed_model
 
-        metadata = data.get("metadata") or {}
+        metadata: Final = data.get("metadata") or {}
         metadata["sensitive_data_routing_applied"] = True
         metadata["sensitive_data_routing_original_model"] = original_model
         data["metadata"] = metadata
 
         return data
+
+
+PROXY_SensitiveDataRoutingHandler: Final = _PROXY_SensitiveDataRoutingHandler

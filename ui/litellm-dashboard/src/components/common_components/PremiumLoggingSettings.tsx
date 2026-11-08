@@ -1,6 +1,8 @@
 import React from "react";
-import { Text } from "@tremor/react";
+import { Trans } from "react-i18next";
+import { Badge } from "@/components/ui/badge";
 import LoggingSettings from "../team/LoggingSettings";
+import { codeSamples } from "@/i18n/untranslated/codeSamples";
 
 interface PremiumLoggingSettingsProps {
   value: any[];
@@ -21,22 +23,29 @@ export function PremiumLoggingSettings({
     return (
       <div>
         <div className="flex flex-wrap gap-2 mb-3">
-          <div className="inline-flex items-center px-3 py-1.5 rounded-lg bg-green-50 border border-green-200 text-green-800 text-sm font-medium opacity-50">
-            ✨ langfuse-logging
-          </div>
-          <div className="inline-flex items-center px-3 py-1.5 rounded-lg bg-green-50 border border-green-200 text-green-800 text-sm font-medium opacity-50">
-            ✨ datadog-logging
-          </div>
+          <Badge variant="secondary" className="opacity-50">
+            {codeSamples.logging.premiumLangfuse}
+          </Badge>
+          <Badge variant="secondary" className="opacity-50">
+            {codeSamples.logging.premiumDatadog}
+          </Badge>
         </div>
-        <div className="p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
-          <Text className="text-sm text-yellow-800">
-            Setting Key/Team logging settings is a LiteLLM Enterprise feature. Global Logging Settings are available for
-            all free users. Get a trial key{" "}
-            <a href="https://www.litellm.ai/#pricing" target="_blank" rel="noopener noreferrer" className="underline">
-              here
-            </a>
-            .
-          </Text>
+        <div className="p-3 bg-muted border border-border rounded-lg">
+          <p className="text-sm text-muted-foreground">
+            <Trans
+              i18nKey="premiumLoggingSettings.enterpriseNotice"
+              components={{
+                docs: (
+                  <a
+                    href="https://www.litellm.ai/#pricing"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="underline"
+                  />
+                ),
+              }}
+            />
+          </p>
         </div>
       </div>
     );

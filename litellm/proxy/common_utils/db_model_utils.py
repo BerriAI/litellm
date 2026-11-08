@@ -1,77 +1,45 @@
-"""Utilities for loading models from the proxy database."""
-
-from __future__ import annotations
-
-import logging
 from collections import deque
-from typing import Any, List, Optional
+from collections.abc import Mapping, Sequence
+from typing import Final
 
-logger = logging.getLogger("litellm.proxy.server")
+from pydantic import BaseModel, TypeAdapter
 
+from litellm._logging import verbose_proxy_logger
 
-def _blank_if_env_ref(value: str, path: str, team_id: str) -> str:
-    logger.warning(
-        "Ignoring os.environ/ reference in team-scoped DB model "
-        "(key=%s, team_id=%s) -- team admins cannot reference proxy "
-        "environment variables.",
-        path,
-        team_id,
-    )
-    return ""
-
-
-def _process_list(items: list, path: str, team_id: str, work: deque) -> list:
-    """Build result list; push nested dicts onto work queue for deferred fill."""
-    out: List[Any] = []
-    for i, item in enumerate(items):
-        item_path = f"{path}[{i}]"
-        if isinstance(item, str) and item.startswith("os.environ/"):
-            out.append(_blank_if_env_ref(item, item_path, team_id))
-        elif isinstance(item, dict):
-            child: dict = {}
-            out.append(child)
-            work.append((item, child, item_path))
-        elif isinstance(item, list):
-            out.append(_process_list(item, item_path, team_id, work))
-        else:
-            out.append(item)
-    return out
-
-
-def _strip_env_refs_iterative(params: dict, team_id: str) -> dict:
-    result: dict = {}
-    work: deque = deque()
-    work.append((params, result, "root"))
-    while work:
-        src, dst, path = work.popleft()
-        for key, value in src.items():
-            key_path = f"{path}.{key}" if path != "root" else key
-            if isinstance(value, str) and value.startswith("os.environ/"):
-                dst[key] = _blank_if_env_ref(value, key_path, team_id)
-            elif isinstance(value, dict):
-                child: dict = {}
-                dst[key] = child
-                work.append((value, child, key_path))
-            elif isinstance(value, list):
-                dst[key] = _process_list(value, key_path, team_id, work)
-            else:
-                dst[key] = value
-    return result
+_MAPPING: Final = TypeAdapter(Mapping[str, object])
+_SEQUENCE: Final = TypeAdapter(Sequence[object])
 
 
 def strip_env_refs_for_team_model(
-    litellm_params: dict,
-    model_info: Optional[dict],
-) -> dict:
-    """Remove os.environ/ references from team-scoped DB model litellm_params.
+    litellm_params: Mapping[str, object], model_info: Mapping[str, object] | BaseModel | None
+) -> Mapping[str, object]:
+    info: Final = model_info.model_dump() if isinstance(model_info, BaseModel) else model_info
+    if info is None or info.get("team_id") is None:
+        return litellm_params
 
-    Only proxy-admin-created models (team_id is None) and config.yaml models
-    may use os.environ/ expansion.  For team-scoped DB models the reference
-    is replaced with an empty string and a warning is logged.
-    """
-    if model_info is None:
-        return litellm_params
-    team_id = model_info.get("team_id") if isinstance(model_info, dict) else None
-    if team_id is None:
-        return litellm_params
-    return _strip_env_refs_iterative(litellm_params, team_id)
+    result: Final = dict[str, object]()
+    pending: Final = deque[tuple[Mapping[str, object] | Sequence[object], dict[str, object] | list[object]]](
+        ((litellm_params, result),)
+    )
+
+    def copy_value(value: object) -> object:
+        if isinstance(value, str) and value.startswith("os.environ/"):
+            verbose_proxy_logger.warning("Ignoring a proxy setting reference in scoped model parameters")
+            return ""
+        if isinstance(value, dict):
+            child: Final = dict[str, object]()
+            pending.append((_MAPPING.validate_python(value), child))
+            return child
+        if isinstance(value, list):
+            items: Final = list[object]()
+            pending.append((_SEQUENCE.validate_python(value), items))
+            return items
+        return value
+
+    while pending:
+        source, target = pending.popleft()
+        if isinstance(source, Mapping) and isinstance(target, dict):
+            target.update((key, copy_value(value)) for key, value in source.items())
+        elif isinstance(source, Sequence) and isinstance(target, list):
+            target.extend(copy_value(value) for value in source)
+    return result

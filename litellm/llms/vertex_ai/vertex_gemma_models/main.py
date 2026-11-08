@@ -19,9 +19,10 @@ The API expects a custom endpoint URL format:
 https://{ENDPOINT_NUMBER}.{location}-{REGION_NUMBER}.prediction.vertexai.goog/v1/projects/{PROJECT_ID}/locations/{location}/endpoints/{ENDPOINT_ID}:predict
 """
 
-from typing import Callable, Optional, Union
+from collections.abc import Callable
+from typing import Final
 
-import httpx  # type: ignore
+import httpx
 
 from litellm.utils import ModelResponse
 
@@ -41,11 +42,11 @@ class VertexAIGemmaModels(VertexBase):
         print_verbose: Callable,
         encoding,
         logging_obj,
-        api_base: Optional[str],
+        api_base: str | None,
         optional_params: dict,
         custom_prompt_dict: dict,
-        headers: Optional[dict],
-        timeout: Union[float, httpx.Timeout],
+        headers: dict | None,
+        timeout: float | httpx.Timeout,
         litellm_params: dict,
         vertex_project=None,
         vertex_location=None,
@@ -71,9 +72,7 @@ class VertexAIGemmaModels(VertexBase):
                 message=f"""vertexai import failed please run `pip install -U "google-cloud-aiplatform>=1.38"`. Got error: {e}""",
             )
 
-        if not (
-            hasattr(vertexai, "preview") or hasattr(vertexai.preview, "language_models")
-        ):
+        if not (hasattr(vertexai, "preview") or hasattr(vertexai.preview, "language_models")):
             raise VertexAIError(
                 status_code=400,
                 message="""Upgrade vertex ai. Run `pip install "google-cloud-aiplatform>=1.38"`""",
@@ -87,10 +86,10 @@ class VertexAIGemmaModels(VertexBase):
                 custom_llm_provider="vertex_ai",
             )
 
-            gemma_transformation = VertexGemmaConfig()
+            gemma_transformation: Final = VertexGemmaConfig()
 
             ## CONSTRUCT API BASE
-            stream: bool = optional_params.get("stream", False) or False
+            stream: Final[bool] = optional_params.get("stream", False) or False
             optional_params["stream"] = stream
 
             # If api_base is not provided, it should be set as an environment variable
