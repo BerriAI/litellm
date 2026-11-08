@@ -165,6 +165,7 @@ from litellm.proxy.vector_store_endpoints.utils import (
     assert_user_can_access_vector_store,
     assert_vector_store_index_access,
     get_litellm_managed_vector_store,
+    has_vector_store_index_access,
     is_allowed_to_call_vector_store_endpoint,
     normalize_litellm_params,
 )
@@ -1167,6 +1168,7 @@ async def opensearch_proxy_route(  # noqa: ANN201  # returns create_pass_through
         query=tuple(request.query_params.multi_items()),
         body=await request.body(),
         store_params=store_params,
+        can_read=has_vector_store_index_access(user_api_key_dict, path.index_name, "read"),
     )
     if isinstance(prepared, IndexRefusal):
         raise HTTPException(status_code=prepared.status_code, detail=prepared.message)
@@ -1180,7 +1182,7 @@ async def opensearch_proxy_route(  # noqa: ANN201  # returns create_pass_through
     )
     setattr(request.state, LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY, prepared.body)
     setattr(request.state, LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY, {})
-    safe_set_request_parsed_body(request, dict(hook_request_body(endpoint, prepared.media_type, prepared.body)))
+    safe_set_request_parsed_body(request, dict(hook_request_body(operation, prepared.body)))
     return await endpoint_func(request, fastapi_response, user_api_key_dict)
 
 

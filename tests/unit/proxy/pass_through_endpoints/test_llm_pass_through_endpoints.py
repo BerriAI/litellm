@@ -10322,6 +10322,84 @@ class TestOpenSearchProxyRoute:
         assert _verified_sigv4_scope(route.calls.last.request) == ("aoss", "us-east-1")
 
     @pytest.mark.parametrize(
+        "path, body, status_code",
+        [
+            pytest.param("_update/1", b'{"doc":{},"_source":true}', 403, id="update-body-source"),
+            pytest.param("_update/1?_source=text", b'{"doc":{"title":"b"}}', 403, id="update-source-param"),
+            pytest.param(
+                "_update/1",
+                b'{"script":{"source":"throw new IllegalArgumentException(ctx._source.text)"}}',
+                403,
+                id="update-script",
+            ),
+            pytest.param("_update/1", b'{"doc":{} /* c */ ,"_source":true}', 400, id="update-body-json-with-comment"),
+            pytest.param("_bulk", b'{"update":{"_id":"1","_source":true}}\n{"doc":{}}\n', 403, id="bulk-action-source"),
+            pytest.param(
+                "_bulk",
+                b'{"index":{"_id":"2"}}\n{"title":"a"}\n{"update":{"_id":"1"}}\n{"doc":{},"_source":true}\n',
+                403,
+                id="bulk-update-payload-source",
+            ),
+            pytest.param("_bulk?_source_includes=text", b'{"update":{"_id":"1"}}\n{"doc":{}}\n', 403, id="bulk-param"),
+            pytest.param("_delete_by_query", b'{"query":{"prefix":{"text":"a"}}}', 403, id="delete-by-query"),
+            pytest.param("_update_by_query", b'{"query":{"match_all":{}}}', 403, id="update-by-query"),
+        ],
+    )
+    def test_a_write_only_key_cannot_read_documents_back_through_a_write(
+        self, opensearch_client: TestClient, monkeypatch: pytest.MonkeyPatch, path: str, body: bytes, status_code: int
+    ) -> None:
+        _act_as(monkeypatch, _opensearch_caller("write"))
+        with respx.mock(assert_all_called=False) as upstream:
+            route = upstream.route(host=OPENSEARCH_HOST).mock(
+                return_value=httpx.Response(200, json={"get": {"_source": {"text": "Remote work"}}})
+            )
+            response = opensearch_client.post(
+                f"/opensearch/docs/{path}", content=body, headers={"Content-Type": NDJSON_TYPE}
+            )
+
+        assert (response.status_code, route.called) == (status_code, False)
+        assert "Remote work" not in response.text
+
+    @pytest.mark.parametrize(
+        "caller, path, body",
+        [
+            pytest.param(
+                _opensearch_caller("write"), "_update/1", b'{"doc":{"script":"a field","_source":"b"}}', id="write-only"
+            ),
+            pytest.param(
+                _opensearch_caller("read", "write"), "_update/1?_source=text", b'{"doc":{},"_source":true}', id="update"
+            ),
+            pytest.param(
+                _opensearch_caller("read", "write"),
+                "_bulk",
+                b'{"update":{"_id":"1","_source":true}}\n{"doc":{},"script":{"source":"ctx._source.n += 1"}}\n',
+                id="bulk",
+            ),
+            pytest.param(
+                _opensearch_caller("read", "write"), "_delete_by_query", b'{"query":{"term":{"a":1}}}', id="by-query"
+            ),
+        ],
+    )
+    def test_a_write_that_reads_no_document_or_has_the_read_grant_is_sent_as_is(
+        self,
+        opensearch_client: TestClient,
+        monkeypatch: pytest.MonkeyPatch,
+        caller: UserAPIKeyAuth,
+        path: str,
+        body: bytes,
+    ) -> None:
+        _act_as(monkeypatch, caller)
+        with respx.mock(assert_all_called=True) as upstream:
+            route = upstream.post(url__startswith=f"{DOCS_UPSTREAM}/{path.partition('?')[0]}").mock(
+                return_value=httpx.Response(200, json={"result": "updated"})
+            )
+            response = opensearch_client.post(
+                f"/opensearch/docs/{path}", content=body, headers={"Content-Type": NDJSON_TYPE}
+            )
+
+        assert (response.status_code, route.calls.last.request.content) == (200, body)
+
+    @pytest.mark.parametrize(
         "caller, index_name",
         [
             (_opensearch_caller("read", "write", index_name="hr"), "docs"),
@@ -10836,8 +10914,13 @@ class TestOpenSearchProxyRoute:
         assert sent.url.query == sent_query
         assert _verified_sigv4_scope(sent) == ("aoss", "us-east-1")
 
+    @pytest.mark.parametrize(
+        "path, content_type",
+        [("_doc", JSON_TYPE), ("_doc", NDJSON_TYPE), ("_doc/_bulk", JSON_TYPE)],
+        ids=["json", "ndjson-content-type", "document-id-named-bulk"],
+    )
     def test_a_pre_call_hook_sees_the_body_that_is_sent_and_not_its_custom_body_key(
-        self, opensearch_client: TestClient, monkeypatch: pytest.MonkeyPatch
+        self, opensearch_client: TestClient, monkeypatch: pytest.MonkeyPatch, path: str, content_type: str
     ) -> None:
         class BlockPayroll(CustomLogger):
             async def async_pre_call_hook(
@@ -10856,9 +10939,9 @@ class TestOpenSearchProxyRoute:
         with respx.mock(assert_all_called=False) as upstream:
             route = upstream.route(host=OPENSEARCH_HOST).mock(return_value=httpx.Response(201, json={}))
             response = opensearch_client.post(
-                "/opensearch/docs/_doc",
+                f"/opensearch/docs/{path}",
                 content=b'{"title":"hr payroll","custom_body":{"title":"lunch menu"}}',
-                headers={"Content-Type": JSON_TYPE},
+                headers={"Content-Type": content_type},
             )
 
         assert (response.status_code, route.called) == (400, False)

@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 
 IndexHttpMethod: TypeAlias = Literal["GET", "HEAD", "POST", "PUT", "DELETE", "PATCH"]
 IndexPermission: TypeAlias = Literal["read", "write"]
-BodyKind: TypeAlias = Literal["query", "msearch", "mget", "bulk", "unscanned"]
+BodyKind: TypeAlias = Literal["query", "msearch", "mget", "bulk", "update", "unscanned"]
 
 DEFAULT_CONTENT_TYPE: Final = "application/json"
 NDJSON_CONTENT_TYPE: Final = "application/x-ndjson"
@@ -27,6 +27,7 @@ _OUT_OF_INDEX_KEYS: Final = _INDEX_KEYS | {"indexed_shape", "wrapper", "search_p
 _BULK_METADATA_KEYS: Final = _INDEX_KEYS | {"pipeline"}
 _OUT_OF_INDEX_QUERY_PARAMETERS: Final = frozenset({"pipeline", "source", "source_content_type"})
 _BULK_ACTIONS: Final = frozenset({"index", "create", "update", "delete"})
+_DOCUMENT_READING_KEYS: Final = frozenset({"_source", "script"})
 _JSON_BLANK: Final = b" \t\r\n"
 _PATH_HELP: Final = "Use /opensearch/<index>/<api>, for example /opensearch/<index>/_search."
 
@@ -69,7 +70,7 @@ INDEX_OPERATIONS: Final = (
     IndexOperation("write", ("POST",), "_doc", False, "unscanned"),
     IndexOperation("write", ("PUT", "POST", "DELETE"), "_doc", True, "unscanned"),
     IndexOperation("write", ("PUT", "POST"), "_create", True, "unscanned"),
-    IndexOperation("write", ("POST",), "_update", True, "unscanned"),
+    IndexOperation("write", ("POST",), "_update", True, "update"),
     IndexOperation("write", ("POST", "PUT"), "_bulk", False, "bulk"),
     IndexOperation("write", ("POST",), "_delete_by_query", False, "query"),
     IndexOperation("write", ("POST",), "_update_by_query", False, "query"),
@@ -84,16 +85,11 @@ INDEX_OPERATIONS: Final = (
 )
 
 
-_NDJSON_APIS: Final = frozenset(
-    operation.api for operation in INDEX_OPERATIONS if operation.body in ("bulk", "msearch")
-)
-
-
 _JSON_OBJECT_BODY: Final = TypeAdapter(dict[str, object])
 
 
-def hook_request_body(route: str, media_type: str, body: bytes) -> Mapping[str, object]:
-    if media_type == NDJSON_CONTENT_TYPE or route.rpartition("/")[2] in _NDJSON_APIS:
+def hook_request_body(operation: IndexOperation | None, body: bytes) -> Mapping[str, object]:
+    if operation is not None and operation.body in ("bulk", "msearch"):
         return {}
     try:
         return _JSON_OBJECT_BODY.validate_json(body)
@@ -130,9 +126,10 @@ class _BulkAction:
 
 
 @dataclass(frozen=True, slots=True)
-class _BulkIndex:
+class _IndexScope:
     name: str
     provider_name: str
+    can_read: bool
 
 
 def _json_object(pairs: Sequence[tuple[str, object]]) -> _JsonObject:
@@ -199,6 +196,24 @@ def _index_reference(value: object, forbidden: frozenset[str]) -> IndexRefusal |
     )
 
 
+def _read_needed(cause: str, index_name: str) -> IndexRefusal:
+    return IndexRefusal(
+        403,
+        f"{cause}, so the key needs read on index '{index_name}' as well as write. "
+        "Ask your administrator to add read to the key or its team.",
+    )
+
+
+def _document_reading_payload(api: str, payload: bytes, index: _IndexScope) -> IndexRefusal | None:
+    if index.can_read:
+        return None
+    parsed: Final = _parse(payload)
+    if parsed is None:
+        return _unparseable(api)
+    key: Final = next((key for key in _own_keys(parsed.value) if key in _DOCUMENT_READING_KEYS), None)
+    return None if key is None else _read_needed(f"'{key}' in an {api} body reads stored documents", index.name)
+
+
 def _line_refusal(api: str, line: bytes, forbidden: frozenset[str]) -> IndexRefusal | None:
     parsed: Final = _parse(line)
     if parsed is None:
@@ -213,7 +228,7 @@ def _whole_body_refusal(api: str, body: bytes) -> IndexRefusal | None:
 
 
 def _pinned_index(
-    metadata: _JsonObject, key: str, forbidden: frozenset[str], index: _BulkIndex, line_kind: str
+    metadata: _JsonObject, key: str, forbidden: frozenset[str], index: _IndexScope, line_kind: str
 ) -> _JsonObject | IndexRefusal | None:
     unnamed: Final = _JsonObject(tuple(pair for pair in metadata.pairs if pair[0] != key))
     refusal: Final = _index_reference(unnamed, forbidden)
@@ -231,7 +246,7 @@ def _pinned_index(
     return _JsonObject(tuple((name, index.provider_name if name == key else value) for name, value in metadata.pairs))
 
 
-def _msearch_header(line: bytes, index: _BulkIndex) -> bytes | IndexRefusal:
+def _msearch_header(line: bytes, index: _IndexScope) -> bytes | IndexRefusal:
     if not line.strip(_JSON_BLANK):
         return line
     parsed: Final = _parse(line)
@@ -245,7 +260,7 @@ def _msearch_header(line: bytes, index: _BulkIndex) -> bytes | IndexRefusal:
     return pinned if isinstance(pinned, IndexRefusal) else _object_json(pinned.pairs).encode()
 
 
-def _msearch_entry(header: bytes, lines: Iterator[bytes], index: _BulkIndex) -> tuple[bytes | IndexRefusal, ...]:
+def _msearch_entry(header: bytes, lines: Iterator[bytes], index: _IndexScope) -> tuple[bytes | IndexRefusal, ...]:
     rendered: Final = _msearch_header(header, index)
     query: Final = None if isinstance(rendered, IndexRefusal) else next(lines, None)
     if query is None:
@@ -254,7 +269,7 @@ def _msearch_entry(header: bytes, lines: Iterator[bytes], index: _BulkIndex) -> 
     return (rendered, refusal or query)
 
 
-def _msearch_lines(lines: Iterator[bytes], index: _BulkIndex) -> Iterator[bytes | IndexRefusal]:
+def _msearch_lines(lines: Iterator[bytes], index: _IndexScope) -> Iterator[bytes | IndexRefusal]:
     for header in lines:
         yield from (entry := _msearch_entry(header, lines, index))
         if any(isinstance(line, IndexRefusal) for line in entry):
@@ -272,13 +287,15 @@ def _bulk_action(line: bytes) -> _BulkAction | None:
             return None
 
 
-def _bulk_action_line(action: _BulkAction | None, line: bytes, index: _BulkIndex) -> bytes | IndexRefusal:
+def _bulk_action_line(action: _BulkAction | None, line: bytes, index: _IndexScope) -> bytes | IndexRefusal:
     if action is None:
         return IndexRefusal(
             400,
             "A _bulk action line must be one JSON object naming index, create, update, or delete. "
             "LiteLLM did not send the request.",
         )
+    if not index.can_read and "_source" in _own_keys(action.metadata):
+        return _read_needed("'_source' in a _bulk action line returns stored documents", index.name)
     pinned: Final = _pinned_index(action.metadata, "_index", _BULK_METADATA_KEYS, index, "_bulk action line")
     if pinned is None:
         return line
@@ -287,7 +304,7 @@ def _bulk_action_line(action: _BulkAction | None, line: bytes, index: _BulkIndex
     return f"{{{json.dumps(action.name)}:{_object_json(pinned.pairs)}}}".encode()
 
 
-def _bulk_entry(line: bytes, lines: Iterator[bytes], index: _BulkIndex) -> tuple[bytes | IndexRefusal, ...]:
+def _bulk_entry(line: bytes, lines: Iterator[bytes], index: _IndexScope) -> tuple[bytes | IndexRefusal, ...]:
     if not line.strip(_JSON_BLANK):
         return (line,)
     action: Final = _bulk_action(line)
@@ -295,13 +312,17 @@ def _bulk_entry(line: bytes, lines: Iterator[bytes], index: _BulkIndex) -> tuple
     if isinstance(rendered, IndexRefusal) or action is None or not action.has_source:
         return (rendered,)
     source: Final = next(lines, None)
-    return (rendered,) if source is None else (rendered, source)
+    if source is None:
+        return (rendered,)
+    if action.name != "update":
+        return (rendered, source)
+    return (rendered, _document_reading_payload("_bulk update", source, index) or source)
 
 
-def _bulk_lines(lines: Iterator[bytes], index: _BulkIndex) -> Iterator[bytes | IndexRefusal]:
+def _bulk_lines(lines: Iterator[bytes], index: _IndexScope) -> Iterator[bytes | IndexRefusal]:
     for line in lines:
         yield from (entry := _bulk_entry(line, lines, index))
-        if isinstance(entry[0], IndexRefusal):
+        if any(isinstance(rendered, IndexRefusal) for rendered in entry):
             return
 
 
@@ -313,10 +334,14 @@ def _rendered_body(lines: Iterator[bytes | IndexRefusal]) -> bytes | IndexRefusa
     return b"\n".join(line for line in rendered if isinstance(line, bytes))
 
 
-def _checked_body(operation: IndexOperation, body: bytes, index: _BulkIndex) -> bytes | IndexRefusal:
+def _checked_body(operation: IndexOperation, body: bytes, index: _IndexScope) -> bytes | IndexRefusal:
     match operation.body:
+        case "query" if operation.permission == "write" and not index.can_read:
+            return _read_needed(f"{operation.api} searches stored documents", index.name)
         case "query" | "mget":
             return _whole_body_refusal(operation.api, body) or body
+        case "update":
+            return _document_reading_payload(operation.api, body, index) or body
         case "msearch":
             return _rendered_body(_msearch_lines(iter(body.split(b"\n")), index))
         case "bulk":
@@ -333,12 +358,11 @@ def accepted_media_type(content_type: str | None) -> str | None:
     return None
 
 
-def checked_request_body(
+def _checked_request_body(
     operation: IndexOperation | None,
     query: Sequence[tuple[str, str]],
     body: bytes,
-    index_name: str,
-    provider_index: str,
+    index: _IndexScope,
 ) -> bytes | IndexRefusal:
     if operation is None:
         return body
@@ -347,8 +371,11 @@ def checked_request_body(
         return IndexRefusal(
             400, f"The {parameter} query parameter can reach beyond the OpenSearch index in the URL path. Remove it."
         )
+    source_parameter: Final = next((key for key, _ in query if key.startswith("_source")), None)
+    if operation.permission == "write" and not index.can_read and source_parameter is not None:
+        return _read_needed(f"The {source_parameter} query parameter returns stored documents", index.name)
     try:
-        return _checked_body(operation, body, _BulkIndex(name=index_name, provider_name=provider_index))
+        return _checked_body(operation, body, index)
     except RecursionError:
         return IndexRefusal(400, f"The {operation.api} request body is nested too deeply for LiteLLM to check.")
 
@@ -369,13 +396,16 @@ async def prepare_index_request(
     query: Sequence[tuple[str, str]],
     body: bytes,
     store_params: Mapping[str, object],
+    can_read: bool,
 ) -> SignedIndexRequest | IndexRefusal:
     media: Final = accepted_media_type(content_type)
     if media is None:
         return IndexRefusal(
             400, "The OpenSearch pass-through takes application/json or application/x-ndjson bodies in UTF-8."
         )
-    checked: Final = checked_request_body(operation, query, body, path.index_name, provider_index)
+    checked: Final = _checked_request_body(
+        operation, query, body, _IndexScope(name=path.index_name, provider_name=provider_index, can_read=can_read)
+    )
     if isinstance(checked, IndexRefusal):
         return checked
     api_base: Final = store_params.get("api_base")

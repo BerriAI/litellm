@@ -427,16 +427,22 @@ def vector_store_endpoint_forbidden(index_name: str) -> HTTPException:
     )
 
 
+def has_vector_store_index_access(
+    user_api_key_dict: UserAPIKeyAuth, index_name: str, permission: Literal["read", "write"] | None
+) -> bool:
+    return _is_proxy_admin(user_api_key_dict) or (
+        permission is not None
+        and check_vector_store_permission(
+            index_name, permission, _key_metadata(user_api_key_dict), user_api_key_dict.team_metadata
+        )
+    )
+
+
 def assert_vector_store_index_access(
     user_api_key_dict: UserAPIKeyAuth, index_name: str, permission: Literal["read", "write"] | None
 ) -> None:
-    if _is_proxy_admin(user_api_key_dict):
-        return
-    if permission is not None and check_vector_store_permission(
-        index_name, permission, _key_metadata(user_api_key_dict), user_api_key_dict.team_metadata
-    ):
-        return
-    raise vector_store_endpoint_forbidden(index_name)
+    if not has_vector_store_index_access(user_api_key_dict, index_name, permission):
+        raise vector_store_endpoint_forbidden(index_name)
 
 
 def is_allowed_to_call_vector_store_endpoint(
