@@ -1546,9 +1546,9 @@ async def test_monitoring_api_requires_admin_write_access(gateway: Gateway, db: 
             assert not (await store.performance_monitoring()).enabled
             enabled: Final = gateway.request("PATCH", "/alerts/monitoring", {"enabled": True})
             assert enabled.status_code == 200, enabled.text
-            assert enabled.json()["enabled"] is True
+            assert enabled.json() == {"enabled": True, "alerts_used": 0, "alert_limit": 5}
             assert gateway.get("/alerts/monitoring")["enabled"] is True
-            invalid: Final = gateway.request("PATCH", "/alerts/monitoring", {"enabled": True, "incidents_used": 0})
+            invalid: Final = gateway.request("PATCH", "/alerts/monitoring", {"enabled": True, "alerts_used": 0})
             assert invalid.status_code == 422, invalid.text
             paused: Final = gateway.request("PATCH", "/alerts/monitoring", {"enabled": False})
             assert paused.status_code == 200, paused.text

@@ -6,20 +6,20 @@ import { backgroundFetchClient } from "@/lib/http/api";
 import type { components } from "@/lib/http/schema";
 
 type Monitoring = components["schemas"]["PerformanceMonitoring"];
-function monitoringCopy({ enabled, incidents_used: used, incident_limit: limit }: Monitoring) {
+function monitoringCopy({ enabled, alerts_used: used, alert_limit: limit }: Monitoring) {
   if (limit !== null && used >= limit)
     return [
       "Performance monitoring paused",
-      `All ${limit} included incidents have been detected. Saved alerts remain available.`,
+      `All ${limit} included alerts have been detected. Saved alerts remain available.`,
     ];
   if (!enabled)
     return [
       "Performance alerts",
-      `Detect unusual spend, latency, errors, and traffic.${limit === null ? "" : ` ${limit - used} included incidents remaining.`}`,
+      `Detect unusual spend, latency, errors, and traffic.${limit === null ? "" : ` ${limit - used} included alerts remaining.`}`,
     ];
   return [
     "Performance alerts enabled",
-    `Checks run hourly on completed days.${limit === null ? "" : ` ${used} of ${limit} included incidents detected.`}`,
+    `Checks run hourly on completed days.${limit === null ? "" : ` ${used} of ${limit} included alerts detected.`}`,
   ];
 }
 
@@ -94,7 +94,7 @@ function MonitoringPanel({
   error: Error | null;
   onUpdate: (enabled: boolean) => void;
 }) {
-  const { enabled, incidents_used: used, incident_limit: limit } = state;
+  const { enabled, alerts_used: used, alert_limit: limit } = state;
   const exhausted = limit !== null && used >= limit;
   if (enabled && limit === null && !settings) return null;
   const [title, description] = monitoringCopy(state);

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, renderWithProviders, screen, testQueryClient } from "../../../tests/test-utils";
 import PerformanceMonitoring from "./PerformanceMonitoring";
 
-let state = { enabled: false, incidents_used: 0, incident_limit: 5 as number | null };
+let state = { enabled: false, alerts_used: 0, alert_limit: 5 as number | null };
 let failed = false;
 const writes: unknown[] = [];
 const json = (body: unknown, status = 200) =>
@@ -11,7 +11,7 @@ const json = (body: unknown, status = 200) =>
 describe("Performance monitoring activation", () => {
   beforeEach(() => {
     testQueryClient.clear();
-    state = { enabled: false, incidents_used: 0, incident_limit: 5 };
+    state = { enabled: false, alerts_used: 0, alert_limit: 5 };
     failed = false;
     writes.length = 0;
     vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
@@ -33,19 +33,19 @@ describe("Performance monitoring activation", () => {
     vi.useRealTimers();
   });
 
-  it("shows remaining allowance when paused after detecting incidents", async () => {
-    state = { enabled: false, incidents_used: 2, incident_limit: 5 };
+  it("shows remaining allowance when paused after detecting alerts", async () => {
+    state = { enabled: false, alerts_used: 2, alert_limit: 5 };
     renderWithProviders(<PerformanceMonitoring accessToken="test-session" />);
-    expect(await screen.findByText(/3 included incidents remaining/)).toBeVisible();
+    expect(await screen.findByText(/3 included alerts remaining/)).toBeVisible();
     expect(screen.getByRole("button", { name: "Enable performance alerts" })).toBeEnabled();
   });
 
   it("updates an open page when monitoring exhausts its allowance", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
-    state = { enabled: true, incidents_used: 4, incident_limit: 5 };
+    state = { enabled: true, alerts_used: 4, alert_limit: 5 };
     renderWithProviders(<PerformanceMonitoring accessToken="test-session" />);
-    expect(await screen.findByText(/4 of 5 included incidents detected/)).toBeVisible();
-    state = { enabled: true, incidents_used: 5, incident_limit: 5 };
+    expect(await screen.findByText(/4 of 5 included alerts detected/)).toBeVisible();
+    state = { enabled: true, alerts_used: 5, alert_limit: 5 };
     await act(() => vi.advanceTimersByTimeAsync(5 * 60_000));
     expect(await screen.findByText("Performance monitoring paused")).toBeVisible();
     expect(screen.getByRole("link", { name: "Upgrade to Enterprise" })).toBeVisible();
@@ -56,11 +56,11 @@ describe("Performance monitoring activation", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Enable performance alerts" }));
     expect(await screen.findByText("Performance alerts enabled")).toBeVisible();
     expect(writes).toEqual([{ enabled: true }]);
-    expect(screen.getByText(/0 of 5 included incidents/)).toBeVisible();
+    expect(screen.getByText(/0 of 5 included alerts/)).toBeVisible();
   });
 
   it("keeps exhausted history accessible and does not offer a reset", async () => {
-    state = { enabled: true, incidents_used: 5, incident_limit: 5 };
+    state = { enabled: true, alerts_used: 5, alert_limit: 5 };
     renderWithProviders(<PerformanceMonitoring accessToken="test-session" />);
     expect(await screen.findByText("Performance monitoring paused")).toBeVisible();
     expect(screen.getByText(/Saved alerts remain available/)).toBeVisible();
@@ -90,11 +90,11 @@ describe("Performance monitoring activation", () => {
   });
 
   it("pauses Enterprise monitoring while retaining its allowance state", async () => {
-    state = { enabled: true, incidents_used: 5, incident_limit: null };
+    state = { enabled: true, alerts_used: 5, alert_limit: null };
     renderWithProviders(<PerformanceMonitoring accessToken="test-session" settings />);
     fireEvent.click(await screen.findByRole("button", { name: "Pause monitoring" }));
     expect(await screen.findByRole("button", { name: "Enable performance alerts" })).toBeVisible();
     expect(writes).toEqual([{ enabled: false }]);
-    expect(state.incidents_used).toBe(5);
+    expect(state.alerts_used).toBe(5);
   });
 });

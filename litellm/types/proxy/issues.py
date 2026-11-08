@@ -39,8 +39,8 @@ class PerformanceMonitoringUpdate(BaseModel, frozen=True):
 
 class PerformanceMonitoring(BaseModel, frozen=True):
     enabled: bool = False
-    incidents_used: int = Field(default=0, ge=0, le=5)
-    incident_limit: int | None = 5
+    incidents_used: int = Field(default=0, ge=0, le=5, serialization_alias="alerts_used")
+    incident_limit: int | None = Field(default=5, serialization_alias="alert_limit")
 
     @property
     def can_detect(self) -> bool:

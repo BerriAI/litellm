@@ -42875,20 +42875,20 @@ export interface components {
         /** PerformanceMonitoring */
         PerformanceMonitoring: {
             /**
+             * Alert Limit
+             * @default 5
+             */
+            alert_limit: number | null;
+            /**
+             * Alerts Used
+             * @default 0
+             */
+            alerts_used: number;
+            /**
              * Enabled
              * @default false
              */
             enabled: boolean;
-            /**
-             * Incident Limit
-             * @default 5
-             */
-            incident_limit: number | null;
-            /**
-             * Incidents Used
-             * @default 0
-             */
-            incidents_used: number;
         };
         /** PerformanceMonitoringUpdate */
         PerformanceMonitoringUpdate: {

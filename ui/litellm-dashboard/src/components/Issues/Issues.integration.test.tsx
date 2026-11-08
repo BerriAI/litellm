@@ -141,7 +141,7 @@ describe("unified issue investigations", () => {
     resourceTotal = 1;
     modelBreakdown = null;
     families = FAMILY_SETTINGS;
-    monitoring = { enabled: true, incidents_used: 0, incident_limit: null };
+    monitoring = { enabled: true, alerts_used: 0, alert_limit: null };
     auth.isViewOnly = false;
     auth.isAuthorized = true;
     auth.userRole = "Admin";
@@ -286,11 +286,11 @@ describe("unified issue investigations", () => {
   });
 
   it("refreshes the remaining allowance alongside the alerts", async () => {
-    monitoring = { enabled: true, incidents_used: 4, incident_limit: 5 };
+    monitoring = { enabled: true, alerts_used: 4, alert_limit: 5 };
     renderWithProviders(<IssuesInbox />);
-    expect(await screen.findByText(/4 of 5 included incidents detected/)).toBeVisible();
+    expect(await screen.findByText(/4 of 5 included alerts detected/)).toBeVisible();
     await screen.findByRole("link", { name: RETIREMENT_ISSUE.title });
-    monitoring = { enabled: true, incidents_used: 5, incident_limit: 5 };
+    monitoring = { enabled: true, alerts_used: 5, alert_limit: 5 };
     empty = true;
     fireEvent.click(screen.getByRole("button", { name: "Refresh alerts" }));
     expect(await screen.findByText("No open alerts.")).toBeVisible();

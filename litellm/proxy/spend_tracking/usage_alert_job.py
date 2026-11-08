@@ -207,9 +207,13 @@ class UsageAlertJob:
 
     async def _work(self, now: datetime, deadline: float) -> None:
         cleanup_until: Final = min(deadline, asyncio.get_running_loop().time() + self._work_budget_seconds / 10)
-        while asyncio.get_running_loop().time() < cleanup_until:
-            if not any((await self._performance_projection.prune(), await self._store.prune(limit=10))):
-                break
+        try:
+            with analytics_deadline(cleanup_until):
+                while asyncio.get_running_loop().time() < cleanup_until:
+                    if not any((await self._performance_projection.prune(), await self._store.prune(limit=10))):
+                        break
+        except AnalyticsCapacityError:
+            verbose_proxy_logger.info("Alert cleanup deferred within its database budget")
         if self._deprecation_projection is not None:
             await self._deprecation_projection(now)
         monitoring: Final = await self._performance_projection.monitoring()

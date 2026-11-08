@@ -44,6 +44,7 @@ _TABLES: Final = (
     "LiteLLM_DailyTeamSpend",
     "LiteLLM_Config",
     "LiteLLM_VerificationToken",
+    "LiteLLM_DeletedVerificationToken",
     "LiteLLM_UserTable",
     "LiteLLM_TeamTable",
     "LiteLLM_SpendLogDelivery",
@@ -942,7 +943,10 @@ async def test_projection_resume_keeps_spend_and_traffic_in_one_episode(db: Mana
 
 
 @pytest.mark.asyncio(loop_scope="session")
-async def test_opt_in_controls_performance_without_stopping_model_retirements(db: ManagementDatabase) -> None:
+@pytest.mark.parametrize("cleanup_locked", (False, True))
+async def test_opt_in_controls_performance_without_stopping_model_retirements(
+    db: ManagementDatabase, cleanup_locked: bool
+) -> None:
     async with _isolated(db) as prisma:
         await _seed(prisma)
         await prisma.writer_db.query_raw(
@@ -964,7 +968,10 @@ async def test_opt_in_controls_performance_without_stopping_model_retirements(db
         job: Final = UsageAlertJob.from_prisma(
             prisma, SlackAlerting(alerting=[], alert_types=[]), deprecation_projection=retirements.run
         )
-        await job._run(_NOW)
+        async with prisma.writer_db.tx(timeout=timedelta(seconds=60)) as blocker:
+            if cleanup_locked:
+                await blocker.execute_raw('LOCK TABLE "LiteLLM_IssueDeliveryRule" IN SHARE MODE')
+            await job._run(_NOW)
         assert (await rules.list_rules()).total == 0
         assert (await store.list_issues(kind="performance")).total == 0
         assert (await store.list_issues(kind="model_deprecation")).total == 1
