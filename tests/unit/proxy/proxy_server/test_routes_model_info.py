@@ -1408,6 +1408,57 @@ def test_model_info_prices_a_wildcard_row_aliased_to_an_aliased_group_as_the_gro
     _invalidate_model_cost_lowercase_map()
 
 
+def test_model_info_prices_a_wildcard_row_aliased_to_another_deployment_as_that_deployment_not_the_wildcards_base_model(
+    client: TestClient,
+    auth_as: Callable[[], AbstractContextManager[object]],
+    monkeypatch: pytest.MonkeyPatch,
+    local_model_cost_map: None,
+) -> None:
+    """The wildcard declares a ``base_model`` for its own calls, but ``my-fw/acme-mini`` is aliased to another
+    deployment, so the row shows the price that deployment bills."""
+    catalog: Final = {
+        "deepseek/acme-lite": {
+            "input_cost_per_token": 7e-07,
+            "output_cost_per_token": 8e-07,
+            "litellm_provider": "deepseek",
+            "mode": "chat",
+        },
+        "deepseek/acme-base": {
+            "input_cost_per_token": 9e-06,
+            "output_cost_per_token": 9.5e-06,
+            "litellm_provider": "deepseek",
+            "mode": "chat",
+        },
+    }
+    monkeypatch.setattr(litellm, "model_cost", {**litellm.model_cost, **catalog})
+    _invalidate_model_cost_lowercase_map()
+    router: Final = litellm.Router(
+        model_list=[
+            {**_FIREWORKS_WILDCARD, "model_info": {"id": "fireworks-wildcard", "base_model": "deepseek/acme-base"}},
+            {
+                "model_name": "acme-target",
+                "litellm_params": {"model": "deepseek/acme-lite", "api_key": "x"},
+                "model_info": {"id": "target"},
+            },
+        ],
+        model_group_alias={"my-fw/acme-mini": "acme-target"},
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    _discoverable_models(monkeypatch, {"fireworks_ai": ["fireworks_ai/accounts/fireworks/models/acme-mini"]})
+    monkeypatch.setattr(proxy_server, "llm_model_list", router.get_model_list())
+    monkeypatch.setattr(proxy_server, "user_model", None)
+
+    with auth_as():
+        rows: Final = _fireworks_wildcard_rows(client)
+
+    call: Final = router.completion(
+        model="my-fw/acme-mini", messages=[{"role": "user", "content": "hi"}], mock_response="hello there"
+    )
+    assert rows["my-fw/acme-mini"].get("input_cost_per_token") is not None
+    assert call._hidden_params["response_cost"] == pytest.approx(_call_cost_at_row_rates(call, rows["my-fw/acme-mini"]))
+    _invalidate_model_cost_lowercase_map()
+
+
 def test_saving_a_replayed_model_info_wildcard_row_stores_none_of_its_shown_metadata(
     client: TestClient,
     auth_as: Callable[[], AbstractContextManager[object]],

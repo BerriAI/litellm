@@ -711,9 +711,14 @@ class RoutedElsewhere:
 ROUTED_ELSEWHERE: Final = RoutedElsewhere()
 
 
+@dataclass(frozen=True, slots=True)
+class OtherDeploymentsBill:
+    model: str
+
+
 def wildcard_row_priced_model(
     row: Mapping[str, object], llm_router: Router | None, caller_aliases: CallerAliases = GLOBAL_ALIASES_ONLY
-) -> str | RoutedElsewhere | None:
+) -> str | OtherDeploymentsBill | RoutedElsewhere | None:
     model_id: Final = _model_info_field(row, "id")
     listed_name: Final = row.get("model_name")
     if llm_router is None or not isinstance(model_id, str) or not isinstance(listed_name, str):
@@ -744,7 +749,7 @@ class WildcardDeployment:
 
 def wildcard_deployment_priced_model(
     llm_router: Router, deployment: WildcardDeployment, listed_name: str, caller_aliases: CallerAliases
-) -> str | RoutedElsewhere | None:
+) -> str | OtherDeploymentsBill | RoutedElsewhere | None:
     served_name: Final = _served_name(llm_router, listed_name, caller_aliases)
     registry: Final = llm_router.registry()
     team_id: Final = deployment.team_id or caller_aliases.team_id
@@ -759,7 +764,7 @@ def wildcard_deployment_priced_model(
 
 def _model_other_deployments_bill(
     registry: RouterRegistry, routed_name: str, candidates: AbstractSet[str], team_id: str | None
-) -> str | RoutedElsewhere:
+) -> OtherDeploymentsBill | RoutedElsewhere:
     rows: Final = registry.deployments(routed_name, team_id=team_id) or ()
     billed: Final = frozenset(
         cost_map_backend_model(Deployment.model_validate(row))
@@ -768,7 +773,7 @@ def _model_other_deployments_bill(
     )
     if len(billed) != 1 or any(_declares_its_own_rate(registry, model_id) for model_id in candidates):
         return ROUTED_ELSEWHERE
-    return next(iter(billed))
+    return OtherDeploymentsBill(next(iter(billed)))
 
 
 def _declares_its_own_rate(registry: RouterRegistry, model_id: str) -> bool:

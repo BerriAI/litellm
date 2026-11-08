@@ -472,6 +472,7 @@ from litellm.proxy.auth.master_key_boot_check import (
 )
 from litellm.proxy.auth.model_checks import (
     GLOBAL_ALIASES_ONLY,
+    OtherDeploymentsBill,
     RoutedElsewhere,
     expand_wildcard_deployments_for_model_info,
     get_all_fallbacks,
@@ -16835,9 +16836,15 @@ def _enrich_model_info_with_litellm_data(
     # read litellm model_prices_and_context_window.json to get the following:
     # input_cost_per_token, output_cost_per_token, max_tokens
     priced_as: Final = wildcard_row_priced_model(model, llm_router, caller_aliases)
+    billed_model: Final = priced_as.model if isinstance(priced_as, OtherDeploymentsBill) else priced_as
+    lookup_model_info: Final = (
+        {k: v for k, v in model_info.items() if k != "base_model"}
+        if isinstance(priced_as, OtherDeploymentsBill)
+        else model_info
+    )
     priced_model: Final = (
-        {**model, "litellm_params": {**model["litellm_params"], "model": priced_as}}
-        if isinstance(priced_as, str)
+        {**model, "litellm_params": {**model["litellm_params"], "model": billed_model}, "model_info": lookup_model_info}
+        if isinstance(billed_model, str)
         else model
     )
     priced_litellm_model: Final = priced_model.get("litellm_params", {}).get("model")

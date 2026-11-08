@@ -64,6 +64,7 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.litellm_license import AUTO_ROUTER_LICENSE_REMEDY
 from litellm.proxy.auth.model_checks import (
     GLOBAL_ALIASES_ONLY,
+    OtherDeploymentsBill,
     WildcardDeployment,
     model_info_cost_map_entry,
     wildcard_deployment_priced_model,
@@ -1361,7 +1362,8 @@ def _routed_cost_map_entry(db_model: Deployment, listed_row: _ListedRow) -> Mapp
         listed_row.name,
         listed_row.caller_aliases,
     )
-    return model_info_cost_map_entry(priced_as) if isinstance(priced_as, str) else MappingProxyType({})
+    billed_model: Final = priced_as.model if isinstance(priced_as, OtherDeploymentsBill) else priced_as
+    return model_info_cost_map_entry(billed_model) if isinstance(billed_model, str) else MappingProxyType({})
 
 
 LoadedCatalog: TypeAlias = Callable[[], Mapping[str, Mapping[str, object]]]
