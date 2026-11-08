@@ -4,7 +4,6 @@ Tests for litellm.acount_tokens() public API.
 
 import asyncio
 import json
-import os
 from unittest.mock import AsyncMock, patch
 
 import httpx
@@ -12,7 +11,6 @@ import pytest
 import respx
 
 import litellm
-from litellm.types.utils import TokenCountResponse
 
 
 def test_acount_tokens_routes_to_openai():
@@ -53,6 +51,25 @@ def test_acount_tokens_routes_to_anthropic():
         assert result.total_tokens == 20
         assert result.tokenizer_type == "anthropic_api"
         assert result.request_model == "anthropic/claude-3-5-sonnet-20241022"
+
+
+def test_acount_tokens_routes_to_mistral():
+    with patch(
+        "litellm.llms.mistral.count_tokens.token_counter.mistral_count_tokens_handler.handle_count_tokens_request",
+        new_callable=AsyncMock,
+        return_value={"input_tokens": 25},
+    ):
+        result = asyncio.run(
+            litellm.acount_tokens(
+                model="mistral/mistral-large-latest",
+                messages=[{"role": "user", "content": "Hello Mistral!"}],
+                api_key="test-mistral-key",
+            )
+        )
+
+        assert result.total_tokens == 25
+        assert result.tokenizer_type == "mistral_api"
+        assert result.request_model == "mistral/mistral-large-latest"
 
 
 def test_acount_tokens_fallback_to_local():
@@ -159,8 +176,6 @@ def test_acount_tokens_no_api_key_falls_back(monkeypatch):
     # Should fall back to local tokenizer since no API key
     assert result.total_tokens > 0
     assert result.tokenizer_type == "local_tokenizer"
-
-
 
 
 @pytest.fixture

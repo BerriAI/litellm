@@ -58,10 +58,10 @@ from litellm.llms.bedrock.count_tokens.kimi_k3 import (
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.gemini.count_tokens import handler as gemini_count_tokens_handler
+from litellm.llms.mistral.count_tokens import handler as mistral_count_tokens_http
 from litellm.llms.openai.responses.count_tokens import handler as openai_count_tokens_http
 from litellm.llms.vertex_ai.vertex_ai_partner_models.count_tokens.handler import VertexAIPartnerModelsTokenCounter
 from litellm.proxy._types import ProxyException, TokenCountRequest, UserAPIKeyAuth
-from litellm.responses.litellm_completion_transformation.session_handler import ResponsesSessionHandler
 from litellm.proxy.anthropic_endpoints.endpoints import (
     count_tokens as anthropic_count_tokens,
 )
@@ -80,6 +80,7 @@ from litellm.proxy.proxy_server import (
     count_request_tokens,
     token_counter,
 )
+from litellm.responses.litellm_completion_transformation.session_handler import ResponsesSessionHandler
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.rust_bridge.fork_guard import ForkedAfterNativeRuntimeStarted
 from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
@@ -91,7 +92,6 @@ from litellm.types.utils import (
     TokenCountMessagesFormat,
     TokenCountResponse,
 )
-
 from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 
 
@@ -1582,7 +1582,7 @@ async def _count_on_a_model_without_a_count_api(
         model_list=[
             {
                 "model_name": "mistral-tool-result",
-                "litellm_params": {"model": "mistral/mistral-small-latest", "api_key": "sk-test"},
+                "litellm_params": {"model": "mistral/mistral-large-4", "api_key": "sk-test"},
             }
         ],
         default_litellm_params=router_defaults,
@@ -1590,7 +1590,11 @@ async def _count_on_a_model_without_a_count_api(
     request: Final = _json_request(body, "python-httpx/0.28.1")
     monkeypatch.setattr(proxy_server, "llm_router", router)
     monkeypatch.setattr(proxy_server, "proxy_config", proxy_server.ProxyConfig())
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     with respx.mock:
+        respx.post("https://api.mistral.ai/v1/responses/input_tokens").mock(
+            return_value=httpx.Response(200, json={"object": "response.input_tokens", "input_tokens": 7})
+        )
         return await anthropic_count_tokens(request, UserAPIKeyAuth())
 
 
@@ -5359,3 +5363,46 @@ def test_utils_token_counter_line_stays_one_line_when_the_model_carries_a_newlin
     assert line["request_model"] == forged_model
     assert "\n" not in message
     assert message.startswith(f'token count - litellm_call_id="count log" request_model={json.dumps(forged_model)} ')
+
+
+@pytest.mark.asyncio
+async def test_mistral_proxy_token_counter_chat_and_responses(monkeypatch: pytest.MonkeyPatch) -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "mistral-proxy-model",
+                "litellm_params": {
+                    "model": "mistral/mistral-large-latest",
+                    "api_key": "test-mistral-key",
+                },
+            }
+        ]
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", router)
+
+    def count_peer(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"object": "response.input_tokens", "input_tokens": 33}, request=request)
+
+    with patch.object(
+        mistral_count_tokens_http,
+        "get_async_httpx_client",
+        return_value=AsyncHTTPHandler(transport=httpx.MockTransport(count_peer)),
+    ):
+        utils_result: Final = await count_request_tokens(
+            request=TokenCountRequest(
+                model="mistral-proxy-model", messages=[{"role": "user", "content": "hello mistral"}]
+            ),
+            call_endpoint=True,
+        )
+        responses_result: Final = await count_request_tokens(
+            request=TokenCountRequest(
+                model="mistral-proxy-model", messages=[{"role": "user", "content": "hello mistral"}]
+            ),
+            call_endpoint=True,
+            responses_request={"model": "mistral-proxy-model", "input": "hello mistral"},
+        )
+
+    assert utils_result.total_tokens == 33
+    assert utils_result.tokenizer_type == "mistral_api"
+    assert responses_result.total_tokens == 33
+    assert responses_result.tokenizer_type == "mistral_api"

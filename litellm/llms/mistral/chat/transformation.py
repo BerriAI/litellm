@@ -59,6 +59,7 @@ from litellm.utils import convert_to_model_response_object, supports_reasoning
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
+    from litellm.llms.base_llm.base_utils import BaseTokenCounter
 
 
 def _accepted_reasoning_effort(model: str, requested: str, custom_llm_provider: str) -> str:
@@ -178,6 +179,11 @@ class MistralConfig(OpenAIGPTConfig):
     @property
     def custom_llm_provider(self) -> str:
         return "mistral"
+
+    def get_token_counter(self) -> "BaseTokenCounter | None":
+        from litellm.llms.mistral.count_tokens.token_counter import MistralTokenCounter
+
+        return MistralTokenCounter()
 
     def _accepts_reasoning(self, model: str) -> bool:
         return "magistral" in model.lower() or supports_reasoning(
