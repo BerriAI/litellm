@@ -3,6 +3,7 @@
 pub mod access;
 pub mod admission;
 pub mod agent_access;
+pub mod agent_ceilings;
 pub mod agent_grants;
 pub mod auth_context;
 pub mod budget_alerts;
@@ -29,6 +30,7 @@ pub mod org_routes;
 pub mod owner_teams;
 pub mod patterns;
 pub mod personal_budget;
+pub mod personal_model_listing;
 pub mod personal_model_request;
 pub mod personal_models;
 pub mod personal_owner;

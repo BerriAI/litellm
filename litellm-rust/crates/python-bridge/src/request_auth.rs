@@ -739,3 +739,36 @@ pub(crate) fn request_auth_end_user_validation(
         &py.detach(move || core::end_user_context::validation(&facts)),
     )
 }
+
+#[pyfunction]
+pub(crate) fn request_auth_personal_model_listing(
+    py: Python<'_>,
+    facts: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    let facts: core::personal_model_listing::Facts = from_py(facts)?;
+    let decision = py
+        .detach(move || core::personal_model_listing::decide(&facts))
+        .map_err(map_error)?;
+    to_py(py, &decision)
+}
+
+#[pyfunction]
+pub(crate) fn request_auth_agent_ceiling(
+    py: Python<'_>,
+    facts: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    let facts: core::agent_ceilings::Facts = from_py(facts)?;
+    let decision = py
+        .detach(move || core::agent_ceilings::decide(&facts))
+        .map_err(map_error)?;
+    to_py(py, &decision)
+}
+
+#[pyfunction]
+pub(crate) fn request_auth_agent_group_load(
+    py: Python<'_>,
+    facts: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    let facts: core::agent_ceilings::LoadFacts = from_py(facts)?;
+    to_py(py, &py.detach(move || core::agent_ceilings::load(&facts)))
+}
