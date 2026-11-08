@@ -133,9 +133,22 @@ fn check_key(check: KeyCheck) -> Result<Step, Error> {
         if key.blocked {
             return Step::deny(Denial::KeyBlocked);
         }
-        Step::effect(Effect::EnforceModelAccess, move |(): ()| {
-            check_owner(check, key)
-        })
+        Step::effect(
+            Effect::EnforceModelAccess,
+            move |facts: crate::key_model_access::Facts| match crate::key_model_access::decide(
+                facts,
+            )? {
+                crate::key_model_access::Decision::Allow => {
+                    Step::effect(Effect::PrefetchAuthObjects, move |(): ()| {
+                        check_owner(check, key)
+                    })
+                }
+                crate::key_model_access::Decision::Deny { denial } => {
+                    Step::deny(Denial::ModelAccessDenied { decision: denial })
+                }
+                _ => Err(Error::InvalidAnswer),
+            },
+        )
     })
 }
 
@@ -157,43 +170,54 @@ fn check_owner(check: KeyCheck, key: KeyFacts) -> Result<Step, Error> {
 }
 
 fn check_budget_exemption(check: KeyCheck, key: KeyFacts) -> Result<Step, Error> {
-    Step::effect(Effect::CheckBudgetExemption, move |exempt: bool| {
-        if exempt || key.team_member_spend.is_none() || !check.settings.has_db {
-            return check_expiry(check, key, exempt);
-        }
-        let (Some(user_id), Some(team_id)) = (key.user_id.clone(), key.team_id.clone()) else {
-            return check_expiry(check, key, exempt);
-        };
-        Step::effect(
-            Effect::ReadTeamMemberBudget {
-                user_id: user_id.clone(),
-                team_id: team_id.clone(),
-            },
-            move |budget: Option<TeamMemberBudget>| {
-                let Some(budget) = budget else {
-                    return check_expiry(check, key, false);
-                };
-                if budget.spend < budget.max_budget {
-                    return check_expiry(check, key, false);
-                }
-                Step::effect(
-                    Effect::AlertTeamMemberBudget {
-                        user_id: user_id.clone(),
-                        team_id: team_id.clone(),
-                        budget: budget.clone(),
-                    },
-                    move |(): ()| {
-                        Step::deny(Denial::TeamMemberBudgetExceeded {
-                            user_id,
-                            team_id,
-                            spend: budget.spend,
-                            max_budget: budget.max_budget,
-                        })
-                    },
-                )
-            },
-        )
-    })
+    Step::effect(
+        Effect::CheckBudgetExemption,
+        move |facts: crate::budget_pricing::ExemptionFacts| {
+            let decision = crate::budget_pricing::exemption(&facts);
+            if decision.read_pass_through
+                || decision.read_price_cache
+                || decision.read_model.is_some()
+            {
+                return Err(Error::InvalidAnswer);
+            }
+            let exempt = decision.exempt;
+            if exempt || key.team_member_spend.is_none() || !check.settings.has_db {
+                return check_expiry(check, key, exempt);
+            }
+            let (Some(user_id), Some(team_id)) = (key.user_id.clone(), key.team_id.clone()) else {
+                return check_expiry(check, key, exempt);
+            };
+            Step::effect(
+                Effect::ReadTeamMemberBudget {
+                    user_id: user_id.clone(),
+                    team_id: team_id.clone(),
+                },
+                move |budget: Option<TeamMemberBudget>| {
+                    let Some(budget) = budget else {
+                        return check_expiry(check, key, false);
+                    };
+                    if budget.spend < budget.max_budget {
+                        return check_expiry(check, key, false);
+                    }
+                    Step::effect(
+                        Effect::AlertTeamMemberBudget {
+                            user_id: user_id.clone(),
+                            team_id: team_id.clone(),
+                            budget: budget.clone(),
+                        },
+                        move |(): ()| {
+                            Step::deny(Denial::TeamMemberBudgetExceeded {
+                                user_id,
+                                team_id,
+                                spend: budget.spend,
+                                max_budget: budget.max_budget,
+                            })
+                        },
+                    )
+                },
+            )
+        },
+    )
 }
 
 fn check_expiry(check: KeyCheck, key: KeyFacts, exempt: bool) -> Result<Step, Error> {

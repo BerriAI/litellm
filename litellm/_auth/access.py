@@ -3,6 +3,7 @@ from typing import Final, Literal, TypeAlias
 
 from pydantic import TypeAdapter
 
+from litellm._auth.failure import native_boundary
 from litellm._auth.rust_core import encode_facts
 from litellm.rust_bridge import _native
 
@@ -83,6 +84,12 @@ class AgentTrace:
 
 
 @dataclass(frozen=True, slots=True)
+class ConcurrentFailures:
+    failures: tuple[bool, ...]
+    terminal: tuple[bool, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class TeamTrace:
     required: bool
     method: str
@@ -129,11 +136,12 @@ class TeamLookup:
     dashboard: bool
     missing: bool
     recorded_models: tuple[str, ...]
-    allow_unavailable: bool
+    allow_unavailable: bool | None
 
 
 AccessFacts: TypeAlias = (
-    UserParamRequest
+    ConcurrentFailures
+    | UserParamRequest
     | GuardrailRequest
     | TraceRequest
     | Search
@@ -168,16 +176,18 @@ GrantLayer: TypeAlias = Literal["key", "team", "user"]
 
 @dataclass(frozen=True, slots=True)
 class AccessDecision:
-    read: Literal["UserParam", "GuardrailPermission"] | None = None
+    read: Literal["UserParam", "GuardrailPermission", "UnavailablePolicy"] | None = None
     denial: AccessDenial | None = None
     rejected: tuple[str, ...] = ()
     layers: tuple[GrantLayer, ...] = ()
     rejected_index: int | None = None
     next_trace: TraceSource | None = None
+    failure_index: int | None = None
 
 
 _DECISION: Final = TypeAdapter(AccessDecision)
 
 
+@native_boundary
 def decide(facts: AccessFacts) -> AccessDecision:
     return _DECISION.validate_python(_native.request_auth_access(encode_facts(facts)))

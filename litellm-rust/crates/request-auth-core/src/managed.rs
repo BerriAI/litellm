@@ -1,12 +1,12 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct BoundIdentity {
     pub active: bool,
     pub revision: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct Agent {
     pub agent_id: String,
     pub enabled: bool,
@@ -55,8 +55,18 @@ pub enum ManagedFacts {
         direct: Vec<String>,
         declared_groups: Vec<String>,
         unified_groups: Vec<String>,
-        group_agents: Vec<String>,
-        unified_agents: Vec<String>,
+        group_agents: Option<Vec<String>>,
+        unified_agents: Option<Vec<String>>,
+    },
+    ManagedAgentGrants {
+        permission_present: bool,
+        own: Option<Vec<String>>,
+        ceilings: Option<Vec<Vec<String>>>,
+        caller_loaded: bool,
+        caller: Option<Vec<String>>,
+        mode: Option<String>,
+        user_present: bool,
+        human: Option<Vec<String>>,
     },
 }
 
@@ -83,6 +93,11 @@ pub enum ManagedAction {
     AssignPolicy,
     ReadHumanGrants,
     Grants,
+    ReadDeclaredGroups,
+    ReadUnifiedGroups,
+    ReadOwn,
+    ReadCeilings,
+    ReadCaller,
 }
 
 #[derive(Debug, PartialEq, Serialize)]
@@ -243,6 +258,12 @@ pub fn decide(facts: ManagedFacts) -> ManagedDecision {
             group_agents,
             unified_agents,
         } => {
+            if !declared_groups.is_empty() && group_agents.is_none() {
+                return action(ManagedAction::ReadDeclaredGroups);
+            }
+            if !unified_groups.is_empty() && unified_agents.is_none() {
+                return action(ManagedAction::ReadUnifiedGroups);
+            }
             let grants =
                 if direct.is_empty() && declared_groups.is_empty() && unified_groups.is_empty() {
                     None
@@ -250,8 +271,8 @@ pub fn decide(facts: ManagedFacts) -> ManagedDecision {
                     Some(
                         direct
                             .into_iter()
-                            .chain(group_agents)
-                            .chain(unified_agents)
+                            .chain(group_agents.into_iter().flatten())
+                            .chain(unified_agents.into_iter().flatten())
                             .collect(),
                     )
                 };
@@ -260,6 +281,51 @@ pub fn decide(facts: ManagedFacts) -> ManagedDecision {
                 denial: None,
                 grants,
             }
+        }
+        ManagedFacts::ManagedAgentGrants {
+            permission_present,
+            own,
+            ceilings,
+            caller_loaded,
+            caller,
+            mode,
+            user_present,
+            human,
+        } => {
+            let grants = |ids| ManagedDecision {
+                action: ManagedAction::Grants,
+                denial: None,
+                grants: Some(ids),
+            };
+            if !permission_present {
+                return grants(vec![]);
+            }
+            let Some(own) = own else {
+                return action(ManagedAction::ReadOwn);
+            };
+            let Some(ceilings) = ceilings else {
+                return action(ManagedAction::ReadCeilings);
+            };
+            if !caller_loaded {
+                return action(ManagedAction::ReadCaller);
+            }
+            let capped: Vec<_> = own
+                .into_iter()
+                .filter(|id| {
+                    ceilings.iter().all(|ceiling| ceiling.contains(id))
+                        && caller.as_ref().is_none_or(|ids| ids.contains(id))
+                })
+                .collect();
+            if mode.is_none() || mode.as_deref() == Some("autonomous") {
+                return grants(capped);
+            }
+            if !user_present {
+                return grants(vec![]);
+            }
+            let Some(human) = human else {
+                return action(ManagedAction::ReadHumanGrants);
+            };
+            grants(capped.into_iter().filter(|id| human.contains(id)).collect())
         }
     }
 }

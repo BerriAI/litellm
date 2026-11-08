@@ -2,22 +2,25 @@
 
 pub mod access;
 pub mod admission;
+pub mod agent_access;
+pub mod agent_grants;
+pub mod auth_context;
 pub mod budget_pricing;
 pub mod common_budgets;
 pub mod credential;
 mod error;
+pub mod fallback_access;
 mod key;
+pub mod key_model_access;
 pub mod managed;
+pub mod model_access;
 pub mod model_budget_data;
 mod model_budgets;
-pub mod patterns;
-pub mod route_access;
-pub mod org_routes;
-pub mod model_access;
 pub mod model_groups;
-pub mod fallback_access;
-pub mod key_model_access;
+pub mod org_routes;
+pub mod patterns;
 pub mod protocol;
+pub mod route_access;
 pub mod unpriced_models;
 
 pub use error::Error;

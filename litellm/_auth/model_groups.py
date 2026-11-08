@@ -3,6 +3,7 @@ from typing import Final, Literal
 
 from pydantic import TypeAdapter
 
+from litellm._auth.failure import native_boundary
 from litellm.rust_bridge import _native
 
 
@@ -42,5 +43,6 @@ class ResourceGroupDecision:
 _DECISION: Final = TypeAdapter(ResourceGroupDecision)
 
 
+@native_boundary
 def resource_group_decision(facts: ResourceGroupFacts) -> ResourceGroupDecision:
     return _DECISION.validate_python(_native.request_auth_model_groups(asdict(facts)))

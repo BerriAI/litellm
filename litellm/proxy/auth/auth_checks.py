@@ -26,6 +26,7 @@ from typing_extensions import NotRequired, ReadOnly, Required, TypedDict, Unpack
 
 import litellm
 from litellm._auth import access as access_policy
+from litellm._auth.failure import NativeAuthFailure
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.dual_cache import DualCache, LimitedSizeOrderedDict
@@ -34,7 +35,6 @@ from litellm.constants import (
     CLI_SESSION_KEY_PREFIX,
     DEFAULT_ACCESS_GROUP_CACHE_TTL,
     DEFAULT_IN_MEMORY_TTL,
-    DEFAULT_MAX_RECURSE_DEPTH,
     EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE,
     END_USER_RESTRICTED_REGISTRY_MAX_SIZE,
     INVALID_API_KEY_ERROR_MESSAGE,
@@ -101,7 +101,6 @@ from litellm.proxy.auth.budget_throttle import (
     should_throttle_budget_exceeded,
 )
 from litellm.proxy.auth.model_access_denied import (
-    customer_model_access_denied_client_message,
     model_access_denied_client_message,
 )
 from litellm.proxy.auth.route_checks import RouteChecks
@@ -704,16 +703,9 @@ def _model_group_has_pricing(model: str, llm_router: "Router") -> bool:
 
 
 def model_has_no_cost_mapping(model: str | None, llm_router: Router | None) -> bool:
-    if not model or llm_router is None:
-        return False
+    from litellm.proxy.auth.unpriced_model_adapter import model_has_no_cost_mapping as native_model_has_no_cost_mapping
 
-    if llm_router.registry().group(model) is None:
-        return False
-
-    if _model_group_has_pricing(model=model, llm_router=llm_router):
-        return False
-
-    return not _is_cost_explicitly_configured(llm_router.registry().deployments(model) or ())
+    return native_model_has_no_cost_mapping(model, llm_router)
 
 
 def _unpriced_models_in_request(model: str | list[str] | None, llm_router: Router | None) -> tuple[str, ...]:
@@ -1398,8 +1390,16 @@ async def common_checks(
 
         with tracer.trace("litellm.proxy.auth.common_checks.budget_checks"):
             budget_results: Final = await asyncio.gather(*budget_check_coros, return_exceptions=True)
-        budget_error: Final = next((r for r in budget_results if isinstance(r, BaseException)), None)
-        if budget_error is not None:
+        failure: Final = access_policy.decide(
+            access_policy.ConcurrentFailures(
+                tuple(isinstance(result, BaseException) for result in budget_results),
+                tuple(isinstance(result, NativeAuthFailure) for result in budget_results),
+            )
+        ).failure_index
+        if failure is not None:
+            budget_error: Final = budget_results[failure]
+            if not isinstance(budget_error, BaseException):
+                raise NativeAuthFailure("native selected an absent budget failure")
             raise budget_error
 
     _enforce_user_param_check(general_settings, request, request_body, route)
@@ -1462,6 +1462,8 @@ async def common_checks(
 def effective_user_role(user_role: str | None) -> LitellmUserRoles:
     try:
         return LitellmUserRoles(user_role)
+    except NativeAuthFailure:
+        raise
     except ValueError:
         return LitellmUserRoles.INTERNAL_USER
 
@@ -1676,6 +1678,8 @@ async def get_default_end_user_budget(
 
         return _budget_obj
 
+    except NativeAuthFailure:
+        raise
     except Exception as e:
         verbose_proxy_logger.error("Error fetching default end user budget: %s", e)
         return None
@@ -1720,6 +1724,8 @@ async def get_team_member_default_budget(
         budget_record: Final = await _dictable_table(BudgetRepository(prisma_client), "budget").find_unique(
             where={"budget_id": budget_id}
         )
+    except NativeAuthFailure:
+        raise
     except Exception:
         verbose_proxy_logger.exception("Error fetching team-default member budget %s", budget_id)
         if raise_on_lookup_error:
@@ -1899,6 +1905,8 @@ async def _cache_registry_answer(
     """Best-effort: a cache backend failure must not turn a registry load into a failed request."""
     try:
         await user_api_key_cache.async_set_cache(key=cache_key, value=value, ttl=ttl)
+    except NativeAuthFailure:
+        raise
     except Exception as e:  # noqa: BLE001  # best-effort cache write: auth must survive a cache backend error
         verbose_proxy_logger.warning("Failed to cache registry %s: %s", cache_key, e)
 
@@ -1913,6 +1921,8 @@ async def _fetch_and_cache_registry(
     """The registry as the database has it, cached whole, or ``None`` when it is unusable."""
     try:
         registry_ids: Final = await fetch_ids()
+    except NativeAuthFailure:
+        raise
     except Exception as e:  # noqa: BLE001  # fail-safe: any registry load error must degrade to per-id lookups, never break auth
         verbose_proxy_logger.warning(
             "Registry %s could not be loaded from the database, so per-id lookups will run and the "
@@ -2136,6 +2146,8 @@ async def get_end_user_object(
             key_end_user_budget_id=key_end_user_budget_id,
         )
 
+    except NativeAuthFailure:
+        raise
     except Exception:
         return None
 
@@ -2228,6 +2240,8 @@ async def _end_user_id_exists_in_db(
         )
         if end_user_obj is not None:
             return True
+    except NativeAuthFailure:
+        raise
     except Exception as e:
         verbose_proxy_logger.debug("end_user validation: get_end_user_object lookup failed: %s", e)
 
@@ -2244,6 +2258,8 @@ async def _end_user_id_exists_in_db(
         )
         if user_obj is not None:
             return True
+    except NativeAuthFailure:
+        raise
     except Exception as e:
         verbose_proxy_logger.debug("end_user validation: get_user_object lookup failed: %s", e)
 
@@ -2324,6 +2340,8 @@ async def _fetch_uncached_model_access_group_budgets(
                 model_type=ModelAccessGroupBudget,
                 ttl=get_management_object_ttl(user_api_key_cache),
             )
+    except NativeAuthFailure:
+        raise
     except Exception as e:  # noqa: BLE001  # fail-safe: a budget fetch error must yield "no budget rows", never break auth
         verbose_proxy_logger.debug("Error batch fetching model access group budgets from database: %s", e)
         return ()
@@ -2406,6 +2424,8 @@ async def _fetch_uncached_tags(
                 model_type=LiteLLM_TagTable,
                 ttl=get_management_object_ttl(user_api_key_cache),
             )
+    except NativeAuthFailure:
+        raise
     except Exception as e:  # noqa: BLE001  # returned as a value: budget checks fail open, the baggage mapper fails closed
         return e
     else:
@@ -2986,6 +3006,8 @@ async def get_user_object(
         return _response
     except UserNotFoundError:
         raise
+    except NativeAuthFailure:
+        raise
     except Exception as e:
         _log_budget_lookup_failure("user", e)
         raise _user_read_failure(user_id=user_id, error=e)
@@ -3069,6 +3091,8 @@ async def cache_team_object(
                 await user_api_key_cache.async_delete_cache(key=alias_key)
             else:
                 await pipelined_delete
+        except NativeAuthFailure:
+            raise
         except Exception as e:  # noqa: BLE001  # best-effort invalidation: any cache backend error must not fail the mutation
             verbose_proxy_logger.warning(
                 "Failed to invalidate cached team alias entry %s; "
@@ -3097,6 +3121,8 @@ async def _invalidate_usage_cache_entry(
             usage_cache.in_memory_cache.delete_cache(key)
         else:
             await usage_cache.async_delete_cache(key=key)
+    except NativeAuthFailure:
+        raise
     except Exception as e:  # noqa: BLE001  # best-effort invalidation: any cache backend error must not fail the write
         verbose_proxy_logger.warning(
             "Failed to invalidate internal usage cache entry %s; a stale %s may be served until its TTL expires: %s",
@@ -3185,6 +3211,8 @@ async def invalidate_team_member_spend_state(
         if spend_counter_cache.redis_cache is not None:
             try:
                 await spend_counter_cache.redis_cache.async_set_cache(key=spend_counter_key, value=new_spend, ttl=60)
+            except NativeAuthFailure:
+                raise
             except Exception as e:  # noqa: BLE001  # fall back to deleting the stale entry before giving up
                 verbose_proxy_logger.warning(
                     "Failed to set spend counter %s in Redis after reset: %s; deleting it instead so the next "
@@ -3194,6 +3222,8 @@ async def invalidate_team_member_spend_state(
                 )
                 try:
                     await spend_counter_cache.redis_cache.async_delete_cache(key=spend_counter_key)
+                except NativeAuthFailure:
+                    raise
                 except Exception:  # noqa: BLE001  # stale value now authoritative in Redis; surface instead of reporting success
                     verbose_proxy_logger.warning(
                         "Failed to delete stale spend counter %s in Redis after a failed reset write",
@@ -3258,6 +3288,8 @@ async def delete_cache_team_object(
             ## UPDATE REDIS CACHE ##
             if proxy_logging_obj is not None:
                 await proxy_logging_obj.internal_usage_cache.dual_cache.async_delete_cache(key=key)
+        except NativeAuthFailure:
+            raise
         except Exception as e:  # noqa: BLE001  # best-effort invalidation: any cache backend error must not abort the delete
             verbose_proxy_logger.warning(
                 "Failed to invalidate cached team entry %s on delete; "
@@ -3320,6 +3352,8 @@ async def delete_cache_key_object(
         ## UPDATE REDIS CACHE ##
         if proxy_logging_obj is not None:
             await proxy_logging_obj.internal_usage_cache.dual_cache.async_delete_cache(key=key)
+    except NativeAuthFailure:
+        raise
     except Exception as e:  # noqa: BLE001  # best-effort: a cache error must not fail a committed write
         verbose_proxy_logger.warning(
             "Failed to invalidate cached key entry %s; a stale key object may be served until its TTL expires: %s",
@@ -3489,6 +3523,8 @@ async def _get_team_object_from_user_api_key_cache(
                 proxy_logging_obj=proxy_logging_obj,
                 check_db_only=use_writer,
             )
+        except NativeAuthFailure:
+            raise
         except Exception as e:
             if use_writer:
                 raise
@@ -3589,6 +3625,8 @@ async def get_team_object(
         )
     except TeamNotFoundError:
         raise
+    except NativeAuthFailure:
+        raise
     except Exception:
         raise HTTPException(
             status_code=404,
@@ -3687,6 +3725,8 @@ async def get_access_object(
         return _response
     except HTTPException:
         raise
+    except NativeAuthFailure:
+        raise
     except Exception as e:
         verbose_proxy_logger.exception(
             "Error getting access group for access_group_id: %s",
@@ -3777,6 +3817,8 @@ async def get_team_object_by_alias(
                     parent_otel_span=parent_otel_span,
                     proxy_logging_obj=proxy_logging_obj,
                 )
+            except NativeAuthFailure:
+                raise
             except Exception as e:
                 verbose_proxy_logger.debug(
                     "Failed to load object_permission for team %s with object_permission_id=%s: %s",
@@ -3804,6 +3846,8 @@ async def get_team_object_by_alias(
         return team_obj
 
     except HTTPException:
+        raise
+    except NativeAuthFailure:
         raise
     except Exception as e:
         verbose_proxy_logger.exception("Error looking up team by alias: %s", team_alias)
@@ -3893,6 +3937,8 @@ async def get_org_object_by_alias(
         return org_obj
 
     except HTTPException:
+        raise
+    except NativeAuthFailure:
         raise
     except Exception as e:
         verbose_proxy_logger.exception("Error looking up organization by alias: %s", org_alias)
@@ -4028,6 +4074,8 @@ class ExperimentalUIJWTToken:
             return None
         try:
             return UserAPIKeyAuth.model_validate(json.loads(decrypted_token))
+        except NativeAuthFailure:
+            raise
         except Exception as e:
             raise Exception(f"Invalid hash key. Hash key={hashed_token}. Decrypted token={decrypted_token}. Error: {e}")
 
@@ -4080,6 +4128,8 @@ async def _fetch_key_object_from_db_unbounded(
                 parent_otel_span=parent_otel_span,
                 proxy_logging_obj=proxy_logging_obj,
             )
+        except NativeAuthFailure:
+            raise
         except Exception as e:
             if PrismaDBExceptionHandler.is_database_transport_error(e):
                 did_reconnect = False
@@ -4240,6 +4290,8 @@ async def get_key_object(
                 proxy_logging_obj=proxy_logging_obj,
                 check_db_only=check_db_only,
             )
+        except NativeAuthFailure:
+            raise
         except Exception as e:
             if check_db_only:
                 raise
@@ -4328,6 +4380,8 @@ async def get_object_permission(
         )
 
         return _perm_obj
+    except NativeAuthFailure:
+        raise
     except Exception:
         if check_db_only:
             raise
@@ -4453,6 +4507,8 @@ async def get_org_object(
         response: Final = await _model_dump_table(OrganizationRepository(prisma_client), "organization").find_unique(
             **query_kwargs
         )
+    except NativeAuthFailure:
+        raise
     except Exception:
         # An operational failure (DB down, timeout, cache fault) is NOT the same fact as a confirmed
         # missing row, and relabelling it as "doesn't exist" made every caller unable to tell them
@@ -4519,6 +4575,8 @@ async def get_org_object_for_request(
         )
     except OrganizationNotFoundError:
         return None
+    except NativeAuthFailure:
+        raise
     except Exception as e:
         if not PrismaDBExceptionHandler.is_database_service_unavailable_error_in_chain(e):
             verbose_proxy_logger.debug("org lookup failed, continuing without org limits", exc_info=True)
@@ -4582,6 +4640,8 @@ async def get_access_group_tables(
                 raise
             verbose_proxy_logger.debug("One of the requested access groups does not exist, it grants nothing")
             return None
+        except NativeAuthFailure:
+            raise
         except Exception:
             if check_db_only or unreadable == "raise":
                 raise
@@ -4821,105 +4881,17 @@ def _can_object_call_model(
     object_type: Literal["user", "customer", "team", "key", "org", "project", "agent"] = "user",
     fallback_depth: int = 0,
 ) -> Literal[True]:
-    """
-    Checks if token can call a given model
+    from litellm.proxy.auth import model_access_adapter
 
-    Args:
-        - model: str
-        - llm_router: Optional[Router]
-        - models: List[str]
-        - team_model_aliases: Optional[Dict[str, str]]
-        - object_type: Literal["user", "team", "key", "org"]. We use the object type to raise the correct exception type
-
-    Returns:
-        - True: if token allowed to call model
-
-    Raises:
-        - Exception: If token not allowed to call model
-    """
-    if fallback_depth >= DEFAULT_MAX_RECURSE_DEPTH:
-        raise Exception(f"Unable to parse model, max fallback depth exceeded - received model: {model}")
-    if isinstance(model, list):
-        for m in model:
-            can_object_call_model(
-                model=m,
-                llm_router=llm_router,
-                models=models,
-                team_model_aliases=team_model_aliases,
-                team_id=team_id,
-                key_model_aliases=key_model_aliases,
-                object_type=object_type,
-                fallback_depth=fallback_depth + 1,
-            )
-        return True
-
-    from litellm.router_strategy.complexity_router.context_compaction import native_compaction_parent
-
-    compaction_parent: Final = native_compaction_parent(model)
-    global_or_router_alias_target: Final = (
-        litellm.model_alias_map[model]
-        if model in litellm.model_alias_map
-        else (
-            llm_router.registry().resolve(model, kind="alias")
-            if llm_router is not None and model in llm_router.registry().aliases()
-            else None
-        )
-    )
-    after_team_alias: Final = team_model_aliases.get(model, model) if team_model_aliases else model
-    after_key_alias: Final = (
-        key_model_aliases.get(after_team_alias, after_team_alias) if key_model_aliases else after_team_alias
-    )
-    after_global_alias: Final = litellm.model_alias_map.get(after_key_alias, after_key_alias)
-    dispatched_model: Final = (
-        key_model_aliases.get(after_global_alias, after_global_alias) if key_model_aliases else after_global_alias
-    )
-    key_alias_applied: Final = after_key_alias != after_team_alias or dispatched_model != after_global_alias
-    potential_models: Final = (
-        (dispatched_model,)
-        if key_alias_applied
-        else (
-            *((model, compaction_parent) if compaction_parent is not None else (model,)),
-            *((global_or_router_alias_target,) if global_or_router_alias_target else ()),
-        )
-    )
-    owning_team_names: Final = (
-        ()
-        if key_alias_applied
-        else _owning_team_names_for_team_deployment(
-            model=model, llm_router=llm_router, team_id=team_id, team_model_aliases=team_model_aliases
-        )
-    )
-
-    ## check model access for alias + underlying model - allow if either is in allowed models
-    for m in potential_models:
-        if check_model_access_helper(
-            model=m,
-            llm_router=llm_router,
-            models=models,
-            team_model_aliases=team_model_aliases,
-            team_id=team_id,
-        ):
-            return True
-    if any(
-        check_model_access_helper(model=name, llm_router=llm_router, models=models, team_id=team_id)
-        for name in owning_team_names
-    ):
-        return True
-
-    internal_message: Final = (
-        f"{object_type} not allowed to access model. This {object_type} can only access models={models}. "
-        f"Tried to access {model}"
-    )
-    raise ModelAccessDeniedProxyException(
-        message=(
-            customer_model_access_denied_client_message(model=model)
-            if object_type == "customer"
-            else model_access_denied_client_message(model=model)
-        ),
-        internal_message=internal_message,
-        type=ProxyErrorTypes.get_model_access_error_type_for_object(object_type=object_type),
-        param="model",
-        code=status.HTTP_403_FORBIDDEN,
+    return model_access_adapter.can_object_call_model(
+        model=model,
+        llm_router=llm_router,
+        models=models,
+        team_model_aliases=team_model_aliases,
+        team_id=team_id,
+        key_model_aliases=key_model_aliases,
+        object_type=object_type,
+        fallback_depth=fallback_depth,
     )
 
 
@@ -5206,6 +5178,8 @@ async def _org_granted_models(
             user_api_key_cache=user_api_key_cache,
             proxy_logging_obj=proxy_logging_obj,
         )
+    except NativeAuthFailure:
+        raise
     except Exception as e:  # noqa: BLE001  # fail-safe: attribution degrades to "no org grant", it must never break auth
         verbose_proxy_logger.debug("access group attribution: org lookup failed: %s", e)
         return ()
@@ -5340,6 +5314,8 @@ async def stamp_matched_model_access_groups(
             team_membership=team_membership,
             team_membership_loaded=team_membership_loaded,
         )
+    except NativeAuthFailure:
+        raise
     except Exception as e:  # noqa: BLE001  # fail-safe: attribution is spend telemetry, it must never break auth
         verbose_proxy_logger.debug("model access group attribution failed: %s", e)
         return ()
@@ -5357,48 +5333,15 @@ async def can_key_call_model(
     llm_router: RegistryReader | None,
     prisma_client: DatabaseClient | None = None,
 ) -> Literal[True]:
-    """
-    Checks if token can call a given model
+    from litellm.proxy.auth import model_access_adapter
 
-    1. First checks native key-level model permissions (current implementation)
-    2. If not allowed natively, falls back to access_group_ids on the key
-
-    Returns:
-        - True: if token allowed to call model
-
-    Raises:
-        - Exception: If token not allowed to call model
-    """
-    key_models: Final = _resolve_key_models_for_auth_check(valid_token=valid_token)
-    try:
-        return can_object_call_model(
-            model=model,
-            llm_router=llm_router,
-            models=key_models,
-            team_model_aliases=valid_token.team_model_aliases,
-            team_id=valid_token.team_id,
-            key_model_aliases=key_model_aliases_for_auth_check(valid_token),
-            object_type="key",
-        )
-    except ProxyException:
-        # Fallback: check key's access_group_ids
-        key_access_group_ids: Final = valid_token.access_group_ids or []
-        if key_access_group_ids:
-            models_from_groups: Final = await get_models_from_access_groups(
-                access_group_ids=key_access_group_ids,
-                prisma_client=prisma_client,
-            )
-            if models_from_groups:
-                return can_object_call_model(
-                    model=model,
-                    llm_router=llm_router,
-                    models=models_from_groups,
-                    team_model_aliases=valid_token.team_model_aliases,
-                    team_id=valid_token.team_id,
-                    key_model_aliases=key_model_aliases_for_auth_check(valid_token),
-                    object_type="key",
-                )
-        raise
+    return await model_access_adapter.can_key_call_model(
+        model=model,
+        llm_model_list=llm_model_list,
+        valid_token=valid_token,
+        llm_router=llm_router,
+        prisma_client=prisma_client,
+    )
 
 
 async def _personal_key_owner(
@@ -5421,6 +5364,8 @@ async def _personal_key_owner(
             proxy_logging_obj=proxy_logging_obj,
             check_db_only=check_db_only,
         )
+    except NativeAuthFailure:
+        raise
     except Exception as e:  # noqa: BLE001  # fail closed: an owner that cannot be loaded grants nothing
         verbose_proxy_logger.warning(
             "Personal key team model access: owner lookup failed, granting nothing: %s",
@@ -5464,6 +5409,8 @@ async def can_key_call_resolved_model(
                 proxy_logging_obj=proxy_logging_obj,
             )
             team_object_from_lookup = True
+        except NativeAuthFailure:
+            raise
         except Exception:
             team_object = LiteLLM_TeamTableCachedObj(
                 team_id=valid_token.team_id,
@@ -5565,16 +5512,10 @@ def can_org_access_model(
     llm_router: Router | None,
     team_model_aliases: dict[str, str] | None = None,
 ) -> Literal[True]:
-    """
-    Returns True if the team can access a specific model.
+    from litellm.proxy.auth import model_access_adapter
 
-    """
-    return can_object_call_model(
-        model=model,
-        llm_router=llm_router,
-        models=org_object.models if org_object else [],
-        team_model_aliases=team_model_aliases,
-        object_type="org",
+    return model_access_adapter.can_org_access_model(
+        model=model, org_object=org_object, llm_router=llm_router, team_model_aliases=team_model_aliases
     )
 
 
@@ -5586,41 +5527,16 @@ async def can_team_access_model(
     key_model_aliases: Mapping[str, str] | None = None,
     prisma_client: DatabaseClient | None = None,
 ) -> Literal[True]:
-    """
-    Returns True if the team can access a specific model.
+    from litellm.proxy.auth import model_access_adapter
 
-    1. First checks native team-level model permissions (current implementation)
-    2. If not allowed natively, falls back to access_group_ids on the team
-    """
-    try:
-        return can_object_call_model(
-            model=model,
-            llm_router=llm_router,
-            models=team_object.models if team_object else [],
-            team_model_aliases=team_model_aliases,
-            team_id=team_object.team_id if team_object else None,
-            key_model_aliases=key_model_aliases,
-            object_type="team",
-        )
-    except ProxyException:
-        # Fallback: check team's access_group_ids
-        team_access_group_ids: Final = (team_object.access_group_ids or []) if team_object else []
-        if team_access_group_ids:
-            models_from_groups: Final = await get_models_from_access_groups(
-                access_group_ids=team_access_group_ids,
-                prisma_client=prisma_client,
-            )
-            if models_from_groups:
-                return can_object_call_model(
-                    model=model,
-                    llm_router=llm_router,
-                    models=list(dict.fromkeys([*(team_object.models if team_object else []), *models_from_groups])),
-                    team_model_aliases=team_model_aliases,
-                    team_id=team_object.team_id if team_object else None,
-                    key_model_aliases=key_model_aliases,
-                    object_type="team",
-                )
-        raise
+    return await model_access_adapter.can_team_access_model(
+        model=model,
+        team_object=team_object,
+        llm_router=llm_router,
+        team_model_aliases=team_model_aliases,
+        key_model_aliases=key_model_aliases,
+        prisma_client=prisma_client,
+    )
 
 
 async def get_authorized_resources_from_key_access_groups(
@@ -5630,54 +5546,15 @@ async def get_authorized_resources_from_key_access_groups(
     check_db_only: bool = False,
     strict_errors: bool = False,
 ) -> list[str]:
-    """
-    For each access_group_id on the key, fetch the LiteLLM_AccessGroupTable row
-    and contribute its `resource_field` only if the group authorizes the caller
-    as an owner — that is, the group's `assigned_team_ids` includes the key's
-    `team_id`, or the group's `assigned_key_ids` includes the key's token. This
-    preserves the team-as-owner boundary while still letting a group reach the
-    key without first being added to the team's `access_group_ids` list.
-    """
-    if valid_token is None:
-        return []
-    key_access_group_ids: Final = list(valid_token.access_group_ids or [])
-    if not key_access_group_ids:
-        return []
+    from litellm.proxy.auth import model_group_adapter
 
-    from litellm.proxy.proxy_server import prisma_client as _prisma_client
-    from litellm.proxy.proxy_server import proxy_logging_obj as _proxy_logging_obj
-    from litellm.proxy.proxy_server import user_api_key_cache as _user_api_key_cache
-
-    if _prisma_client is None or _user_api_key_cache is None:
-        return []
-
-    key_team_id: Final = valid_token.team_id or (team_object.team_id if team_object is not None else None)
-    key_token: Final = valid_token.token
-
-    authorized_resources: Final[list[str]] = []
-    for ag_id in key_access_group_ids:
-        try:
-            ag = await get_access_object(
-                access_group_id=ag_id,
-                prisma_client=_prisma_client,
-                user_api_key_cache=_user_api_key_cache,
-                proxy_logging_obj=_proxy_logging_obj,
-                check_db_only=check_db_only,
-            )
-        except AccessGroupNotFoundError:
-            if check_db_only or strict_errors:
-                raise
-            continue
-        except Exception:
-            if check_db_only or strict_errors:
-                raise
-            continue
-        team_authorized = bool(key_team_id and key_team_id in (ag.assigned_team_ids or []))
-        key_authorized = bool(key_token and key_token in (ag.assigned_key_ids or []))
-        if team_authorized or key_authorized:
-            authorized_resources.extend(getattr(ag, resource_field, []) or [])
-
-    return list(set(authorized_resources))
+    return await model_group_adapter.get_authorized_resources_from_key_access_groups(
+        valid_token=valid_token,
+        team_object=team_object,
+        resource_field=resource_field,
+        check_db_only=check_db_only,
+        strict_errors=strict_errors,
+    )
 
 
 async def key_access_group_grants_model(
@@ -5723,18 +5600,10 @@ def can_project_access_model(
     llm_router: RegistryReader | None,
     key_model_aliases: Mapping[str, str] | None = None,
 ) -> Literal[True]:
-    """
-    Returns True if the project can access a specific model.
+    from litellm.proxy.auth import model_access_adapter
 
-    Raises ProxyException if access is denied.
-    """
-    return can_object_call_model(
-        model=model,
-        llm_router=llm_router,
-        models=project_object.models if project_object else [],
-        team_id=project_object.team_id if project_object else None,
-        key_model_aliases=key_model_aliases,
-        object_type="project",
+    return model_access_adapter.can_project_access_model(
+        model=model, project_object=project_object, llm_router=llm_router, key_model_aliases=key_model_aliases
     )
 
 
@@ -5744,27 +5613,11 @@ def can_customer_access_model(
     llm_router: RegistryReader | None,
     valid_token: UserAPIKeyAuth | None,
 ) -> Literal[True]:
-    team_model_aliases: Final = team_model_aliases_for_auth_check(valid_token) if valid_token is not None else None
-    team_id: Final = valid_token.team_id if valid_token is not None else None
-    key_model_aliases: Final = key_model_aliases_for_auth_check(valid_token)
+    from litellm.proxy.auth import model_access_adapter
 
-    def check(name: str) -> None:
-        team_target: Final = (
-            _live_team_alias_target(name, team_model_aliases, team_id, llm_router) if team_model_aliases else name
-        )
-        if team_target != name and name in (end_user_object.models or ()):
-            return
-        can_object_call_model(
-            model=team_target,
-            llm_router=llm_router,
-            models=end_user_object.models,
-            key_model_aliases=key_model_aliases,
-            object_type="customer",
-        )
-
-    for name in (model,) if isinstance(model, str) else model:
-        check(name)
-    return True
+    return model_access_adapter.can_customer_access_model(
+        model=model, end_user_object=end_user_object, llm_router=llm_router, valid_token=valid_token
+    )
 
 
 async def can_user_call_model(
@@ -5773,28 +5626,10 @@ async def can_user_call_model(
     user_object: LiteLLM_UserTable | None,
     key_model_aliases: Mapping[str, str] | None = None,
 ) -> Literal[True]:
-    if user_object is None:
-        return True
+    from litellm.proxy.auth import model_access_adapter
 
-    if SpecialModelNames.no_default_models.value in user_object.models:
-        internal_message: Final = (
-            f"User not allowed to access model. No default model access, only team models allowed. "
-            f"Tried to access {model}"
-        )
-        raise ModelAccessDeniedProxyException(
-            message=model_access_denied_client_message(model=model),
-            internal_message=internal_message,
-            type=ProxyErrorTypes.key_model_access_denied,
-            param="model",
-            code=status.HTTP_403_FORBIDDEN,
-        )
-
-    return can_object_call_model(
-        model=model,
-        llm_router=llm_router,
-        models=user_object.models,
-        key_model_aliases=key_model_aliases,
-        object_type="user",
+    return await model_access_adapter.can_user_call_model(
+        model=model, llm_router=llm_router, user_object=user_object, key_model_aliases=key_model_aliases
     )
 
 
@@ -5844,6 +5679,8 @@ async def _load_personal_key_team_with_status(
             proxy_logging_obj=proxy_logging_obj,
             check_db_only=check_db_only,
         )
+    except NativeAuthFailure:
+        raise
     except Exception as e:  # noqa: BLE001  # fail closed: a team that cannot be loaded grants nothing
         verbose_proxy_logger.warning(
             "Personal key team model access: team=%s lookup failed, granting nothing: %s", team_id, e
@@ -5930,6 +5767,8 @@ async def _team_grants_personal_key_model(
         )
     except ProxyException:
         return False
+    except NativeAuthFailure:
+        raise
     except Exception as e:  # noqa: BLE001  # fail closed: a team check that errors grants nothing
         verbose_proxy_logger.warning(
             "Personal key team model access: team=%s check failed, granting nothing: %s", team_object.team_id, e
@@ -6060,6 +5899,8 @@ async def _personal_key_team_within_budget(
         )
     except litellm.BudgetExceededError:
         return False
+    except NativeAuthFailure:
+        raise
     except Exception as e:  # noqa: BLE001  # fail closed: a team whose budget cannot be checked grants nothing
         verbose_proxy_logger.warning("Failed to check budget for personal key team %s, skipping: %s", team.team_id, e)
         return False
@@ -6362,6 +6203,8 @@ def _search_tool_denied(object_type: GrantLayer, message: str) -> ProxyException
 async def _strict_team_object(load_team_object: TeamObjectLoader) -> LiteLLM_TeamTable | None:
     try:
         return await load_team_object()
+    except NativeAuthFailure:
+        raise
     except Exception as e:  # noqa: BLE001  # an unresolved team grants nothing under deny-by-default
         verbose_proxy_logger.debug("Team lookup failed under search_tool_deny_by_default: %s", e)
         return None
@@ -6380,6 +6223,8 @@ async def _strict_user_object(
             user_id_upsert=False,
             parent_otel_span=valid_token.parent_otel_span,
         )
+    except NativeAuthFailure:
+        raise
     except Exception as e:  # noqa: BLE001  # an unresolved user grants nothing under deny-by-default
         verbose_proxy_logger.debug("User lookup failed under search_tool_deny_by_default: %s", e)
         return None
@@ -7197,6 +7042,8 @@ def _model_custom_llm_provider_matches_wildcard_pattern(model: str, allowed_mode
     """
     try:
         stripped_model, custom_llm_provider, _, _ = get_llm_provider(model=model)
+    except NativeAuthFailure:
+        raise
     except Exception:
         return False
 

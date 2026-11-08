@@ -3,6 +3,7 @@ from typing import Final, Literal, TypeAlias
 
 from pydantic import TypeAdapter
 
+from litellm._auth.failure import native_boundary
 from litellm.rust_bridge import _native
 
 BudgetScope: TypeAlias = Literal[
@@ -94,17 +95,21 @@ _MEMBER: Final = TypeAdapter(MemberLimitFacts)
 _WINDOW: Final = TypeAdapter(WindowFacts)
 
 
+@native_boundary
 def check(facts: BudgetFacts) -> BudgetDecision:
     return _DECISION.validate_python(_native.request_auth_common_budget(_FACTS.dump_python(facts)))  # pyright: ignore[reportAny]  # Pydantic serializes the validated frozen facts for the native boundary
 
 
+@native_boundary
 def alert(facts: AlertFacts) -> bool:
     return _native.request_auth_budget_alert(_ALERT.dump_python(facts))  # pyright: ignore[reportAny]  # Pydantic serializes the validated frozen facts for the native boundary
 
 
+@native_boundary
 def member_limit(facts: MemberLimitFacts) -> float | None:
     return _native.request_auth_member_limit(_MEMBER.dump_python(facts))  # pyright: ignore[reportAny]  # Pydantic serializes the validated frozen facts for the native boundary
 
 
+@native_boundary
 def window_start(facts: WindowFacts) -> float | None:
     return _native.request_auth_budget_window_start(_WINDOW.dump_python(facts))  # pyright: ignore[reportAny]  # Pydantic serializes the validated frozen facts for the native boundary

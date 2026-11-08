@@ -3,6 +3,7 @@ from typing import Final, Literal, TypeAlias
 
 from pydantic import TypeAdapter
 
+from litellm._auth.failure import native_boundary
 from litellm.rust_bridge import _native
 
 
@@ -52,10 +53,12 @@ _ROUTE: Final = TypeAdapter(RouteBudgetFacts)
 _ROUTE_DECISION: Final = TypeAdapter[RouteBudgetDecision](RouteBudgetDecision)
 
 
+@native_boundary
 def price(facts: ModelPriceFacts) -> PriceDecision:
     return _PRICE_DECISION.validate_python(_native.request_auth_budget_price(_PRICE.dump_python(facts)))  # pyright: ignore[reportAny]  # Pydantic serializes the validated frozen facts for the native boundary
 
 
+@native_boundary
 def route(facts: RouteBudgetFacts) -> RouteBudgetDecision:
     return _ROUTE_DECISION.validate_python(_native.request_auth_budget_route(_ROUTE.dump_python(facts)))  # pyright: ignore[reportAny]  # Pydantic serializes the validated frozen facts for the native boundary
 
@@ -82,5 +85,6 @@ _EXEMPTION: Final = TypeAdapter(ExemptionFacts)
 _EXEMPTION_DECISION: Final = TypeAdapter(ExemptionDecision)
 
 
+@native_boundary
 def exemption(facts: ExemptionFacts) -> ExemptionDecision:
     return _EXEMPTION_DECISION.validate_python(_native.request_auth_budget_exemption(_EXEMPTION.dump_python(facts)))  # pyright: ignore[reportAny]  # Pydantic serializes frozen facts

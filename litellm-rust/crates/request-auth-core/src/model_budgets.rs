@@ -53,7 +53,8 @@ fn key_models(
         Effect::CheckKeyModelBudget {
             model: model.clone(),
         },
-        move |exceeded: Option<ModelBudgetExceeded>| {
+        move |reading: ModelBudgetRead| {
+            let exceeded = reading.exceeded();
             let Some(exceeded) = exceeded else {
                 return key_models(fallbacks, rest, rewritable, then);
             };
@@ -86,7 +87,8 @@ fn first_affordable(
         Effect::CheckKeyModelBudget {
             model: candidate.clone(),
         },
-        move |over: Option<ModelBudgetExceeded>| {
+        move |reading: ModelBudgetRead| {
+            let over = reading.exceeded();
             if over.is_some() {
                 return first_affordable(rest, exceeded, found);
             }
@@ -94,9 +96,16 @@ fn first_affordable(
                 Effect::AuthorizeBudgetFallback {
                     model: candidate.clone(),
                 },
-                move |authorized: bool| {
-                    if !authorized {
-                        return Step::deny(exceeded);
+                move |facts: crate::fallback_access::Facts| {
+                    match crate::fallback_access::decide(facts)? {
+                        crate::fallback_access::Decision::Allow => (),
+                        crate::fallback_access::Decision::Deny {
+                            denial: Some(denial @ crate::model_access::Decision::Depth { .. }),
+                        } => return Step::deny(Denial::ModelAccessDenied { decision: denial }),
+                        crate::fallback_access::Decision::Deny { .. } => {
+                            return Step::deny(exceeded);
+                        }
+                        _ => return Err(Error::InvalidAnswer),
                     }
                     Step::effect(
                         Effect::RewriteRequestModel {
@@ -122,7 +131,7 @@ fn user_models(enabled: bool, models: Vec<String>, then: Then) -> Result<Step, E
         Effect::CheckUserModelBudget {
             model: model.clone(),
         },
-        move |exceeded: Option<ModelBudgetExceeded>| match exceeded {
+        move |reading: ModelBudgetRead| match reading.exceeded() {
             Some(exceeded) => Step::deny(exceeded),
             None => user_models(enabled, rest, then),
         },
@@ -155,7 +164,8 @@ fn member_models(
         Effect::CheckTeamMemberModelBudget {
             model: model.clone(),
         },
-        move |exceeded: Option<ModelBudgetExceeded>| {
+        move |reading: ModelBudgetRead| {
+            let exceeded = reading.exceeded();
             let Some(exceeded) = exceeded else {
                 return member_models(rest, rewritable, can_fall_back);
             };
@@ -234,11 +244,40 @@ mod tests {
         assert!(
             matches!(read.node, Node::Effect(Effect::CheckKeyModelBudget { ref model }) if model == "first")
         );
-        let authorize = (read.resume.unwrap())(Answer::Exceeded(None)).unwrap();
+        let authorize = (read.resume.unwrap())(Answer::ModelBudgetData(ModelBudgetRead {
+            snapshot: crate::model_budget_data::Snapshot {
+                max_budget: None,
+                local_spend: None,
+                legacy_spend: None,
+                shared_spend: None,
+                shared_started_at: None,
+                shared_window_seconds: None,
+                now: 0.0,
+            },
+            message: String::new(),
+            entity_type: None,
+            entity_id: None,
+        }))
+        .unwrap();
         assert!(
             matches!(authorize.node, Node::Effect(Effect::AuthorizeBudgetFallback { ref model }) if model == "first")
         );
-        let result = (authorize.resume.unwrap())(Answer::Bool(false)).unwrap();
+        let result =
+            (authorize.resume.unwrap())(Answer::FallbackAccess(crate::fallback_access::Facts {
+                refuse_agent_keys: true,
+                agent_id: Some("agent".into()),
+                key: None,
+                team: None,
+                embedded_team: None,
+                assigned_models: None,
+                member: None,
+                project: None,
+                team_present: false,
+                embedded_team_grants: vec![],
+                member_grants: vec![],
+                project_grants: vec![],
+            }))
+            .unwrap();
         assert!(matches!(
             result.node,
             Node::Outcome(Outcome::Deny {

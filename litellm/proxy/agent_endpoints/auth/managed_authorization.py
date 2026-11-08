@@ -2,12 +2,11 @@ from collections.abc import Mapping
 from dataclasses import replace
 from itertools import product
 from types import MappingProxyType
-from typing import Annotated, Final, Literal
+from typing import Final, Literal, assert_never
 
-from pydantic import Field, TypeAdapter, ValidationError
+from pydantic import TypeAdapter, ValidationError
 
-from litellm._auth import managed
-
+from litellm._auth import agent_access, managed
 from litellm.proxy._types import LiteLLMRoutes, UserAPIKeyAuth
 from litellm.proxy.agent_endpoints.identity_store import AgentIdentityStore
 from litellm.proxy.agent_endpoints.managed_identity import raise_identity_failure
@@ -97,17 +96,18 @@ _MODEL_ROUTE_KINDS: Final[
 
 
 def managed_agent_route_allowed(route: str, method: str | None) -> bool:
-    from litellm.proxy.auth.route_checks import RouteChecks
+    from litellm.proxy.auth import route_policy_adapter
 
-    if route in ("/agents", "/v1/agents"):
-        return method in (None, "GET", "HEAD")
-    if route in _MANAGED_REALTIME_ROUTES or route in _MANAGED_LIVE_ROUTES:
-        return method in (None, "GET")
-    if route in _MANAGED_MODEL_ROUTES or RouteChecks.check_route_access(route, _MANAGED_MODEL_PATHS):
-        return method in (None, "POST")
-    return RouteChecks.check_route_access(route, _MANAGED_MCP_ROUTES) or RouteChecks.check_route_access(
-        route, LiteLLMRoutes.agent_inference_routes.value
-    )
+    return route_policy_adapter.classify(route, "Managed", method)
+
+
+def _model_route_kind(
+    route: str,
+) -> Literal["completion", "image_generation", "image_edit", "moderation", "speech", "body", "path"]:
+    for suffix, kind in _MODEL_ROUTE_KINDS.items():
+        if route.endswith(suffix):
+            return kind
+    return "completion"
 
 
 def managed_inference_request(
@@ -137,7 +137,7 @@ def managed_inference_request(
         return dict(body)
     from litellm.proxy.common_utils.http_parsing_utils import resolve_inference_model
 
-    kind: Final = next((kind for suffix, kind in _MODEL_ROUTE_KINDS.items() if route.endswith(suffix)), "completion")
+    kind: Final = _model_route_kind(route)
     endpoint_model: Final = path_model or (
         query_model if route.endswith(("/completions", "/embeddings", "/images/generations", "/images/edits")) else None
     )
@@ -207,7 +207,7 @@ async def _drive_actor(
         await _drive_actor(
             auth,
             store,
-            replace(facts, agent_loaded=True, agent=_managed_agent(loaded) if loaded is not None else None),
+            replace(facts, agent_loaded=True, agent=project_agent(loaded) if loaded is not None else None),
             loaded,
         )
         return
@@ -235,7 +235,7 @@ async def _drive_actor(
     raise RuntimeError("Invalid managed actor decision")
 
 
-def _managed_agent(agent: AgentResponse) -> managed.Agent:
+def project_agent(agent: AgentResponse) -> managed.Agent:
     return managed.Agent(
         agent_id=agent.agent_id,
         enabled=agent.enabled,
@@ -282,11 +282,11 @@ def actor_admission_failure(
     agent: AgentResponse,
     context: ManagedAgentContext | None,
 ) -> AgentIdentityFailure | None:
-    decision: Final = managed.decide(managed.Actor(_managed_agent(agent), _managed_context(context)))
+    decision: Final = managed.decide(managed.Actor(project_agent(agent), _managed_context(context)))
     return _managed_failure(decision.denial) if decision.denial is not None else None
 
 
-_INVOCATION_COST: Final = TypeAdapter(Annotated[float, Field(ge=0, allow_inf_nan=False)])
+_INVOCATION_COST: Final = TypeAdapter(float)
 
 
 def invocation_target(route: str, body: Mapping[str, object]) -> str | None:
@@ -301,36 +301,93 @@ def invocation_target(route: str, body: Mapping[str, object]) -> str | None:
 async def prepare_agent_invocation(
     auth: UserAPIKeyAuth, target_name: str, store: AgentIdentityStore | None, *, billable: bool = True
 ) -> None:
-    from litellm.proxy.agent_endpoints.auth.agent_permission_handler import AgentRequestHandler
     from litellm.proxy.common_utils.registry_read_through import get_agent_with_read_through
 
     registered: Final = await get_agent_with_read_through(target_name)
-    if registered is None:
-        return
-    registered_managed: Final = registered.identity_managed or registered.identity is not None
-    if store is None and registered_managed:
-        raise_identity_failure(
-            AgentIdentityFailure(code="policy_unavailable", message="Managed agent policy requires a database")
-        )
-    target: Final = await store.agent(registered.agent_id) if store is not None else None
-    if isinstance(target, AgentIdentityFailure):
-        raise_identity_failure(target)
-    if target is None and registered_managed:
-        raise_identity_failure(AgentIdentityFailure(message="Invoked agent no longer exists"))
-    effective: Final = target if target is not None else registered
-    if not effective.identity_managed and auth.managed_agent_policy is None:
-        return
-    if not await AgentRequestHandler.is_agent_allowed(effective.agent_id, auth):
-        raise_identity_failure(AgentIdentityFailure(message="The caller is not permitted to invoke this agent"))
-    auth.invoked_agent_id = effective.agent_id
-    auth.invoked_agent_policy = effective
-    if auth.agent_id is None and effective.identity_managed:
-        auth.billing_agent_policy = effective
-    raw_fee: Final = (effective.litellm_params or MappingProxyType({})).get("cost_per_query", 0.0) if billable else 0.0
+    facts: Final = agent_access.InvocationFacts(
+        registered=project_agent(registered) if registered is not None else None,
+        has_store=store is not None,
+        actor_managed=auth.managed_agent_policy is not None,
+        actor_id_present=auth.agent_id is not None,
+    )
+    await _drive_invocation(auth, store, registered, None, billable, facts)
+
+
+async def _drive_invocation(
+    auth: UserAPIKeyAuth,  # mutable-ok: native directives update the shared request auth carrier
+    store: AgentIdentityStore | None,
+    registered: AgentResponse | None,
+    target: AgentResponse | None,
+    billable: bool,
+    facts: agent_access.InvocationFacts,
+) -> None:
+    plan: Final = agent_access.invocation(facts)
+    effective: Final = target if plan.use_target else registered
+    match plan.action:
+        case "Complete":
+            if facts.fee_loaded:
+                assert facts.fee is not None
+                auth.agent_invocation_cost = facts.fee
+            return
+        case "Deny":
+            failures: Final = MappingProxyType(
+                {
+                    "DatabaseRequired": AgentIdentityFailure(
+                        code="policy_unavailable", message="Managed agent policy requires a database"
+                    ),
+                    "Removed": AgentIdentityFailure(message="Invoked agent no longer exists"),
+                    "CallerNotPermitted": AgentIdentityFailure(
+                        message="The caller is not permitted to invoke this agent"
+                    ),
+                    "InvalidFee": AgentIdentityFailure(
+                        code="policy_unavailable", message="Agent invocation price is invalid"
+                    ),
+                }
+            )
+            assert plan.denial is not None
+            raise_identity_failure(failures[plan.denial])
+        case "ReadTarget":
+            assert registered is not None
+            loaded: Final = await store.agent(registered.agent_id) if store is not None else None
+            if isinstance(loaded, AgentIdentityFailure):
+                raise_identity_failure(loaded)
+            await _drive_invocation(
+                auth,
+                store,
+                registered,
+                loaded,
+                billable,
+                replace(facts, target_loaded=True, target=project_agent(loaded) if loaded is not None else None),
+            )
+        case "ReadPermissions":
+            from litellm.proxy.agent_endpoints.auth.agent_permission_handler import read_agent_access_facts
+
+            assert effective is not None
+            permissions: Final = await read_agent_access_facts(effective.agent_id, auth)
+            await _drive_invocation(auth, store, registered, target, billable, replace(facts, permissions=permissions))
+        case "Assign":
+            assert effective is not None
+            auth.invoked_agent_id = effective.agent_id
+            auth.invoked_agent_policy = effective
+            if plan.assign_billing:
+                auth.billing_agent_policy = effective
+            await _drive_invocation(auth, store, registered, target, billable, replace(facts, assigned=True))
+        case "ReadFee":
+            assert effective is not None
+            raw: Final = (
+                (effective.litellm_params or MappingProxyType[str, object]({})).get("cost_per_query", 0.0)
+                if billable
+                else 0.0
+            )
+            await _drive_invocation(
+                auth, store, registered, target, billable, replace(facts, fee_loaded=True, fee=_invocation_fee(raw))
+            )
+        case _:
+            assert_never(plan.action)
+
+
+def _invocation_fee(raw: object) -> float | None:
     try:
-        fee: Final = _INVOCATION_COST.validate_python(raw_fee)
+        return _INVOCATION_COST.validate_python(raw)
     except ValidationError:
-        raise_identity_failure(
-            AgentIdentityFailure(code="policy_unavailable", message="Agent invocation price is invalid")
-        )
-    auth.agent_invocation_cost = fee
+        return None

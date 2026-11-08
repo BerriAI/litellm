@@ -7,6 +7,7 @@ from pydantic import TypeAdapter
 import litellm
 from litellm._auth import budget_pricing
 from litellm._auth.budget_pricing import DeploymentPrice, ModelPriceFacts, RouteBudgetFacts
+from litellm._auth.failure import NativeAuthFailure
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.decisions_pricing import decisions_pricing_fields, decisions_request_price
 from litellm.proxy.auth.route_checks import RouteChecks
@@ -56,6 +57,8 @@ def read_model_price_facts(model: str, router: Router, cached: bool | None = Non
             input_price=group.input_cost_per_token if group is not None else None,
             output_price=group.output_cost_per_token if group is not None else None,
         )
+    except NativeAuthFailure:
+        raise
     except Exception:  # noqa: BLE001  # preserve lookup failure as non-exempt without caching
         return ModelPriceFacts(lookup_failed=True)
     if not budget_pricing.price(facts).read_deployments:
@@ -64,6 +67,8 @@ def read_model_price_facts(model: str, router: Router, cached: bool | None = Non
         deployments: Final = tuple(
             _deployment_price(deployment) for deployment in _deployments_served_for(model, router)
         )
+    except NativeAuthFailure:
+        raise
     except Exception:  # noqa: BLE001  # preserve lookup failure as non-exempt without caching
         return ModelPriceFacts(lookup_failed=True)
     return replace(facts, deployments=deployments)

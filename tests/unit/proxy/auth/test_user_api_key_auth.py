@@ -1404,14 +1404,15 @@ async def test_check_user_model_budget(user_id, user_model_max_budget, expected_
     calls = []
 
     class _Limiter:
-        async def is_key_within_model_budget(self, user_api_key_dict: UserAPIKeyAuth, model: str) -> bool:
-            return True
+        async def read_model_budget_raw(
+            self, entity: str, entity_id: str | None, team_id: str | None, model: str,
+            budgets: Mapping[str, object] | None, key_budgets: Mapping[str, object] | None = None,
+        ):
+            from litellm._auth.model_budget_data import ModelBudgetSnapshot
+            from litellm.proxy.auth.model_budget_adapter import ModelBudgetReading
 
-        async def is_user_within_model_budget(
-            self, user_id: str, user_model_max_budget: Mapping[str, object], model: str, team_id: str | None = None
-        ) -> bool:
-            calls.append((user_id, user_model_max_budget, model))
-            return True
+            calls.append((entity_id, budgets, model))
+            return ModelBudgetReading(ModelBudgetSnapshot(None, None, None, None, None, None, 0), model, model)
 
     valid_token = UserAPIKeyAuth(
         token="hash",

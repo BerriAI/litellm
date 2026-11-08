@@ -4,6 +4,7 @@ from typing import Final, Literal, TypeAlias
 
 from pydantic import TypeAdapter
 
+from litellm._auth.failure import native_boundary
 from litellm.rust_bridge import _native
 
 
@@ -94,6 +95,7 @@ class RouteDecision:
 _DECISION: Final = TypeAdapter(RouteDecision)
 
 
+@native_boundary
 def match_route(
     route: str,
     patterns: tuple[str, ...],
@@ -104,6 +106,7 @@ def match_route(
     ).allowed
 
 
+@native_boundary
 def classify_route(
     context: RouteContext, kind: Literal["Llm", "Unbilled", "Discovery", "SelfCredential", "Azure", "Managed"]
 ) -> bool:
@@ -112,18 +115,22 @@ def classify_route(
     ).allowed
 
 
+@native_boundary
 def virtual_route(facts: VirtualRouteFacts) -> RouteDecision:
     return _DECISION.validate_python(_native.request_auth_route_access({"Virtual": asdict(facts)}))
 
 
+@native_boundary
 def non_admin_route(facts: NonAdminFacts) -> RouteDecision:
     return _DECISION.validate_python(_native.request_auth_route_access({"NonAdmin": asdict(facts)}))
 
 
+@native_boundary
 def viewer_route(facts: ViewerFacts) -> RouteDecision:
     return _DECISION.validate_python(_native.request_auth_route_access({"Viewer": asdict(facts)}))
 
 
+@native_boundary
 def passthrough_route(context: RouteContext, facts: PassThroughFacts, *, required: bool = False) -> RouteDecision:
     return _DECISION.validate_python(
         _native.request_auth_route_access(
@@ -132,6 +139,7 @@ def passthrough_route(context: RouteContext, facts: PassThroughFacts, *, require
     )
 
 
+@native_boundary
 def denied_passthrough_route(route: str, facts: PassThroughFacts) -> RouteDecision:
     return _DECISION.validate_python(
         _native.request_auth_route_access({"DeniedPassThrough": {"route": route, "facts": asdict(facts)}})

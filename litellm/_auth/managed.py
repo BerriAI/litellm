@@ -3,6 +3,7 @@ from typing import Final, Literal, TypeAlias
 
 from pydantic import TypeAdapter
 
+from litellm._auth.failure import native_boundary
 from litellm._auth.rust_core import encode_facts
 from litellm.rust_bridge import _native
 
@@ -68,8 +69,20 @@ class DeclaredGrants:
     direct: tuple[str, ...]
     declared_groups: tuple[str, ...]
     unified_groups: tuple[str, ...]
-    group_agents: tuple[str, ...]
-    unified_agents: tuple[str, ...]
+    group_agents: tuple[str, ...] | None = None
+    unified_agents: tuple[str, ...] | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ManagedAgentGrants:
+    permission_present: bool
+    mode: str | None
+    user_present: bool
+    own: tuple[str, ...] | None = None
+    ceilings: tuple[tuple[str, ...], ...] | None = None
+    caller_loaded: bool = False
+    caller: tuple[str, ...] | None = None
+    human: tuple[str, ...] | None = None
 
 
 ManagedDenial: TypeAlias = Literal[
@@ -88,7 +101,19 @@ ManagedDenial: TypeAlias = Literal[
 @dataclass(frozen=True, slots=True)
 class ManagedDecision:
     action: Literal[
-        "Allow", "Deny", "ReadRegistry", "ReadAgent", "ReadRetired", "AssignPolicy", "ReadHumanGrants", "Grants"
+        "Allow",
+        "Deny",
+        "ReadRegistry",
+        "ReadAgent",
+        "ReadRetired",
+        "AssignPolicy",
+        "ReadHumanGrants",
+        "Grants",
+        "ReadDeclaredGroups",
+        "ReadUnifiedGroups",
+        "ReadOwn",
+        "ReadCeilings",
+        "ReadCaller",
     ]
     denial: ManagedDenial | None
     grants: tuple[str, ...] | None
@@ -97,5 +122,8 @@ class ManagedDecision:
 _DECISION: Final = TypeAdapter(ManagedDecision)
 
 
-def decide(facts: Actor | ActorLookup | UnionGrants | IntersectGrants | DeclaredGrants) -> ManagedDecision:
+@native_boundary
+def decide(
+    facts: Actor | ActorLookup | UnionGrants | IntersectGrants | DeclaredGrants | ManagedAgentGrants,
+) -> ManagedDecision:
     return _DECISION.validate_python(_native.request_auth_managed(encode_facts(facts)))

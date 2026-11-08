@@ -3,6 +3,7 @@ from typing import Final, Literal, TypeAlias
 
 from pydantic import TypeAdapter
 
+from litellm._auth.failure import native_boundary
 from litellm.rust_bridge import _native
 
 ModelBudgetEntity: TypeAlias = Literal["Key", "User", "Team", "TeamMember", "EndUser"]
@@ -70,13 +71,16 @@ _SNAPSHOT: Final = TypeAdapter(ModelBudgetSnapshot)
 _DECISION: Final = TypeAdapter(ModelBudgetDecision)
 
 
+@native_boundary
 def resolve(facts: ModelBudgetResolveFacts) -> ModelBudgetResolution:
     return _RESOLUTION.validate_python(_native.request_auth_model_budget_resolve(_RESOLVE.dump_python(facts)))  # pyright: ignore[reportAny]  # Pydantic serializes the validated frozen facts for the native boundary
 
 
+@native_boundary
 def query(facts: ModelBudgetQueryFacts) -> ModelBudgetDecision:
     return _DECISION.validate_python(_native.request_auth_model_budget_query(_QUERY.dump_python(facts)))  # pyright: ignore[reportAny]  # Pydantic serializes the validated frozen facts for the native boundary
 
 
+@native_boundary
 def check(facts: ModelBudgetSnapshot) -> ModelBudgetDecision:
     return _DECISION.validate_python(_native.request_auth_model_budget_check(_SNAPSHOT.dump_python(facts)))  # pyright: ignore[reportAny]  # Pydantic serializes the validated frozen facts for the native boundary

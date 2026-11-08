@@ -3,6 +3,10 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Deserialize)]
 #[serde(tag = "kind")]
 pub enum AccessFacts {
+    ConcurrentFailures {
+        failures: Vec<bool>,
+        terminal: Vec<bool>,
+    },
     UserParamRequest {
         enabled: bool,
     },
@@ -91,7 +95,7 @@ pub enum AccessFacts {
         dashboard: bool,
         missing: bool,
         recorded_models: Vec<String>,
-        allow_unavailable: bool,
+        allow_unavailable: Option<bool>,
     },
 }
 
@@ -128,12 +132,14 @@ pub struct AccessDecision {
     pub layers: Vec<String>,
     pub rejected_index: Option<usize>,
     pub next_trace: Option<TraceSource>,
+    pub failure_index: Option<usize>,
 }
 
 #[derive(Debug, PartialEq, Serialize, strum::VariantArray)]
 pub enum AccessRead {
     UserParam,
     GuardrailPermission,
+    UnavailablePolicy,
 }
 
 fn modifies_guardrails(keys: &[String]) -> bool {
@@ -161,6 +167,13 @@ fn nonempty(value: &Option<String>) -> bool {
 
 pub fn decide(facts: AccessFacts) -> AccessDecision {
     match facts {
+        AccessFacts::ConcurrentFailures { failures, terminal } => AccessDecision {
+            failure_index: terminal
+                .iter()
+                .position(|failed| *failed)
+                .or_else(|| failures.iter().position(|failed| *failed)),
+            ..AccessDecision::default()
+        },
         AccessFacts::UserParamRequest { enabled } => AccessDecision {
             read: enabled.then_some(AccessRead::UserParam),
             ..AccessDecision::default()
@@ -358,10 +371,19 @@ pub fn decide(facts: AccessFacts) -> AccessDecision {
             missing,
             recorded_models,
             allow_unavailable,
-        } => deny_if(
-            !dashboard && (missing || (recorded_models.is_empty() && !allow_unavailable)),
-            Denial::TeamLookup,
-        ),
+        } => {
+            if !dashboard && !missing && recorded_models.is_empty() && allow_unavailable.is_none() {
+                return AccessDecision {
+                    read: Some(AccessRead::UnavailablePolicy),
+                    ..AccessDecision::default()
+                };
+            }
+            deny_if(
+                !dashboard
+                    && (missing || (recorded_models.is_empty() && allow_unavailable != Some(true))),
+                Denial::TeamLookup,
+            )
+        }
     }
 }
 
@@ -369,6 +391,22 @@ pub fn decide(facts: AccessFacts) -> AccessDecision {
 mod tests {
     use super::*;
     use rstest::rstest;
+
+    #[rstest]
+    #[case::allow(vec![false, false], vec![false, false], None)]
+    #[case::scope_priority(vec![true, true], vec![false, false], Some(0))]
+    #[case::second_scope(vec![false, true], vec![false, false], Some(1))]
+    #[case::terminal_fault(vec![true, true], vec![false, true], Some(1))]
+    fn gathered_failures_preserve_scope_order_unless_native_failed(
+        #[case] failures: Vec<bool>,
+        #[case] terminal: Vec<bool>,
+        #[case] expected: Option<usize>,
+    ) {
+        assert_eq!(
+            decide(AccessFacts::ConcurrentFailures { failures, terminal }).failure_index,
+            expected
+        );
+    }
 
     #[rstest]
     #[case::key_overrides_team(Some(vec!["key".into()]), Some(vec!["team".into()]), vec!["team".into()])]

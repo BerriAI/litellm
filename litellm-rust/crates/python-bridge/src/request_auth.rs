@@ -10,12 +10,51 @@ use pyo3::{
 type ProjectedStep = (Py<PyAny>, Option<NativeAuthContinuation>);
 
 #[pyfunction]
+pub(crate) fn request_auth_context(
+    py: Python<'_>,
+    facts: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    let facts: core::auth_context::Facts = from_py(facts)?;
+    to_py(py, &py.detach(move || core::auth_context::plan(facts)))
+}
+
+#[pyfunction]
+pub(crate) fn request_auth_agent_grants(
+    py: Python<'_>,
+    facts: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    let facts: core::agent_grants::Facts = from_py(facts)?;
+    to_py(py, &py.detach(move || core::agent_grants::decide(facts)))
+}
+
+#[pyfunction]
 pub(crate) fn request_auth_managed(
     py: Python<'_>,
     facts: &Bound<'_, PyAny>,
 ) -> PyResult<Py<PyAny>> {
     let facts: core::managed::ManagedFacts = from_py(facts)?;
     to_py(py, &py.detach(move || core::managed::decide(facts)))
+}
+
+#[pyfunction]
+pub(crate) fn request_auth_agent_access(
+    py: Python<'_>,
+    facts: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    let facts: core::agent_access::Facts = from_py(facts)?;
+    to_py(py, &py.detach(move || core::agent_access::decide(&facts)))
+}
+
+#[pyfunction]
+pub(crate) fn request_auth_agent_invocation(
+    py: Python<'_>,
+    facts: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    let facts: core::agent_access::Invocation = from_py(facts)?;
+    to_py(
+        py,
+        &py.detach(move || core::agent_access::invocation(&facts)),
+    )
 }
 
 #[pyfunction]

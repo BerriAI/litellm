@@ -10,6 +10,7 @@ from litellm._auth.decision import (
     Deny,
     FallbackTarget,
     ModelBudgetExceeded,
+    ModelBudgetRead,
     ModelBudgetScope,
     ReadModelBudgetScope,
     ReadTeamMemberFallbacks,
@@ -22,6 +23,18 @@ from litellm._auth.decision import (
     VetTeamMemberFallback,
     WithinModelBudgets,
 )
+from tests.unit._auth.budget_reference import model
+from tests.unit._auth.raw_model_reference import fallback_access
+
+
+def exceeded(reading: ModelBudgetRead) -> ModelBudgetExceeded | None:
+    result: Final = model(reading.snapshot)
+    if not result.denied:
+        return None
+    assert reading.snapshot.max_budget is not None
+    return ModelBudgetExceeded(
+        reading.message, result.current_spend, reading.snapshot.max_budget, reading.entity_type, reading.entity_id
+    )
 
 
 def check_model_budgets(then: Callable[[], Step]) -> Step:
@@ -64,7 +77,7 @@ def _check_key_budget_of(
             exhausted=lambda: Deny(exceeded),
         )
 
-    return CheckKeyModelBudget(model=model, resume=after)
+    return CheckKeyModelBudget(model=model, resume=lambda reading: after(exceeded(reading)))
 
 
 def _first_fallback_within_budget(
@@ -75,8 +88,10 @@ def _first_fallback_within_budget(
     candidate: Final = candidates[0]
     return CheckKeyModelBudget(
         model=candidate,
-        resume=lambda exceeded: (
-            found(candidate) if exceeded is None else _first_fallback_within_budget(candidates[1:], found, exhausted)
+        resume=lambda reading: (
+            found(candidate)
+            if exceeded(reading) is None
+            else _first_fallback_within_budget(candidates[1:], found, exhausted)
         ),
     )
 
@@ -84,7 +99,9 @@ def _first_fallback_within_budget(
 def _reroute(fallback: str, exceeded: ModelBudgetExceeded, then: Callable[[], Step]) -> Step:
     return AuthorizeBudgetFallback(
         model=fallback,
-        resume=lambda authorized: RewriteRequestModel(model=fallback, resume=then) if authorized else Deny(exceeded),
+        resume=lambda facts: (
+            RewriteRequestModel(model=fallback, resume=then) if fallback_access(facts) else Deny(exceeded)
+        ),
     )
 
 
@@ -93,7 +110,9 @@ def _check_user_budgets(scope: ModelBudgetScope, models: tuple[str, ...], then: 
         return then()
     return CheckUserModelBudget(
         model=models[0],
-        resume=lambda exceeded: _check_user_budgets(scope, models[1:], then) if exceeded is None else Deny(exceeded),
+        resume=lambda reading: (
+            _check_user_budgets(scope, models[1:], then) if (failure := exceeded(reading)) is None else Deny(failure)
+        ),
     )
 
 
@@ -134,7 +153,7 @@ def _check_team_member_budget_of(
             ),
         )
 
-    return CheckTeamMemberModelBudget(model=model, resume=after)
+    return CheckTeamMemberModelBudget(model=model, resume=lambda reading: after(exceeded(reading)))
 
 
 def _first_usable_fallback(

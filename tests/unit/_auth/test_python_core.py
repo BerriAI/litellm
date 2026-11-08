@@ -6,22 +6,25 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
+from litellm._auth.budget_pricing import ExemptionFacts, RouteBudgetFacts
 from litellm._auth.decision import (
     AdminKey,
     Allow,
+    AuthCore,
     CachedAdminKey,
     Deny,
     ExpiredKey,
     KeyBlocked,
     KeyBudgetExceeded,
     KeyFacts,
-    ModelBudgetExceeded,
-    ModelBudgetScope,
     KeyWithoutToken,
     MalformedKey,
     MasterKey,
     MasterKeyOnlyRoute,
     MissingKey,
+    ModelBudgetExceeded,
+    ModelBudgetRead,
+    ModelBudgetScope,
     NoDatabase,
     NoMasterKey,
     NonAdminKey,
@@ -40,8 +43,10 @@ from litellm._auth.decision import (
     VirtualKey,
 )
 from litellm._auth.driver import drive
+from litellm._auth.fallback_access import FallbackAuthorizationFacts
 from litellm._auth.key import hash_token
-from litellm._auth.decision import AuthCore
+from litellm._auth.key_model_access import KeyAndFallbackModelAccessFacts
+from tests.unit._auth.raw_answers import budget_read, fallback_read
 
 MASTER: Final = "sk-master"
 NOW: Final = datetime(2026, 11, 6, 12, tzinfo=timezone.utc)
@@ -121,16 +126,20 @@ class RecordingHandler:
         self._record("inspect_key")
         return self.key
 
-    async def enforce_model_access(self) -> None:
+    async def enforce_model_access(self) -> KeyAndFallbackModelAccessFacts:
         self._record("enforce_model_access")
+        return KeyAndFallbackModelAccessFacts(True, ())
+
+    async def prefetch_auth_objects(self) -> None:
+        return None
 
     async def load_key_owner(self, user_id: str) -> OwnerFacts | None:
         self._record("load_key_owner", user_id)
         return self.owner
 
-    async def check_budget_exemption(self) -> bool:
+    async def check_budget_exemption(self) -> ExemptionFacts:
         self._record("check_budget_exemption")
-        return self.exempt
+        return ExemptionFacts(RouteBudgetFacts(discovery_route=self.exempt, llm_route=True), False, False, 0)
 
     async def read_team_member_budget(self, user_id: str, team_id: str) -> TeamMemberBudget | None:
         self._record("read_team_member_budget", (user_id, team_id))
@@ -156,20 +165,20 @@ class RecordingHandler:
         self._record("read_model_budget_scope")
         return self.model_budget_scope
 
-    async def check_key_model_budget(self, model: str) -> ModelBudgetExceeded | None:
+    async def check_key_model_budget(self, model: str) -> ModelBudgetRead:
         self._record("check_key_model_budget", model)
-        return None
+        return budget_read()
 
-    async def authorize_budget_fallback(self, model: str) -> bool:
+    async def authorize_budget_fallback(self, model: str) -> FallbackAuthorizationFacts:
         self._record("authorize_budget_fallback", model)
-        return True
+        return fallback_read(model)
 
     async def rewrite_request_model(self, model: str) -> None:
         self._record("rewrite_request_model", model)
 
-    async def check_user_model_budget(self, model: str) -> ModelBudgetExceeded | None:
+    async def check_user_model_budget(self, model: str) -> ModelBudgetRead:
         self._record("check_user_model_budget", model)
-        return self.user_model_budget_exceeded
+        return budget_read(self.user_model_budget_exceeded)
 
     async def load_key_context(self) -> None:
         self._record("load_key_context")

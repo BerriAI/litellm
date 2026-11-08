@@ -5,6 +5,13 @@ from litellm._auth import access, admission, managed
 
 def access_decision(facts: access.AccessFacts) -> access.AccessDecision:
     match facts:
+        case access.ConcurrentFailures(failures=failures, terminal=terminal):
+            return access.AccessDecision(
+                failure_index=next(
+                    (index for index, failed in enumerate(terminal) if failed),
+                    next((index for index, failed in enumerate(failures) if failed), None),
+                )
+            )
         case access.UserParamRequest(enabled=enabled):
             return access.AccessDecision(read="UserParam" if enabled else None)
         case access.GuardrailRequest(requested_keys=keys):
@@ -71,6 +78,8 @@ def access_decision(facts: access.AccessFacts) -> access.AccessDecision:
                 denial="VectorStores" if rejected_index is not None else None, rejected_index=rejected_index
             )
         case access.TeamLookup(dashboard=dashboard, missing=missing, recorded_models=models, allow_unavailable=allow):
+            if not dashboard and not missing and not models and allow is None:
+                return access.AccessDecision(read="UnavailablePolicy")
             return access.AccessDecision(
                 denial="TeamLookup" if not dashboard and (missing or (not models and not allow)) else None
             )

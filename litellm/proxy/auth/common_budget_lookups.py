@@ -4,6 +4,7 @@ from typing import Final
 
 from litellm._auth import common_budgets
 from litellm._auth.common_budgets import BudgetFacts
+from litellm._auth.failure import NativeAuthFailure
 from litellm.proxy._types import (
     Litellm_EntityType,
     LiteLLM_TagTable,
@@ -53,6 +54,8 @@ async def organization_max_budget_check(
             proxy_logging_obj=proxy_logging_obj,
             include_budget_table=True,
         )
+    except NativeAuthFailure:
+        raise
     except Exception:  # noqa: BLE001  # preserve organization lookup failure handling
         return
     if org is None:

@@ -3,6 +3,7 @@ from typing import Final, Literal
 
 from pydantic import TypeAdapter
 
+from litellm._auth.failure import native_boundary
 from litellm._auth.rust_core import encode_facts
 from litellm.rust_bridge import _native
 
@@ -61,13 +62,16 @@ _RESERVATION: Final = TypeAdapter(ReservationPlan)
 _OWNERSHIP: Final = TypeAdapter(OwnershipPlan)
 
 
+@native_boundary
 def common_plan(facts: CommonGate) -> CommonPlan:
     return _COMMON.validate_python(_native.request_auth_admission(encode_facts(facts)))
 
 
+@native_boundary
 def reservation_plan(facts: Reservation) -> ReservationPlan:
     return _RESERVATION.validate_python(_native.request_auth_admission(encode_facts(facts)))
 
 
+@native_boundary
 def ownership_plan(facts: Ownership) -> OwnershipPlan:
     return _OWNERSHIP.validate_python(_native.request_auth_admission(encode_facts(facts)))

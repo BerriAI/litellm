@@ -3,6 +3,7 @@ from typing import Final, Literal, TypeAlias
 
 from pydantic import TypeAdapter
 
+from litellm._auth.failure import native_boundary
 from litellm.rust_bridge import _native
 
 
@@ -43,9 +44,11 @@ class OrganizationRouteDecision:
 _DECISION: Final = TypeAdapter(OrganizationRouteDecision)
 
 
+@native_boundary
 def organization_route(facts: OrganizationRouteFacts) -> OrganizationRouteDecision:
     return _DECISION.validate_python(_native.request_auth_org_route(asdict(facts)))
 
 
+@native_boundary
 def user_is_org_admin(memberships: tuple[OrganizationMembership, ...], organizations: tuple[str, ...]) -> bool:
     return _native.request_auth_org_admin(tuple(asdict(item) for item in memberships), organizations)

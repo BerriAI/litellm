@@ -3,7 +3,41 @@ from dataclasses import replace
 from typing import Final
 
 from litellm._auth.common_budgets import BudgetDecision, BudgetFacts
+from litellm._auth.budget_pricing import ExemptionFacts, ModelPriceFacts
 from litellm._auth.model_budget_data import ModelBudgetDecision, ModelBudgetSnapshot
+
+
+def price(f: ModelPriceFacts) -> bool:
+    if f.cached is not None:
+        return f.cached
+    if f.lookup_failed or not f.group_found or f.input_price is None or f.output_price is None:
+        return False
+    if f.input_price > 0 or f.output_price > 0:
+        return False
+    deployments: Final = f.deployments or ()
+    return any(d.has_input_price or d.has_output_price for d in deployments) and not any(
+        (d.input_price is not None and d.input_price > 0)
+        or (d.output_price is not None and d.output_price > 0)
+        or (d.query_price is not None and d.query_price > 0)
+        or (d.ptu_count is not None and d.cost_per_ptu_per_hour is not None)
+        for d in deployments
+    )
+
+
+def exemption(f: ExemptionFacts) -> bool:
+    route: Final = f.route
+    if not route.side_effect_route and (
+        route.discovery_route or (not route.llm_route and not route.registered_pass_through)
+    ):
+        return True
+    if route.body_present and (
+        route.route in ("/mcp-rest/tools/list", "/v1/mcp/tools")
+        or route.route not in ("/mcp/tools/call", "/mcp-rest/tools/call")
+        and (route.route == "/mcp" or route.route.startswith("/mcp/"))
+        and route.method in ("initialize", "notifications/initialized", "ping", "tools/list")
+    ):
+        return True
+    return f.model_input_present and f.router_present and all(price(p) for p in f.prices)
 
 
 def common(f: BudgetFacts) -> BudgetDecision:

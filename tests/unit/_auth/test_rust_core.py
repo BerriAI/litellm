@@ -15,9 +15,10 @@ from litellm._auth.decision import (
     WithinModelBudgets,
 )
 from litellm._auth.driver import drive
+from litellm._auth.key_model_access import KeyAndFallbackModelAccessFacts
 from litellm._auth.rust_core import RustCore
-from tests.unit._auth.shadow import ShadowCore, ShadowMismatch
 from litellm.rust_bridge import _native
+from tests.unit._auth.shadow import ShadowCore, ShadowMismatch
 from tests.unit._auth.test_python_core import NOW, PLAIN_KEY, SETTINGS, RecordingHandler
 
 
@@ -115,7 +116,7 @@ async def test_effect_failure_after_native_entry_is_never_replayed(core: AuthCor
     failure: Final = RuntimeError("effect failed")
 
     class FailingHandler(RecordingHandler):
-        async def enforce_model_access(self) -> None:
+        async def enforce_model_access(self) -> KeyAndFallbackModelAccessFacts:
             self._record("enforce_model_access")
             raise failure
 
