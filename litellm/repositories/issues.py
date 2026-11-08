@@ -14,21 +14,21 @@ from litellm.models.team import LiteLLM_TeamTable
 from litellm.proxy.common_utils.model_deprecation import deprecation_alert_state_key
 from litellm.repositories.usage_alerts import AlertDatabase, UsageAlertsRepository
 from litellm.types.proxy.issues import (
-    Issue,
-    IssueCohort,
-    IssueDeliveryBinding,
-    IssueFamily,
-    IssueFamilyList,
-    IssueFamilySetting,
-    IssueFamilyUpdate,
-    IssueInput,
-    IssueKind,
-    IssueList,
-    IssuePendingDelivery,
-    IssueProjectionSignal,
-    IssueScope,
-    IssueSignal,
-    IssueSignalList,
+    Alert,
+    AlertCohort,
+    AlertDeliveryBinding,
+    AlertFamily,
+    AlertFamilyList,
+    AlertFamilySetting,
+    AlertFamilyUpdate,
+    AlertInput,
+    AlertKind,
+    AlertList,
+    AlertPendingDelivery,
+    AlertProjectionSignal,
+    AlertScope,
+    AlertSignal,
+    AlertSignalList,
 )
 from litellm.types.proxy.usage_alert_defaults import DEFAULT_USAGE_RULE_IDS, PerformanceIssueFamily
 from litellm.types.proxy.usage_alerts import UsageAlertMetric, UsageAlertStatus
@@ -38,11 +38,11 @@ if TYPE_CHECKING:
 
 
 class _IssueRow(BaseModel, frozen=True):
-    record: Issue
+    record: Alert
 
 
 class _SignalRow(BaseModel, frozen=True):
-    record: IssueSignal
+    record: AlertSignal
 
 
 class _Count(BaseModel, frozen=True):
@@ -82,8 +82,8 @@ def _utc(value: datetime) -> str:
     return value.astimezone(timezone.utc).replace(tzinfo=None).isoformat()
 
 
-def _issue_payload(data: IssueInput, status: UsageAlertStatus | None) -> Mapping[str, object]:
-    initial: Final = Issue.model_validate(
+def _issue_payload(data: AlertInput, status: UsageAlertStatus | None) -> Mapping[str, object]:
+    initial: Final = Alert.model_validate(
         {
             **data.model_dump(),
             "status": status or "open",
@@ -110,10 +110,10 @@ class IssuesRepository:
 
     async def upsert_issues(
         self,
-        inputs: tuple[IssueInput, ...],
+        inputs: tuple[AlertInput, ...],
         reopen: bool = False,
         status: UsageAlertStatus | None = None,
-    ) -> tuple[Issue, ...]:
+    ) -> tuple[Alert, ...]:
         if not inputs:
             return ()
         if len(inputs) > 500 or len(frozenset(item.id for item in inputs)) != len(inputs):
@@ -152,7 +152,7 @@ class IssuesRepository:
             raise ValueError("An issue ID already belongs to another cohort")
         return tuple(row.record for row in rows)
 
-    async def get_issue(self, issue_id: str) -> Issue | None:
+    async def get_issue(self, issue_id: str) -> Alert | None:
         rows: Final = TypeAdapter(tuple[_IssueRow, ...]).validate_python(
             await self.database.query_raw(f"SELECT {_RECORD} AS record {_JOIN} WHERE i.id=$1", issue_id)
         )
@@ -179,14 +179,14 @@ class IssuesRepository:
 
     async def list_issues(
         self,
-        kind: IssueKind | None = None,
-        family: IssueFamily | None = None,
+        kind: AlertKind | None = None,
+        family: AlertFamily | None = None,
         status: UsageAlertStatus | None = None,
-        scope_type: IssueScope | None = None,
+        scope_type: AlertScope | None = None,
         scope_id: str | None = None,
         limit: int = 50,
         offset: int = 0,
-    ) -> IssueList:
+    ) -> AlertList:
         where: Final = f"""($1::text IS NULL OR i.kind=$1) AND ($2::text IS NULL OR i.family=$2)
             AND ($3::text IS NULL OR ({_STATUS})=$3) AND ($4::text IS NULL OR i.scope_type=$4)
             AND ($5::text IS NULL OR i.scope_id=$5)"""
@@ -202,11 +202,11 @@ class IssuesRepository:
                 offset,
             )
         )
-        return IssueList(
+        return AlertList(
             data=await self._labels(tuple(row.record for row in rows)), total=count[0].count, limit=limit, offset=offset
         )
 
-    async def _labels(self, issues: tuple[Issue, ...]) -> tuple[Issue, ...]:
+    async def _labels(self, issues: tuple[Alert, ...]) -> tuple[Alert, ...]:
         if not issues:
             return ()
         labels: Final = await UsageAlertsRepository(self.database).resource_labels(
@@ -217,7 +217,7 @@ class IssuesRepository:
             for issue in issues
         )
 
-    async def find_active_issues(self, cohort_keys: tuple[str, ...]) -> tuple[Issue, ...]:
+    async def find_active_issues(self, cohort_keys: tuple[str, ...]) -> tuple[Alert, ...]:
         if len(cohort_keys) > 500:
             raise ValueError("Read at most 500 issue cohorts per batch")
         rows: Final = TypeAdapter(tuple[_IssueRow, ...]).validate_python(
@@ -236,8 +236,8 @@ class IssuesRepository:
         status: UsageAlertStatus,
         expected_status: UsageAlertStatus,
         actor: str | None = None,
-        authorized_scopes: tuple[IssueCohort, ...] | None = None,
-    ) -> Issue | None:
+        authorized_scopes: tuple[AlertCohort, ...] | None = None,
+    ) -> Alert | None:
         if authorized_scopes is not None and len(authorized_scopes) > 10:
             raise ValueError("Authorize at most 10 alert source scopes")
         changed: Final = TypeAdapter(tuple[_Identifier, ...]).validate_python(
@@ -248,8 +248,8 @@ class IssuesRepository:
                         AND ($5::jsonb IS NULL OR NOT EXISTS (
                             SELECT 1 FROM "LiteLLM_IssueSignal" s WHERE s.issue_id=i.id AND NOT EXISTS (
                                 SELECT 1 FROM jsonb_to_recordset($5::jsonb) AS x(scope_type text,scope_id text)
-                                WHERE s.source='usage_alert' AND x.scope_type=s.record->'usage_alert'->>'scope_type'
-                                    AND x.scope_id IS NOT DISTINCT FROM s.record->'usage_alert'->>'scope_id')))
+                                WHERE s.source='performance' AND x.scope_type=s.record->'performance'->>'scope_type'
+                                    AND x.scope_id IS NOT DISTINCT FROM s.record->'performance'->>'scope_id')))
                 ), ack AS (
                     INSERT INTO "LiteLLM_Config" AS prior (param_name,param_value)
                     SELECT ack_key,jsonb_build_object('model',record->'deprecation'->>'usage_model',
@@ -279,18 +279,18 @@ class IssuesRepository:
         )
         return await self.get_issue(issue_id) if changed else None
 
-    async def status_scopes(self, issue_id: str) -> tuple[IssueCohort, ...]:
-        return TypeAdapter(tuple[IssueCohort, ...]).validate_python(
+    async def status_scopes(self, issue_id: str) -> tuple[AlertCohort, ...]:
+        return TypeAdapter(tuple[AlertCohort, ...]).validate_python(
             await self.database.query_raw(
-                """SELECT DISTINCT CASE WHEN source='usage_alert' THEN record->'usage_alert'->>'scope_type'
+                """SELECT DISTINCT CASE WHEN source='performance' THEN record->'performance'->>'scope_type'
                     ELSE 'deployment' END AS scope_type,
-                    CASE WHEN source='usage_alert' THEN record->'usage_alert'->>'scope_id' END AS scope_id
+                    CASE WHEN source='performance' THEN record->'performance'->>'scope_id' END AS scope_id
                 FROM "LiteLLM_IssueSignal" WHERE issue_id=$1 ORDER BY scope_type,scope_id LIMIT 11""",
                 issue_id,
             )
         )
 
-    async def add_signal_batch(self, signals: tuple[IssueSignal, ...]) -> None:
+    async def add_signal_batch(self, signals: tuple[AlertSignal, ...]) -> None:
         if not signals:
             return
         if len(signals) > 500:
@@ -310,14 +310,14 @@ class IssuesRepository:
             ) UPDATE "LiteLLM_Issue" i SET
                 updated_at=GREATEST(CURRENT_TIMESTAMP,i.updated_at+interval '1 millisecond'),
                 status=CASE WHEN i.kind='performance' AND i.active AND i.status<>'open' AND EXISTS (
-                    SELECT 1 FROM added a WHERE a.issue_id=i.id AND a.source='usage_alert'
-                        AND (a.record->'usage_alert'->>'scope_type'<>i.scope_type
-                            OR a.record->'usage_alert'->>'scope_id' IS DISTINCT FROM i.scope_id)
+                    SELECT 1 FROM added a WHERE a.issue_id=i.id AND a.source='performance'
+                        AND (a.record->'performance'->>'scope_type'<>i.scope_type
+                            OR a.record->'performance'->>'scope_id' IS DISTINCT FROM i.scope_id)
                         AND NOT EXISTS(SELECT 1 FROM "LiteLLM_IssueSignal" prior
-                            WHERE prior.issue_id=i.id AND prior.source='usage_alert'
-                                AND prior.record->'usage_alert'->>'scope_type'=a.record->'usage_alert'->>'scope_type'
-                                AND prior.record->'usage_alert'->>'scope_id'
-                                    IS NOT DISTINCT FROM a.record->'usage_alert'->>'scope_id')
+                            WHERE prior.issue_id=i.id AND prior.source='performance'
+                                AND prior.record->'performance'->>'scope_type'=a.record->'performance'->>'scope_type'
+                                AND prior.record->'performance'->>'scope_id'
+                                    IS NOT DISTINCT FROM a.record->'performance'->>'scope_id')
                 ) THEN 'open' ELSE i.status END
             WHERE i.id IN(SELECT issue_id FROM added) RETURNING i.id""",
             json.dumps(tuple(signal.model_dump(mode="json") for signal in signals)),
@@ -328,11 +328,11 @@ class IssuesRepository:
         issue_id: str,
         limit: int = 50,
         offset: int = 0,
-        visible_scope: IssueCohort | None = None,
-    ) -> IssueSignalList:
-        where: Final = """issue_id=$1 AND ($2::text IS NULL OR (source='usage_alert'
-            AND record->'usage_alert'->>'scope_type'=$2
-            AND record->'usage_alert'->>'scope_id' IS NOT DISTINCT FROM $3::text))"""
+        visible_scope: AlertCohort | None = None,
+    ) -> AlertSignalList:
+        where: Final = """issue_id=$1 AND ($2::text IS NULL OR (source='performance'
+            AND record->'performance'->>'scope_type'=$2
+            AND record->'performance'->>'scope_id' IS NOT DISTINCT FROM $3::text))"""
         args: Final = (
             issue_id,
             visible_scope.scope_type if visible_scope else None,
@@ -352,7 +352,7 @@ class IssuesRepository:
                 offset,
             )
         )
-        return IssueSignalList(
+        return AlertSignalList(
             data=tuple(row.record for row in rows), total=counts[0].count, limit=limit, offset=offset
         )
 
@@ -361,17 +361,17 @@ class IssuesRepository:
         day: date,
         limit: int = 500,
         cursor: str | None = None,
-        scope_type: IssueScope | None = None,
+        scope_type: AlertScope | None = None,
         metric: UsageAlertMetric | None = None,
         scope_ids: tuple[str, ...] | None = None,
-    ) -> tuple[IssueProjectionSignal, ...]:
+    ) -> tuple[AlertProjectionSignal, ...]:
         if not 1 <= limit <= 500:
             raise ValueError("Read between one and 500 source signals")
         if scope_ids == ():
             return ()
         if scope_ids is not None and len(scope_ids) > 500:
             raise ValueError("Filter at most 500 source scopes")
-        return TypeAdapter(tuple[IssueProjectionSignal, ...]).validate_python(
+        return TypeAdapter(tuple[AlertProjectionSignal, ...]).validate_python(
             await self.database.query_raw(
                 """SELECT a.record AS alert,r.record AS rule,a.evaluation_day
                 FROM "LiteLLM_UsageAlertIncident" a JOIN "LiteLLM_UsageAlertRule" r ON r.id=a.rule_id
@@ -418,14 +418,14 @@ class IssuesRepository:
                 FROM "LiteLLM_Issue" i JOIN "LiteLLM_IssueSignal" s ON s.issue_id=i.id
                 LEFT JOIN "LiteLLM_UsageAlertIncident" a ON a.id=s.source_id
                 LEFT JOIN "LiteLLM_UsageAlertRule" r ON r.id=a.rule_id
-                WHERE i.kind='performance' AND i.active AND i.scope_type<>'provider' AND s.source='usage_alert'
+                WHERE i.kind='performance' AND i.active AND i.scope_type<>'provider' AND s.source='performance'
                     AND ({selection})
-                    AND s.record->'usage_alert'->>'scope_type'=i.scope_type
-                    AND s.record->'usage_alert'->>'scope_id' IS NOT DISTINCT FROM i.scope_id
-                    AND ((i.family='spend' AND s.record->'usage_alert'->>'metric'='spend')
-                        OR (i.family='latency' AND s.record->'usage_alert'->>'metric'='latency')
-                        OR (i.family='traffic' AND s.record->'usage_alert'->>'metric'='requests')
-                        OR (i.family='reliability' AND s.record->'usage_alert'->>'metric' IN ('errors','error_rate')))
+                    AND s.record->'performance'->>'scope_type'=i.scope_type
+                    AND s.record->'performance'->>'scope_id' IS NOT DISTINCT FROM i.scope_id
+                    AND ((i.family='spend' AND s.record->'performance'->>'metric'='spend')
+                        OR (i.family='latency' AND s.record->'performance'->>'metric'='latency')
+                        OR (i.family='traffic' AND s.record->'performance'->>'metric'='requests')
+                        OR (i.family='reliability' AND s.record->'performance'->>'metric' IN ('errors','error_rate')))
             ), observations AS (
                 SELECT *,COALESCE(source_id IS NOT NULL AND NOT breached AND evaluation_day<=$1
                     AND evaluation_day>=latest_observation_day
@@ -446,7 +446,7 @@ class IssuesRepository:
         )
         return rows[0].count
 
-    async def active_provider_issues(self, limit: int = 500, cursor: str | None = None) -> tuple[Issue, ...]:
+    async def active_provider_issues(self, limit: int = 500, cursor: str | None = None) -> tuple[Alert, ...]:
         if not 1 <= limit <= 500:
             raise ValueError("Read between one and 500 provider issues")
         rows: Final = TypeAdapter(tuple[_IssueRow, ...]).validate_python(
@@ -508,19 +508,19 @@ class IssuesRepository:
         )
         return rows[0].count
 
-    async def family_settings(self) -> "IssueFamilyList":
+    async def family_settings(self) -> "AlertFamilyList":
         from litellm.repositories.issue_families import family_settings
 
         return await family_settings(self.database)
 
     async def update_family(
-        self, family: "PerformanceIssueFamily", data: "IssueFamilyUpdate"
-    ) -> "IssueFamilySetting | None":
+        self, family: "PerformanceIssueFamily", data: "AlertFamilyUpdate"
+    ) -> "AlertFamilySetting | None":
         from litellm.repositories.issue_families import update_family
 
         return await update_family(self.database, family, data)
 
-    async def queue_deliveries(self, bindings: tuple[IssueDeliveryBinding, ...]) -> None:
+    async def queue_deliveries(self, bindings: tuple[AlertDeliveryBinding, ...]) -> None:
         if not bindings:
             return
         if len(bindings) > 500:
@@ -545,17 +545,17 @@ class IssuesRepository:
             json.dumps(tuple(binding.model_dump(mode="json") for binding in bindings)),
         )
 
-    async def pending_deliveries(self, limit: int = 100) -> tuple[IssuePendingDelivery, ...]:
+    async def pending_deliveries(self, limit: int = 100) -> tuple[AlertPendingDelivery, ...]:
         return await self._pending_deliveries(limit, None)
 
-    async def pending_delivery(self, delivery_id: str) -> IssuePendingDelivery | None:
+    async def pending_delivery(self, delivery_id: str) -> AlertPendingDelivery | None:
         rows: Final = await self._pending_deliveries(1, delivery_id)
         return rows[0] if rows else None
 
-    async def _pending_deliveries(self, limit: int, delivery_id: str | None) -> tuple[IssuePendingDelivery, ...]:
+    async def _pending_deliveries(self, limit: int, delivery_id: str | None) -> tuple[AlertPendingDelivery, ...]:
         if not 1 <= limit <= 500:
             raise ValueError("Read between one and 500 deliveries")
-        return TypeAdapter(tuple[IssuePendingDelivery, ...]).validate_python(
+        return TypeAdapter(tuple[AlertPendingDelivery, ...]).validate_python(
             await self.database.query_raw(
                 f"""SELECT d.record || jsonb_build_object('next_attempt',d.next_attempt AT TIME ZONE 'UTC') AS delivery,
                 {_RECORD} AS issue,bound.rule,bound.alert
@@ -583,7 +583,7 @@ class IssuesRepository:
                         AND custom.record->>'direction'=r.record->>'direction'
                         AND (custom.scope_id IS NULL OR custom.scope_id=a.scope_id)))
                     AND EXISTS(SELECT 1 FROM "LiteLLM_IssueSignal" s WHERE s.issue_id=i.id
-                        AND s.source='usage_alert' AND s.source_id=a.id)
+                        AND s.source='performance' AND s.source_id=a.id)
                 ORDER BY b.rule_id,b.source_id LIMIT 1
             ) bound ON true
             WHERE NOT d.sent AND d.next_attempt<=CURRENT_TIMESTAMP AND i.active AND ({_STATUS})='open'
@@ -622,10 +622,10 @@ class IssuesRepository:
         if not 1 <= limit <= 500 or retention_days < 1:
             raise ValueError("Retention and cleanup batch must be bounded positive values")
         await self.database.query_raw(
-            """WITH expired AS MATERIALIZED (
-                SELECT id FROM "LiteLLM_Issue" WHERE status<>'open'
-                    AND updated_at<CURRENT_TIMESTAMP-make_interval(days=>$1::int)
-                ORDER BY updated_at,id LIMIT $2
+            f"""WITH expired AS MATERIALIZED (
+                SELECT i.id {_JOIN} WHERE i.status<>'open' AND ({_STATUS})<>'open'
+                    AND i.updated_at<CURRENT_TIMESTAMP-make_interval(days=>$1::int)
+                ORDER BY i.updated_at,i.id LIMIT $2
             ), signals AS (
                 DELETE FROM "LiteLLM_IssueSignal" WHERE (issue_id,source,source_id) IN (
                     SELECT issue_id,source,source_id FROM "LiteLLM_IssueSignal"

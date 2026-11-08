@@ -8,14 +8,14 @@ from litellm.repositories.issue_families import family_settings
 from litellm.types.proxy.usage_alerts import (
     UsageAlertEvaluationStatus,
     UsageAlertMetric,
-    UsageAlertRule,
+    AlertRule,
     UsageAlertScope,
 )
 
 
 @dataclass
 class RuleRows:
-    rules: tuple[UsageAlertRule, ...]
+    rules: tuple[AlertRule, ...]
     calls: int = 0
 
     async def query_raw(self, query: str, *args: object) -> object:
@@ -36,7 +36,7 @@ async def test_family_counts_only_its_enabled_rules_without_an_extra_query(statu
         ("model", "latency", True),
     )
     rules: Final = tuple(
-        UsageAlertRule(
+        AlertRule(
             id=f"test-{scope}-{metric}",
             name="Daily monitoring",
             scope_type=scope,

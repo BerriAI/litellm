@@ -4,11 +4,11 @@ from typing import Final, Literal, TypeAlias
 from uuid import NAMESPACE_URL, uuid5
 
 from litellm.types.proxy.usage_alerts import (
+    AlertRule,
+    AlertRuleInput,
     UsageAlertChannel,
     UsageAlertDirection,
     UsageAlertMetric,
-    UsageAlertRule,
-    UsageAlertRuleInput,
     UsageAlertScope,
 )
 
@@ -46,7 +46,7 @@ DEFAULT_USAGE_RULE_IDS: Final = frozenset(
 )
 
 
-def is_default_usage_rule(rule: UsageAlertRule) -> bool:
+def is_default_usage_rule(rule: AlertRule) -> bool:
     return rule.id in DEFAULT_USAGE_RULE_IDS and rule.id == default_usage_rule_id(
         rule.scope_type, rule.metric, rule.direction
     )
@@ -54,9 +54,9 @@ def is_default_usage_rule(rule: UsageAlertRule) -> bool:
 
 def default_usage_rules(
     channels: tuple[UsageAlertChannel, ...] = (), *, legacy_user_spend_alerts: bool = False
-) -> tuple[UsageAlertRuleInput, ...]:
+) -> tuple[AlertRuleInput, ...]:
     return tuple(
-        UsageAlertRuleInput(
+        AlertRuleInput(
             name=f"Daily {scope} {policy.metric.replace('_', ' ')} {policy.direction}",
             scope_type=scope,
             metric=policy.metric,
