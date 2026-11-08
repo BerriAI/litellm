@@ -9498,6 +9498,50 @@ async def test_failure_log_redacts_a_request_body_prompt_that_differs_from_the_m
     assert failures.logged == [([templated_messages[0], *_MASKED_LOG], [templated_messages[0], *_MASKED_LOG])]
 
 
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("no_global_callbacks")
+@pytest.mark.parametrize("sync", [True, False])
+@pytest.mark.parametrize("masks_before_the_call", [True, False])
+async def test_failure_log_keeps_a_rewritten_request_body_when_no_guardrail_masks_the_log(
+    sync: bool, masks_before_the_call: bool
+) -> None:
+    templated_messages: Final = [{"role": "system", "content": "Answer briefly"}, *copy.deepcopy(_RAW_LOG)]
+    guardrails: Final = (_NameMaskingGuardrail(GuardrailEventHooks.pre_call),) if masks_before_the_call else ()
+    recorder: Final = _ProxyRequestRecorder()
+    logging_obj: Final = LitellmLogging(
+        model="gpt-4o-mini",
+        messages=templated_messages,
+        stream=False,
+        call_type="completion" if sync else "acompletion",
+        start_time=datetime.datetime(2026, 1, 1),
+        litellm_call_id="templated-unmasked-rejection",
+        function_id="templated-unmasked-rejection",
+        dynamic_failure_callbacks=[*guardrails, recorder],
+        dynamic_async_failure_callbacks=[*guardrails, recorder],
+    )
+    logging_obj.update_environment_variables(
+        litellm_params={
+            "metadata": {},
+            "proxy_server_request": {"url": "/chat/completions", "body": {"messages": copy.deepcopy(_RAW_LOG)}},
+        },
+        optional_params={},
+    )
+    error: Final = litellm.RateLimitError("429", "openai", "gpt-4o-mini")
+
+    if sync:
+        await asyncio.to_thread(logging_obj.failure_handler, error, "tb")
+    else:
+        await logging_obj.async_failure_handler(error, "tb")
+
+    _, proxy_server_request = recorder.request_copies[0]
+    assert cast(dict[str, object], proxy_server_request)["body"] == {"messages": _RAW_LOG}
+    lifted: Final = logging_obj.failure_logged_proxy_server_request(
+        {"url": "/chat/completions", "body": {"messages": copy.deepcopy(_RAW_LOG)}}
+    )
+    assert lifted["body"] == {"messages": _RAW_LOG}
+    assert recorder.logged == [(templated_messages, templated_messages)]
+
+
 async def _fail_once_the_mask_outlasts_its_time_bound(
     clock: _SkippableClockLoop, guardrail: _BlockingNameMaskingGuardrail, recorder: _FailureLogRecorder
 ) -> None:

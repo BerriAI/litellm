@@ -4760,13 +4760,12 @@ class Logging(LiteLLMLoggingBaseClass):
         on_cancelled: Callable[[], None] | None = None,
         on_cancelled_async: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
+        if not self._failure_log_masked and not self.masks_failure_log:
+            return
         if not self._claim_failure_log_mask():
             await self._keep_failure_log_masked(on_cancelled, on_cancelled_async)
             return
-        maskers: Final = self._failure_log_maskers()
-        if not maskers:
-            return
-        mask: Final = asyncio.create_task(self._mask_failure_log_request_with(maskers))
+        mask: Final = asyncio.create_task(self._mask_failure_log_request_with(self._failure_log_maskers()))
         self._failure_log_mask = mask
         await self._await_failure_log_mask(mask, on_cancelled, on_cancelled_async)
 
@@ -4816,13 +4815,10 @@ class Logging(LiteLLMLoggingBaseClass):
         _ = run()
 
     def mask_failure_log_request(self, mask_executor: concurrent.futures.Executor = failure_log_mask_executor) -> None:
-        if is_event_loop_running() or not self._claim_failure_log_mask():
-            return
-        maskers: Final = self._failure_log_maskers()
-        if not maskers:
+        if is_event_loop_running() or not self.masks_failure_log or not self._claim_failure_log_mask():
             return
         masking: Final = mask_executor.submit(
-            functools.reduce, self._sync_failure_log_mask_step, maskers, self.model_call_details
+            functools.reduce, self._sync_failure_log_mask_step, self._failure_log_maskers(), self.model_call_details
         )
         try:
             masked: Final = masking.result(timeout=FAILURE_LOG_MASK_TIMEOUT_SECONDS)
