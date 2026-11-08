@@ -377,3 +377,12 @@ pub(crate) fn request_auth_unpriced_model(
         &py.detach(move || core::unpriced_models::decide(&facts)),
     )
 }
+
+#[pyfunction]
+pub(crate) fn request_auth_budget_alert_plan(
+    py: Python<'_>,
+    facts: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    let facts: core::budget_alerts::Facts = from_py(facts)?;
+    to_py(py, &py.detach(move || core::budget_alerts::plan(&facts)))
+}

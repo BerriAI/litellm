@@ -168,10 +168,10 @@ async def check_team_member_budget(
         get_team_member_default_budget,
         get_team_membership,
         get_utc_datetime,
-        team_member_max_budget_alert_check,
     )
+    from litellm.proxy.auth.budget_alert_adapter import team_member_max_budget_alert_check
 
-    if team_object is None or valid_token is None or valid_token.user_id is None:
+    if team_object is None or team_object.team_id is None or valid_token is None or valid_token.user_id is None:  # pyright: ignore[reportUnnecessaryComparison]  # retain the legacy None guard for constructed cache rows
         return
     membership: Final = (
         team_membership

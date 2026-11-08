@@ -212,7 +212,7 @@ async def user_max_budget_check(
         BudgetFacts(
             "User",
             user_object.max_budget,
-            team_key=team_object is not None,
+            team_key=team_object is not None and team_object.team_id is not None,  # pyright: ignore[reportUnnecessaryComparison]  # retain the legacy None guard for constructed cache rows
             apply_user_budget_to_team_keys=general_settings.get("apply_user_budget_to_team_keys") is True,
         ),
         CounterRead(f"spend:user:{user_object.user_id}", user_object.spend or 0.0, user_object.max_budget),

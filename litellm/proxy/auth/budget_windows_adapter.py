@@ -6,6 +6,7 @@ from typing import Final
 from pydantic import TypeAdapter
 
 from litellm._auth.common_budgets import BudgetFacts, WindowFacts, window_start
+from litellm._auth.failure import NativeAuthFailure
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.proxy._types import Litellm_EntityType, LiteLLM_TeamTable, UserAPIKeyAuth
 from litellm.proxy.auth.common_budget_adapter import CounterRead, raise_budget, read_budget
@@ -28,6 +29,8 @@ def _window(raw: object) -> BudgetWindow:
 def _seconds(duration: str) -> int | None:
     try:
         return duration_in_seconds(duration)
+    except NativeAuthFailure:
+        raise
     except Exception:  # noqa: BLE001  # preserve invalid-duration skip behavior
         return None
 
@@ -38,6 +41,8 @@ def _reset(value: object) -> datetime | None:
     if isinstance(value, str):
         try:
             parsed: Final = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except NativeAuthFailure:
+            raise
         except ValueError:
             return None
         return _reset(parsed)

@@ -153,7 +153,9 @@ async def _read_snapshot(
             return await _read_snapshot(io, replace(facts, snapshot=legacy_snapshot), key, legacy_key, duration)
         case "Shared":
             now: Final = io.clock()
-            shared: Final = await io.shared_windows.read(key, duration) if duration is not None else None
+            shared: Final = (
+                await io.shared_windows.read(spend_key=key, budget_duration=duration) if duration is not None else None
+            )
             shared_snapshot: Final = replace(
                 facts.snapshot,
                 shared_spend=shared.spend if shared is not None else None,
