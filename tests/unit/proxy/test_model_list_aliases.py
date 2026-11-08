@@ -384,12 +384,25 @@ async def test_hidden_router_settings_alias_the_key_does_not_list_is_not_retriev
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model", "provider", "owned_by"),
+    [("github_copilot/example-model", None, "github_copilot"), ("deployment-name", "openai", "openai")],
+)
 async def test_model_listing_describes_a_provider_without_saved_login(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, model: str, provider: str | None, owned_by: str
 ) -> None:
     monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(tmp_path))
     metadata_router: Final = Router(
-        model_list=[_deployment("assistant", model="github_copilot/example-model")]
+        model_list=[
+            {
+                **_deployment("assistant", model=model),
+                "litellm_params": {
+                    "model": model,
+                    "api_key": "sk-fake",
+                    **({"custom_llm_provider": provider} if provider is not None else {}),
+                },
+            }
+        ]
     )
     monkeypatch.setattr(proxy_server, "llm_router", metadata_router)
     monkeypatch.setattr(proxy_server, "llm_model_list", metadata_router.model_list)
@@ -398,4 +411,4 @@ async def test_model_listing_describes_a_provider_without_saved_login(
     monkeypatch.setattr(proxy_server, "user_model", None)
     caller: Final = UserAPIKeyAuth(api_key="test", user_id="user", models=["assistant"], team_models=[])
     listing: Final = await proxy_server.model_list(user_api_key_dict=caller, request=None)
-    assert [(row["id"], row["owned_by"]) for row in listing["data"]] == [("assistant", "github_copilot")]
+    assert [(row["id"], row["owned_by"]) for row in listing["data"]] == [("assistant", owned_by)]

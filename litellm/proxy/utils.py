@@ -10511,7 +10511,10 @@ def create_model_info_response(
 
     if scoped:
         _, scoped_provider = resolve_model_and_provider_for_metadata(
-            model=str(scoped[0].litellm_params.get("model") or lookup_model)
+            model=str(scoped[0].litellm_params.get("model") or lookup_model),
+            custom_llm_provider=TypeAdapter[str | None](str | None).validate_python(
+                scoped[0].litellm_params.get("custom_llm_provider")
+            ),
         )
         base["owned_by"] = scoped_provider
         scoped_mode: Final = next(
