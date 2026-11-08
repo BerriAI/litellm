@@ -52,21 +52,15 @@ async def test_batch_checkpoints_preserve_rule_revisions_and_incomplete_status(d
 
 @pytest.mark.asyncio(loop_scope="session")
 async def test_freshness_timestamps_use_the_real_prisma_parameter_types(db: ManagementDatabase) -> None:
-    repository: Final = UsageAlertHealthRepository.from_prisma(db.prisma)
     start: Final = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=2)
-    try:
+    async with _isolated(db) as prisma:
+        repository: Final = UsageAlertHealthRepository.from_prisma(prisma)
         assert await repository.record("user", start)
         assert (await repository.coverage("user", start)).hours == 1
         assert not (await repository.coverage("user", start)).after_grace
         assert await repository.record("user", start + timedelta(days=1, hours=1))
         coverage: Final = await repository.coverage("user", start)
         assert coverage.hours == 1 and coverage.after_grace
-    finally:
-        await db.prisma.writer_db.query_raw(
-            "DELETE FROM \"LiteLLM_UsageAlertFlush\" WHERE source='user' AND hour IN ($1::timestamp,$2::timestamp) RETURNING source",
-            start.replace(tzinfo=None),
-            (start + timedelta(days=1, hours=1)).replace(tzinfo=None),
-        )
 
 
 @pytest.mark.asyncio(loop_scope="session")
