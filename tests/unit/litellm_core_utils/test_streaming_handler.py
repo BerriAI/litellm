@@ -9660,23 +9660,24 @@ class _RecordingLogging(Logging):
             messages=[{"role": "user", "content": "Hey"}],
             stream=True,
             call_type="completion",
-            start_time=datetime.datetime.now(),
+            start_time=datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc),
             litellm_call_id="12345",
             function_id="1245",
         )
         self.logged_failures: list[Exception] = []  # mutable-ok: test double accumulating callback arguments
+        self.failure_logged: Final = threading.Event()
 
     def failure_handler(self, exception: Exception, traceback_exception: str, *args: object, **kwargs: object) -> None:
         self.logged_failures.append(exception)
+        self.failure_logged.set()
 
     async def dispatch_attempt_failure_handlers(self, exception: Exception, traceback_exception: str) -> None:
         self.logged_failures.append(exception)
+        self.failure_logged.set()
 
 
 def _assert_failure_callback_got_the_public_exception(logging: _RecordingLogging, raised: MidStreamFallbackError) -> None:
-    deadline: Final = time.monotonic() + 5
-    while not logging.logged_failures and time.monotonic() < deadline:
-        time.sleep(0.01)
+    assert logging.failure_logged.wait(timeout=5), "failure callbacks never ran"
     assert len(logging.logged_failures) == 1, logging.logged_failures
     logged: Final = logging.logged_failures[0]
     assert type(logged) is litellm.InternalServerError, logged

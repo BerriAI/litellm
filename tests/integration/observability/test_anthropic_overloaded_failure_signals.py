@@ -338,15 +338,15 @@ def test_the_datadog_proxy_failure_log_carries_the_answered_status_and_the_llm_f
 def _datadog_llm_failures(rig: _Rig, aliases: Sequence[str]) -> Mapping[str, Mapping[str, JsonValue]]:
     batches: Final[list[Request]] = []  # mutable-ok: drain() consumes the queue, later polls must keep earlier batches
 
+    def alias_of(message: Mapping[str, JsonValue]) -> str | None:
+        if "user_api_key_dict" in message:
+            return None
+        return next((alias for alias in aliases if _keyed_by(message, alias)), None)
+
     def delivered() -> Mapping[str, Mapping[str, JsonValue]]:
         batches.extend(rig.datadog.drain())
-        return {
-            alias: object_value(message["error_information"])
-            for message in _datadog_messages(batches)
-            if "user_api_key_dict" not in message
-            for alias in aliases
-            if _keyed_by(message, alias)
-        }
+        keyed: Final = ((alias_of(message), message) for message in _datadog_messages(batches))
+        return {alias: object_value(message["error_information"]) for alias, message in keyed if alias is not None}
 
     return eventually(delivered, lambda found: len(found) >= len(aliases), seconds=40, return_last_on_timeout=True)
 
