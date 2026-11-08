@@ -80,6 +80,36 @@ async def test_success_uses_standard_logging_response_cost(monkeypatch: pytest.M
 
 
 @pytest.mark.asyncio
+async def test_success_falls_back_to_kwargs_cost_when_sl_payload_omits_field(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reservation = _reservation()
+    reconcile = AsyncMock(return_value=())
+    monkeypatch.setattr(
+        "litellm.proxy.spend_tracking.budget_reservation.reconcile_budget_reservation",
+        reconcile,
+    )
+    logger = BudgetReservationReconcileLogger()
+
+    await logger.async_log_success_event(
+        {
+            "litellm_params": {
+                "metadata": {"user_api_key_budget_reservation": reservation},
+            },
+            # Redaction may drop the key; an explicit None must still defer (covered elsewhere).
+            "standard_logging_object": {"id": "sl-without-cost"},
+            "response_cost": 0.004,
+        },
+        response_obj=object(),
+        start_time=datetime.now(UTC),
+        end_time=datetime.now(UTC),
+    )
+
+    reconcile.assert_awaited_once()
+    assert reconcile.await_args.kwargs["actual_cost"] == 0.004
+
+
+@pytest.mark.asyncio
 async def test_success_noop_when_no_reservation(monkeypatch: pytest.MonkeyPatch) -> None:
     reconcile = AsyncMock(return_value=())
     monkeypatch.setattr(

@@ -40,7 +40,7 @@ class BudgetReservationReconcileLogger(CustomLogger):
 
         sl_object: Final = kwargs.get("standard_logging_object")
         response_cost: Final[object] = (  # pyright: ignore[reportUnknownVariableType]  # callback payloads are legacy untyped mappings
-            sl_object.get("response_cost")  # pyright: ignore[reportUnknownMemberType]  # float below validates the untyped cost value
+            sl_object.get("response_cost", kwargs.get("response_cost"))  # pyright: ignore[reportUnknownMemberType]  # float below validates the untyped cost value
             if isinstance(sl_object, Mapping)
             else kwargs.get("response_cost")
         )
