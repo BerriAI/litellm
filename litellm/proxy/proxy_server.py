@@ -16190,8 +16190,21 @@ async def _count_request_tokens(
     native_responses: Final = responses_request is not None and _serves_native_responses(
         deployment_view, request.model, responses_request
     )
-    provider_carries_tools: Final = sends_function_tools(
-        _COUNT_TOOLS.validate_python(tools) if chat_count is None else chat_count.tools
+    count_tools: Final = _COUNT_TOOLS.validate_python(tools)
+    provider_carries_tools: Final = sends_function_tools(count_tools if chat_count is None else chat_count.tools)
+    openai_model: Final = deployment_openai_model(deployment_view)
+    template_model: Final = openai_model or _deployment_base_model(deployment_view) or model_to_use
+    tool_section: Final = chat_template_tool_section(template_model)
+    strict_by_default: Final = (
+        native_responses
+        and _deployment_provider(deployment_view, request.model, responses_request) in _AZURE_PROVIDERS
+        and tool_section is not None
+        and tool_section.renders_strict_only_when_true
+    )
+    request_tools: Final = (
+        None
+        if count_tools is None
+        else list(_with_strict_by_default(count_tools) if strict_by_default else count_tools)
     )
     ladder: Final = (
         None
@@ -16218,7 +16231,7 @@ async def _count_request_tokens(
                 contents=None if prompt_as_message else contents,
                 deployment=count_deployment,
                 request_model=request.model,
-                tools=tools if chat_count is None else [dict(tool) for tool in chat_count.tools or ()] or None,
+                tools=request_tools if chat_count is None else [dict(tool) for tool in chat_count.tools or ()] or None,
                 system=inference_system,
                 messages_format=messages_format,
                 output_format=output_format,
@@ -16289,20 +16302,8 @@ async def _count_request_tokens(
     counted_messages: Final = (
         typed_messages if typed_messages is None or system_message is None else (system_message, *typed_messages)
     )
-    sent_tools: Final = cast(  # cast-ok: raw OpenAI or Anthropic tool dicts, both of which token_counter formats
-        list[ChatCompletionToolParam] | None, tools if counted_messages is not None else None
-    )
-    openai_model: Final = deployment_openai_model(deployment_view)
-    template_model: Final = openai_model or _deployment_base_model(deployment_view) or model_to_use
-    tool_section: Final = chat_template_tool_section(template_model)
-    counted_tools: Final = (
-        cast(list[ChatCompletionToolParam], list(_with_strict_by_default(sent_tools)))  # cast-ok: strict added
-        if sent_tools is not None
-        and native_responses
-        and _deployment_provider(deployment_view, request.model, responses_request) in _AZURE_PROVIDERS
-        and tool_section is not None
-        and tool_section.renders_strict_only_when_true
-        else sent_tools
+    counted_tools: Final = cast(  # cast-ok: raw OpenAI or Anthropic tool dicts, both of which token_counter formats
+        list[ChatCompletionToolParam] | None, request_tools if counted_messages is not None else None
     )
     framing: Final = (
         0

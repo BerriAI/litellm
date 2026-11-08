@@ -1846,6 +1846,43 @@ async def test_an_xai_count_adds_the_framing_of_its_request_kind(
     assert (response.total_tokens, response.count_source) == (11 + framing, "provider")
 
 
+
+async def _xai_text_for_an_azure_responses_tool(monkeypatch: pytest.MonkeyPatch, tool: Mapping[str, object]) -> str:
+    import litellm.proxy.proxy_server as proxy_server
+
+    monkeypatch.setenv("XAI_API_KEY", "xai-env-key")
+    deployment: Final = {
+        **_AZURE_GROK,
+        "model_info": {"token_count_model": {"model": "grok-4-1-fast-reasoning", "litellm_provider": "xai"}},
+    }
+    monkeypatch.setattr(proxy_server, "llm_router", Router(model_list=[deployment]))
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    with respx.mock:
+        route: Final = respx.post("https://api.x.ai/v1/tokenize-text").mock(return_value=_xai_token_ids(11))
+        await count_request_tokens(
+            request=TokenCountRequest(
+                model="azure-grok", messages=[{"role": "user", "content": "hi"}], tools=[dict(tool)]
+            ),
+            call_endpoint=True,
+            responses_request={"model": "azure-grok", "input": "hi", "tools": [dict(tool)]},
+        )
+    text: Final = json.loads(route.calls.last.request.content)["text"]
+    assert isinstance(text, str)
+    return text
+
+
+@pytest.mark.asyncio
+async def test_an_azure_responses_count_through_xai_renders_an_unset_strict_the_way_azure_bills_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tool: Final = {"type": "function", **_XAI_WEATHER_FUNCTION}
+
+    unset: Final = await _xai_text_for_an_azure_responses_tool(monkeypatch, tool)
+
+    assert unset == await _xai_text_for_an_azure_responses_tool(monkeypatch, {**tool, "strict": True})
+    assert unset != await _xai_text_for_an_azure_responses_tool(monkeypatch, {**tool, "strict": False})
+
+
 class _ScriptedCounter(BaseTokenCounter):
     def __init__(self, replies: dict[str, TokenCountResponse], burst: int = 1) -> None:
         self._replies = replies
