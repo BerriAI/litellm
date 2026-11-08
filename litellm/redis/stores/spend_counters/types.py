@@ -7,6 +7,7 @@ from litellm.rust_bridge._native import NativeRedisStoreError
 SPEND_COUNTERS_TARGET: Final = "spend_counters"
 SPEND_COUNTER_PREFIX: Final = "spend:"
 END_USER_COUNTER_PREFIX: Final = "spend:end_user:"
+TEAM_MEMBER_COUNTER_PREFIX: Final = "spend:team_member:"
 
 SpendIncrement: TypeAlias = tuple[str, float]
 SpendReading: TypeAlias = tuple[float | None, bool]
@@ -30,7 +31,7 @@ def team_window_counter(team_id: str, budget_duration: str) -> str:
 
 
 def team_member_counter(user_id: str, team_id: str) -> str:
-    return f"spend:team_member:{user_id}:{team_id}"
+    return f"{TEAM_MEMBER_COUNTER_PREFIX}{user_id}:{team_id}"
 
 
 def user_counter(user_id: str) -> str:
