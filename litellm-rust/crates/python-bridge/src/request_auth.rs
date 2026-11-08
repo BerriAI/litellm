@@ -224,3 +224,24 @@ pub(crate) fn request_auth_fallback_candidate(py: Python<'_>, facts: &Bound<'_, 
     let decision = py.detach(move || core::fallback_candidate::decide(&facts)).map_err(map_error)?;
     to_py(py, &decision)
 }
+
+#[pyfunction]
+pub(crate) fn request_auth_personal_budget(py: Python<'_>, facts: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
+    let facts: core::personal_budget::Facts = from_py(facts)?;
+    let decision = py.detach(move || core::personal_budget::decide(&facts)).map_err(map_error)?;
+    to_py(py, &decision)
+}
+
+#[pyfunction]
+pub(crate) fn request_auth_personal_models(py: Python<'_>, facts: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
+    let facts: core::personal_models::Request = from_py(facts)?;
+    let decision = py.detach(move || core::personal_models::decide(facts)).map_err(map_error)?;
+    to_py(py, &decision)
+}
+
+#[pyfunction]
+pub(crate) fn request_auth_owner_teams(py: Python<'_>, facts: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
+    let facts: core::owner_teams::Facts = from_py(facts)?;
+    let decision = py.detach(move || core::owner_teams::decide(&facts)).map_err(map_error)?;
+    to_py(py, &decision)
+}
