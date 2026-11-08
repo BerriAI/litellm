@@ -1,10 +1,11 @@
 import asyncio
 import json
+import posixpath
 import time
 import urllib.parse
 from datetime import datetime
 from typing import Final, Literal
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 import httpx
 from typing_extensions import TypedDict
@@ -300,8 +301,8 @@ class AssemblyAIPassthroughLoggingHandler:
         parsed = urlparse(url)
         if parsed.hostname in ("api.eu.assemblyai.com", "eu.assemblyai.com"):
             return "eu"
-        path = parsed.path
-        if path.startswith("/eu.assemblyai/") or path == "/eu.assemblyai" or "eu.assemblyai" in path.split("/"):
+        normalized_path = posixpath.normpath(unquote(parsed.path))
+        if normalized_path == "/eu.assemblyai" or normalized_path.startswith("/eu.assemblyai/"):
             return "eu"
         return None
 

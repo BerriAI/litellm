@@ -98,6 +98,9 @@ def test_get_assembly_region_from_url():
     assert AssemblyAIPassthroughLoggingHandler.get_assembly_region_from_url("http://localhost:4000/assemblyai/v2/transcript") is None
     assert AssemblyAIPassthroughLoggingHandler.get_assembly_region_from_url("/assemblyai/v2/transcript") is None
     assert AssemblyAIPassthroughLoggingHandler.get_assembly_region_from_url("https://api.assemblyai.com/v2/transcript") is None
+    assert AssemblyAIPassthroughLoggingHandler.get_assembly_region_from_url("/assemblyai/eu.assemblyai/%2e%2e/v2/transcript") is None
+    assert AssemblyAIPassthroughLoggingHandler.get_assembly_region_from_url("/assemblyai/eu.assemblyai/../v2/transcript") is None
+    assert AssemblyAIPassthroughLoggingHandler.get_assembly_region_from_url("/other/prefix/eu.assemblyai/v2/transcript") is None
     assert AssemblyAIPassthroughLoggingHandler.get_assembly_region_from_url(None) is None
 
 
