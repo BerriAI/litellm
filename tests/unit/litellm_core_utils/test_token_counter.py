@@ -46,6 +46,7 @@ from litellm.litellm_core_utils.token_counter import (
     _get_extrapolating_count_function,
     _get_tiktoken_count_function,
     _price_pdf_pages,
+    _pdf_string_operand_bytes,
     calculate_img_tokens,
     estimate_image_tokens,
     high_detail_image_token_upper_bound,
@@ -3614,6 +3615,46 @@ def test_shared_pdf_form_uses_each_parents_resources(
     assert shared_price is not None
     assert distinct_price is not None
     assert distinct_price - shared_price == second_count - 1
+
+
+@pytest.mark.parametrize("context_count", [0, 2, 8])
+def test_shared_pdf_stream_is_scanned_once_across_inherited_contexts(context_count: int):
+    attributes: Final = b"/Type /XObject /Subtype /Form /BBox [0 0 612 792]"
+    shared_number: Final = 6 + context_count
+    shared_content: Final = b"/Leaf Do"
+    parent_content: Final = b"/Shared Do"
+    parents: Final = tuple(
+        _pdf_stream(
+            parent_content,
+            attributes
+            + f" /Resources << /XObject << /Shared {shared_number} 0 R /Leaf {shared_number + index + 1} 0 R >> >>".encode(),
+        )
+        for index in range(context_count)
+    )
+    leaves: Final = tuple(
+        _pdf_stream(
+            b"BT /F1 12 Tf (" + b"x" * (index + 1) + b") Tj ET",
+            attributes + b" /Resources << /Font << /F1 3 0 R >> >>",
+        )
+        for index in range(context_count)
+    )
+    path: Final = b"10 10 m 20 20 l S\n"
+    padding: Final = path * (PDF_PAGE_MAX_EXACT_CONTENT_BYTES // len(path) + 1)
+    data_url: Final = _pdf_data_url_with_xobjects(
+        padding + b"".join(f"/Parent{index} Do\n".encode() for index in range(context_count)),
+        b"<< " + b" ".join(f"/Parent{index} {6 + index} 0 R".encode() for index in range(context_count)) + b" >>",
+        (*parents, _pdf_stream(shared_content, attributes), *leaves),
+    )
+    blank_price: Final = _count_inline_pdf_tokens(_pdf_data_url_with_xobjects(b"", b"<< >>", ()), len)
+    with patch(
+        "litellm.litellm_core_utils.token_counter._pdf_string_operand_bytes", wraps=_pdf_string_operand_bytes
+    ) as scan:
+        price: Final = _count_inline_pdf_tokens(data_url, len)
+    assert price is not None
+    assert blank_price is not None
+    assert price - blank_price == sum(range(1, context_count + 1))
+    assert sum(call.args[0] == shared_content for call in scan.call_args_list) == int(context_count > 0)
+    assert sum(call.args[0] == parent_content for call in scan.call_args_list) == context_count
 
 
 def test_repeated_identity_h_form_draws_count_each_text_sample():

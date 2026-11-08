@@ -1624,6 +1624,13 @@ class _PdfModule(Protocol):
 
 
 @dataclass(frozen=True, slots=True)
+class _PdfStreamScan:
+    content: bytes
+    operand_bytes: int
+    invoked_names: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class _PdfStreamMetrics:
     content: bytes
     content_bytes: int
@@ -1677,37 +1684,42 @@ def _pdf_strip_inline_images(content: bytes) -> bytes:
     return PDF_INLINE_IMAGE.sub(_pdf_inline_image_replacement, content) if b"BI" in content else content
 
 
+def _pdf_scan_stream(content: bytes) -> _PdfStreamScan:
+    return _PdfStreamScan(
+        content=content,
+        operand_bytes=_pdf_string_operand_bytes(content),
+        invoked_names=tuple(
+            name
+            for invocation in PDF_XOBJECT_INVOCATION.finditer(content)
+            if (name := _pdf_invocation_name(invocation)) is not None
+        ),
+    )
+
+
 def _pdf_page_content_metrics(page: _PdfPage, page_content: bytes) -> _PdfStreamMetrics:
     form_metrics_memo: Final[dict[tuple[int, int], _PdfStreamMetrics]] = {}  # mutable-ok: page-local walk cache
+    stream_scans: Final[dict[int, _PdfStreamScan]] = {}  # mutable-ok: scan each stream identity once per page
 
     def stream_metrics(
-        content: bytes,
+        scan: _PdfStreamScan,
         resources: _PdfResourceDictionary,
         ancestors: frozenset[int],
     ) -> _PdfStreamMetrics:
         xobjects: Final = _pdf_resolve_object(resources.get("/XObject"))
         xobject_resources: Final = xobjects if isinstance(xobjects, _PdfResourceDictionary) else _PDF_EMPTY_RESOURCES
-        invoked_names: Final = (
-            tuple(
-                name
-                for invocation in PDF_XOBJECT_INVOCATION.finditer(content)
-                if (name := _pdf_invocation_name(invocation)) is not None
-            )
-            if xobject_resources
-            else ()
-        )
         form_metrics: Final = tuple(
             form_metrics_for_xobject(
                 _pdf_resolve_object(xobject_resources.get(name)),
                 resources,
                 ancestors,
             )
-            for name in invoked_names
+            for name in scan.invoked_names
+            if xobject_resources
         )
         return _PdfStreamMetrics(
-            content=content,
-            content_bytes=len(content) + sum(metrics.content_bytes for metrics in form_metrics),
-            operand_bytes=_pdf_string_operand_bytes(content) + sum(metrics.operand_bytes for metrics in form_metrics),
+            content=scan.content,
+            content_bytes=len(scan.content) + sum(metrics.content_bytes for metrics in form_metrics),
+            operand_bytes=scan.operand_bytes + sum(metrics.operand_bytes for metrics in form_metrics),
             resources=resources,
             forms=form_metrics,
             extraction_limited=any(metrics.extraction_limited for metrics in form_metrics),
@@ -1730,14 +1742,15 @@ def _pdf_page_content_metrics(page: _PdfPage, page_content: bytes) -> _PdfStream
         cached: Final = form_metrics_memo.get(cache_key)
         if cached is not None:
             return cached
-        content: Final = _pdf_strip_inline_images(resolved.get_data())
-        metrics: Final = stream_metrics(content, resources, ancestors | {identity})
+        if identity not in stream_scans:
+            stream_scans[identity] = _pdf_scan_stream(_pdf_strip_inline_images(resolved.get_data()))
+        metrics: Final = stream_metrics(stream_scans[identity], resources, ancestors | {identity})
         form_metrics_memo[cache_key] = metrics
         return metrics
 
     resources: Final = _pdf_resolve_object(page.get("/Resources"))
     page_resources: Final = resources if isinstance(resources, _PdfResourceDictionary) else _PDF_EMPTY_RESOURCES
-    return stream_metrics(page_content, page_resources, frozenset())
+    return stream_metrics(_pdf_scan_stream(page_content), page_resources, frozenset())
 
 
 def _evenly_spaced_page_indices(page_count: int) -> tuple[int, ...]:
