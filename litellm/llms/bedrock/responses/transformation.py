@@ -52,6 +52,7 @@ from litellm.llms.base_llm.responses.codex_compat import drop_unsupported_tools,
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.common_utils import (
     BEDROCK_CHAT_COMPLETIONS_ROUTE_PREFIX,
+    BEDROCK_RUNTIME_OPENAI_CHAT_ROUTE_SUFFIXES,
     BEDROCK_RUNTIME_OPENAI_RESPONSES_ROUTE_SUFFIXES,
     BedrockError,
     bedrock_reasoning_effort_disabled,
@@ -66,9 +67,7 @@ from litellm.types.utils import LlmProviders
 
 BEDROCK_RUNTIME_OPENAI_RESPONSES_PATH: Final = "/openai/v1/responses"
 BEDROCK_RUNTIME_OPENAI_BASE_SUFFIXES: Final = (
-    "/openai/v1/chat/completions",
-    "/v1/chat/completions",
-    "/chat/completions",
+    *BEDROCK_RUNTIME_OPENAI_CHAT_ROUTE_SUFFIXES,
     *BEDROCK_RUNTIME_OPENAI_RESPONSES_ROUTE_SUFFIXES,
     "/openai/v1",
     "/v1",

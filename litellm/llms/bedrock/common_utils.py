@@ -54,6 +54,11 @@ _OPENAI_GPT_VERSION_RE: Final = re.compile(r"(^|[./])openai\.gpt-(\d{1,3})(?!\d)
 _BEDROCK_RUNTIME_CHAT_COMPLETIONS_DEFAULT_SINCE: Final = (5, 6)
 _XAI_GROK_MODEL_RE: Final = re.compile(r"(^|[./])xai\.grok-")
 _BEDROCK_RUNTIME_CHAT_COMPLETIONS_ENDPOINT: Final = "/v1/chat/completions"
+BEDROCK_RUNTIME_OPENAI_CHAT_ROUTE_SUFFIXES: Final = (
+    "/openai/v1/chat/completions",
+    "/v1/chat/completions",
+    "/chat/completions",
+)
 BEDROCK_RUNTIME_OPENAI_RESPONSES_ROUTE_SUFFIXES: Final = ("/openai/v1/responses", "/v1/responses", "/responses")
 BedrockRoute = Literal[
     "converse",

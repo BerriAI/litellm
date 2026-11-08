@@ -22,7 +22,14 @@ from litellm.types.utils import ModelResponse
 from litellm.utils import CustomStreamWrapper
 
 from ..base_aws_llm import BaseAWSLLM, Credentials, bedrock_bearer_token, pop_aws_auth_params, run_aws_signing
-from ..common_utils import BedrockError, error_response_text, get_all_bedrock_regions
+from ..common_utils import (
+    BEDROCK_RUNTIME_OPENAI_CHAT_ROUTE_SUFFIXES,
+    BEDROCK_RUNTIME_OPENAI_RESPONSES_ROUTE_SUFFIXES,
+    BedrockError,
+    error_response_text,
+    get_all_bedrock_regions,
+    strip_bedrock_runtime_route_suffix,
+)
 from .invoke_handler import AWSEventStreamDecoder, make_call
 
 
@@ -299,7 +306,7 @@ class BedrockConverseLLM(BaseAWSLLM):
         api_key: str | None = None,
     ):
         ## SETUP ##
-        stream: Final = optional_params.pop("stream", None)
+        stream: Final[bool | None] = optional_params.pop("stream", None)
         stream_chunk_size: Final = stored_control_options(litellm_params).stream_chunk_size if stream is True else None
         unencoded_model_id: Final = optional_params.pop("model_id", None)
         fake_stream = optional_params.pop("fake_stream", False)
@@ -358,17 +365,19 @@ class BedrockConverseLLM(BaseAWSLLM):
         )
 
         ### SET RUNTIME ENDPOINT ###
-        endpoint_url, proxy_endpoint_url = self.get_runtime_endpoint(
+        _, runtime_url = self.get_runtime_endpoint(
             api_base=api_base,
             aws_bedrock_runtime_endpoint=aws_bedrock_runtime_endpoint,
             aws_region_name=aws_region_name,
         )
-        if (stream is not None and stream is True) and not fake_stream:
-            endpoint_url = join_api_base(endpoint_url, f"model/{modelId}/converse-stream")
-            proxy_endpoint_url = join_api_base(proxy_endpoint_url, f"model/{modelId}/converse-stream")
-        else:
-            endpoint_url = join_api_base(endpoint_url, f"model/{modelId}/converse")
-            proxy_endpoint_url = join_api_base(proxy_endpoint_url, f"model/{modelId}/converse")
+        converse_route: Final = "converse-stream" if stream is True and not fake_stream else "converse"
+        proxy_endpoint_url: Final = join_api_base(
+            strip_bedrock_runtime_route_suffix(
+                runtime_url,
+                (*BEDROCK_RUNTIME_OPENAI_CHAT_ROUTE_SUFFIXES, *BEDROCK_RUNTIME_OPENAI_RESPONSES_ROUTE_SUFFIXES),
+            ),
+            f"model/{modelId}/{converse_route}",
+        )
 
         ## COMPLETION CALL
         headers = {"Content-Type": "application/json"}

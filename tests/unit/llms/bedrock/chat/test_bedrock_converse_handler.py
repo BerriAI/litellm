@@ -959,3 +959,28 @@ def test_converse_profile_override_records_cost_without_changing_response_model(
         CONVERSE_RESPONSE["usage"]["inputTokens"] * prices["input_cost_per_token"]
         + CONVERSE_RESPONSE["usage"]["outputTokens"] * prices["output_cost_per_token"]
     )
+
+
+@pytest.mark.parametrize(
+    "api_base",
+    ["https://gateway.example.com/openai/v1/chat/completions", "https://gateway.example.com/openai/v1/responses"],
+)
+def test_converse_fallback_on_a_full_route_url_api_base_calls_converse_on_that_host(
+    api_base: str, respx_mock: respx.MockRouter
+) -> None:
+    gateway: Final = respx_mock.post(url__startswith="https://gateway.example.com/").mock(
+        return_value=httpx.Response(200, json=CONVERSE_RESPONSE)
+    )
+
+    litellm.completion(
+        model="bedrock/us.openai.gpt-6.1-sol",
+        messages=[{"role": "user", "content": "hi"}],
+        api_base=api_base,
+        api_key="bedrock-api-key",
+        aws_region_name="us-east-1",
+        response_format={"type": "json_object"},
+    )
+
+    assert [call.request.url for call in gateway.calls] == [
+        httpx.URL("https://gateway.example.com/model/us.openai.gpt-6.1-sol/converse")
+    ]
