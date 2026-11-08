@@ -391,3 +391,52 @@ def test_approximate_input_size_skips_gemini_media_data() -> None:
     }
     # Sizing should only account for "Short prompt", not the 100,000 characters of inline media data
     assert _approximate_input_size(body) < 1_000
+
+
+def test_count_input_tokens_for_model_gemini_extra_body_overrides_return_none() -> None:
+    body_contents_override: Final = {
+        "contents": [{"role": "user", "parts": [{"text": "Hello"}]}],
+        "extra_body": {"contents": [{"role": "user", "parts": [{"text": "Overridden huge prompt"}]}]},
+    }
+    assert count_input_tokens_for_model(request_body=body_contents_override, model="gpt-4o") is None
+
+    body_sys_override: Final = {
+        "contents": [{"role": "user", "parts": [{"text": "Hello"}]}],
+        "extra_body": {"systemInstruction": "Overridden system prompt"},
+    }
+    assert count_input_tokens_for_model(request_body=body_sys_override, model="gpt-4o") is None
+
+    body_tools_override: Final = {
+        "contents": [{"role": "user", "parts": [{"text": "Hello"}]}],
+        "extra_body": {"tools": [{"functionDeclarations": []}]},
+    }
+    assert count_input_tokens_for_model(request_body=body_tools_override, model="gpt-4o") is None
+
+
+def test_count_input_tokens_for_model_responses_route_ignores_unrelated_contents() -> None:
+    long_input: Final = "This is a long input prompt for Responses endpoint " * 10
+    body: Final = {
+        "input": long_input,
+        "contents": "Hi",
+    }
+    # For /v1/responses route, the billable input is 'input', not the decoy 'contents'
+    tokens = count_input_tokens_for_model(request_body=body, model="gpt-4o", route="/v1/responses")
+    assert tokens is not None
+    assert tokens > 20
+
+    # Without route, input field still takes precedence over contents
+    tokens_no_route = count_input_tokens_for_model(request_body=body, model="gpt-4o")
+    assert tokens_no_route == tokens
+
+
+def test_count_input_tokens_for_model_native_gemini_route_counts_contents() -> None:
+    body: Final = {
+        "contents": [{"role": "user", "parts": [{"text": "Hello Gemini native"}]}],
+        "input": "decoy",
+    }
+    # On native Gemini route, contents is counted and decoy input is ignored
+    tokens = count_input_tokens_for_model(
+        request_body=body, model="gpt-4o", route="/vertex_ai/models/gemini-pro:generateContent"
+    )
+    assert tokens is not None
+    assert tokens > 0

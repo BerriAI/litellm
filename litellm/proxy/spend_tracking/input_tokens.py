@@ -110,6 +110,7 @@ async def count_input_tokens(
     request_body: dict,
     raw_body: bytes | None,
     models: Sequence[str],
+    route: str | None = None,
 ) -> Mapping[str, int]:
     """Input-token count per model, sharing one native count across models that
     select the same tokenizer."""
@@ -124,6 +125,7 @@ async def count_input_tokens(
             raw_body=counted_raw_body,
             tokenizer=tokenizer,
             models=tuple(model for model, selected in tokenizers if selected == tokenizer),
+            route=route,
         )
         for tokenizer in groups
     ]
@@ -137,14 +139,16 @@ async def _count_group(
     raw_body: bytes | None,
     tokenizer: RustTokenizer | None,
     models: tuple[str, ...],
+    route: str | None = None,
 ) -> Mapping[str, int]:
     async def python() -> Mapping[str, int]:
         if _approximate_input_size(request_body) < TOKENIZE_OFF_EVENT_LOOP_MIN_CHARS:
-            return _count_input_tokens_for_models(request_body=request_body, models=models)
+            return _count_input_tokens_for_models(request_body=request_body, models=models, route=route)
         return await asyncio.to_thread(
             _count_input_tokens_for_models,
             request_body=request_body,
             models=models,
+            route=route,
         )
 
     if tokenizer is None or raw_body is None:
@@ -179,12 +183,13 @@ async def _native_counts(
 def _count_input_tokens_for_models(
     request_body: dict,
     models: Sequence[str],
+    route: str | None = None,
 ) -> Mapping[str, int]:
     return MappingProxyType(
         {
             model: tokens
             for model in models
-            if (tokens := count_input_tokens_for_model(request_body=request_body, model=model)) is not None
+            if (tokens := count_input_tokens_for_model(request_body=request_body, model=model, route=route)) is not None
         }
     )
 
@@ -304,9 +309,20 @@ def _extract_gemini_part_text(part: Mapping[str, object]) -> str | None:
 
 def _extract_gemini_text(request_body: Mapping[str, object]) -> str | None:
     extra_body = request_body.get("extra_body")
-    if any(key in request_body for key in ("cachedContent", "cached_content")) or (
-        isinstance(extra_body, Mapping) and any(key in extra_body for key in ("cachedContent", "cached_content"))
-    ):
+    if isinstance(extra_body, Mapping):
+        if any(
+            key in extra_body
+            for key in (
+                "contents",
+                "systemInstruction",
+                "system_instruction",
+                "tools",
+                "cachedContent",
+                "cached_content",
+            )
+        ):
+            return None
+    if any(key in request_body for key in ("cachedContent", "cached_content")):
         return None
 
     texts: list[str] = []
@@ -391,8 +407,22 @@ def _extract_gemini_text(request_body: Mapping[str, object]) -> str | None:
     return combined if combined else None
 
 
-def count_input_tokens_for_model(request_body: dict, model: str) -> int | None:
+def is_native_gemini_route(route: str | None) -> bool:
+    if route is None:
+        return False
+    return any(p in route for p in ("/vertex_ai", "/gemini", "generateContent", "streamGenerateContent"))
+
+
+def count_input_tokens_for_model(request_body: dict, model: str, route: str | None = None) -> int | None:
     try:
+        if is_native_gemini_route(route):
+            if "contents" in request_body:
+                gemini_text: Final = _extract_gemini_text(request_body)
+                if gemini_text is not None:
+                    return _count_text_tokens(model=model, text=gemini_text)
+                return None
+            return None
+
         if "messages" in request_body:
             try:
                 return litellm.token_counter(
@@ -403,11 +433,6 @@ def count_input_tokens_for_model(request_body: dict, model: str) -> int | None:
                 )
             except ValueError:
                 return _count_text_tokens(model=model, text=request_body.get("messages"))
-        if "contents" in request_body:
-            gemini_text: Final = _extract_gemini_text(request_body)
-            if gemini_text is not None:
-                return _count_text_tokens(model=model, text=gemini_text)
-            return None
         if "prompt" in request_body:
             return _count_text_tokens(model=model, text=request_body.get("prompt"))
         if "input" in request_body:
@@ -421,6 +446,11 @@ def count_input_tokens_for_model(request_body: dict, model: str) -> int | None:
                 text=request_body.get("documents"),
             )
             return query_tokens + document_tokens
+        if "contents" in request_body:
+            gemini_text: Final = _extract_gemini_text(request_body)
+            if gemini_text is not None:
+                return _count_text_tokens(model=model, text=gemini_text)
+            return None
     except Exception:
         verbose_proxy_logger.debug("Unable to count input tokens for budget reservation", exc_info=True)
     return None

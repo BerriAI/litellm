@@ -1636,6 +1636,7 @@ async def count_request_input_tokens(
         request_body=request_body,
         raw_body=raw_body,
         models=tuple(dict.fromkeys(chain.from_iterable(counted_models.values()))),
+        route=route,
     )
     chat_pdf_files: Final = (
         inline_pdf_file_count(request_body.get("messages"))
@@ -1668,7 +1669,7 @@ def _estimate_input_tokens(
     counted: Final = (
         input_tokens
         if input_tokens is not None
-        else count_input_tokens_for_model(request_body=request_body, model=model)
+        else count_input_tokens_for_model(request_body=request_body, model=model, route=route)
     )
     if counted is not None:
         return counted
@@ -1709,17 +1710,25 @@ _OUTPUT_TOKEN_FIELDS: Final = ("max_completion_tokens", "max_tokens", "max_outpu
 
 
 def _is_native_gemini_request(request_body: Mapping[str, object], route: str | None = None) -> bool:
-    if "contents" in request_body:
-        return True
-    if route is not None and any(
-        gemini_path in route for gemini_path in ("/vertex_ai", "/gemini", "generateContent", "streamGenerateContent")
-    ):
-        return True
-    return False
+    if route is not None:
+        return any(
+            gemini_path in route
+            for gemini_path in ("/vertex_ai", "/gemini", "generateContent", "streamGenerateContent")
+        )
+    return (
+        "contents" in request_body
+        and "messages" not in request_body
+        and "prompt" not in request_body
+        and "input" not in request_body
+    )
 
 
 def _extract_gemini_max_output_tokens(request_body: Mapping[str, object]) -> int | None:
     found: list[int] = []
+    for token_key in ("maxOutputTokens", "max_output_tokens", "max_tokens", "max_completion_tokens"):
+        val = _to_int(request_body.get(token_key))
+        if val is not None:
+            found.append(val)
     for cfg_key in ("config", "generationConfig", "generation_config"):
         cfg = request_body.get(cfg_key)
         if isinstance(cfg, Mapping):
@@ -1732,6 +1741,10 @@ def _extract_gemini_max_output_tokens(request_body: Mapping[str, object]) -> int
 
 def _extract_gemini_candidate_count(request_body: Mapping[str, object]) -> int | None:
     found: list[int] = []
+    for cand_key in ("candidateCount", "candidate_count"):
+        val = _to_int(request_body.get(cand_key))
+        if val is not None:
+            found.append(val)
     for cfg_key in ("config", "generationConfig", "generation_config"):
         cfg = request_body.get(cfg_key)
         if isinstance(cfg, Mapping):
@@ -1743,14 +1756,13 @@ def _extract_gemini_candidate_count(request_body: Mapping[str, object]) -> int |
 
 
 def _requested_output_tokens(request_body: Mapping[str, object], route: str | None = None) -> int | None:
+    if _is_native_gemini_request(request_body, route):
+        return _extract_gemini_max_output_tokens(request_body)
+
     inference_config: Final = request_body.get("inferenceConfig")
-    generation_max_tokens: Final = (
-        _extract_gemini_max_output_tokens(request_body) if _is_native_gemini_request(request_body, route) else None
-    )
     candidates: Final = (
         *(request_body.get(field) for field in _OUTPUT_TOKEN_FIELDS),
         inference_config.get("maxTokens") if isinstance(inference_config, Mapping) else None,
-        generation_max_tokens,
     )
     return next((tokens for tokens in map(_to_int, candidates) if tokens is not None), None)
 

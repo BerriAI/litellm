@@ -615,6 +615,15 @@ def test_requested_output_tokens_gemini_generation_config() -> None:
     body_chat: Final = {"messages": [{"role": "user", "content": "hi"}], "generationConfig": {"maxOutputTokens": 1}}
     assert _requested_output_tokens(body_chat, route="/v1/chat/completions") is None
 
+    # Adding contents to a non-native chat route still ignores generationConfig
+    body_chat_decoy: Final = {
+        "messages": [{"role": "user", "content": "hi"}],
+        "contents": [],
+        "generationConfig": {"maxOutputTokens": 1},
+    }
+    assert _requested_output_tokens(body_chat_decoy, route="/v1/chat/completions") is None
+    assert _requested_output_tokens(body_chat_decoy) is None
+
     # Native route honors generationConfig
     assert _requested_output_tokens(body_camel, route="/vertex_ai/models/gemini-pro:generateContent") == 4096
 
