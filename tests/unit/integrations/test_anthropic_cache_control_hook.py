@@ -33,7 +33,9 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_to_anthropic_tool_invoke,
 )
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+from litellm.llms.chatgpt.common_utils import CHATGPT_DEVICE_CODE_URL
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.llms.github_copilot.authenticator import DEFAULT_GITHUB_DEVICE_CODE_URL
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionAssistantToolCall
 from litellm.types.utils import ChatCompletionMessageToolCall, LlmProviders, Message
 from litellm.utils import ProviderConfigManager
@@ -5188,6 +5190,77 @@ def test_cache_control_hook_injects_next_to_a_malformed_message_instead_of_raisi
         {"type": "ephemeral"},
     ]
 
+
+
+def test_system_injection_point_filling_the_cap_without_a_developer_message_logs_no_limit_warning(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+):
+    monkeypatch.setattr(verbose_logger, "propagate", True)
+    caplog.set_level(logging.WARNING, logger=verbose_logger.name)
+    messages: Final = [
+        {"role": "system", "content": "You are a weather assistant."},
+        {"role": "user", "content": "Weather in Paris?"},
+        {"role": "assistant", "content": "18C and sunny."},
+        {"role": "user", "content": "And tomorrow?"},
+    ]
+
+    _, processed, _ = AnthropicCacheControlHook().get_chat_completion_prompt(
+        model="anthropic/claude-opus-5-5",
+        messages=cast(list[AllMessageValues], messages),
+        non_default_params={
+            "cache_control_injection_points": [
+                {"location": "message", "role": "system"},
+                {"location": "message", "index": -1},
+                {"location": "message", "index": -2},
+                {"location": "message", "index": -3},
+            ]
+        },
+        prompt_id=None,
+        prompt_variables=None,
+        dynamic_callback_params={},
+    )
+
+    assert _wire_cache_marks(processed) == 4
+    assert [record.getMessage() for record in caplog.records if "provider limit" in record.getMessage()] == []
+
+
+@pytest.mark.parametrize(
+    ("custom_llm_provider", "device_code_url"),
+    [
+        pytest.param("github_copilot", DEFAULT_GITHUB_DEVICE_CODE_URL, id="github_copilot"),
+        pytest.param("chatgpt", CHATGPT_DEVICE_CODE_URL, id="chatgpt"),
+    ],
+)
+def test_system_injection_point_on_a_developer_prompt_starts_no_provider_sign_in(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path, custom_llm_provider: str, device_code_url: str
+):
+    monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(tmp_path))
+    monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path))
+    monkeypatch.delenv("GITHUB_COPILOT_DEVICE_CODE_URL", raising=False)
+
+    def prompt_mark(role: str) -> object:
+        _, processed, _ = AnthropicCacheControlHook().get_chat_completion_prompt(
+            model="gpt-6.1-sol",
+            messages=cast(
+                list[AllMessageValues],
+                [{"role": role, "content": "Answer in French."}, {"role": "user", "content": "Hi"}],
+            ),
+            non_default_params={
+                "custom_llm_provider": custom_llm_provider,
+                "cache_control_injection_points": [{"location": "message", "role": "system"}],
+            },
+            prompt_id=None,
+            prompt_variables=None,
+            dynamic_callback_params={},
+        )
+        return processed[0].get("cache_control")
+
+    with respx.mock(assert_all_called=False) as router:
+        device_code: Final = router.route(url=device_code_url).mock(return_value=Response(500))
+        marks: Final = (prompt_mark("system"), prompt_mark("developer"))
+
+    assert device_code.called is False
+    assert marks == ({"type": "ephemeral"}, {"type": "ephemeral"})
 
 _SHARED_FOUNDRY_MODEL: Final = "azure_ai/qa-shared-gpt-deployment"
 _SIBLING_BREAKPOINT_FLAGS: Final = MappingProxyType(
