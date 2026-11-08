@@ -9,6 +9,7 @@ A raw or forged managed-looking file id has no ownership row, so without the gua
 is attached to a vector store or read back under shared provider credentials.
 """
 
+import asyncio
 import base64
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
@@ -316,28 +317,75 @@ async def test_admin_file_listing_preserves_a_provider_page() -> None:
 
 
 @pytest.mark.asyncio
-async def test_file_listing_reports_its_page_budget() -> None:
+@pytest.mark.parametrize("before", [False, True])
+async def test_file_listing_resumes_after_its_page_budget(before: bool) -> None:
     async def next_page(cursor: str) -> VectorStoreFileListResponse:
+        if cursor.count("-next") == endpoints._FILE_LIST_MAX_PAGES - 1:
+            return {"data": [_vector_store_file_row(RAW_FILE_ID)], "has_more": False}
         return {"data": [_vector_store_file_row(cursor + "-next")], "has_more": True}
 
     fetch: Final = AsyncMock(side_effect=next_page)
     resolver: Final = ManagedFileIdResolverStub(AsyncMock(return_value={}))
+    page: Final = await endpoints._with_managed_file_list_pages(
+        {"data": [_vector_store_file_row("file-first")], "has_more": True}, fetch, resolver, CALLER, before
+    )
+    cursor: Final = "file-first" + "-next" * (endpoints._FILE_LIST_MAX_PAGES - 1)
+    assert page == {
+        "data": [],
+        "has_more": True,
+        "first_id": cursor if before else None,
+        "last_id": None if before else cursor,
+    }
+    assert fetch.await_count == endpoints._FILE_LIST_MAX_PAGES - 1
+    query: Final = _with_provider_file_id_cursors({"before" if before else "after": cursor})
+    assert query == {"before" if before else "after": cursor}
+    following: Final = await fetch(query["before" if before else "after"])
+    owned_resolver: Final = ManagedFileIdResolverStub(AsyncMock(return_value={RAW_FILE_ID: _unified_file_id()}))
+    assert await endpoints._with_managed_file_list_pages(following, fetch, owned_resolver, CALLER, before) == {
+        "data": [_vector_store_file_row(_unified_file_id())],
+        "has_more": False,
+        "first_id": _unified_file_id(),
+        "last_id": _unified_file_id(),
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("before", [False, True])
+async def test_file_listing_returns_a_resumable_page_at_its_deadline(
+    monkeypatch: pytest.MonkeyPatch, before: bool
+) -> None:
+    monkeypatch.setattr(endpoints, "_FILE_LIST_SCAN_TIMEOUT", 0)
+    fetch: Final = AsyncMock()
+    resolver: Final = ManagedFileIdResolverStub(AsyncMock(return_value={}))
+    assert await endpoints._with_managed_file_list_pages(
+        {"data": [_vector_store_file_row("file-first")], "has_more": True}, fetch, resolver, CALLER, before
+    ) == {
+        "data": [],
+        "has_more": True,
+        "first_id": "file-first" if before else None,
+        "last_id": None if before else "file-first",
+    }
+    fetch.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_file_scan_timeout_keeps_the_last_completed_page() -> None:
+    resolver: Final = ManagedFileIdResolverStub(AsyncMock(return_value={}))
+    fetch: Final = AsyncMock(side_effect=asyncio.TimeoutError)
+    assert await endpoints._with_managed_file_list_pages(
+        {"data": [_vector_store_file_row("file-first")], "has_more": True}, fetch, resolver, CALLER
+    ) == {"data": [], "has_more": True, "first_id": None, "last_id": "file-first"}
+
+
+@pytest.mark.asyncio
+async def test_file_scan_preserves_an_upstream_error() -> None:
+    resolver: Final = ManagedFileIdResolverStub(AsyncMock(return_value={}))
+    fetch: Final = AsyncMock(side_effect=HTTPException(status_code=502, detail="upstream unavailable"))
     with pytest.raises(HTTPException) as exc:
         await endpoints._with_managed_file_list_pages(
             {"data": [_vector_store_file_row("file-first")], "has_more": True}, fetch, resolver, CALLER
         )
-    assert exc.value.status_code == 503
-    assert fetch.await_count == endpoints._FILE_LIST_MAX_PAGES - 1
-
-
-@pytest.mark.asyncio
-async def test_file_listing_reports_an_expired_deadline(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(endpoints, "_FILE_LIST_SCAN_TIMEOUT", 0)
-    fetch: Final = AsyncMock()
-    with pytest.raises(HTTPException) as exc:
-        await endpoints._with_managed_file_list_pages({"data": [], "has_more": False}, fetch, None, CALLER)
-    assert exc.value.status_code == 504
-    fetch.assert_not_awaited()
+    assert exc.value.status_code == 502
 
 
 @pytest.mark.asyncio

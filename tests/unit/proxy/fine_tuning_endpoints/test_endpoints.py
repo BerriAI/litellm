@@ -10,6 +10,7 @@ Each test asserts BOTH that the request is rejected AND that every downstream pr
 seam stayed untouched, so a guard that raises after the provider call would still fail.
 """
 
+import asyncio
 import base64
 from contextlib import ExitStack
 from collections.abc import Mapping, Sequence
@@ -341,14 +342,14 @@ PROVIDER_JOBS_PAGE: Final = {
 }
 
 
-async def _list(custom_llm_provider: str | None):
+async def _list(custom_llm_provider: str | None, *, after: str | None = None, limit: int | None = None):
     return await endpoints.list_fine_tuning_jobs(
         request=FakeRequest(),
         fastapi_response=Response(),
         custom_llm_provider=custom_llm_provider,
         target_model_names=None,
-        after=None,
-        limit=None,
+        after=after,
+        limit=limit,
         user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
     )
 
@@ -433,10 +434,8 @@ async def test_admin_job_cursor_keeps_provider_value(cursor: str | None) -> None
 
 
 @pytest.mark.asyncio
-async def test_job_cursor_requires_a_managed_reference() -> None:
-    with pytest.raises(HTTPException) as exc:
-        await endpoints._provider_job_cursor(RAW_JOB_ID, UserAPIKeyAuth(api_key="test"), None)
-    assert exc.value.status_code == 403
+async def test_job_list_cursor_accepts_a_provider_page_boundary() -> None:
+    assert await endpoints._provider_job_cursor(RAW_JOB_ID, UserAPIKeyAuth(api_key="test"), None) == RAW_JOB_ID
 
 
 @pytest.mark.asyncio
@@ -460,12 +459,71 @@ async def test_job_listing_continues_until_an_owned_page(seams) -> None:
 
 
 @pytest.mark.asyncio
-async def test_job_listing_stops_at_its_page_budget() -> None:
+async def test_job_listing_returns_a_resumable_page_at_its_budget() -> None:
     async def next_page(cursor: str | None) -> object:
         assert cursor is not None
         return {"data": [{"id": cursor + "-next"}], "has_more": True}
 
     fetch: Final = AsyncMock(side_effect=next_page)
+    assert await endpoints._owned_job_pages(
+        {"data": [{"id": "job-first"}], "has_more": True},
+        fetch,
+        UserAPIKeyAuth(api_key="test"),
+        _OwnedJobIds({}),
+    ) == {"data": [], "has_more": True, "last_id": "job-first" + "-next" * (endpoints._JOB_LIST_MAX_PAGES - 1)}
+    assert fetch.await_count == endpoints._JOB_LIST_MAX_PAGES - 1
+
+
+@pytest.mark.asyncio
+async def test_job_listing_returns_a_resumable_page_at_its_deadline(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(endpoints, "_JOB_LIST_SCAN_TIMEOUT", 0)
+
+    async def next_page(cursor: str | None) -> object:
+        pytest.fail("An expired scan must not request another page")
+
+    assert await endpoints._owned_job_pages(
+        {"data": [{"id": "job-first"}], "has_more": True}, next_page, UserAPIKeyAuth(api_key="test"), _OwnedJobIds({})
+    ) == {"data": [], "has_more": True, "last_id": "job-first"}
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_job_listing_resumes_after_an_empty_scan(seams) -> None:
+    job: Final = _job().model_dump()
+    route: Final = respx.get(f"{FINE_TUNING_API_BASE}/fine_tuning/jobs").mock(
+        side_effect=[
+            *(
+                httpx.Response(200, json={"data": [{**job, "id": f"ftjob-page-{index}"}], "has_more": True})
+                for index in range(endpoints._JOB_LIST_MAX_PAGES)
+            ),
+            httpx.Response(200, json={"data": [job], "has_more": False}),
+        ]
+    )
+    seams.logging.get_proxy_hook.return_value = _OwnedJobIds({RAW_JOB_ID: _unified_job_id()})
+    provider: Final = {"custom_llm_provider": "openai", "api_key": "sk-provider", "api_base": FINE_TUNING_API_BASE}
+    with patch.object(endpoints, "fine_tuning_config", [provider]):
+        page: Final = await _list(custom_llm_provider="openai", limit=1)
+        assert page == {"data": [], "has_more": True, "last_id": f"ftjob-page-{endpoints._JOB_LIST_MAX_PAGES - 1}"}
+        following: Final = await _list(custom_llm_provider="openai", after=page["last_id"], limit=1)
+    assert following == {"data": [{**job, "id": _unified_job_id()}], "has_more": False}
+    assert route.calls[-1].request.url.params["after"] == page["last_id"]
+    assert route.calls[-1].request.url.params["limit"] == "1"
+
+
+@pytest.mark.asyncio
+async def test_job_scan_timeout_keeps_the_last_completed_page() -> None:
+    fetch: Final = AsyncMock(side_effect=asyncio.TimeoutError)
+    assert await endpoints._owned_job_pages(
+        {"data": [{"id": "job-first"}], "has_more": True},
+        fetch,
+        UserAPIKeyAuth(api_key="test"),
+        _OwnedJobIds({}),
+    ) == {"data": [], "has_more": True, "last_id": "job-first"}
+
+
+@pytest.mark.asyncio
+async def test_job_scan_preserves_an_upstream_error() -> None:
+    fetch: Final = AsyncMock(side_effect=HTTPException(status_code=502, detail="upstream unavailable"))
     with pytest.raises(HTTPException) as exc:
         await endpoints._owned_job_pages(
             {"data": [{"id": "job-first"}], "has_more": True},
@@ -473,21 +531,4 @@ async def test_job_listing_stops_at_its_page_budget() -> None:
             UserAPIKeyAuth(api_key="test"),
             _OwnedJobIds({}),
         )
-    assert exc.value.status_code == 503
-    assert exc.value.detail == "Fine-tuning job listing exceeded its page budget"
-    assert fetch.await_count == endpoints._JOB_LIST_MAX_PAGES - 1
-
-
-@pytest.mark.asyncio
-async def test_job_listing_reports_an_expired_scan_deadline(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(endpoints, "_JOB_LIST_SCAN_TIMEOUT", 0)
-
-    async def next_page(cursor: str | None) -> object:
-        pytest.fail("An expired scan must not request another page")
-
-    with pytest.raises(HTTPException) as exc:
-        await endpoints._owned_job_pages(
-            {"data": [], "has_more": False}, next_page, UserAPIKeyAuth(api_key="test"), _OwnedJobIds({})
-        )
-    assert exc.value.status_code == 504
-    assert exc.value.detail == "Fine-tuning job listing timed out"
+    assert exc.value.status_code == 502

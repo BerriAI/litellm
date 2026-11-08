@@ -189,21 +189,33 @@ async def _collect_managed_file_list_pages(
     user_api_key_dict: UserAPIKeyAuth,
     before: bool,
 ) -> VectorStoreFileListResponse:
+    loop: Final = asyncio.get_running_loop()
+    deadline: Final = loop.time() + _FILE_LIST_SCAN_TIMEOUT
+
+    async def owned_page(cursor: str) -> _ManagedFilePage:
+        return await _managed_file_list_page(await next_page(cursor), managed_files_obj, user_api_key_dict, before)
+
     state: tuple[str | None, _ManagedFilePage] = (  # rebind-ok: advance a bounded page scan
         None,
         await _managed_file_list_page(response, managed_files_obj, user_api_key_dict, before),
     )
     for _ in range(_FILE_LIST_MAX_PAGES - 1):
-        if state[1].next_cursor is None or state[1].next_cursor == state[0]:
+        if state[1].next_cursor is None or state[1].next_cursor == state[0] or loop.time() >= deadline:
             break
-        state = (
-            state[1].next_cursor,
-            await _managed_file_list_page(
-                await next_page(state[1].next_cursor), managed_files_obj, user_api_key_dict, before
-            ),
-        )
+        try:
+            state = (
+                state[1].next_cursor,
+                await asyncio.wait_for(owned_page(state[1].next_cursor), timeout=deadline - loop.time()),
+            )
+        except asyncio.TimeoutError:
+            break
     if state[1].next_cursor is not None and state[1].next_cursor != state[0]:
-        raise HTTPException(status_code=503, detail="Vector store file listing exceeded its page budget")
+        return {
+            **state[1].response,
+            "has_more": True,
+            "first_id": state[1].next_cursor if before else None,
+            "last_id": state[1].next_cursor if not before else None,
+        }
     return {**state[1].response, "has_more": False} if state[1].next_cursor is not None else state[1].response
 
 
@@ -216,13 +228,7 @@ async def _with_managed_file_list_pages(
 ) -> VectorStoreFileListResponse:
     if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
         return await _with_managed_file_list_ids(response, managed_files_obj, user_api_key_dict)
-    try:
-        return await asyncio.wait_for(
-            _collect_managed_file_list_pages(response, next_page, managed_files_obj, user_api_key_dict, before),
-            timeout=_FILE_LIST_SCAN_TIMEOUT,
-        )
-    except asyncio.TimeoutError as e:
-        raise HTTPException(status_code=504, detail="Vector store file listing timed out") from e
+    return await _collect_managed_file_list_pages(response, next_page, managed_files_obj, user_api_key_dict, before)
 
 
 async def _update_request_data_with_managed_file_id(
