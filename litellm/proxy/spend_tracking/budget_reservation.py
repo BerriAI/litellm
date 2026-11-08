@@ -43,6 +43,7 @@ from litellm.proxy.spend_tracking.input_tokens import (
     count_input_tokens,
     count_input_tokens_for_model,
     inline_pdf_file_count,
+    is_native_gemini_route,
     models_counted_for,
     openai_chat_pdf_file_tokens,
 )
@@ -1711,10 +1712,7 @@ _OUTPUT_TOKEN_FIELDS: Final = ("max_completion_tokens", "max_tokens", "max_outpu
 
 def _is_native_gemini_request(request_body: Mapping[str, object], route: str | None = None) -> bool:
     if route is not None:
-        return any(
-            gemini_path in route
-            for gemini_path in ("/vertex_ai", "/gemini", "generateContent", "streamGenerateContent")
-        )
+        return is_native_gemini_route(route)
     return (
         "contents" in request_body
         and "messages" not in request_body

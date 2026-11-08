@@ -622,6 +622,9 @@ def test_requested_output_tokens_gemini_generation_config() -> None:
         "generationConfig": {"maxOutputTokens": 1},
     }
     assert _requested_output_tokens(body_chat_decoy, route="/v1/chat/completions") is None
+    assert (
+        _requested_output_tokens(body_chat_decoy, route="/openai/deployments/gemini-2.0-flash/chat/completions") is None
+    )
     assert _requested_output_tokens(body_chat_decoy) is None
 
     # Native route honors generationConfig
@@ -648,6 +651,7 @@ def test_output_multiplier_gemini_candidate_count() -> None:
     # Non-native chat completions route ignores generationConfig candidateCount
     body_chat: Final = {"messages": [{"role": "user", "content": "hi"}], "generationConfig": {"candidateCount": 5}}
     assert _get_output_multiplier(body_chat, route="/v1/chat/completions") == 1
+    assert _get_output_multiplier(body_chat, route="/openai/deployments/gemini-2.0-flash/chat/completions") == 1
 
     # Decoy generationConfig cannot reduce higher candidate count
     body_decoy: Final = {

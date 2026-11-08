@@ -440,3 +440,25 @@ def test_count_input_tokens_for_model_native_gemini_route_counts_contents() -> N
     )
     assert tokens is not None
     assert tokens > 0
+
+
+def test_count_input_tokens_for_model_gemini_preserves_whitespace() -> None:
+    whitespace_text: Final = ("\n\t \n " * 100) + "Hi"
+    body: Final = {"contents": [{"role": "user", "parts": [{"text": whitespace_text}]}]}
+    tokens = count_input_tokens_for_model(request_body=body, model="gpt-4o")
+    assert tokens is not None
+    # Whitespace tokens must be preserved, not stripped to 1 token
+    assert tokens > 10
+
+
+def test_count_input_tokens_for_model_azure_deployment_route_ignores_gemini_name() -> None:
+    body: Final = {
+        "messages": [{"role": "user", "content": "A long message with lots of tokens " * 10}],
+        "contents": "Hi",
+    }
+    # Azure OpenAI deployment route with gemini model name must still be treated as chat completions
+    route: Final = "/openai/deployments/gemini-2.0-flash/chat/completions"
+    tokens = count_input_tokens_for_model(request_body=body, model="gpt-4o", route=route)
+    assert tokens is not None
+    # Must count the long message tokens, not the 1 token from contents
+    assert tokens > 20

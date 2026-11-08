@@ -403,14 +403,21 @@ def _extract_gemini_text(request_body: Mapping[str, object]) -> str | None:
     elif contents is not None:
         return None
 
-    combined = " ".join(texts).strip()
+    combined = " ".join(texts)
     return combined if combined else None
 
 
 def is_native_gemini_route(route: str | None) -> bool:
-    if route is None:
+    if not route:
         return False
-    return any(p in route for p in ("/vertex_ai", "/gemini", "generateContent", "streamGenerateContent"))
+    for standard_path in ("/chat/completions", "/completions", "/responses", "/embeddings", "/rerank"):
+        if standard_path in route:
+            return False
+    if "generateContent" in route or "streamGenerateContent" in route:
+        return True
+    if route.startswith("/vertex_ai/") or route.startswith("/gemini/"):
+        return True
+    return False
 
 
 def count_input_tokens_for_model(request_body: dict, model: str, route: str | None = None) -> int | None:
