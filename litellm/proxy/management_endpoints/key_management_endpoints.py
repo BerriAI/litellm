@@ -30,7 +30,7 @@ from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
-from litellm._internal_context import service_target, with_service_target
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.caching.dual_cache import DualCache
@@ -40,6 +40,7 @@ from litellm.constants import (
     MINIMUM_CUSTOM_KEY_LENGTH,
     UI_SESSION_TOKEN_TEAM_ID,
 )
+from litellm.litellm_core_utils.core_helpers import as_object_list
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.models.credentials import CredentialItem
@@ -65,7 +66,6 @@ from litellm.proxy.auth.auth_utils import (
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
     evict_and_broadcast,
-    publish_auth_cache_invalidation,
 )
 from litellm.proxy.common_utils.callback_config_validation import logging_metadata_config_error
 from litellm.proxy.common_utils.callback_utils import (
@@ -158,7 +158,6 @@ from litellm.proxy.mcp_server.outbound_credentials.sso_assertion_store import (
 from litellm.proxy.search_endpoints.search_tool_registry import rotate_search_tools_master_key
 from litellm.proxy.spend_tracking.budget_reservation import get_budget_window_start
 from litellm.proxy.spend_tracking.committed_spend import committed_spend_key
-from litellm.proxy.spend_tracking.spend_counter_batch import SPEND_COUNTERS_TARGET
 from litellm.proxy.spend_tracking.spend_tracking_utils import (  # noqa: F401  # legacy module exports
     _is_master_key,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     is_master_key,
@@ -171,6 +170,10 @@ from litellm.proxy.utils import (
     hash_token_if_needed,
     is_valid_api_key,
     require_enterprise_license,
+)
+from litellm.redis.stores.spend_counters import (
+    key_counter,
+    key_window_counter,
 )
 from litellm.repositories.base_repository import BaseRepository, record_to_dict
 from litellm.repositories.budget_repository import BudgetRepository
@@ -2057,7 +2060,7 @@ async def _check_project_key_limits(
 
     # Validate key models are a subset of project models
     if data.models and len(project_obj.models) > 0:
-        for m in data.models:
+        for m in as_object_list(data.models) or ():
             if m not in project_obj.models and m not in _INHERITED_MODEL_SENTINELS:
                 raise HTTPException(
                     status_code=400,
@@ -2406,7 +2409,7 @@ async def generate_key_fn(
     - soft_budget: Optional[float] - Specify soft budget for a given key. Will trigger a slack alert when this soft budget is reached.
     - tags: Optional[List[str]] - Tags for [tracking spend](https://litellm.vercel.app/docs/proxy/enterprise#tracking-spend-for-custom-tags) and/or doing [tag-based routing](https://litellm.vercel.app/docs/proxy/tag_routing).
     - prompts: Optional[List[str]] - List of prompts that the key is allowed to use.
-    - enforced_params: Optional[List[str]] - List of enforced params for the key (Enterprise only). [Docs](https://docs.litellm.ai/docs/proxy/enterprise#enforce-required-params-for-llm-requests)
+    - enforced_params: Optional[List[str]] - List of enforced params for the key (Enterprise only). [Docs](https://docs.litellm.ai/docs/enterprise#governance-and-cost)
     - prompts: Optional[List[str]] - List of prompts that the key is allowed to use.
     - allowed_routes: Optional[list] - List of allowed routes for the key. Store the actual route or store a wildcard pattern for a set of routes. Example - ["/chat/completions", "/embeddings", "/keys/*"]
     - allowed_passthrough_routes: Optional[list] - List of allowed pass through endpoints for the key. Store the actual endpoint or store a wildcard pattern for a set of endpoints. Example - ["/my-custom-endpoint"]. Use this instead of allowed_routes, if you just want to specify which pass through endpoints the key can access, without specifying the routes. If allowed_routes is specified, allowed_pass_through_endpoints is ignored.
@@ -2614,7 +2617,7 @@ async def generate_service_account_key_fn(
     - tpd_limit: Optional[int] - Specify tpd limit for a given key (Tokens per day). Charged by batch submissions instead of tpm_limit/rpm_limit.
     - soft_budget: Optional[float] - Specify soft budget for a given key. Will trigger a slack alert when this soft budget is reached.
     - tags: Optional[List[str]] - Tags for [tracking spend](https://litellm.vercel.app/docs/proxy/enterprise#tracking-spend-for-custom-tags) and/or doing [tag-based routing](https://litellm.vercel.app/docs/proxy/tag_routing).
-    - enforced_params: Optional[List[str]] - List of enforced params for the key (Enterprise only). [Docs](https://docs.litellm.ai/docs/proxy/enterprise#enforce-required-params-for-llm-requests)
+    - enforced_params: Optional[List[str]] - List of enforced params for the key (Enterprise only). [Docs](https://docs.litellm.ai/docs/enterprise#governance-and-cost)
     - allowed_routes: Optional[list] - List of allowed routes for the key. Store the actual route or store a wildcard pattern for a set of routes. Example - ["/chat/completions", "/embeddings", "/keys/*"]
     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - key-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "agents": ["agent_1", "agent_2"], "agent_access_groups": ["dev_group"]}. IF null or {} then no object permission.
     Examples:
@@ -4046,7 +4049,7 @@ async def update_key_fn(
     - models: Optional[list] - Model_name's a user is allowed to call
     - tags: Optional[List[str]] - Tags for organizing keys (Enterprise only)
     - prompts: Optional[List[str]] - List of prompts that the key is allowed to use.
-    - enforced_params: Optional[List[str]] - List of enforced params for the key (Enterprise only). [Docs](https://docs.litellm.ai/docs/proxy/enterprise#enforce-required-params-for-llm-requests)
+    - enforced_params: Optional[List[str]] - List of enforced params for the key (Enterprise only). [Docs](https://docs.litellm.ai/docs/enterprise#governance-and-cost)
     - spend: Optional[float] - Amount spent by key
     - max_budget: Optional[float] - Max budget for key
     - model_max_budget: Optional[Dict[str, BudgetConfig]] - Model-specific budgets keyed by model name, `*` pattern like "claude-opus*", or model access group, e.g. {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}
@@ -4264,21 +4267,18 @@ async def update_key_fn(
         )
 
         if data.spend is not None:
-            from litellm.proxy.proxy_server import invalidate_spend_counter, spend_counter_cache
+            from litellm.proxy.proxy_server import invalidate_spend_counter, spend_counter_store
 
-            counter_key: Final = f"spend:key:{hash_token_if_needed(key)}"
-            spend_counter_cache.in_memory_cache.set_cache(key=counter_key, value=data.spend, ttl=60)
-            if spend_counter_cache.redis_cache is not None:
-                try:
-                    with service_target(SPEND_COUNTERS_TARGET):
-                        await spend_counter_cache.redis_cache.async_set_cache(key=counter_key, value=data.spend, ttl=60)
-                except Exception as redis_err:
-                    verbose_proxy_logger.warning(
-                        "Failed to update spend counter %s in Redis after key spend update: %s. "
-                        "Budget checks may use stale value until counter expires.",
-                        counter_key,
-                        redis_err,
-                    )
+            counter_key: Final = key_counter(hash_token_if_needed(key))
+            try:
+                await spend_counter_store.set(counter_key, data.spend, ttl=60)
+            except Exception as redis_err:
+                verbose_proxy_logger.warning(
+                    "Failed to update spend counter %s in Redis after key spend update: %s. "
+                    "Budget checks may use stale value until counter expires.",
+                    counter_key,
+                    redis_err,
+                )
             await invalidate_spend_counter(counter_key=committed_spend_key(counter_key))
 
         asyncio.create_task(
@@ -4903,7 +4903,7 @@ async def _budget_window_usage(
     if not isinstance(duration, str) or not duration:
         return None
     spend: Final = await get_current_spend(
-        counter_key=f"spend:key:{api_key_hash}:window:{duration}",
+        counter_key=key_window_counter(api_key_hash, duration),
         fallback_spend=0.0,
         max_budget=_window_max_budget(window),
         window_entity_type="Key",
@@ -5484,7 +5484,9 @@ async def generate_key_helper_fn(
                 if query_type == "insert_data":
                     user_row = cast(  # cast-ok: table_name="user" is the insert_data branch returning the user row
                         "prisma_models.LiteLLM_UserTable | None",
-                        await prisma_client.insert_data(data=user_data, table_name="user"),
+                        await prisma_client.insert_data(
+                            data=user_data, table_name="user", allow_existing_user=request_type != "user"
+                        ),
                     )
 
                     if user_row is None:
@@ -6808,41 +6810,6 @@ def _validate_reset_spend_value(reset_to: object, key_in_db: LiteLLM_Verificatio
     return reset_to
 
 
-@with_service_target(SPEND_COUNTERS_TARGET)
-async def _set_spend_counter_with_floor_and_broadcast(counter_key: str, value: float) -> None:
-    """
-    Set a Redis-backed spend counter to `value`, mirror it into the short-lived
-    spend_db_floor marker `_authoritative_floor_spend` reads, and broadcast both
-    to every worker (LIT-3803 pattern: setting, not deleting, means a worker's
-    own self-delivered broadcast still carries the reset value forward).
-
-    Without the floor marker, `_authoritative_floor_spend` can re-derive a
-    stale, pre-reset value from a marker another worker cached moments earlier
-    and raise the just-reset counter right back up via `_repair_stale_spend_counter`.
-    Without the broadcast, a worker that already cached the pre-reset key object
-    or floor marker keeps enforcing against it until its own TTL expires.
-    """
-    from litellm.proxy.proxy_server import SPEND_DB_FLOOR_CACHE_TTL_SECONDS, spend_counter_cache
-
-    spend_counter_cache.in_memory_cache.set_cache(key=counter_key, value=value, ttl=60)
-    if spend_counter_cache.redis_cache is not None:
-        try:
-            await spend_counter_cache.redis_cache.async_set_cache(key=counter_key, value=value, ttl=60)
-        except Exception as redis_err:
-            verbose_proxy_logger.warning(
-                "Failed to update spend counter %s in Redis: %s. "
-                "Budget checks may use stale value until counter expires.",
-                counter_key,
-                redis_err,
-            )
-
-    floor_key: Final = f"spend_db_floor:{counter_key}"
-    spend_counter_cache.in_memory_cache.set_cache(key=floor_key, value=value, ttl=SPEND_DB_FLOOR_CACHE_TTL_SECONDS)
-
-    await publish_auth_cache_invalidation(cache_key=counter_key, new_value=value, ttl=60)
-    await publish_auth_cache_invalidation(cache_key=floor_key, new_value=value, ttl=SPEND_DB_FLOOR_CACHE_TTL_SECONDS)
-
-
 def _budget_limit_windows(budget_limits: Sequence[object] | str | None) -> tuple[Mapping[str, object], ...]:
     """Coerce a key's stored `budget_limits` into a tuple of plain window dicts.
 
@@ -6927,6 +6894,8 @@ async def _reset_key_budget_windows(
     pre-reset boundary, re-sum the unchanged historical spend, and put the
     counter right back where it was before the write ever landed.
     """
+    from litellm.proxy.proxy_server import set_spend_counter_with_floor_and_broadcast
+
     windows: Final = _budget_limit_windows(budget_limits)
     if not windows:
         return
@@ -6944,8 +6913,8 @@ async def _reset_key_budget_windows(
     for window in reset_windows:
         duration = window.get("budget_duration")
         if isinstance(duration, str) and duration:
-            counter_key = f"spend:key:{hashed_api_key}:window:{duration}"
-            await _set_spend_counter_with_floor_and_broadcast(counter_key=counter_key, value=0.0)
+            counter_key = key_window_counter(hashed_api_key, duration)
+            await set_spend_counter_with_floor_and_broadcast(counter_key=counter_key, value=0.0)
 
 
 @router.post(
@@ -6969,6 +6938,7 @@ async def reset_key_spend_fn(
             invalidate_spend_counter,
             prisma_client,
             proxy_logging_obj,
+            set_spend_counter_with_floor_and_broadcast,
             user_api_key_cache,
         )
 
@@ -7019,8 +6989,8 @@ async def reset_key_spend_fn(
         # budget_limits windows, so get_current_spend() returns the correct
         # amount for every enforcement check immediately instead of the stale
         # pre-reset value.
-        _counter_key: Final = f"spend:key:{hashed_api_key}"
-        await _set_spend_counter_with_floor_and_broadcast(counter_key=_counter_key, value=reset_to)
+        _counter_key: Final = key_counter(hashed_api_key)
+        await set_spend_counter_with_floor_and_broadcast(counter_key=_counter_key, value=reset_to)
         await invalidate_spend_counter(counter_key=committed_spend_key(_counter_key))
         await _reset_key_budget_windows(
             prisma_client=prisma_client,

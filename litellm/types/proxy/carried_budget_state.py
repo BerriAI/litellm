@@ -14,9 +14,14 @@ from typing import Final
 from pydantic import ConfigDict, Field, ValidationError
 from typing_extensions import Self
 
+from litellm.redis.stores.spend_counters.types import (
+    end_user_counter,
+    key_counter,
+    org_counter,
+    team_counter,
+    user_counter,
+)
 from litellm.types.llms.base import LiteLLMBaseModel
-
-END_USER_COUNTER_PREFIX: Final = "spend:end_user:"
 
 
 class _BudgetSnapshot(LiteLLMBaseModel):
@@ -90,11 +95,11 @@ class EntitySpendCounterKeys(LiteLLMBaseModel):
         end_user_id: str | None,
     ) -> Self:
         return cls(
-            key=f"spend:key:{token}" if token else None,
-            team=f"spend:team:{team_id}" if team_id else None,
-            user=f"spend:user:{user_id}" if user_id else None,
-            org=f"spend:org:{org_id}" if org_id else None,
-            end_user=f"{END_USER_COUNTER_PREFIX}{end_user_id}" if end_user_id else None,
+            key=key_counter(token) if token else None,
+            team=team_counter(team_id) if team_id else None,
+            user=user_counter(user_id) if user_id else None,
+            org=org_counter(org_id) if org_id else None,
+            end_user=end_user_counter(end_user_id) if end_user_id else None,
         )
 
     def tracked(self) -> tuple[str, ...]:

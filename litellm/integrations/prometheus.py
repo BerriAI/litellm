@@ -21,7 +21,7 @@ from typing_extensions import ReadOnly, TypedDict, assert_never
 import litellm
 from litellm._internal_context import with_service_target
 from litellm._logging import print_verbose, verbose_logger
-from litellm.caching.redis_batch import post_call_writes_unsent
+from litellm.caching.redis_batch import active_request_redis_batches
 from litellm.constants import (
     AUTH_OBJECTS_TARGET,
     LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL,
@@ -55,6 +55,7 @@ from litellm.litellm_core_utils.get_llm_provider_logic import is_registered_cust
 from litellm.litellm_core_utils.service_tier_utils import (
     get_service_tier_from_standard_logging_payload,
 )
+from litellm.llms.azure.common_utils import caused_by_entra_rejection
 from litellm.llms.github_copilot.per_user_auth import github_copilot_user_session_from
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.models.end_user import LiteLLM_EndUserTable
@@ -67,7 +68,7 @@ from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.table_repositories import EndUserRepository
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
-from litellm.router_utils.router_callbacks.track_deployment_metrics import find_deployment_metadata
+from litellm.router_api import deployment_metadata
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.integrations.prometheus import *
 from litellm.types.integrations.prometheus import (
@@ -394,11 +395,11 @@ async def _committed_spend_now(counter_keys: EntitySpendCounterKeys) -> Committe
     if not counter_keys.tracked():
         return CommittedBudgetSpend()
     try:
-        from litellm.proxy.proxy_server import spend_counter_cache
+        from litellm.proxy.proxy_server import spend_counter_store
         from litellm.proxy.spend_tracking.committed_spend import read_committed_budget_spend
 
         return await asyncio.wait_for(
-            read_committed_budget_spend(spend_counter_cache, counter_keys),
+            read_committed_budget_spend(spend_counter_store, counter_keys),
             timeout=_get_budget_metrics_per_request_timeout(),
         )
     except Exception as e:  # noqa: BLE001  # a gauge read never fails the request; the gauges keep the stored spend
@@ -406,24 +407,41 @@ async def _committed_spend_now(counter_keys: EntitySpendCounterKeys) -> Committe
         return CommittedBudgetSpend()
 
 
-def _own_charge_waits_in_post_call_pipeline() -> bool:
-    from litellm.proxy.proxy_server import spend_counter_cache
+OwnCharge: TypeAlias = Literal["unknown", "pending", "counted"]
 
-    return spend_counter_cache.redis_cache is not None and post_call_writes_unsent()
+
+def _own_charge() -> OwnCharge:
+    """Whether this request's committed spend charge is in Redis yet, known only inside a request with Redis."""
+    try:
+        from litellm.proxy.proxy_server import spend_counter_store
+    except ImportError:
+        return "unknown"
+    batches: Final = active_request_redis_batches()
+    if batches is None or not spend_counter_store.has_redis:
+        return "unknown"
+    settlements: Final = batches.post_call_settlements
+    return "counted" if settlements and all(settlement.settled for settlement in settlements) else "pending"
 
 
 def _committed_spend_before_request(
-    at_auth: CommittedBudgetSpend, now: CommittedBudgetSpend, response_cost: float
+    at_auth: CommittedBudgetSpend, now: CommittedBudgetSpend, response_cost: float, own_charge: OwnCharge
 ) -> CommittedBudgetSpend:
     def before(at_auth_spend: float | None, now_spend: float | None) -> float | None:
         if now_spend is None:
             return at_auth_spend
-        if _own_charge_waits_in_post_call_pipeline():
-            return now_spend
-        if at_auth_spend is None:
-            return now_spend - response_cost
-        own_charge_counted: Final = now_spend - at_auth_spend >= response_cost * _OWN_CHARGE_MATCH_RATIO
-        return max(at_auth_spend, now_spend - response_cost) if own_charge_counted else now_spend
+        match own_charge:
+            case "pending":
+                return now_spend
+            case "counted":
+                without_own_charge: Final = now_spend - response_cost
+                return without_own_charge if at_auth_spend is None else max(at_auth_spend, without_own_charge)
+            case "unknown":
+                if at_auth_spend is None:
+                    return now_spend - response_cost
+                own_charge_counted: Final = now_spend - at_auth_spend >= response_cost * _OWN_CHARGE_MATCH_RATIO
+                return max(at_auth_spend, now_spend - response_cost) if own_charge_counted else now_spend
+            case _:
+                assert_never(own_charge)
 
     return CommittedBudgetSpend(
         key=before(at_auth.key, now.key),
@@ -518,7 +536,7 @@ def _is_deployment_failure(exception: openai.APIError, logged_call: Mapping[str,
     return not (
         isinstance(exception, CallerCredentialAuthenticationError)
         or bool(logged_call.get(LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL))
-        or logged_call.get("api_call_start_time") is None
+        or (logged_call.get("api_call_start_time") is None and not caused_by_entra_rejection(exception))
         or _used_a_caller_credential(logged_call)
     )
 
@@ -2312,6 +2330,7 @@ class PrometheusLogger(CustomLogger):
         budget_metrics_timeout: Final = _get_budget_metrics_per_request_timeout()
 
         async def emit_budget_metrics() -> tuple[object, ...]:
+            own_charge_before_read: Final = _own_charge()
             committed_now: Final = await _committed_spend_now(
                 _committed_at_auth.counter_keys
                 if _row_carries_auth
@@ -2323,10 +2342,12 @@ class PrometheusLogger(CustomLogger):
                     end_user_id=end_user_id,
                 )
             )
+            own_charge: Final = own_charge_before_read if _own_charge() == own_charge_before_read else "unknown"
             committed: Final = _committed_spend_before_request(
                 at_auth=_committed_at_auth if _row_carries_auth else committed_now,
                 now=committed_now,
                 response_cost=response_cost,
+                own_charge=own_charge,
             )
             return await asyncio.gather(
                 self._set_api_key_budget_metrics_after_api_request(
@@ -2897,10 +2918,12 @@ class PrometheusLogger(CustomLogger):
             )
             failure_org_alias: Final = failure_metadata.get("user_api_key_org_alias")
             failure_org: Final = OrgBudgetSnapshot.from_metadata(failure_metadata)
+            failure_own_charge: Final = _own_charge()
             failure_committed: Final = _committed_spend_before_request(
                 at_auth=committed_budget_spend_from_metadata(failure_metadata),
                 now=await _committed_spend_now(_budgeted_org_counter(user_api_key_org_id, failure_org)),
                 response_cost=0,
+                own_charge=failure_own_charge,
             )
             await self._set_org_budget_metrics_after_api_request(
                 org_id=user_api_key_org_id,
@@ -3129,8 +3152,8 @@ class PrometheusLogger(CustomLogger):
         ).get("custom_llm_provider")
         if isinstance(provider, str) and provider:
             return provider
-        deployment_metadata: Final = find_deployment_metadata(litellm_params)
-        return _deployment_model_provider(deployment_metadata.get("deployment") if deployment_metadata else None)
+        picked_deployment: Final = deployment_metadata(litellm_params)
+        return _deployment_model_provider(picked_deployment.get("deployment") if picked_deployment else None)
 
     @staticmethod
     def _extract_api_provider_from_exception(exception: Exception) -> str | None:
@@ -3143,7 +3166,7 @@ class PrometheusLogger(CustomLogger):
 
     async def async_post_call_failure_hook(
         self,
-        request_data: dict,
+        request_data: dict[str, object],
         original_exception: Exception,
         user_api_key_dict: UserAPIKeyAuth,
         traceback_str: str | None = None,
@@ -3166,10 +3189,14 @@ class PrometheusLogger(CustomLogger):
         try:
             _tags: Final = StandardLoggingPayloadSetup.get_request_tags(
                 litellm_params=request_data,
-                proxy_server_request=request_data.get("proxy_server_request", {}),
+                proxy_server_request=_logged_fields(request_data.get("proxy_server_request")),
             )
-            _metadata: Final = request_data.get("metadata", {}) or {}
-            model_id: Final = _metadata.get("model_info", {}).get("id") or request_data.get("model_info", {}).get("id")
+            _metadata: Final = _logged_fields(request_data.get("metadata"))
+            model_id: Final = (
+                _logged_fields(_metadata.get("model_info")).get("id")
+                or _logged_fields(request_data.get("model_info")).get("id")
+                or _logged_fields(request_data.get("standard_logging_object")).get("model_id")
+            )
             rate_limit_category, rate_limit_type = self._extract_rate_limit_labels(original_exception)
             api_provider: Final = self._extract_api_provider_from_request_data(
                 request_data
@@ -5320,7 +5347,7 @@ def _tag_matches_wildcard_configured_pattern(tags: Sequence[str], configured_tag
     """
     import re
 
-    from litellm.router_utils.pattern_match_deployments import PatternMatchRouter
+    from litellm.litellm_core_utils.pattern_match_deployments import PatternMatchRouter
 
     pattern_router: Final = PatternMatchRouter()
     regex_pattern: Final = pattern_router.pattern_to_regex(configured_tag)

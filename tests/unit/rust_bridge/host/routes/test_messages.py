@@ -138,3 +138,110 @@ def test_stream_hidden_params_projects_upstream_headers_the_way_the_python_handl
     assert additional["llm_provider-request-id"] == "req_upstream_123"
     assert additional["x-ratelimit-remaining-requests"] == "41"
     assert additional["request-id"] == additional["llm_provider-request-id"]
+
+
+_ADAPTIVE_OPUS: Final = "anthropic/claude-opus-4-7"
+
+
+@pytest.mark.parametrize(
+    ("model", "expected"),
+    [("claude-sonnet-4-5", "anthropic"), ("gpt-4o", "openai"), ("not-a-known-model", None)],
+)
+def test_inferred_provider_is_the_one_the_python_handler_resolves(model: str, expected: str | None) -> None:
+    assert messages_host.inferred_provider(model, None) == expected
+
+
+@pytest.mark.parametrize(
+    ("request_effort", "levels", "drop_params", "expected"),
+    [
+        ("max", ["low", "high"], False, "high"),
+        ("high", ["low"], True, "low"),
+    ],
+)
+def test_body_params_round_effort_to_the_levels_the_deployment_declares(
+    request_effort: str, levels: list[str], drop_params: bool, expected: str
+) -> None:
+    request: Final[dict[str, object]] = {
+        "model": _ADAPTIVE_OPUS,
+        "messages": [],
+        "max_tokens": 8,
+        "output_config": {"effort": request_effort},
+        "drop_params": drop_params,
+        "model_info": {"id": "deployment-1", "reasoning_effort_levels": levels},
+    }
+
+    assert messages_host.body_params(request)["output_config"] == {"effort": expected}
+
+
+def test_body_params_keep_the_requested_effort_without_deployment_levels() -> None:
+    request: Final[dict[str, object]] = {
+        "model": _ADAPTIVE_OPUS,
+        "messages": [],
+        "max_tokens": 8,
+        "output_config": {"effort": "max"},
+    }
+
+    assert messages_host.body_params(request)["output_config"] == {"effort": "max"}
+
+
+def _marked(phase: str | None = None, *args: object) -> ValueError:
+    error: Final = ValueError(*args)
+    if phase is not None:
+        error.messages_timeout = phase  # pyright: ignore[reportAttributeAccessIssue]  # marker the native host sets
+    return error
+
+
+def test_a_stalled_stream_body_reaches_the_caller_as_the_transport_timeout() -> None:
+    import httpx
+
+    mapped: Final = messages_host.map_failure(_marked("Body"), {"model": _ADAPTIVE_OPUS}, "anthropic")
+
+    assert isinstance(mapped, httpx.ReadTimeout)
+    assert str(mapped) == "Timeout on reading data from socket"
+
+
+def test_a_native_read_timeout_maps_to_the_public_timeout_with_python_text() -> None:
+    mapped: Final = messages_host.map_failure(_marked("Read"), {"model": _ADAPTIVE_OPUS, "timeout": 1.0}, "anthropic")
+
+    assert isinstance(mapped, litellm.Timeout)
+    assert "Read timed out. Timeout passed=1.0" in str(mapped)
+
+
+def test_an_upstream_status_maps_through_the_provider_error_class() -> None:
+    upstream: Final = ValueError(429, "slow down")
+    upstream.headers = [("retry-after", "3")]  # pyright: ignore[reportAttributeAccessIssue]  # set by the native host
+
+    mapped: Final = messages_host.map_failure(upstream, {"model": _ADAPTIVE_OPUS}, "anthropic")
+
+    assert isinstance(mapped, litellm.RateLimitError)
+    assert "slow down" in str(mapped)
+    assert mapped.__context__ is upstream
+
+
+def test_a_late_rejection_tells_the_logger_the_resolved_call_first() -> None:
+    import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    logger: Final = Logging(
+        model=_ADAPTIVE_OPUS,
+        messages=[],
+        stream=False,
+        call_type="anthropic_messages",
+        start_time=datetime.datetime.now(),
+        litellm_call_id="late",
+        function_id="late",
+    )
+    rejected: Final = ValueError("budget_tokens must be a number")
+    rejected.messages_late_rejection = True  # pyright: ignore[reportAttributeAccessIssue]  # marker the native host sets
+    rejected.messages_request_error = True  # pyright: ignore[reportAttributeAccessIssue]  # marker the native host sets
+
+    mapped: Final = messages_host.map_failure(
+        rejected,
+        {"model": _ADAPTIVE_OPUS, "messages": [], "max_tokens": 8, "litellm_logging_obj": logger},
+        "anthropic",
+    )
+
+    assert isinstance(mapped, litellm.BadRequestError)
+    assert logger.model_call_details["custom_llm_provider"] == "anthropic"
+    assert logger.model_call_details["optional_params"] == {"max_tokens": 8}

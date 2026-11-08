@@ -5,23 +5,21 @@ auth, SDK callers, failure paths)
 """
 
 import asyncio
+from collections.abc import Sequence
 from datetime import datetime, timezone
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fakeredis import FakeAsyncRedis, FakeServer
 from prometheus_client import REGISTRY
 
-from litellm.caching.dual_cache import DualCache
-from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.caching.redis_batch import (
     active_post_call_redis_batch,
     flush_post_call_redis_batches,
     request_redis_batch_scope,
 )
-from litellm.caching.redis_cache import RedisCache, RedisCircuitBreaker
-from litellm._service_logger import ServiceLogging
 from litellm.integrations.prometheus import PrometheusLogger
+from litellm.proxy import proxy_server
 from litellm.proxy._types import (
     LiteLLM_BudgetTable,
     LiteLLM_OrganizationTable,
@@ -35,7 +33,7 @@ from litellm.proxy.spend_tracking.carried_budget_state import (
     carry_organization_budget_state,
     carry_team_and_user_budget_state,
 )
-from litellm.proxy.spend_tracking.committed_spend import committed_spend_key
+from litellm.proxy.spend_tracking.spend_counter_batch import PendingSpendIncrement
 from litellm.types.proxy.carried_budget_state import (
     CommittedBudgetSpend,
     EntitySpendCounterKeys,
@@ -43,6 +41,8 @@ from litellm.types.proxy.carried_budget_state import (
     TeamBudgetSnapshot,
     UserBudgetSnapshot,
 )
+from tests.unit.caching.test_redis_batch import FakeNatives, fake_send, make
+from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
 
 TEAM_RESET_AT = datetime(2026, 10, 1, tzinfo=timezone.utc)
 USER_RESET_AT = datetime(2026, 11, 1, tzinfo=timezone.utc)
@@ -70,12 +70,12 @@ def prometheus_logger():
 
 
 @pytest.fixture(autouse=True)
-def spend_counter_cache():
-    cache = DualCache()
+def spend_counters():
+    spend: Final = FakeSpendCounters(redis=None)
     with patch(  # test-quality-ok: prometheus reads the proxy_server spend counters at emit time, no injection seam
-        "litellm.proxy.proxy_server.spend_counter_cache", cache
+        "litellm.proxy.proxy_server.spend_counter_store", spend.store()
     ):
-        yield cache
+        yield spend
 
 
 @pytest.fixture
@@ -222,24 +222,26 @@ async def test_authed_request_sets_every_gauge_without_any_object_getter(prometh
     prometheus_logger.litellm_user_budget_remaining_hours_metric.labels().set.assert_called_once()
 
 
-def _store_counters(spend_counter_cache: DualCache, key: float, team: float, user: float, org: float) -> None:
-    for counter_key, value in (
-        ("spend:key:hashed", key),
-        ("spend:team:t1", team),
-        ("spend:user:u1", user),
-        ("spend:org:o1", org),
-    ):
-        spend_counter_cache.in_memory_cache.set_cache(key=counter_key, value=value)
+_COUNTER_KEYS: Final = ("spend:key:hashed", "spend:team:t1", "spend:user:u1", "spend:org:o1")
+_TWIN_KEYS: Final = (
+    "spend:committed:key:hashed",
+    "spend:committed:team:t1",
+    "spend:committed:user:u1",
+    "spend:committed:org:o1",
+)
 
 
-def _store_committed(spend_counter_cache: DualCache, key: float, team: float, user: float, org: float) -> None:
-    for counter_key, value in (
-        ("spend:key:hashed", key),
-        ("spend:team:t1", team),
-        ("spend:user:u1", user),
-        ("spend:org:o1", org),
-    ):
-        spend_counter_cache.in_memory_cache.set_cache(key=committed_spend_key(counter_key), value=value)
+def _store(spend: FakeSpendCounters, counter_keys: Sequence[str], values: Sequence[float]) -> None:
+    tier: Final = spend.memory if spend.redis is None else spend.redis
+    tier.update(zip(counter_keys, values, strict=True))
+
+
+def _store_counters(spend: FakeSpendCounters, key: float, team: float, user: float, org: float) -> None:
+    _store(spend, _COUNTER_KEYS, (key, team, user, org))
+
+
+def _store_committed(spend: FakeSpendCounters, key: float, team: float, user: float, org: float) -> None:
+    _store(spend, _TWIN_KEYS, (key, team, user, org))
 
 
 def _remaining(prometheus_logger: PrometheusLogger) -> dict[str, float]:
@@ -267,11 +269,11 @@ def _token_committed_at_auth() -> UserAPIKeyAuth:
 
 @pytest.mark.asyncio
 async def test_gauges_use_the_committed_spend_at_emit_when_other_requests_finished_after_auth(
-    prometheus_logger, getters, spend_counter_cache
+    prometheus_logger, getters, spend_counters
 ):
     """This request's 2.0 plus 1.0 from another request that finished first, so the gauge is never set back."""
     _stub_gauges(prometheus_logger)
-    _store_committed(spend_counter_cache, key=6.0, team=33.0, user=11.0, org=63.0)
+    _store_committed(spend_counters, key=6.0, team=33.0, user=11.0, org=63.0)
 
     await _emit(prometheus_logger, _request_metadata(_token_committed_at_auth()))
 
@@ -285,11 +287,11 @@ async def test_gauges_use_the_committed_spend_at_emit_when_other_requests_finish
 
 @pytest.mark.asyncio
 async def test_gauges_add_the_cost_to_another_requests_charge_while_the_own_charge_is_not_in_yet(
-    prometheus_logger, getters, spend_counter_cache
+    prometheus_logger, getters, spend_counters
 ):
     """1.0 from another request reached the counters during this long request, this request's 2.0 has not."""
     _stub_gauges(prometheus_logger)
-    _store_committed(spend_counter_cache, key=4.0, team=31.0, user=9.0, org=61.0)
+    _store_committed(spend_counters, key=4.0, team=31.0, user=9.0, org=61.0)
 
     await _emit(prometheus_logger, _request_metadata(_token_committed_at_auth()))
 
@@ -303,10 +305,10 @@ async def test_gauges_add_the_cost_to_another_requests_charge_while_the_own_char
 
 @pytest.mark.asyncio
 async def test_gauges_read_no_committed_counter_auth_did_not_name_as_budgeted(
-    prometheus_logger, getters, spend_counter_cache
+    prometheus_logger, getters, spend_counters
 ):
     _stub_gauges(prometheus_logger)
-    _store_committed(spend_counter_cache, key=9.0, team=99.0, user=19.0, org=99.0)
+    _store_committed(spend_counters, key=9.0, team=99.0, user=19.0, org=99.0)
 
     await _emit(prometheus_logger, _request_metadata(_authed_token()))
 
@@ -324,11 +326,11 @@ def _billed_row_metadata() -> dict:
 
 @pytest.mark.asyncio
 async def test_row_with_no_auth_adds_its_cost_to_the_committed_spend_of_the_entities_it_is_charged_to(
-    prometheus_logger, getters, spend_counter_cache
+    prometheus_logger, getters, spend_counters
 ):
     """Counter increments flush after the success callbacks, so the row's own charge is not in the counters yet."""
     _stub_gauges(prometheus_logger)
-    _store_committed(spend_counter_cache, key=6.0, team=33.0, user=11.0, org=63.0)
+    _store_committed(spend_counters, key=6.0, team=33.0, user=11.0, org=63.0)
 
     await _emit(prometheus_logger, _billed_row_metadata())
 
@@ -342,7 +344,7 @@ async def test_row_with_no_auth_adds_its_cost_to_the_committed_spend_of_the_enti
 
 @pytest.mark.asyncio
 async def test_row_with_no_auth_and_no_committed_counters_keeps_the_stored_spend(
-    prometheus_logger, getters, spend_counter_cache
+    prometheus_logger, getters, spend_counters
 ):
     _stub_gauges(prometheus_logger)
 
@@ -360,15 +362,12 @@ async def test_row_with_no_auth_and_no_committed_counters_keeps_the_stored_spend
 async def test_slow_committed_read_on_a_failed_request_is_bounded_and_keeps_the_auth_time_spend(
     prometheus_logger, getters, monkeypatch
 ):
-    async def never_answers(key_list: list[str]) -> dict[str, float]:
+    async def never_answers(counter: str) -> None:
         await asyncio.sleep(30)
-        return {}
 
-    redis_cache = AsyncMock(spec=RedisCache)
-    redis_cache.async_batch_get_cache = never_answers
     monkeypatch.setattr(
-        "litellm.proxy.proxy_server.spend_counter_cache",
-        DualCache(in_memory_cache=InMemoryCache(), redis_cache=redis_cache),
+        "litellm.proxy.proxy_server.spend_counter_store",
+        FakeSpendCounters(redis={}, batch_reads=False, read_hook=never_answers).store(),
     )
     monkeypatch.setenv("PROMETHEUS_BUDGET_METRICS_PER_REQUEST_TIMEOUT", "0.01")
     _stub_gauges(prometheus_logger)
@@ -383,73 +382,63 @@ async def test_slow_committed_read_on_a_failed_request_is_bounded_and_keeps_the_
     prometheus_logger.litellm_remaining_org_budget_metric.labels().set.assert_called_once_with(pytest.approx(440.0))
 
 
-class _RedisCacheOnClient(RedisCache):
-    def __init__(self, client: FakeAsyncRedis) -> None:
-        self._injected_client = client
-        self.namespace = None
-        self._circuit_breaker = RedisCircuitBreaker(failure_threshold=5, recovery_timeout=30)
-        self.service_logger_obj = ServiceLogging()
-        self.default_ttl = None
-
-    def init_async_client(self) -> FakeAsyncRedis:
-        return self._injected_client
-
-
-_TWIN_KEYS = tuple(
-    committed_spend_key(counter_key)
-    for counter_key in ("spend:key:hashed", "spend:team:t1", "spend:user:u1", "spend:org:o1")
-)
-
-
 @pytest.fixture
-def redis_spend_counter_cache():
-    redis_cache = _RedisCacheOnClient(FakeAsyncRedis(server=FakeServer()))
-    cache = DualCache(in_memory_cache=InMemoryCache(), redis_cache=redis_cache)
+def redis_spend_counters():
+    spend: Final = FakeSpendCounters(redis={})
     with patch(  # test-quality-ok: prometheus reads the proxy_server spend counters at emit time, no injection seam
-        "litellm.proxy.proxy_server.spend_counter_cache", cache
+        "litellm.proxy.proxy_server.spend_counter_store", spend.store()
     ):
-        yield redis_cache
+        yield spend
 
 
-async def _store_auth_time_spend_plus_a_two_dollar_charge(redis_cache: _RedisCacheOnClient) -> None:
-    for twin_key, spend in zip(_TWIN_KEYS, (5.0, 32.0, 10.0, 62.0)):
-        await redis_cache.init_async_client().set(twin_key, spend)
+def _request_scope() -> request_redis_batch_scope:
+    return request_redis_batch_scope(
+        native_factory=FakeNatives(),  # pyright: ignore[reportArgumentType]  # test double
+        native_send_factory=fake_send,  # pyright: ignore[reportArgumentType]  # test double
+    )
+
+
+async def _declare_the_own_two_dollar_charge() -> None:
+    await proxy_server._apply_spend_counter_increments(
+        tuple(PendingSpendIncrement(counter_key, 2.0) for counter_key in (*_COUNTER_KEYS, *_TWIN_KEYS))
+    )
+
+
+_BOTH_TWO_DOLLAR_CHARGES_COUNTED_ONCE: Final = {
+    "key": pytest.approx(3.0),
+    "team": pytest.approx(266.0),
+    "user": pytest.approx(38.0),
+    "org": pytest.approx(436.0),
+}
 
 
 @pytest.mark.asyncio
 async def test_gauges_add_the_own_charge_to_a_same_size_charge_of_another_request_while_the_own_waits_in_the_pipeline(
-    prometheus_logger, getters, redis_spend_counter_cache
+    prometheus_logger, getters, redis_spend_counters
 ):
     """Another request's 2.0 reached the counters and this request's 2.0 is queued, so both count."""
     _stub_gauges(prometheus_logger)
-    await _store_auth_time_spend_plus_a_two_dollar_charge(redis_spend_counter_cache)
+    _store_committed(redis_spend_counters, key=5.0, team=32.0, user=10.0, org=62.0)
 
-    with request_redis_batch_scope():
-        batch = active_post_call_redis_batch(redis_spend_counter_cache)
-        for twin_key in _TWIN_KEYS:
-            batch.increment(twin_key, 2.0, None)
+    with _request_scope():
+        await _declare_the_own_two_dollar_charge()
         await _emit(prometheus_logger, _request_metadata(_token_committed_at_auth()))
         await flush_post_call_redis_batches()
 
-    assert _remaining(prometheus_logger) == {
-        "key": pytest.approx(3.0),
-        "team": pytest.approx(266.0),
-        "user": pytest.approx(38.0),
-        "org": pytest.approx(436.0),
-    }
+    assert _remaining(prometheus_logger) == _BOTH_TWO_DOLLAR_CHARGES_COUNTED_ONCE
 
 
 @pytest.mark.asyncio
 async def test_gauges_do_not_add_the_own_charge_twice_once_the_pipeline_went_out(
-    prometheus_logger, getters, redis_spend_counter_cache
+    prometheus_logger, getters, redis_spend_counters
 ):
-    """The 2.0 over the auth time spend is this request's own charge, sent before the gauges read it."""
+    """The 2.0 over the auth time spend is this request's own charge, settled before the gauges read it."""
     _stub_gauges(prometheus_logger)
-    await _store_auth_time_spend_plus_a_two_dollar_charge(redis_spend_counter_cache)
+    _store_committed(redis_spend_counters, key=3.0, team=30.0, user=8.0, org=60.0)
 
-    with request_redis_batch_scope():
-        batch = active_post_call_redis_batch(redis_spend_counter_cache)
-        batch.increment("unrelated-write", 1.0, None)
+    with _request_scope():
+        await _declare_the_own_two_dollar_charge()
+        redis_spend_counters.settle_post_call()
         await flush_post_call_redis_batches()
         await _emit(prometheus_logger, _request_metadata(_token_committed_at_auth()))
 
@@ -462,12 +451,65 @@ async def test_gauges_do_not_add_the_own_charge_twice_once_the_pipeline_went_out
 
 
 @pytest.mark.asyncio
+async def test_an_unrelated_post_call_flush_does_not_make_the_gauge_drop_its_own_unsent_charge(
+    prometheus_logger, getters, redis_spend_counters
+):
+    """An unrelated write went out first, then another request's 2.0 reached the counters. This request's 2.0 counts
+    once whether it is undeclared, declared but unsent, or settled."""
+    _stub_gauges(prometheus_logger)
+    _store_committed(redis_spend_counters, key=5.0, team=32.0, user=10.0, org=62.0)
+    unrelated_cache, _ = make()
+    metadata: Final = _request_metadata(_token_committed_at_auth())
+
+    with _request_scope():
+        active_post_call_redis_batch(unrelated_cache).increment("unrelated-write", 1.0)
+        await flush_post_call_redis_batches()
+        await _emit(prometheus_logger, metadata)
+        undeclared: Final = _remaining(prometheus_logger)
+        await _declare_the_own_two_dollar_charge()
+        await _emit(prometheus_logger, metadata)
+        declared_unsent: Final = _remaining(prometheus_logger)
+        redis_spend_counters.settle_post_call()
+        await _emit(prometheus_logger, metadata)
+        settled: Final = _remaining(prometheus_logger)
+        await flush_post_call_redis_batches()
+
+    assert {"undeclared": undeclared, "declared_unsent": declared_unsent, "settled": settled} == {
+        "undeclared": _BOTH_TWO_DOLLAR_CHARGES_COUNTED_ONCE,
+        "declared_unsent": _BOTH_TWO_DOLLAR_CHARGES_COUNTED_ONCE,
+        "settled": _BOTH_TWO_DOLLAR_CHARGES_COUNTED_ONCE,
+    }
+
+
+@pytest.mark.asyncio
+async def test_gauges_count_the_own_charge_once_when_it_settles_while_the_gauges_read_the_counters(
+    prometheus_logger, getters, redis_spend_counters
+):
+    """Another request's 2.0 reached the counters, and this request's 2.0 goes out during the gauges' read."""
+    _stub_gauges(prometheus_logger)
+    _store_committed(redis_spend_counters, key=5.0, team=32.0, user=10.0, org=62.0)
+
+    async def settle_during_read(_counter: str) -> None:
+        redis_spend_counters.settle_post_call()
+
+    redis_spend_counters.batch_reads = False
+    redis_spend_counters.read_hook = settle_during_read
+
+    with _request_scope():
+        await _declare_the_own_two_dollar_charge()
+        await _emit(prometheus_logger, _request_metadata(_token_committed_at_auth()))
+        await flush_post_call_redis_batches()
+
+    assert _remaining(prometheus_logger) == _BOTH_TWO_DOLLAR_CHARGES_COUNTED_ONCE
+
+
+@pytest.mark.asyncio
 async def test_gauges_without_redis_treat_a_charge_equal_to_the_own_as_the_own(
-    prometheus_logger, getters, spend_counter_cache
+    prometheus_logger, getters, spend_counters
 ):
     """Without Redis the charge increments in memory at once, so a request scope says nothing about it."""
     _stub_gauges(prometheus_logger)
-    _store_committed(spend_counter_cache, key=5.0, team=32.0, user=10.0, org=62.0)
+    _store_committed(spend_counters, key=5.0, team=32.0, user=10.0, org=62.0)
 
     with request_redis_batch_scope():
         await _emit(prometheus_logger, _request_metadata(_token_committed_at_auth()))
@@ -482,10 +524,10 @@ async def test_gauges_without_redis_treat_a_charge_equal_to_the_own_as_the_own(
 
 @pytest.mark.asyncio
 async def test_gauges_add_the_cost_to_the_auth_time_spend_before_the_charge_reaches_the_counters(
-    prometheus_logger, getters, spend_counter_cache
+    prometheus_logger, getters, spend_counters
 ):
     _stub_gauges(prometheus_logger)
-    _store_committed(spend_counter_cache, key=3.0, team=30.0, user=8.0, org=60.0)
+    _store_committed(spend_counters, key=3.0, team=30.0, user=8.0, org=60.0)
 
     await _emit(prometheus_logger, _request_metadata(_token_committed_at_auth()))
 
@@ -502,7 +544,7 @@ async def test_gauges_keep_the_auth_time_spend_when_the_proxy_spend_counters_can
     prometheus_logger, getters, monkeypatch
 ):
     _stub_gauges(prometheus_logger)
-    monkeypatch.delattr("litellm.proxy.proxy_server.spend_counter_cache")
+    monkeypatch.delattr("litellm.proxy.proxy_server.spend_counter_store")
 
     await _emit(prometheus_logger, _request_metadata(_token_committed_at_auth()))
 
@@ -516,11 +558,11 @@ async def test_gauges_keep_the_auth_time_spend_when_the_proxy_spend_counters_can
 
 @pytest.mark.asyncio
 async def test_a_budget_hold_on_the_enforcement_counters_never_shows_in_the_gauges(
-    prometheus_logger, getters, spend_counter_cache
+    prometheus_logger, getters, spend_counters
 ):
     _stub_gauges(prometheus_logger)
-    _store_committed(spend_counter_cache, key=5.0, team=32.0, user=10.0, org=62.0)
-    _store_counters(spend_counter_cache, key=9.0, team=36.0, user=14.0, org=66.0)
+    _store_committed(spend_counters, key=5.0, team=32.0, user=10.0, org=62.0)
+    _store_counters(spend_counters, key=9.0, team=36.0, user=14.0, org=66.0)
 
     await _emit(prometheus_logger, _request_metadata(_token_committed_at_auth()))
 
@@ -562,11 +604,11 @@ def _failed_request(metadata: dict) -> dict:
 
 @pytest.mark.asyncio
 async def test_failed_request_sets_the_org_gauge_from_the_carried_org_and_committed_spend(
-    prometheus_logger, getters, spend_counter_cache
+    prometheus_logger, getters, spend_counters
 ):
     _stub_gauges(prometheus_logger)
-    _store_committed(spend_counter_cache, key=3.0, team=30.0, user=8.0, org=65.0)
-    _store_counters(spend_counter_cache, key=9.0, team=36.0, user=14.0, org=90.0)
+    _store_committed(spend_counters, key=3.0, team=30.0, user=8.0, org=65.0)
+    _store_counters(spend_counters, key=9.0, team=36.0, user=14.0, org=90.0)
 
     await prometheus_logger.async_log_failure_event(
         _failed_request(_request_metadata(_token_committed_at_auth())), None, KEY_RESET_AT, KEY_RESET_AT
@@ -578,10 +620,10 @@ async def test_failed_request_sets_the_org_gauge_from_the_carried_org_and_commit
 
 @pytest.mark.asyncio
 async def test_failed_request_without_the_auth_object_still_reads_the_committed_org_spend(
-    prometheus_logger, getters, spend_counter_cache
+    prometheus_logger, getters, spend_counters
 ):
     _stub_gauges(prometheus_logger)
-    _store_committed(spend_counter_cache, key=3.0, team=30.0, user=8.0, org=65.0)
+    _store_committed(spend_counters, key=3.0, team=30.0, user=8.0, org=65.0)
     metadata = _request_metadata(_token_committed_at_auth())
     del metadata["user_api_key_auth"]
 
@@ -592,10 +634,10 @@ async def test_failed_request_without_the_auth_object_still_reads_the_committed_
 
 @pytest.mark.asyncio
 async def test_failed_request_without_a_carried_org_reads_no_committed_org_spend(
-    prometheus_logger, getters, spend_counter_cache
+    prometheus_logger, getters, spend_counters
 ):
     _stub_gauges(prometheus_logger)
-    _store_committed(spend_counter_cache, key=3.0, team=30.0, user=8.0, org=65.0)
+    _store_committed(spend_counters, key=3.0, team=30.0, user=8.0, org=65.0)
     token = _token_committed_at_auth().model_copy(update={"org_budget_snapshot": None})
     metadata = {key: value for key, value in _request_metadata(token).items() if key != "user_api_key_auth"}
 

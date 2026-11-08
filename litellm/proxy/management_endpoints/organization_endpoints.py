@@ -48,7 +48,7 @@ from litellm.proxy.management_endpoints.budget_management_endpoints import (
     new_budget,
     update_budget,
 )
-from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity
+from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity, unless_database_fails
 from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401  # legacy module exports
     _set_object_metadata_field,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _user_has_admin_view,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -68,6 +68,7 @@ from litellm.proxy.management_helpers.utils import (
 )
 from litellm.proxy.spend_tracking.committed_spend import drop_committed_spend
 from litellm.proxy.utils import PrismaClient, ProxyLogging
+from litellm.redis.stores.spend_counters import org_counter
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.chunked_in import find_many_in
 from litellm.repositories.object_permission_repository import ObjectPermissionRepository
@@ -656,10 +657,12 @@ async def resolve_organization_daily_activity_scope(
     )
 
     organization_table: Final = _table(OrganizationRepository(prisma_client))
-    organization_rows: Final = (
-        await find_many_in(organization_table, "organization_id", resolved_organization_ids)
+    organization_rows: Final = await unless_database_fails(
+        find_many_in(organization_table, "organization_id", resolved_organization_ids)
         if resolved_organization_ids is not None
-        else await organization_table.find_many(where={})
+        else organization_table.find_many(where={}),
+        (),
+        "its organization aliases",
     )
     metadata: Final = MappingProxyType(
         {
@@ -819,9 +822,9 @@ async def update_organization(
     )
 
     if data.spend is not None:
-        from litellm.proxy.proxy_server import spend_counter_cache
+        from litellm.proxy.proxy_server import spend_counter_store
 
-        await drop_committed_spend(spend_counter_cache, (f"spend:org:{data.organization_id}",))
+        await drop_committed_spend(spend_counter_store, (org_counter(data.organization_id),))
 
     return response
 
@@ -1053,12 +1056,12 @@ async def delete_organization(
 
     deleted_orgs: Final = []
     for organization_id in data.organization_ids:
-        # delete all teams in the organization
-        await _table(TeamRepository(prisma_client)).delete_many(where={"organization_id": organization_id})
-        # delete all members in the organization
-        await _table(OrganizationMembershipRepository(prisma_client)).delete_many(
-            where={"organization_id": organization_id}
-        )
+        async with prisma_client.tx() as transaction:
+            _ = await transaction.query_raw(_LOCK_ORG_TEAMS_SQL, organization_id)
+            _ = await transaction.litellm_teamtable.delete_many(where={"organization_id": organization_id})
+        async with prisma_client.tx() as transaction:
+            _ = await transaction.query_raw(_LOCK_ORG_MEMBERS_SQL, organization_id)
+            _ = await transaction.litellm_organizationmembership.delete_many(where={"organization_id": organization_id})
         await _delete_organization_keys(
             organization_id=organization_id,
             prisma_client=prisma_client,
@@ -1080,6 +1083,19 @@ async def delete_organization(
     return deleted_orgs
 
 
+_LOCK_ORG_TEAMS_SQL: Final = (
+    'SELECT 1 AS locked FROM "LiteLLM_TeamTable" WHERE organization_id = $1 ORDER BY team_id COLLATE "C" FOR UPDATE'
+)
+_LOCK_ORG_MEMBERS_SQL: Final = (
+    'SELECT 1 AS locked FROM "LiteLLM_OrganizationMembership" WHERE organization_id = $1 '
+    'ORDER BY organization_id COLLATE "C", user_id COLLATE "C" FOR UPDATE'
+)
+_LOCK_ORG_KEYS_SQL: Final = (
+    'SELECT 1 AS locked FROM "LiteLLM_VerificationToken" WHERE organization_id = $1 '
+    'ORDER BY token COLLATE "C" FOR UPDATE'
+)
+
+
 async def _delete_organization_keys(
     organization_id: str,
     prisma_client: PrismaClient,
@@ -1093,7 +1109,9 @@ async def _delete_organization_keys(
         hashed_tokens=hashed_tokens_to_delete,
         prisma_client=prisma_client,
     )
-    await _table(VerificationTokenRepository(prisma_client)).delete_many(where=key_filter)
+    async with prisma_client.tx() as transaction:
+        _ = await transaction.query_raw(_LOCK_ORG_KEYS_SQL, organization_id)
+        _ = await transaction.litellm_verificationtoken.delete_many(where={"organization_id": organization_id})
     await delete_cache_key_objects(
         hashed_tokens=hashed_tokens_to_delete,
         user_api_key_cache=user_api_key_cache,

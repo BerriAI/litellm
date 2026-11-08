@@ -1072,12 +1072,11 @@ async def test_customer_gauge_subtracts_the_committed_spend_instead_of_the_cache
     """Auth saw 1.5 committed, and by emit the counter holds 2.5 with this request's 0.5 and another request's."""
     import sys
 
-    from litellm.caching.dual_cache import DualCache
     from litellm.models.budget import LiteLLM_BudgetTable
     from litellm.models.end_user import LiteLLM_EndUserTable
     from litellm.proxy._types import UserAPIKeyAuth
-    from litellm.proxy.spend_tracking.committed_spend import committed_spend_key
     from litellm.types.proxy.carried_budget_state import CommittedBudgetSpend, EntitySpendCounterKeys
+    from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
 
     mock_proxy_server = MagicMock()
     mock_proxy_server.user_api_key_cache.async_get_cache = AsyncMock(
@@ -1088,10 +1087,9 @@ async def test_customer_gauge_subtracts_the_committed_spend_instead_of_the_cache
             litellm_budget_table=LiteLLM_BudgetTable(budget_id="b", max_budget=3.0),
         )
     )
-    mock_proxy_server.spend_counter_cache = DualCache()
-    mock_proxy_server.spend_counter_cache.in_memory_cache.set_cache(
-        key=committed_spend_key("spend:end_user:cust-live"), value=2.5
-    )
+    mock_proxy_server.spend_counter_store = FakeSpendCounters(
+        redis=None, memory={"spend:committed:end_user:cust-live": 2.5}
+    ).store()
     token = UserAPIKeyAuth(token="hashed")
     token.committed_budget_spend = CommittedBudgetSpend(
         counter_keys=EntitySpendCounterKeys(end_user="spend:end_user:cust-live"), end_user=1.5
