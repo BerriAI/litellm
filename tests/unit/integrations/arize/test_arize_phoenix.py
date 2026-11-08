@@ -520,7 +520,7 @@ class TestPerProjectTracerProviderCache:
         mock_provider = MagicMock()
         logger._project_providers["proj"] = mock_provider
 
-        logger.flush_tracer_providers()
+        logger.flush_tracer_providers(timeout_millis=5_000)
 
         mock_processor.force_flush.assert_called_once()
         mock_provider.force_flush.assert_called_once()
@@ -697,7 +697,7 @@ class TestTracerResolutionAndCache:
             callback_name="arize_phoenix",
             tracer_provider=provider,
         )
-        logger.flush_tracer_providers()
+        logger.flush_tracer_providers(timeout_millis=5_000)
         exporter.shutdown()
 
     def test_standard_logging_metadata_wins_over_litellm_params(self):

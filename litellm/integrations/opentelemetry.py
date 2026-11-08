@@ -67,6 +67,7 @@ if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
     from opentelemetry.trace import SpanKind as _SpanKind
     from opentelemetry.trace import Tracer as _Tracer
+    from opentelemetry.trace import TracerProvider as _APITracerProvider
 
     from litellm.proxy._types import (
         ManagementEndpointLoggingPayload as _ManagementEndpointLoggingPayload,
@@ -440,6 +441,8 @@ class OpenTelemetryConfig:
 
 
 class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
+    _tracer_provider: "_APITracerProvider"
+
     def __init__(
         self,
         config: OpenTelemetryConfig | None = None,
@@ -1278,6 +1281,16 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
         cache_key: Final = str(sorted(dynamic_headers.items()))
         return self._cached_dynamic_tracer(cache_key, _build, owns_exporter)
+
+    def flush_tracer_providers(self, timeout_millis: int) -> bool:
+        from opentelemetry.sdk.trace import TracerProvider
+
+        with self._tracer_provider_cache_lock:
+            cached: Final = tuple(entry.provider for entry in self._tracer_provider_cache.values())
+        providers: Final = tuple(
+            provider for provider in (self._tracer_provider, *cached) if isinstance(provider, TracerProvider)
+        )
+        return all(tuple(provider.force_flush(timeout_millis) for provider in providers))
 
     def construct_dynamic_otel_headers(
         self, standard_callback_dynamic_params: StandardCallbackDynamicParams

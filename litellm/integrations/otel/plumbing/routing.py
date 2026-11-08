@@ -213,6 +213,11 @@ class TenantTracerCache:
         if drained:
             _shutdown_provider(provider)
 
+    def force_flush(self, timeout_millis: int) -> bool:
+        with self._lock:
+            providers: Final = (*self._providers.values(), *self._retired)
+        return all(tuple(provider.force_flush(timeout_millis) for provider in providers))
+
     def route_for(
         self,
         default: Tracer,

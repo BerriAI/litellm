@@ -7822,3 +7822,16 @@ class TestOpentelemetryUnitTests:
 
         # Assert: error.message should be set from error_str using ErrorAttributes constant
         mock_span.set_attribute.assert_called_with(ErrorAttributes.ERROR_MESSAGE, "Fallback error message")
+
+
+def test_flush_tracer_providers_sends_spans_still_queued_in_a_credential_scoped_provider(otlp_http_sink, monkeypatch):
+    monkeypatch.setenv("OTEL_BSP_SCHEDULE_DELAY", "3600000")
+    logger: Final = OpenTelemetry(
+        config=OpenTelemetryConfig(exporter="otlp_http", endpoint=otlp_http_sink.url + "/v1/traces"),
+        tracer_provider=TracerProvider(),
+    )
+    logger._get_tracer_with_dynamic_headers({"api-key": "tenant-a"}).start_span("queued").end()
+
+    assert otlp_http_sink.received.empty()
+    assert logger.flush_tracer_providers(timeout_millis=5_000)
+    assert otlp_http_sink.received.get_nowait() == "/v1/traces"

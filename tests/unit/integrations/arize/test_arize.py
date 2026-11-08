@@ -440,3 +440,13 @@ def test_get_arize_config_with_endpoints(mock_env_vars, monkeypatch):
     assert config.endpoint == "grpc://test.endpoint"
     assert config.protocol == "otlp_grpc"
     assert config.project_name == "custom-project"
+
+
+def test_flush_tracer_providers_sends_spans_still_queued_in_arizes_own_provider(otlp_http_sink, monkeypatch):
+    monkeypatch.setenv("OTEL_BSP_SCHEDULE_DELAY", "3600000")
+    logger = ArizeLogger(config=OpenTelemetryConfig(exporter="otlp_http", endpoint=otlp_http_sink.url + "/v1/traces"))
+    logger.tracer.start_span("queued").end()
+
+    assert otlp_http_sink.received.empty()
+    assert logger.flush_tracer_providers(timeout_millis=5_000)
+    assert otlp_http_sink.received.get_nowait() == "/v1/traces"
