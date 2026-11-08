@@ -30,10 +30,13 @@ action.
 """
 
 import base64
+import itertools
 import json
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
+from fnmatch import fnmatchcase
 from types import MappingProxyType
-from typing import Final
+from typing import Final, TypeAlias
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -44,15 +47,30 @@ from litellm.integrations.sqs import SQSLogger
 from litellm.llms.aws_polly.text_to_speech.transformation import AWSPollyTextToSpeechConfig
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.batches.transformation import BedrockBatchesConfig
+from litellm.llms.bedrock.chat.converse_handler import BedrockConverseLLM
 from litellm.llms.bedrock.embed.embedding import BedrockEmbedding
 from litellm.llms.bedrock.files.handler import BedrockFilesHandler
 from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+from litellm.llms.bedrock.model_listing import BedrockModelLister
 from litellm.llms.bedrock.web_identity_session_policy import WebIdentitySessionPolicy, _SessionPolicyStatement
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.llms.opensearch.vector_stores.transformation import OpenSearchVectorStoreConfig
 from litellm.llms.s3_vectors.vector_stores.transformation import S3VectorsVectorStoreConfig
+from litellm.llms.sagemaker.chat.handler import SagemakerChatHandler
 from litellm.llms.sagemaker.chat.transformation import SagemakerChatConfig
 from litellm.llms.sagemaker.completion.handler import SagemakerLLM
+from litellm.proxy.common_utils.load_config_utils import s3_object_reader
+from litellm.proxy.pass_through_endpoints.llm_provider_handlers.comprehend_medical_passthrough_logging_handler import (
+    COMPREHEND_MEDICAL_SUPPORTED_OPERATIONS,
+    ComprehendMedicalAWS,
+)
+from litellm.proxy.pass_through_endpoints.llm_provider_handlers.transcribe_passthrough_logging_handler import (
+    TranscribeAWS,
+    transcribe_supported_operations,
+)
+from litellm.rag.ingestion.bedrock_ingestion import BedrockRAGIngestion
 from litellm.rag.ingestion.s3_vectors_ingestion import S3VectorsRAGIngestion
+from litellm.secret_managers.aws_secret_manager_v2 import AWSSecretsManagerV2
 from litellm.types.router import GenericLiteLLMParams
 
 # Actions the Claude Platform on AWS service is documented to call.
@@ -133,14 +151,12 @@ class TestWebIdentitySessionPolicyShape:
     def test_bedrock_statement_actions_preserved(self):
         """The original bedrock action set must still be granted —
         regression for the pre-existing bedrock/* routes."""
-        policy = _captured_policy()
-        bedrock_stmt = _statement_by_sid(policy, "BedrockLiteLLM")
-        actions = set(bedrock_stmt["Action"])
+        granted: Final = _granted_actions(_captured_policy())
         for required in (
             "bedrock:InvokeModel",
             "bedrock:InvokeModelWithResponseStream",
         ):
-            assert required in actions, f"{required} missing from BedrockLiteLLM"
+            assert required in granted, f"{required} missing from the Bedrock session policy"
 
     def test_bedrock_count_tokens_action_present(self):
         """Regression for #33142: the CountTokens handler authorizes
@@ -346,13 +362,28 @@ class TestPolicyTransportConditions:
             "ClaudePlatformLiteLLM must require aws:SecureTransport=true to keep parity with the bedrock statement"
         )
 
-    def test_only_the_outbound_identity_statement_requires_a_claude_platform_caller(self):
+    def test_statements_for_services_litellm_calls_directly_require_no_calling_service(self):
+        directly_called_services: Final = frozenset(
+            {"bedrock", "bedrock-agentcore", "bedrock-mantle", "aws-external-anthropic"}
+        )
         directly_called: Final = tuple(
-            stmt for stmt in _captured_policy()["Statement"] if stmt["Sid"] != "ClaudePlatformOutboundIdentityLiteLLM"
+            stmt
+            for stmt in _captured_policy()["Statement"]
+            if all(_service(action) in directly_called_services for action in stmt["Action"])
         )
         assert directly_called
-        assert all("StringEquals" not in stmt["Condition"] for stmt in directly_called), (
+        assert all("StringEquals" not in (stmt.get("Condition") or {}) for stmt in directly_called), (
             "statements LiteLLM calls directly must not require aws:CalledViaLast, or OIDC auth 403s on those routes"
+        )
+
+    def test_invoke_model_is_granted_without_requiring_secure_transport(self):
+        granting: Final = tuple(
+            stmt for stmt in _captured_policy()["Statement"] if "bedrock:InvokeModel" in stmt["Action"]
+        )
+        assert any("Condition" not in stmt for stmt in granting), (
+            "Bedrock authorizes the Nova Sonic bidirectional stream as bedrock:InvokeModel with aws:SecureTransport "
+            "false (live probe on amazon.nova-2-sonic-v1:0, 2026-11-08), "
+            "so a TLS-only grant denies every realtime session"
         )
 
 
@@ -365,6 +396,11 @@ _BEDROCK_ROUTE_ACTIONS: Final = MappingProxyType(
         "model/{model_id}/converse": "bedrock:InvokeModel",
         "model/{model_id}/converse-stream": "bedrock:InvokeModelWithResponseStream",
         "model/{model_id}/count-tokens": "bedrock:CountTokens",
+        "model/{model_id}/async-invoke": "bedrock:InvokeModel",
+        "async-invoke/{invocation_arn}": "bedrock:GetAsyncInvoke",
+        "model/{model_id}/invoke-with-bidirectional-stream": "bedrock:InvokeModel",
+        "bedrock-mantle anthropic/v1/messages": "bedrock-mantle:CreateInference",
+        "bedrock-mantle anthropic/v1/messages/count_tokens": "bedrock-mantle:CountTokens",
         "guardrail/{guardrail_id}/version/{version}/apply": "bedrock:ApplyGuardrail",
         "rerank": "bedrock:Rerank",
         "knowledgebases/{knowledge_base_id}/retrieve": "bedrock:Retrieve",
@@ -409,6 +445,18 @@ def _sqs_logger() -> SQSLogger:
         )
 
 
+def _bedrock_knowledge_base_ingestion() -> BedrockRAGIngestion:
+    return BedrockRAGIngestion(
+        ingest_options={
+            "vector_store": {"custom_llm_provider": "bedrock", "aws_region_name": "us-east-1"},
+        }
+    )
+
+
+def _bedrock_model_lister() -> BedrockModelLister:
+    return BedrockModelLister(deployment={"aws_region_name": "us-east-1"}, client=HTTPHandler())
+
+
 def _s3_vectors_ingestion() -> S3VectorsRAGIngestion:
     return S3VectorsRAGIngestion(
         ingest_options={
@@ -422,9 +470,10 @@ def _s3_vectors_ingestion() -> S3VectorsRAGIngestion:
     )
 
 
-_CALLER_ROUTE_ACTIONS: Final = MappingProxyType(
+_CallerAndActions: TypeAlias = tuple[Callable[[], BaseAWSLLM], tuple[str, ...]]
+
+_CALLER_ROUTE_ACTIONS: Final[MappingProxyType[str, _CallerAndActions]] = MappingProxyType(
     {
-        "bedrock async invoke": (BedrockEmbedding, ("bedrock:InvokeModel", "bedrock:GetAsyncInvoke", "s3:PutObject")),
         "bedrock batches": (
             BedrockBatchesConfig,
             (
@@ -440,12 +489,44 @@ _CALLER_ROUTE_ACTIONS: Final = MappingProxyType(
             ("s3:PutObject", "s3:GetObject", "s3:DeleteObject", "s3:ListBucket", "kms:GenerateDataKey"),
         ),
         "bedrock file download": (BedrockFilesHandler, ("s3:GetObject", "kms:Decrypt")),
+        "bedrock model listing": (
+            _bedrock_model_lister,
+            ("bedrock:ListFoundationModels", "bedrock:ListInferenceProfiles"),
+        ),
+        "bedrock knowledge base ingestion": (
+            _bedrock_knowledge_base_ingestion,
+            (
+                "bedrock:ListDataSources",
+                "bedrock:GetDataSource",
+                "bedrock:CreateKnowledgeBase",
+                "bedrock:GetKnowledgeBase",
+                "bedrock:CreateDataSource",
+                "bedrock:StartIngestionJob",
+                "bedrock:GetIngestionJob",
+                "s3:CreateBucket",
+                "s3:PutObject",
+                "kms:GenerateDataKey",
+                "aoss:CreateSecurityPolicy",
+                "aoss:CreateAccessPolicy",
+                "aoss:CreateCollection",
+                "aoss:BatchGetCollection",
+                "aoss:APIAccessAll",
+                "iam:CreateServiceLinkedRole",
+                "iam:CreateRole",
+                "iam:PutRolePolicy",
+                "iam:PassRole",
+            ),
+        ),
         "sagemaker completion": (
             SagemakerLLM,
             ("sagemaker:InvokeEndpoint", "sagemaker:InvokeEndpointWithResponseStream"),
         ),
         "sagemaker chat": (
             SagemakerChatConfig,
+            ("sagemaker:InvokeEndpoint", "sagemaker:InvokeEndpointWithResponseStream"),
+        ),
+        "sagemaker chat handler": (
+            SagemakerChatHandler,
             ("sagemaker:InvokeEndpoint", "sagemaker:InvokeEndpointWithResponseStream"),
         ),
         "polly speech": (AWSPollyTextToSpeechConfig, ("polly:SynthesizeSpeech",)),
@@ -462,8 +543,65 @@ _CALLER_ROUTE_ACTIONS: Final = MappingProxyType(
         ),
         "s3 logging": (_s3_logger, ("s3:PutObject", "kms:GenerateDataKey")),
         "sqs logging": (_sqs_logger, ("sqs:SendMessage", "kms:GenerateDataKey")),
+        "secrets manager": (
+            AWSSecretsManagerV2,
+            (
+                "secretsmanager:GetSecretValue",
+                "secretsmanager:DescribeSecret",
+                "secretsmanager:CreateSecret",
+                "secretsmanager:PutSecretValue",
+                "secretsmanager:UpdateSecret",
+                "secretsmanager:RestoreSecret",
+                "secretsmanager:TagResource",
+                "secretsmanager:ReplicateSecretToRegions",
+                "secretsmanager:DeleteSecret",
+                "kms:GenerateDataKey",
+                "kms:Decrypt",
+            ),
+        ),
+        "comprehend medical passthrough": (
+            ComprehendMedicalAWS,
+            tuple(f"comprehendmedical:{operation}" for operation in sorted(COMPREHEND_MEDICAL_SUPPORTED_OPERATIONS)),
+        ),
+        "transcribe passthrough": (
+            TranscribeAWS,
+            (
+                "transcribe:StartTranscriptionJob",
+                "transcribe:GetTranscriptionJob",
+                "s3:GetObject",
+                "s3:PutObject",
+                "iam:PassRole",
+                "kms:GenerateDataKey",
+                "kms:Decrypt",
+            ),
+        ),
     }
 )
+
+
+_KMS_VIA_SERVICE_BY_ROUTE: Final = MappingProxyType(
+    {
+        "bedrock files": "s3.*",
+        "bedrock file download": "s3.*",
+        "s3 logging": "s3.*",
+        "sqs logging": "sqs.*",
+        "bedrock knowledge base ingestion": "s3.*",
+        "secrets manager": "secretsmanager.*",
+        "transcribe passthrough": "s3.*",
+    }
+)
+
+
+_PASS_ROLE_TARGET_BY_ROUTE: Final = MappingProxyType(
+    {
+        "bedrock batches": "bedrock.amazonaws.com",
+        "bedrock knowledge base ingestion": "bedrock.amazonaws.com",
+        "transcribe passthrough": "transcribe.amazonaws.com",
+    }
+)
+
+
+_STS_SESSION_EXPIRATION: Final = datetime(2099, 1, 1, tzinfo=timezone.utc)
 
 
 def _sts_mock() -> MagicMock:
@@ -473,7 +611,7 @@ def _sts_mock() -> MagicMock:
             "AccessKeyId": "k",
             "SecretAccessKey": "s",
             "SessionToken": "t",
-            "Expiration": datetime.now(timezone.utc) + timedelta(hours=1),
+            "Expiration": _STS_SESSION_EXPIRATION,
         },
         "PackedPolicySize": 0,
     }
@@ -503,21 +641,32 @@ def _service(action: str) -> str:
     return action.split(":", 1)[0]
 
 
+def _grants_kms(statement: _SessionPolicyStatement) -> bool:
+    return any(_service(action) == "kms" for action in statement["Action"])
+
+
+def _ungranted(actions: tuple[str, ...], policy: WebIdentitySessionPolicy) -> tuple[str, ...]:
+    granted: Final = _granted_actions(policy)
+    return tuple(action for action in actions if not any(fnmatchcase(action, pattern) for pattern in granted))
+
+
 class TestEachCallerGetsItsOwnCeiling:
-    """Async invoke, batches, files, SageMaker, Polly, S3 Vectors and the S3 and SQS loggers each
-    authorize against actions outside the Bedrock runtime ceiling, so on web identity auth they 403d
-    with "no session policy allows" even when the role allowed them. Each caller's STS session must
-    carry a ceiling that grants what its routes call and nothing from another caller's service."""
+    """Every AWS caller besides Bedrock runtime (batches, files, model listing, knowledge base
+    ingestion, SageMaker, Polly, S3 Vectors, the loggers, Secrets Manager, the config bucket, and the
+    Comprehend Medical and Transcribe pass-throughs) authorizes against actions outside the Bedrock
+    runtime ceiling, so on web identity auth it 403d with "no session policy allows" even when the
+    role allowed it. Each caller's STS session must carry a ceiling that grants what its routes call
+    and nothing from another caller's service."""
 
     @pytest.mark.parametrize(("route", "caller_and_actions"), sorted(_CALLER_ROUTE_ACTIONS.items()))
-    def test_route_actions_are_granted_by_the_callers_ceiling(self, route, caller_and_actions):
+    def test_route_actions_are_granted_by_the_callers_ceiling(self, route: str, caller_and_actions: _CallerAndActions):
         make_caller, actions = caller_and_actions
         (policy,) = _policies_sent_to_sts((make_caller(),), session_name=f"grant-{route}")
-        missing: Final = frozenset(actions) - _granted_actions(policy)
+        missing: Final = _ungranted(actions, policy)
         assert not missing, f"{route} calls {sorted(missing)}, which its session policy does not grant"
 
     @pytest.mark.parametrize(("route", "caller_and_actions"), sorted(_CALLER_ROUTE_ACTIONS.items()))
-    def test_ceiling_grants_no_service_the_route_does_not_call(self, route, caller_and_actions):
+    def test_ceiling_grants_no_service_the_route_does_not_call(self, route: str, caller_and_actions: _CallerAndActions):
         make_caller, actions = caller_and_actions
         (policy,) = _policies_sent_to_sts((make_caller(),), session_name=f"deny-{route}")
         called_services: Final = frozenset(_service(action) for action in actions)
@@ -525,38 +674,105 @@ class TestEachCallerGetsItsOwnCeiling:
         assert not extra, f"{route}'s session policy also grants {extra}"
 
     @pytest.mark.parametrize(("route", "caller_and_actions"), sorted(_CALLER_ROUTE_ACTIONS.items()))
-    def test_ceiling_fits_the_sts_plaintext_limit(self, route, caller_and_actions):
+    def test_ceiling_fits_the_sts_plaintext_limit(self, route: str, caller_and_actions: _CallerAndActions):
         make_caller, _actions = caller_and_actions
         (policy,) = _policies_sent_to_sts((make_caller(),), session_name=f"size-{route}")
         assert len(json.dumps(policy, separators=(",", ":"))) <= _STS_SESSION_POLICY_PLAINTEXT_LIMIT
 
-    def test_bedrock_runtime_ceiling_grants_none_of_the_other_callers_services(self):
-        other_services: Final = frozenset(
-            _service(action)
-            for _caller, actions in _CALLER_ROUTE_ACTIONS.values()
-            for action in actions
-            if _service(action) != "bedrock"
+    def test_bedrock_runtime_ceiling_reaches_other_callers_services_only_through_bedrock_storage(self):
+        every_route_action: Final = itertools.chain.from_iterable(
+            actions for _caller, actions in _CALLER_ROUTE_ACTIONS.values()
         )
-        granted: Final = frozenset(_service(action) for action in _granted_actions(_captured_policy()))
-        assert not granted & other_services
+        other_services: Final = frozenset(
+            _service(action) for action in every_route_action if _service(action) != "bedrock"
+        )
+        reaching: Final = tuple(
+            stmt
+            for stmt in _captured_policy()["Statement"]
+            if any(_service(action) in other_services for action in stmt["Action"])
+        )
+        assert frozenset(_service(action) for stmt in reaching for action in stmt["Action"]) == {"s3", "kms"}
+        assert all(
+            stmt["Condition"].get("StringEquals") == {"aws:CalledViaLast": "bedrock.amazonaws.com"}
+            or stmt["Condition"].get("StringLike") == {"kms:ViaService": "s3.*"}
+            for stmt in reaching
+        )
 
-    def test_batch_service_role_can_only_be_passed_to_bedrock(self):
-        (policy,) = _policies_sent_to_sts((BedrockBatchesConfig(),), session_name="batch-pass-role")
+    @pytest.mark.parametrize(("route", "target_service"), sorted(_PASS_ROLE_TARGET_BY_ROUTE.items()))
+    def test_service_role_can_only_be_passed_to_the_routes_service(self, route: str, target_service: str):
+        make_caller, _actions = _CALLER_ROUTE_ACTIONS[route]
+        (policy,) = _policies_sent_to_sts((make_caller(),), session_name=f"pass-role-{route}")
         granting: Final = tuple(stmt for stmt in policy["Statement"] if "iam:PassRole" in stmt["Action"])
         assert granting
         assert all(
-            stmt["Condition"].get("StringEquals") == {"iam:PassedToService": "bedrock.amazonaws.com"}
-            for stmt in granting
+            stmt["Condition"].get("StringEquals") == {"iam:PassedToService": target_service} for stmt in granting
         )
 
-    def test_async_invoke_output_write_is_only_granted_through_bedrock(self):
-        (policy,) = _policies_sent_to_sts((BedrockEmbedding(),), session_name="async-output")
+    @pytest.mark.parametrize("action", ["s3:GetObject", "s3:PutObject"])
+    def test_async_invoke_bucket_access_is_only_granted_through_bedrock(self, action: str):
+        (policy,) = _policies_sent_to_sts((BedrockEmbedding(),), session_name=f"async-{action}")
+        granting: Final = tuple(stmt for stmt in policy["Statement"] if action in stmt["Action"])
+        assert granting
+        assert all(
+            stmt["Condition"].get("StringEquals") == {"aws:CalledViaLast": "bedrock.amazonaws.com"} for stmt in granting
+        )
+
+    def test_async_invoke_output_bucket_key_is_only_usable_through_s3(self):
+        (policy,) = _policies_sent_to_sts((BedrockEmbedding(),), session_name="async-kms")
+        granting: Final = tuple(stmt for stmt in policy["Statement"] if _grants_kms(stmt))
+        assert {"kms:GenerateDataKey", "kms:Decrypt"} <= _granted_actions(policy)
+        assert all(stmt["Condition"].get("StringLike") == {"kms:ViaService": "s3.*"} for stmt in granting)
+
+    def test_transcribe_ceiling_grants_every_operation_the_passthrough_serves(self):
+        (policy,) = _policies_sent_to_sts((TranscribeAWS(),), session_name="transcribe-operations")
+        operations: Final = tuple(f"transcribe:{operation}" for operation in sorted(transcribe_supported_operations()))
+        assert not _ungranted(operations, policy)
+
+    def test_transcript_output_write_is_only_granted_through_transcribe(self):
+        (policy,) = _policies_sent_to_sts((TranscribeAWS(),), session_name="transcribe-output")
         granting: Final = tuple(stmt for stmt in policy["Statement"] if "s3:PutObject" in stmt["Action"])
         assert granting
         assert all(
-            stmt["Condition"].get("StringEquals") == {"aws:CalledViaLast": "bedrock.amazonaws.com"}
+            stmt["Condition"].get("StringEquals") == {"aws:CalledViaLast": "transcribe.amazonaws.com"}
             for stmt in granting
         )
+
+    def test_knowledge_base_ingestion_can_only_create_the_opensearch_serverless_service_linked_role(self):
+        (policy,) = _policies_sent_to_sts((_bedrock_knowledge_base_ingestion(),), session_name="kb-slr")
+        granting: Final = tuple(stmt for stmt in policy["Statement"] if "iam:CreateServiceLinkedRole" in stmt["Action"])
+        assert granting
+        assert all(
+            stmt["Condition"].get("StringEquals") == {"iam:AWSServiceName": "observability.aoss.amazonaws.com"}
+            for stmt in granting
+        )
+
+    def test_config_bucket_reader_signs_with_a_read_only_ceiling(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv("AWS_WEB_IDENTITY_TOKEN", "oidc/google/litellm")
+        monkeypatch.setenv("AWS_ROLE_NAME", "arn:aws:iam::123456789012:role/litellm-role")
+        monkeypatch.setenv("AWS_SESSION_NAME", "config-bucket")
+        monkeypatch.setenv("AWS_REGION_NAME", "us-east-1")
+        sts: Final = _sts_mock()
+        with (
+            patch("boto3.client", return_value=sts),
+            patch("litellm.llms.bedrock.base_aws_llm.get_secret", return_value="oidc-jwt-token"),
+        ):
+            s3_object_reader("litellm-config")
+        policy: Final = _SESSION_POLICY_ADAPTER.validate_python(
+            json.loads(sts.assume_role_with_web_identity.call_args.kwargs["Policy"])
+        )
+        assert _granted_actions(policy) == frozenset({"s3:GetObject", "kms:Decrypt"})
+
+    def test_file_download_ceiling_cannot_write_list_or_delete(self):
+        (policy,) = _policies_sent_to_sts((BedrockFilesHandler(),), session_name="file-download-only")
+        assert _granted_actions(policy) == frozenset({"s3:GetObject", "kms:Decrypt"})
+
+    @pytest.mark.parametrize(("route", "via_service"), sorted(_KMS_VIA_SERVICE_BY_ROUTE.items()))
+    def test_kms_is_only_granted_through_the_routes_storage_service(self, route: str, via_service: str):
+        make_caller, _actions = _CALLER_ROUTE_ACTIONS[route]
+        (policy,) = _policies_sent_to_sts((make_caller(),), session_name=f"kms-via-{route}")
+        granting: Final = tuple(stmt for stmt in policy["Statement"] if _grants_kms(stmt))
+        assert granting
+        assert all(stmt["Condition"].get("StringLike") == {"kms:ViaService": via_service} for stmt in granting)
 
 
 _OPENSEARCH_ENDPOINT_ACTIONS: Final = MappingProxyType(
@@ -610,6 +826,12 @@ class TestWebIdentityCredentialCacheIsPerCeiling:
 
     def test_callers_with_the_same_ceiling_share_one_sts_session(self):
         policies: Final = _policies_sent_to_sts((SagemakerLLM(), SagemakerLLM()), session_name="cache-share")
+        assert len(policies) == 1
+
+    def test_bedrock_chat_and_embeddings_share_one_sts_session(self):
+        policies: Final = _policies_sent_to_sts(
+            (BedrockConverseLLM(), BedrockEmbedding()), session_name="bedrock-share"
+        )
         assert len(policies) == 1
 
 

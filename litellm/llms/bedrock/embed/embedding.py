@@ -6,7 +6,7 @@ import copy
 import json
 import urllib.parse
 from collections.abc import Callable, Mapping
-from typing import TYPE_CHECKING, ClassVar, Final, get_args, overload
+from typing import TYPE_CHECKING, Final, get_args, overload
 
 import httpx
 from pydantic import ConfigDict, TypeAdapter
@@ -15,7 +15,6 @@ import litellm
 from litellm.constants import BEDROCK_EMBEDDING_PROVIDERS_LITERAL
 from litellm.litellm_core_utils.hidden_params import set_hidden_param
 from litellm.litellm_core_utils.url_utils import join_api_base
-from litellm.llms.bedrock.web_identity_session_policy import BEDROCK_EMBEDDING_SESSION_POLICY, WebIdentitySessionPolicy
 from litellm.llms.cohere.embed.handler import embedding as cohere_embedding
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -78,8 +77,6 @@ def _without_region_path(model: str) -> str:
 
 
 class BedrockEmbedding(BaseAWSLLM):
-    _web_identity_session_policy: ClassVar[WebIdentitySessionPolicy] = BEDROCK_EMBEDDING_SESSION_POLICY
-
     @overload
     def _load_credentials(
         self,

@@ -1,5 +1,5 @@
 import json
-from typing import Final, Literal
+from typing import Final, Literal, TypeAlias
 
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
@@ -7,17 +7,31 @@ _SecureTransportBool: Final = TypedDict("_SecureTransportBool", {"aws:SecureTran
 
 _CalledViaLastEquals: Final = TypedDict(
     "_CalledViaLastEquals",
-    {"aws:CalledViaLast": ReadOnly[Literal["aws-external-anthropic.amazonaws.com", "bedrock.amazonaws.com"]]},
+    {
+        "aws:CalledViaLast": ReadOnly[
+            Literal["aws-external-anthropic.amazonaws.com", "bedrock.amazonaws.com", "transcribe.amazonaws.com"]
+        ]
+    },
 )
 
 _PassedToServiceEquals: Final = TypedDict(
-    "_PassedToServiceEquals", {"iam:PassedToService": ReadOnly[Literal["bedrock.amazonaws.com"]]}
+    "_PassedToServiceEquals",
+    {"iam:PassedToService": ReadOnly[Literal["bedrock.amazonaws.com", "transcribe.amazonaws.com"]]},
 )
+
+_ServiceLinkedRoleEquals: Final = TypedDict(
+    "_ServiceLinkedRoleEquals", {"iam:AWSServiceName": ReadOnly[Literal["observability.aoss.amazonaws.com"]]}
+)
+
+_KmsViaService: TypeAlias = Literal["s3.*", "sqs.*", "secretsmanager.*"]
+
+_ViaServiceLike: Final = TypedDict("_ViaServiceLike", {"kms:ViaService": ReadOnly[_KmsViaService]})
 
 
 class _SessionPolicyCondition(TypedDict):
     Bool: ReadOnly[_SecureTransportBool]
-    StringEquals: NotRequired[ReadOnly[_CalledViaLastEquals | _PassedToServiceEquals]]
+    StringEquals: NotRequired[ReadOnly[_CalledViaLastEquals | _PassedToServiceEquals | _ServiceLinkedRoleEquals]]
+    StringLike: NotRequired[ReadOnly[_ViaServiceLike]]
 
 
 class _SessionPolicyStatement(TypedDict):
@@ -25,7 +39,7 @@ class _SessionPolicyStatement(TypedDict):
     Effect: ReadOnly[Literal["Allow"]]
     Action: ReadOnly[tuple[str, ...]]
     Resource: ReadOnly[Literal["*"]]
-    Condition: ReadOnly[_SessionPolicyCondition]
+    Condition: NotRequired[ReadOnly[_SessionPolicyCondition]]
 
 
 class WebIdentitySessionPolicy(TypedDict):
@@ -44,6 +58,10 @@ def _allow(
     return _SessionPolicyStatement(Sid=sid, Effect="Allow", Action=actions, Resource="*", Condition=condition)
 
 
+def _allow_over_any_transport(sid: str, actions: tuple[str, ...]) -> _SessionPolicyStatement:
+    return _SessionPolicyStatement(Sid=sid, Effect="Allow", Action=actions, Resource="*")
+
+
 def _policy(*statements: _SessionPolicyStatement) -> WebIdentitySessionPolicy:
     return WebIdentitySessionPolicy(Version="2012-10-17", Statement=statements)
 
@@ -52,14 +70,23 @@ def session_policy_document(policy: WebIdentitySessionPolicy) -> str:
     return json.dumps(policy, separators=(",", ":"))
 
 
-_OBJECT_ENCRYPTION: Final = _allow("KmsLiteLLM", ("kms:GenerateDataKey", "kms:Decrypt"))
+def _encryption_through(service: _KmsViaService, actions: tuple[str, ...]) -> _SessionPolicyStatement:
+    return _allow(
+        "KmsLiteLLM",
+        actions,
+        _SessionPolicyCondition(Bool=_SECURE_TRANSPORT, StringLike=_ViaServiceLike({"kms:ViaService": service})),
+    )
+
+
+_OBJECT_ENCRYPTION: Final = ("kms:GenerateDataKey", "kms:Decrypt")
 
 BEDROCK_SESSION_POLICY: Final = _policy(
+    _allow_over_any_transport("BedrockInvokeLiteLLM", ("bedrock:InvokeModel",)),
     _allow(
         "BedrockLiteLLM",
         (
-            "bedrock:InvokeModel",
             "bedrock:InvokeModelWithResponseStream",
+            "bedrock:GetAsyncInvoke",
             "bedrock:CountTokens",
             "bedrock:Rerank",
             "bedrock:Retrieve",
@@ -98,19 +125,20 @@ BEDROCK_SESSION_POLICY: Final = _policy(
             StringEquals=_CalledViaLastEquals({"aws:CalledViaLast": "aws-external-anthropic.amazonaws.com"}),
         ),
     ),
-    _allow("BedrockMantleLiteLLM", ("bedrock-mantle:CreateInference",)),
-)
-
-BEDROCK_EMBEDDING_SESSION_POLICY: Final = _policy(
-    _allow("BedrockEmbeddingLiteLLM", ("bedrock:InvokeModel", "bedrock:GetAsyncInvoke")),
+    _allow("BedrockMantleLiteLLM", ("bedrock-mantle:CreateInference", "bedrock-mantle:CountTokens")),
     _allow(
-        "BedrockAsyncInvokeOutputLiteLLM",
-        ("s3:PutObject",),
+        "BedrockS3LiteLLM",
+        ("s3:GetObject", "s3:PutObject"),
         _SessionPolicyCondition(
             Bool=_SECURE_TRANSPORT,
             StringEquals=_CalledViaLastEquals({"aws:CalledViaLast": "bedrock.amazonaws.com"}),
         ),
     ),
+    _encryption_through("s3.*", _OBJECT_ENCRYPTION),
+)
+
+BEDROCK_MODEL_LISTING_SESSION_POLICY: Final = _policy(
+    _allow("BedrockModelListingLiteLLM", ("bedrock:ListFoundationModels", "bedrock:ListInferenceProfiles")),
 )
 
 BEDROCK_BATCHES_SESSION_POLICY: Final = _policy(
@@ -135,7 +163,56 @@ BEDROCK_BATCHES_SESSION_POLICY: Final = _policy(
 
 BEDROCK_FILES_SESSION_POLICY: Final = _policy(
     _allow("S3ObjectsLiteLLM", ("s3:PutObject", "s3:GetObject", "s3:DeleteObject", "s3:ListBucket")),
-    _OBJECT_ENCRYPTION,
+    _encryption_through("s3.*", _OBJECT_ENCRYPTION),
+)
+
+S3_OBJECT_READ_SESSION_POLICY: Final = _policy(
+    _allow("S3ObjectsLiteLLM", ("s3:GetObject",)),
+    _encryption_through("s3.*", ("kms:Decrypt",)),
+)
+
+BEDROCK_KNOWLEDGE_BASE_INGESTION_SESSION_POLICY: Final = _policy(
+    _allow(
+        "BedrockKnowledgeBaseLiteLLM",
+        (
+            "bedrock:ListDataSources",
+            "bedrock:GetDataSource",
+            "bedrock:CreateKnowledgeBase",
+            "bedrock:GetKnowledgeBase",
+            "bedrock:CreateDataSource",
+            "bedrock:StartIngestionJob",
+            "bedrock:GetIngestionJob",
+        ),
+    ),
+    _allow("S3ObjectsLiteLLM", ("s3:CreateBucket", "s3:PutObject")),
+    _encryption_through("s3.*", _OBJECT_ENCRYPTION),
+    _allow(
+        "OpenSearchServerlessLiteLLM",
+        (
+            "aoss:CreateSecurityPolicy",
+            "aoss:CreateAccessPolicy",
+            "aoss:CreateCollection",
+            "aoss:BatchGetCollection",
+            "aoss:APIAccessAll",
+        ),
+    ),
+    _allow(
+        "OpenSearchServerlessServiceLinkedRoleLiteLLM",
+        ("iam:CreateServiceLinkedRole",),
+        _SessionPolicyCondition(
+            Bool=_SECURE_TRANSPORT,
+            StringEquals=_ServiceLinkedRoleEquals({"iam:AWSServiceName": "observability.aoss.amazonaws.com"}),
+        ),
+    ),
+    _allow("KnowledgeBaseRoleLiteLLM", ("iam:CreateRole", "iam:PutRolePolicy")),
+    _allow(
+        "KnowledgeBaseServiceRoleLiteLLM",
+        ("iam:PassRole",),
+        _SessionPolicyCondition(
+            Bool=_SECURE_TRANSPORT,
+            StringEquals=_PassedToServiceEquals({"iam:PassedToService": "bedrock.amazonaws.com"}),
+        ),
+    ),
 )
 
 SAGEMAKER_SESSION_POLICY: Final = _policy(
@@ -165,10 +242,63 @@ S3_VECTORS_INGESTION_SESSION_POLICY: Final = _policy(
 
 S3_LOGGING_SESSION_POLICY: Final = _policy(
     _allow("S3ObjectsLiteLLM", ("s3:PutObject", "s3:GetObject")),
-    _OBJECT_ENCRYPTION,
+    _encryption_through("s3.*", _OBJECT_ENCRYPTION),
 )
 
 SQS_LOGGING_SESSION_POLICY: Final = _policy(
     _allow("SqsLiteLLM", ("sqs:SendMessage",)),
-    _OBJECT_ENCRYPTION,
+    _encryption_through("sqs.*", _OBJECT_ENCRYPTION),
+)
+
+SECRETS_MANAGER_SESSION_POLICY: Final = _policy(
+    _allow(
+        "SecretsManagerLiteLLM",
+        (
+            "secretsmanager:GetSecretValue",
+            "secretsmanager:DescribeSecret",
+            "secretsmanager:CreateSecret",
+            "secretsmanager:PutSecretValue",
+            "secretsmanager:UpdateSecret",
+            "secretsmanager:RestoreSecret",
+            "secretsmanager:TagResource",
+            "secretsmanager:ReplicateSecretToRegions",
+            "secretsmanager:DeleteSecret",
+        ),
+    ),
+    _encryption_through("secretsmanager.*", _OBJECT_ENCRYPTION),
+)
+
+COMPREHEND_MEDICAL_SESSION_POLICY: Final = _policy(
+    _allow(
+        "ComprehendMedicalLiteLLM",
+        (
+            "comprehendmedical:DetectEntitiesV2",
+            "comprehendmedical:DetectPHI",
+            "comprehendmedical:InferICD10CM",
+            "comprehendmedical:InferRxNorm",
+            "comprehendmedical:InferSNOMEDCT",
+        ),
+    ),
+)
+
+TRANSCRIBE_SESSION_POLICY: Final = _policy(
+    _allow("TranscribeLiteLLM", ("transcribe:*",)),
+    _allow("TranscribeMediaLiteLLM", ("s3:GetObject",)),
+    _allow(
+        "TranscribeOutputLiteLLM",
+        ("s3:PutObject",),
+        _SessionPolicyCondition(
+            Bool=_SECURE_TRANSPORT,
+            StringEquals=_CalledViaLastEquals({"aws:CalledViaLast": "transcribe.amazonaws.com"}),
+        ),
+    ),
+    _allow(
+        "TranscribeDataAccessRoleLiteLLM",
+        ("iam:PassRole",),
+        _SessionPolicyCondition(
+            Bool=_SECURE_TRANSPORT,
+            StringEquals=_PassedToServiceEquals({"iam:PassedToService": "transcribe.amazonaws.com"}),
+        ),
+    ),
+    _encryption_through("s3.*", _OBJECT_ENCRYPTION),
 )
