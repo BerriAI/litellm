@@ -348,6 +348,41 @@ def test_saved_team_models_remain_editable_without_serving(
     assert router is None or router.registry().deployment("saved-model") is None
 
 
+@pytest.mark.parametrize("search", ("", "saved"))
+@pytest.mark.parametrize("router_absent", (False, True))
+def test_saved_model_pages_preserve_database_totals(
+    client: TestClient,
+    auth_as: Callable[[], AbstractContextManager[object]],
+    monkeypatch: pytest.MonkeyPatch,
+    mock_prisma: MagicMock,
+    search: str,
+    router_absent: bool,
+) -> None:
+    rows: Final = [
+        LiteLLM_ProxyModelTable(
+            model_id=f"saved-{index:03}",
+            model_name=f"saved-{index:03}",
+            model_info={"id": f"saved-{index:03}", "team_id": "owner-team"},
+            litellm_params={"model": "openai/gpt-4o-mini", "api_base": "os.environ/SAVED_MODEL_ENDPOINT"},
+        )
+        for index in range(60)
+    ]
+    mock_prisma.db.litellm_proxymodeltable.count.return_value = 60
+    mock_prisma.db.litellm_proxymodeltable.find_many.side_effect = lambda where, take: rows[:take]
+    monkeypatch.setattr(proxy_server, "prisma_client", mock_prisma)
+    monkeypatch.setattr(proxy_server, "llm_router", None if router_absent else litellm.Router(model_list=[]))
+
+    with auth_as():
+        first: Final = client.get("/v2/model/info", params={"page": 1, "size": 50, "search": search})
+        second: Final = client.get("/v2/model/info", params={"page": 2, "size": 50, "search": search})
+
+    assert first.status_code == second.status_code == 200, (first.text, second.text)
+    assert first.json()["total_count"] == second.json()["total_count"] == 60
+    assert first.json()["total_pages"] == second.json()["total_pages"] == 2
+    assert [model["model_info"]["id"] for model in first.json()["data"]] == [row.model_id for row in rows[:50]]
+    assert [model["model_info"]["id"] for model in second.json()["data"]] == [row.model_id for row in rows[50:]]
+
+
 def test_v2_model_info_in_openapi_schema():
     """``GET /v2/model/info`` is published in the proxy OpenAPI/Swagger spec."""
     from litellm.proxy.proxy_server import get_openapi_schema

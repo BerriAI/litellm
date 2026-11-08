@@ -129,6 +129,7 @@ from litellm.llms.bedrock.count_tokens.kimi_k3 import (
     kimi_k3_template_tokens,
     kimi_k3_tokens,
 )
+from litellm.models.model import LiteLLM_ProxyModelTable as StoredProxyModel
 from litellm.proxy._types import (
     UI_TEAM_ID,
     AwsErrorTypeProxyException,
@@ -17029,14 +17030,15 @@ async def _fetch_db_models_for_search(
     page: int,
     size: int,
     sort_by: str | None,
-    is_byok_outside_caller_teams: Callable[[dict[str, JsonValue]], bool],
+    is_byok_outside_caller_teams: Callable[[object], bool],
     model_name: str | None = None,
     blocked: bool | None = None,
+    allowed_team_ids: AbstractSet[str] | None = None,
 ) -> tuple[list[dict[str, object]], int]:
     """
     Run the bounded DB query that backs `/v2/model/info?search=`. Returns
     `(decrypted_models, total_count)` where `total_count` is the cheap
-    `count(...)` of rows matching `search` (not yet team-scoped) so the
+    count of rows matching `search` and the caller's team scope so the
     UI's pagination stays accurate without materializing every row.
 
     Earlier iterations also OR'd a JSON-path match on
@@ -17067,10 +17069,26 @@ async def _fetch_db_models_for_search(
     else:
         take_limit = max(0, page * size - router_models_count)
 
-    db_models_total_count: Final = await ModelRepository(prisma_client).table.count(where=db_where_condition)
+    scoped_page: Final = (
+        await ModelRepository(prisma_client).search_scoped_model_page(
+            search=search_lower,
+            model_name=model_name,
+            blocked=blocked,
+            excluded_ids=db_model_ids_in_router,
+            allowed_team_ids=allowed_team_ids,
+            take=take_limit,
+        )
+        if allowed_team_ids is not None
+        else None
+    )
+    db_models_total_count: Final = (
+        scoped_page[1]
+        if scoped_page is not None
+        else await ModelRepository(prisma_client).table.count(where=db_where_condition)
+    )
 
-    db_models_raw: Sequence[_ProxyModelRow] = []
-    if take_limit > 0:
+    db_models_raw: Sequence[_ProxyModelRow | StoredProxyModel] = scoped_page[0] if scoped_page is not None else ()
+    if scoped_page is None and take_limit > 0:
         db_models_raw = await ModelRepository(prisma_client).table.find_many(
             where=db_where_condition,
             take=take_limit,
@@ -17081,7 +17099,9 @@ async def _fetch_db_models_for_search(
     matching_db_rows: Final = [
         m
         for m in db_models_raw
-        if not is_byok_outside_caller_teams(m.model_info if isinstance(m.model_info, dict) else {})
+        if not is_byok_outside_caller_teams(
+            as_str_mapping(_UNTYPED_VALUE.validate_python(getattr(m, "model_info", None))) or {}
+        )
     ]
 
     decrypted: Final[list[dict[str, object]]] = []
@@ -17207,6 +17227,7 @@ async def _apply_search_filter_to_models(
                 is_byok_outside_caller_teams=_is_byok_outside_caller_teams,
                 model_name=model_name,
                 blocked=blocked,
+                allowed_team_ids=allowed_team_ids,
             )
             search_total_count = router_models_count + db_models_total_count
         except Exception as e:
@@ -17944,10 +17965,13 @@ async def model_info_v2(
         append_agents_to_model_info,
     )
 
+    before_agents_count: Final = len(all_models)
     all_models = await append_agents_to_model_info(
         models=all_models,
         user_api_key_dict=user_api_key_dict,
     )
+
+    added_agents_count: Final = len(all_models) - before_agents_count
 
     # `is True` because direct-call tests bypass FastAPI, so the Query default arrives as a
     # truthy sentinel object rather than False.
@@ -17958,7 +17982,16 @@ async def model_info_v2(
     ]
 
     # Update total count to include agents
-    search_total_count = len(all_models)
+    search_total_count = (
+        len(all_models)
+        if search_total_count is None
+        or user_models_only
+        or include_team_models
+        or exclude_auto_routers is True
+        or wildcard_only is True
+        or isinstance(access_group, str)
+        else search_total_count + added_agents_count
+    )
 
     # Translate `model_name` to the public name for team-scoped rows.
     all_models = [_translate_model_name_for_response(m) for m in all_models]

@@ -3,11 +3,12 @@ Model repository for database operations on LiteLLM_ProxyModelTable.
 """
 
 import json
-from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Final
+from collections.abc import Mapping, Sequence, Set
+from typing import TYPE_CHECKING, Final, Protocol
 
-from pydantic import ConfigDict, TypeAdapter
+from pydantic import BaseModel, ConfigDict, TypeAdapter
 
+from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.models.model import LiteLLM_ProxyModelTable
 from litellm.repositories.base_repository import BaseRepository, DbRecord, record_to_dict
 from litellm.repositories.prisma_protocols import TableActions
@@ -17,6 +18,31 @@ if TYPE_CHECKING:
     from prisma import models as prisma_models
 
 _LITELLM_PARAMS: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(strict=True, hide_input_in_errors=True))
+
+
+class _ModelReadDatabase(Protocol):
+    async def query_raw(self, query: str, *args: object) -> Sequence[Mapping[str, object]]: ...
+
+
+class _ModelReadClient(Protocol):
+    @property
+    def db(self) -> _ModelReadDatabase: ...
+
+
+class _ModelCount(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    total: int
+
+
+_MODEL_SEARCH_WHERE: Final = """
+WHERE (($1::text IS NULL AND model_name ILIKE $2) OR model_name = $1)
+  AND ($3::boolean IS NULL OR blocked = $3)
+  AND model_id NOT IN (SELECT jsonb_array_elements_text($4::jsonb))
+  AND (model_info ->> 'team_id' IS NULL
+       OR (jsonb_typeof(model_info -> 'team_id') = 'string'
+           AND model_info ->> 'team_id' IN (SELECT jsonb_array_elements_text($5::jsonb))))
+"""
 
 
 class _ProxyModelTableRepository(PrismaTableRepository["prisma_models.LiteLLM_ProxyModelTable"]):
@@ -107,6 +133,39 @@ class ModelRepository(BaseRepository[LiteLLM_ProxyModelTable]):
         """Find every model except the row currently being updated."""
         records: Final = await self.table.find_many(where={"model_id": {"not": model_id}})
         return tuple(self._to_model_list(records))
+
+    async def search_scoped_model_page(
+        self,
+        *,
+        search: str,
+        model_name: str | None,
+        blocked: bool | None,
+        excluded_ids: Set[str],
+        allowed_team_ids: Set[str],
+        take: int,
+    ) -> tuple[Sequence[LiteLLM_ProxyModelTable], int]:
+        database: Final = require_attributes(self._connected_client(), _ModelReadClient, "db").db
+        arguments: Final = (
+            model_name,
+            f"%{search}%",
+            blocked,
+            json.dumps(sorted(excluded_ids)),
+            json.dumps(sorted(allowed_team_ids)),
+        )
+        counts: Final = await database.query_raw(
+            'SELECT COUNT(*) AS total FROM "LiteLLM_ProxyModelTable" ' + _MODEL_SEARCH_WHERE, *arguments
+        )
+        total: Final = _ModelCount.model_validate(counts[0]).total
+        records: Final = (
+            await database.query_raw(
+                'SELECT * FROM "LiteLLM_ProxyModelTable" ' + _MODEL_SEARCH_WHERE + " ORDER BY model_id LIMIT $6",
+                *arguments,
+                take,
+            )
+            if take > 0 and total > 0
+            else ()
+        )
+        return tuple(self._to_model_list(records)), total
 
     async def find_by_team_id(self, team_id: str) -> list[LiteLLM_ProxyModelTable]:
         """Find models associated with a specific team.
