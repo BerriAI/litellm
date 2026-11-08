@@ -25,6 +25,7 @@ from fakeredis import TcpFakeServer
 from fastapi import HTTPException
 
 from litellm.caching.caching import DualCache
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.route_llm_request import (
@@ -2545,7 +2546,34 @@ def _mock_deployment(model_name: str, **deployment_limits: int) -> dict[str, obj
     }
 
 
+async def _settle_router_accounting() -> None:
+    try:
+        await GLOBAL_LOGGING_WORKER.flush()
+    finally:
+        await GLOBAL_LOGGING_WORKER.stop()
+    while pending := {task for task in asyncio.all_tasks() - {asyncio.current_task()} if not _is_periodic_sync(task)}:
+        _, still_running = await asyncio.wait(pending, timeout=5)
+        assert not still_running, still_running
+
+
+def _is_periodic_sync(task: asyncio.Task[object]) -> bool:
+    return task.get_coro().__qualname__.endswith(".periodic_sync_in_memory_spend_with_redis")
+
+
 async def _user_config_request_outcome(
+    redis_port: int | None,
+    routing_settings: Mapping[str, object],
+    deployment_limits: Mapping[str, int],
+    logging_obj: LiteLLMLoggingObj | None,
+) -> str:
+    outcome: Final = await _unsettled_user_config_request_outcome(
+        redis_port, routing_settings, deployment_limits, logging_obj
+    )
+    await _settle_router_accounting()
+    return outcome
+
+
+async def _unsettled_user_config_request_outcome(
     redis_port: int | None,
     routing_settings: Mapping[str, object],
     deployment_limits: Mapping[str, int],
@@ -2566,8 +2594,6 @@ async def _user_config_request_outcome(
         await (await route_request(data, None, None, "acompletion"))
     except (litellm.RateLimitError, RouterRateLimitError):
         return "429"
-    finally:
-        await asyncio.sleep(0.3)
     return "200"
 
 
@@ -2606,7 +2632,7 @@ async def _proxy_router_outcomes(
         except (litellm.RateLimitError, RouterRateLimitError):
             return "429"
         finally:
-            await asyncio.sleep(0.3)
+            await _settle_router_accounting()
         return "200"
 
     try:
@@ -2700,16 +2726,21 @@ async def test_concurrent_user_config_requests_each_count_once_against_the_tpm_l
     tpm_for_three_requests: Final = await _tpm_for_three_requests()
 
     def request() -> Coroutine[None, None, str]:
-        return _user_config_request_outcome(
+        return _unsettled_user_config_request_outcome(
             fake_redis_port,
             {"routing_strategy": "usage-based-routing-v2"},
             {"tpm": tpm_for_three_requests},
             _proxy_logging_obj() if arrives_with_logging_obj else None,
         )
 
+    async def settled(*requests: Coroutine[None, None, str]) -> list[str]:
+        outcomes: Final = await asyncio.gather(*requests)
+        await _settle_router_accounting()
+        return outcomes
+
     await _wait_out_a_rate_limit_minute_rollover()
-    concurrent_outcomes: Final = await asyncio.gather(request(), request())
-    later_outcomes: Final = [await request() for _ in range(2)]
+    concurrent_outcomes: Final = await settled(request(), request())
+    later_outcomes: Final = [*(await settled(request())), *(await settled(request()))]
 
     assert [*concurrent_outcomes, *later_outcomes] == ["200", "200", "200", "429"]
 
@@ -2717,12 +2748,13 @@ async def test_concurrent_user_config_requests_each_count_once_against_the_tpm_l
 @pytest.mark.asyncio
 async def test_overlapping_user_config_requests_share_one_rpm_limit(fake_redis_port: int) -> None:
     def request() -> Coroutine[None, None, str]:
-        return _user_config_request_outcome(
+        return _unsettled_user_config_request_outcome(
             fake_redis_port, {"routing_strategy": "usage-based-routing-v2"}, {"rpm": 2}, _proxy_logging_obj()
         )
 
     await _wait_out_a_rate_limit_minute_rollover()
     outcomes: Final = await asyncio.gather(*(request() for _ in range(4)))
+    await _settle_router_accounting()
 
     assert outcomes.count("200") <= 2, outcomes
     assert "429" in outcomes, outcomes
@@ -2747,13 +2779,14 @@ async def test_a_proxy_router_on_the_same_strategy_leaves_the_user_config_limit_
     async def outcomes() -> list[str]:
         first_instance: Final = [await request() for _ in range(2)]
         user_config_routers.clear()
+        await _settle_router_accounting()
         second_instance: Final = [await request() for _ in range(3)]
         return [*first_instance, *second_instance]
 
     await _wait_out_a_rate_limit_minute_rollover()
     alone: Final = await outcomes()
     user_config_routers.clear()
-    await asyncio.sleep(0.3)
+    await _settle_router_accounting()
     redis.Redis(host="127.0.0.1", port=fake_redis_port).flushall()
     proxy_router: Final = litellm.Router(
         routing_strategy=routing_strategy,
@@ -2781,7 +2814,7 @@ async def test_user_config_requests_stay_under_the_proxy_provider_budget(
     )
     try:
         await proxy_router.acompletion(model="proxy-model", messages=[{"role": "user", "content": "hi"}])
-        await asyncio.sleep(0.3)
+        await _settle_router_accounting()
         with pytest.raises(ValueError, match=RouterErrors.no_deployments_with_provider_budget_routing.value):
             await _user_config_request_outcome(None, user_config_settings, {}, _proxy_logging_obj())
     finally:

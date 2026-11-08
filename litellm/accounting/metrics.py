@@ -1,7 +1,9 @@
+import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final
 
-from litellm.repositories.accounting_delivery_repository import DeliveryMetrics
+from litellm.repositories.accounting_delivery_repository import DeliveryBacklog, DeliveryStorage
 
 if TYPE_CHECKING:
     from prometheus_client import Gauge, Histogram
@@ -44,12 +46,32 @@ def _instruments() -> _Instruments | None:
 _INSTRUMENTS: Final = _instruments()
 
 
-def record_deliveries(metrics: DeliveryMetrics, seconds: float) -> None:
+def record_backlog(backlog: DeliveryBacklog, seconds: float) -> None:
     if _INSTRUMENTS is None:
         return
-    _INSTRUMENTS.pending.set(metrics.pending_count)
-    _INSTRUMENTS.parked.set(metrics.parked_count)
-    _INSTRUMENTS.oldest.set(max(0.0, metrics.oldest_pending_seconds))
+    _INSTRUMENTS.pending.set(backlog.pending_count)
+    _INSTRUMENTS.parked.set(backlog.parked_count)
+    _INSTRUMENTS.oldest.set(max(0.0, backlog.oldest_pending_seconds))
     _INSTRUMENTS.batch_time.observe(seconds)
-    _INSTRUMENTS.batch_count.set(metrics.batch_count)
-    _INSTRUMENTS.table_bytes.set(metrics.table_bytes)
+
+
+def record_storage(storage: DeliveryStorage) -> None:
+    if _INSTRUMENTS is None:
+        return
+    _INSTRUMENTS.batch_count.set(storage.batch_count)
+    _INSTRUMENTS.table_bytes.set(storage.table_bytes)
+
+
+class Cadence:
+    __slots__ = ("_clock", "_last")
+
+    def __init__(self, clock: Callable[[], float] = time.monotonic) -> None:
+        self._clock = clock
+        self._last: float | None = None
+
+    def due(self, interval_seconds: float) -> bool:
+        now: Final = self._clock()
+        if self._last is not None and now - self._last < interval_seconds:
+            return False
+        self._last = now
+        return True
