@@ -314,7 +314,7 @@ async def prepare_agent_invocation(
 
 
 async def _drive_invocation(
-    auth: UserAPIKeyAuth,  # mutable-ok: native directives update the shared request auth carrier
+    auth: UserAPIKeyAuth,
     store: AgentIdentityStore | None,
     registered: AgentResponse | None,
     target: AgentResponse | None,

@@ -3,9 +3,8 @@ from typing import Final, cast
 
 from fastapi import HTTPException, Request, status
 
-from litellm._logging import verbose_proxy_logger
 from litellm._auth import routes
-from litellm.proxy.auth import route_policy_adapter
+from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import (
     MODEL_LIST_ROUTES,
     UI_TEAM_ID,
@@ -18,6 +17,7 @@ from litellm.proxy._types import (
     ProxyException,
     UserAPIKeyAuth,
 )
+from litellm.proxy.auth import route_policy_adapter
 
 from .auth_checks_organization import (  # noqa: F401  # legacy module exports
     _user_is_org_admin,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export

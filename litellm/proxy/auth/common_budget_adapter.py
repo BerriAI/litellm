@@ -366,6 +366,16 @@ def resolve_effective_team_member_budget(
     team_default_budget: LiteLLM_BudgetTable | None,
     now: datetime,
 ) -> float | None:
+    return common_budgets.member_limit(
+        read_member_limit_facts(
+            member_budget, team_default_budget.max_budget if team_default_budget is not None else None, now
+        )
+    )
+
+
+def read_member_limit_facts(
+    member_budget: LiteLLM_BudgetTable | None, default_limit: float | None, now: datetime
+) -> MemberLimitFacts:
     expiry: Final = member_budget.temp_budget_expiry if member_budget is not None else None
     aware_expiry: Final = (
         expiry.replace(tzinfo=timezone.utc) if expiry is not None and expiry.tzinfo is None else expiry
@@ -382,15 +392,13 @@ def resolve_effective_team_member_budget(
         if aware_expiry is not None and aware_expiry.tzinfo is now.tzinfo
         else now.timestamp()
     )
-    return common_budgets.member_limit(
-        MemberLimitFacts(
-            member_limit=member_budget.max_budget if member_budget is not None else None,
-            default_limit=team_default_budget.max_budget if team_default_budget is not None else None,
-            temporary_increase=member_budget.temp_budget_increase if member_budget is not None else None,
-            expires_at=expiry_number,
-            now=now_number,
-            now_naive=now.utcoffset() is None,
-        )
+    return MemberLimitFacts(
+        member_limit=member_budget.max_budget if member_budget is not None else None,
+        default_limit=default_limit,
+        temporary_increase=member_budget.temp_budget_increase if member_budget is not None else None,
+        expires_at=expiry_number,
+        now=now_number,
+        now_naive=now.utcoffset() is None,
     )
 
 

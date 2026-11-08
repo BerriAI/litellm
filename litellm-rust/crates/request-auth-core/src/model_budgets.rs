@@ -267,8 +267,8 @@ mod tests {
         assert!(
             matches!(authorize.node, Node::Effect(Effect::AuthorizeBudgetFallback { ref model }) if model == "first")
         );
-        let result =
-            (authorize.resume.unwrap())(Answer::FallbackAccess(crate::fallback_access::Facts {
+        let result = (authorize.resume.unwrap())(Answer::FallbackAccess(Box::new(
+            crate::fallback_access::Facts {
                 refuse_agent_keys: true,
                 agent_id: Some("agent".into()),
                 key: None,
@@ -281,8 +281,9 @@ mod tests {
                 embedded_team_grants: vec![],
                 member_grants: vec![],
                 project_grants: vec![],
-            }))
-            .unwrap();
+            },
+        )))
+        .unwrap();
         assert!(matches!(
             result.node,
             Node::Outcome(Outcome::Deny {

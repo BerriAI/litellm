@@ -1,5 +1,3 @@
-from litellm._auth import common_flow
-
 # What is this?
 ## Common auth checks between jwt + key based auth
 """
@@ -28,6 +26,7 @@ from typing_extensions import NotRequired, ReadOnly, Required, TypedDict, Unpack
 
 import litellm
 from litellm._auth import access as access_policy
+from litellm._auth import common_flow
 from litellm._auth.failure import NativeAuthFailure
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
@@ -1802,30 +1801,10 @@ async def resolve_default_end_user_budget(
     key_end_user_budget_id: str | None,
     parent_otel_span: Span | None = None,
 ) -> LiteLLM_BudgetTable | None:
-    """
-    The default budget for an end user with no budget of its own.
+    from litellm.proxy.auth import budget_context_adapter
 
-    The key's ``end_user_budget_id`` takes precedence over the proxy-wide
-    ``litellm.max_end_user_budget_id``; the proxy-wide default is the fallback when the key
-    names no budget or its budget row is missing.
-    """
-    if key_end_user_budget_id is not None:
-        key_budget: Final = await get_default_end_user_budget(
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            parent_otel_span=parent_otel_span,
-            budget_id=key_end_user_budget_id,
-        )
-        if key_budget is not None:
-            return key_budget
-
-    if litellm.max_end_user_budget_id is None:
-        return None
-
-    return await get_default_end_user_budget(
-        prisma_client=prisma_client,
-        user_api_key_cache=user_api_key_cache,
-        parent_otel_span=parent_otel_span,
+    return await budget_context_adapter.resolve_default_end_user_budget(
+        prisma_client, user_api_key_cache, key_end_user_budget_id, parent_otel_span
     )
 
 
@@ -4538,23 +4517,13 @@ async def get_org_object(
     if deserialized_org is not None:
         return deserialized_org
     # else, check db
-    try:
-        query_kwargs: Final[dict[str, Mapping[str, object]]] = {"where": {"organization_id": org_id}}
-        if include_budget_table:
-            query_kwargs["include"] = {"litellm_budget_table": True}
+    query_kwargs: Final[dict[str, Mapping[str, object]]] = {"where": {"organization_id": org_id}}
+    if include_budget_table:
+        query_kwargs["include"] = {"litellm_budget_table": True}
 
-        response: Final = await _model_dump_table(OrganizationRepository(prisma_client), "organization").find_unique(
-            **query_kwargs
-        )
-    except NativeAuthFailure:
-        raise
-    except Exception:
-        # An operational failure (DB down, timeout, cache fault) is NOT the same fact as a confirmed
-        # missing row, and relabelling it as "doesn't exist" made every caller unable to tell them
-        # apart — a caller that treats absence as "this org places no restriction" then drops a real
-        # org ceiling during an outage. Propagate the real error; callers that already catch
-        # Exception are unaffected.
-        raise
+    response: Final = await _model_dump_table(OrganizationRepository(prisma_client), "organization").find_unique(
+        **query_kwargs
+    )
 
     if response is None:
         raise OrganizationNotFoundError(

@@ -559,18 +559,9 @@ async def _check_team_model_budget(
     model_max_budget_limiter: _TeamModelBudgetLimiter,
     models: list[str],
 ) -> None:
-    """Enforce the team's `model_max_budget` for every requested model the key does not override."""
-    team_model_max_budget: Final = valid_token.team_model_max_budget
-    if valid_token.team_id is None or not team_model_max_budget:
-        return
-    key_model_max_budget: Final[Mapping[str, object] | None] = valid_token.model_max_budget
-    for model_name in models:
-        await model_max_budget_limiter.is_team_within_model_budget(
-            team_id=valid_token.team_id,
-            team_model_max_budget=team_model_max_budget,
-            key_model_max_budget=key_model_max_budget,
-            model=model_name,
-        )
+    from litellm.proxy.auth import budget_context_adapter
+
+    return await budget_context_adapter.check_team_model_budget(valid_token, model_max_budget_limiter, models)
 
 
 async def _end_user_model_max_budget(
@@ -581,21 +572,11 @@ async def _end_user_model_max_budget(
     user_api_key_cache: UserApiKeyCache,
     parent_otel_span: Span | None,
 ) -> Mapping[str, object] | None:
-    budget_table: Final = (
-        end_user_object.litellm_budget_table
-        if end_user_object is not None
-        else (
-            await resolve_default_end_user_budget(
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-                key_end_user_budget_id=key_end_user_budget_id,
-                parent_otel_span=parent_otel_span,
-            )
-            if end_user_id and prisma_client is not None
-            else None
-        )
+    from litellm.proxy.auth import budget_context_adapter
+
+    return await budget_context_adapter.end_user_model_max_budget(
+        end_user_id, end_user_object, key_end_user_budget_id, prisma_client, user_api_key_cache, parent_otel_span
     )
-    return model_max_budget_of(budget_table) if budget_table is not None else None
 
 
 async def _check_end_user_model_budget(
@@ -605,15 +586,11 @@ async def _check_end_user_model_budget(
     models: Sequence[str],
     team_id: str | None,
 ) -> None:
-    if not end_user_id or not end_user_model_max_budget:
-        return
-    for model_name in models:
-        await model_max_budget_limiter.is_end_user_within_model_budget(
-            end_user_id=end_user_id,
-            end_user_model_max_budget=end_user_model_max_budget,
-            model=model_name,
-            team_id=team_id,
-        )
+    from litellm.proxy.auth import budget_context_adapter
+
+    return await budget_context_adapter.check_end_user_model_budget(
+        end_user_id, end_user_model_max_budget, model_max_budget_limiter, models, team_id
+    )
 
 
 async def _is_within_every_model_budget(
@@ -2525,6 +2502,8 @@ class _BuilderEffects:
         )
 
     async def read_team_member_budget(self, user_id: str, team_id: str) -> TeamMemberBudget | None:
+        from litellm._auth import reservation
+        from litellm.proxy.auth.common_budget_adapter import resolve_effective_team_member_budget
         from litellm.proxy.proxy_server import get_current_spend
 
         if self._prisma_client is None:
@@ -2534,9 +2513,12 @@ class _BuilderEffects:
         membership: Final = cached if cached is not None else await self._load_team_membership(user_id, team_id)
         if membership is None or membership.litellm_budget_table is None:
             return None
-        max_budget: Final = membership.litellm_budget_table.effective_max_budget(now=datetime.now(timezone.utc))
-        if max_budget is None or max_budget <= 0:
+        max_budget: Final = resolve_effective_team_member_budget(
+            membership.litellm_budget_table, None, datetime.now(timezone.utc)
+        )
+        if not reservation.counter("Member", max_budget):
             return None
+        assert max_budget is not None
         spend: Final = await get_current_spend(
             counter_key=f"spend:team_member:{user_id}:{team_id}",
             fallback_spend=self.key.team_member_spend or 0.0,
@@ -3461,70 +3443,10 @@ async def _load_team_member_default_model_budget(
     skip_budget_checks: bool,
     proxy_logging_obj: ProxyLogging | None,
 ) -> None:
-    team_metadata_value: Final[object] = getattr(team_object, "metadata", None) if team_object is not None else None
-    team_metadata: Final[Mapping[str, object] | None] = (
-        cast(  # cast-ok: team metadata is a string-keyed JSON object
-            Mapping[str, object], team_metadata_value
-        )
-        if isinstance(team_metadata_value, Mapping)
-        else None
-    )
-    team_member_budget_id: Final[object | None] = (
-        team_metadata.get("team_member_budget_id") if isinstance(team_metadata, Mapping) else None
-    )
-    if (
-        not isinstance(user_api_key_auth_obj.user_id, str)
-        or not isinstance(user_api_key_auth_obj.team_id, str)
-        or prisma_client is None
-    ):
-        return
+    from litellm.proxy.auth import budget_context_adapter
 
-    try:
-        membership: Final = await get_team_membership(
-            user_id=user_api_key_auth_obj.user_id,
-            team_id=user_api_key_auth_obj.team_id,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            proxy_logging_obj=proxy_logging_obj,
-        )
-        member_budget_row: Final = membership.litellm_budget_table if membership is not None else None
-        member_budget_value: Final[object] = (
-            getattr(member_budget_row, "model_max_budget", None) if member_budget_row is not None else None
-        )
-        if (
-            membership is not None
-            and membership.budget_id is not None
-            and membership.budget_id != team_member_budget_id
-            and isinstance(member_budget_value, Mapping)
-            and member_budget_value
-        ):
-            user_api_key_auth_obj.team_member_model_max_budget = (  # rebind-ok: auth context carries member budget downstream
-                member_budget_value
-            )
-            return
-        if not isinstance(team_member_budget_id, str):
-            return
-        team_member_default_budget: Final = await get_team_member_default_budget(
-            budget_id=team_member_budget_id,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            raise_on_lookup_error=True,
-        )
-    except NativeAuthFailure:
-        raise
-    except Exception:
-        if not skip_budget_checks:
-            raise
-        verbose_proxy_logger.warning("Skipping team-member model budget lookup after a lookup error", exc_info=True)
-        return
-
-    default_budget_value: Final[object] = (
-        getattr(team_member_default_budget, "model_max_budget", None)
-        if team_member_default_budget is not None
-        else None
-    )
-    user_api_key_auth_obj.team_member_model_max_budget = (  # rebind-ok: auth context carries default budget downstream
-        default_budget_value if isinstance(default_budget_value, Mapping) else None
+    return await budget_context_adapter.load_team_member_default_model_budget(
+        user_api_key_auth_obj, team_object, prisma_client, user_api_key_cache, skip_budget_checks, proxy_logging_obj
     )
 
 
@@ -4012,35 +3934,17 @@ async def _apply_key_end_user_default_budget_to_token(
     parent_otel_span: Span | None,
     keep_token_limits: bool,
 ) -> None:
-    """The builder's end-user pass runs before the key is resolved, so only here can the key's
-    ``end_user_budget_id`` win over the proxy-wide default on the token that reservation reads.
-    On the virtual-key path the token's end-user limits are the builder's proxy-wide defaults and
-    the key budget replaces them wholesale. With ``keep_token_limits`` (custom auth) the token's
-    limits are caps the custom auth callable set, so the key budget only fills the ones it left
-    unset."""
-    default_budget: Final = (
-        end_user_object.litellm_budget_table
-        if end_user_object is not None
-        else await resolve_default_end_user_budget(
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            key_end_user_budget_id=key_end_user_budget_id,
-            parent_otel_span=parent_otel_span,
-        )
-    )
-    if default_budget is None:
-        return
+    from litellm.proxy.auth import budget_context_adapter
 
-    if not keep_token_limits or valid_token.end_user_max_budget is None:
-        valid_token.end_user_max_budget = default_budget.max_budget
-    if not keep_token_limits or valid_token.end_user_tpm_limit is None:
-        valid_token.end_user_tpm_limit = default_budget.tpm_limit
-    if not keep_token_limits or valid_token.end_user_rpm_limit is None:
-        valid_token.end_user_rpm_limit = default_budget.rpm_limit
-    if not keep_token_limits or valid_token.end_user_tpd_limit is None:
-        valid_token.end_user_tpd_limit = default_budget.tpd_limit
-    if not keep_token_limits or valid_token.end_user_model_max_budget is None:
-        valid_token.end_user_model_max_budget = default_budget.model_max_budget
+    return await budget_context_adapter.apply_key_end_user_default_budget_to_token(
+        valid_token,
+        end_user_object,
+        key_end_user_budget_id,
+        prisma_client,
+        user_api_key_cache,
+        parent_otel_span,
+        keep_token_limits,
+    )
 
 
 async def _reserve_budget_after_common_checks(
@@ -4509,12 +4413,9 @@ def _get_temp_budget_increase(valid_token: UserAPIKeyAuth):
 def _update_key_budget_with_temp_budget_increase(
     valid_token: UserAPIKeyAuth,
 ) -> UserAPIKeyAuth:
-    if valid_token.max_budget is None:
-        return valid_token
-    temp_budget_increase: Final = _get_temp_budget_increase(valid_token)
-    if not temp_budget_increase:
-        return valid_token
-    return valid_token.model_copy(update={"max_budget": valid_token.max_budget + temp_budget_increase})
+    from litellm.proxy.auth import key_budget_context_adapter
+
+    return key_budget_context_adapter.update_key_budget_with_temp_budget_increase(valid_token)
 
 
 async def _lookup_end_user_and_apply_budget(

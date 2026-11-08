@@ -82,3 +82,42 @@ def test_window_parse_and_warning_timing(duration: bool, limit: float | None, pa
         else "WarnWindow"
     )
     assert reservation.action(reservation.Window(duration, limit, parsed)).kind == expected
+
+
+@pytest.mark.parametrize("scope", ("EndUser", "Organization", "Project"))
+@pytest.mark.parametrize("primary", (None, "", "primary"))
+@pytest.mark.parametrize("fallback", (None, "", "fallback"))
+def test_reservation_identity_keeps_empty_scope_semantics(
+    scope: str, primary: str | None, fallback: str | None
+) -> None:
+    from pydantic import TypeAdapter
+
+    facts: Final = TypeAdapter(reservation.Identity).validate_python(
+        {"scope": scope, "primary": primary, "fallback": fallback}
+    )
+    expected: Final = (
+        primary or fallback
+        if scope == "EndUser"
+        else primary
+        if scope == "Project" or primary is not None
+        else fallback
+    )
+    assert reservation.identity(facts) == expected
+
+
+@pytest.mark.parametrize("team", (False, True))
+@pytest.mark.parametrize("user", (False, True))
+@pytest.mark.parametrize("team_id", (None, "", "team"))
+@pytest.mark.parametrize("user_id", (None, "", "user"))
+def test_reservation_membership_requires_both_subjects(
+    team: bool, user: bool, team_id: str | None, user_id: str | None
+) -> None:
+    expected: Final = "ReadMember" if team and team_id is not None and user and user_id is not None else "Skip"
+    assert reservation.action(reservation.MemberGate(team, team_id, user, user_id)).kind == expected
+
+
+@pytest.mark.parametrize("cap", (None, -1.0, 0.0, 1.0, inf, nan))
+@pytest.mark.parametrize("read", (False, True))
+def test_member_default_read_only_when_own_cap_absent(cap: float | None, read: bool) -> None:
+    expected: Final = "ReadDefault" if cap is None and not read else "ReadCap"
+    assert reservation.action(reservation.MemberCap(cap, read)).kind == expected

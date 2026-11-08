@@ -30,6 +30,28 @@ pub enum Facts {
         limit: Option<f64>,
         start_present: Option<bool>,
     },
+    Identity {
+        scope: IdentityScope,
+        primary: Option<String>,
+        fallback: Option<String>,
+    },
+    MemberGate {
+        team_present: bool,
+        team_id: Option<String>,
+        user_present: bool,
+        user_id: Option<String>,
+    },
+    MemberCap {
+        member_limit: Option<f64>,
+        default_read: bool,
+    },
+}
+
+#[derive(Clone, Copy, Deserialize, strum::VariantArray)]
+pub enum IdentityScope {
+    EndUser,
+    Organization,
+    Project,
 }
 
 #[derive(Clone, Copy, Deserialize, strum::VariantArray)]
@@ -58,12 +80,49 @@ pub enum Decision {
     ReadStart,
     WarnWindow,
     AppendWindow,
+    ReadMember,
+    ReadDefault,
+    ReadCap,
+    Identity { id: Option<String> },
     Sources { key: bool, team: bool, user: bool },
     Counter { include: bool },
 }
 
 pub fn decide(facts: Facts) -> Decision {
     match facts {
+        Facts::Identity {
+            scope,
+            primary,
+            fallback,
+        } => Decision::Identity {
+            id: match scope {
+                IdentityScope::EndUser => primary.filter(|id| !id.is_empty()).or(fallback),
+                IdentityScope::Organization => primary.or(fallback),
+                IdentityScope::Project => primary,
+            },
+        },
+        Facts::MemberGate {
+            team_present,
+            team_id,
+            user_present,
+            user_id,
+        } => {
+            if team_present && team_id.is_some() && user_present && user_id.is_some() {
+                Decision::ReadMember
+            } else {
+                Decision::Skip
+            }
+        }
+        Facts::MemberCap {
+            member_limit,
+            default_read,
+        } => {
+            if member_limit.is_none() && !default_read {
+                Decision::ReadDefault
+            } else {
+                Decision::ReadCap
+            }
+        }
         Facts::Gate {
             token_present,
             llm_route,
@@ -150,6 +209,69 @@ pub fn decide(facts: Facts) -> Decision {
 mod tests {
     use super::*;
     use rstest::rstest;
+
+    #[rstest]
+    #[case::customer_empty(IdentityScope::EndUser, Some(""), Some("fallback"), Some("fallback"))]
+    #[case::org_empty(IdentityScope::Organization, Some(""), Some("fallback"), Some(""))]
+    #[case::org_fallback(IdentityScope::Organization, None, Some("fallback"), Some("fallback"))]
+    #[case::project_no_fallback(IdentityScope::Project, None, Some("fallback"), None)]
+    fn identities(
+        #[case] scope: IdentityScope,
+        #[case] primary: Option<&str>,
+        #[case] fallback: Option<&str>,
+        #[case] expected: Option<&str>,
+    ) {
+        assert_eq!(
+            decide(Facts::Identity {
+                scope,
+                primary: primary.map(str::to_owned),
+                fallback: fallback.map(str::to_owned)
+            }),
+            Decision::Identity {
+                id: expected.map(str::to_owned)
+            }
+        );
+    }
+
+    #[rstest]
+    #[case::member_cap(Some(0.0), false, Decision::ReadCap)]
+    #[case::default_needed(None, false, Decision::ReadDefault)]
+    #[case::default_read(None, true, Decision::ReadCap)]
+    fn member_cap(
+        #[case] member_limit: Option<f64>,
+        #[case] default_read: bool,
+        #[case] expected: Decision,
+    ) {
+        assert_eq!(
+            decide(Facts::MemberCap {
+                member_limit,
+                default_read
+            }),
+            expected
+        );
+    }
+
+    #[rstest]
+    #[case::all_present(true, Some(""), true, Some(""), Decision::ReadMember)]
+    #[case::missing_team(true, None, true, Some("user"), Decision::Skip)]
+    #[case::missing_user(true, Some("team"), false, Some("user"), Decision::Skip)]
+    fn member_gate(
+        #[case] team_present: bool,
+        #[case] team_id: Option<&str>,
+        #[case] user_present: bool,
+        #[case] user_id: Option<&str>,
+        #[case] expected: Decision,
+    ) {
+        assert_eq!(
+            decide(Facts::MemberGate {
+                team_present,
+                team_id: team_id.map(str::to_owned),
+                user_present,
+                user_id: user_id.map(str::to_owned)
+            }),
+            expected
+        );
+    }
 
     #[rstest]
     #[case::key_nan(Scope::Key, f64::NAN, false)]

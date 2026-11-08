@@ -14,6 +14,7 @@ from fastapi import HTTPException, status
 from pydantic import ConfigDict, TypeAdapter
 
 import litellm
+from litellm._auth import common_budgets
 from litellm._auth import reservation as reservation_policy
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
@@ -29,6 +30,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.auth_utils import get_model_from_request
 from litellm.proxy.auth.budget_throttle import should_throttle_budget_exceeded
+from litellm.proxy.auth.common_budget_adapter import read_member_limit_facts
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.common_utils.user_api_key_cache import (
     AUTH_OBJECTS_TARGET,
@@ -625,7 +627,9 @@ async def _get_end_user_budget_counter(
     end_user_id: str | None,
     end_user_object: object,
 ) -> _BudgetCounter | None:
-    end_user_id = end_user_id or valid_token.end_user_id
+    end_user_id = reservation_policy.identity(
+        reservation_policy.Identity("EndUser", end_user_id, valid_token.end_user_id)
+    )
     if end_user_id is None:
         return None
 
@@ -754,8 +758,19 @@ async def _get_team_member_budget_counter(
     user_object: LiteLLM_UserTable | None,
     user_api_key_cache: UserApiKeyCache,
 ) -> _BudgetCounter | None:
-    if team_object is None or team_object.team_id is None or user_object is None or valid_token.user_id is None:
+    if (
+        reservation_policy.action(
+            reservation_policy.MemberGate(
+                team_object is not None,
+                team_object.team_id if team_object is not None else None,
+                user_object is not None,
+                valid_token.user_id,
+            )
+        ).kind
+        == "Skip"
+    ):
         return None
+    assert team_object is not None and valid_token.user_id is not None
 
     membership_cache_key: Final = team_membership_reservation_cache_key(
         user_id=valid_token.user_id, team_id=team_object.team_id
@@ -771,20 +786,27 @@ async def _get_team_member_budget_counter(
 
     member_budget_row: Final = team_membership.litellm_budget_table if team_membership is not None else None
     now: Final = datetime.now(timezone.utc)
-    team_member_budget: float | None = None
-    if member_budget_row is not None and member_budget_row.max_budget is not None:
-        team_member_budget = member_budget_row.effective_max_budget(now=now)
-    else:
+    default_cap: float | None = None
+    if (
+        reservation_policy.action(
+            reservation_policy.MemberCap(member_budget_row.max_budget if member_budget_row is not None else None)
+        ).kind
+        == "ReadDefault"
+    ):
         default_budget_id: Final = (team_object.metadata or {}).get("team_member_budget_id")
         if isinstance(default_budget_id, str):
             default_budget: Final = _CACHED_VALUE.validate_python(
                 await user_api_key_cache.async_get_cache(key=f"team_member_default_budget:{default_budget_id}")
             )
-            default_cap: Final = _to_float(_get_value(default_budget, "max_budget"))
-            if default_cap is not None and default_cap > 0:
-                team_member_budget = default_cap + (
-                    member_budget_row.active_temp_budget_increase(now=now) if member_budget_row is not None else 0.0
-                )
+            default_cap = _to_float(_get_value(default_budget, "max_budget"))
+
+    team_member_budget: Final = common_budgets.member_limit(
+        read_member_limit_facts(
+            member_budget_row,
+            default_cap if reservation_policy.counter("Key", default_cap) else None,
+            now,
+        )
+    )
 
     if not reservation_policy.counter("Member", team_member_budget):
         return None
@@ -807,11 +829,11 @@ async def _get_org_budget_counter(
     team_object: LiteLLM_TeamTable | None,
     user_api_key_cache: UserApiKeyCache,
 ) -> _BudgetCounter | None:
-    org_id: str | None = None
-    if valid_token.org_id is not None:
-        org_id = valid_token.org_id
-    elif team_object is not None and team_object.organization_id is not None:
-        org_id = team_object.organization_id
+    org_id: Final = reservation_policy.identity(
+        reservation_policy.Identity(
+            "Organization", valid_token.org_id, team_object.organization_id if team_object is not None else None
+        )
+    )
     if org_id is None:
         return None
 

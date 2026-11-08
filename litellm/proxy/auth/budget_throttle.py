@@ -10,39 +10,20 @@ so it never compounds across requests.
 """
 
 import math
-from typing import Final
 
-import litellm
 from litellm.proxy._types import UserAPIKeyAuth
 
 
 def budget_throttle_percentage() -> float | None:
-    """
-    The global throttle percentage, or None when throttling is disabled /
-    misconfigured (in which case an over-budget key is hard-blocked, the safe
-    default).
-    """
-    pct: Final = litellm.budget_exceeded_throttle_percentage
-    if not isinstance(pct, (int, float)) or isinstance(pct, bool):
-        return None
-    if not 0 < pct <= 1:
-        return None
-    return float(pct)
+    from litellm.proxy.auth import key_budget_context_adapter
+
+    return key_budget_context_adapter.budget_throttle_percentage()
 
 
 def should_throttle_budget_exceeded(valid_token: UserAPIKeyAuth) -> bool:
-    """
-    True when a key that exceeded its own ``max_budget`` should be throttled
-    rather than blocked: it opted in, a valid global percentage is set, and the
-    key has a TPM or RPM limit to scale down. A key with neither limit has
-    nothing to throttle, so it stays hard-blocked (the safe default) rather than
-    serving unlimited requests past its budget.
-    """
-    if (valid_token.metadata or {}).get("throttle_on_budget_exceeded") is not True:
-        return False
-    if valid_token.tpm_limit is None and valid_token.rpm_limit is None:
-        return False
-    return budget_throttle_percentage() is not None
+    from litellm.proxy.auth import key_budget_context_adapter
+
+    return key_budget_context_adapter.should_throttle_budget_exceeded(valid_token)
 
 
 def throttled_limit(limit: int | None, pct: float | None) -> int | None:

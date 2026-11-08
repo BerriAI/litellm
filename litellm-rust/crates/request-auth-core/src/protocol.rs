@@ -296,8 +296,8 @@ pub enum Node {
 #[serde(tag = "kind", content = "value")]
 pub enum Answer {
     ModelAccess(crate::key_model_access::Facts),
-    FallbackAccess(crate::fallback_access::Facts),
-    Candidate(crate::fallback_candidate::Facts),
+    FallbackAccess(Box<crate::fallback_access::Facts>),
+    Candidate(Box<crate::fallback_candidate::Facts>),
     Unit,
     Bool(bool),
     Exemption(crate::budget_pricing::ExemptionFacts),
@@ -332,8 +332,6 @@ macro_rules! answer {
 }
 answer!(bool, Bool);
 answer!(crate::key_model_access::Facts, ModelAccess);
-answer!(crate::fallback_access::Facts, FallbackAccess);
-answer!(crate::fallback_candidate::Facts, Candidate);
 answer!(crate::budget_pricing::ExemptionFacts, Exemption);
 answer!(Option<PresentedKey>, Presented);
 answer!(KeyFacts, Key);
@@ -346,6 +344,24 @@ answer!(Option<ModelBudgetExceeded>, Exceeded);
 answer!(ModelBudgetRead, ModelBudgetData);
 answer!(TeamMemberModelBudgetScope, TeamScope);
 answer!(Vec<FallbackTarget>, Targets);
+
+impl FromAnswer for crate::fallback_candidate::Facts {
+    fn from_answer(answer: Answer) -> Result<Self, Error> {
+        match answer {
+            Answer::Candidate(value) => Ok(*value),
+            _ => Err(Error::InvalidAnswer),
+        }
+    }
+}
+
+impl FromAnswer for crate::fallback_access::Facts {
+    fn from_answer(answer: Answer) -> Result<Self, Error> {
+        match answer {
+            Answer::FallbackAccess(value) => Ok(*value),
+            _ => Err(Error::InvalidAnswer),
+        }
+    }
+}
 
 impl FromAnswer for () {
     fn from_answer(answer: Answer) -> Result<Self, Error> {

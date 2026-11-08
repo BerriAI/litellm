@@ -1,6 +1,6 @@
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
-from typing import Final, Protocol, cast
+from typing import Final, Protocol
 
 from pydantic import BaseModel
 
@@ -91,9 +91,9 @@ class _Sources:
 
 
 def _mapping(raw: object) -> Mapping[str, object] | None:
-    if not isinstance(raw, Mapping):
-        return None
-    return cast(Mapping[str, object], raw)  # cast-ok: preserve opaque mapping contents
+    from litellm.proxy.auth.budget_context_adapter import mapping_value
+
+    return mapping_value(raw)
 
 
 def _budget_sources(token: UserAPIKeyAuth) -> tuple[_BudgetSource, ...]:

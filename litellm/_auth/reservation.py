@@ -46,6 +46,33 @@ class Window:
 
 
 @dataclass(frozen=True, slots=True)
+class Identity:
+    scope: Literal["EndUser", "Organization", "Project"]
+    primary: str | None
+    fallback: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class MemberGate:
+    team_present: bool
+    team_id: str | None
+    user_present: bool
+    user_id: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class MemberCap:
+    member_limit: float | None
+    default_read: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class IdentityPlan:
+    id: str | None
+    kind: Literal["Identity"] = "Identity"
+
+
+@dataclass(frozen=True, slots=True)
 class Action:
     kind: Literal[
         "ReadRoute",
@@ -58,6 +85,9 @@ class Action:
         "ReadStart",
         "WarnWindow",
         "AppendWindow",
+        "ReadMember",
+        "ReadDefault",
+        "ReadCap",
     ]
 
 
@@ -78,10 +108,11 @@ class CounterPlan:
 _ACTION: Final = TypeAdapter(Action)
 _SOURCES: Final = TypeAdapter(SourcePlan)
 _COUNTER: Final = TypeAdapter(CounterPlan)
+_IDENTITY: Final = TypeAdapter(IdentityPlan)
 
 
 @native_boundary
-def action(facts: Gate | Window) -> Action:
+def action(facts: Gate | Window | MemberGate | MemberCap) -> Action:
     return _ACTION.validate_python(_native.request_auth_reservation(encode_facts(facts)))
 
 
@@ -93,3 +124,8 @@ def sources(facts: Sources) -> SourcePlan:
 @native_boundary
 def counter(scope: Scope, limit: float | None) -> bool:
     return _COUNTER.validate_python(_native.request_auth_reservation(encode_facts(Counter(scope, limit)))).include
+
+
+@native_boundary
+def identity(facts: Identity) -> str | None:
+    return _IDENTITY.validate_python(_native.request_auth_reservation(encode_facts(facts))).id
