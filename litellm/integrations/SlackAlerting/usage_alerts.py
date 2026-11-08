@@ -134,7 +134,7 @@ class UsageAlertDelivery:
     async def _send_email(recipient: str, subject: str, html: str) -> None:
         from litellm.proxy.utils import send_email
 
-        await send_email(receiver_email=recipient, subject=subject, html=html, raise_on_error=True, attempt_timeout=2)
+        await send_email(receiver_email=recipient, subject=subject, html=html, raise_on_error=True, attempt_timeout=30)
 
     async def _post(self, webhook: str, message: str) -> None:
         response: Final[Response] = await self._slack.async_http_handler.post(  # pyright: ignore[reportUnknownMemberType]  # legacy HTTP signature; supplied arguments are concrete

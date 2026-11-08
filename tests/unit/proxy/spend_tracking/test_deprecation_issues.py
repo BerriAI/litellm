@@ -6,6 +6,7 @@ from litellm.proxy.spend_tracking.deprecation_issues import deprecation_candidat
 from litellm.types.proxy.model_deprecation import (
     DeprecationAlertState,
     DeprecationAlertStatus,
+    DeprecationStatus,
     ModelDeprecationInfo,
     ModelDeprecationUsage,
     SuccessorModelSource,
@@ -15,36 +16,43 @@ NOW = datetime(2026, 11, 5, 10, tzinfo=timezone.utc)
 RETIREMENT = date(2026, 11, 20)
 
 
-def model(**updates):
+def model(
+    *,
+    model_name: str = "public-alias",
+    litellm_model: str = "example/retiring-model",
+    deprecation_date: date = RETIREMENT,
+    days_until_deprecation: int = 15,
+    status: DeprecationStatus = "imminent",
+    successor_model: str | None = None,
+    successor_model_source: SuccessorModelSource | None = None,
+) -> ModelDeprecationInfo:
     return ModelDeprecationInfo(
-        **{
-            "model_name": "public-alias",
-            "litellm_model": "example/retiring-model",
-            "litellm_provider": "example",
-            "deprecation_date": RETIREMENT,
-            "days_until_deprecation": 15,
-            "status": "imminent",
-            **updates,
-        }
+        model_name=model_name,
+        litellm_model=litellm_model,
+        litellm_provider="example",
+        deprecation_date=deprecation_date,
+        days_until_deprecation=days_until_deprecation,
+        status=status,
+        successor_model=successor_model,
+        successor_model_source=successor_model_source,
     )
 
 
-def snapshot(*models, upcoming=()):
+def snapshot(
+    *models: ModelDeprecationInfo, upcoming: tuple[ModelDeprecationInfo, ...] = ()
+) -> tuple[ModelDeprecationInfo, ...]:
     return (*models, *upcoming)
 
 
-def usage(name="example/retiring-model", **updates):
+def usage(name: str = "example/retiring-model") -> ModelDeprecationUsage:
     return ModelDeprecationUsage(
-        **{
-            "model": name,
-            "requests": 700,
-            "last_used_date": NOW.date(),
-            "last_day_requests": 30,
-            "keys": 12,
-            "users": 4,
-            "teams": 2,
-            **updates,
-        }
+        model=name,
+        requests=700,
+        last_used_date=NOW.date(),
+        last_day_requests=30,
+        keys=12,
+        users=4,
+        teams=2,
     )
 
 
