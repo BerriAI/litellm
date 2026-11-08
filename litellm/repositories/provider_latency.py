@@ -1,13 +1,14 @@
 """Confirm shared latency changes using existing daily key/model counters."""
 
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 from typing import TYPE_CHECKING, Final, cast  # noqa: TID251  # generated Prisma structural interface
 
 from pydantic import BaseModel, Field, TypeAdapter
 
 from litellm.constants import PTU_SENTINEL_API_KEY
 from litellm.repositories.daily_activity_buckets import api_key_bucket, api_key_from_bucket
+from litellm.repositories.usage_alert_health import UsageAlertHealthRepository
 from litellm.repositories.usage_alert_metrics import MetricsDatabase
 from litellm.types.proxy.issues import AlertCohort, AlertComparison, AlertImpact, AlertModelPair
 from litellm.types.proxy.usage_alerts import AlertRuleInput, UsageAlertMetricPoint, UsageAlertScope
@@ -274,6 +275,11 @@ class ProviderLatencyRepository:
         return frozenset(api_key_bucket(row.entity_id) if scope_type == "key" else row.entity_id for row in rows)
 
     async def cohort_recovered(self, pairs: tuple[AlertModelPair, ...], day: date, rule: AlertRuleInput) -> bool:
+        coverage: Final = await UsageAlertHealthRepository(self._database).coverage(
+            "user", datetime.combine(day, time(), tzinfo=timezone.utc)
+        )
+        if not coverage.after_grace:
+            return False
         arguments: Final = _arguments(pairs, day, rule)
         rows: Final = TypeAdapter(tuple[_Recovery, ...]).validate_python(
             await self._database.query_raw(_RECOVERY_QUERY, *arguments)
