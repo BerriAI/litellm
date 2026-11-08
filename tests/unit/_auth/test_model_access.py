@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from dataclasses import replace
 from typing import Final
 
@@ -177,7 +178,9 @@ _CASES: Final = (
 
 @pytest.mark.parametrize("policy", (reference.model_access, native.model_access), ids=("reference", "native"))
 @pytest.mark.parametrize(("facts", "kind"), _CASES)
-def test_model_policy_case_table(policy, facts: Facts, kind: str) -> None:
+def test_model_policy_case_table(
+    policy: Callable[[Facts], native.ModelAccessDecision], facts: Facts, kind: str
+) -> None:
     decision: Final = policy(facts)
     assert decision.kind == kind
     assert decision == reference.model_access(facts)

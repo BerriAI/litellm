@@ -1,7 +1,7 @@
 import itertools
 import re
-from collections.abc import Collection, Iterable, Mapping
-from typing import Final, cast
+from collections.abc import Collection, Iterable, Mapping, Sequence
+from typing import Final, Protocol, cast
 
 from fastapi import HTTPException, Request, status
 
@@ -19,10 +19,23 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 
-from litellm.proxy.auth.auth_checks_organization import (  # noqa: F401  # legacy module exports
-    _user_is_org_admin,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
-    user_is_org_admin,
-)
+from litellm.proxy.auth.auth_checks_organization import user_is_org_admin  # pyright: ignore[reportUnknownVariableType]  # preserve the original organization lookup
+
+
+class _ReferenceToken(Protocol):
+    @property
+    def allowed_routes(self) -> Sequence[str] | None: ...
+
+    @property
+    def metadata(self) -> Mapping[str, object]: ...
+
+    @property
+    def team_metadata(self) -> Mapping[str, object] | None: ...
+
+
+def _token(value: UserAPIKeyAuth) -> _ReferenceToken:
+    return cast(_ReferenceToken, value)
+
 
 # Management write routes denied to PROXY_ADMIN_VIEW_ONLY. Adding a new write
 # endpoint to a management router REQUIRES adding it here too — the surrounding
@@ -144,25 +157,26 @@ class RouteChecks:
         """
         Raises Exception if Virtual Key is not allowed to call the route
         """
+        token: Final = _token(valid_token)
 
-        # Only check if valid_token.allowed_routes is set and is a list with at least one item
-        if valid_token.allowed_routes is None:
+        # Only check if token.allowed_routes is set and is a list with at least one item
+        if token.allowed_routes is None:
             return True
-        if not isinstance(valid_token.allowed_routes, list):
+        if not isinstance(token.allowed_routes, list):
             return True
-        if len(valid_token.allowed_routes) == 0:
+        if len(token.allowed_routes) == 0:
             return True
 
         denied_auth_enforced_pass_through_route = False
 
         # explicit check for allowed routes (exact match or prefix match)
-        for allowed_route in valid_token.allowed_routes:
+        for allowed_route in token.allowed_routes:
             if RouteChecks._route_matches_allowed_route(route=route, allowed_route=allowed_route):
                 return True
 
         ## check if 'allowed_route' is a field name in LiteLLMRoutes
-        if any(allowed_route in LiteLLMRoutes._member_names_ for allowed_route in valid_token.allowed_routes):
-            for allowed_route in valid_token.allowed_routes:
+        if any(allowed_route in LiteLLMRoutes._member_names_ for allowed_route in token.allowed_routes):
+            for allowed_route in token.allowed_routes:
                 if allowed_route in LiteLLMRoutes._member_names_:
                     if RouteChecks.check_route_access(
                         route=route,
@@ -234,14 +248,14 @@ class RouteChecks:
                             return True
 
         # check if wildcard pattern is allowed
-        for allowed_route in valid_token.allowed_routes:
+        for allowed_route in token.allowed_routes:
             if RouteChecks.route_matches_wildcard_pattern(route=route, pattern=allowed_route):
                 return True
 
         if denied_auth_enforced_pass_through_route:
             raise RouteChecks._auth_pass_through_denied_exception(route=route)
 
-        if valid_token.metadata.get("password_reset_required") is True:
+        if token.metadata.get("password_reset_required") is True:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=(
@@ -253,7 +267,7 @@ class RouteChecks:
 
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"Virtual key is not allowed to call this route. Only allowed to call routes: {valid_token.allowed_routes}. Tried to call route: {route}",
+            detail=f"Virtual key is not allowed to call this route. Only allowed to call routes: {token.allowed_routes}. Tried to call route: {route}",
         )
 
     @staticmethod
@@ -316,11 +330,12 @@ class RouteChecks:
         route: str,
         request: Request,
         valid_token: UserAPIKeyAuth,
-        request_data: dict,
+        request_data: Mapping[str, object] | None,
     ):
         """
         Checks if Non Proxy Admin User is allowed to access the route
         """
+        token: Final = _token(valid_token)
 
         # Check user has defined custom admin routes
         RouteChecks.custom_admin_only_route_check(
@@ -386,7 +401,7 @@ class RouteChecks:
                 RouteChecks.check_route_access(route=route, allowed_routes=LiteLLMRoutes.internal_user_routes.value)
                 or RouteChecks.is_self_scoped_credential_route(route=route, request=request)
             )
-            or user_is_org_admin(request_data=request_data, user_object=user_obj)
+            or user_is_org_admin(request_data=request_data, user_object=user_obj)  # pyright: ignore[reportArgumentType]  # preserve the legacy request dictionary contract in this reference
             and RouteChecks.check_route_access(route=route, allowed_routes=LiteLLMRoutes.org_admin_allowed_routes.value)
             or _user_role == LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value
             and RouteChecks.check_route_access(
@@ -405,10 +420,10 @@ class RouteChecks:
             )
         ):
             pass
-        elif valid_token.allowed_routes is not None:
+        elif token.allowed_routes is not None:
             # check if route is in allowed_routes (exact match or prefix match)
             route_allowed = False
-            for allowed_route in valid_token.allowed_routes:
+            for allowed_route in token.allowed_routes:
                 if RouteChecks._route_matches_allowed_route(route=route, allowed_route=allowed_route):
                     route_allowed = True
                     break
@@ -424,7 +439,7 @@ class RouteChecks:
 
     @staticmethod
     def custom_admin_only_route_check(route: str):
-        from litellm.proxy.proxy_server import general_settings, premium_user
+        from litellm.proxy.proxy_server import general_settings, premium_user  # pyright: ignore[reportUnknownVariableType]  # preserve the legacy settings import in this reference
 
         if "admin_only_routes" in general_settings:
             if premium_user is not True:
@@ -455,7 +470,7 @@ class RouteChecks:
             - False: if route is not an OpenAI route
         """
         # Ensure route is a string before performing checks
-        if not isinstance(route, str):
+        if not isinstance(route, str):  # pyright: ignore[reportUnnecessaryIsInstance]  # reference retains the legacy runtime validation
             return False
 
         if route in LiteLLMRoutes.openai_routes.value:
@@ -574,7 +589,7 @@ class RouteChecks:
         route='/openai/deployments/vertex_ai/gemini-1.5-flash/chat/completions'
         """
         # Ensure route is a string before attempting regex matching
-        if not isinstance(route, str):
+        if not isinstance(route, str):  # pyright: ignore[reportUnnecessaryIsInstance]  # reference retains the legacy runtime validation
             return False
         # Add support for deployment and engine model paths
         deployment_pattern: Final = r"^/openai/deployments/[^/]+/[^/]+/chat/completions$"
@@ -600,10 +615,10 @@ class RouteChecks:
         - returns: False, pattern is "/key/{token_id}/regenerate"
         """
         # Ensure route is a string before attempting regex matching
-        if not isinstance(route, str):
+        if not isinstance(route, str):  # pyright: ignore[reportUnnecessaryIsInstance]  # reference retains the legacy runtime validation
             return False
 
-        def _placeholder_to_regex(match: re.Match) -> str:
+        def _placeholder_to_regex(match: re.Match[str]) -> str:
             placeholder: Final = match.group(0).strip("{}")
             if not placeholder.endswith(":path"):
                 return r"[^/]+"
@@ -848,9 +863,10 @@ class RouteChecks:
 
     @staticmethod
     def _raise_if_passthrough_route_denied(route: str, valid_token: UserAPIKeyAuth) -> None:
+        token: Final = _token(valid_token)
         denied_route: Final = RouteChecks.matching_denied_passthrough_route(
             route=route,
-            metadata_sources=(valid_token.metadata, valid_token.team_metadata),
+            metadata_sources=(token.metadata, token.team_metadata),
         )
         if denied_route is not None:
             raise RouteChecks.passthrough_route_denied_exception(route=route, denied_route=denied_route)
@@ -902,9 +918,10 @@ class RouteChecks:
         Check if route is a passthrough route.
         Supports both exact match and prefix match.
         """
-        metadata: Final = user_api_key_dict.metadata
-        team_metadata: Final = user_api_key_dict.team_metadata or {}
-        if metadata is None and team_metadata is None:
+        token: Final = _token(user_api_key_dict)
+        metadata: Final = token.metadata
+        team_metadata: Final = token.team_metadata or {}
+        if metadata is None and team_metadata is None:  # pyright: ignore[reportUnnecessaryComparison]  # reference retains the legacy runtime validation
             return False
         if "allowed_passthrough_routes" not in metadata and "allowed_passthrough_routes" not in team_metadata:
             return False
@@ -914,8 +931,9 @@ class RouteChecks:
         ):
             return False
 
-        allowed_passthrough_routes: Final = (
-            metadata.get("allowed_passthrough_routes") or team_metadata.get("allowed_passthrough_routes") or []
+        allowed_passthrough_routes: Final = cast(
+            Sequence[str],
+            metadata.get("allowed_passthrough_routes") or team_metadata.get("allowed_passthrough_routes") or [],
         )
 
         # Check if route matches any allowed passthrough route (exact or prefix match)
@@ -937,7 +955,7 @@ class RouteChecks:
             bool: True if `thread` or `assistant` is in the request path, False otherwise
         """
         # Inline import — auth_utils participates in a proxy import cycle.
-        from .auth_utils import get_request_route  # noqa: PLC0415
+        from litellm.proxy.auth.auth_utils import get_request_route
 
         route: Final = get_request_route(request)
         if "thread" in route or "assistant" in route:
@@ -1001,7 +1019,7 @@ class RouteChecks:
     def _check_proxy_admin_viewer_access(
         route: str,
         _user_role: str,
-        request_data: dict,
+        request_data: Mapping[str, object] | None,
         request: Request | None = None,
     ) -> None:
         """

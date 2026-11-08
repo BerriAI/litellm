@@ -240,41 +240,66 @@ pub(crate) fn request_auth_litellm_header_token(value: &str) -> String {
 }
 
 #[pyfunction]
-pub(crate) fn request_auth_route_access(py: Python<'_>, request: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
+pub(crate) fn request_auth_route_access(
+    py: Python<'_>,
+    request: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
     let request: core::route_access::Request = from_py(request)?;
-    let decision = py.detach(move || core::route_access::decide(request)).map_err(map_error)?;
+    let decision = py
+        .detach(move || core::route_access::decide(request))
+        .map_err(map_error)?;
     to_py(py, &decision)
 }
 
 #[pyfunction]
-pub(crate) fn request_auth_org_route(py: Python<'_>, facts: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
+pub(crate) fn request_auth_org_route(
+    py: Python<'_>,
+    facts: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
     let facts: core::org_routes::Facts = from_py(facts)?;
     to_py(py, &py.detach(move || core::org_routes::decide(facts)))
 }
 
 #[pyfunction]
-pub(crate) fn request_auth_org_admin(py: Python<'_>, memberships: &Bound<'_, PyAny>, organizations: Vec<String>) -> PyResult<bool> {
+pub(crate) fn request_auth_org_admin(
+    py: Python<'_>,
+    memberships: &Bound<'_, PyAny>,
+    organizations: Vec<String>,
+) -> PyResult<bool> {
     let memberships: Vec<core::org_routes::Membership> = from_py(memberships)?;
     Ok(py.detach(move || core::org_routes::user_is_admin(&memberships, &organizations)))
 }
 
 #[pyfunction]
-pub(crate) fn request_auth_model_access(py: Python<'_>, request: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
+pub(crate) fn request_auth_model_access(
+    py: Python<'_>,
+    request: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
     let request: core::model_access::Request = from_py(request)?;
-    let decision = py.detach(move || core::model_access::decide(request)).map_err(map_error)?;
+    let decision = py
+        .detach(move || core::model_access::decide(request))
+        .map_err(map_error)?;
     to_py(py, &decision)
 }
 
 #[pyfunction]
-pub(crate) fn request_auth_model_groups(py: Python<'_>, facts: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
+pub(crate) fn request_auth_model_groups(
+    py: Python<'_>,
+    facts: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
     let facts: core::model_groups::Facts = from_py(facts)?;
     to_py(py, &py.detach(move || core::model_groups::decide(facts)))
 }
 
 #[pyfunction]
-pub(crate) fn request_auth_fallback_access(py: Python<'_>, facts: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
+pub(crate) fn request_auth_fallback_access(
+    py: Python<'_>,
+    facts: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
     let facts: core::fallback_access::Facts = from_py(facts)?;
-    let decision = py.detach(move || core::fallback_access::decide(facts)).map_err(map_error)?;
+    let decision = py
+        .detach(move || core::fallback_access::decide(facts))
+        .map_err(map_error)?;
     to_py(py, &decision)
 }
 
@@ -287,5 +312,29 @@ pub(crate) fn request_auth_budget_exemption(
     to_py(
         py,
         &py.detach(move || core::budget_pricing::exemption(&facts)),
+    )
+}
+
+#[pyfunction]
+pub(crate) fn request_auth_key_model_access(
+    py: Python<'_>,
+    facts: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    let facts: core::key_model_access::Facts = from_py(facts)?;
+    let decision = py
+        .detach(move || core::key_model_access::decide(facts))
+        .map_err(map_error)?;
+    to_py(py, &decision)
+}
+
+#[pyfunction]
+pub(crate) fn request_auth_unpriced_model(
+    py: Python<'_>,
+    facts: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    let facts: core::unpriced_models::Facts = from_py(facts)?;
+    to_py(
+        py,
+        &py.detach(move || core::unpriced_models::decide(&facts)),
     )
 }

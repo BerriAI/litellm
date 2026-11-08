@@ -50,6 +50,7 @@ mod _native {
         request_auth_budgets,
         request_auth_common_budget,
         request_auth_fallback_access,
+        request_auth_key_model_access,
         request_auth_litellm_header_token,
         request_auth_managed,
         request_auth_member_limit,
@@ -65,6 +66,7 @@ mod _native {
         request_auth_select_api_key,
         request_auth_select_websocket_api_key,
         request_auth_start,
+        request_auth_unpriced_model,
     };
     #[pymodule_export]
     use crate::router::{RouterCall, RouterCoreHandle};

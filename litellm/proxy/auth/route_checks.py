@@ -205,7 +205,9 @@ class RouteChecks:
         valid_token: UserAPIKeyAuth,
         request_data: dict,
     ):
-        return route_policy_adapter.check_non_admin_route(user_obj, _user_role, route, request, valid_token, request_data)
+        return route_policy_adapter.check_non_admin_route(
+            user_obj, _user_role, route, request, valid_token, request_data
+        )
 
     @staticmethod
     def custom_admin_only_route_check(route: str):
@@ -406,7 +408,9 @@ class RouteChecks:
 
     @staticmethod
     def check_passthrough_route_access(route: str, user_api_key_dict: UserAPIKeyAuth) -> bool:
-        return routes.passthrough_route(routes.RouteContext(route), route_policy_adapter.passthrough_facts(route, user_api_key_dict)).allowed
+        return routes.passthrough_route(
+            routes.RouteContext(route), route_policy_adapter.passthrough_facts(route, user_api_key_dict)
+        ).allowed
 
     @staticmethod
     def is_assistants_api_request(request: Request) -> bool:

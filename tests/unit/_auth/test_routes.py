@@ -69,9 +69,9 @@ def test_route_classifications_match_reference(route: str, method: str | None) -
     assert RouteChecks.is_self_scoped_credential_route(
         route, request
     ) == ReferenceRoutes.is_self_scoped_credential_route(route, request)
-    assert RouteChecks._is_get_mcp_server_discovery_route(
+    assert RouteChecks._is_get_mcp_server_discovery_route(  # pyright: ignore[reportPrivateUsage]  # compare the preserved private route behavior against native projection
         route, request
-    ) == ReferenceRoutes._is_get_mcp_server_discovery_route(route, request)
+    ) == ReferenceRoutes._is_get_mcp_server_discovery_route(route, request)  # pyright: ignore[reportPrivateUsage]  # compare the preserved private route behavior against native projection
 
 
 @pytest.mark.parametrize("route", _ROUTES)
@@ -105,11 +105,11 @@ def test_viewer_role_denial_order_and_envelope(route: str, method: str, keys: tu
     request: Final = Request({"type": "http", "method": method, "path": route, "headers": []})
     data: Final = {key: "value" for key in keys}
     assert outcome(
-        lambda: RouteChecks._check_proxy_admin_viewer_access(
+        lambda: RouteChecks._check_proxy_admin_viewer_access(  # pyright: ignore[reportPrivateUsage, reportUnknownMemberType]  # compare the preserved private route behavior against native projection
             route=route, _user_role="proxy_admin_viewer", request_data=data, request=request
         )
     ) == outcome(
-        lambda: ReferenceRoutes._check_proxy_admin_viewer_access(
+        lambda: ReferenceRoutes._check_proxy_admin_viewer_access(  # pyright: ignore[reportPrivateUsage]  # compare the preserved private route behavior against native projection
             route=route, _user_role="proxy_admin_viewer", request_data=data, request=request
         )
     )
@@ -139,14 +139,14 @@ def test_full_catalog_classification(group: LiteLLMRoutes) -> None:
     ),
 )
 def test_route_pattern_modes(route: str, pattern: str) -> None:
-    assert RouteChecks._route_matches_pattern(route, pattern) == ReferenceRoutes._route_matches_pattern(route, pattern)
-    assert RouteChecks._route_matches_allowed_route(route, pattern) == ReferenceRoutes._route_matches_allowed_route(
+    assert RouteChecks._route_matches_pattern(route, pattern) == ReferenceRoutes._route_matches_pattern(route, pattern)  # pyright: ignore[reportPrivateUsage]  # compare the preserved private route behavior against native projection
+    assert RouteChecks._route_matches_allowed_route(route, pattern) == ReferenceRoutes._route_matches_allowed_route(  # pyright: ignore[reportPrivateUsage]  # compare the preserved private route behavior against native projection
         route, pattern
     )
     assert RouteChecks.route_matches_wildcard_pattern(route, pattern) == ReferenceRoutes.route_matches_wildcard_pattern(
         route, pattern
     )
-    assert RouteChecks._route_matches_denied_route(route, pattern) == ReferenceRoutes._route_matches_denied_route(
+    assert RouteChecks._route_matches_denied_route(route, pattern) == ReferenceRoutes._route_matches_denied_route(  # pyright: ignore[reportPrivateUsage]  # compare the preserved private route behavior against native projection
         route, pattern
     )
 

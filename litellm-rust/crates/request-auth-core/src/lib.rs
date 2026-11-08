@@ -16,7 +16,9 @@ pub mod org_routes;
 pub mod model_access;
 pub mod model_groups;
 pub mod fallback_access;
+pub mod key_model_access;
 pub mod protocol;
+pub mod unpriced_models;
 
 pub use error::Error;
 pub use key::{start, start_resolved_key};
