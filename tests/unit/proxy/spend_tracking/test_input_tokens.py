@@ -356,3 +356,38 @@ def test_count_input_tokens_for_model_gemini_unrecognized_part_returns_none() ->
         ],
     }
     assert count_input_tokens_for_model(request_body=body, model="gpt-4o") is None
+
+
+def test_count_input_tokens_for_model_gemini_cached_content_returns_none() -> None:
+    body: Final = {
+        "contents": [{"role": "user", "parts": [{"text": "Hello"}]}],
+        "cachedContent": "cachedContents/12345678",
+    }
+    assert count_input_tokens_for_model(request_body=body, model="gpt-4o") is None
+
+
+def test_count_input_tokens_for_model_gemini_cached_content_extra_body_returns_none() -> None:
+    body: Final = {
+        "contents": [{"role": "user", "parts": [{"text": "Hello"}]}],
+        "extra_body": {"cached_content": "cachedContents/12345678"},
+    }
+    assert count_input_tokens_for_model(request_body=body, model="gpt-4o") is None
+
+
+def test_approximate_input_size_skips_gemini_media_data() -> None:
+    from litellm.proxy.spend_tracking.input_tokens import _approximate_input_size
+
+    large_dummy_media: Final = "A" * 100_000
+    body: Final = {
+        "contents": [
+            {
+                "role": "user",
+                "parts": [
+                    {"text": "Short prompt"},
+                    {"inlineData": {"mimeType": "image/png", "data": large_dummy_media}},
+                ],
+            }
+        ],
+    }
+    # Sizing should only account for "Short prompt", not the 100,000 characters of inline media data
+    assert _approximate_input_size(body) < 1_000

@@ -49,18 +49,45 @@ TOKENIZE_OFF_EVENT_LOOP_MIN_CHARS: Final = 30_000
 
 _OPENAI_PREFIX: Final = "openai/"
 
-_INPUT_SIZE_FIELDS: Final = (
-    "messages",
-    "prompt",
-    "input",
-    "query",
-    "documents",
-    "tools",
-    "tool_choice",
-    "contents",
-    "systemInstruction",
-    "system_instruction",
-)
+_INPUT_SIZE_FIELDS: Final = ("messages", "prompt", "input", "query", "documents", "tools", "tool_choice")
+
+
+def _approximate_gemini_part_size(part: Mapping[str, object]) -> int:
+    if "inlineData" in part or "inline_data" in part or "fileData" in part or "file_data" in part:
+        return 0
+    text = part.get("text")
+    if isinstance(text, str):
+        return len(text)
+    for key in (
+        "functionResponse",
+        "function_response",
+        "functionCall",
+        "function_call",
+        "executableCode",
+        "executable_code",
+        "codeExecutionResult",
+        "code_execution_result",
+    ):
+        val = part.get(key)
+        if val is not None:
+            return len(str(val))
+    return 0
+
+
+def _approximate_gemini_payload_size(payload: object) -> int:
+    if isinstance(payload, str):
+        return len(payload)
+    if isinstance(payload, Mapping):
+        parts = payload.get("parts")
+        if isinstance(parts, list):
+            return sum(_approximate_gemini_payload_size(p) for p in parts)
+        text = payload.get("text")
+        if isinstance(text, str):
+            return len(text)
+        return _approximate_gemini_part_size(payload)
+    if isinstance(payload, list):
+        return sum(_approximate_gemini_payload_size(item) for item in payload)
+    return 0
 
 
 def _approximate_input_size(request_body: Mapping[str, object]) -> int:
@@ -69,7 +96,14 @@ def _approximate_input_size(request_body: Mapping[str, object]) -> int:
     Every field count_input_tokens_for_model hands the tokenizer is sized here,
     and rendering rather than walking keeps mapping keys in the total, which a
     tool schema's property names are."""
-    return sum(len(str(request_body.get(field, ""))) for field in _INPUT_SIZE_FIELDS)
+    size = sum(len(str(request_body.get(field, ""))) for field in _INPUT_SIZE_FIELDS)
+    contents = request_body.get("contents")
+    if contents is not None:
+        size += _approximate_gemini_payload_size(contents)
+    sys_inst = request_body.get("systemInstruction") or request_body.get("system_instruction")
+    if sys_inst is not None:
+        size += _approximate_gemini_payload_size(sys_inst)
+    return size
 
 
 async def count_input_tokens(
@@ -269,6 +303,12 @@ def _extract_gemini_part_text(part: Mapping[str, object]) -> str | None:
 
 
 def _extract_gemini_text(request_body: Mapping[str, object]) -> str | None:
+    extra_body = request_body.get("extra_body")
+    if any(key in request_body for key in ("cachedContent", "cached_content")) or (
+        isinstance(extra_body, Mapping) and any(key in extra_body for key in ("cachedContent", "cached_content"))
+    ):
+        return None
+
     texts: list[str] = []
 
     sys_inst = request_body.get("systemInstruction") or request_body.get("system_instruction")
