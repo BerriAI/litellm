@@ -310,6 +310,7 @@ async def test_due_issue_delivery_retries_after_daily_projection_is_complete(db:
             "WHERE id=$1 RETURNING id",
             before[0]["id"],
         )
+        await IssuesRepository.from_prisma(prisma).set_performance_monitoring(False)
         await job._run(_NOW + timedelta(hours=1))
         after = await prisma.writer_db.query_raw(
             "SELECT (record->>'attempts')::int AS attempts FROM \"LiteLLM_IssueDelivery\" WHERE id=$1",

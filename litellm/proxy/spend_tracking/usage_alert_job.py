@@ -214,6 +214,7 @@ class UsageAlertJob:
             await self._deprecation_projection(now)
         monitoring: Final = await self._performance_projection.monitoring()
         if not monitoring.enabled:
+            await self._performance_projection.notify(deadline)
             return
         if monitoring.can_detect:
             if not self._defaults_registered:
