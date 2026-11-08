@@ -87,18 +87,6 @@ class ConfigRepository:
             param_value = _decoded_json(param_value)
         return ConfigParam(param_name=param_name, param_value=param_value)
 
-    async def get_params(self, param_names: Sequence[str]) -> tuple[ConfigParam, ...]:
-        if not param_names:
-            return ()
-        records: Final = await self._config_table.find_many(where={"param_name": {"in": tuple(param_names)}})
-        return tuple(
-            ConfigParam(
-                record.param_name,
-                _decoded_json(record.param_value) if isinstance(record.param_value, str) else record.param_value,
-            )
-            for record in records
-        )
-
     async def set_param(self, param_name: str, param_value: object) -> ConfigParam:
         """Set a config parameter in the database."""
         value_json: Final = json.dumps(param_value) if not isinstance(param_value, str) else param_value

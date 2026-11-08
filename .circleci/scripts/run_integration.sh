@@ -246,6 +246,10 @@ fi
 
 shared_services=()
 worker_coverage=()
+pytest_coverage=()
+if [ "$suite" = database ]; then
+  pytest_coverage=("PYTEST_ADDOPTS=--cov=litellm --cov-report=xml:$PWD/$results/coverage.xml")
+fi
 if [ "$isolated_workers" = false ]; then
   shared_services=(
     "REDIS_HOST=$REDIS_HOST" "REDIS_PORT=$REDIS_PORT"
@@ -259,7 +263,7 @@ fi
 env -i PATH="$PATH" HOME="$HOME" PYTHONPATH="$PYTHONPATH" \
   INTEGRATION_RUN_ID="$integration_identity" \
   DATABASE_URL="$DATABASE_URL" \
-  "${shared_services[@]}" "${worker_coverage[@]}" \
+  "${shared_services[@]}" "${worker_coverage[@]}" "${pytest_coverage[@]}" \
   INTEGRATION_WORKERS="${INTEGRATION_WORKERS:-1}" \
   LITELLM_MODE=PRODUCTION \
   "${license_env[@]}" \
