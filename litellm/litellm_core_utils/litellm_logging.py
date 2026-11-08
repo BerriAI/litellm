@@ -917,7 +917,9 @@ class Logging(LiteLLMLoggingBaseClass):
             "litellm_params": litellm_params,
             "applied_guardrails": applied_guardrails,
             "model": model,
-            "standard_callback_dynamic_params": self.standard_callback_dynamic_params,
+            "standard_callback_dynamic_params": {
+                "turn_off_message_logging": self.standard_callback_dynamic_params.get("turn_off_message_logging")
+            },
         }
 
         # Set by proxy request handlers to defer spend-log fire until after
@@ -1761,18 +1763,7 @@ class Logging(LiteLLMLoggingBaseClass):
                                 model_call_details=details_to_log,
                                 result=None,
                             )
-                            additional_args_to_log = details_to_log.get("additional_args")
-                            if isinstance(additional_args_to_log, dict) and isinstance(
-                                additional_args_to_log.get("complete_input_dict"), dict
-                            ):
-                                details_to_log["additional_args"] = {
-                                    **additional_args_to_log,
-                                    "complete_input_dict": {
-                                        k: v
-                                        for k, v in additional_args_to_log["complete_input_dict"].items()
-                                        if k not in ("messages", "input", "prompt")
-                                    },
-                                }
+                            details_to_log.pop("additional_args", None)
                             details_to_log.pop("messages", None)
                             details_to_log.pop("input", None)
                             details_to_log.pop("prompt", None)
@@ -1942,6 +1933,8 @@ class Logging(LiteLLMLoggingBaseClass):
                             details_to_log.pop("messages", None)
                             details_to_log.pop("input", None)
                             details_to_log.pop("prompt", None)
+                            details_to_log.pop("original_response", None)
+                            details_to_log.pop("additional_args", None)
 
                         add_breadcrumb(
                             category="litellm.llm_call",
