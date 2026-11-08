@@ -21,6 +21,12 @@ from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.opensearch.vector_stores.index_passthrough import (
+    IndexPath,
+    IndexRefusal,
+    index_operation,
+    prepare_index_request,
+)
 from litellm.llms.opensearch.vector_stores.transformation import OpenSearchVectorStoreConfig
 from litellm.types.llms.bedrock import AwsAuthParams
 from litellm.types.router import GenericLiteLLMParams
@@ -374,17 +380,17 @@ def test_failing_credential_source_is_a_401_that_keeps_its_output_out_of_the_rep
         ),
     ],
 )
-def test_a_missing_container_credentials_token_file_is_a_401(
+def test_a_missing_container_credentials_token_file_is_a_500(
     sign: Callable[[OpenSearchVectorStoreConfig], object], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     _isolate_from_ambient_aws(monkeypatch, tmp_path)
     monkeypatch.setenv("AWS_CONTAINER_CREDENTIALS_FULL_URI", "http://127.0.0.1:9/v1/credentials")
     monkeypatch.setenv("AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE", str(tmp_path / "missing-token"))
 
-    with pytest.raises(litellm.AuthenticationError, match="the AWS credential source failed") as error:
+    with pytest.raises(litellm.InternalServerError, match="could not load or refresh the AWS credentials") as error:
         sign(OpenSearchVectorStoreConfig())
 
-    assert error.value.status_code == 401
+    assert error.value.status_code == 500
 
 
 EXPIRED_METADATA: Final = MappingProxyType(
@@ -429,16 +435,35 @@ class _CredentialSourceThatCannotRefresh(BaseAWSLLM):
         ),
     ],
 )
-def test_credentials_that_fail_to_refresh_at_signing_are_a_401(
+def test_credentials_that_fail_to_refresh_at_signing_are_a_500(
     sign: Callable[[OpenSearchVectorStoreConfig], object], refresh: Callable[[], dict[str, str]]
 ) -> None:
     config: Final = OpenSearchVectorStoreConfig(aws=_CredentialSourceThatCannotRefresh(refresh))
 
-    with pytest.raises(litellm.AuthenticationError, match="the AWS credential source failed") as error:
+    with pytest.raises(litellm.InternalServerError, match="could not load or refresh the AWS credentials") as error:
         sign(config)
 
-    assert error.value.status_code == 401
+    assert error.value.status_code == 500
     assert CREDENTIAL_SOURCE_OUTPUT not in str(error.value)
+
+
+@pytest.mark.asyncio
+async def test_the_index_pass_through_answers_500_when_credentials_fail_to_refresh() -> None:
+    refused: Final = await prepare_index_request(
+        config=OpenSearchVectorStoreConfig(aws=_CredentialSourceThatCannotRefresh(_refresh_after_the_token_file_is_gone)),
+        method="GET",
+        path=IndexPath(index_name="docs", api=("_mapping",)),
+        operation=index_operation("GET", ("_mapping",)),
+        provider_index="prod-docs",
+        content_type=None,
+        query=(),
+        body=b"",
+        store_params={"api_base": SERVERLESS},
+        can_read=True,
+    )
+
+    assert isinstance(refused, IndexRefusal)
+    assert (refused.status_code, CREDENTIAL_SOURCE_OUTPUT in refused.message) == (500, False)
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])

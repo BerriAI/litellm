@@ -1142,7 +1142,6 @@ async def opensearch_proxy_route(  # noqa: ANN201  # returns create_pass_through
     """
     from litellm.llms.opensearch.vector_stores.index_passthrough import (
         IndexRefusal,
-        hook_request_body,
         index_operation,
         parse_index_path,
         prepare_index_request,
@@ -1182,7 +1181,7 @@ async def opensearch_proxy_route(  # noqa: ANN201  # returns create_pass_through
     )
     setattr(request.state, LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY, prepared.body)
     setattr(request.state, LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY, {})
-    safe_set_request_parsed_body(request, dict(hook_request_body(operation, prepared.body)))
+    safe_set_request_parsed_body(request, {})
     return await endpoint_func(request, fastapi_response, user_api_key_dict)
 
 

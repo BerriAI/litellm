@@ -10425,6 +10425,8 @@ class TestOpenSearchProxyRoute:
         "method, path",
         [
             ("POST", "/opensearch/docs/_search/template"),
+            ("POST", "/opensearch/docs/_msearch"),
+            ("GET", "/opensearch/docs/_msearch"),
             ("PUT", "/opensearch/docs/_mapping"),
             ("GET", "/opensearch/docs/_settings"),
             ("POST", "/opensearch/docs/_close"),
@@ -10605,48 +10607,6 @@ class TestOpenSearchProxyRoute:
                 id="delete-by-query-terms-lookup",
             ),
             pytest.param(
-                "_msearch",
-                NDJSON_TYPE,
-                b'{"index":"hr-private"}\n{"query":{"match_all":{}}}\n',
-                "'index'",
-                id="msearch-header",
-            ),
-            pytest.param(
-                "_msearch",
-                NDJSON_TYPE,
-                b'{}\n{"query":{"more_like_this":{"like":[{"_index":"hr-private","_id":"1"}]}}}\n',
-                "'_index'",
-                id="msearch-query-line",
-            ),
-            pytest.param(
-                "_msearch",
-                NDJSON_TYPE,
-                b'{"index":"docs","index":"hr-private"}\n{"query":{"match_all":{}}}\n',
-                "'index'",
-                id="msearch-header-duplicate-index",
-            ),
-            pytest.param(
-                "_msearch",
-                NDJSON_TYPE,
-                b'{"index":"docs,hr-private"}\n{"query":{"match_all":{}}}\n',
-                "'index'",
-                id="msearch-header-index-list",
-            ),
-            pytest.param(
-                "_msearch",
-                NDJSON_TYPE,
-                b'{"index":"docs","indices":["hr-private"]}\n{"query":{"match_all":{}}}\n',
-                "'indices'",
-                id="msearch-header-indices",
-            ),
-            pytest.param(
-                "_msearch",
-                NDJSON_TYPE,
-                b'{"index":"docs"}\n{"query":{"terms":{"user":{"index":"hr-private","id":"1","path":"f"}}}}\n',
-                "'index'",
-                id="msearch-query-after-a-pinned-header",
-            ),
-            pytest.param(
                 "_mget",
                 JSON_TYPE,
                 b'{"docs":[{"_id":"1"},{"_index":"hr-private","_id":"2"}]}',
@@ -10765,7 +10725,6 @@ class TestOpenSearchProxyRoute:
                 b'{"update":{"_id":"3"}}\r\n{"doc":{"_index":"hr-private"}}\n',
                 id="bulk",
             ),
-            pytest.param("_msearch", b'{}\n{"query":{"match_all":{}}}\n{"preference":"a"}\n{}\n', id="msearch"),
         ],
     )
     @pytest.mark.parametrize("content_type", [NDJSON_TYPE, "application/json"])
@@ -10822,26 +10781,6 @@ class TestOpenSearchProxyRoute:
             )
 
         assert (response.status_code, route.calls.last.request.content) == (201, document)
-
-    def test_an_msearch_header_naming_the_path_index_is_sent_to_the_mapped_index(
-        self, opensearch_client: TestClient, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        _act_as(monkeypatch, _opensearch_caller("read"))
-        with respx.mock(assert_all_called=True) as upstream:
-            route = upstream.post(f"{DOCS_UPSTREAM}/_msearch").mock(
-                return_value=httpx.Response(200, json={"responses": []})
-            )
-            response = opensearch_client.post(
-                "/opensearch/docs/_msearch",
-                content=b'{"index":"docs","preference":"a"}\n{"query":{"match_all":{}}}\n{}\n{"size":1}\n',
-                headers={"Content-Type": NDJSON_TYPE},
-            )
-
-        assert response.status_code == 200
-        assert route.calls.last.request.content == (
-            b'{"index":"prod-docs-v2","preference":"a"}\n{"query":{"match_all":{}}}\n{}\n{"size":1}\n'
-        )
-        assert _verified_sigv4_scope(route.calls.last.request) == ("aoss", "us-east-1")
 
     def test_a_bulk_action_naming_the_path_index_is_sent_to_the_mapped_index(
         self, opensearch_client: TestClient, monkeypatch: pytest.MonkeyPatch
@@ -10914,15 +10853,15 @@ class TestOpenSearchProxyRoute:
         assert sent.url.query == sent_query
         assert _verified_sigv4_scope(sent) == ("aoss", "us-east-1")
 
-    @pytest.mark.parametrize(
-        "path, content_type",
-        [("_doc", JSON_TYPE), ("_doc", NDJSON_TYPE), ("_doc/_bulk", JSON_TYPE)],
-        ids=["json", "ndjson-content-type", "document-id-named-bulk"],
-    )
-    def test_a_pre_call_hook_sees_the_body_that_is_sent_and_not_its_custom_body_key(
-        self, opensearch_client: TestClient, monkeypatch: pytest.MonkeyPatch, path: str, content_type: str
+    def test_document_fields_named_like_request_params_leave_the_rate_limiter_alone(
+        self, opensearch_client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        class BlockPayroll(CustomLogger):
+        from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3
+        from litellm.proxy.utils import InternalUsageCache
+
+        limiter: Final = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(DualCache()))
+
+        class RateLimit(CustomLogger):
             async def async_pre_call_hook(
                 self,
                 user_api_key_dict: UserAPIKeyAuth,
@@ -10930,21 +10869,54 @@ class TestOpenSearchProxyRoute:
                 data: dict[str, object],
                 call_type: CallTypesLiteral,
             ) -> dict[str, object]:
-                if "payroll" in str(data.get("title")):
-                    raise HTTPException(status_code=400, detail="payroll documents are blocked")
+                await limiter.async_pre_call_hook(user_api_key_dict, cache, data, call_type)
                 return data
 
-        monkeypatch.setattr(litellm, "callbacks", [BlockPayroll()])
-        _act_as(monkeypatch, _opensearch_caller("read", "write"))
-        with respx.mock(assert_all_called=False) as upstream:
-            route = upstream.route(host=OPENSEARCH_HOST).mock(return_value=httpx.Response(201, json={}))
-            response = opensearch_client.post(
-                f"/opensearch/docs/{path}",
-                content=b'{"title":"hr payroll","custom_body":{"title":"lunch menu"}}',
-                headers={"Content-Type": content_type},
+        monkeypatch.setattr(litellm, "callbacks", [RateLimit()])
+        grant: Final = {"index_name": "docs", "index_permissions": ["write"]}
+        _act_as(
+            monkeypatch,
+            UserAPIKeyAuth(
+                api_key="sk-opensearch-rate-limited-writer",
+                metadata={"allowed_vector_store_indexes": [grant], "model_rpm_limit": {"text-embedding-3-small": 1}},
+            ),
+        )
+        documents: Final = (
+            b'{"text":"a","metadata":"handbook"}',
+            b'{"text":"b","metadata":["handbook"]}',
+            b'{"text":"c","model":"text-embedding-3-small"}',
+            b'{"text":"d","model":"text-embedding-3-small"}',
+        )
+        with respx.mock(assert_all_called=True) as upstream:
+            route = upstream.post(f"{DOCS_UPSTREAM}/_doc").mock(
+                return_value=httpx.Response(201, json={"result": "created"})
+            )
+            statuses: Final = tuple(
+                opensearch_client.post(
+                    "/opensearch/docs/_doc", content=document, headers={"Content-Type": JSON_TYPE}
+                ).status_code
+                for document in documents
             )
 
-        assert (response.status_code, route.called) == (400, False)
+        assert statuses == (201, 201, 201, 201)
+        assert tuple(call.request.content for call in route.calls) == documents
+
+    @pytest.mark.parametrize(
+        "document", [b'[{"text":"array body"}]', b'{"text":"\xff\xfe"}'], ids=["json-array", "invalid-utf-8"]
+    )
+    def test_a_malformed_document_gets_the_opensearch_answer(
+        self, opensearch_client: TestClient, monkeypatch: pytest.MonkeyPatch, document: bytes
+    ) -> None:
+        rejected: Final = {"error": {"type": "mapper_parsing_exception"}, "status": 400}
+        _act_as(monkeypatch, _opensearch_caller("write"))
+        with respx.mock(assert_all_called=True) as upstream:
+            route = upstream.post(f"{DOCS_UPSTREAM}/_doc").mock(return_value=httpx.Response(400, json=rejected))
+            response = opensearch_client.post(
+                "/opensearch/docs/_doc", content=document, headers={"Content-Type": JSON_TYPE}
+            )
+
+        assert (response.status_code, response.json()) == (400, rejected)
+        assert route.calls.last.request.content == document
 
     def test_an_opensearch_error_keeps_its_status_and_body(
         self, opensearch_client: TestClient, monkeypatch: pytest.MonkeyPatch

@@ -6,9 +6,9 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, TypeAlias
 from urllib.parse import quote
 
-from pydantic import TypeAdapter, ValidationError
+from pydantic import TypeAdapter
 
-from litellm.exceptions import AuthenticationError, BadRequestError
+from litellm.exceptions import AuthenticationError, BadRequestError, InternalServerError
 from litellm.llms.bedrock.base_aws_llm import run_aws_signing
 
 if TYPE_CHECKING:
@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 
 IndexHttpMethod: TypeAlias = Literal["GET", "HEAD", "POST", "PUT", "DELETE", "PATCH"]
 IndexPermission: TypeAlias = Literal["read", "write"]
-BodyKind: TypeAlias = Literal["query", "msearch", "mget", "bulk", "update", "unscanned"]
+BodyKind: TypeAlias = Literal["query", "mget", "bulk", "update", "unscanned"]
 
 DEFAULT_CONTENT_TYPE: Final = "application/json"
 NDJSON_CONTENT_TYPE: Final = "application/x-ndjson"
@@ -79,22 +79,9 @@ INDEX_OPERATIONS: Final = (
     IndexOperation("read", ("GET", "HEAD"), "_doc", True, "unscanned"),
     IndexOperation("read", ("GET", "HEAD"), "_source", True, "unscanned"),
     IndexOperation("read", ("GET", "POST"), "_mget", False, "mget"),
-    IndexOperation("read", ("GET", "POST"), "_msearch", False, "msearch"),
     IndexOperation("read", ("GET", "POST"), "_explain", True, "query"),
     IndexOperation("read", ("GET",), "_mapping", False, "unscanned"),
 )
-
-
-_JSON_OBJECT_BODY: Final = TypeAdapter(dict[str, object])
-
-
-def hook_request_body(operation: IndexOperation | None, body: bytes) -> Mapping[str, object]:
-    if operation is not None and operation.body in ("bulk", "msearch"):
-        return {}
-    try:
-        return _JSON_OBJECT_BODY.validate_json(body)
-    except ValidationError:
-        return {}
 
 
 def index_operation(method: str, api: tuple[str, ...]) -> IndexOperation | None:
@@ -227,53 +214,23 @@ def _whole_body_refusal(api: str, body: bytes) -> IndexRefusal | None:
     return _line_refusal(api, body, _OUT_OF_INDEX_KEYS)
 
 
-def _pinned_index(
-    metadata: _JsonObject, key: str, forbidden: frozenset[str], index: _IndexScope, line_kind: str
-) -> _JsonObject | IndexRefusal | None:
-    unnamed: Final = _JsonObject(tuple(pair for pair in metadata.pairs if pair[0] != key))
-    refusal: Final = _index_reference(unnamed, forbidden)
+def _pinned_index(metadata: _JsonObject, index: _IndexScope) -> _JsonObject | IndexRefusal | None:
+    unnamed: Final = _JsonObject(tuple(pair for pair in metadata.pairs if pair[0] != "_index"))
+    refusal: Final = _index_reference(unnamed, _BULK_METADATA_KEYS)
     if refusal is not None:
         return refusal
-    named: Final = tuple(value for name, value in metadata.pairs if name == key)
+    named: Final = tuple(value for name, value in metadata.pairs if name == "_index")
     if not named:
         return None
     if any(value != index.name for value in named):
         return IndexRefusal(
             400,
-            f"A {line_kind} sets '{key}' to another index than '{index.name}' in the URL path. "
-            f"Remove '{key}' or set it to '{index.name}'.",
+            f"A _bulk action line sets '_index' to another index than '{index.name}' in the URL path. "
+            f"Remove '_index' or set it to '{index.name}'.",
         )
-    return _JsonObject(tuple((name, index.provider_name if name == key else value) for name, value in metadata.pairs))
-
-
-def _msearch_header(line: bytes, index: _IndexScope) -> bytes | IndexRefusal:
-    if not line.strip(_JSON_BLANK):
-        return line
-    parsed: Final = _parse(line)
-    if parsed is None:
-        return _unparseable("_msearch")
-    if not isinstance(parsed.value, _JsonObject):
-        return _index_reference(parsed.value, _OUT_OF_INDEX_KEYS) or line
-    pinned: Final = _pinned_index(parsed.value, "index", _OUT_OF_INDEX_KEYS, index, "_msearch header line")
-    if pinned is None:
-        return line
-    return pinned if isinstance(pinned, IndexRefusal) else _object_json(pinned.pairs).encode()
-
-
-def _msearch_entry(header: bytes, lines: Iterator[bytes], index: _IndexScope) -> tuple[bytes | IndexRefusal, ...]:
-    rendered: Final = _msearch_header(header, index)
-    query: Final = None if isinstance(rendered, IndexRefusal) else next(lines, None)
-    if query is None:
-        return (rendered,)
-    refusal: Final = _line_refusal("_msearch", query, _OUT_OF_INDEX_KEYS) if query.strip(_JSON_BLANK) else None
-    return (rendered, refusal or query)
-
-
-def _msearch_lines(lines: Iterator[bytes], index: _IndexScope) -> Iterator[bytes | IndexRefusal]:
-    for header in lines:
-        yield from (entry := _msearch_entry(header, lines, index))
-        if any(isinstance(line, IndexRefusal) for line in entry):
-            return
+    return _JsonObject(
+        tuple((name, index.provider_name if name == "_index" else value) for name, value in metadata.pairs)
+    )
 
 
 def _bulk_action(line: bytes) -> _BulkAction | None:
@@ -296,7 +253,7 @@ def _bulk_action_line(action: _BulkAction | None, line: bytes, index: _IndexScop
         )
     if not index.can_read and "_source" in _own_keys(action.metadata):
         return _read_needed("'_source' in a _bulk action line returns stored documents", index.name)
-    pinned: Final = _pinned_index(action.metadata, "_index", _BULK_METADATA_KEYS, index, "_bulk action line")
+    pinned: Final = _pinned_index(action.metadata, index)
     if pinned is None:
         return line
     if isinstance(pinned, IndexRefusal):
@@ -342,8 +299,6 @@ def _checked_body(operation: IndexOperation, body: bytes, index: _IndexScope) ->
             return _whole_body_refusal(operation.api, body) or body
         case "update":
             return _document_reading_payload(operation.api, body, index) or body
-        case "msearch":
-            return _rendered_body(_msearch_lines(iter(body.split(b"\n")), index))
         case "bulk":
             return _rendered_body(_bulk_lines(iter(body.split(b"\n")), index))
         case "unscanned":
@@ -417,7 +372,7 @@ async def prepare_index_request(
             query,
         )
         signed: Final = await run_aws_signing(config.sign_http_request, method, url, checked, media, store_params)
-    except (AuthenticationError, BadRequestError) as error:
+    except (AuthenticationError, BadRequestError, InternalServerError) as error:
         return IndexRefusal(error.status_code, error.message)
     return SignedIndexRequest(
         url=url, media_type=media, headers=MappingProxyType(dict(signed.headers.items())), body=checked

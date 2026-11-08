@@ -684,9 +684,8 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         # downstream guardrail scans and snapshots never observe the server streaming marker.
         _parsed_body.clear()
         _parsed_body.update(server_marker_free_body)
-        provider_payload: Final = _is_provider_payload(request)
         managed_model: Final = get_model_from_request(
-            request_data={} if provider_payload else _parsed_body,
+            request_data=_parsed_body,
             route=get_request_route(request),
             request_headers=request.headers,
             request_query_params=request.query_params,
@@ -696,9 +695,7 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         )
 
         litellm_keys_in_body: Final = MappingProxyType(
-            {}
-            if provider_payload
-            else {k: _parsed_body.pop(k) for k in types_utils.all_litellm_params if k in _parsed_body}
+            {k: _parsed_body.pop(k) for k in types_utils.all_litellm_params if k in _parsed_body}
         )
         kept_out_of_litellm_params: Final = (
             _KEPT_OUT_OF_LITELLM_PARAMS
@@ -1420,9 +1417,7 @@ async def pass_through_request(
         ## LOGGING OBJECT ## - initialize before pre_call_hook so guardrails can access it
         # Surface the requested model (when the body carries one) so logging/spans
         # read e.g. ``chat gpt-4o`` instead of ``chat unknown``.
-        passthrough_model: Final = (
-            _parsed_body.get("model") if isinstance(_parsed_body, dict) and not _is_provider_payload(request) else None
-        ) or "unknown"
+        passthrough_model: Final = (_parsed_body.get("model") if isinstance(_parsed_body, dict) else None) or "unknown"
         start_time: Final = datetime.now()
         team_callbacks: Final = _resolve_team_callback_wiring(
             user_api_key_dict=user_api_key_dict,
@@ -2286,6 +2281,8 @@ async def _parse_request_data_by_content_type(
     Returns:
         Tuple of (query_params_data, custom_body_data, file_data, stream)
     """
+    if _is_provider_payload(request):
+        return None, None, None, None
     content_type: Final = request.headers.get("content-type", "")
 
     query_params_data = None

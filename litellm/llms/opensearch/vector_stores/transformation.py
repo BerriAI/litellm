@@ -10,7 +10,7 @@ import httpx
 from pydantic import ConfigDict, Field, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
-from litellm.exceptions import AuthenticationError, BadRequestError
+from litellm.exceptions import AuthenticationError, BadRequestError, InternalServerError
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.optional_imports import ensure_optional_import
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -81,9 +81,14 @@ def _unauthenticated(reason: str) -> AuthenticationError:
     )
 
 
-def _failed_credential_source(error: Exception) -> AuthenticationError:
-    verbose_logger.warning("OpenSearch vector store AWS credential source failed: %s", error)
-    return _unauthenticated("the AWS credential source failed, see the LiteLLM logs")
+def _unavailable_credentials(error: Exception) -> InternalServerError:
+    verbose_logger.warning("OpenSearch vector store AWS credentials could not be loaded or refreshed: %s", error)
+    return InternalServerError(
+        message="LiteLLM could not load or refresh the AWS credentials that sign the OpenSearch request, "
+        "see the LiteLLM logs.",
+        llm_provider="opensearch",
+        model=None,
+    )
 
 
 def _usable_credentials(credentials: object) -> "Credentials":
@@ -254,14 +259,17 @@ class OpenSearchVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig, SignsRequ
 
         try:
             credentials: Final = _usable_credentials(self._aws.resolve_credentials(auth, region))
-        except (CredentialRetrievalError, OSError) as error:
-            raise _failed_credential_source(error) from None
+        except CredentialRetrievalError as error:
+            verbose_logger.warning("OpenSearch vector store AWS credential source failed: %s", error)
+            raise _unauthenticated("the AWS credential source failed, see the LiteLLM logs") from None
+        except OSError as error:
+            raise _unavailable_credentials(error) from None
         except (NoCredentialsError, PartialCredentialsError, ProfileNotFound) as error:
             raise _unauthenticated(str(error)) from None
         try:
             frozen: Final = credentials.get_frozen_credentials()
         except (CredentialRetrievalError, OSError, RuntimeError) as error:
-            raise _failed_credential_source(error) from None
+            raise _unavailable_credentials(error) from None
         if frozen.access_key is None or frozen.secret_key is None:
             raise _unauthenticated("none were found")
         return Credentials(frozen.access_key, frozen.secret_key, frozen.token, account_id=frozen.account_id)

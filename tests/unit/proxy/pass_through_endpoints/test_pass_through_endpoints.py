@@ -12607,32 +12607,6 @@ def test_init_kwargs_with_litellm_metadata(mock_request, mock_user_api_key_dict)
     assert metadata["user_api_key"] == "test-key"
 
 
-def test_init_kwargs_reads_no_litellm_params_from_an_opensearch_document(mock_user_api_key_dict):
-    document: Final = {"title": "Remote work", "model": "gpt-4o", "metadata": {"tags": ["hr"], "team": "payroll"}}
-    request: Final = Request(
-        {
-            "type": "http",
-            "method": "POST",
-            "path": "/opensearch/docs/_doc",
-            "headers": [(b"content-type", b"application/json")],
-            "query_string": b"",
-        }
-    )
-
-    result: Final = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
-        request=request,
-        user_api_key_dict=mock_user_api_key_dict,
-        passthrough_logging_payload=PassthroughStandardLoggingPayload(url="https://test.com", request_body={}),
-        _parsed_body={**document},
-        litellm_call_id="test-call-id",
-        logging_obj=MagicMock(),
-    )
-
-    metadata: Final = result["litellm_params"]["metadata"]
-    assert (metadata.get("tags"), metadata.get("team"), metadata.get("model_group")) == (None, None, None)
-    assert result["litellm_params"]["proxy_server_request"]["body"] == document
-
-
 def test_init_kwargs_with_tags_in_header(mock_request, mock_user_api_key_dict):
     request: Final = mock_request(headers={"tags": "tag1,tag2"})
     passthrough_payload: Final = PassthroughStandardLoggingPayload(
