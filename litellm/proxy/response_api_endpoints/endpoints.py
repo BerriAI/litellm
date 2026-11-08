@@ -1591,20 +1591,37 @@ async def _with_managed_file_id_mapping(
     )
     nested_parts: Final = tuple(as_str_mapping(part) or {} for part in nested_content)
     parts: Final = messages + nested_parts
-    for part in parts:
-        if part.get("type") == "input_file" and isinstance(file_id := part.get("file_id"), str):
-            try:
-                await validate_managed_id_requirement(
-                    resource_id=file_id,
-                    resource_kind="file",
-                    user_api_key_dict=user_api_key_dict,
-                    managed_files_obj=managed_files,
-                    require_owned_resource=True,
-                )
-            except HTTPException as e:
-                raise ProxyException(
-                    message=str(e.detail), type="permission_error", param=None, code=e.status_code
-                ) from e
+    input_file_ids: Final = tuple(
+        input_file_id
+        for part in parts
+        if part.get("type") == "input_file" and isinstance(input_file_id := part.get("file_id"), str)
+    )
+    tools: Final = data.get("tools")
+    tool_rows: Final = (
+        tuple(as_str_mapping(tool) or {} for tool in TypeAdapter(tuple[object, ...]).validate_python(tools))
+        if isinstance(tools, list)
+        else ()
+    )
+    containers: Final = tuple(
+        as_str_mapping(tool.get("container")) or {} for tool in tool_rows if tool.get("type") == "code_interpreter"
+    )
+    container_files: Final = chain.from_iterable(
+        TypeAdapter(tuple[object, ...]).validate_python(files)
+        for container in containers
+        if isinstance(files := container.get("file_ids"), list)
+    )
+    file_ids: Final = chain(input_file_ids, (reference for reference in container_files if isinstance(reference, str)))
+    for file_id in file_ids:
+        try:
+            await validate_managed_id_requirement(
+                resource_id=file_id,
+                resource_kind="file",
+                user_api_key_dict=user_api_key_dict,
+                managed_files_obj=managed_files,
+                require_owned_resource=True,
+            )
+        except HTTPException as e:
+            raise ProxyException(message=str(e.detail), type="permission_error", param=None, code=e.status_code) from e
     if managed_files is None:
         return caller_fields
     from litellm.proxy.proxy_server import user_api_key_cache

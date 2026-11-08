@@ -98,6 +98,8 @@ async def _owned_job_page(
     owned: Final = TypeAdapter(dict[str, object]).validate_python(
         await _owned_jobs(source, user_api_key_dict, managed_files_obj)
     )
+    if not isinstance(managed_files_obj, _FineTuningListAccess):
+        return _OwnedJobPage(response={**owned, "has_more": False}, next_cursor=None)
     if owned.get("data") or not source.get("has_more"):
         return _OwnedJobPage(response=owned, next_cursor=None)
     jobs: Final = TypeAdapter(tuple[dict[str, object], ...]).validate_python(source.get("data", []))

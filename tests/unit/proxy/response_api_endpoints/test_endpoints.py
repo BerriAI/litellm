@@ -5623,7 +5623,8 @@ class TestResponsesInputTokens:
             "resp_client_form",
         )
 
-    def test_managed_file_ids_reach_the_counter_with_the_mapping_inference_uses(self) -> None:
+    @pytest.mark.parametrize("file_location", ["input", "tools"])
+    def test_managed_file_ids_reach_the_counter_with_the_mapping_inference_uses(self, file_location: str) -> None:
         from litellm.integrations.custom_logger import CustomLogger
 
         managed_id: Final = base64.urlsafe_b64encode(SpecialEnums.LITELLM_MANAGED_FILE_COMPLETE_STR.value.format(
@@ -5646,13 +5647,27 @@ class TestResponsesInputTokens:
         response, counter = self._post_input_tokens(
             {
                 "model": "gpt-4o",
-                "input": [{"role": "user", "content": [{"type": "input_file", "file_id": managed_id}]}],
+                **(
+                    {"input": [{"role": "user", "content": [{"type": "input_file", "file_id": managed_id}]}]}
+                    if file_location == "input"
+                    else {"input": "hello", "tools": [{"type": "code_interpreter", "container": {"type": "auto", "file_ids": [managed_id]}}]}
+                ),
             },
             managed_files=ManagedFiles(),
         )
 
         assert response.status_code == 200, response.text
         assert counter.await_args.kwargs["responses_request"]["model_file_id_mapping"] == mapping
+
+    def test_tool_file_ids_require_managed_ownership(self) -> None:
+        response, counter = self._post_input_tokens(
+            {
+                "model": "gpt-4o", "input": "hello",
+                "tools": [{"type": "code_interpreter", "container": {"type": "auto", "file_ids": ["file-example"]}}],
+            }
+        )
+        assert response.status_code == 403, response.text
+        counter.assert_not_awaited()
 
     @pytest.mark.parametrize("caller_mapping", [5, "lots", [1], {"file-x": {"deployment-a": 7}}])
     def test_a_caller_sent_model_file_id_mapping_does_not_break_the_count(
@@ -5777,14 +5792,21 @@ class TestResponsesInputTokens:
     def test_a_managed_file_the_key_cannot_read_answers_403_without_a_count(self) -> None:
         from litellm.integrations.custom_logger import CustomLogger
 
+        managed_id: Final = base64.urlsafe_b64encode(SpecialEnums.LITELLM_MANAGED_FILE_COMPLETE_STR.value.format(
+            "application/json", "example", "gpt-4o", "file-on-a", "deployment-a"
+        ).encode()).decode().rstrip("=")
+
         class ManagedFiles(CustomLogger):
-            async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
-                raise HTTPException(status_code=403, detail="File is not available to this caller.")
+            async def can_user_call_unified_file_id(self, unified_file_id, user_api_key_dict):
+                return False
+
+            async def can_user_call_unified_object_id(self, unified_object_id, user_api_key_dict):
+                return False
 
         response, counter = self._post_input_tokens(
             {
                 "model": "gpt-4o",
-                "input": [{"role": "user", "content": [{"type": "input_file", "file_id": "litellm-managed-file"}]}],
+                "input": [{"role": "user", "content": [{"type": "input_file", "file_id": managed_id}]}],
             },
             managed_files=ManagedFiles(),
         )

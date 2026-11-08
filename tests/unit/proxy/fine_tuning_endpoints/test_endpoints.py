@@ -410,6 +410,14 @@ async def test_admin_job_pages_preserve_provider_response() -> None:
 
 
 @pytest.mark.asyncio
+async def test_job_page_without_tracking_is_complete() -> None:
+    page: Final = {"object": "list", "data": [_job().model_dump()], "has_more": True}
+    result: Final = await endpoints._owned_job_page(page, UserAPIKeyAuth(api_key="test"), None)
+    assert result.response == {"object": "list", "data": [], "has_more": False}
+    assert result.next_cursor is None
+
+
+@pytest.mark.asyncio
 async def test_owned_job_cursor_resolves_to_provider_id() -> None:
     assert await endpoints._provider_job_cursor(
         _unified_job_id(), UserAPIKeyAuth(api_key="test"), ManagedResourceAccessCheckerStub()

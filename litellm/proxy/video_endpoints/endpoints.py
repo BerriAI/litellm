@@ -850,14 +850,17 @@ async def video_edit(
     )
     data["custom_llm_provider"] = custom_llm_provider
 
-    await authorize_video_reference(
-        data["video_id"],
-        decoded,
-        custom_llm_provider,
-        llm_router,
-        proxy_logging_obj.get_proxy_hook("managed_files"),
-        user_api_key_dict,
-    )
+    if isinstance(uploaded_video, StarletteUploadFile):
+        video_ownership_store(proxy_logging_obj.get_proxy_hook("managed_files"), user_api_key_dict)
+    else:
+        await authorize_video_reference(
+            data["video_id"],
+            decoded,
+            custom_llm_provider,
+            llm_router,
+            proxy_logging_obj.get_proxy_hook("managed_files"),
+            user_api_key_dict,
+        )
     resolved_model: Final = video_model_group(decoded, llm_router)
     if resolved_model:
         data["model"] = resolved_model
