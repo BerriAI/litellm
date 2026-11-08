@@ -2,6 +2,7 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any, Final
+from urllib.parse import urlparse
 
 import httpx
 from pydantic import JsonValue
@@ -39,18 +40,40 @@ class _MistralCountCredential:
     api_base: str | None
 
 
+def _is_azure_endpoint(api_base: str | None) -> bool:
+    if not api_base:
+        return False
+    hostname: Final = urlparse(api_base).hostname or ""
+    return hostname.endswith(".azure.com") or hostname.endswith(".azure.cn") or "azure" in hostname.lower()
+
+
 def _count_credential(
     deployment: Mapping[str, object] | None, model_label: str
-) -> _MistralCountCredential | MistralError:
+) -> _MistralCountCredential | MistralError | None:
     litellm_params: Final = as_str_mapping(None if deployment is None else deployment.get("litellm_params")) or {}
-    api_base: Final = litellm_params.get("api_base")
-    api_key: Final = (
-        litellm_params.get("api_key")
-        or litellm.api_key
-        or get_secret_str("MISTRAL_API_KEY")
-        or get_secret_str("MISTRAL_AZURE_API_KEY")
+    custom_llm_provider: Final = litellm_params.get("custom_llm_provider")
+    if custom_llm_provider in ("azure", "azure_ai"):
+        return None
+    raw_api_base: Final = litellm_params.get("api_base")
+    raw_api_key: Final = litellm_params.get("api_key")
+
+    from litellm.llms.mistral.chat.transformation import MistralConfig
+
+    resolved_base, resolved_key = MistralConfig()._get_openai_compatible_provider_info(
+        api_base=raw_api_base if isinstance(raw_api_base, str) else None,
+        api_key=raw_api_key if isinstance(raw_api_key, str) else None,
     )
-    if not isinstance(api_key, str) or not api_key:
+
+    if _is_azure_endpoint(resolved_base) or (
+        bool(get_secret_str("MISTRAL_AZURE_API_KEY")) and not raw_api_key and not get_secret_str("MISTRAL_API_KEY")
+    ):
+        verbose_logger.debug(
+            "Mistral native count tokens skipped for Azure deployment/credential, falling back to local: base=%s",
+            resolved_base,
+        )
+        return None
+
+    if not isinstance(resolved_key, str) or not resolved_key:
         return MistralError(
             status_code=401,
             message=(
@@ -59,7 +82,7 @@ def _count_credential(
             ),
             headers=httpx.Headers(),
         )
-    return _MistralCountCredential(api_key=api_key, api_base=api_base if isinstance(api_base, str) else None)
+    return _MistralCountCredential(api_key=resolved_key, api_base=resolved_base)
 
 
 def _count_error(model_to_use: str, request_model: str, message: str, status_code: int) -> TokenCountResponse:
@@ -191,6 +214,8 @@ class MistralTokenCounter(BaseTokenCounter):
             )
 
         resolved: Final = _count_credential(deployment, request_model or model_to_use)
+        if resolved is None:
+            return None
         if isinstance(resolved, MistralError):
             return _count_error(model_to_use, request_model, resolved.message, resolved.status_code)
 
@@ -230,6 +255,8 @@ class MistralTokenCounter(BaseTokenCounter):
         request_model: str,
     ) -> TokenCountResponse | None:
         resolved: Final = _count_credential(deployment, request_model or model_to_use)
+        if resolved is None:
+            return None
         if isinstance(resolved, MistralError):
             return _count_error(model_to_use, request_model, resolved.message, resolved.status_code)
         body: Final = native_count_request(request, model_to_use, policy)

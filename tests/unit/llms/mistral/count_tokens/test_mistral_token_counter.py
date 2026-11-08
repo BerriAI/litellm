@@ -373,3 +373,86 @@ async def test_count_tokens_malformed_tool_result_rejected_before_provider_call(
     assert result.error is True
     assert result.status_code == 400
     assert result.rejected_before_provider_call is True
+
+
+@pytest.mark.asyncio
+async def test_count_tokens_azure_endpoint_falls_back_to_none():
+    counter: Final = MistralTokenCounter()
+    result: Final = await counter.count_tokens(
+        model_to_use="mistral-large-4",
+        messages=[{"role": "user", "content": "Hello"}],
+        contents=None,
+        deployment={
+            "litellm_params": {
+                "api_key": "test-key",
+                "api_base": "https://my-mistral.inference.ai.azure.com",
+            }
+        },
+        request_model="mistral/mistral-large-4",
+    )
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_count_tokens_azure_only_credentials_falls_back_to_none(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("MISTRAL_AZURE_API_KEY", "azure-test-key")
+    monkeypatch.delenv("MISTRAL_API_KEY", raising=False)
+    monkeypatch.setattr(litellm, "api_key", None)
+    counter: Final = MistralTokenCounter()
+    result: Final = await counter.count_tokens(
+        model_to_use="mistral-large-4",
+        messages=[{"role": "user", "content": "Hello"}],
+        contents=None,
+        deployment={"litellm_params": {}},
+        request_model="mistral/mistral-large-4",
+    )
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_count_tokens_mistral_env_key_takes_precedence_over_generic_litellm_api_key(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("MISTRAL_API_KEY", "real-mistral-key")
+    monkeypatch.setattr(litellm, "api_key", "generic-openai-key")
+    counter: Final = MistralTokenCounter()
+    with respx.mock:
+        route: Final = respx.post(COUNT_URL).mock(
+            return_value=httpx.Response(200, json={"object": "response.input_tokens", "input_tokens": 15})
+        )
+        result: Final = await counter.count_tokens(
+            model_to_use="mistral-large-4",
+            messages=[{"role": "user", "content": "Hello"}],
+            contents=None,
+            deployment={"litellm_params": {}},
+            request_model="mistral/mistral-large-4",
+        )
+    assert result is not None
+    assert result.total_tokens == 15
+    assert route.calls.last.request.headers["authorization"] == "Bearer real-mistral-key"
+
+
+def test_mistral_config_get_api_key_and_base(monkeypatch: pytest.MonkeyPatch):
+    from litellm.llms.mistral.chat.transformation import MistralConfig
+
+    monkeypatch.setenv("MISTRAL_API_KEY", "env-mistral-key")
+    monkeypatch.setenv("MISTRAL_API_BASE", "https://custom.mistral.ai")
+    assert MistralConfig.get_api_key() == "env-mistral-key"
+    assert MistralConfig.get_api_base() == "https://custom.mistral.ai"
+
+
+def test_mistral_config_get_models_calls_mistral_endpoint():
+    from litellm.llms.mistral.chat.transformation import MistralConfig
+
+    config: Final = MistralConfig()
+
+    def mock_fetch(api_base: str | None, bearer_token: str | None) -> list[str]:
+        assert api_base == "https://api.mistral.ai/v1"
+        assert bearer_token == "test-key"
+        return ["mistral-large-4", "mistral-small-latest"]
+
+    with patch.object(config, "_fetch_model_ids", side_effect=mock_fetch):
+        models: Final = config.get_models(api_key="test-key")
+        assert models == ["mistral-large-4", "mistral-small-latest"]
+

@@ -388,10 +388,43 @@ class MistralConfig(OpenAIGPTConfig):
             model=model,
         )
 
+    @staticmethod
+    def get_api_key(api_key: str | None = None) -> str | None:
+        return (
+            api_key
+            or get_secret_str("MISTRAL_API_KEY")
+            or get_secret_str("MISTRAL_AZURE_API_KEY")
+            or litellm.api_key
+        )
+
+    @staticmethod
+    def get_api_base(api_base: str | None = None) -> str | None:
+        return (
+            api_base
+            or litellm.api_base
+            or get_secret_str("MISTRAL_API_BASE")
+            or get_secret_str("MISTRAL_AZURE_API_BASE")
+            or "https://api.mistral.ai/v1"
+        )
+
+    def get_models(self, api_key: str | None = None, api_base: str | None = None) -> list[str]:
+        resolved_base, resolved_key = self._get_openai_compatible_provider_info(api_base, api_key)
+        if not resolved_key:
+            raise ValueError(
+                "MISTRAL_API_KEY or api_key parameter is not set. Please set the environment variable to query "
+                "Mistral's `/v1/models` endpoint."
+            )
+        return self._fetch_model_ids(
+            api_base=resolved_base,
+            bearer_token=resolved_key,
+        )
+
     def _get_openai_compatible_provider_info(self, api_base: str | None, api_key: str | None) -> tuple[str, str | None]:
         # mistral is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.mistral.ai
         api_base = (
             api_base
+            or litellm.api_base
+            or get_secret_str("MISTRAL_API_BASE")
             or get_secret_str("MISTRAL_AZURE_API_BASE")  # for Azure AI Mistral
             or "https://api.mistral.ai/v1"
         )
@@ -400,8 +433,9 @@ class MistralConfig(OpenAIGPTConfig):
         api_base = ensure_api_route(api_base, "v1")
         dynamic_api_key: Final = (
             api_key
-            or get_secret_str("MISTRAL_AZURE_API_KEY")  # for Azure AI Mistral
             or get_secret_str("MISTRAL_API_KEY")
+            or get_secret_str("MISTRAL_AZURE_API_KEY")  # for Azure AI Mistral
+            or litellm.api_key
         )
         return api_base, dynamic_api_key
 
