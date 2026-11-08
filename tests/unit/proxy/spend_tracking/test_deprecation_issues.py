@@ -3,6 +3,7 @@ from datetime import date, datetime, timedelta, timezone
 import pytest
 
 from litellm.proxy.spend_tracking.deprecation_issues import deprecation_candidates, used_deprecation_issues
+from litellm.types.proxy.usage_alerts import UsageAlertMetricPoint
 from litellm.types.proxy.model_deprecation import (
     DeprecationAlertState,
     DeprecationAlertStatus,
@@ -136,3 +137,15 @@ def test_retirement_candidates_are_bounded_and_preserve_alias_choice() -> None:
     assert len(candidates) == 1 and candidates[0].model.model_name == "a-alias"
     with pytest.raises(ValueError, match="at most 10"):
         deprecation_candidates(tuple(model(model_name=f"alias-{index}") for index in range(11)))
+
+
+def test_retirement_keeps_recorded_daily_usage_in_the_saved_issue() -> None:
+    points = (
+        UsageAlertMetricPoint(day=NOW.date() - timedelta(days=2), value=670),
+        UsageAlertMetricPoint(day=NOW.date(), value=30),
+    )
+    recorded = usage().model_copy(update={"daily_requests": points})
+    issue = used_deprecation_issues(deprecation_candidates((model(),)), {recorded.model: recorded}, {}, NOW)[0]
+    assert issue.deprecation is not None
+    assert issue.deprecation.daily_requests == points
+    assert sum(point.value or 0 for point in issue.deprecation.daily_requests) == issue.deprecation.requests

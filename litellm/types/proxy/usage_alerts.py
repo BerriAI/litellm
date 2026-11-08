@@ -17,6 +17,13 @@ UsageAlertEvaluationStatus: TypeAlias = Literal[
 UsageAlertRuleKind: TypeAlias = Literal["all", "default", "custom"]
 
 
+class UsageAlertMetricPoint(BaseModel, frozen=True):
+    model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
+
+    day: date
+    value: float | None = Field(default=None, ge=0)
+
+
 class UsageAlertRuleInput(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
 

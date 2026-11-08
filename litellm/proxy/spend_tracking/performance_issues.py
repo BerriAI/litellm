@@ -11,7 +11,7 @@ from uuid import NAMESPACE_URL, uuid5
 
 from litellm._logging import verbose_proxy_logger
 from litellm.models.issues import IssueStore
-from litellm.proxy.spend_tracking.daily_usage_alerts import DailyComparison, compare_daily_usage
+from litellm.proxy.spend_tracking.daily_usage_alerts import DailyComparison, compare_daily_usage, metric_value
 from litellm.repositories.provider_latency import ProviderLatencyEvidence, ProviderLatencyRepository
 from litellm.repositories.usage_alert_metrics import (
     DailyAlertMetrics,
@@ -43,6 +43,7 @@ from litellm.types.proxy.usage_alert_defaults import (
 from litellm.types.proxy.usage_alerts import (
     UsageAlertDirection,
     UsageAlertMetric,
+    UsageAlertMetricPoint,
     UsageAlertProjectionCursor,
     UsageAlertProjectionWork,
     UsageAlertRule,
@@ -97,6 +98,17 @@ def _window(source: IssueProjectionSignal, day: date) -> IssueMetricWindow:
     )
 
 
+def _history(candidate: _Candidate, metric: UsageAlertMetric, observed: float) -> tuple[UsageAlertMetricPoint, ...]:
+    history: Final = tuple(row for row in candidate.rows if candidate.window.start <= row.day < candidate.window.day)
+    return (
+        *(
+            UsageAlertMetricPoint(day=day, value=metric_value(metric, tuple(rows), 1))
+            for day, rows in groupby(sorted(history, key=lambda row: row.day), lambda row: row.day)
+        ),
+        UsageAlertMetricPoint(day=candidate.window.day, value=observed),
+    )
+
+
 def _comparison(candidate: _Candidate) -> IssueComparison:
     return IssueComparison(
         metric=candidate.source.rule.metric,
@@ -107,6 +119,7 @@ def _comparison(candidate: _Candidate) -> IssueComparison:
         baseline_start=candidate.window.start,
         baseline_end=candidate.window.day - timedelta(days=1),
         baseline_sample_days=candidate.comparison.baseline_sample_days,
+        history=_history(candidate, candidate.source.rule.metric, candidate.comparison.observed),
     )
 
 
@@ -122,6 +135,7 @@ def _request_context(candidate: _Candidate) -> IssueComparison:
         baseline_start=candidate.window.start,
         baseline_end=candidate.window.day - timedelta(days=1),
         baseline_sample_days=len({row.day for row in history}),
+        history=_history(candidate, "requests", observed),
     )
 
 

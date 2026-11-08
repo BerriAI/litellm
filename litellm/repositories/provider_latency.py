@@ -4,13 +4,13 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from typing import TYPE_CHECKING, Final, cast  # noqa: TID251  # generated Prisma structural interface
 
-from pydantic import BaseModel, TypeAdapter
+from pydantic import BaseModel, Field, TypeAdapter
 
 from litellm.constants import PTU_SENTINEL_API_KEY
 from litellm.repositories.daily_activity_buckets import api_key_bucket, api_key_from_bucket
 from litellm.repositories.usage_alert_metrics import MetricsDatabase
 from litellm.types.proxy.issues import IssueCohort, IssueComparison, IssueImpact, IssueModelPair
-from litellm.types.proxy.usage_alerts import UsageAlertRuleInput, UsageAlertScope
+from litellm.types.proxy.usage_alerts import UsageAlertMetricPoint, UsageAlertRuleInput, UsageAlertScope
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
@@ -37,6 +37,7 @@ class _CohortRow(BaseModel, frozen=True):
     teams: int
     requests: int
     measured_keys: int
+    history: tuple[UsageAlertMetricPoint, ...] = Field(default=(), max_length=31)
 
 
 class _Member(BaseModel, frozen=True):
@@ -119,8 +120,13 @@ _COHORT: Final = (
     + """
 , selected AS MATERIALIZED (
     SELECT s.* FROM scored s JOIN model_scores USING(provider,model)
+), cohort_history AS (
+    SELECT d.date AS day,SUM(d.response_ms)/NULLIF(SUM(d.timed),0) AS value
+    FROM daily d JOIN selected s USING(source_id,provider,model,api_key)
+    WHERE s.comparable GROUP BY d.date
 )
 SELECT jsonb_agg(jsonb_build_object('provider',provider,'model',model) ORDER BY provider,model) AS pairs,
+       (SELECT jsonb_agg(jsonb_build_object('day',day,'value',value) ORDER BY day) FROM cohort_history) AS history,
        SUM(observed_ms)/SUM(comparable_timed) AS observed,
        SUM(expected_ms)/SUM(comparable_timed) AS expected,
        CASE WHEN MIN(min_days)=MAX(max_days) THEN MIN(min_days) ELSE NULL END AS sample_days,
@@ -223,6 +229,7 @@ class ProviderLatencyRepository:
                 baseline_start=day - timedelta(days=rule.baseline_days),
                 baseline_end=day - timedelta(days=1),
                 baseline_sample_days=row.sample_days,
+                history=row.history,
             ),
             impact=IssueImpact(
                 keys=row.keys,

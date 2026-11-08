@@ -114,6 +114,7 @@ def deprecation_issue(
             last_used_date=usage.last_used_date,
             last_day_requests=usage.last_day_requests,
             state=state,
+            daily_requests=usage.daily_requests,
         ),
     )
 
