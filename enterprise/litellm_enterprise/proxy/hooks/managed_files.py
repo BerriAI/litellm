@@ -1945,14 +1945,13 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 if isinstance(file_id, str) and file_id:
                     file_ids.append(file_id)
 
-            # Check for input_file in content array
+            # Check for file references in content
             content = item.get("content")
-            if isinstance(content, list):
-                for content_item in content:
-                    if isinstance(content_item, dict) and content_item.get("type") in ("input_file", "input_image"):
-                        file_id = content_item.get("file_id")
-                        if isinstance(file_id, str) and file_id:
-                            file_ids.append(file_id)
+            for content_item in (content if isinstance(content, list) else (content,)):
+                if isinstance(content_item, dict) and content_item.get("type") in ("input_file", "input_image"):
+                    file_id = content_item.get("file_id")
+                    if isinstance(file_id, str) and file_id:
+                        file_ids.append(file_id)
 
         return file_ids
 

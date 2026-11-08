@@ -1425,8 +1425,15 @@ def test_update_responses_tools_with_mixed_file_ids():
 @pytest.mark.parametrize("input_type", ["input_file", "input_image"])
 def test_responses_content_file_references_are_collected(input_type: str) -> None:
     hook: Final = PROXY_LiteLLMManagedFiles(DualCache(), prisma_client=None)
-    content: Final = [{"type": input_type, "file_id": "file-example"}, {"type": "input_text", "text": "hello"}]
-    assert hook.get_file_ids_from_responses_input([{"role": "user", "content": content}]) == ["file-example"]
+    input_items: Final = [
+        {"type": input_type, "file_id": "file-direct"},
+        {"role": "user", "content": {"type": input_type, "file_id": "file-singleton"}},
+        {
+            "role": "user",
+            "content": [{"type": input_type, "file_id": "file-list"}, {"type": "input_text", "text": "hello"}],
+        },
+    ]
+    assert hook.get_file_ids_from_responses_input(input_items) == ["file-direct", "file-singleton", "file-list"]
 
 
 def test_get_file_ids_from_responses_tools():
