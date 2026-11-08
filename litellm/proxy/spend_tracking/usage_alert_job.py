@@ -145,7 +145,8 @@ class UsageAlertJob:
             background=True,
         )
         metrics: Final = UsageAlertMetricsRepository(database)
-        delivery: Final = UsageAlertDelivery(slack)
+        issues: Final = IssuesRepository(database)
+        delivery: Final = UsageAlertDelivery(slack, issues)
         return cls(
             UsageAlertsRepository(database),
             metrics,
@@ -158,7 +159,7 @@ class UsageAlertJob:
             ),
             deprecation_projection=deprecation_projection,
             performance_projection=PerformanceIssueProjector(
-                IssuesRepository(database),
+                issues,
                 metrics,
                 ProviderLatencyRepository(database),
                 delivery,

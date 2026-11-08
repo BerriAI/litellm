@@ -207,6 +207,8 @@ class IssueDeliveryInput(BaseModel, frozen=True):
     issue_id: str = Field(min_length=1, max_length=200)
     channel: UsageAlertChannel
     email_recipients: tuple[str, ...] = Field(default=(), max_length=20)
+    slack_destination: str | None = Field(default=None, pattern="^[a-f0-9]{64}$")
+    parent_delivery_id: str | None = Field(default=None, min_length=1, max_length=200)
 
 
 class IssueDeliveryBinding(BaseModel, frozen=True):
