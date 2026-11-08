@@ -1,16 +1,24 @@
+from collections.abc import Callable
 from dataclasses import replace
 from typing import Final
 
 import pytest
 
-from litellm._auth.fallback_access import FallbackAuthorizationFacts, GroupedModelScope, fallback_authorization
+from litellm._auth.fallback_access import (
+    FallbackAuthorizationDecision,
+    FallbackAuthorizationFacts,
+    GroupedModelScope,
+    fallback_authorization,
+)
 from litellm._auth.model_access import ModelAccessFacts
+from tests.unit._auth.support.fallback_reference import authorization
 
 _ALLOW: Final = ModelAccessFacts(("model",), ("model",), object_type="key")
 _DENY: Final = replace(_ALLOW, grants=("other",))
 _BASE: Final = FallbackAuthorizationFacts(GroupedModelScope(_ALLOW))
 
 
+@pytest.mark.parametrize("policy", (authorization, fallback_authorization))
 @pytest.mark.parametrize(
     ("facts", "kind"),
     (
@@ -50,8 +58,12 @@ _BASE: Final = FallbackAuthorizationFacts(GroupedModelScope(_ALLOW))
         pytest.param(replace(_BASE, project=_DENY), "Deny", id="project-ceiling"),
     ),
 )
-def test_fallback_authorization_stage_order(facts: FallbackAuthorizationFacts, kind: str) -> None:
-    assert fallback_authorization(facts).kind == kind
+def test_fallback_authorization_stage_order(
+    policy: Callable[[FallbackAuthorizationFacts], FallbackAuthorizationDecision],
+    facts: FallbackAuthorizationFacts,
+    kind: str,
+) -> None:
+    assert policy(facts).kind == kind
 
 
 def test_key_denial_wins_before_later_scopes() -> None:
@@ -62,6 +74,7 @@ def test_key_denial_wins_before_later_scopes() -> None:
     assert decision.denial.object_type == "key"
 
 
+@pytest.mark.parametrize("policy", (authorization, fallback_authorization))
 @pytest.mark.parametrize(
     ("facts", "kind"),
     (
@@ -76,6 +89,8 @@ def test_key_denial_wins_before_later_scopes() -> None:
     ),
 )
 def test_later_scope_projection_is_requested_only_after_prior_allow(
-    facts: FallbackAuthorizationFacts, kind: str
+    policy: Callable[[FallbackAuthorizationFacts], FallbackAuthorizationDecision],
+    facts: FallbackAuthorizationFacts,
+    kind: str,
 ) -> None:
-    assert fallback_authorization(facts).kind == kind
+    assert policy(facts).kind == kind

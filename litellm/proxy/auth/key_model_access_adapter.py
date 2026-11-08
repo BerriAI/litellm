@@ -5,7 +5,7 @@ from typing import Final
 from fastapi import Request
 from pydantic import BaseModel, Field
 
-from litellm._auth.failure import NativeAuthFailure
+from litellm._auth.failure import NativeAuthFailure, NativeAuthRuntimeError
 from litellm._auth.fallback_access import GroupedModelScope
 from litellm._auth.key_model_access import KeyAndFallbackModelAccessFacts, key_and_fallback_model_access
 from litellm._auth.model_access import key_model_grants
@@ -123,7 +123,7 @@ async def _read(
             )
         case "ReadPrimaryGroups":
             if facts.primary is None:
-                raise RuntimeError("missing primary model scope")
+                raise NativeAuthRuntimeError("missing primary model scope")
             return await _read(replace(facts, primary=await _groups(facts.primary)), source, route_errors)
         case "ReadFallbackNames":
             names: Final = tuple(
@@ -136,7 +136,7 @@ async def _read(
             return await _read(replace(facts, fallback_names=names), source, route_errors)
         case "ReadFallbackScope":
             if facts.fallback_names is None:
-                raise RuntimeError("missing fallback names")
+                raise NativeAuthRuntimeError("missing fallback names")
             scope: Final = _scope(facts.fallback_names[decision.index], source)
             return await _read(replace(facts, fallback_scopes=(*facts.fallback_scopes, scope)), source, route_errors)
         case "ReadFallbackGroups":
@@ -147,7 +147,7 @@ async def _read(
             return await _read(replace(facts, fallback_scopes=scopes), source, route_errors)
         case "RouteFallback":
             if facts.fallback_names is None:
-                raise RuntimeError("missing fallback names")
+                raise NativeAuthRuntimeError("missing fallback names")
             error: Final = await _route(facts.fallback_names[decision.index], source)
             return await _read(
                 replace(facts, routing=(*facts.routing, "Routed" if error is None else "Failed")),
@@ -157,5 +157,5 @@ async def _read(
         case "RoutingFailure":
             failure: Final = route_errors[decision.index]
             if failure is None:
-                raise RuntimeError("missing fallback routing failure")
+                raise NativeAuthRuntimeError("missing fallback routing failure")
             raise failure

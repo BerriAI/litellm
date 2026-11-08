@@ -1,6 +1,7 @@
 from dataclasses import dataclass, replace
 from typing import Final
 
+from litellm._auth.failure import NativeAuthRuntimeError
 from litellm._auth.fallback_access import FallbackAuthorizationFacts, GroupedModelScope, fallback_authorization
 from litellm._auth.model_access import key_model_grants
 from litellm.proxy._types import LiteLLM_ProjectTable, LiteLLM_TeamMembership, LiteLLM_TeamTable, UserAPIKeyAuth
@@ -69,7 +70,7 @@ async def _read(facts: FallbackAuthorizationFacts, source: _Sources) -> Fallback
             return await _read(replace(facts, key=key), source)
         case "ReadTeam":
             if source.team is None:
-                raise RuntimeError("missing fallback team source")
+                raise NativeAuthRuntimeError("missing fallback team source")
             team: Final = GroupedModelScope(
                 project_model_facts(
                     source.model,
@@ -106,7 +107,7 @@ async def _read(facts: FallbackAuthorizationFacts, source: _Sources) -> Fallback
             return await _read(replace(facts, member=member), source)
         case "ReadProject":
             if source.project is None:
-                raise RuntimeError("missing fallback project source")
+                raise NativeAuthRuntimeError("missing fallback project source")
             project: Final = project_model_facts(
                 source.model,
                 source.router,
@@ -118,12 +119,12 @@ async def _read(facts: FallbackAuthorizationFacts, source: _Sources) -> Fallback
             return await _read(replace(facts, project=project), source)
         case "ReadKeyGroups":
             if facts.key is None:
-                raise RuntimeError("missing fallback key scope")
+                raise NativeAuthRuntimeError("missing fallback key scope")
             models: Final = await get_models_from_access_groups(facts.key.group_ids, prisma_client=source.prisma)
             return await _read(replace(facts, key=replace(facts.key, group_models=tuple(models))), source)
         case "ReadTeamGroups":
             if facts.team is None:
-                raise RuntimeError("missing fallback team scope")
+                raise NativeAuthRuntimeError("missing fallback team scope")
             team_models: Final = await get_models_from_access_groups(facts.team.group_ids, prisma_client=source.prisma)
             return await _read(replace(facts, team=replace(facts.team, group_models=tuple(team_models))), source)
         case "ReadAssignedGroups":

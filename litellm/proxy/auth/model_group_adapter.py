@@ -1,7 +1,7 @@
 from dataclasses import dataclass, replace
 from typing import Final, Literal, TypeAlias
 
-from litellm._auth.failure import NativeAuthFailure
+from litellm._auth.failure import NativeAuthFailure, NativeAuthRuntimeError
 from litellm._auth.model_groups import GroupLookup, GroupResources, ResourceGroupFacts, resource_group_decision
 from litellm.proxy._types import LiteLLM_TeamTable, UserAPIKeyAuth
 
@@ -83,7 +83,7 @@ async def _drive(
         case "Raise":
             error: Final = reads[decision.index].error
             if error is None:
-                raise RuntimeError("missing access group lookup failure")
+                raise NativeAuthRuntimeError("missing access group lookup failure")
             raise error
         case "Read":
             result: Final = await _read(facts.group_ids[decision.index], resource_field, facts.check_db_only)

@@ -5,6 +5,7 @@ from typing import Final
 from pydantic import BaseModel, Field, TypeAdapter
 
 import litellm
+from litellm._auth.failure import NativeAuthRuntimeError
 from litellm._auth.unpriced_models import DeploymentPricing, PriceEntry, PriceMetric, UnpricedModelFacts, unpriced_model
 from litellm.router_api import RegistryReader
 
@@ -52,7 +53,7 @@ def _read(facts: UnpricedModelFacts, router: RegistryReader | None, rows: Sequen
     if decision.kind == "Complete":
         return facts
     if router is None or facts.model is None:
-        raise RuntimeError("unpriced model read without a router or model")
+        raise NativeAuthRuntimeError("unpriced model read without a router or model")
     match decision.kind:
         case "ReadGroup":
             found: Final = router.registry().group(facts.model) is not None
@@ -72,11 +73,11 @@ def _read(facts: UnpricedModelFacts, router: RegistryReader | None, rows: Sequen
             return _read(snapshot, router, deployments)
         case "ReadInfo" | "ReadCost":
             if facts.deployments is None:
-                raise RuntimeError("missing unpriced deployment facts")
+                raise NativeAuthRuntimeError("missing unpriced deployment facts")
             row: Final = rows[decision.index]
             model_id: Final = row.model_info.id
             if model_id is None:
-                raise RuntimeError("missing unpriced deployment identifier")
+                raise NativeAuthRuntimeError("missing unpriced deployment identifier")
             current: Final = (
                 facts.deployments[decision.index]
                 if decision.kind == "ReadInfo"

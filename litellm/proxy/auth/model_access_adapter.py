@@ -6,7 +6,7 @@ from fastapi import HTTPException
 from pydantic import BaseModel
 
 import litellm
-from litellm._auth.failure import NativeAuthFailure
+from litellm._auth.failure import NativeAuthFailure, NativeAuthRuntimeError
 from litellm._auth.model_access import (
     ModelAccessDecision,
     ModelAccessFacts,
@@ -144,7 +144,7 @@ def raise_model_denial(
         case "NoAgentModels":
             raise HTTPException(403, "This agent has no model grants")
         case "ReadGroups" | "ReadScope":
-            raise RuntimeError("model grant lookup was not answered")
+            raise NativeAuthRuntimeError("model grant lookup was not answered")
         case "Deny" | "NoDefaultModels" | "EmptyAgentCeiling" | "PersonalTeam":
             error_model: Final = decision.model if decision.model is not None else model
             object_type: Final = decision.object_type

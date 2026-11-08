@@ -1,11 +1,16 @@
 #![forbid(unsafe_code)]
 
 pub mod credential;
+pub mod budget_pricing;
+pub mod common_budgets;
 mod error;
 pub mod fallback_access;
+pub mod fallback_candidate;
 mod key;
 pub mod key_model_access;
 pub mod model_access;
+pub mod model_attribution;
+pub mod model_budget_data;
 mod model_budgets;
 pub mod model_groups;
 pub mod org_routes;
