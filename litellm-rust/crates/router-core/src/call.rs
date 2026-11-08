@@ -1098,17 +1098,20 @@ impl Core {
                 });
             }
             if uncounted == Some(UncountedRetries::Raises) {
+                if let Some(refusal) = refusal {
+                    return Err(refusal);
+                }
                 self.host.observe(&RouterEvent::RetryCountRaised {
                     level: at.level,
                     model: target.group.clone(),
                     cause: RetryCause::of(&failed.error),
                 });
-                return Err(refusal.unwrap_or(Failed {
+                return Err(Failed {
                     error: Box::new(Error::Attempt(AttemptError::host_raised(&["Exception"]))),
                     deployment_id: None,
                     routed: None,
                     served_as: None,
-                }));
+                });
             }
             if num_retries == 0 {
                 return Err(refusal.unwrap_or(failed));

@@ -1108,6 +1108,29 @@ async fn a_retry_that_fails_after_a_context_window_error_raises_that_error(confi
 
 #[rstest]
 #[tokio::test]
+async fn a_num_retries_that_raises_leaves_a_context_window_error_standing(config: RouterConfig) {
+    let host = Arc::new(ScriptedHost::failing("primary", vec![context_window()]));
+    let router = router(config, json!({"num_retries": 2}), host.clone());
+    let request = RouterRequest {
+        uncounted_retries: Some(UncountedRetries::Raises),
+        ..request()
+    };
+    let refused = router.call(Op::from("acompletion"), request).await;
+    assert!(
+        matches!(refused, Err(Error::Attempt(failed)) if failed.kind == FailureKind::ContextWindowExceeded)
+    );
+    assert!(
+        !host
+            .events
+            .lock()
+            .iter()
+            .any(|event| matches!(event, RouterEvent::RetryCountRaised { .. }))
+    );
+    assert_eq!(host.selected().len(), 1);
+}
+
+#[rstest]
+#[tokio::test]
 async fn a_failed_agentic_followup_is_not_retried_but_still_falls_back(config: RouterConfig) {
     let host = Arc::new(ScriptedHost::failing("primary", vec![agentic_followup()]));
     let router = router(
