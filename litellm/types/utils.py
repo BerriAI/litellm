@@ -3333,6 +3333,14 @@ RoutingDecisionCause = Literal[
     "health_default_fallback",
     "session_affinity_pin",
     "session_affinity_escalation",
+    # Cascade router: the cheap deployment answered first; the cause says whether that answer was kept
+    # or why the strong deployment was called instead. `escalation_reason` carries the specific check.
+    "cascade_cheap_first",
+    "cascade_pass",
+    "cascade_heuristic_escalation",
+    "cascade_verifier_escalation",
+    "cascade_verifier_error",
+    "cascade_strong_error",
     # classification_mode 'user_turn': the request is an agent loop's continuation turn (no new
     # human ask), so the session's held routing decision was replayed and the classifier was never
     # called. Distinct from "session_affinity_pin", which reports the session_affinity flag pinning
@@ -3361,6 +3369,7 @@ InternalCallOrigin = Literal[
     "llm_as_a_judge_guardrail",
     "background_response_cost_poll",
     "background_response_status_poll",
+    "cascade_verifier",
 ]
 """Which internal litellm feature originated a billed sub-call, so a spend log row
 records that it is not traffic the caller sent."""
@@ -3371,6 +3380,9 @@ SHADOW_EVAL_JUDGE_CALL_ORIGIN: Final[InternalCallOrigin] = "shadow_eval_judge"
 LLM_AS_A_JUDGE_GUARDRAIL_CALL_ORIGIN: Final[InternalCallOrigin] = "llm_as_a_judge_guardrail"
 BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN: Final[InternalCallOrigin] = "background_response_cost_poll"
 BACKGROUND_RESPONSE_STATUS_POLL_CALL_ORIGIN: Final[InternalCallOrigin] = "background_response_status_poll"
+# Cascade router verifier: billed on its own row and attributed through the decision's classifier_cost, like
+# the auto-router classifier. The strong leg is the request's own continuation (one row bills both legs).
+CASCADE_VERIFIER_CALL_ORIGIN: Final[InternalCallOrigin] = "cascade_verifier"
 
 
 class StandardLoggingHeuristicV2Forecast(TypedDict):
@@ -3384,7 +3396,7 @@ class StandardLoggingRoutingDecision(TypedDict, total=False):
     """Per-request provenance for a pre-routing strategy (auto-router) decision."""
 
     router_model_name: str
-    router_type: ReadOnly[Literal["complexity", "adaptive", "quality", "semantic", "switchyard"]]
+    router_type: ReadOnly[Literal["complexity", "adaptive", "quality", "semantic", "switchyard", "cascade"]]
     switchyard_algorithm: ReadOnly[str]
     switchyard_evidence: ReadOnly[object]
     switchyard_fallback_reason: ReadOnly[str]
@@ -3434,6 +3446,7 @@ class StandardLoggingRoutingDecision(TypedDict, total=False):
     savings_baseline_model: str
     savings_baseline_deployment_id: str
     tier_litellm_params: Mapping[str, object]  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
+    escalation_reason: str  # writable-ok: the cascade sets it after the call (empty | short | refusal | truncated | verifier_no | verifier_error)
 
 
 class StandardLoggingKubernetesPodRouting(TypedDict):
@@ -3490,6 +3503,7 @@ DERIVED_ROUTING_DECISION_FIELDS: Final[frozenset[str]] = frozenset(
         "classifier_prompt_version",
         "classifier_threshold",
         "escalated",
+        "escalation_reason",
         "context_escalated",
         "context_escalation_original_tier",
         "tier_boundaries",

@@ -93,6 +93,8 @@ def test_only_non_default_open_source_instructions_claim_the_shared_customizatio
         ("auto_router/complexity_router-eu", "complexity"),
         ("auto_router/adaptive_router", "adaptive"),
         ("auto_router/quality_router", "quality"),
+        ("auto_router/cascade_router", "cascade"),
+        ("auto_router/cascade_router/support", "cascade"),
         ("auto_router/auto_router/complexity_router", "semantic"),
         ("auto_router/", "semantic"),
     ],
@@ -112,6 +114,7 @@ def test_classify_strategy_router_model(model, expected):
         ("auto_router/my-router", frozenset({"auto_router_config"}), "requires"),
         ("auto_router/adaptive_router", frozenset(), "requires"),
         ("auto_router/quality_router", frozenset(), "requires"),
+        ("auto_router/cascade_router", frozenset(), "cascade_router_config"),
     ],
 )
 def test_validate_rejects_incoherent_writes(model, present_fields, expected_fragment):
@@ -142,6 +145,7 @@ def test_validate_rejects_incoherent_writes(model, present_fields, expected_frag
         ("auto_router/adaptive_router", frozenset({"adaptive_router_config"})),
         ("auto_router/quality_router", frozenset({"quality_router_default_model"})),
         ("auto_router/quality_router", frozenset({"quality_router_config"})),
+        ("auto_router/cascade_router", frozenset({"cascade_router_config"})),
     ],
 )
 def test_validate_accepts_coherent_writes(model, present_fields):
@@ -373,6 +377,20 @@ def test_config_check_ignores_the_model_entirely():
                 "quality_router_config": {"available_models": ["q1"], "default_model": "qd"},
             },
             (("q1", "tier"), ("qd", "default")),
+        ),
+        (
+            {
+                "model": "auto_router/cascade_router/support",
+                "cascade_router_config": {"cheap_model": "small", "strong_model": "large", "verifier_model": "judge"},
+            },
+            (("small", "tier"), ("large", "tier"), ("judge", "classifier")),
+        ),
+        (
+            {
+                "model": "auto_router/cascade_router",
+                "cascade_router_config": {"cheap_model": "small", "strong_model": "large"},
+            },
+            (("small", "tier"), ("large", "tier")),
         ),
     ],
 )

@@ -116,6 +116,14 @@ from litellm.router_rust.invoke.walk import FallbackOutcomes, WalkMetadata, awai
 from litellm.router_rust.routing_stores import RoutingStores
 from litellm.router_rust.steps.access import caller_fields, selection_refusal
 from litellm.router_rust.steps.callbacks import OptionalChecks, RustOptionalChecks
+from litellm.router_rust.steps.cascade import (
+    CascadeAttempt,
+    CascadeOutcome,
+    fail_judged_attempt,
+    judge_cascade_answer,
+    prepare_cascade_attempt,
+    provider_call_scope,
+)
 from litellm.router_rust.steps.plugins import SYNC_PATH_MESSAGE, candidate_models, run_plugins
 from litellm.router_rust.steps.precall import (
     DECISIONS_MEDIA_CALL_TYPES,
@@ -1179,6 +1187,7 @@ _HOSTED_STATE: Final = frozenset(
         "_core_quality_routers",
         "_core_switchyard_routers",
         "_core_adaptive_routers",
+        "_core_cascade_routers",
         "_core_routing_plugins",
         "_core_deployment_latency_map",
     }
@@ -5019,8 +5028,25 @@ class _Driver:
         if first is not None and first is not error:
             error.__context__ = first  # rebind-ok: chained as the retry loop's raise chains it
 
+    async def _judge_cascade(self, pending: CascadeAttempt, call: "AttemptCall", response: object) -> CascadeOutcome:
+        """The cascade's judgment of the served answer; a strong leg that fails retracts the attempt's success count."""
+        try:
+            return await judge_cascade_answer(
+                self._core, pending, call, response, blocked=self._blocked(response, call.host_op) is not None
+            )
+        except Exception as error:
+            self._core._endpoints.counters.retract_success(self._plan, call)  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core
+            await fail_judged_attempt(pending, call, error)
+            raise
+
     def _succeeded(
-        self, call: "AttemptCall", response: object, host_op: str, stream: "StreamAttempt | None" = None
+        self,
+        call: "AttemptCall",
+        response: object,
+        host_op: str,
+        stream: "StreamAttempt | None" = None,
+        *,
+        counted: object | None = None,
     ) -> Mapping[str, object]:
         self._last_response = response
         _log_attempt(self._plan, call.model_name)
@@ -5030,7 +5056,9 @@ class _Driver:
             # One line per `run_async_fallback` the served hop returns through.
             for _ in range(self._fallback_depth):
                 verbose_router_logger.info("Successful fallback b/w models.")
-        tokens: Final = total_tokens(response)
+        # A cascade's attempt counts the cheap answer it was served (`counted`): the strong leg's own drive
+        # counted the strong deployment's.
+        tokens: Final = total_tokens(response if counted is None else counted)
         # A wrapped stream reports its success or failure when it ends; the attempt counts the
         # request and the tokens read so far, which the end's report leaves out.
         # A realtime attempt counts its session's success itself (`attempt`), when it ended cleanly.
@@ -5040,7 +5068,8 @@ class _Driver:
         return {
             "ok": True,
             "total_tokens": tokens,
-            "blocked": self._blocked(response, host_op),
+            # A judged attempt is blocked on the cheap answer alone: a strong answer was taken as served.
+            "blocked": self._blocked(response if counted is None else counted, host_op),
             "deferred": deferred,
             "tracks_usage": self._tracks_usage(call, response, deferred),
         }
@@ -5167,6 +5196,10 @@ class _Driver:
                 await log_refused_call(call, call.refused)
                 raise call.refused
             host: Final = self._core._host  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core
+            # A chat attempt a cascade judges: its logging object (and parked success log), ahead of the call.
+            cascade: Final = (
+                prepare_cascade_attempt(self._core, call) if self._plan.kind == "chat" and not self._plan.sync else None
+            )
             try:
                 compacted: Final = await compacted_attempt(self._core._port, self._plan, deployment, call)  # pyright: ignore[reportPrivateUsage]  # see above
             except Exception as refused:  # noqa: BLE001  # raised before the provider call, so no cooldown reads it
@@ -5190,18 +5223,19 @@ class _Driver:
                 first_to_log: Final = not failure_already_logged(call.kwargs, "async_failure")
                 logs_failure = first_to_log  # rebind-ok: whether a failure here is this attempt's to log
                 in_call = True  # rebind-ok: see above
-                pending: Final[object] = (
-                    self._core._endpoints.create_file_everywhere(  # pyright: ignore[reportPrivateUsage]  # see above
-                        _with_target_order(call.kwargs, step.get("target_order")),
-                        call.model_name,
-                        self._request.get("specific_deployment"),
+                with provider_call_scope(call.kwargs):
+                    pending: Final[object] = (
+                        self._core._endpoints.create_file_everywhere(  # pyright: ignore[reportPrivateUsage]  # see above
+                            _with_target_order(call.kwargs, step.get("target_order")),
+                            call.model_name,
+                            self._request.get("specific_deployment"),
+                        )
+                        if self._plan.kind == "create_file"
+                        else host.invoke(call.host_op)(**compacted)
                     )
-                    if self._plan.kind == "create_file"
-                    else host.invoke(call.host_op)(**compacted)
-                )
-                # The generic helper awaits whatever the handler returns, as the Python router does.
-                awaited: Final = self._plan.kind == "generic" or inspect.isawaitable(pending)
-                answered: Final[object] = await pending if awaited else pending  # pyright: ignore[reportGeneralTypeIssues, reportUnknownVariableType]  # see above
+                    # The generic helper awaits whatever the handler returns, as the Python router does.
+                    awaited: Final = self._plan.kind == "generic" or inspect.isawaitable(pending)
+                    answered: Final[object] = await pending if awaited else pending  # pyright: ignore[reportGeneralTypeIssues, reportUnknownVariableType]  # see above
                 logs_failure = False  # rebind-ok: see above
                 in_call = False  # rebind-ok: see above
                 self._core._endpoints.check_response(self._plan, answered, call)  # pyright: ignore[reportPrivateUsage, reportUnknownArgumentType]  # see above
@@ -5215,6 +5249,8 @@ class _Driver:
                 # `self.success_calls[model_name] += 1`, inside the try: a counter replaced with a
                 # plain dict fails the attempt.
                 self._core._endpoints.counters.succeeded(self._plan, call)  # pyright: ignore[reportPrivateUsage]  # see above
+            # The slot is released: a cascade judges the answer (and calls the strong group) outside it.
+            judged: Final = await self._judge_cascade(cascade, call, response) if cascade is not None else None
         except Exception as error:  # noqa: BLE001  # every attempt failure is classified and handed to the Rust call loop
             if call is not None:
                 # `make_call`: a failed call hands back the io tokens it reserved, whatever its
@@ -5234,10 +5270,13 @@ class _Driver:
             # `_dispatch_stream_failure`: the stream logs its failure in a task of its own.
             reading_stream.report_first_chunk_failure(error)
             return {**failed, "recorded": True}
-        served: Final = self._succeeded(call, response, call.host_op, stream)
+        answer: Final = judged.response if judged is not None else response
+        served: Final = self._succeeded(
+            call, answer, call.host_op, stream, counted=judged.counted if judged is not None else None
+        )
         # The session re-pin the Python core's success callback runs; a wrapped stream runs it when it ends.
         if not served.get("deferred") and self._core.outcome_callbacks(call.kwargs, sync=False).get("success", True):
-            await self._core.repin_after_success(stream.logged(), response)
+            await self._core.repin_after_success(stream.logged(), answer)
         session_deployment: Final = clean_realtime_session_deployment(call)
         if session_deployment is not None:
             await self._core.count_realtime_session_success(session_deployment)

@@ -13,7 +13,7 @@
  * prefixes are matched first, and only a bare `auto_router/<name>` is the semantic router.
  */
 
-export type AutoRouterKind = "complexity" | "adaptive" | "quality" | "semantic" | "switchyard";
+export type AutoRouterKind = "complexity" | "adaptive" | "quality" | "semantic" | "switchyard" | "cascade";
 
 export interface AutoRouterParams {
   model?: string | null;
@@ -26,6 +26,7 @@ export interface AutoRouterParams {
   adaptive_router_default_model?: string | null;
   quality_router_config?: unknown;
   quality_router_default_model?: string | null;
+  cascade_router_config?: unknown;
 }
 
 export interface AutoRouterStrategy {
@@ -33,7 +34,8 @@ export interface AutoRouterStrategy {
   /** Type-pill label. The complexity router overrides this with its classifier. */
   label: string;
   configKey: keyof AutoRouterParams;
-  defaultModelKey: keyof AutoRouterParams;
+  /** Where the strategy's default/fallback model lives. Unset for strategies without one (the cascade). */
+  defaultModelKey?: keyof AutoRouterParams;
   /** Whether the dashboard has a form that understands this strategy's config shape. */
   hasEditor: boolean;
   matches: (params: AutoRouterParams) => boolean;
@@ -76,6 +78,14 @@ export const AUTO_ROUTER_STRATEGIES: readonly AutoRouterStrategy[] = [
     defaultModelKey: "quality_router_default_model",
     hasEditor: false,
     matches: (p) => startsWith(p, "auto_router/quality_router"),
+  },
+  {
+    kind: "cascade",
+    label: "Cascade",
+    configKey: "cascade_router_config",
+    // The cascade has no default model: the strong_model inside its config is where escalations go.
+    hasEditor: false,
+    matches: (p) => startsWith(p, "auto_router/cascade_router"),
   },
   {
     kind: "semantic",

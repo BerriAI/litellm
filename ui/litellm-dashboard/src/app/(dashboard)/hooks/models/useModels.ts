@@ -119,6 +119,7 @@ export interface AutoRouterDeployment extends AutoRouterCandidateDeployment {
     adaptive_router_default_model?: string | null;
     quality_router_config?: unknown;
     quality_router_default_model?: string | null;
+    cascade_router_config?: unknown;
   } | null;
   model_info?: {
     id?: string | null;

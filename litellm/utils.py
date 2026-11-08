@@ -53,7 +53,7 @@ import litellm.litellm_core_utils
 
 # audio_utils.utils is lazy-loaded - only imported when needed for transcription calls
 import litellm.litellm_core_utils.json_validation_rule
-from litellm._internal_context import is_internal_call, is_resent_failure
+from litellm._internal_context import is_internal_call, is_resent_failure, own_call_scope
 from litellm._lazy_imports import (
     _get_modified_max_tokens,
     get_default_encoding,
@@ -2060,7 +2060,11 @@ def client(original_function):
     rules_obj: Final = Rules()
 
     @wraps(original_function)
-    def wrapper(*args, **kwargs):
+    def wrapper(*args: object, **kwargs: object) -> object:  # kwargs-ok: the wrapped call's arguments
+        with own_call_scope(kwargs.get("litellm_logging_obj")):
+            return _wrapper(*args, **kwargs)  # pyright: ignore[reportUnknownVariableType]  # the wrapped body is untyped
+
+    def _wrapper(*args, **kwargs):  # kwargs-ok: the wrapped call's arguments
         # DO NOT MOVE THIS. It always needs to run first
         # Check if this is an async function. If so only execute the async function
         call_type: Final = _get_call_type_from_public_name(original_function.__name__)
@@ -2370,7 +2374,11 @@ def client(original_function):
             raise e
 
     @wraps(original_function)
-    async def wrapper_async(*args, **kwargs):
+    async def wrapper_async(*args: object, **kwargs: object) -> object:  # kwargs-ok: the wrapped call's arguments
+        with own_call_scope(kwargs.get("litellm_logging_obj")):
+            return await _wrapper_async(*args, **kwargs)  # pyright: ignore[reportUnknownVariableType]  # the wrapped body is untyped
+
+    async def _wrapper_async(*args, **kwargs):  # kwargs-ok: the wrapped call's arguments
         print_args_passed_to_litellm(original_function, args, kwargs)
         start_time: Final = datetime.datetime.now()
         call_type: Final = _get_call_type_from_public_name(original_function.__name__)

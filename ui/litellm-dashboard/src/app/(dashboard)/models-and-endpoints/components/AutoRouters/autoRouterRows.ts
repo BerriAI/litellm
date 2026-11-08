@@ -109,6 +109,15 @@ const PRESENTERS: Record<AutoRouterKind, (config: Record<string, unknown>) => Pr
   },
   adaptive: (config) => configManaged(i18n.t("modelsAndEndpoints.autoRouterRows.types.adaptive"), config),
   quality: (config) => configManaged(i18n.t("modelsAndEndpoints.autoRouterRows.types.quality"), config),
+  cascade: (config) => ({
+    typeLabel: i18n.t("modelsAndEndpoints.autoRouterRows.types.cascade"),
+    // cheap first, strong on escalation, optional verifier: the three groups the cascade can call
+    targets: dedupe(
+      [config.cheap_model, config.strong_model, config.verifier_model].filter(
+        (name): name is string => typeof name === "string" && name.length > 0,
+      ),
+    ),
+  }),
 };
 
 export const toAutoRouterRow = (
@@ -140,7 +149,9 @@ export const toAutoRouterRow = (
     editBlockedReason,
     createdAt: info.created_at ?? undefined,
     defaultModel:
-      strategy.kind === "switchyard" ? null : (params[strategy.defaultModelKey] as string | null | undefined) ?? null,
+      strategy.kind === "switchyard" || !strategy.defaultModelKey
+        ? null
+        : ((params[strategy.defaultModelKey] as string | null | undefined) ?? null),
     deployment,
     ...PRESENTERS[strategy.kind](asRecord(params[strategy.configKey])),
   };
