@@ -23,8 +23,9 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.constants import MAX_FILE_LIST_LIMIT
 from litellm.litellm_core_utils.batch_utils import batch_cost_is_final
+from litellm.litellm_core_utils.cloud_storage_security import is_managed_cloud_storage_uri
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
-from litellm.proxy._types import ProxyException
+from litellm.proxy._types import LitellmUserRoles, ProxyException
 from litellm.repositories.managed_file_repository import ManagedFileRepository
 from litellm.repositories.table_repositories import (
     ManagedObjectRepository,
@@ -817,6 +818,17 @@ async def handle_model_based_routing(
         HTTPException: If router unavailable or model not found
         ProxyException: If the caller is not allowed to use the model
     """
+    if (
+        is_managed_cloud_storage_uri(get_original_file_id(file_id))
+        and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN
+    ):
+        from fastapi import HTTPException
+
+        raise HTTPException(
+            status_code=403,
+            detail="Raw cloud storage file ids require a proxy admin key. Use the managed file id instead.",
+        )
+
     model_from_id, model_from_param = extract_model_from_sources(
         file_id=file_id,
         request=request,
