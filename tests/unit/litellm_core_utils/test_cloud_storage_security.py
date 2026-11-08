@@ -1,3 +1,4 @@
+from base64 import urlsafe_b64encode
 from functools import reduce
 from typing import Final
 from urllib.parse import quote
@@ -63,6 +64,16 @@ def test_is_managed_cloud_storage_uri_fails_closed_on_an_id_encoded_past_the_pas
 _MANAGED_UPLOAD: Final = "s3://media-bucket/litellm-bedrock-files/other-team.pdf"
 
 
+def _unpadded_base64url(text: str) -> str:
+    return urlsafe_b64encode(text.encode()).decode().rstrip("=")
+
+
+_MODEL_EMBEDDED_UPLOAD_ID: Final = "file-" + _unpadded_base64url(f"litellm:{_MANAGED_UPLOAD};model,nova")
+_UNIFIED_BATCH_OUTPUT_ID: Final = _unpadded_base64url(
+    f"litellm_proxy:application/json;unified_id,u1;target_model_names,nova;llm_output_file_id,{_MANAGED_UPLOAD};"
+)
+
+
 def _user_turn(*parts: object) -> dict[str, object]:
     return {"messages": [{"role": "user", "content": list(parts)}]}
 
@@ -93,6 +104,14 @@ def _gemini_turn(*parts: object) -> dict[str, object]:
                 ]
             },
             id="chat-tool-result",
+        ),
+        pytest.param(
+            _user_turn({"type": "file", "file": {"file_id": _MODEL_EMBEDDED_UPLOAD_ID}}),
+            id="chat-model-embedded-file-id",
+        ),
+        pytest.param(
+            _responses_turn({"type": "input_file", "file_id": _UNIFIED_BATCH_OUTPUT_ID}),
+            id="responses-unified-file-id",
         ),
         pytest.param(_responses_turn({"type": "input_image", "image_url": _MANAGED_UPLOAD}), id="responses-image"),
         pytest.param(_responses_turn({"type": "input_file", "file_url": _MANAGED_UPLOAD}), id="responses-file-url"),
@@ -199,6 +218,32 @@ def test_is_managed_s3_uri_leaves_other_objects_alone(uri: str):
         pytest.param(
             _user_turn({"type": "image_url", "image_url": {"url": "data:image/png;base64,czM6Ly9idWNrZXQva2V5"}}),
             id="data-url",
+        ),
+        pytest.param(
+            _user_turn(
+                {
+                    "type": "file",
+                    "file": {
+                        "file_id": _unpadded_base64url(
+                            "litellm_proxy:application/pdf;unified_id,u2;target_model_names,nova;"
+                            "llm_output_file_id,file-abc123;"
+                        )
+                    },
+                }
+            ),
+            id="unified-file-id-of-a-provider-file",
+        ),
+        pytest.param(
+            _user_turn(
+                {
+                    "type": "file",
+                    "file": {"file_data": "data:application/pdf;base64," + _unpadded_base64url(_MANAGED_UPLOAD)},
+                }
+            ),
+            id="file-data-payload-naming-an-s3-object",
+        ),
+        pytest.param(
+            _user_turn({"type": "text", "text": _MODEL_EMBEDDED_UPLOAD_ID}), id="encoded-file-id-outside-a-media-part"
         ),
         pytest.param(_user_turn({"type": "text", "text": _MANAGED_UPLOAD}), id="text-part"),
         pytest.param({"messages": [{"role": "user", "content": _MANAGED_UPLOAD}]}, id="string-content"),
