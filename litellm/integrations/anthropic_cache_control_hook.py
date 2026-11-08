@@ -14,6 +14,7 @@ import itertools
 import os
 import re
 from collections.abc import Callable, Container, Iterable, Mapping, Sequence
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, cast
 from urllib.parse import urlparse
 
@@ -23,6 +24,7 @@ from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.custom_prompt_management import CustomPromptManagement
 from litellm.integrations.prompt_management_base import PromptManagementClient
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     cache_control_as_prompt_cache_breakpoint,
     with_prompt_cache_breakpoint,
@@ -35,6 +37,7 @@ from litellm.llms.anthropic.common_utils import (
     is_claude_code_one_shot_subagent_request,
     supports_anthropic_cache_control,
     tool_call_is_rebuilt_as_server_tool_use,
+    tool_config_point_control,
 )
 from litellm.types.integrations.anthropic_cache_control_hook import (
     GATEWAY_INJECTED_CACHE_METADATA_KEY,
@@ -234,6 +237,52 @@ def _as_object_list(value: object | None) -> list[object] | None:
     return _validated_object_list(value)
 
 
+def _cache_control_values(value: object) -> tuple[object, ...]:
+    fields: Final = as_str_mapping(value)
+    if fields is not None:
+        own: Final = () if fields.get("cache_control") is None else (fields["cache_control"],)
+        return own + _nested_cache_control_values(field for key, field in fields.items() if key != "cache_control")
+    items: Final = _as_object_list(value)
+    return () if items is None else _nested_cache_control_values(items)
+
+
+def _nested_cache_control_values(values: Iterable[object]) -> tuple[object, ...]:
+    return tuple(itertools.chain.from_iterable(map(_cache_control_values, values)))
+
+
+def _cache_control_ttl(cache_control: object) -> object:
+    fields: Final = as_str_mapping(cache_control)
+    return None if fields is None else fields.get("ttl") or "5m"
+
+
+def cache_control_ttls(value: object) -> tuple[object, ...]:
+    return tuple(map(_cache_control_ttl, _cache_control_values(value)))
+
+
+def tool_config_point_ttls(points: object) -> tuple[object, ...]:
+    control: Final = tool_config_point_control(points)
+    return () if control is None else (_cache_control_ttl(control),)
+
+
+def keeps_one_ttl_within_the_cap(ttls: Sequence[object]) -> bool:
+    return len(ttls) <= MAX_CACHE_CONTROL_BLOCKS and all(ttl == ttls[0] for ttl in ttls)
+
+
+def request_keeps_developer_cache_control(
+    messages: Sequence[AllMessageValues], other_request_fields: Mapping[str, object]
+) -> bool:
+    """Anthropic and Bedrock send the system prompt after the tools and reject a 1h mark after a 5m
+    one, so a developer mark is kept only while every mark, a ``tool_config`` point's included,
+    shares one TTL within the cap."""
+    return keeps_one_ttl_within_the_cap(
+        (
+            *cache_control_ttls(messages),
+            *cache_control_ttls(other_request_fields),
+            *tool_config_point_ttls(other_request_fields.get("cache_control_injection_points")),
+        )
+    )
+
+
 def _tool_call_carries_cache_breakpoint(tool_call: object, message: object, answered_tool_ids: Container[str]) -> bool:
     if _attribute_or_key(tool_call, "cache_control") is None:
         return False
@@ -375,6 +424,7 @@ def _points_with_their_target_roles(
 CARRY_UNMATCHED_MESSAGE_POINTS: Final = "_litellm_carry_unmatched_cache_control_points"
 
 EXTERNAL_BREAKPOINTS_STAMP: Final = "_litellm_external_breakpoints"
+OUTSIDE_MESSAGES_TTLS_STAMP: Final = "_litellm_outside_messages_cache_control_ttls"
 CUSTOM_LLM_PROVIDER_STAMP: Final = "_litellm_custom_llm_provider"
 
 
@@ -492,6 +542,10 @@ class AnthropicCacheControlHook(CustomPromptManagement):
             openai_dialect=openai_dialect,
             answered_tool_ids=answered_tool_ids,
             covers_developer=not _serves_gemini(model, custom_llm_provider),
+            outside_ttls=(
+                *(_validated_object_list(injection_points[0].get(OUTSIDE_MESSAGES_TTLS_STAMP)) or ()),
+                *tool_config_point_ttls(remaining_points),
+            ),
         )
         if (
             openai_dialect
@@ -639,6 +693,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         openai_dialect: bool = False,
         answered_tool_ids: frozenset[str] | None = None,
         covers_developer: bool = True,
+        outside_ttls: Sequence[object] = (),
     ) -> list[AllMessageValues]:
         """Apply message-level cache control injection points in order.
 
@@ -677,6 +732,11 @@ class AnthropicCacheControlHook(CustomPromptManagement):
 
                 if AnthropicCacheControlHook._message_has_cache_control(messages[target_index], client_answers):
                     # Client already marked this message; don't overwrite it.
+                    continue
+
+                if targeted_role == "developer" and not keeps_one_ttl_within_the_cap(
+                    (*cache_control_ttls(messages), *outside_ttls, _cache_control_ttl(control))
+                ):
                     continue
 
                 messages[target_index] = AnthropicCacheControlHook._safe_insert_cache_control_in_message(
@@ -1160,10 +1220,28 @@ class AnthropicCacheControlHook(CustomPromptManagement):
                 api_base,
                 non_default_params.get("prompt_cache_options"),
             )
-            non_default_params["cache_control_injection_points"] = (
-                AnthropicCacheControlHook._stamped(stamped, CUSTOM_LLM_PROVIDER_STAMP, custom_llm_provider)
-                if custom_llm_provider is not None and _marks_a_server_tool_call(messages)
+            outside_ttls: Final = (
+                cache_control_ttls(
+                    MappingProxyType(
+                        {
+                            "tools": cast(list[object] | None, tools),  # cast-ok: the seed types tools as a bare list
+                            "cache_control": non_default_params.get("cache_control"),
+                            "extra_body": non_default_params.get("extra_body"),
+                        }
+                    )
+                )
+                if any(message["role"] == "developer" for message in messages)
+                else ()
+            )
+            with_outside_ttls: Final = (
+                AnthropicCacheControlHook._stamped(stamped, OUTSIDE_MESSAGES_TTLS_STAMP, outside_ttls)
+                if outside_ttls
                 else stamped
+            )
+            non_default_params["cache_control_injection_points"] = (
+                AnthropicCacheControlHook._stamped(with_outside_ttls, CUSTOM_LLM_PROVIDER_STAMP, custom_llm_provider)
+                if custom_llm_provider is not None and _marks_a_server_tool_call(messages)
+                else with_outside_ttls
             )
             return
         points: Final = AnthropicCacheControlHook.get_default_injection_points(

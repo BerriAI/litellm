@@ -5686,6 +5686,7 @@ def completion(
                         "tools": cast(list[object] | None, tools),  # cast-ok: completion types tools as a bare List
                         "cache_control": non_default_params.get("cache_control"),
                         "extra_body": non_default_params.get("extra_body"),
+                        "cache_control_injection_points": non_default_params.get("cache_control_injection_points"),
                     }
                 ),
             )

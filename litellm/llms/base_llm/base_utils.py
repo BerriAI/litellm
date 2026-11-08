@@ -6,8 +6,9 @@ import copy
 import itertools
 import json
 from abc import ABC, abstractmethod
-from collections.abc import Iterable, Iterator, Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Any, Final
 
 from openai.lib import _parsing, _pydantic  # pyright: ignore[reportPrivateUsage]  # SDK parser internals
@@ -449,7 +450,6 @@ def type_to_response_format_param(
 
 
 _CACHE_CONTROL: Final = TypeAdapter(ChatCompletionCachedContent)
-_OBJECTS: Final = TypeAdapter(list[object])
 
 
 def _valid_cache_control(value: object) -> ChatCompletionCachedContent | None:
@@ -459,32 +459,14 @@ def _valid_cache_control(value: object) -> ChatCompletionCachedContent | None:
         return None
 
 
-def _cache_control_values(value: object) -> tuple[object, ...]:
-    fields: Final = as_str_mapping(value)
-    if fields is not None:
-        own: Final = () if fields.get("cache_control") is None else (fields["cache_control"],)
-        return own + _nested_cache_control_values(field for key, field in fields.items() if key != "cache_control")
-    if isinstance(value, (list, tuple)):
-        return _nested_cache_control_values(_OBJECTS.validate_python(value))
-    return ()
-
-
-def _nested_cache_control_values(values: Iterable[object]) -> tuple[object, ...]:
-    return tuple(itertools.chain.from_iterable(map(_cache_control_values, values)))
-
-
-def _ttl(cache_control: object) -> object:
-    fields: Final = as_str_mapping(cache_control)
-    return None if fields is None else fields.get("ttl") or "5m"
-
-
 def _request_keeps_developer_cache_control(
     messages: Sequence[AllMessageValues], other_request_fields: Mapping[str, object] | None
 ) -> bool:
-    from litellm.integrations.anthropic_cache_control_hook import MAX_CACHE_CONTROL_BLOCKS
+    from litellm.integrations.anthropic_cache_control_hook import request_keeps_developer_cache_control
 
-    marks: Final = _cache_control_values(messages) + _cache_control_values(other_request_fields)
-    return len(marks) <= MAX_CACHE_CONTROL_BLOCKS and all(_ttl(mark) == _ttl(marks[0]) for mark in marks)
+    if not any(message["role"] == "developer" and "cache_control" in message for message in messages):
+        return False
+    return request_keeps_developer_cache_control(messages, other_request_fields or MappingProxyType({}))
 
 
 def _developer_message_as_system_message(message: AllMessageValues, keep_cache_control: bool) -> AllMessageValues:

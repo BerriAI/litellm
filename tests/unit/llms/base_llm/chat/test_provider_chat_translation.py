@@ -825,7 +825,7 @@ def test_a_malformed_developer_cache_control_is_dropped(
     assert _request_body(route)["system"] == unmarked_system
 
 
-def _user_message_with_marked_parts(marks: int) -> dict[str, object]:
+def _user_message_with_marked_parts(marks: int) -> dict[str, JsonValue]:
     return {
         "role": "user",
         "content": [
@@ -874,12 +874,10 @@ def test_a_developer_cache_control_is_kept_only_within_the_four_mark_limit(
     assert _request_body(route)["system"] == (marked_system if keeps_developer_mark else unmarked_system)
 
 
-def _marked_tool(cache_control: dict[str, str]) -> dict[str, JsonValue]:
-    return {
-        "type": "function",
-        "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {}}},
-        "cache_control": cache_control,
-    }
+_WEATHER_TOOL: Final[Mapping[str, JsonValue]] = {
+    "type": "function",
+    "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {}}},
+}
 
 
 @pytest.mark.parametrize(
@@ -900,8 +898,8 @@ def test_a_developer_cache_control_counts_tool_marks_and_their_ttl(
     marked_system: list[JsonValue],
     unmarked_system: list[JsonValue],
     user_marks: int,
-    developer_mark: dict[str, str],
-    tool_mark: dict[str, str],
+    developer_mark: dict[str, JsonValue],
+    tool_mark: dict[str, JsonValue],
     keeps_developer_mark: bool,
     respx_mock: MockRouter,
 ) -> None:
@@ -913,12 +911,44 @@ def test_a_developer_cache_control_counts_tool_marks_and_their_ttl(
                 {"role": "developer", "content": "Be a good bot!", "cache_control": developer_mark},
                 _user_message_with_marked_parts(user_marks) if user_marks else {"role": "user", "content": "Hi"},
             ],
-            "tools": [_marked_tool(tool_mark)],
+            "tools": [{**_WEATHER_TOOL, "cache_control": tool_mark}],
         },
     )
     assert _request_body(route)["system"] == (marked_system if keeps_developer_mark else unmarked_system)
 
 
+@pytest.mark.parametrize(
+    ("case", "marked_system", "unmarked_system"), [_ANTHROPIC_SYSTEMS, _BEDROCK_CONVERSE_SYSTEMS]
+)
+@pytest.mark.parametrize(
+    ("developer_mark", "keeps_developer_mark"),
+    [({"type": "ephemeral"}, True), ({"type": "ephemeral", "ttl": "1h"}, False)],
+    ids=["same_ttl_as_the_tool_config_point", "one_hour_after_the_tool_config_point"],
+)
+def test_a_developer_cache_control_counts_the_tool_config_injection_point(
+    case: _Case,
+    marked_system: list[JsonValue],
+    unmarked_system: list[JsonValue],
+    developer_mark: dict[str, JsonValue],
+    keeps_developer_mark: bool,
+    respx_mock: MockRouter,
+) -> None:
+    route: Final = _register(case, respx_mock, f"canned-{case['id']}")
+    _complete(
+        case,
+        {
+            "messages": [
+                {"role": "developer", "content": "Be a good bot!", "cache_control": developer_mark},
+                {"role": "user", "content": "Hi"},
+            ],
+            "tools": [dict(_WEATHER_TOOL)],
+            "cache_control_injection_points": [{"location": "tool_config"}],
+        },
+    )
+    assert _request_body(route)["system"] == (marked_system if keeps_developer_mark else unmarked_system)
+
+
+@pytest.mark.parametrize(("case", "marked_system", "unmarked_system"), [_ANTHROPIC_SYSTEMS])
 @pytest.mark.parametrize(
     ("request_fields", "keeps_developer_mark"),
     [
@@ -929,9 +959,13 @@ def test_a_developer_cache_control_counts_tool_marks_and_their_ttl(
     ids=["top_level_cache_control", "extra_body_cache_control", "no_outside_mark"],
 )
 def test_a_developer_cache_control_counts_marks_outside_messages_and_tools(
-    request_fields: dict[str, JsonValue], keeps_developer_mark: bool, respx_mock: MockRouter
+    case: _Case,
+    marked_system: list[JsonValue],
+    unmarked_system: list[JsonValue],
+    request_fields: dict[str, JsonValue],
+    keeps_developer_mark: bool,
+    respx_mock: MockRouter,
 ) -> None:
-    case: Final = _BY_ID["anthropic_sonnet45"]
     route: Final = _register(case, respx_mock, f"canned-{case['id']}")
     _complete(
         case,
@@ -943,8 +977,6 @@ def test_a_developer_cache_control_counts_marks_outside_messages_and_tools(
             **request_fields,
         },
     )
-    marked_system: Final = [{"type": "text", "text": "Be a good bot!", "cache_control": {"type": "ephemeral"}}]
-    unmarked_system: Final = [{"type": "text", "text": "Be a good bot!"}]
     assert _request_body(route)["system"] == (marked_system if keeps_developer_mark else unmarked_system)
 
 

@@ -161,7 +161,7 @@ def supports_anthropic_cache_control(model: str, custom_llm_provider: str | None
     )
 
 
-def _tool_config_point_control(points: object) -> Mapping[object, object] | None:
+def tool_config_point_control(points: object) -> Mapping[object, object] | None:
     point_fields: Final = tuple(validated_object_mapping(point) for point in validated_object_list(points) or ())
     tool_config_point: Final = next(
         (fields for fields in point_fields if fields is not None and fields.get("location") == "tool_config"), None
@@ -179,7 +179,7 @@ def tools_marked_for_a_tool_config_point(tools: object, points: object) -> tuple
     the mark, skipping tool-search tools whose transform drops cache markers. A client that
     already marked a tool keeps its own breakpoint. Returns ``None`` when nothing is marked.
     """
-    control: Final = _tool_config_point_control(points)
+    control: Final = tool_config_point_control(points)
     tool_list: Final = validated_object_list(tools) or ()
     tool_fields: Final = tuple(validated_object_mapping(tool) for tool in tool_list)
     if control is None or any(fields is not None and "cache_control" in fields for fields in tool_fields):
