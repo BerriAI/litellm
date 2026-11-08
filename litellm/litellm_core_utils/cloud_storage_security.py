@@ -1,7 +1,9 @@
+import base64
 import posixpath
 import re
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from itertools import accumulate, chain, repeat
+from dataclasses import dataclass
+from itertools import accumulate, chain, repeat, takewhile
 from types import MappingProxyType
 from typing import Any, Final, cast
 from urllib.parse import quote, unquote
@@ -48,20 +50,35 @@ _S3_MEDIA_PART_TYPES: Final = frozenset(
 )
 _GEMINI_MEDIA_PART_KEYS: Final = frozenset({"file_data", "fileData"})
 _MEDIA_URI_KEYS: Final = frozenset({"url", "image_url", "file_id", "file_url", "file_data", "file_uri", "fileUri"})
+_ENCODED_FILE_ID_PREFIXES: Final = ("file-", "batch_")
+_EMBEDDED_S3_URI: Final = re.compile(r"s3://[^;]*")
 
 
 def is_s3_uri(value: str) -> bool:
     return value.startswith(_S3_SCHEME)
 
 
-def _media_part_uris(value: object, key: str | None = None) -> Iterator[str]:
-    if isinstance(value, str):
-        return iter((value,) if key in _MEDIA_URI_KEYS else ())
-    fields: Final = as_str_mapping(value)
-    if fields is not None:
-        return chain.from_iterable(_media_part_uris(child, child_key) for child_key, child in fields.items())
-    items: Final = as_object_list(value)
-    return chain.from_iterable(map(_media_part_uris, items)) if items is not None else iter(())
+def _base64url_text(value: str) -> str | None:
+    try:
+        return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4)).decode()
+    except ValueError:
+        return None
+
+
+def _s3_uris_in(text: str) -> Iterator[str]:
+    return (match.group(0) for match in _EMBEDDED_S3_URI.finditer(text))
+
+
+def _s3_uris_embedded_in_file_id(file_id: str) -> Iterator[str]:
+    encodings: Final = dict.fromkeys((file_id, *(file_id.removeprefix(prefix) for prefix in _ENCODED_FILE_ID_PREFIXES)))
+    return chain.from_iterable(map(_s3_uris_in, filter(None, map(_base64url_text, encodings))))
+
+
+@dataclass(frozen=True, slots=True)
+class _BodyNode:
+    value: object
+    key: str | None = None
+    inside_media_part: bool = False
 
 
 def _is_media_part(fields: Mapping[str, object], key: str | None) -> bool:
@@ -69,14 +86,30 @@ def _is_media_part(fields: Mapping[str, object], key: str | None) -> bool:
     return (isinstance(part_type, str) and part_type in _S3_MEDIA_PART_TYPES) or key in _GEMINI_MEDIA_PART_KEYS
 
 
-def _media_uris(value: object, key: str | None = None) -> Iterator[str]:
-    fields: Final = as_str_mapping(value)
-    if fields is not None and _is_media_part(fields, key):
-        return _media_part_uris(fields)
+def _child_nodes(node: _BodyNode) -> Iterator[_BodyNode]:
+    fields: Final = as_str_mapping(node.value)
     if fields is not None:
-        return chain.from_iterable(_media_uris(child, child_key) for child_key, child in fields.items())
-    items: Final = as_object_list(value)
-    return chain.from_iterable(map(_media_uris, items)) if items is not None else iter(())
+        inside_media_part: Final = node.inside_media_part or _is_media_part(fields, node.key)
+        return (_BodyNode(child, child_key, inside_media_part) for child_key, child in fields.items())
+    items: Final = as_object_list(node.value)
+    return (_BodyNode(item, None, node.inside_media_part) for item in items) if items is not None else iter(())
+
+
+def _next_level(level: tuple[_BodyNode, ...], _: None) -> tuple[_BodyNode, ...]:
+    return tuple(chain.from_iterable(map(_child_nodes, level)))
+
+
+def _body_nodes(request_body: Mapping[str, object]) -> Iterator[_BodyNode]:
+    levels: Final = accumulate(repeat(None), _next_level, initial=(_BodyNode(request_body),))
+    return chain.from_iterable(takewhile(bool, levels))
+
+
+def _media_uri_candidates(node: _BodyNode) -> Iterator[str]:
+    if not node.inside_media_part or not isinstance(node.value, str):
+        return iter(())
+    if node.key == "file_id":
+        return chain((node.value,), _s3_uris_embedded_in_file_id(node.value))
+    return iter((node.value,) if node.key in _MEDIA_URI_KEYS else ())
 
 
 def _s3_bucket(uri: str) -> str | None:
@@ -104,7 +137,8 @@ def _refused_in_some_decoding(
 
 
 def s3_media_uris(request_body: Mapping[str, object]) -> tuple[str, ...]:
-    return tuple(dict.fromkeys(filter(is_s3_uri, _media_uris(request_body))))
+    media_uris: Final = chain.from_iterable(map(_media_uri_candidates, _body_nodes(request_body)))
+    return tuple(dict.fromkeys(filter(is_s3_uri, media_uris)))
 
 
 def is_managed_s3_uri(uri: str) -> bool:

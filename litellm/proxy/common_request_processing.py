@@ -860,7 +860,7 @@ def _request_model(data: Mapping[str, object]) -> str | list[str] | None:
         return None
 
 
-def _refuse_s3_media_the_key_may_not_read(
+def refuse_s3_media_the_key_may_not_read(
     data: Mapping[str, object],
     user_api_key_dict: UserAPIKeyAuth,
     general_settings: Mapping[str, object],
@@ -2309,7 +2309,7 @@ class ProxyBaseLLMRequestProcessing:
                 param="model",
                 code=status.HTTP_400_BAD_REQUEST,
             )
-        _refuse_s3_media_the_key_may_not_read(self.data, user_api_key_dict, general_settings)
+        refuse_s3_media_the_key_may_not_read(self.data, user_api_key_dict, general_settings)
         self.data = await add_litellm_data_to_request(
             data=self.data,
             request=request,
