@@ -608,7 +608,7 @@ async def test_issue_delivery_guards_snapshot_freeze_and_delayed_recovery(db: Ma
             update={"day": observation.day + timedelta(days=1), "breached": False, "observed": 120}
         )
         await alerts.record_observations(enabled, (healthy,))
-        await store.recover_issues(observation.day + timedelta(days=2))
+        await store.recover_issues(observation.day + timedelta(days=2), (initial.id,))
         recovered: Final = await store.get_issue(initial.id)
         assert recovered is not None and not recovered.active and recovered.status == "resolved"
         assert await store.find_active_issues((original.cohort_key,)) == ()
@@ -1092,7 +1092,7 @@ async def test_resource_recovery_ignores_broader_and_traffic_context(db: Managem
                 ),
             ),
         )
-        await store.recover_issues(issue.observed_on + timedelta(days=2))
+        await store.recover_issues(issue.observed_on + timedelta(days=2), (issue.id,))
         recovered: Final = await store.get_issue(issue.id)
         assert recovered is not None and recovered.status == "resolved" and not recovered.active
         supporting: Final = tuple([await alerts.get_alert(source.id) for source in sources[1:]])
@@ -1135,7 +1135,7 @@ async def test_provider_recovery_pages_saved_cohorts_and_rejects_stale_observati
         resolved: Final = await store.get_issue(inputs[1].id)
         assert dismissed is not None and not dismissed.active and dismissed.status == "dismissed"
         assert resolved is not None and not resolved.active and resolved.status == "resolved"
-        await store.recover_issues(template.observed_on + timedelta(days=1))
+        await store.recover_issues(template.observed_on + timedelta(days=1), (inputs[2].id,))
         remaining: Final = await store.active_provider_issues(1, prefix)
         assert remaining[0].id == inputs[2].id
     finally:
@@ -1435,7 +1435,7 @@ async def test_disabled_later_breach_requires_new_healthy_primary_evidence(db: M
             ),
         )
         assert await alerts.save_rule(definition.model_copy(update={"enabled": False}), "qa-admin", second)
-        await store.recover_issues(issue.observed_on + timedelta(days=3))
+        await store.recover_issues(issue.observed_on + timedelta(days=3), (issue.id,))
         unresolved: Final = await store.get_issue(issue.id)
         assert unresolved is not None and unresolved.active
         await alerts.record_observations(
@@ -1450,7 +1450,7 @@ async def test_disabled_later_breach_requires_new_healthy_primary_evidence(db: M
                 ),
             ),
         )
-        await store.recover_issues(issue.observed_on + timedelta(days=3))
+        await store.recover_issues(issue.observed_on + timedelta(days=3), (issue.id,))
         recovered: Final = await store.get_issue(issue.id)
         assert recovered is not None and not recovered.active
     finally:
@@ -1556,3 +1556,37 @@ async def test_monitoring_api_requires_admin_write_access(gateway: Gateway, db: 
     finally:
         await store.set_performance_monitoring(False)
         await lease.release_job(owner)
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_retirement_recovery_is_batched_and_resumable(db: ManagementDatabase) -> None:
+    store: Final = IssuesRepository.from_prisma(db.prisma)
+    template: Final = _issue(AlertCohort(scope_type="model", scope_id="example-model"))
+    retirement: Final = template.observed_on + timedelta(days=10)
+    details: Final = AlertDeprecation(
+        model=ModelDeprecationInfo(
+            model_name="example-model", deprecation_date=retirement, days_until_deprecation=10, status="imminent"
+        ),
+        usage_model="example-model",
+        requests=10,
+        last_used_date=template.observed_on,
+        last_day_requests=10,
+        state=DeprecationAlertState(model="example-model", deprecation_date=retirement),
+    )
+    inputs: Final = tuple(
+        template.model_copy(update={
+            "id": str(uuid4()), "cohort_key": str(uuid4()), "kind": "model_deprecation",
+            "family": "retirement", "deprecation": details, "grouping_reason": "model_deprecation",
+            "comparisons": (),
+        })
+        for _ in range(23)
+    )
+    try:
+        await store.upsert_issues(inputs)
+        observed_at: Final = template.observed_at + timedelta(seconds=1)
+        counts: Final = tuple([await store.finish_deprecation_projection(observed_at) for _ in range(4)])
+        assert counts == (10, 10, 3, 0)
+        recovered: Final = tuple([await store.get_issue(item.id) for item in inputs])
+        assert all(item is not None and not item.active and item.status == "resolved" for item in recovered)
+    finally:
+        await _remove_issues(db, tuple(item.id for item in inputs))

@@ -220,7 +220,8 @@ class DeprecationIssueProjector:
             if self._source.revision != state.source_revision:
                 return
             if page.complete:
-                await self._issues.finish_deprecation_projection(observed_at)
+                while await self._issues.finish_deprecation_projection(observed_at):
+                    await asyncio.sleep(0.1)
                 finished = state.model_copy(update={"hour": hour, "complete": True})
                 await self._config.set_param(_PROJECTION_CHECKPOINT, finished.model_dump(mode="json"))
                 return

@@ -517,15 +517,14 @@ class IssuesRepository:
         )
         return tuple(row.id for row in rows)
 
-    async def recover_issues(self, day: date, issue_ids: tuple[str, ...] | None = None) -> int:
+    async def recover_issues(self, day: date, issue_ids: tuple[str, ...]) -> int:
         if issue_ids == ():
             return 0
-        if issue_ids is not None and len(issue_ids) > 10:
+        if len(issue_ids) > 10:
             raise ValueError("Recover at most 10 resource alerts")
-        selection: Final = "i.id=ANY($3::text[])" if issue_ids is not None else "$3::text[] IS NULL"
         rows: Final = TypeAdapter(tuple[_Count, ...]).validate_python(
             await self.database.query_raw(
-                f"""WITH primary_signals AS (
+                """WITH primary_signals AS (
                 SELECT i.id,a.id AS source_id,a.breached,a.evaluation_day,a.evaluation_revision,
                     max(a.evaluation_day) OVER (PARTITION BY i.id) AS latest_observation_day,
                     r.id AS rule_id,r.record AS rule_record,
@@ -544,7 +543,7 @@ class IssuesRepository:
                 LEFT JOIN "LiteLLM_UsageAlertIncident" a ON a.id=s.source_id
                 LEFT JOIN "LiteLLM_UsageAlertRule" r ON r.id=a.rule_id
                 WHERE i.kind='performance' AND i.active AND i.scope_type<>'provider' AND s.source='performance'
-                    AND ({selection})
+                    AND i.id=ANY($3::text[])
                     AND s.record->'performance'->>'scope_type'=i.scope_type
                     AND s.record->'performance'->>'scope_id' IS NOT DISTINCT FROM i.scope_id
                     AND ((i.family='spend' AND s.record->'performance'->>'metric'='spend')
@@ -626,7 +625,9 @@ class IssuesRepository:
                 """WITH changed AS (
                 UPDATE "LiteLLM_Issue" SET active=false,
                     status=CASE WHEN status='open' THEN 'resolved' ELSE status END,updated_at=CURRENT_TIMESTAMP
-                WHERE kind='model_deprecation' AND active AND last_seen<$1::timestamp(3) RETURNING id
+                WHERE id IN (SELECT id FROM "LiteLLM_Issue"
+                    WHERE kind='model_deprecation' AND active AND last_seen<$1::timestamp(3)
+                    ORDER BY id LIMIT 10) AND active AND last_seen<$1::timestamp(3) RETURNING id
             ) SELECT count(*)::int AS count FROM changed""",
                 _utc(observed_at),
             )
