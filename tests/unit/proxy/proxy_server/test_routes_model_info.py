@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from contextlib import AbstractContextManager
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
@@ -370,6 +370,7 @@ def test_saved_model_pages_preserve_database_totals(
         for index in range(60)
     ]
     mock_prisma.db.litellm_proxymodeltable.count.return_value = 60
+
     def stored_page(
         where: Mapping[str, object], take: int, order: Mapping[str, object] | None = None
     ) -> list[LiteLLM_ProxyModelTable]:
@@ -1549,7 +1550,12 @@ def test_fetch_db_models_for_search_pushes_blocked_into_the_where(monkeypatch):
             captured["count_where"] = where
             return 0
 
-        async def find_many(self, where=None, take=None):
+        async def find_many(
+            self,
+            where: Mapping[str, object] | None = None,
+            take: int | None = None,
+            order: Mapping[str, object] | None = None,
+        ) -> list[object]:
             captured["find_where"] = where
             return []
 
