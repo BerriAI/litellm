@@ -4,6 +4,7 @@ import orjson
 from pydantic import BaseModel, ConfigDict, TypeAdapter
 
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.auth.auth_utils import video_access_group
 from litellm.proxy.openai_files_endpoints.common_utils import authorize_model_for_key
 from litellm.types.videos.main import DecodedVideoId, VideoObject
 from litellm.types.videos.utils import (
@@ -130,7 +131,11 @@ async def authorized_video_model(
     model: Final = video_model_group(decoded, llm_router)
     if model is None:
         return None
-    await authorize_model_for_key(model_id=model, llm_router=llm_router, user_api_key_dict=user_api_key_dict)
+    await authorize_model_for_key(
+        model_id=video_access_group(decoded, llm_router, resolved_model=model) or model,
+        llm_router=llm_router,
+        user_api_key_dict=user_api_key_dict,
+    )
     return model
 
 
