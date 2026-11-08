@@ -279,6 +279,7 @@ TOOL_CALLS_CACHE: Final = InMemoryCache()
 _ANY_KEY_DICT_ADAPTER: Final = TypeAdapter(dict[object, object])
 _STR_KEY_DICT_ADAPTER: Final = TypeAdapter(dict[str, object])
 _OBJECT_LIST_ADAPTER: Final = TypeAdapter(list[object])
+_RESPONSE_TOOLS_ADAPTER: Final = TypeAdapter(list[dict[str, object]])
 _AUDIO_PART_ADAPTER: Final = TypeAdapter(ChatCompletionAudioObject)
 _IMAGE_URL_ADAPTER: Final = TypeAdapter(ChatCompletionImageUrlObject)
 _FILE_PART_ADAPTER: Final = TypeAdapter(_ResponsesFilePart)
@@ -1428,7 +1429,7 @@ class LiteLLMCompletionResponsesConfig:
             replay_reasoning=replay_reasoning,
             native_compaction=native_compaction,
             self_named_namespace_members=LiteLLMCompletionResponsesConfig.self_named_namespace_members(
-                responses_api_request.get("tools")
+                LiteLLMCompletionResponsesConfig._request_tools(responses_api_request)
             ),
         )
         try:
@@ -3091,20 +3092,23 @@ class LiteLLMCompletionResponsesConfig:
         return result
 
     @staticmethod
-    def _tool_entries(tools: ResponseTools) -> tuple[Mapping[str, object], ...]:
-        """The mapping-shaped entries of ``tools``. A ``tools`` that is not a list has none."""
-        return tuple(tool for tool in tools or () if isinstance(tool, Mapping))
+    def _request_tools(responses_api_request: Mapping[str, object] | None) -> ResponseTools:
+        """The request's tools. A ``tools`` value that is not a list of objects reads as no tools."""
+        raw_tools: Final = responses_api_request.get("tools") if responses_api_request is not None else None
+        if raw_tools is None:
+            return None
+        try:
+            return tuple(_RESPONSE_TOOLS_ADAPTER.validate_python(raw_tools))
+        except ValidationError:
+            return None
 
     @staticmethod
     def _namespace_member_names(tool: Mapping[str, object]) -> frozenset[str]:
-        members: Final = tool.get("tools")
-        if not isinstance(members, Sequence) or isinstance(members, (str, bytes)):
+        try:
+            members: Final = _RESPONSE_TOOLS_ADAPTER.validate_python(tool.get("tools"))
+        except ValidationError:
             return frozenset()
-        return frozenset(
-            str(member.get("name") or "")
-            for member in members
-            if isinstance(member, Mapping) and member.get("type") == "function"
-        )
+        return frozenset(str(member.get("name") or "") for member in members or () if member.get("type") == "function")
 
     @staticmethod
     def self_named_namespace_members(tools: ResponseTools) -> frozenset[str]:
@@ -3115,7 +3119,7 @@ class LiteLLMCompletionResponsesConfig:
         """
         return frozenset(
             str(tool.get("name") or "")
-            for tool in LiteLLMCompletionResponsesConfig._tool_entries(tools)
+            for tool in tools or ()
             if tool.get("type") == "namespace"
             and str(tool.get("name") or "") in LiteLLMCompletionResponsesConfig._namespace_member_names(tool)
         )
@@ -3130,7 +3134,7 @@ class LiteLLMCompletionResponsesConfig:
         self_named: Final = LiteLLMCompletionResponsesConfig.self_named_namespace_members(tools)
         return frozenset(
             str(tool.get("name") or "")
-            for tool in LiteLLMCompletionResponsesConfig._tool_entries(tools)
+            for tool in tools or ()
             if tool.get("type") == "function"
             and tool.get("defer_loading") is True
             and tool.get("name")
@@ -3205,7 +3209,7 @@ class LiteLLMCompletionResponsesConfig:
                         value=tool_call,
                     )
 
-        request_tools: Final = responses_api_request.get("tools") if responses_api_request is not None else None
+        request_tools: Final = LiteLLMCompletionResponsesConfig._request_tools(responses_api_request)
         custom_tool_names: Final = extract_custom_tool_names(request_tools)
         namespace_tool_names: Final = LiteLLMCompletionResponsesConfig.namespace_tool_name_map(request_tools)
         tool_search: Final = tool_search_routing(request_tools)
