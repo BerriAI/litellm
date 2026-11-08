@@ -4,6 +4,7 @@ import re
 from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
 from pathlib import Path
+from types import MappingProxyType
 from typing import Final
 from unittest.mock import MagicMock
 
@@ -12,7 +13,7 @@ import openai
 import pytest
 from botocore.auth import SigV4Auth
 from botocore.awsrequest import AWSRequest
-from botocore.credentials import Credentials
+from botocore.credentials import Credentials, RefreshableCredentials
 from botocore.exceptions import CredentialRetrievalError
 
 import litellm
@@ -384,6 +385,60 @@ def test_a_missing_container_credentials_token_file_is_a_401(
         sign(OpenSearchVectorStoreConfig())
 
     assert error.value.status_code == 401
+
+
+EXPIRED_METADATA: Final = MappingProxyType(
+    {"access_key": "AKIDEXAMPLE", "secret_key": "secret", "token": "token", "expiry_time": "2020-01-01T00:00:00Z"}
+)
+
+
+def _refresh_returning_expired_credentials() -> dict[str, str]:
+    return dict(EXPIRED_METADATA)
+
+
+def _refresh_after_the_token_file_is_gone() -> dict[str, str]:
+    raise CredentialRetrievalError(provider="container-role", error_msg=CREDENTIAL_SOURCE_OUTPUT)
+
+
+class _CredentialSourceThatCannotRefresh(BaseAWSLLM):
+    def __init__(self, refresh: Callable[[], dict[str, str]]) -> None:
+        super().__init__()
+        self._refresh = refresh
+
+    def resolve_credentials(self, auth_params: AwsAuthParams, aws_region_name: str | None) -> Credentials:
+        return RefreshableCredentials.create_from_metadata(
+            metadata=dict(EXPIRED_METADATA), refresh_using=self._refresh, method="container-role"
+        )
+
+
+@pytest.mark.parametrize(
+    "refresh", [_refresh_returning_expired_credentials, _refresh_after_the_token_file_is_gone]
+)
+@pytest.mark.parametrize(
+    "sign",
+    [
+        pytest.param(
+            lambda config: config.validate_environment({}, GenericLiteLLMParams(api_base=SERVERLESS)),
+            id="vector-store-search",
+        ),
+        pytest.param(
+            lambda config: config.sign_http_request(
+                "GET", f"{SERVERLESS}/docs/_mapping", b"", "application/json", {"api_base": SERVERLESS}
+            ),
+            id="index-pass-through",
+        ),
+    ],
+)
+def test_credentials_that_fail_to_refresh_at_signing_are_a_401(
+    sign: Callable[[OpenSearchVectorStoreConfig], object], refresh: Callable[[], dict[str, str]]
+) -> None:
+    config: Final = OpenSearchVectorStoreConfig(aws=_CredentialSourceThatCannotRefresh(refresh))
+
+    with pytest.raises(litellm.AuthenticationError, match="the AWS credential source failed") as error:
+        sign(config)
+
+    assert error.value.status_code == 401
+    assert CREDENTIAL_SOURCE_OUTPUT not in str(error.value)
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])

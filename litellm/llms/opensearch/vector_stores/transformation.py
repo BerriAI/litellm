@@ -82,6 +82,11 @@ def _unauthenticated(reason: str) -> AuthenticationError:
     )
 
 
+def _failed_credential_source(error: Exception) -> AuthenticationError:
+    verbose_logger.warning("OpenSearch vector store AWS credential source failed: %s", error)
+    return _unauthenticated("the AWS credential source failed, see the LiteLLM logs")
+
+
 def _usable_credentials(credentials: object) -> "Credentials":
     from botocore.credentials import Credentials
 
@@ -240,6 +245,7 @@ class OpenSearchVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig, SignsRequ
         if bool(auth.aws_access_key_id) != bool(auth.aws_secret_access_key):
             raise _unauthenticated("aws_access_key_id and aws_secret_access_key must be set together")
         ensure_optional_import("botocore")
+        from botocore.credentials import Credentials
         from botocore.exceptions import (
             CredentialRetrievalError,
             NoCredentialsError,
@@ -248,12 +254,18 @@ class OpenSearchVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig, SignsRequ
         )
 
         try:
-            return _usable_credentials(self._aws.resolve_credentials(auth, region))
+            credentials: Final = _usable_credentials(self._aws.resolve_credentials(auth, region))
         except (CredentialRetrievalError, OSError) as error:
-            verbose_logger.warning("OpenSearch vector store AWS credential source failed: %s", error)
-            raise _unauthenticated("the AWS credential source failed, see the LiteLLM logs") from None
+            raise _failed_credential_source(error) from None
         except (NoCredentialsError, PartialCredentialsError, ProfileNotFound) as error:
             raise _unauthenticated(str(error)) from None
+        try:
+            frozen: Final = credentials.get_frozen_credentials()
+        except (CredentialRetrievalError, OSError, RuntimeError) as error:
+            raise _failed_credential_source(error) from None
+        if frozen.access_key is None or frozen.secret_key is None:
+            raise _unauthenticated("none were found")
+        return Credentials(frozen.access_key, frozen.secret_key, frozen.token, account_id=frozen.account_id)
 
     def get_complete_url(self, api_base: str | None, litellm_params: Mapping[str, object]) -> str:
         parsed: Final = urlsplit(api_base or "")
