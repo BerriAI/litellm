@@ -1986,19 +1986,21 @@ class DBSpendUpdateWriter:
     ) -> None:
         transactions: Final = await queue.flush_and_get_aggregated_daily_spend_update_transactions()
         commit_started: Final = asyncio.Event()
-        commit_task: Final = _start_daily_spend_commit(
-            commit_started,
-            lambda: commit(
+
+        async def commit_and_record_freshness() -> None:
+            await commit(
                 n_retry_times=n_retry_times,
                 prisma_client=prisma_client,
                 proxy_logging_obj=proxy_logging_obj,
                 daily_spend_transactions=cast(dict[str, _DailySpendTransactionT], transactions),
-            ),
-        )
-        try:
-            await asyncio.shield(commit_task)
+            )
+            commit_started.set()
             if entity_type in ("user", "team"):
                 await self.usage_alert_flush_recorder.record(prisma_client, entity_type)
+
+        commit_task: Final = _start_daily_spend_commit(commit_started, commit_and_record_freshness)
+        try:
+            await asyncio.shield(commit_task)
         except asyncio.CancelledError:
             if commit_started.is_set():
                 queue.track_interrupted_commit(

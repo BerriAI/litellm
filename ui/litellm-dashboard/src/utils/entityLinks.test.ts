@@ -75,7 +75,7 @@ describe("modelOrAccessGroupHref", () => {
 });
 
 describe("entityActivityHref", () => {
-  const context = { from: "2026-10-01", to: "2026-10-07", alert: "incident-1" };
+  const context = { from: "2026-10-01", to: "2026-10-07", signal: "incident-1" };
   it.each([
     ["key", "key-hash", "/api-keys", "key"],
     ["team", "a b/c", "/teams", "team"],
@@ -88,7 +88,7 @@ describe("entityActivityHref", () => {
     expect(url.searchParams.get("detail_tab")).toBe("activity");
     expect(url.searchParams.get("activity_from")).toBe(context.from);
     expect(url.searchParams.get("activity_to")).toBe(context.to);
-    expect(url.searchParams.get("alert")).toBe(context.alert);
+    expect(url.searchParams.get("signal")).toBe(context.signal);
   });
   it("does not link credentials, empty entities, or synthetic entities", () => {
     expect(entityActivityHref("key", "sk-test-placeholder", context)).toBeUndefined();

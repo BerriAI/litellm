@@ -8221,6 +8221,7 @@
         "viewAlerts": "View all",
         "loadingAlerts": "Loading alerts…",
         "loadError": "Could not load alerts. Open Alerts to retry.",
+        "retry": "Retry",
         "empty": "No open alerts.",
         "triggerDeprecations_one": "Notifications, {{count}} model deprecation alert needs attention",
         "triggerDeprecations_other": "Notifications, {{count}} model deprecation alerts need attention",

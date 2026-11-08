@@ -5,9 +5,9 @@ import { Button } from "@/components/ui/button";
 import { backgroundFetchClient } from "@/lib/http/api";
 import { formatAlertValue, METRIC_LABELS, usageAlertHref } from "@/components/UsageAlerts/usageAlertApi";
 import { useQueryState, parseAsInteger } from "nuqs";
-import { Issue } from "./issueApi";
+import { Alert } from "./issueApi";
 
-export default function IssueSignals({ issue }: { issue: Issue }) {
+export default function IssueSignals({ issue }: { issue: Alert }) {
   const { userId, userRole, isAuthorized, accessToken } = useAuthorized();
   const [page, setPage] = useQueryState("signal_page", parseAsInteger.withDefault(1));
   const offset = (Math.max(1, page) - 1) * 20;
@@ -15,8 +15,8 @@ export default function IssueSignals({ issue }: { issue: Issue }) {
     queryKey: ["issueSignals", getProxyBaseUrl(), userId, userRole, issue.id, offset],
     enabled: Boolean(isAuthorized && accessToken),
     queryFn: async ({ signal }: { signal: AbortSignal }) => {
-      const { data } = await backgroundFetchClient.GET("/issues/{issue_id}/signals", {
-        params: { path: { issue_id: issue.id }, query: { limit: 20, offset } },
+      const { data } = await backgroundFetchClient.GET("/alerts/{alert_id}/signals", {
+        params: { path: { alert_id: issue.id }, query: { limit: 20, offset } },
         signal,
       });
       if (!data) throw new Error("Could not load source signals");
@@ -48,7 +48,7 @@ export default function IssueSignals({ issue }: { issue: Issue }) {
       </p>
       <ul className="divide-y">
         {query.data.data.map((signal) => {
-          const alert = signal.usage_alert;
+          const alert = signal.performance;
           return (
             <li key={`${signal.source}-${signal.source_id}`} className="py-3">
               {alert ? (

@@ -138,7 +138,7 @@ function ModelResource(props: ResourceProps) {
     queryKey: ["usageAlertModels", getProxyBaseUrl(), userId, userRole, search],
     initialPageParam: "",
     queryFn: async ({ pageParam, signal }: { pageParam: string; signal: AbortSignal }) => {
-      const { data } = await backgroundFetchClient.GET("/usage/alert-models", {
+      const { data } = await backgroundFetchClient.GET("/alerts/models", {
         params: { query: { search: search || undefined, cursor: pageParam || undefined, limit: PAGE_SIZE } },
         signal,
       });

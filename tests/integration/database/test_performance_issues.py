@@ -22,7 +22,7 @@ from litellm.repositories.daily_activity_buckets import api_key_bucket
 from litellm.repositories.issues import IssuesRepository
 from litellm.repositories.usage_alert_metrics import IssueMetricWindow, UsageAlertMetricsRepository
 from litellm.repositories.usage_alerts import UsageAlertsRepository
-from litellm.types.proxy.usage_alerts import UsageAlertObservation, UsageAlertRule, UsageAlertRuleInput, UsageAlertScope
+from litellm.types.proxy.usage_alerts import UsageAlertObservation, AlertRule, AlertRuleInput, UsageAlertScope
 
 _DAY: Final = date(2026, 11, 4)
 _NOW: Final = datetime(2026, 11, 5, 3, microsecond=987654, tzinfo=timezone.utc)
@@ -277,7 +277,7 @@ async def test_due_issue_delivery_retries_after_daily_projection_is_complete(db:
         await _seed(prisma)
         rules = UsageAlertsRepository.from_prisma(prisma)
         rule = await rules.save_rule(
-            UsageAlertRuleInput(
+            AlertRuleInput(
                 name="Key spend notification",
                 scope_type="key",
                 scope_id=_KEY_A,
@@ -390,7 +390,7 @@ async def test_same_day_rule_revision_requires_a_fresh_observation(db: Managemen
     async with _isolated(db) as prisma:
         alerts: Final = UsageAlertsRepository.from_prisma(prisma)
         issues: Final = IssuesRepository.from_prisma(prisma)
-        definition: Final = UsageAlertRuleInput(
+        definition: Final = AlertRuleInput(
             name="Project spend",
             scope_type="key",
             scope_id=_KEY_A,
@@ -427,7 +427,7 @@ async def test_late_custom_key_rule_only_overrides_that_keys_default_signal(db: 
             _KEY_B,
         )
         job: Final = UsageAlertJob.from_prisma(prisma, SlackAlerting(alerting=[], alert_types=[]))
-        # A rule can change after the daily observations, before Issue projection.
+        # A rule can change after the daily observations, before Alert projection.
         await job._store.ensure_default_rules(job._defaults)
         await job._store.ensure_projection_work(_DAY)
         await job._evaluate(_DAY, asyncio.get_running_loop().time() + 60)
@@ -437,7 +437,7 @@ async def test_late_custom_key_rule_only_overrides_that_keys_default_signal(db: 
         overridden: Final = next(item for item in original if item.alert.scope_id == _KEY_A)
         retained: Final = next(item for item in original if item.alert.scope_id == _KEY_B)
         custom: Final = await UsageAlertsRepository.from_prisma(prisma).save_rule(
-            UsageAlertRuleInput(
+            AlertRuleInput(
                 name="Project A high spend threshold",
                 scope_type="key",
                 scope_id=_KEY_A,
@@ -609,7 +609,7 @@ async def test_entity_page_progress_resumes_old_day_without_early_completion(db:
         await _coverage(prisma, _DAY)
         job: Final = UsageAlertJob.from_prisma(prisma, SlackAlerting(alerting=[], alert_types=[]))
         rule: Final = await job._store.save_rule(
-            UsageAlertRuleInput(
+            AlertRuleInput(
                 name="Resume each key",
                 scope_type="key",
                 metric="spend",
@@ -625,7 +625,7 @@ async def test_entity_page_progress_resumes_old_day_without_early_completion(db:
         assert partial.evaluation_progress is not None and partial.evaluation_progress.cursor is not None
         assert not await job._store.completed_rule_ids((rule,), _DAY)
         assert "evaluation_progress" not in partial.model_dump()
-        assert "evaluation_progress" not in UsageAlertRule.model_json_schema(mode="serialization")["properties"]
+        assert "evaluation_progress" not in AlertRule.model_json_schema(mode="serialization")["properties"]
         first: Final = await job._store.list_alerts(limit=500)
         assert first.total == 10
         projector: Final = job._performance_projection
@@ -662,7 +662,7 @@ async def test_entity_page_progress_resumes_old_day_without_early_completion(db:
         resumed: Final = await job._store.get_rule(rule.id)
         assert resumed is not None and resumed.evaluation_progress is None
         edited: Final = await job._store.save_rule(
-            UsageAlertRuleInput.model_validate(rule.model_dump(include=set(UsageAlertRuleInput.model_fields))),
+            AlertRuleInput.model_validate(rule.model_dump(include=set(AlertRuleInput.model_fields))),
             None,
             resumed,
         )
@@ -674,7 +674,7 @@ async def test_disabled_primary_requires_another_eligible_healthy_source_to_reco
     async with _isolated(db) as prisma:
         await _seed(prisma)
         job: Final = UsageAlertJob.from_prisma(prisma, SlackAlerting(alerting=[], alert_types=[]))
-        definition: Final = UsageAlertRuleInput(
+        definition: Final = AlertRuleInput(
             name="Extra key policy",
             scope_type="key",
             scope_id=_KEY_A,
@@ -713,7 +713,7 @@ async def test_lone_disabled_source_does_not_claim_recovery(db: ManagementDataba
             _KEY_A,
         )
         job: Final = UsageAlertJob.from_prisma(prisma, SlackAlerting(alerting=[], alert_types=[]))
-        definition: Final = UsageAlertRuleInput(
+        definition: Final = AlertRuleInput(
             name="Sensitive key policy",
             scope_type="key",
             scope_id=_KEY_A,
@@ -743,9 +743,7 @@ async def test_rule_edit_discards_old_cursor_and_rejects_stale_progress(db: Mana
 
     async with _isolated(db) as prisma:
         store: Final = UsageAlertsRepository.from_prisma(prisma)
-        definition: Final = UsageAlertRuleInput(
-            name="Resumable", scope_type="key", metric="spend", direction="increase"
-        )
+        definition: Final = AlertRuleInput(name="Resumable", scope_type="key", metric="spend", direction="increase")
         rule: Final = await store.save_rule(definition, None)
         assert rule is not None
         position: Final = UsageAlertProgress(day=_DAY, revision=rule.updated_at, cursor="a" * 64, evaluated=True)
@@ -779,6 +777,38 @@ async def test_busy_background_capacity_defers_and_releases_the_worker_lease(db:
         assert await prisma.writer_db.query_raw(
             "SELECT count(*)::int AS count FROM \"LiteLLM_UsageAlertCheckpoint\" WHERE id='worker'"
         ) == [{"count": 0}]
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_capacity_failure_before_coverage_does_not_pin_a_drop_rule_to_an_incomplete_day(
+    db: ManagementDatabase,
+) -> None:
+    async with _isolated(db) as prisma:
+        await _seed(prisma)
+        store: Final = UsageAlertsRepository.from_prisma(prisma)
+        rule: Final = await store.save_rule(
+            AlertRuleInput(
+                name="Project traffic drop",
+                scope_type="key",
+                scope_id=_KEY_A,
+                metric="requests",
+                direction="decrease",
+            ),
+            "qa-admin",
+        )
+        assert rule is not None
+        await prisma.writer_db.execute_raw(
+            'DELETE FROM "LiteLLM_UsageAlertFlush" WHERE hour<$1::timestamp', (_DAY + timedelta(days=1)).isoformat()
+        )
+        job: Final = UsageAlertJob.from_prisma(prisma, SlackAlerting(alerting=[], alert_types=[]))
+        async with prisma.writer_db.tx(timeout=timedelta(seconds=10)) as transaction:
+            await transaction.execute_raw('LOCK TABLE "LiteLLM_UsageAlertFlush" IN ACCESS EXCLUSIVE MODE')
+            assert not await job._attempt_scope_page((rule,), _DAY, False)
+        saved: Final = await store.get_rule(rule.id)
+        assert saved is not None and saved.evaluation_progress is None
+        await _next_day(prisma, _DAY + timedelta(days=1), 1, 1)
+        assert await job._attempt_scope_page((saved,), _DAY + timedelta(days=1), False)
+        assert await store.completed_rule_ids((saved,), _DAY + timedelta(days=1)) == frozenset((rule.id,))
 
 
 @pytest.mark.asyncio(loop_scope="session")
@@ -849,7 +879,7 @@ async def test_projection_resume_keeps_spend_and_traffic_in_one_episode(db: Mana
         before: Final = await IssuesRepository.from_prisma(prisma).list_issues()
         assert len(before.data) == 1 and before.data[0].family == "spend"
         added: Final = await job._store.save_rule(
-            UsageAlertRuleInput(
+            AlertRuleInput(
                 name="Later policy", scope_type="key", scope_id=_KEY_B, metric="latency", direction="increase"
             ),
             None,
@@ -873,7 +903,7 @@ async def test_projection_resume_keeps_spend_and_traffic_in_one_episode(db: Mana
         after: Final = await IssuesRepository.from_prisma(prisma).list_issues()
         assert tuple(item.id for item in after.data) == tuple(item.id for item in before.data)
         links: Final = await IssuesRepository.from_prisma(prisma).list_signals(after.data[0].id)
-        assert any(link.usage_alert is not None and link.usage_alert.metric == "requests" for link in links.data)
+        assert any(link.performance is not None and link.performance.metric == "requests" for link in links.data)
 
 
 @pytest.mark.asyncio(loop_scope="session")
@@ -891,7 +921,7 @@ async def test_slack_retry_only_repeats_the_failed_destination(db: ManagementDat
             rules: Final = UsageAlertsRepository.from_prisma(prisma)
             assert (
                 await rules.save_rule(
-                    UsageAlertRuleInput(
+                    AlertRuleInput(
                         name="Project spend",
                         scope_type="key",
                         scope_id=_KEY_A,
@@ -905,7 +935,7 @@ async def test_slack_retry_only_repeats_the_failed_destination(db: ManagementDat
             )
             assert (
                 await rules.save_rule(
-                    UsageAlertRuleInput(
+                    AlertRuleInput(
                         name="Another project rule",
                         scope_type="key",
                         scope_id=_KEY_A,
@@ -938,8 +968,8 @@ async def test_slack_retry_only_repeats_the_failed_destination(db: ManagementDat
             retry: Final = (await IssuesRepository.from_prisma(prisma).pending_deliveries())[0]
             assert (
                 await rules.save_rule(
-                    UsageAlertRuleInput.model_validate(
-                        retry.rule.model_dump(include=set(UsageAlertRuleInput.model_fields))
+                    AlertRuleInput.model_validate(
+                        retry.rule.model_dump(include=set(AlertRuleInput.model_fields))
                     ).model_copy(update={"enabled": False}),
                     "qa-admin",
                     retry.rule,
@@ -1001,7 +1031,7 @@ async def test_cancelled_email_receipt_survives_a_different_delivery(
             rules: Final = UsageAlertsRepository.from_prisma(prisma)
             assert (
                 await rules.save_rule(
-                    UsageAlertRuleInput(
+                    AlertRuleInput(
                         name="Project spend",
                         scope_type="key",
                         scope_id=_KEY_A,
@@ -1056,15 +1086,13 @@ async def test_large_custom_rule_scope_does_not_starve_other_scopes_on_resume(db
         await _seed(prisma)
         store: Final = UsageAlertsRepository.from_prisma(prisma)
         key_rule: Final = await store.save_rule(
-            UsageAlertRuleInput(
+            AlertRuleInput(
                 name="Project spend", scope_type="key", scope_id=_KEY_A, metric="spend", direction="increase"
             ),
             "qa-user",
         )
         team_rule: Final = await store.save_rule(
-            UsageAlertRuleInput(
-                name="Team spend", scope_type="team", scope_id="team", metric="spend", direction="increase"
-            ),
+            AlertRuleInput(name="Team spend", scope_type="team", scope_id="team", metric="spend", direction="increase"),
             "qa-admin",
         )
         assert key_rule is not None and team_rule is not None

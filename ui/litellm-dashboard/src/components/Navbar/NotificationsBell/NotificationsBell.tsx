@@ -159,6 +159,8 @@ interface NotificationsBellViewProps {
   issues?: IssuePage;
   issuesPending?: boolean;
   issuesFailed?: boolean;
+  retryingAlerts?: boolean;
+  onRetryAlerts?: () => void;
   deploymentHealthLink?: React.ReactNode;
   currentVersion: string | null | undefined;
   latestRelease: LatestReleaseInfo | null | undefined;
@@ -171,6 +173,8 @@ export const NotificationsBellView: React.FC<NotificationsBellViewProps> = ({
   issues,
   issuesPending,
   issuesFailed,
+  retryingAlerts,
+  onRetryAlerts,
 }) => {
   const { t } = useTranslation();
   const upgrade = upgradeAnnouncement(currentVersion, latestRelease);
@@ -230,7 +234,12 @@ export const NotificationsBellView: React.FC<NotificationsBellViewProps> = ({
                 </p>
               )}
               {issuesFailed && (
-                <p className="text-xs text-muted-foreground">{t("shell.notifications.bell.loadError")}</p>
+                <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground" role="alert">
+                  <p>{t("shell.notifications.bell.loadError")}</p>
+                  <Button variant="link" size="sm" disabled={retryingAlerts} onClick={onRetryAlerts}>
+                    {t("shell.notifications.bell.retry")}
+                  </Button>
+                </div>
               )}
               {issues?.data.map((issue) => (
                 <article key={issue.id} className="space-y-1 border-t pt-3" aria-label={issue.title}>
@@ -276,6 +285,8 @@ export const NotificationsBell: React.FC<{ accessToken: string | null; deploymen
       issues={issueQuery.data}
       issuesPending={issueQuery.enabled && issueQuery.isPending}
       issuesFailed={issueQuery.enabled && issueQuery.isError}
+      retryingAlerts={issueQuery.isFetching}
+      onRetryAlerts={() => void issueQuery.refetch()}
       deploymentHealthLink={deploymentHealthLink}
     />
   );

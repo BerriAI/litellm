@@ -1,8 +1,8 @@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { METRIC_LABELS, formatAlertValue } from "@/components/UsageAlerts/usageAlertApi";
-import type { Issue } from "./issueApi";
+import type { Alert } from "./issueApi";
 
-export default function IssueComparisonTable({ issue }: { issue: Issue }) {
+export default function IssueComparisonTable({ issue }: { issue: Alert }) {
   const comparisons = issue.comparisons ?? [];
   if (!comparisons.length) return null;
   return (

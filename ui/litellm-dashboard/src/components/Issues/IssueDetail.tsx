@@ -15,7 +15,7 @@ import { uiHref } from "@/utils/uiHref";
 import { ApiError } from "@/lib/http/client";
 import { useUrlTableState } from "@/components/shared/DataTable";
 import {
-  Issue,
+  Alert,
   issueDate,
   issueComparisonText,
   issueImpactText,
@@ -31,7 +31,7 @@ import IssueSignals from "./IssueSignals";
 import IssueStatusActions from "./IssueStatusActions";
 import IssueHistoryChart from "./IssueHistoryChart";
 
-function resourceHref(issue: Issue): string | undefined {
+function resourceHref(issue: Alert): string | undefined {
   const { scope_type: scope, scope_id: id } = issue.cohort;
   if (!id || scope === "provider" || scope === "deployment") return undefined;
   return entityActivityHref(scope, scope === "key" ? storedKeyId(id) : id, {
@@ -40,7 +40,7 @@ function resourceHref(issue: Issue): string | undefined {
   });
 }
 
-function RetirementContext({ issue }: { issue: Issue }) {
+function RetirementContext({ issue }: { issue: Alert }) {
   const deprecation = issue.deprecation;
   if (!deprecation) return null;
   const copy = () =>
@@ -67,7 +67,7 @@ function RetirementContext({ issue }: { issue: Issue }) {
   );
 }
 
-function IssueBody({ issue }: { issue: Issue }) {
+function IssueBody({ issue }: { issue: Alert }) {
   const [params, setParams] = useQueryStates(entityActivityParsers);
   const resourcesTable = useUrlTableState(ISSUE_RESOURCE_TABLE_STATE);
   const [resourcesOpen, setResourcesOpen] = useState(false);

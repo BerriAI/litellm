@@ -47,7 +47,7 @@ export type ActivityScope = "key" | "team" | "user" | "model";
 export interface ActivityLinkContext {
   from: string;
   to: string;
-  alert?: string;
+  signal?: string;
 }
 
 export function entityActivityHref(scope: ActivityScope, id: string, context: ActivityLinkContext): string | undefined {
@@ -71,6 +71,6 @@ export function entityActivityHref(scope: ActivityScope, id: string, context: Ac
   }
   if (!href) return undefined;
   const params = new URLSearchParams({ detail_tab: "activity", activity_from: context.from, activity_to: context.to });
-  if (context.alert) params.set("alert", context.alert);
+  if (context.signal) params.set("signal", context.signal);
   return `${href}&${params}`;
 }

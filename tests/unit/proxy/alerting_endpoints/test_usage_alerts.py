@@ -21,20 +21,20 @@ class NoDatabase:
 def test_info_grants_do_not_authorize_mutations(role: LitellmUserRoles, key_type: str | None) -> None:
     user: Final = UserAPIKeyAuth(user_role=role, key_type=key_type, allowed_routes=["info_routes", "openai_routes"])
     with pytest.raises(HTTPException) as error:
-        require_write_access(user, "/usage/alert-rules/example")
+        require_write_access(user, "/alerts/rules/example")
     assert error.value.status_code == 403
 
 
-@pytest.mark.parametrize("grant", ["management_routes", "/usage", "/usage/alert-rules", "/usage/*"])
+@pytest.mark.parametrize("grant", ["management_routes", "/alerts", "/alerts/rules", "/alerts/*"])
 def test_explicit_route_grants_authorize_alert_mutations(grant: str) -> None:
-    assert _allows_write(grant, "/usage/alert-rules/example") is True
+    assert _allows_write(grant, "/alerts/rules/example") is True
 
 
-@pytest.mark.parametrize("grant", ["/usag", "/usage/alert-rule", "/usage/alerts"])
+@pytest.mark.parametrize("grant", ["/alert", "/alerts/rule", "/alerts/signals"])
 def test_route_grants_require_a_complete_path_segment(grant: str) -> None:
     user: Final = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, allowed_routes=[grant])
     with pytest.raises(HTTPException) as error:
-        require_write_access(user, "/usage/alert-rules/example")
+        require_write_access(user, "/alerts/rules/example")
     assert error.value.status_code == 403
 
 
@@ -91,10 +91,10 @@ def test_global_activity_link_uses_the_usage_page_date_contract() -> None:
 
 @pytest.mark.asyncio
 async def test_no_database_returns_an_actionable_service_error() -> None:
-    from litellm.proxy.alerting_endpoints.usage_alerts import list_usage_alerts
+    from litellm.proxy.alerting_endpoints.usage_alerts import list_performance_signals
 
     user: Final = UserAPIKeyAuth(user_id="qa-admin", user_role=LitellmUserRoles.PROXY_ADMIN)
     with pytest.raises(HTTPException) as error:
-        await list_usage_alerts(user, None)
+        await list_performance_signals(user, None)
     assert error.value.status_code == 503
-    assert error.value.detail == "Usage alerts require a database connection"
+    assert error.value.detail == "Alert signals require a database connection"

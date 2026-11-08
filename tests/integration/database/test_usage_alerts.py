@@ -9,12 +9,11 @@ from integration._support.client import Gateway, string_value
 
 from litellm.repositories.usage_alerts import UsageAlertsRepository
 from litellm.types.proxy.usage_alerts import (
-    UsageAlertGroupList,
+    AlertModelList,
+    AlertRule,
+    AlertRuleInput,
     UsageAlertMetric,
-    UsageAlertModelList,
     UsageAlertObservation,
-    UsageAlertRule,
-    UsageAlertRuleInput,
 )
 
 
@@ -22,7 +21,7 @@ from litellm.types.proxy.usage_alerts import (
 async def test_alert_resource_labels_bound_legacy_display_values(db: ManagementDatabase) -> None:
     repository: Final = UsageAlertsRepository.from_prisma(db.prisma)
     identity: Final = "label-bound-" + uuid4().hex
-    scope: Final = UsageAlertRuleInput(
+    scope: Final = AlertRuleInput(
         name="Display label", scope_type="user", scope_id=identity, metric="spend", direction="increase"
     )
     await repository.database.query_raw(
@@ -43,7 +42,7 @@ async def test_alert_resource_labels_bound_legacy_display_values(db: ManagementD
 async def test_deleted_key_labels_use_the_latest_alias_and_prefer_live_keys(db: ManagementDatabase) -> None:
     repository: Final = UsageAlertsRepository.from_prisma(db.prisma)
     identity: Final = sha256(uuid4().bytes).hexdigest()
-    scope: Final = UsageAlertRuleInput(
+    scope: Final = AlertRuleInput(
         name="Deleted key", scope_type="key", scope_id=identity, metric="spend", direction="increase"
     )
     try:
@@ -63,7 +62,7 @@ async def test_deleted_key_labels_use_the_latest_alias_and_prefer_live_keys(db: 
         await repository.database.query_raw('DELETE FROM "LiteLLM_DeletedVerificationToken" WHERE token=$1', identity)
 
 
-@pytest.mark.parametrize("grant", ["management_routes", "/usage", "/usage/alert-rules"])
+@pytest.mark.parametrize("grant", ["management_routes", "/alerts", "/alerts/rules"])
 def test_scoped_rules_use_real_management_auth_and_preserve_read_only_roles(gateway: Gateway, grant: str) -> None:
     with gateway.scenario() as scenario:
         owner: Final = scenario.user(user_role="internal_user")
@@ -81,10 +80,10 @@ def test_scoped_rules_use_real_management_auth_and_preserve_read_only_roles(gate
             "direction": "increase",
             "multiplier": 3,
         }
-        created: Final = gateway.request("POST", "/usage/alert-rules", config, key=owner_key)
+        created: Final = gateway.request("POST", "/alerts/rules", config, key=owner_key)
         assert created.status_code == 201, created.text
         rule_id: Final = string_value(created.json()["id"])
-        path: Final = f"/usage/alert-rules/{rule_id}"
+        path: Final = f"/alerts/rules/{rule_id}"
         try:
             assert gateway.request("GET", path, key=owner_key).status_code == 200
             assert gateway.request("GET", path, key=outsider_key).status_code == 403
@@ -93,14 +92,13 @@ def test_scoped_rules_use_real_management_auth_and_preserve_read_only_roles(gate
             assert gateway.request("PUT", path, config, key=viewer_key).status_code == 403
             assert gateway.request("PUT", path, config, key=outsider_key).status_code == 403
             assert (
-                gateway.request("POST", "/usage/alert-rules", {**config, "scope_id": None}, key=owner_key).status_code
-                == 403
+                gateway.request("POST", "/alerts/rules", {**config, "scope_id": None}, key=owner_key).status_code == 403
             )
             disabled: Final = gateway.request("PUT", path, {**config, "enabled": False}, key=owner_key)
             assert disabled.status_code == 200 and disabled.json()["enabled"] is False
             page: Final = gateway.request(
                 "GET",
-                "/usage/alert-rules",
+                "/alerts/rules",
                 key=owner_key,
                 params={"scope_type": "key", "scope_id": str(config["scope_id"]), "limit": "1"},
             )
@@ -122,9 +120,9 @@ def test_admin_edit_preserves_owner_rule_access(gateway: Gateway) -> None:
             "metric": "spend",
             "direction": "increase",
         }
-        created: Final = gateway.request("POST", "/usage/alert-rules", config, key=owner_key)
+        created: Final = gateway.request("POST", "/alerts/rules", config, key=owner_key)
         assert created.status_code == 201, created.text
-        path: Final = f"/usage/alert-rules/{created.json()['id']}"
+        path: Final = f"/alerts/rules/{created.json()['id']}"
         try:
             edited: Final = gateway.request("PUT", path, {**config, "name": "Renamed by admin"})
             assert edited.status_code == 200, edited.text
@@ -151,10 +149,10 @@ def test_team_admin_can_manage_team_alerts_but_member_can_only_read(gateway: Gat
             "direction": "decrease",
             "multiplier": 2,
         }
-        created: Final = gateway.request("POST", "/usage/alert-rules", config, key=admin_key)
+        created: Final = gateway.request("POST", "/alerts/rules", config, key=admin_key)
         assert created.status_code == 201, created.text
         rule_id: Final = string_value(created.json()["id"])
-        path: Final = f"/usage/alert-rules/{rule_id}"
+        path: Final = f"/alerts/rules/{rule_id}"
         try:
             assert gateway.request("GET", path, key=member_key).status_code == 200
             assert gateway.request("PUT", path, config, key=member_key).status_code == 403
@@ -177,21 +175,21 @@ def test_info_only_credentials_cannot_mutate_alerts(gateway: Gateway) -> None:
             "metric": "spend",
             "direction": "increase",
         }
-        created: Final = gateway.request("POST", "/usage/alert-rules", config, key=owner_key)
+        created: Final = gateway.request("POST", "/alerts/rules", config, key=owner_key)
         assert created.status_code == 201
-        path: Final = f"/usage/alert-rules/{created.json()['id']}"
+        path: Final = f"/alerts/rules/{created.json()['id']}"
         try:
             assert gateway.request("GET", path, key=reader).status_code == 200
-            assert gateway.request("POST", "/usage/alert-rules", config, key=reader).status_code == 403
+            assert gateway.request("POST", "/alerts/rules", config, key=reader).status_code == 403
             assert gateway.request("PUT", path, config, key=reader).status_code == 403
             assert gateway.request("DELETE", path, key=reader).status_code == 403
             assert (
-                gateway.request("PATCH", "/issues/families/spend", {"enabled": False}, key=admin_reader).status_code
+                gateway.request("PATCH", "/alerts/defaults/spend", {"enabled": False}, key=admin_reader).status_code
                 == 403
             )
             assert (
                 gateway.request(
-                    "PATCH", "/issues/unavailable", {"status": "resolved", "expected_status": "open"}, key=admin_reader
+                    "PATCH", "/alerts/unavailable", {"status": "resolved", "expected_status": "open"}, key=admin_reader
                 ).status_code
                 == 403
             )
@@ -215,23 +213,19 @@ def test_only_admins_can_configure_operator_notifications(gateway: Gateway) -> N
             {"notification_channels": ["email"], "email_recipients": ["ops@example.com"]},
         ):
             assert (
-                gateway.request("POST", "/usage/alert-rules", {**config, **notification}, key=owner_key).status_code
-                == 403
+                gateway.request("POST", "/alerts/rules", {**config, **notification}, key=owner_key).status_code == 403
             )
         assert (
-            gateway.request(
-                "POST", "/usage/alert-rules", {**config, "overrides_defaults": True}, key=owner_key
-            ).status_code
+            gateway.request("POST", "/alerts/rules", {**config, "overrides_defaults": True}, key=owner_key).status_code
             == 422
         )
         assert (
-            gateway.request("POST", "/usage/alert-rules", {**config, "name": "Spend\r\nInjected: header"}).status_code
-            == 422
+            gateway.request("POST", "/alerts/rules", {**config, "name": "Spend\r\nInjected: header"}).status_code == 422
         )
-        created: Final = gateway.request("POST", "/usage/alert-rules", {**config, "notification_channels": ["slack"]})
+        created: Final = gateway.request("POST", "/alerts/rules", {**config, "notification_channels": ["slack"]})
         assert created.status_code == 201
         assert "overrides_defaults" not in created.json()
-        path: Final = f"/usage/alert-rules/{created.json()['id']}"
+        path: Final = f"/alerts/rules/{created.json()['id']}"
         try:
             assert gateway.request("PUT", path, config, key=owner_key).status_code == 403
             assert gateway.request("DELETE", path, key=owner_key).status_code == 403
@@ -252,7 +246,7 @@ async def test_incident_http_read_dismiss_and_scope_authorization(gateway: Gatew
         viewer_key: Final = scenario.key(user_id=viewer, key_type="read_only")
         created: Final = gateway.request(
             "POST",
-            "/usage/alert-rules",
+            "/alerts/rules",
             {
                 "name": "Incident API fixture",
                 "scope_type": "user",
@@ -264,7 +258,7 @@ async def test_incident_http_read_dismiss_and_scope_authorization(gateway: Gatew
             key=owner_key,
         )
         assert created.status_code == 201
-        rule: Final = UsageAlertRule.model_validate(created.json())
+        rule: Final = AlertRule.model_validate(created.json())
         try:
             incident: Final = (
                 await repository.record_observations(
@@ -282,9 +276,9 @@ async def test_incident_http_read_dismiss_and_scope_authorization(gateway: Gatew
                     ),
                 )
             )[0]
-            path: Final = f"/usage/alerts/{incident.id}"
+            path: Final = f"/alerts/signals/{incident.id}"
             params: Final = {"scope_type": "user", "scope_id": owner, "limit": "1"}
-            page: Final = gateway.request("GET", "/usage/alerts", key=owner_key, params=params)
+            page: Final = gateway.request("GET", "/alerts/signals", key=owner_key, params=params)
             assert page.status_code == 200 and page.json()["data"][0]["id"] == incident.id
             detail: Final = gateway.request("GET", path, key=owner_key)
             assert detail.status_code == 200
@@ -293,22 +287,19 @@ async def test_incident_http_read_dismiss_and_scope_authorization(gateway: Gatew
             assert detail.json()["threshold"] == 360
             assert detail.json()["baseline_sample_days"] == 7
             assert "detail_tab=activity" in detail.json()["activity_path"]
-            assert gateway.request("GET", "/usage/alerts", key=outsider_key, params=params).status_code == 403
+            assert gateway.request("GET", "/alerts/signals", key=outsider_key, params=params).status_code == 403
             assert gateway.request("GET", path, key=outsider_key).status_code == 403
-            assert gateway.request("PATCH", path, {"status": "dismissed"}, key=outsider_key).status_code == 403
             assert gateway.request("GET", path, key=viewer_key).status_code == 200
-            assert gateway.request("PATCH", path, {"status": "dismissed"}, key=viewer_key).status_code == 403
-            dismissed: Final = gateway.request("PATCH", path, {"status": "dismissed"}, key=owner_key)
-            assert dismissed.status_code == 200 and dismissed.json()["status"] == "dismissed"
-            assert gateway.request("GET", path, key=owner_key).json()["status"] == "dismissed"
+            assert gateway.request("PATCH", path, {"status": "dismissed"}, key=owner_key).status_code == 405
+            assert gateway.request("GET", path, key=owner_key).json()["status"] == "open"
         finally:
-            assert gateway.request("DELETE", f"/usage/alert-rules/{rule.id}", key=owner_key).status_code == 204
+            assert gateway.request("DELETE", f"/alerts/rules/{rule.id}", key=owner_key).status_code == 204
 
 
 @pytest.mark.asyncio(loop_scope="session")
 async def test_ongoing_episode_preserves_its_original_evidence_and_activity_link(db: ManagementDatabase) -> None:
     repository: Final = UsageAlertsRepository.from_prisma(db.prisma)
-    definition: Final = UsageAlertRuleInput(
+    definition: Final = AlertRuleInput(
         name="Original episode", scope_type="user", scope_id="episode-example", metric="requests", direction="increase"
     )
     rule: Final = await repository.save_rule(definition, "qa-admin")
@@ -358,7 +349,7 @@ async def test_ongoing_episode_preserves_its_original_evidence_and_activity_link
 @pytest.mark.asyncio(loop_scope="session")
 async def test_rule_scope_changes_reject_stale_updates_and_deletes(db: ManagementDatabase) -> None:
     repository: Final = UsageAlertsRepository.from_prisma(db.prisma)
-    definition: Final = UsageAlertRuleInput(
+    definition: Final = AlertRuleInput(
         name="Concurrent scope edit", scope_type="user", scope_id="original-owner", metric="spend", direction="increase"
     )
     original: Final = await repository.save_rule(definition, "qa-admin")
@@ -394,7 +385,7 @@ async def test_rule_identity_edits_preserve_old_incident_and_filter_consistency(
     db: ManagementDatabase, changed_field: str, new_value: str
 ) -> None:
     repository: Final = UsageAlertsRepository.from_prisma(db.prisma)
-    definition: Final = UsageAlertRuleInput(
+    definition: Final = AlertRuleInput(
         name="Semantic identity",
         scope_type="team",
         scope_id="semantic-example",
@@ -410,7 +401,7 @@ async def test_rule_identity_edits_preserve_old_incident_and_filter_consistency(
     try:
         original: Final = (await repository.record_observations(rule, (initial,)))[0]
         edited: Final = await repository.save_rule(
-            UsageAlertRuleInput.model_validate({**definition.model_dump(), changed_field: new_value}), "qa-admin", rule
+            AlertRuleInput.model_validate({**definition.model_dump(), changed_field: new_value}), "qa-admin", rule
         )
         assert edited is not None
         observation: Final = initial.model_copy(update={"entity_id": edited.scope_id})
@@ -438,189 +429,11 @@ async def test_rule_identity_edits_preserve_old_incident_and_filter_consistency(
 
 
 @pytest.mark.asyncio(loop_scope="session")
-async def test_grouped_http_pages_preserve_all_metrics_history_and_scoped_actions(
-    gateway: Gateway, db: ManagementDatabase
-) -> None:
-    repository: Final = UsageAlertsRepository.from_prisma(db.prisma)
-    day: Final = date(2026, 11, 4)
-    with gateway.scenario() as scenario:
-        owner: Final = scenario.user(user_role="internal_user", user_alias="Checkout operator")
-        outsider: Final = scenario.user(user_role="internal_user")
-        viewer: Final = scenario.user(user_role="proxy_admin_viewer")
-        owner_key: Final = scenario.key(user_id=owner, key_type="management")
-        outsider_key: Final = scenario.key(user_id=outsider, key_type="management")
-        viewer_key: Final = scenario.key(user_id=viewer, key_type="read_only")
-        inference_key: Final = scenario.key(user_id=owner, key_type="llm_api")
-        metrics: Final[tuple[UsageAlertMetric, ...]] = (
-            *(("requests",) * 27),
-            "spend",
-            "errors",
-            "latency",
-            "error_rate",
-        )
-        rules: Final = tuple(
-            [
-                await repository.save_rule(
-                    UsageAlertRuleInput(
-                        name=f"Group rule {index}",
-                        scope_type="user",
-                        scope_id=owner,
-                        metric=metric,
-                        direction="increase",
-                        baseline_days=7 if index % 2 else 14,
-                    ),
-                    owner,
-                )
-                for index, metric in enumerate(metrics)
-            ]
-        )
-        assert all(rule is not None for rule in rules)
-        incidents: Final = tuple(
-            [
-                (
-                    await repository.record_observations(
-                        rule,
-                        (
-                            UsageAlertObservation(
-                                entity_id=owner,
-                                day=day,
-                                observed=14 if rule.metric == "error_rate" else 420,
-                                baseline=4 if rule.metric == "error_rate" else 0 if index == 0 else 120,
-                                threshold=12 if rule.metric == "error_rate" else 100 if index == 0 else 360,
-                                breached=True,
-                            ),
-                        ),
-                    )
-                )[0]
-                for index, rule in enumerate(rules)
-                if rule is not None
-            ]
-        )
-        old_rule: Final = await repository.save_rule(
-            UsageAlertRuleInput(
-                name="Earlier day", scope_type="user", scope_id=owner, metric="requests", direction="increase"
-            ),
-            owner,
-        )
-        assert old_rule is not None
-        old: Final = (
-            await repository.record_observations(
-                old_rule,
-                (
-                    UsageAlertObservation(
-                        entity_id=owner,
-                        day=day - timedelta(days=1),
-                        observed=420,
-                        baseline=120,
-                        threshold=360,
-                        breached=True,
-                    ),
-                ),
-            )
-        )[0]
-        other_rule: Final = await repository.save_rule(
-            UsageAlertRuleInput(
-                name="Other resource", scope_type="user", scope_id=outsider, metric="requests", direction="increase"
-            ),
-            outsider,
-        )
-        assert other_rule is not None
-        other: Final = (
-            await repository.record_observations(
-                other_rule,
-                (
-                    UsageAlertObservation(
-                        entity_id=outsider,
-                        day=day,
-                        observed=420,
-                        baseline=120,
-                        threshold=360,
-                        breached=True,
-                    ),
-                ),
-            )
-        )[0]
-        params: Final = {"scope_type": "user", "scope_id": owner, "status": "open", "limit": "1"}
-        try:
-            response: Final = gateway.request("GET", "/usage/alert-groups", key=owner_key, params=params)
-            assert response.status_code == 200, response.text
-            page: Final = UsageAlertGroupList.model_validate(response.json())
-            assert page.total == 2 and len(page.data) == 1
-            group: Final = page.data[0]
-            assert group.day == day and group.scope_label == "Checkout operator"
-            assert group.incident_count == 31 and len(group.metrics) == 5
-            assert {metric.metric: metric.incident_count for metric in group.metrics} == {
-                "requests": 27,
-                "spend": 1,
-                "errors": 1,
-                "latency": 1,
-                "error_rate": 1,
-            }
-            assert all(metric.representative.id in {incident.id for incident in incidents} for metric in group.metrics)
-            assert group.activity_path in {incident.activity_path for incident in incidents}
-            second: Final = UsageAlertGroupList.model_validate(
-                gateway.request("GET", "/usage/alert-groups", key=owner_key, params={**params, "offset": "1"}).json()
-            )
-            assert second.total == 2 and second.data[0].day == old.day
-            empty: Final = UsageAlertGroupList.model_validate(
-                gateway.request("GET", "/usage/alert-groups", key=owner_key, params={**params, "offset": "2"}).json()
-            )
-            assert empty.total == 2 and empty.data == ()
-            history: Final = gateway.request(
-                "GET",
-                "/usage/alerts",
-                key=owner_key,
-                params={**params, "start_date": day.isoformat(), "end_date": day.isoformat(), "metric": "requests"},
-            )
-            assert history.status_code == 200 and history.json()["total"] == 27
-            await repository.set_status(incidents[0].id, "dismissed")
-            body: Final = {
-                "scope_type": "user",
-                "scope_id": owner,
-                "day": day.isoformat(),
-                "expected_status": "open",
-                "status": "resolved",
-            }
-            for forbidden in (outsider_key, inference_key):
-                assert gateway.request("GET", "/usage/alert-groups", key=forbidden, params=params).status_code == 403
-            for forbidden in (outsider_key, inference_key, viewer_key):
-                assert gateway.request("PATCH", "/usage/alert-groups", body, key=forbidden).status_code == 403
-            assert gateway.request("GET", "/usage/alert-groups", key=viewer_key, params=params).status_code == 200
-            updated: Final = gateway.request("PATCH", "/usage/alert-groups", body, key=owner_key)
-            assert updated.status_code == 200 and updated.json()["updated_count"] == 30
-            assert gateway.request("PATCH", "/usage/alert-groups", body, key=owner_key).json()["updated_count"] == 0
-            assert await repository.get_alert(old.id) == old
-            assert await repository.get_alert(other.id) == other
-            dismissed: Final = await repository.get_alert(incidents[0].id)
-            assert dismissed is not None and dismissed.status == "dismissed" and dismissed.baseline_value == 0
-            resolved: Final = await repository.get_alert(incidents[-1].id)
-            assert resolved == incidents[-1].model_copy(update={"status": "resolved"})
-            assert (
-                gateway.request(
-                    "GET", "/usage/alert-groups", params={"scope_type": "user", "scope_id": "x' OR 1=1 --"}
-                ).json()["total"]
-                == 0
-            )
-            assert (
-                gateway.request(
-                    "GET", "/usage/alert-groups", params={"start_date": "2026-11-05", "end_date": "2026-11-04"}
-                ).status_code
-                == 422
-            )
-        finally:
-            for rule in (*rules, old_rule, other_rule):
-                if rule is not None:
-                    await repository.delete_rule(rule.id)
-    deleted: Final = await repository.list_groups(scope_type="user", scope_id=owner)
-    assert deleted.total == 2 and all(group.scope_label is None and group.scope_id == owner for group in deleted.data)
-
-
-@pytest.mark.asyncio(loop_scope="session")
 async def test_default_rule_summary_and_kind_filters_do_not_require_loading_every_rule(
     gateway: Gateway, db: ManagementDatabase
 ) -> None:
     repository: Final = UsageAlertsRepository.from_prisma(db.prisma)
-    default: Final = UsageAlertRuleInput(
+    default: Final = AlertRuleInput(
         name="Built-in daily model requests", scope_type="model", metric="requests", direction="increase"
     )
     await repository.ensure_default_rules((default,))
@@ -645,12 +458,12 @@ async def test_default_rule_summary_and_kind_filters_do_not_require_loading_ever
         stored: Final = await repository.get_rule(builtins.data[0].id)
         assert stored is not None and stored.is_default
         filtered: Final = gateway.request(
-            "GET", "/usage/alert-rules", params={"scope_type": "model", "kind": "custom", "limit": "1"}
+            "GET", "/alerts/rules", params={"scope_type": "model", "kind": "custom", "limit": "1"}
         )
         assert filtered.status_code == 200 and filtered.json()["total"] == customs.total
         assert all(not rule["is_default"] for rule in filtered.json()["data"])
-        configuration: Final = stored.model_dump(mode="json", include=frozenset(UsageAlertRuleInput.model_fields))
-        path: Final = f"/usage/alert-rules/{stored.id}"
+        configuration: Final = stored.model_dump(mode="json", include=frozenset(AlertRuleInput.model_fields))
+        path: Final = f"/alerts/rules/{stored.id}"
         for change in (
             {"scope_type": "key"},
             {"scope_id": "model-example"},
@@ -665,9 +478,9 @@ async def test_default_rule_summary_and_kind_filters_do_not_require_loading_ever
             assert updated.json()["min_value"] == stored.min_value + 1
         finally:
             assert gateway.request("PUT", path, configuration).status_code == 200
-        custom_input: Final = custom.model_dump(mode="json", include=frozenset(UsageAlertRuleInput.model_fields))
+        custom_input: Final = custom.model_dump(mode="json", include=frozenset(AlertRuleInput.model_fields))
         assert (
-            gateway.request("PUT", f"/usage/alert-rules/{custom.id}", {**custom_input, "metric": "latency"}).status_code
+            gateway.request("PUT", f"/alerts/rules/{custom.id}", {**custom_input, "metric": "latency"}).status_code
             == 200
         )
     finally:
@@ -704,9 +517,9 @@ async def test_reported_model_search_preserves_exact_identity_and_cursor(
             prefix,
             f"{prefix}/old",
         )
-        response: Final = gateway.request("GET", "/usage/alert-models", params={"search": prefix, "limit": "1"})
+        response: Final = gateway.request("GET", "/alerts/models", params={"search": prefix, "limit": "1"})
         assert response.status_code == 200, response.text
-        first: Final = UsageAlertModelList.model_validate(response.json())
+        first: Final = AlertModelList.model_validate(response.json())
         assert first.data[0].scope_id == models[0] and first.next_cursor == models[0]
         second: Final = await repository.list_reported_models(prefix, first.next_cursor, 1)
         third: Final = await repository.list_reported_models(prefix, second.next_cursor, 1)
@@ -720,6 +533,6 @@ async def test_reported_model_search_preserves_exact_identity_and_cursor(
         with gateway.scenario() as scenario:
             user: Final = scenario.user(user_role="internal_user")
             key: Final = scenario.key(user_id=user, key_type="management")
-            assert gateway.request("GET", "/usage/alert-models", key=key).status_code == 403
+            assert gateway.request("GET", "/alerts/models", key=key).status_code == 403
     finally:
         await db.prisma.writer_db.execute_raw('DELETE FROM "LiteLLM_DailyUserSpend" WHERE api_key=$1', prefix)

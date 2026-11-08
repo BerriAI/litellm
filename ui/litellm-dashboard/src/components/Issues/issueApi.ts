@@ -7,11 +7,11 @@ import { hasCapability } from "@/utils/capabilities";
 import { uiHref } from "@/utils/uiHref";
 import { formatAlertValue } from "@/components/UsageAlerts/usageAlertApi";
 
-export type Issue = components["schemas"]["Issue"];
-export type IssuePage = components["schemas"]["IssueList"];
-export type IssueFamily = Issue["family"];
-export type IssueStatus = Issue["status"];
-export type IssueComparison = components["schemas"]["IssueComparison"];
+export type Alert = components["schemas"]["Alert"];
+export type IssuePage = components["schemas"]["AlertList"];
+export type AlertFamily = Alert["family"];
+export type IssueStatus = Alert["status"];
+export type AlertComparison = components["schemas"]["AlertComparison"];
 export const ISSUE_FAMILIES = ["retirement", "latency", "reliability", "spend", "traffic"] as const;
 export const ISSUE_STATUSES = ["open", "resolved", "dismissed"] as const;
 export const FAMILY_LABELS = {
@@ -37,10 +37,10 @@ const PRIMARY_METRICS = {
   traffic: "requests",
 };
 
-export const issueHref = (id: string) => uiHref(`alerts?issue=${encodeURIComponent(id)}`);
+export const issueHref = (id: string) => uiHref(`alerts?alert=${encodeURIComponent(id)}`);
 export const issuesHref = () => uiHref("alerts");
 
-export function issueResource(issue: Issue): string {
+export function issueResource(issue: Alert): string {
   const { scope_type: scope, scope_id: id } = issue.cohort;
   const label = SCOPE_LABELS[scope];
   if (scope === "deployment" && issue.scope_label === label) return label;
@@ -50,7 +50,7 @@ export function issueResource(issue: Issue): string {
   return `${label} · ${short}`;
 }
 
-export const primaryComparison = (issue: Issue) =>
+export const primaryComparison = (issue: Alert) =>
   (issue.comparisons ?? []).find((comparison) => comparison.metric === PRIMARY_METRICS[issue.family]) ??
   issue.comparisons?.[0];
 
@@ -62,7 +62,7 @@ const READABLE_METRICS = {
   error_rate: "Error rate for",
 };
 
-export function issueHeadline(issue: Issue): string {
+export function issueHeadline(issue: Alert): string {
   const comparison = primaryComparison(issue);
   if (issue.deprecation || !comparison) return issue.title;
   const { metric, observed_value: actual, baseline_value: baseline, direction } = comparison;
@@ -79,7 +79,7 @@ export function issueHeadline(issue: Issue): string {
   return `${prefix} rose to ${ratio}× normal`;
 }
 
-export function issueComparisonText(issue: Issue): string {
+export function issueComparisonText(issue: Alert): string {
   if (issue.deprecation) {
     const { requests, model } = issue.deprecation;
     const replacement = model.successor_model ? ` Suggested replacement: ${model.successor_model}.` : "";
@@ -92,7 +92,7 @@ export function issueComparisonText(issue: Issue): string {
   return `${actual} on ${issueDate(issue.observed_on)} UTC, compared with the usual ${baseline}.`;
 }
 
-export function issueImpactText(issue: Issue): string {
+export function issueImpactText(issue: Alert): string {
   const impact = issue.impact ?? {};
   return (["keys", "teams", "models"] as const)
     .map((field) => {
@@ -109,8 +109,8 @@ export const issueDate = (value: string) => new Date(value).toLocaleDateString(u
 
 interface IssueListOptions {
   status?: IssueStatus;
-  family?: IssueFamily;
-  kind?: Issue["kind"];
+  family?: AlertFamily;
+  kind?: Alert["kind"];
   limit?: number;
   offset?: number;
 }
@@ -134,7 +134,7 @@ export function useIssues(accessToken: string | null, listOptions: IssueListOpti
     ],
     enabled,
     queryFn: async ({ signal }: { signal: AbortSignal }) => {
-      const { data } = await backgroundFetchClient.GET("/issues", {
+      const { data } = await backgroundFetchClient.GET("/alerts", {
         params: { query: { status, family, kind, limit, offset } },
         signal,
       });
@@ -156,8 +156,8 @@ export function useIssue(accessToken: string | null, id: string) {
     queryKey: ["issues", getProxyBaseUrl(), user?.user_id, user?.user_role, "detail", id],
     enabled,
     queryFn: async ({ signal }: { signal: AbortSignal }) => {
-      const { data } = await backgroundFetchClient.GET("/issues/{issue_id}", {
-        params: { path: { issue_id: id } },
+      const { data } = await backgroundFetchClient.GET("/alerts/{alert_id}", {
+        params: { path: { alert_id: id } },
         signal,
       });
       if (!data) throw new Error("Could not load this alert");
@@ -170,9 +170,9 @@ export function useIssue(accessToken: string | null, id: string) {
   return { ...query, enabled, data: enabled && !query.isError ? query.data : undefined };
 }
 
-export async function updateIssueStatus(issue: Issue, status: IssueStatus) {
-  const { data } = await backgroundFetchClient.PATCH("/issues/{issue_id}", {
-    params: { path: { issue_id: issue.id } },
+export async function updateIssueStatus(issue: Alert, status: IssueStatus) {
+  const { data } = await backgroundFetchClient.PATCH("/alerts/{alert_id}", {
+    params: { path: { alert_id: issue.id } },
     body: { status, expected_status: issue.status },
   });
   if (!data) throw new Error("Could not update this alert");

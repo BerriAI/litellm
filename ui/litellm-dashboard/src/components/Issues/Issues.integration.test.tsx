@@ -10,10 +10,11 @@ import {
   within,
 } from "../../../tests/test-utils";
 import IssuesInbox from "./IssuesInbox";
+import { NotificationsBell } from "@/components/Navbar/NotificationsBell/NotificationsBell";
 import IssueDetail from "./IssueDetail";
 import { FAMILY_SETTINGS, RETIREMENT_ISSUE, SPEND_ISSUE } from "./issueFixtures";
 import { EMPTY_DAILY_ACTIVITY_METADATA } from "@/components/UsagePage/dailyActivityApi";
-import type { Issue } from "./issueApi";
+import type { Alert } from "./issueApi";
 import type { components } from "@/lib/http/schema";
 
 const auth = vi.hoisted(() => ({
@@ -25,7 +26,7 @@ const auth = vi.hoisted(() => ({
 }));
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({ default: () => auth }));
 const calls: { path: string; query: URLSearchParams; method: string; body: unknown }[] = [];
-let detail: Issue;
+let detail: Alert;
 let refreshBarrier: Promise<void> | undefined;
 let holdReads = false;
 let failList = false;
@@ -154,10 +155,10 @@ describe("unified issue investigations", () => {
       calls.push(call);
       if (url.pathname === "/management/v1/users/me")
         return json({ user_id: auth.userId, user_role: auth.userRole === "Admin" ? "proxy_admin" : "internal_user" });
-      if (url.pathname === "/issues/foreign-issue") return json({ detail: "Forbidden private-project metadata" }, 403);
-      if (url.pathname === "/issues") return refreshed(() => listResponse(url.searchParams));
-      if (url.pathname === "/issues/families") return json(families);
-      if (url.pathname === "/issues/families/spend") return json(FAMILY_SETTINGS.data[0]);
+      if (url.pathname === "/alerts/foreign-issue") return json({ detail: "Forbidden private-project metadata" }, 403);
+      if (url.pathname === "/alerts") return refreshed(() => listResponse(url.searchParams));
+      if (url.pathname === "/alerts/defaults") return json(families);
+      if (url.pathname === "/alerts/defaults/spend") return json(FAMILY_SETTINGS.data[0]);
       if (url.pathname.endsWith("/activity"))
         return failActivity ? json({ detail: "Unavailable" }, 503) : json(activity());
       if (url.pathname.endsWith("/keys")) return resourceKeyPage(url.searchParams);
@@ -176,10 +177,10 @@ describe("unified issue investigations", () => {
         const page = { data: [], total: 0, limit: 20, offset: 0 };
         return json(page);
       }
-      if (url.pathname.startsWith("/issues/")) {
+      if (url.pathname.startsWith("/alerts/")) {
         if (deniedDetail) return json({ detail: "Access revoked" }, 403);
         if (request.method === "PATCH") {
-          if (staleStatus) return json({ detail: "Issue changed" }, 409);
+          if (staleStatus) return json({ detail: "Alert changed" }, 409);
           detail = { ...detail, ...body };
           holdReads = Boolean(refreshBarrier);
           return json({ ...detail, can_update_status: null, can_view_activity: null });
@@ -194,19 +195,33 @@ describe("unified issue investigations", () => {
     vi.unstubAllGlobals();
   });
 
+  it("retries a failed notification feed and opens the same alert detail", async () => {
+    failList = true;
+    renderWithProviders(<NotificationsBell accessToken="test-session" />);
+    await userEvent.click(screen.getByRole("button", { name: /^Notifications/ }));
+    await screen.findByRole("alert");
+    failList = false;
+    await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByRole("link", { name: SPEND_ISSUE.title })).toHaveAttribute(
+      "href",
+      `/ui/alerts?alert=${SPEND_ISSUE.id}`,
+    );
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
   it("adapts pagination to the server byte budget without skipping alerts", async () => {
     byteLimitedPage = true;
     renderWithProviders(<IssuesInbox />);
     await screen.findByRole("heading", { name: /Wide key 0/ });
     await waitFor(() =>
-      expect(calls.some((call) => call.path === "/issues" && call.query.get("limit") === "2")).toBe(true),
+      expect(calls.some((call) => call.path === "/alerts" && call.query.get("limit") === "2")).toBe(true),
     );
     await userEvent.click(screen.getByRole("button", { name: "Go to next page" }));
     await screen.findByRole("heading", { name: /Wide key 2/ });
     await userEvent.click(screen.getByRole("button", { name: "Go to next page" }));
     await screen.findByRole("heading", { name: /Wide key 4/ });
     expect(screen.getByRole("button", { name: "Go to next page" })).toBeDisabled();
-    expect(calls.some((call) => call.path === "/issues" && call.query.get("offset") === "4")).toBe(true);
+    expect(calls.some((call) => call.path === "/alerts" && call.query.get("offset") === "4")).toBe(true);
   });
 
   it.each([false, true])("preserves the exact offset when later pages shrink (deep link %s)", async (deepLink) => {
@@ -220,7 +235,7 @@ describe("unified issue investigations", () => {
     await waitFor(() =>
       expect(
         calls
-          .filter((call) => call.path === "/issues")
+          .filter((call) => call.path === "/alerts")
           .at(-1)
           ?.query.get("limit"),
       ).toBe("1"),
@@ -241,19 +256,19 @@ describe("unified issue investigations", () => {
     renderWithProviders(<IssuesInbox />);
     expect(await screen.findByRole("link", { name: "Spend on Checkout key rose to 20× normal" })).toHaveAttribute(
       "href",
-      "/ui/alerts?issue=issue-checkout-spend",
+      "/ui/alerts?alert=issue-checkout-spend",
     );
     expect(screen.getByRole("link", { name: RETIREMENT_ISSUE.title })).toBeInTheDocument();
     expect(screen.getByText("$600.00 on Nov 4, 2026 UTC, compared with the usual $30.00.")).toBeInTheDocument();
     expect(screen.getByRole("list", { name: "Alerts", exact: true })).toBeInTheDocument();
     expect(screen.queryByRole("table")).not.toBeInTheDocument();
-    expect(calls.filter((call) => call.path === "/issues")).toHaveLength(1);
+    expect(calls.filter((call) => call.path === "/alerts")).toHaveLength(1);
     expect(calls.some((call) => call.path.includes("activity") || call.path.includes("deprecations"))).toBe(false);
     await user.click(screen.getByRole("button", { name: "Go to next page", exact: true }));
     expect(await screen.findByRole("link", { name: "Spend on Second key rose to 20× normal" })).toBeInTheDocument();
     expect(
       calls
-        .filter((call) => call.path === "/issues")
+        .filter((call) => call.path === "/alerts")
         .at(-1)
         ?.query.get("offset"),
     ).toBe("25");
@@ -261,7 +276,7 @@ describe("unified issue investigations", () => {
     expect(await screen.findByRole("link", { name: RETIREMENT_ISSUE.title })).toBeInTheDocument();
     expect(
       calls
-        .filter((call) => call.path === "/issues")
+        .filter((call) => call.path === "/alerts")
         .at(-1)
         ?.query.get("offset"),
     ).toBe("0");
@@ -270,7 +285,7 @@ describe("unified issue investigations", () => {
   it("keeps old performance list links usable", async () => {
     renderWithProviders(<IssuesInbox />, { searchParams: "type=usage&usage_status=resolved" });
     await screen.findByRole("link", { name: "Spend on Checkout key rose to 20× normal" });
-    const request = calls.find((call) => call.path === "/issues");
+    const request = calls.find((call) => call.path === "/alerts");
     expect(request?.query.get("kind")).toBe("performance");
     expect(request?.query.get("status")).toBe("resolved");
   });
@@ -307,11 +322,11 @@ describe("unified issue investigations", () => {
     const feed = screen.getByRole("list", { name: "Alerts", exact: true });
     await userEvent.click(within(feed).getAllByRole("button", { name: "Mark resolved" })[0]);
     await waitFor(() =>
-      expect(calls.some((call) => call.method === "PATCH" && call.path === `/issues/${SPEND_ISSUE.id}`)).toBe(true),
+      expect(calls.some((call) => call.method === "PATCH" && call.path === `/alerts/${SPEND_ISSUE.id}`)).toBe(true),
     );
     expect(
       calls.filter(
-        (call) => call.method === "GET" && call.path.startsWith("/issues/") && !call.path.endsWith("/families"),
+        (call) => call.method === "GET" && call.path.startsWith("/alerts/") && !call.path.endsWith("/families"),
       ),
     ).toHaveLength(0);
     expect(calls.find((call) => call.method === "PATCH")?.body).toEqual({
@@ -328,7 +343,7 @@ describe("unified issue investigations", () => {
     try {
       await userEvent.click(screen.getByRole("button", { name: "Mark resolved" }));
       await waitFor(() =>
-        expect(calls.filter((call) => call.method === "GET" && call.path === `/issues/${detail.id}`)).toHaveLength(2),
+        expect(calls.filter((call) => call.method === "GET" && call.path === `/alerts/${detail.id}`)).toHaveLength(2),
       );
       expect(screen.getByRole("link", { name: "View key activity" })).toBeVisible();
       expect(screen.getByRole("button", { name: "Reopen" })).toBeDisabled();
@@ -344,7 +359,7 @@ describe("unified issue investigations", () => {
     await screen.findByRole("link", { name: "Spend on Checkout key rose to 20× normal" });
     try {
       await userEvent.click(screen.getAllByRole("button", { name: "Mark resolved" })[0]);
-      await waitFor(() => expect(calls.filter((call) => call.path === "/issues")).toHaveLength(2));
+      await waitFor(() => expect(calls.filter((call) => call.path === "/alerts")).toHaveLength(2));
       expect(screen.getByRole("button", { name: "Reopen" })).toBeDisabled();
     } finally {
       await act(async () => refresh.resolve());
@@ -358,10 +373,10 @@ describe("unified issue investigations", () => {
     await screen.findByRole("link", { name: "Spend on Checkout key rose to 20× normal" });
     try {
       await userEvent.click(screen.getAllByRole("button", { name: "Mark resolved" })[0]);
-      await waitFor(() => expect(calls.filter((call) => call.path === "/issues")).toHaveLength(2));
+      await waitFor(() => expect(calls.filter((call) => call.path === "/alerts")).toHaveLength(2));
       view.rerender(<IssueDetail id={detail.id} />);
       await waitFor(() =>
-        expect(calls.some((call) => call.method === "GET" && call.path === `/issues/${detail.id}`)).toBe(true),
+        expect(calls.some((call) => call.method === "GET" && call.path === `/alerts/${detail.id}`)).toBe(true),
       );
       expect(screen.queryByText("You don’t have access to this alert’s activity.")).not.toBeInTheDocument();
     } finally {
@@ -516,7 +531,7 @@ describe("unified issue investigations", () => {
     });
     vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
       const request = input instanceof Request ? input : new Request(input, init);
-      if (request.method === "GET" && new URL(request.url).pathname.startsWith("/issues")) await stalled;
+      if (request.method === "GET" && new URL(request.url).pathname.startsWith("/alerts")) await stalled;
       return fetchBefore(input, init);
     });
     try {
@@ -546,7 +561,7 @@ describe("unified issue investigations", () => {
       "href",
       "/ui/models-and-endpoints?activity_model=provider%2Fretiring-model&detail_tab=activity&activity_from=2026-10-28&activity_to=2026-11-04",
     );
-    expect(calls.some((call) => call.path === `/issues/${RETIREMENT_ISSUE.id}/activity`)).toBe(false);
+    expect(calls.some((call) => call.path === `/alerts/${RETIREMENT_ISSUE.id}/activity`)).toBe(false);
   });
 
   it("does not show invalid per-success averages when all requests failed", async () => {
@@ -623,7 +638,7 @@ describe("unified issue investigations", () => {
       "href",
       "/ui/api-keys?key=reporting-test-id&detail_tab=activity&activity_from=2026-10-28&activity_to=2026-11-04",
     );
-    expect(calls.some((call) => call.path === "/issues")).toBe(false);
+    expect(calls.some((call) => call.path === "/alerts")).toBe(false);
     expect(calls.some((call) => call.path.includes("/user/daily"))).toBe(false);
     await userEvent.click(screen.getByRole("button", { name: "Mark resolved" }));
     await waitFor(() =>
@@ -642,7 +657,7 @@ describe("unified issue investigations", () => {
     expect(screen.getByRole("link", { name: "My usage" })).toHaveAttribute("href", "/ui/usage?view=my-usage");
     expect(screen.queryByText(/private-project/)).not.toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Spend on Checkout key rose to 20× normal" })).not.toBeInTheDocument();
-    expect(calls.filter((call) => call.path.startsWith("/issues"))).toHaveLength(1);
+    expect(calls.filter((call) => call.path.startsWith("/alerts"))).toHaveLength(1);
     expect(calls.some((call) => call.path.endsWith("/activity") || call.path.endsWith("/keys"))).toBe(false);
   });
 
@@ -726,7 +741,7 @@ describe("unified issue investigations", () => {
     fireEvent.change(screen.getByLabelText("Increase factor"), { target: { value: "10" } });
     await user.click(screen.getByRole("button", { name: "Save changes" }));
     await waitFor(() =>
-      expect(calls.find((call) => call.path === "/issues/families/spend")?.body).toEqual({
+      expect(calls.find((call) => call.path === "/alerts/defaults/spend")?.body).toEqual({
         policies: [{ direction: "increase", multiplier: 10 }],
       }),
     );

@@ -10,40 +10,40 @@ from litellm.types.proxy.management_endpoints.common_daily_activity import (
 from litellm.types.proxy.model_deprecation import DeprecationAlertState, ModelDeprecationInfo
 from litellm.types.proxy.usage_alert_defaults import PerformanceIssueFamily
 from litellm.types.proxy.usage_alerts import (
-    UsageAlert,
+    AlertRule,
+    PerformanceSignal,
     UsageAlertChannel,
     UsageAlertDirection,
     UsageAlertEvaluationCounts,
     UsageAlertMetric,
     UsageAlertMetricPoint,
-    UsageAlertRule,
     UsageAlertStatus,
 )
 
-IssueActivityResponse: TypeAlias = BoundedDailyActivityResponse
+AlertActivityResponse: TypeAlias = BoundedDailyActivityResponse
 
-IssueKind: TypeAlias = Literal["performance", "model_deprecation"]
-IssueFamily: TypeAlias = Literal["retirement", "latency", "reliability", "spend", "traffic"]
-IssueScope: TypeAlias = Literal["deployment", "key", "user", "team", "model", "provider"]
-IssueGroupingReason: TypeAlias = Literal["same_resource", "dominant_key", "provider_cohort", "model_deprecation"]
-IssueSignalGroupingReason: TypeAlias = Literal[
+AlertKind: TypeAlias = Literal["performance", "model_deprecation"]
+AlertFamily: TypeAlias = Literal["retirement", "latency", "reliability", "spend", "traffic"]
+AlertScope: TypeAlias = Literal["deployment", "key", "user", "team", "model", "provider"]
+AlertGroupingReason: TypeAlias = Literal["same_resource", "dominant_key", "provider_cohort", "model_deprecation"]
+AlertSignalGroupingReason: TypeAlias = Literal[
     "same_resource", "same_key_traffic", "dominant_key", "provider_cohort", "volume_explains_spend", "model_deprecation"
 ]
 
 
-class IssueModelPair(BaseModel, frozen=True):
+class AlertModelPair(BaseModel, frozen=True):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     provider: str = Field(min_length=1, max_length=256)
     model: str = Field(min_length=1, max_length=1024)
 
 
-class IssueCohort(BaseModel, frozen=True):
+class AlertCohort(BaseModel, frozen=True):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    scope_type: IssueScope
+    scope_type: AlertScope
     scope_id: str | None = Field(default=None, min_length=1, max_length=1024)
-    model_pairs: tuple[IssueModelPair, ...] = Field(default=(), max_length=100)
+    model_pairs: tuple[AlertModelPair, ...] = Field(default=(), max_length=100)
 
     @model_validator(mode="after")
     def validate_scope(self) -> Self:
@@ -56,7 +56,7 @@ class IssueCohort(BaseModel, frozen=True):
         return self
 
 
-class IssueComparison(BaseModel, frozen=True):
+class AlertComparison(BaseModel, frozen=True):
     model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
 
     metric: UsageAlertMetric
@@ -78,7 +78,7 @@ class IssueComparison(BaseModel, frozen=True):
         return self
 
 
-class IssueImpact(BaseModel, frozen=True):
+class AlertImpact(BaseModel, frozen=True):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     keys: int | None = Field(default=None, ge=0)
@@ -90,7 +90,7 @@ class IssueImpact(BaseModel, frozen=True):
     measured_models: int | None = Field(default=None, ge=0)
 
 
-class IssueDeprecation(BaseModel, frozen=True):
+class AlertDeprecation(BaseModel, frozen=True):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     model: ModelDeprecationInfo
@@ -102,24 +102,24 @@ class IssueDeprecation(BaseModel, frozen=True):
     daily_requests: tuple[UsageAlertMetricPoint, ...] = Field(default=(), max_length=30)
 
 
-class IssueInput(BaseModel, frozen=True):
+class AlertInput(BaseModel, frozen=True):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     id: str = Field(min_length=1, max_length=200)
     cohort_key: str = Field(min_length=1, max_length=200)
-    kind: IssueKind
-    family: IssueFamily
+    kind: AlertKind
+    family: AlertFamily
     title: str = Field(min_length=1, max_length=2048)
-    cohort: IssueCohort
+    cohort: AlertCohort
     observed_on: date
     observed_at: datetime
     range_start: date
     range_end: date
-    grouping_reason: IssueGroupingReason
+    grouping_reason: AlertGroupingReason
     explanation: str = Field(default="", max_length=2000)
-    comparisons: tuple[IssueComparison, ...] = Field(default=(), max_length=10)
-    impact: IssueImpact = Field(default_factory=IssueImpact)
-    deprecation: IssueDeprecation | None = None
+    comparisons: tuple[AlertComparison, ...] = Field(default=(), max_length=10)
+    impact: AlertImpact = Field(default_factory=AlertImpact)
+    deprecation: AlertDeprecation | None = None
 
     @model_validator(mode="after")
     def validate_issue(self) -> Self:
@@ -134,7 +134,7 @@ class IssueInput(BaseModel, frozen=True):
         return self
 
 
-class Issue(IssueInput, frozen=True):
+class Alert(AlertInput, frozen=True):
     status: UsageAlertStatus
     first_seen: datetime
     last_seen: datetime
@@ -149,58 +149,60 @@ class Issue(IssueInput, frozen=True):
     )
 
 
-class IssueList(BaseModel, frozen=True):
-    data: tuple[Issue, ...]
+class AlertList(BaseModel, frozen=True):
+    data: tuple[Alert, ...]
     total: int
     limit: int = Field(description="Effective page size, reduced for large records. Continue at offset + limit.")
     offset: int
 
 
-class IssueUpdate(BaseModel, frozen=True):
+class AlertUpdate(BaseModel, frozen=True):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     status: UsageAlertStatus
     expected_status: UsageAlertStatus
 
 
-class IssueSignalInput(BaseModel, frozen=True):
+class AlertSignalInput(BaseModel, frozen=True):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    source: Literal["usage_alert", "model_deprecation"]
+    source: Literal["performance", "model_deprecation"]
     source_id: str = Field(min_length=1, max_length=200)
-    usage_alert: UsageAlert | None = None
-    deprecation: IssueDeprecation | None = None
-    grouping_reason: IssueSignalGroupingReason = "same_resource"
+    performance: PerformanceSignal | None = None
+    deprecation: AlertDeprecation | None = None
+    grouping_reason: AlertSignalGroupingReason = "same_resource"
     explanation: str = Field(default="", max_length=2000)
 
     @model_validator(mode="after")
     def validate_signal(self) -> Self:
-        if self.source == "usage_alert":
-            if self.usage_alert is None or self.deprecation is not None or self.usage_alert.id != self.source_id:
-                raise ValueError("Usage signals require their matching source alert")
-        elif self.deprecation is None or self.usage_alert is not None:
+        if self.source == "performance":
+            if self.performance is None or self.deprecation is not None or self.performance.id != self.source_id:
+                raise ValueError("Performance signals require their matching evidence")
+        elif self.deprecation is None or self.performance is not None:
             raise ValueError("Deprecation signals require deprecation details")
         return self
 
 
-class IssueSignal(IssueSignalInput, frozen=True):
-    issue_id: str
+class AlertSignal(AlertSignalInput, frozen=True):
+    model_config = ConfigDict(frozen=True, extra="forbid", populate_by_name=True)
+
+    issue_id: str = Field(alias="alert_id")
 
 
-class IssueSignalList(BaseModel, frozen=True):
-    data: tuple[IssueSignal, ...]
+class AlertSignalList(BaseModel, frozen=True):
+    data: tuple[AlertSignal, ...]
     total: int
     limit: int
     offset: int
 
 
-class IssueProjectionSignal(BaseModel, frozen=True):
-    alert: UsageAlert
-    rule: UsageAlertRule
+class AlertProjectionSignal(BaseModel, frozen=True):
+    alert: PerformanceSignal
+    rule: AlertRule
     evaluation_day: date
 
 
-class IssueDeliveryInput(BaseModel, frozen=True):
+class AlertDeliveryInput(BaseModel, frozen=True):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     id: str = Field(min_length=1, max_length=200)
@@ -211,27 +213,27 @@ class IssueDeliveryInput(BaseModel, frozen=True):
     parent_delivery_id: str | None = Field(default=None, min_length=1, max_length=200)
 
 
-class IssueDeliveryBinding(BaseModel, frozen=True):
-    delivery: IssueDeliveryInput
+class AlertDeliveryBinding(BaseModel, frozen=True):
+    delivery: AlertDeliveryInput
     rule_id: str
     rule_revision: str
     source_id: str
 
 
-class IssueDelivery(IssueDeliveryInput, frozen=True):
+class AlertDelivery(AlertDeliveryInput, frozen=True):
     attempts: int = 0
     next_attempt: datetime | None = None
     last_error: Literal["delivery_failed", "transport_not_configured"] | None = None
 
 
-class IssuePendingDelivery(BaseModel, frozen=True):
-    delivery: IssueDelivery
-    issue: Issue
-    rule: UsageAlertRule
-    alert: UsageAlert
+class AlertPendingDelivery(BaseModel, frozen=True):
+    delivery: AlertDelivery
+    issue: Alert
+    rule: AlertRule
+    alert: PerformanceSignal
 
 
-class IssueFamilyPolicy(BaseModel, frozen=True):
+class AlertFamilyPolicy(BaseModel, frozen=True):
     direction: UsageAlertDirection
     enabled: bool | None
     multiplier: float | None
@@ -244,21 +246,21 @@ class IssueFamilyPolicy(BaseModel, frozen=True):
     enabled_rules: int
 
 
-class IssueFamilySetting(BaseModel, frozen=True):
+class AlertFamilySetting(BaseModel, frozen=True):
     family: PerformanceIssueFamily
     enabled: bool | None
     total_rules: int
     enabled_rules: int
-    policies: tuple[IssueFamilyPolicy, ...]
+    policies: tuple[AlertFamilyPolicy, ...]
     evaluation_status_counts: UsageAlertEvaluationCounts = Field(default_factory=UsageAlertEvaluationCounts)
 
 
-class IssueFamilyList(BaseModel, frozen=True):
-    data: tuple[IssueFamilySetting, ...]
+class AlertFamilyList(BaseModel, frozen=True):
+    data: tuple[AlertFamilySetting, ...]
     projection_pending: bool = False
 
 
-class IssueFamilyPolicyUpdate(BaseModel, frozen=True):
+class AlertFamilyPolicyUpdate(BaseModel, frozen=True):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     direction: UsageAlertDirection
@@ -270,11 +272,11 @@ class IssueFamilyPolicyUpdate(BaseModel, frozen=True):
     min_history_days: int | None = Field(default=None, ge=1, le=30)
 
 
-class IssueFamilyUpdate(BaseModel, frozen=True):
+class AlertFamilyUpdate(BaseModel, frozen=True):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     enabled: bool | None = None
-    policies: tuple[IssueFamilyPolicyUpdate, ...] = Field(default=(), max_length=2)
+    policies: tuple[AlertFamilyPolicyUpdate, ...] = Field(default=(), max_length=2)
 
     @model_validator(mode="after")
     def validate_update(self) -> Self:

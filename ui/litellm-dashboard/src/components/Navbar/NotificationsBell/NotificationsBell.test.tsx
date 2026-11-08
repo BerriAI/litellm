@@ -215,7 +215,7 @@ describe("issue notifications", () => {
     renderWithProviders(<NotificationsBellView currentVersion={null} latestRelease={null} issues={ISSUES} />);
     await user.click(screen.getByRole("button", { name: "Notifications, 2 alerts need attention" }));
     const destination = screen.getByRole("link", { name: SPEND_ISSUE.title });
-    expect(destination).toHaveAttribute("href", "/ui/alerts?issue=issue-checkout-spend");
+    expect(destination).toHaveAttribute("href", "/ui/alerts?alert=issue-checkout-spend");
     expect(screen.getByRole("article", { name: SPEND_ISSUE.title })).toHaveTextContent(
       "$600.00 on Nov 4, 2026 UTC, compared with the usual $30.00.",
     );
@@ -237,7 +237,7 @@ describe("issue notifications", () => {
     await user.click(screen.getByRole("button", { name: "Notifications, 2 alerts need attention" }));
     expect(screen.getByRole("link", { name: RETIREMENT_ISSUE.title })).toHaveAttribute(
       "href",
-      "/ui/alerts?issue=issue-model-retirement",
+      "/ui/alerts?alert=issue-model-retirement",
     );
     expect(screen.getByRole("link", { name: "LiteLLM model cost map" })).toHaveAttribute(
       "href",

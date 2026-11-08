@@ -23,17 +23,17 @@ from litellm.repositories.usage_alert_metrics import (
 )
 from litellm.repositories.usage_alerts import UsageAlertsRepository
 from litellm.types.proxy.issues import (
-    Issue,
-    IssueCohort,
-    IssueComparison,
-    IssueDeliveryBinding,
-    IssueDeliveryInput,
-    IssueImpact,
-    IssueInput,
-    IssuePendingDelivery,
-    IssueProjectionSignal,
-    IssueSignal,
-    IssueSignalGroupingReason,
+    Alert,
+    AlertCohort,
+    AlertComparison,
+    AlertDeliveryBinding,
+    AlertDeliveryInput,
+    AlertImpact,
+    AlertInput,
+    AlertPendingDelivery,
+    AlertProjectionSignal,
+    AlertSignal,
+    AlertSignalGroupingReason,
 )
 from litellm.types.proxy.usage_alert_defaults import (
     PerformanceIssueFamily,
@@ -41,12 +41,12 @@ from litellm.types.proxy.usage_alert_defaults import (
     is_default_usage_rule,
 )
 from litellm.types.proxy.usage_alerts import (
+    AlertRule,
     UsageAlertDirection,
     UsageAlertMetric,
     UsageAlertMetricPoint,
     UsageAlertProjectionCursor,
     UsageAlertProjectionWork,
-    UsageAlertRule,
     UsageAlertScope,
 )
 
@@ -54,30 +54,30 @@ _SCOPES: Final[tuple[UsageAlertScope, ...]] = ("key", "user", "team", "model", "
 _METRICS: Final[tuple[UsageAlertMetric, ...]] = ("spend", "latency", "error_rate", "errors", "requests")
 
 
-class IssueDelivery(Protocol):
-    async def send_issue(self, pending: IssuePendingDelivery) -> bool: ...
+class AlertDelivery(Protocol):
+    async def send_issue(self, pending: AlertPendingDelivery) -> bool: ...
 
 
 @dataclass(frozen=True, slots=True)
 class _Candidate:
-    source: IssueProjectionSignal
+    source: AlertProjectionSignal
     comparison: DailyComparison
     rows: tuple[DailyAlertMetrics, ...]
-    impact: IssueImpact
+    impact: AlertImpact
     window: IssueMetricWindow
 
 
 @dataclass(frozen=True, slots=True)
 class _Target:
-    issue: IssueInput
-    reason: IssueSignalGroupingReason = "same_resource"
+    issue: AlertInput
+    reason: AlertSignalGroupingReason = "same_resource"
     explanation: str = ""
 
 
 @dataclass(frozen=True, slots=True)
 class _ProviderGroup:
     evidence: ProviderLatencyEvidence
-    rule: UsageAlertRule
+    rule: AlertRule
 
 
 def _family(metric: UsageAlertMetric) -> PerformanceIssueFamily:
@@ -92,7 +92,7 @@ def _cohort_key(family: str, scope: str, entity: str | None, direction: UsageAle
     return str(uuid5(NAMESPACE_URL, f"litellm:issue:{family}:{scope}:{entity}:{direction}"))
 
 
-def _window(source: IssueProjectionSignal, day: date) -> IssueMetricWindow:
+def _window(source: AlertProjectionSignal, day: date) -> IssueMetricWindow:
     return IssueMetricWindow(
         source.alert.id, source.alert.scope_id or "deployment", day - timedelta(days=source.rule.baseline_days), day
     )
@@ -109,8 +109,8 @@ def _history(candidate: _Candidate, metric: UsageAlertMetric, observed: float) -
     )
 
 
-def _comparison(candidate: _Candidate) -> IssueComparison:
-    return IssueComparison(
+def _comparison(candidate: _Candidate) -> AlertComparison:
+    return AlertComparison(
         metric=candidate.source.rule.metric,
         direction=candidate.source.rule.direction,
         observed_value=candidate.comparison.observed,
@@ -123,11 +123,11 @@ def _comparison(candidate: _Candidate) -> IssueComparison:
     )
 
 
-def _request_context(candidate: _Candidate) -> IssueComparison:
+def _request_context(candidate: _Candidate) -> AlertComparison:
     history: Final = tuple(row for row in candidate.rows if row.day < candidate.window.day)
     baseline: Final = sum(row.requests for row in history) / len({row.day for row in history})
     observed: Final = sum(row.requests for row in candidate.rows if row.day == candidate.window.day)
-    return IssueComparison(
+    return AlertComparison(
         metric="requests",
         direction="increase" if observed >= baseline else "decrease",
         observed_value=observed,
@@ -139,7 +139,7 @@ def _request_context(candidate: _Candidate) -> IssueComparison:
     )
 
 
-def _resource_issue(candidate: _Candidate, now: datetime) -> IssueInput:
+def _resource_issue(candidate: _Candidate, now: datetime) -> AlertInput:
     rule: Final = candidate.source.rule
     family: Final = _family(rule.metric)
     cohort_key: Final = _cohort_key(family, rule.scope_type, candidate.source.alert.scope_id, rule.direction)
@@ -150,7 +150,7 @@ def _resource_issue(candidate: _Candidate, now: datetime) -> IssueInput:
         "errors": "Failed requests",
         "requests": "Traffic",
     }[rule.metric]
-    return IssueInput(
+    return AlertInput(
         id=str(
             uuid5(NAMESPACE_URL, f"{cohort_key}:{candidate.source.alert.id}:{candidate.window.day}:{rule.updated_at}")
         ),
@@ -158,7 +158,7 @@ def _resource_issue(candidate: _Candidate, now: datetime) -> IssueInput:
         kind="performance",
         family=family,
         title=f"{title} {'increased' if rule.direction == 'increase' else 'decreased'}",
-        cohort=IssueCohort(scope_type=rule.scope_type, scope_id=candidate.source.alert.scope_id),
+        cohort=AlertCohort(scope_type=rule.scope_type, scope_id=candidate.source.alert.scope_id),
         observed_on=candidate.window.day,
         observed_at=now,
         range_start=candidate.window.start,
@@ -186,7 +186,7 @@ def _volume_explains_spend(traffic: _Candidate, spend: _Candidate) -> bool:
     return 0.8 <= cost_ratio / request_ratio <= 1.2
 
 
-def _bindings(candidate: _Candidate, issue_id: str) -> tuple[IssueDeliveryBinding, ...]:
+def _bindings(candidate: _Candidate, issue_id: str) -> tuple[AlertDeliveryBinding, ...]:
     rule: Final = candidate.source.rule
     destinations: Final = (
         tuple(("email", address) for address in rule.email_recipients) if "email" in rule.notification_channels else ()
@@ -196,8 +196,8 @@ def _bindings(candidate: _Candidate, issue_id: str) -> tuple[IssueDeliveryBindin
         *((("slack", "configured-slack-route"),) if "slack" in rule.notification_channels else ()),
     )
     return tuple(
-        IssueDeliveryBinding(
-            delivery=IssueDeliveryInput(
+        AlertDeliveryBinding(
+            delivery=AlertDeliveryInput(
                 id=str(uuid5(NAMESPACE_URL, f"{issue_id}:{channel}:{destination}")),
                 issue_id=issue_id,
                 channel="email" if channel == "email" else "slack",
@@ -217,13 +217,13 @@ class PerformanceIssueProjector:
         store: IssueStore,
         metrics: UsageAlertMetricsRepository,
         providers: ProviderLatencyRepository,
-        delivery: IssueDelivery,
+        delivery: AlertDelivery,
     ) -> None:
         self._store = store
         self._metrics = metrics
         self._providers = providers
         self._delivery = delivery
-        self._provider_rule: UsageAlertRule | None = None
+        self._provider_rule: AlertRule | None = None
         self._provider_cache: OrderedDict[str, _ProviderGroup | None] = OrderedDict()  # mutable-ok: max 32 providers
 
     async def run_pending(
@@ -300,7 +300,7 @@ class PerformanceIssueProjector:
         )
 
     async def _candidates(
-        self, sources: tuple[IssueProjectionSignal, ...], scope: UsageAlertScope, day: date
+        self, sources: tuple[AlertProjectionSignal, ...], scope: UsageAlertScope, day: date
     ) -> tuple[_Candidate, ...]:
         eligible: Final = sources
         windows: Final = tuple(_window(source, day) for source in eligible)
@@ -318,7 +318,7 @@ class PerformanceIssueProjector:
         )
 
     @staticmethod
-    def _candidate(source: IssueProjectionSignal, days: tuple[IssueMetricDay, ...], day: date) -> _Candidate | None:
+    def _candidate(source: AlertProjectionSignal, days: tuple[IssueMetricDay, ...], day: date) -> _Candidate | None:
         rows: Final = tuple(item.metrics for item in days)
         comparison: Final = compare_daily_usage(source.rule, rows, day)
         if comparison is None or not comparison.breached:
@@ -327,7 +327,7 @@ class PerformanceIssueProjector:
             source,
             comparison,
             rows,
-            IssueImpact(
+            AlertImpact(
                 keys=days[0].keys if days else None,
                 users=days[0].users if days else None,
                 teams=1 if source.rule.scope_type == "team" else None,
@@ -339,7 +339,7 @@ class PerformanceIssueProjector:
 
     async def _project_page(
         self,
-        sources: tuple[IssueProjectionSignal, ...],
+        sources: tuple[AlertProjectionSignal, ...],
         scope: UsageAlertScope,
         day: date,
         now: datetime,
@@ -542,7 +542,7 @@ class PerformanceIssueProjector:
         )
 
     @staticmethod
-    def _same_policy(left: UsageAlertRule, right: UsageAlertRule) -> bool:
+    def _same_policy(left: AlertRule, right: AlertRule) -> bool:
         return (left.baseline_days, left.min_history_days, left.min_requests, left.multiplier, left.min_value) == (
             right.baseline_days,
             right.min_history_days,
@@ -579,21 +579,21 @@ class PerformanceIssueProjector:
 
     async def _prior_provider_page(
         self,
-        existing: tuple[Issue, ...],
+        existing: tuple[Alert, ...],
         day: date,
-        rule: UsageAlertRule,
+        rule: AlertRule,
         now: datetime,
-    ) -> tuple[tuple[Issue, bool, ProviderLatencyEvidence | None], ...]:
+    ) -> tuple[tuple[Alert, bool, ProviderLatencyEvidence | None], ...]:
         states: Final = tuple([await self._prior_provider(issue, day, rule) for issue in existing])
         await self._store.recover_issue_ids(tuple(issue.id for issue, recovered, _ in states if recovered), now)
         return states
 
     async def _prior_provider(
         self,
-        issue: Issue,
+        issue: Alert,
         day: date,
-        rule: UsageAlertRule,
-    ) -> tuple[Issue, bool, ProviderLatencyEvidence | None]:
+        rule: AlertRule,
+    ) -> tuple[Alert, bool, ProviderLatencyEvidence | None]:
         if await self._providers.cohort_recovered(issue.cohort.model_pairs, day, rule):
             return issue, True, None
         evidence: Final = await self._providers.latency_cohort(issue.cohort.model_pairs, day, rule)
@@ -665,7 +665,7 @@ class PerformanceIssueProjector:
             return None
         key: Final = _cohort_key("latency", "provider", evidence.cohort.scope_id, "increase")
         return _Target(
-            IssueInput(
+            AlertInput(
                 id=str(
                     uuid5(
                         NAMESPACE_URL, f"{key}:{item.source.alert.id}:{item.window.day}:{item.source.rule.updated_at}"
@@ -701,11 +701,11 @@ class PerformanceIssueProjector:
         saved: Final = {item.cohort_key: item for item in await self._store.upsert_issues(inputs)}
         await self._store.add_signal_batch(
             tuple(
-                IssueSignal(
-                    issue_id=saved[targets[candidate.source.alert.id].issue.cohort_key].id,
-                    source="usage_alert",
+                AlertSignal(
+                    alert_id=saved[targets[candidate.source.alert.id].issue.cohort_key].id,
+                    source="performance",
                     source_id=candidate.source.alert.id,
-                    usage_alert=candidate.source.alert,
+                    performance=candidate.source.alert,
                     grouping_reason=targets[candidate.source.alert.id].reason,
                     explanation=targets[candidate.source.alert.id].explanation,
                 )
@@ -729,7 +729,7 @@ class PerformanceIssueProjector:
                     return
                 await self._notify_one(item, deadline)
 
-    async def _notify_one(self, item: IssuePendingDelivery, deadline: float) -> None:
+    async def _notify_one(self, item: AlertPendingDelivery, deadline: float) -> None:
         current: Final = await self._store.pending_delivery(item.delivery.id)
         if current is None:
             return

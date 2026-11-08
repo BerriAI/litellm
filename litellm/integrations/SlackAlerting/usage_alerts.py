@@ -15,8 +15,8 @@ from pydantic import TypeAdapter
 
 from litellm.models.issues import IssueStore
 from litellm.types.integrations.slack_alerting import AlertType
-from litellm.types.proxy.issues import IssueDeliveryBinding, IssueDeliveryInput, IssuePendingDelivery
-from litellm.types.proxy.usage_alerts import UsageAlert
+from litellm.types.proxy.issues import AlertDeliveryBinding, AlertDeliveryInput, AlertPendingDelivery
+from litellm.types.proxy.usage_alerts import PerformanceSignal
 
 if TYPE_CHECKING:
     from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
@@ -28,7 +28,7 @@ def configured_destinations(slack: "SlackAlerting") -> tuple[str, ...]:
     return _URLS.validate_python(slack.alerting or ())  # pyright: ignore[reportUnknownMemberType]  # validate legacy destination config
 
 
-def activity_url(alert: UsageAlert, base_url: str | None) -> str:
+def activity_url(alert: PerformanceSignal, base_url: str | None) -> str:
     if not base_url:
         return alert.activity_path
     parsed: Final = urlsplit(base_url)
@@ -37,7 +37,7 @@ def activity_url(alert: UsageAlert, base_url: str | None) -> str:
     return base_url.rstrip("/") + "/ui" + alert.activity_path
 
 
-def incident_message(alert: UsageAlert, url: str | None) -> str:
+def incident_message(alert: PerformanceSignal, url: str | None) -> str:
     scope: Final = "Gateway" if alert.scope_type == "deployment" else f"{alert.scope_type}: {alert.scope_id}"
     unit: Final = (
         " ms"
@@ -65,14 +65,14 @@ class UsageAlertDelivery:
         self._slack = slack
         self._store = store
 
-    async def send_issue(self, pending: IssuePendingDelivery) -> bool:
+    async def send_issue(self, pending: AlertPendingDelivery) -> bool:
         urls: Final = self._webhooks() if pending.delivery.channel == "slack" else ()
         if len(urls) > 1 and pending.delivery.slack_destination is None:
             if self._store is None:
                 raise RuntimeError("Multiple alert destinations require a delivery store")
             bindings: Final = (
-                IssueDeliveryBinding(
-                    delivery=IssueDeliveryInput(
+                AlertDeliveryBinding(
+                    delivery=AlertDeliveryInput(
                         id=str(uuid5(NAMESPACE_URL, f"{pending.delivery.id}:{destination}")),
                         issue_id=pending.issue.id,
                         channel="slack",
@@ -88,7 +88,7 @@ class UsageAlertDelivery:
             while batch := tuple(islice(bindings, 10)):
                 await self._store.queue_deliveries(batch)
             return True
-        path: Final = "/alerts?" + urlencode({"issue": pending.issue.id})
+        path: Final = "/alerts?" + urlencode({"alert": pending.issue.id})
         issue_url: Final = activity_url(
             pending.alert.model_copy(update={"activity_path": path}), os.getenv("PROXY_BASE_URL")
         )
@@ -103,7 +103,7 @@ class UsageAlertDelivery:
 
     async def _send(
         self,
-        pending: IssuePendingDelivery,
+        pending: AlertPendingDelivery,
         urls: tuple[str, ...],
         message: str,
         subject: str,

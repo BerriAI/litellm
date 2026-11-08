@@ -607,7 +607,7 @@ describe("UsagePage", () => {
   });
 
   it.each([
-    { context: "deployment alert", alert: "&alert=example-alert", timezoneOffsetMinutes: 0 },
+    { context: "deployment alert", alert: "&signal=example-alert", timezoneOffsetMinutes: 0 },
     { context: "ordinary usage", alert: "", timezoneOffsetMinutes: undefined },
   ])(
     "uses the same daily timezone for totals and tag activity in $context",

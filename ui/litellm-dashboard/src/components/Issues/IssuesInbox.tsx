@@ -11,8 +11,8 @@ import {
   FAMILY_LABELS,
   ISSUE_FAMILIES,
   ISSUE_STATUSES,
-  Issue,
-  IssueFamily,
+  Alert,
+  AlertFamily,
   IssueStatus,
   issueComparisonText,
   issueHeadline,
@@ -25,7 +25,7 @@ import IssueHistoryChart from "./IssueHistoryChart";
 import IssueStatusActions from "./IssueStatusActions";
 
 const TABLE_STATE = { sortFields: [], defaultSort: { id: "", desc: false }, defaultPageSize: 25, filterColumns: [] };
-function AlertEntry({ issue }: { issue: Issue }) {
+function AlertEntry({ issue }: { issue: Alert }) {
   const impact = issueImpactText(issue);
   return (
     <li className="grid gap-4 px-4 py-5 sm:px-5 lg:grid-cols-[minmax(0,1fr)_220px] lg:gap-8">
@@ -84,7 +84,7 @@ export default function IssuesInbox() {
   };
   const changeFamily = (next: string) => {
     void setParams({
-      family: next === "all" || next === "performance" ? null : (next as IssueFamily),
+      family: next === "all" || next === "performance" ? null : (next as AlertFamily),
       type: next === "performance" ? "usage" : null,
     });
     table.onPaginationChange({ ...table.pagination, pageIndex: 0 });

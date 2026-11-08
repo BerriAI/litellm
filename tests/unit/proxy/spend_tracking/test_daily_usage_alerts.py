@@ -19,8 +19,8 @@ from litellm.repositories.usage_alert_health import UsageAlertHealthRepository
 from litellm.repositories.usage_alert_metrics import DailyAlertMetrics, UsageAlertMetricsRepository
 from litellm.repositories.usage_alerts import UsageAlertsRepository
 from litellm.types.proxy.usage_alert_defaults import default_usage_rule_id, default_usage_rules
-from litellm.types.proxy.issues import IssuePendingDelivery
-from litellm.types.proxy.usage_alerts import UsageAlertRule, UsageAlertRuleInput
+from litellm.types.proxy.issues import AlertPendingDelivery
+from litellm.types.proxy.usage_alerts import AlertRule, AlertRuleInput
 
 _DAY: Final = date(2026, 10, 20)
 
@@ -93,7 +93,7 @@ class _BudgetDatabase:
 
 
 class _UnexpectedDelivery:
-    async def send_issue(self, pending: IssuePendingDelivery) -> bool:
+    async def send_issue(self, pending: AlertPendingDelivery) -> bool:
         raise AssertionError("stalled evaluation must not deliver alerts")
 
 
@@ -149,7 +149,7 @@ def _row(day: date, requests: int = 200, spend: float = 20, ms: float = 100_000,
     "metric,observed,baseline", [("spend", 100, 20), ("requests", 1000, 200), ("latency", 2000, 500)]
 )
 def test_spikes_use_recorded_reference_days_and_weighted_latency(metric: str, observed: float, baseline: float) -> None:
-    rule: Final = UsageAlertRuleInput.model_validate(
+    rule: Final = AlertRuleInput.model_validate(
         {"name": "spike", "scope_type": "key", "metric": metric, "direction": "increase"}
     )
     history: Final = tuple(_row(_DAY - timedelta(days=days)) for days in (1, 3, 7))
@@ -161,13 +161,13 @@ def test_spikes_use_recorded_reference_days_and_weighted_latency(metric: str, ob
 
 def test_missing_target_is_zero_for_counts_but_never_zero_latency() -> None:
     history: Final = tuple(_row(_DAY - timedelta(days=days)) for days in (1, 2, 3))
-    rule: Final = UsageAlertRuleInput(name="drop", scope_type="key", metric="requests", direction="decrease")
+    rule: Final = AlertRuleInput(name="drop", scope_type="key", metric="requests", direction="decrease")
     assert compare_daily_usage(rule, history, _DAY) == DailyComparison(3, 0, 200, 200 / 3, True)
     assert compare_daily_usage(rule.model_copy(update={"metric": "latency"}), history, _DAY) is None
 
 
 def test_low_volume_and_recorded_zero_spend_do_not_establish_a_multiplier_baseline() -> None:
-    rule: Final = UsageAlertRuleInput(name="spike", scope_type="key", metric="spend", direction="increase")
+    rule: Final = AlertRuleInput(name="spike", scope_type="key", metric="spend", direction="increase")
     history: Final = tuple(_row(_DAY - timedelta(days=days), requests=10, spend=0) for days in (1, 2, 3))
     assert compare_daily_usage(rule, (*history, _row(_DAY, spend=100)), _DAY) is None
     enough_requests: Final = tuple(replace(row, requests=200) for row in history)
@@ -178,7 +178,7 @@ def test_low_volume_and_recorded_zero_spend_do_not_establish_a_multiplier_baseli
 
 def test_absolute_floor_suppresses_small_changes() -> None:
     history: Final = tuple(_row(_DAY - timedelta(days=days)) for days in (1, 2, 3))
-    rule: Final = UsageAlertRuleInput(
+    rule: Final = AlertRuleInput(
         name="spike", scope_type="key", metric="spend", direction="increase", min_value=100
     )
     assert compare_daily_usage(rule, (*history, _row(_DAY, spend=100)), _DAY) == DailyComparison(3, 100, 20, 120, False)
@@ -191,7 +191,7 @@ def test_day_is_eligible_only_after_one_hour_utc_grace() -> None:
 
 
 def test_latency_weights_request_samples_instead_of_averaging_daily_averages() -> None:
-    rule: Final = UsageAlertRuleInput(
+    rule: Final = AlertRuleInput(
         name="latency", scope_type="key", metric="latency", direction="increase", min_history_days=2
     )
     rows: Final = (
@@ -203,7 +203,7 @@ def test_latency_weights_request_samples_instead_of_averaging_daily_averages() -
 
 
 def test_errors_are_failed_request_count_and_require_absolute_change_floor() -> None:
-    rule: Final = UsageAlertRuleInput(
+    rule: Final = AlertRuleInput(
         name="errors", scope_type="key", metric="errors", direction="increase", min_value=10
     )
     history: Final = tuple(_row(_DAY - timedelta(days=days)) for days in (1, 2, 3))
@@ -213,7 +213,7 @@ def test_errors_are_failed_request_count_and_require_absolute_change_floor() -> 
 
 def test_a_value_at_the_configured_multiplier_alerts() -> None:
     history: Final = tuple(_row(_DAY - timedelta(days=days)) for days in (1, 2, 3))
-    rule: Final = UsageAlertRuleInput(name="spike", scope_type="key", metric="spend", direction="increase")
+    rule: Final = AlertRuleInput(name="spike", scope_type="key", metric="spend", direction="increase")
     assert compare_daily_usage(rule, (*history, _row(_DAY, spend=60)), _DAY) == DailyComparison(3, 60, 20, 60, True)
 
 
@@ -234,9 +234,9 @@ def test_default_notifications_require_opt_in_and_do_not_duplicate_legacy_user_s
 )
 def test_sentinel_entities_cannot_create_alerts_with_unusable_activity_links(scope: str, entity: str) -> None:
     from litellm.proxy.spend_tracking.usage_alert_job import _observations
-    from litellm.types.proxy.usage_alerts import UsageAlertRule
+    from litellm.types.proxy.usage_alerts import AlertRule
 
-    rule: Final = UsageAlertRule.model_validate(
+    rule: Final = AlertRule.model_validate(
         {
             "id": "rule",
             "name": "spike",
@@ -292,9 +292,9 @@ def test_healthy_evaluation_completes_and_recovers_only_with_sufficient_evidence
     active: bool, spend: float, history_days: int, evaluated: bool, persisted: bool
 ) -> None:
     from litellm.proxy.spend_tracking.usage_alert_job import _observations
-    from litellm.types.proxy.usage_alerts import UsageAlertRule
+    from litellm.types.proxy.usage_alerts import AlertRule
 
-    rule: Final = UsageAlertRule(
+    rule: Final = AlertRule(
         id="rule",
         name="spike",
         scope_type="key",
@@ -347,7 +347,7 @@ def test_error_rate_default_requires_two_percentage_points_as_well_as_the_multip
 
 
 def test_no_requests_cannot_report_zero_error_rate_or_resolve_a_reliability_issue() -> None:
-    rule: Final = UsageAlertRuleInput(name="rate", scope_type="key", metric="error_rate", direction="decrease")
+    rule: Final = AlertRuleInput(name="rate", scope_type="key", metric="error_rate", direction="decrease")
     history: Final = tuple(_row(_DAY - timedelta(days=day), requests=500) for day in (1, 2, 3))
     assert compare_daily_usage(rule, history, _DAY) is None
 
@@ -382,7 +382,7 @@ def test_latency_default_requires_a_material_change_and_enough_timed_requests() 
 
 @pytest.mark.parametrize("metric", ["spend", "requests", "latency", "errors"])
 def test_multiplier_alerts_need_a_positive_established_baseline(metric: str) -> None:
-    rule: Final = UsageAlertRuleInput.model_validate(
+    rule: Final = AlertRuleInput.model_validate(
         {"name": "baseline", "scope_type": "key", "metric": metric, "direction": "increase", "min_requests": 0}
     )
     current: Final = replace(_row(_DAY, requests=2000, spend=500), errors=100)
@@ -413,7 +413,7 @@ def test_default_traffic_drop_does_not_treat_a_normal_quiet_weekend_as_an_outage
         for rule in default_usage_rules()
         if (rule.scope_type, rule.metric, rule.direction) == ("key", "requests", "decrease")
     )
-    rule: Final = UsageAlertRule.model_validate(
+    rule: Final = AlertRule.model_validate(
         {
             **definition.model_dump(),
             "id": default_usage_rule_id("key", "requests", "decrease"),
@@ -432,7 +432,7 @@ def test_default_traffic_drop_does_not_treat_a_normal_quiet_weekend_as_an_outage
 
 
 def test_error_rate_drop_requires_enough_current_requests() -> None:
-    rule: Final = UsageAlertRuleInput(
+    rule: Final = AlertRuleInput(
         name="Reliability",
         scope_type="key",
         metric="error_rate",
@@ -448,7 +448,7 @@ def test_error_rate_drop_requires_enough_current_requests() -> None:
 def test_suppressed_default_can_recover_existing_episode_without_creating_a_new_one() -> None:
     from litellm.proxy.spend_tracking.usage_alert_job import _observations
 
-    rule: Final = UsageAlertRule(
+    rule: Final = AlertRule(
         id="rule",
         name="Default",
         scope_type="key",

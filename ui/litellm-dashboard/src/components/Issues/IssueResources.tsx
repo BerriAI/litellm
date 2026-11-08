@@ -10,7 +10,7 @@ import { storedKeyId } from "@/components/UsagePage/keyActivityData";
 import { backgroundFetchClient } from "@/lib/http/api";
 import { entityActivityHref } from "@/utils/entityLinks";
 import { formatAlertValue } from "@/components/UsageAlerts/usageAlertApi";
-import type { Issue } from "./issueApi";
+import type { Alert } from "./issueApi";
 
 interface ResourceRow {
   id: string;
@@ -58,7 +58,7 @@ export const ISSUE_RESOURCE_TABLE_STATE = {
   keyPrefix: "resources",
 };
 
-export default function IssueResources({ issue, from, to }: { issue: Issue; from: string; to: string }) {
+export default function IssueResources({ issue, from, to }: { issue: Alert; from: string; to: string }) {
   const { userId, userRole, isAuthorized, accessToken } = useAuthorized();
   const [requestedResource, setResource] = useQueryState(
     "resources",
@@ -84,11 +84,11 @@ export default function IssueResources({ issue, from, to }: { issue: Issue; from
     enabled: Boolean(isAuthorized && accessToken && from <= to),
     queryFn: async ({ signal }: { signal: AbortSignal }) => {
       const params = {
-        path: { issue_id: issue.id },
+        path: { alert_id: issue.id },
         query: { start_date: from, end_date: to, limit: table.pagination.pageSize, offset },
       };
       if (resource === "keys") {
-        const { data } = await backgroundFetchClient.GET("/issues/{issue_id}/keys", { params, signal });
+        const { data } = await backgroundFetchClient.GET("/alerts/{alert_id}/keys", { params, signal });
         if (!data) throw new Error("Could not load keys");
         const rows: ResourceRow[] = data.api_keys.map((key) => ({
           id: key.api_key,
@@ -101,7 +101,7 @@ export default function IssueResources({ issue, from, to }: { issue: Issue; from
         }));
         return { rows, total: data.total_api_keys };
       }
-      const { data } = await backgroundFetchClient.GET("/issues/{issue_id}/users", { params, signal });
+      const { data } = await backgroundFetchClient.GET("/alerts/{alert_id}/users", { params, signal });
       if (!data) throw new Error("Could not load users");
       const rows: ResourceRow[] = data.users.map((user) => ({
         id: user.user_id ?? "unattributed",
