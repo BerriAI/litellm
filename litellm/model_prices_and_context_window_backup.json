@@ -9403,6 +9403,8 @@
         "cache_creation_input_token_cost_above_272k_tokens": 2.5e-06,
         "cache_read_input_token_cost": 5e-08,
         "cache_read_input_token_cost_above_272k_tokens": 1e-07,
+        "deprecation_date": "2027-10-26",
+        "deprecation_source": "https://management.azure.com/subscriptions/{subscriptionId}/providers/Microsoft.CognitiveServices/locations/eastus/models?api-version=2024-10-01",
         "input_cost_per_token": 1e-06,
         "input_cost_per_token_above_272k_tokens": 2e-06,
         "litellm_provider": "azure",
@@ -13402,6 +13404,8 @@
     },
     "azure_ai/MAI-Thinking-1": {
         "cache_read_input_token_cost": 2e-07,
+        "deprecation_date": "2027-03-01",
+        "deprecation_source": "https://management.azure.com/subscriptions/{subscriptionId}/providers/Microsoft.CognitiveServices/locations/eastus/models?api-version=2024-10-01",
         "input_cost_per_token": 2e-06,
         "litellm_provider": "azure_ai",
         "max_input_tokens": 256000,
@@ -13561,6 +13565,8 @@
         "litellm_provider": "azure_ai",
         "ocr_cost_per_page": 0.004,
         "annotation_cost_per_page": 0.005,
+        "deprecation_date": "2027-10-01",
+        "deprecation_source": "https://management.azure.com/subscriptions/{subscriptionId}/providers/Microsoft.CognitiveServices/locations/eastus/models?api-version=2024-10-01",
         "mode": "ocr",
         "supported_endpoints": [
             "/v1/ocr"
@@ -13795,6 +13801,8 @@
     "azure_ai/grok-4.3": {
         "cache_read_input_token_cost": 2e-07,
         "cache_read_input_token_cost_above_200k_tokens": 4e-07,
+        "deprecation_date": "2027-05-12",
+        "deprecation_source": "https://management.azure.com/subscriptions/{subscriptionId}/providers/Microsoft.CognitiveServices/locations/eastus/models?api-version=2024-10-01",
         "input_cost_per_token": 1.25e-06,
         "input_cost_per_token_above_200k_tokens": 2.5e-06,
         "litellm_provider": "azure_ai",
@@ -13816,6 +13824,8 @@
     "azure_ai/grok-4.6": {
         "cache_read_input_token_cost": 5e-07,
         "cache_read_input_token_cost_above_200k_tokens": 1e-06,
+        "deprecation_date": "2027-08-24",
+        "deprecation_source": "https://management.azure.com/subscriptions/{subscriptionId}/providers/Microsoft.CognitiveServices/locations/eastus/models?api-version=2024-10-01",
         "input_cost_per_token": 2e-06,
         "input_cost_per_token_above_200k_tokens": 4e-06,
         "litellm_provider": "azure_ai",
@@ -69341,6 +69351,8 @@
         "source": "https://techcommunity.microsoft.com/blog/azure-ai-foundry-blog/deepseek-v4-1-flash-is-coming-to-microsoft-foundry/4556431"
     },
     "azure_ai/MAI-Image-2.6": {
+        "deprecation_date": "2027-05-01",
+        "deprecation_source": "https://management.azure.com/subscriptions/{subscriptionId}/providers/Microsoft.CognitiveServices/locations/eastus/models?api-version=2024-10-01",
         "input_cost_per_image_token": 8e-06,
         "input_cost_per_token": 5e-06,
         "litellm_provider": "azure_ai",
@@ -69354,6 +69366,8 @@
         ]
     },
     "azure_ai/MAI-Image-2.6-Flash": {
+        "deprecation_date": "2027-05-01",
+        "deprecation_source": "https://management.azure.com/subscriptions/{subscriptionId}/providers/Microsoft.CognitiveServices/locations/eastus/models?api-version=2024-10-01",
         "input_cost_per_image_token": 2.5e-06,
         "input_cost_per_token": 1.75e-06,
         "litellm_provider": "azure_ai",
@@ -69467,6 +69481,8 @@
         "supports_tool_choice": true
     },
     "azure_ai/mistral-medium-3-5": {
+        "deprecation_date": "2027-10-01",
+        "deprecation_source": "https://management.azure.com/subscriptions/{subscriptionId}/providers/Microsoft.CognitiveServices/locations/eastus/models?api-version=2024-10-01",
         "input_cost_per_token": 1.5e-06,
         "litellm_provider": "azure_ai",
         "max_input_tokens": 128000,
@@ -78384,6 +78400,8 @@
         "supports_video_input": true
     },
     "azure_ai/Microsoft-Decision-1": {
+        "deprecation_date": "2027-02-04",
+        "deprecation_source": "https://management.azure.com/subscriptions/{subscriptionId}/providers/Microsoft.CognitiveServices/locations/eastus/models?api-version=2024-10-01",
         "input_cost_per_token": 4.2e-08,
         "litellm_provider": "azure_ai",
         "max_input_tokens": 32768,
