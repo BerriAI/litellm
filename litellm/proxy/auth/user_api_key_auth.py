@@ -3822,6 +3822,9 @@ async def run_centralized_common_checks(
         if isinstance(r, (ProxyException, litellm.BudgetExceededError)):
             raise r
 
+    if isinstance(end_user_result, HTTPException):
+        raise end_user_result
+
     # Use BaseException (not HTTPException) in the narrowing checks so
     # mypy can narrow ``Any | BaseException`` to the typed object in the
     # else branch. After the for-loop above, the only BaseException that
@@ -4670,7 +4673,7 @@ async def _lookup_end_user_and_apply_budget(
                 if valid_token.end_user_max_budget is None:
                     valid_token.end_user_max_budget = default_budget.max_budget
     except Exception as e:
-        if isinstance(e, litellm.BudgetExceededError):
+        if isinstance(e, (HTTPException, litellm.BudgetExceededError)):
             raise e
         verbose_proxy_logger.debug("Unable to find user in db. Error - %s", e)
     return valid_token, end_user_object

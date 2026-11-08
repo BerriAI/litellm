@@ -8413,6 +8413,52 @@ async def test_get_end_user_object_missing_row_returns_none_when_fail_closed(mon
     assert result is None
 
 
+@pytest.mark.asyncio
+async def test_run_centralized_common_checks_propagates_fail_closed_end_user_error(monkeypatch):
+    import litellm.proxy.proxy_server as proxy_server
+    from fastapi import HTTPException
+
+    from litellm.proxy.auth.user_api_key_auth import run_centralized_common_checks
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_endusertable.find_many = AsyncMock(return_value=[])
+    mock_prisma_client.db.litellm_endusertable.find_unique = AsyncMock(
+        side_effect=RuntimeError("database unavailable")
+    )
+
+    mock_cache = MagicMock()
+    mock_cache.async_get_cache = AsyncMock(return_value=None)
+    mock_cache.async_set_cache = AsyncMock()
+
+    monkeypatch.setattr(proxy_server, "general_settings", {"fail_closed_budget_enforcement": True})
+    monkeypatch.setattr(proxy_server, "prisma_client", mock_prisma_client)
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", mock_cache)
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", MagicMock())
+    monkeypatch.setattr(proxy_server, "master_key", "sk-test-master")
+    monkeypatch.setattr(proxy_server, "user_custom_auth", None)
+    monkeypatch.setattr(proxy_server, "llm_router", None)
+    monkeypatch.setattr(proxy_server, "llm_model_list", [])
+    monkeypatch.setattr(proxy_server, "litellm_proxy_admin_name", "admin")
+    monkeypatch.setattr(proxy_server, "model_max_budget_limiter", None)
+
+    valid_token = UserAPIKeyAuth(end_user_id="eu-1", end_user_max_budget=50.0)
+
+    with patch(
+        "litellm.proxy.auth.user_api_key_auth.common_checks",
+        new_callable=AsyncMock,
+    ) as mock_common:
+        with pytest.raises(HTTPException) as exc_info:
+            await run_centralized_common_checks(
+                user_api_key_auth_obj=valid_token,
+                request=MagicMock(),
+                request_data={},
+                route="/chat/completions",
+            )
+
+    assert exc_info.value.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
+    mock_common.assert_not_called()
+
+
 def _end_user_registry_row(user_id: str):
     """A row as the restricted-id registry query sees it: only ``user_id`` is read off it."""
     return SimpleNamespace(user_id=user_id)

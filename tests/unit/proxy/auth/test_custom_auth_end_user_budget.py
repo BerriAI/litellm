@@ -403,3 +403,73 @@ def test_end_user_budget_tpd_limit_reaches_the_token():
 
     assert result.end_user_rpm_limit == 5
     assert result.end_user_tpd_limit == 750000
+
+
+@pytest.mark.asyncio
+async def test_lookup_end_user_fail_closed_error_propagates(monkeypatch):
+    """With fail_closed_budget_enforcement on, a database error loading the end user must reject
+    the request with the 503 raised by get_end_user_object instead of silently continuing with
+    no end-user budget applied."""
+    from unittest.mock import MagicMock
+
+    import litellm.proxy.proxy_server as proxy_server
+    from fastapi import HTTPException
+
+    from litellm.proxy.auth.user_api_key_auth import _lookup_end_user_and_apply_budget
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    monkeypatch.setattr(proxy_server, "general_settings", {"fail_closed_budget_enforcement": True})
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_endusertable.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.litellm_endusertable.find_unique = AsyncMock(
+        side_effect=RuntimeError("database unavailable")
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _lookup_end_user_and_apply_budget(
+            valid_token=UserAPIKeyAuth(
+                token="test_token", end_user_id="customer-1", end_user_max_budget=50.0
+            ),
+            route="/v1/chat/completions",
+            parent_otel_span=None,
+            prisma_client=mock_prisma,
+            user_api_key_cache=UserApiKeyCache(),
+            proxy_logging_obj=MagicMock(),
+        )
+
+    assert exc_info.value.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_lookup_end_user_lookup_error_swallowed_by_default(monkeypatch):
+    """By default the same database error stays fail-open: the lookup returns no end user object
+    and the request continues, exactly as it did before fail-closed enforcement existed."""
+    from unittest.mock import MagicMock
+
+    import litellm.proxy.proxy_server as proxy_server
+
+    from litellm.proxy.auth.user_api_key_auth import _lookup_end_user_and_apply_budget
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_endusertable.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.litellm_endusertable.find_unique = AsyncMock(
+        side_effect=RuntimeError("database unavailable")
+    )
+
+    valid_token, end_user_object = await _lookup_end_user_and_apply_budget(
+        valid_token=UserAPIKeyAuth(
+            token="test_token", end_user_id="customer-1", end_user_max_budget=50.0
+        ),
+        route="/v1/chat/completions",
+        parent_otel_span=None,
+        prisma_client=mock_prisma,
+        user_api_key_cache=UserApiKeyCache(),
+        proxy_logging_obj=MagicMock(),
+    )
+
+    assert end_user_object is None
+    assert valid_token.end_user_id == "customer-1"
