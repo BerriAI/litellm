@@ -1794,6 +1794,58 @@ async def test_a_grok_model_without_known_framing_is_estimated_locally_instead_o
     assert response["litellm_count_source"] == "local_estimate"
 
 
+_XAI_WEATHER_FUNCTION: Final = MappingProxyType(
+    {
+        "name": "get_weather",
+        "description": "Get the weather",
+        "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]},
+    }
+)
+
+
+@pytest.mark.parametrize(
+    ("with_tools", "responses", "framing"),
+    [(False, False, 7), (True, False, 50), (False, True, 5), (True, True, 2)],
+    ids=["chat", "chat_tools", "responses", "responses_tools"],
+)
+@pytest.mark.asyncio
+async def test_an_xai_count_adds_the_framing_of_its_request_kind(
+    monkeypatch: pytest.MonkeyPatch, with_tools: bool, responses: bool, framing: int
+) -> None:
+    import litellm.proxy.proxy_server as proxy_server
+
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "grok",
+                    "litellm_params": {"model": "xai/grok-4.7", "api_key": "xai-deployment-key"},
+                    "model_info": {
+                        "token_count_framing": 7,
+                        "token_count_tool_framing": 50,
+                        "token_count_responses_framing": 5,
+                        "token_count_responses_tool_framing": 2,
+                    },
+                }
+            ]
+        ),
+    )
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    chat_tools: Final = [{"type": "function", "function": dict(_XAI_WEATHER_FUNCTION)}] if with_tools else None
+    responses_tools: Final = {"tools": [{"type": "function", **_XAI_WEATHER_FUNCTION}]} if with_tools else {}
+    with respx.mock:
+        respx.post("https://api.x.ai/v1/tokenize-text").mock(return_value=_xai_token_ids(11))
+        response: Final = await count_request_tokens(
+            request=TokenCountRequest(model="grok", messages=[{"role": "user", "content": "hi"}], tools=chat_tools),
+            call_endpoint=True,
+            responses_request={"model": "grok", "input": "hi", **responses_tools} if responses else None,
+        )
+
+    assert (response.total_tokens, response.count_source) == (11 + framing, "provider")
+
+
 class _ScriptedCounter(BaseTokenCounter):
     def __init__(self, replies: dict[str, TokenCountResponse], burst: int = 1) -> None:
         self._replies = replies

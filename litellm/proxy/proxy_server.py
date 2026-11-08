@@ -16187,6 +16187,12 @@ async def _count_request_tokens(
     )
     if isinstance(chat_count, ChatCountBridgeError):
         raise ProxyException(message=chat_count.message, type="invalid_request_error", param=None, code=400)
+    native_responses: Final = responses_request is not None and _serves_native_responses(
+        deployment_view, request.model, responses_request
+    )
+    provider_carries_tools: Final = sends_function_tools(
+        _COUNT_TOOLS.validate_python(tools) if chat_count is None else chat_count.tools
+    )
     ladder: Final = (
         None
         if provider_counter is None
@@ -16223,7 +16229,11 @@ async def _count_request_tokens(
             request_model=request.model,
             settings=settings,
             local_estimate_allowed=litellm.disable_token_counter is not True and contents_estimable,
-            added_framing=0 if provider_counter.includes_framing else settings.framing or 0,
+            added_framing=(
+                0
+                if provider_counter.includes_framing
+                else settings.hidden_prompt_tokens(carries_tools=provider_carries_tools, responses_api=native_responses)
+            ),
             forwarded_edits=context_edits is not None and edited_request is None,
         )
     )
@@ -16278,9 +16288,6 @@ async def _count_request_tokens(
     )
     counted_messages: Final = (
         typed_messages if typed_messages is None or system_message is None else (system_message, *typed_messages)
-    )
-    native_responses: Final = responses_request is not None and _serves_native_responses(
-        deployment_view, request.model, responses_request
     )
     sent_tools: Final = cast(  # cast-ok: raw OpenAI or Anthropic tool dicts, both of which token_counter formats
         list[ChatCompletionToolParam] | None, tools if counted_messages is not None else None
