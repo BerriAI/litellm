@@ -1,14 +1,17 @@
 import asyncio
 import base64
 import copy
+import gzip
 import threading
 import time
 import uuid
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Final
 from unittest.mock import MagicMock
 
+import httpx
 import pytest
 from httpx import Request, Response
 
@@ -708,6 +711,48 @@ async def test_async_inline_remote_media_raises_image_fetch_error_when_the_fetch
 
     with pytest.raises(litellm.ImageFetchError, match="Status code: 404"):
         await async_inline_remote_media([{"role": "user", "content": [{"type": "image_url", "image_url": url}]}])
+
+
+@pytest.mark.asyncio
+async def test_async_fetch_stops_reading_an_oversized_body_before_it_is_whole(monkeypatch: pytest.MonkeyPatch):
+    served_chunks: Final[list[int]] = []  # mutable-ok: counts the chunks the server sent
+
+    async def body() -> AsyncIterator[bytes]:
+        for _ in range(8):
+            served_chunks.append(1)
+            yield b"\0" * (512 * 1024)
+
+    def serve(request: httpx.Request) -> Response:
+        return Response(200, headers={"content-type": "image/png"}, content=body())
+
+    transport: Final = httpx.MockTransport(serve)
+    monkeypatch.setattr(litellm, "module_level_aclient", AsyncHTTPHandler(transport=transport))
+    monkeypatch.setattr(litellm, "user_url_validation", False)
+    monkeypatch.setattr(image_handling, "MAX_IMAGE_URL_DOWNLOAD_SIZE_MB", 1)
+
+    with pytest.raises(litellm.ImageFetchError, match="exceeds maximum allowed size"):
+        await async_convert_url_to_base64(f"https://img.example/{uuid.uuid4()}.png", bounded_read=True)
+
+    assert len(served_chunks) == 3
+
+
+@pytest.mark.asyncio
+async def test_async_fetch_still_accepts_a_compressed_image_by_default(monkeypatch: pytest.MonkeyPatch):
+    png: Final = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+    )
+
+    def serve(request: httpx.Request) -> Response:
+        return Response(
+            200, headers={"content-type": "image/png", "content-encoding": "gzip"}, content=gzip.compress(png)
+        )
+
+    monkeypatch.setattr(litellm, "module_level_aclient", AsyncHTTPHandler(transport=httpx.MockTransport(serve)))
+    monkeypatch.setattr(litellm, "user_url_validation", False)
+
+    result: Final = await async_convert_url_to_base64(f"https://img.example/{uuid.uuid4()}.png")
+
+    assert result == "data:image/png;base64," + base64.b64encode(png).decode()
 
 
 PDF_BODY: Final = b"%PDF-1.7\n" + b"0" * 4096
