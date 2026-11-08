@@ -68,7 +68,7 @@ from litellm.proxy.auth.auth_checks import (
     cache_key_object,
     jwt_key_mapping_cache_key,
 )
-from litellm._auth.python_core import PythonCore
+from tests.unit._auth.reference_core import PythonCore
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.common_utils.http_parsing_utils import get_client_requested_model
 from litellm.proxy.auth.user_api_key_auth import (

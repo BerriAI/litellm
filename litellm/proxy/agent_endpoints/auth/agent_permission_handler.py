@@ -8,13 +8,13 @@ Follows the same pattern as MCP permission handling.
 import asyncio
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
-from itertools import chain
 from types import MappingProxyType
 from typing import Final, Protocol, TypeAlias
 
 from fastapi import HTTPException
 from pydantic import TypeAdapter, ValidationError
 
+from litellm._auth import managed
 from litellm._logging import verbose_logger
 from litellm.proxy._types import (
     UI_TEAM_ID,
@@ -90,23 +90,28 @@ def _restricted_ids(access: AgentAccess) -> frozenset[str] | None:
 
 
 def _union_agent_access(accesses: Sequence[AgentAccess]) -> AgentAccess:
-    if accesses and all(isinstance(access, UnrestrictedAgentAccess) for access in accesses):
-        return UnrestrictedAgentAccess()
-    return RestrictedAgentAccess(
-        frozenset(
-            chain.from_iterable(access.agent_ids for access in accesses if isinstance(access, RestrictedAgentAccess))
+    result: Final = managed.decide(
+        managed.UnionGrants(
+            tuple(tuple(access.agent_ids) if isinstance(access, RestrictedAgentAccess) else None for access in accesses)
         )
     )
+    return _project_agent_grants(result)
+
+
+def _project_agent_grants(decision: managed.ManagedDecision) -> AgentAccess:
+    return UnrestrictedAgentAccess() if decision.grants is None else RestrictedAgentAccess(frozenset(decision.grants))
 
 
 def _intersect_agent_access(key_access: AgentAccess, team_access: AgentAccess) -> AgentAccess:
     key_ids: Final = _restricted_ids(key_access)
     team_ids: Final = _restricted_ids(team_access)
-    if key_ids is None:
-        return UnrestrictedAgentAccess() if team_ids is None else RestrictedAgentAccess(team_ids)
-    if team_ids is None:
-        return RestrictedAgentAccess(key_ids)
-    return RestrictedAgentAccess(key_ids & team_ids)
+    return _project_agent_grants(
+        managed.decide(
+            managed.IntersectGrants(
+                tuple(key_ids) if key_ids is not None else None, tuple(team_ids) if team_ids is not None else None
+            )
+        )
+    )
 
 
 class AgentRequestHandler:
@@ -151,11 +156,14 @@ class AgentRequestHandler:
         agent_ceiling: Final = await AgentRequestHandler._agent_access_group_ceiling(
             user_api_key_auth, resolve_ceiling, strict=strict
         )
-        if agent_ceiling is None:
-            return own_access
-        if isinstance(own_access, UnrestrictedAgentAccess):
-            return RestrictedAgentAccess(agent_ceiling)
-        return RestrictedAgentAccess(own_access.agent_ids & agent_ceiling)
+        return _project_agent_grants(
+            managed.decide(
+                managed.IntersectGrants(
+                    tuple(own_access.agent_ids) if isinstance(own_access, RestrictedAgentAccess) else None,
+                    tuple(agent_ceiling) if agent_ceiling is not None else None,
+                )
+            )
+        )
 
     @staticmethod
     async def agent_caller_access(user_api_key_auth: UserAPIKeyAuth | None, *, strict: bool = False) -> AgentAccess:

@@ -1,8 +1,11 @@
 #![forbid(unsafe_code)]
 
+pub mod access;
+pub mod admission;
 pub mod credential;
 mod error;
 mod key;
+pub mod managed;
 mod model_budgets;
 pub mod protocol;
 

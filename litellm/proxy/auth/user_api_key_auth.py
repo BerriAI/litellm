@@ -22,6 +22,7 @@ from pydantic import TypeAdapter
 from starlette.exceptions import WebSocketException
 
 import litellm
+from litellm._auth import access as access_policy, admission
 from litellm._auth.credential import (
     PresentedKeys,
     WebSocketDenial,
@@ -3442,13 +3443,15 @@ def _token_can_vouch_for_team(valid_token: UserAPIKeyAuth, lookup_error: BaseExc
     back out, and is only consulted here because the failure is known by this
     point to be a degraded read.
     """
-    if valid_token.team_id == UI_TEAM_ID:
-        return True
-    if isinstance(lookup_error, TeamNotFoundError):
-        return False
-    if valid_token.team_models:
-        return True
-    return PrismaDBExceptionHandler.should_allow_request_on_db_unavailable()
+    decision: Final = access_policy.decide(
+        access_policy.TeamLookup(
+            dashboard=valid_token.team_id == UI_TEAM_ID,
+            missing=isinstance(lookup_error, TeamNotFoundError),
+            recorded_models=tuple(valid_token.team_models or ()),
+            allow_unavailable=PrismaDBExceptionHandler.should_allow_request_on_db_unavailable(),
+        )
+    )
+    return decision.denial is None
 
 
 async def _inherit_org_identity(
@@ -3616,41 +3619,34 @@ async def run_centralized_common_checks(
         user_custom_auth,
     )
 
-    # Public routes (e.g. /health/liveness) are exempt from
-    # auth in the builder — the wrapper must not retroactively apply
-    # authz on top, or k8s readiness probes and other unauthenticated
-    # callers get 401.
-    if not force_virtual_key_checks and (
-        route in LiteLLMRoutes.public_routes.value or route_in_additonal_public_routes(current_route=route)
-    ):
-        return
-
-    # User-configured pass-through endpoints with ``auth: false`` are
-    # explicitly unauthenticated — the builder returns an empty
-    # UserAPIKeyAuth() and the request is forwarded as-is. Running
-    # common_checks on the empty token would reject the request as
-    # admin-only. The "auth" flag on the endpoint config is the
-    # contract; honor it.
     pass_through_endpoints: Final = general_settings.get("pass_through_endpoints", None)
-    if not force_virtual_key_checks and pass_through_endpoints is not None:
-        for endpoint in pass_through_endpoints:
-            if isinstance(endpoint, dict) and endpoint.get("path", "") == route and endpoint.get("auth") is not True:
-                return
-
-    # No-auth dev mode: master_key unset AND no JWT/OAuth2 auth
-    # configured. The builder returns an INTERNAL_USER token for any
-    # api_key; the proxy is unauthenticated by configuration.
-    # Running common_checks would block every admin route on these
-    # deployments where that was previously not the contract. If any
-    # authn is enabled (JWT, OAuth2, OAuth2-proxy), authz must run.
-    if not force_virtual_key_checks and is_no_auth_dev_mode(master_key, general_settings):
-        return
-
-    if (
-        not force_virtual_key_checks
-        and user_custom_auth is not None
-        and not general_settings.get("custom_auth_run_common_checks", False)
-    ):
+    plan: Final = admission.common_plan(
+        admission.CommonGate(
+            force_virtual_key_checks=force_virtual_key_checks,
+            public_route=route in LiteLLMRoutes.public_routes.value,
+            additional_public_route=route_in_additonal_public_routes(current_route=route),
+            unauthenticated_passthrough=any(
+                isinstance(endpoint, dict) and endpoint.get("path", "") == route and endpoint.get("auth") is not True
+                for endpoint in (pass_through_endpoints or ())
+            ),
+            master_key_present=master_key is not None,
+            jwt_enabled=bool(general_settings.get("enable_jwt_auth", False)),
+            oauth_enabled=bool(general_settings.get("enable_oauth2_auth", False)),
+            oauth_proxy_enabled=bool(general_settings.get("enable_oauth2_proxy_auth", False)),
+            custom_auth=user_custom_auth is not None,
+            custom_auth_common_checks=bool(general_settings.get("custom_auth_run_common_checks", False)),
+        )
+    )
+    request.state.auth_ownership_plan = admission.ownership_plan(
+        admission.Ownership(
+            virtual_key=user_api_key_auth_obj.via_virtual_key,
+            custom_auth=user_api_key_auth_obj.authenticated_by_custom_auth,
+            jwt=bool(user_api_key_auth_obj.jwt_claims),
+            oauth=bool(general_settings.get("enable_oauth2_auth", False))
+            or bool(general_settings.get("enable_oauth2_proxy_auth", False)),
+        )
+    )
+    if plan.skip is not None:
         return
 
     parent_otel_span: Final = user_api_key_auth_obj.parent_otel_span
@@ -4086,7 +4082,16 @@ async def _reserve_budget_after_common_checks(
     request: Request | None = None,
 ) -> None:
     user_api_key_auth_obj.budget_reservation = None
-    if not skip_budget_checks and general_settings.get("disable_budget_reservation") is not True:
+    plan: Final = admission.reservation_plan(
+        admission.Reservation(
+            skip_budget_checks=skip_budget_checks,
+            disabled=general_settings.get("disable_budget_reservation") is True,
+            apply_user_budget_to_team_keys=general_settings.get("apply_user_budget_to_team_keys") is True,
+            fail_closed=general_settings.get("fail_closed_budget_enforcement") is True,
+            billing_agent=user_api_key_auth_obj.billing_agent_policy is not None,
+        )
+    )
+    if plan.reserve:
         from litellm.proxy.spend_tracking.budget_reservation import (
             reserve_budget_for_request,
         )
@@ -4103,11 +4108,8 @@ async def _reserve_budget_after_common_checks(
             proxy_logging_obj=proxy_logging_obj,
             end_user_id=end_user_id,
             end_user_object=end_user_object,
-            apply_user_budget_to_team_keys=general_settings.get("apply_user_budget_to_team_keys") is True,
-            fail_closed_budget_enforcement=(
-                general_settings.get("fail_closed_budget_enforcement") is True
-                or user_api_key_auth_obj.billing_agent_policy is not None
-            ),
+            apply_user_budget_to_team_keys=plan.apply_user_budget_to_team_keys,
+            fail_closed_budget_enforcement=plan.fail_closed,
             raw_body=await read_raw_json_body(request=request),
         )
     if request is not None:

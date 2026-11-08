@@ -58,7 +58,9 @@ def _check_key_budget_of(
             return Deny(exceeded)
         return _first_fallback_within_budget(
             scope.key_budget_fallbacks.get(model, ()),
-            found=lambda fallback: _reroute(fallback, exceeded, then=lambda: _check_key_budget_of(scope, rest, fallback, then)),
+            found=lambda fallback: _reroute(
+                fallback, exceeded, then=lambda: _check_key_budget_of(scope, rest, fallback, then)
+            ),
             exhausted=lambda: Deny(exceeded),
         )
 
@@ -74,9 +76,7 @@ def _first_fallback_within_budget(
     return CheckKeyModelBudget(
         model=candidate,
         resume=lambda exceeded: (
-            found(candidate)
-            if exceeded is None
-            else _first_fallback_within_budget(candidates[1:], found, exhausted)
+            found(candidate) if exceeded is None else _first_fallback_within_budget(candidates[1:], found, exhausted)
         ),
     )
 

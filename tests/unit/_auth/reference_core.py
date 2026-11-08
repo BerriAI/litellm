@@ -54,7 +54,7 @@ from litellm._auth.decision import (
     WithinModelBudgets,
 )
 from litellm._auth.key import hash_token, is_master_key
-from litellm._auth.model_budgets import (
+from tests.unit._auth.reference_model_budgets import (
     check_model_budgets,
     check_team_member_model_budgets,
     check_user_model_budgets,

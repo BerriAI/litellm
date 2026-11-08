@@ -15,7 +15,7 @@ from litellm._logging import verbose_proxy_logger
 import json
 import logging
 import litellm
-from litellm._auth.python_core import PythonCore
+from tests.unit._auth.reference_core import PythonCore
 from litellm.proxy.auth.user_api_key_auth import (
     _enforce_model_budgets,
     _ModelBudgetEffects,

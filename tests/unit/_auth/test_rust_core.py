@@ -16,7 +16,7 @@ from litellm._auth.decision import (
 )
 from litellm._auth.driver import drive
 from litellm._auth.rust_core import RustCore
-from litellm._auth.shadow import ShadowCore, ShadowMismatch
+from tests.unit._auth.shadow import ShadowCore, ShadowMismatch
 from litellm.rust_bridge import _native
 from tests.unit._auth.test_python_core import NOW, PLAIN_KEY, SETTINGS, RecordingHandler
 

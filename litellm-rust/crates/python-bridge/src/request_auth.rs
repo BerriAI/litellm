@@ -9,6 +9,30 @@ use pyo3::{
 
 type ProjectedStep = (Py<PyAny>, Option<NativeAuthContinuation>);
 
+#[pyfunction]
+pub(crate) fn request_auth_managed(
+    py: Python<'_>,
+    facts: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    let facts: core::managed::ManagedFacts = from_py(facts)?;
+    to_py(py, &py.detach(move || core::managed::decide(facts)))
+}
+
+#[pyfunction]
+pub(crate) fn request_auth_admission(
+    py: Python<'_>,
+    facts: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    let facts: core::admission::AdmissionFacts = from_py(facts)?;
+    to_py(py, &py.detach(move || core::admission::plan(facts)))
+}
+
+#[pyfunction]
+pub(crate) fn request_auth_access(py: Python<'_>, facts: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
+    let facts: core::access::AccessFacts = from_py(facts)?;
+    to_py(py, &py.detach(move || core::access::decide(facts)))
+}
+
 fn map_error(error: core::Error) -> PyErr {
     let message = litellm_error::Report::new(&error).to_string();
     match error {

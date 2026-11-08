@@ -184,6 +184,10 @@ def field_value(value: object, name: str) -> object:
     return cast(object, getattr(value, name))  # cast-ok: dataclass fields are discovered dynamically
 
 
+def encode_facts(value: object) -> Wire:
+    return _Projection().encode(value)
+
+
 def public_type(kind: str) -> Callable[..., object]:
     return _PUBLIC_TYPES[kind]
 

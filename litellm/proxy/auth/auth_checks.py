@@ -26,6 +26,7 @@ from pydantic import BaseModel, TypeAdapter, ValidationError
 from typing_extensions import NotRequired, ReadOnly, Required, TypedDict, Unpack
 
 import litellm
+from litellm._auth import access as access_policy
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.dual_cache import DualCache, LimitedSizeOrderedDict
@@ -448,31 +449,45 @@ def _team_metadata_requires_trace_id(team_object: LiteLLM_TeamTable) -> bool:
 
 
 def _request_has_trace_id(request_body: Mapping[str, object], request: Request, *, headers_only: bool = False) -> bool:
+    return _read_trace_id(request_body, request, "Header", headers_only=headers_only)
+
+
+def _read_trace_id(
+    request_body: Mapping[str, object],
+    request: Request,
+    source: access_policy.TraceSource,
+    *,
+    headers_only: bool,
+) -> bool:
     from litellm.proxy.litellm_pre_call_utils import (
         _trace_id_from_traceparent,  # pyright: ignore[reportPrivateUsage]  # reuse W3C traceparent parser
         get_chain_id_from_headers,
         metadata_variable_name_for_request,
     )
 
-    if get_chain_id_from_headers(dict(request.headers)):
-        return True
-    if headers_only:
-        return False
-    litellm_trace_id: Final[object] = request_body.get("litellm_trace_id")
-    if isinstance(litellm_trace_id, str) and litellm_trace_id:
-        return True
-    if "litellm_trace_id" not in request_body:
-        traceparent: Final[str | None] = request.headers.get("traceparent")
-        if isinstance(traceparent, str) and _trace_id_from_traceparent(traceparent):
-            return True
-    metadata_variable_name: Final = metadata_variable_name_for_request(get_request_route(request), request_body)
-    selected_metadata: Final[object] = request_body.get(metadata_variable_name)
-    if isinstance(selected_metadata, dict):
-        selected_metadata_dict: Final = _TRACE_ID_METADATA_ADAPTER.validate_python(selected_metadata)
-        if "trace_id" in selected_metadata_dict:
-            return _metadata_mapping_has_trace_id(selected_metadata_dict)
-    other_metadata_variable_name: Final = "litellm_metadata" if metadata_variable_name == "metadata" else "metadata"
-    return _metadata_has_trace_id(request_body.get(other_metadata_variable_name))
+    if source == "Header":
+        value, present = get_chain_id_from_headers(dict(request.headers)), True
+    elif source == "Body":
+        value, present = request_body.get("litellm_trace_id"), "litellm_trace_id" in request_body
+    elif source == "Traceparent":
+        traceparent: Final = request.headers.get("traceparent")
+        value, present = _trace_id_from_traceparent(traceparent) if isinstance(traceparent, str) else None, True
+    else:
+        selected_name: Final = metadata_variable_name_for_request(get_request_route(request), request_body)
+        name: Final = (
+            selected_name
+            if source == "Selected"
+            else ("litellm_metadata" if selected_name == "metadata" else "metadata")
+        )
+        metadata: Final = request_body.get(name)
+        mapping: Final = _TRACE_ID_METADATA_ADAPTER.validate_python(metadata) if isinstance(metadata, dict) else {}
+        value, present = mapping.get("trace_id"), "trace_id" in mapping
+    result: Final = access_policy.decide(
+        access_policy.TraceStep(source, value if isinstance(value, str) else None, present, headers_only)
+    )
+    if result.next_trace is not None:
+        return _read_trace_id(request_body, request, result.next_trace, headers_only=headers_only)
+    return result.denial is None
 
 
 class _JsonLoadsObj(Protocol):
@@ -851,7 +866,7 @@ async def _run_project_checks(
         return
 
     # 1.1. If project is blocked
-    if project_object.blocked is True:
+    if access_policy.decide(access_policy.Blocked(project_object.blocked is True)).denial is not None:
         raise Exception(
             f"Project={project_object.project_id} is blocked. Update via `/project/update` if you're an admin."
         )
@@ -882,26 +897,35 @@ async def _run_project_checks(
 
 
 def _enforce_user_param_check(general_settings: dict, request: Request, request_body: dict, route: str) -> None:
-    if not general_settings.get("enforce_user_param", False):
+    if (
+        access_policy.decide(
+            access_policy.UserParamRequest(bool(general_settings.get("enforce_user_param", False)))
+        ).read
+        is None
+    ):
         return
-
     http_method: Final = request.method if hasattr(request, "method") else None
-    is_post_method: Final = http_method and http_method.upper() == "POST"
     is_openai_route: Final = RouteChecks.is_llm_api_route(route=route)
     is_mcp_route: Final = route in LiteLLMRoutes.mcp_routes.value or RouteChecks.check_route_access(
         route=route, allowed_routes=LiteLLMRoutes.mcp_routes.value
     )
 
-    if is_post_method and is_openai_route and not is_mcp_route and "user" not in request_body:
+    decision: Final = access_policy.decide(
+        access_policy.UserParam(
+            enabled=bool(general_settings.get("enforce_user_param", False)),
+            method=http_method,
+            llm_route=is_openai_route,
+            mcp_route=is_mcp_route,
+            has_user="user" in request_body,
+        )
+    )
+    if decision.denial is not None:
         raise Exception(f"'user' param not passed in. 'enforce_user_param'={general_settings['enforce_user_param']}")
 
 
 def _reject_clientside_metadata_tags_check(
     general_settings: dict, request_body: dict, route: str, request: Request | None = None
 ) -> None:
-    if not general_settings.get("reject_clientside_metadata_tags", False):
-        return
-
     original_client_tags: Final = (
         getattr(request.state, "litellm_baggage_client_metadata_tags", None) if request is not None else None
     )
@@ -914,7 +938,14 @@ def _reject_clientside_metadata_tags_check(
             and "tags" in request_body["metadata"]
         )
     )
-    if RouteChecks.is_llm_api_route(route=route) and has_client_tags:
+    decision: Final = access_policy.decide(
+        access_policy.ClientTags(
+            enabled=bool(general_settings.get("reject_clientside_metadata_tags", False)),
+            llm_route=RouteChecks.is_llm_api_route(route=route),
+            has_tags=has_client_tags,
+        )
+    )
+    if decision.denial is not None:
         raise ProxyException(
             message=f"Client-side 'metadata.tags' not allowed in request. 'reject_clientside_metadata_tags'={general_settings['reject_clientside_metadata_tags']}. Tags can only be set via key or team metadata, or by configured request_tag_mappings.",
             type=ProxyErrorTypes.bad_request_error,
@@ -952,9 +983,21 @@ def requests_guardrail_modification(request_body: Mapping[str, object]) -> bool:
     default-on guardrails run (``disable_global_guardrails``, ``disable_global_guardrail`` singular, and
     ``opted_out_global_guardrails``), at the top level or in either metadata key"""
     return (
-        _requests_guardrail_modification_in(request_body.get("metadata"))
-        or _requests_guardrail_modification_in(request_body.get("litellm_metadata"))
-        or _requests_guardrail_modification_in(request_body)
+        access_policy.decide(access_policy.GuardrailRequest(_requested_guardrail_keys(request_body))).read is not None
+    )
+
+
+def _requested_guardrail_keys(request_body: Mapping[str, object]) -> tuple[str, ...]:
+    return tuple(
+        chain.from_iterable(
+            tuple(container)
+            for container in (
+                _guardrail_container_as_dict(request_body.get("metadata")),
+                _guardrail_container_as_dict(request_body.get("litellm_metadata")),
+                request_body,
+            )
+            if container is not None
+        )
     )
 
 
@@ -996,10 +1039,19 @@ def guardrail_modification_check(request_body: Mapping[str, object], team_object
         require_guardrail_modification_permission(team_object)
 
 
-def require_guardrail_modification_permission(team_object: LiteLLM_TeamTable | None) -> None:
-    from litellm.proxy.guardrails.guardrail_helpers import can_modify_guardrails
+def _team_modify_guardrails(team_object: LiteLLM_TeamTable | None) -> bool | None:
+    metadata: Final = _typed_request_body(team_object.metadata or {}) if team_object is not None else {}
+    guardrails: Final = metadata.get("guardrails")
+    values: Final = _TRACE_ID_METADATA_ADAPTER.validate_python(guardrails) if isinstance(guardrails, dict) else {}
+    value: Final = values.get("modify_guardrails")
+    return value if isinstance(value, bool) else None
 
-    if not can_modify_guardrails(team_object):
+
+def require_guardrail_modification_permission(team_object: LiteLLM_TeamTable | None) -> None:
+    if (
+        access_policy.decide(access_policy.Guardrails(("guardrails",), _team_modify_guardrails(team_object))).denial
+        is not None
+    ):
         raise HTTPException(
             status_code=403,
             detail={"error": "Your team does not have permission to modify guardrails."},
@@ -1033,14 +1085,16 @@ async def check_tools_allowlist(
     team_meta: Final = (valid_token.team_metadata or {}) if isinstance(valid_token.team_metadata, dict) else {}
     key_allowed: Final = key_meta.get("allowed_tools")
     team_allowed: Final = team_meta.get("allowed_tools")
-    effective: Final = key_allowed if (isinstance(key_allowed, list) and len(key_allowed) > 0) else team_allowed
-    if not isinstance(effective, list) or len(effective) == 0:
-        return
-    allowed_set: Final = {str(t) for t in effective}
-    disallowed: Final = [n for n in tool_names if n not in allowed_set]
-    if disallowed:
+    decision: Final = access_policy.decide(
+        access_policy.Tools(
+            requested=tuple(tool_names),
+            key_allowed=tuple(str(t) for t in key_allowed) if isinstance(key_allowed, list) else None,
+            team_allowed=tuple(str(t) for t in team_allowed) if isinstance(team_allowed, list) else None,
+        )
+    )
+    if decision.denial is not None:
         raise ProxyException(
-            message=f"Tool(s) {disallowed} are not in the allowed tools list for this key/team.",
+            message=f"Tool(s) {list(decision.rejected)} are not in the allowed tools list for this key/team.",
             type=ProxyErrorTypes.tool_access_denied,
             param="tools",
             code=status.HTTP_403_FORBIDDEN,
@@ -1206,7 +1260,10 @@ async def common_checks(
         )
 
     # 1. If team is blocked
-    if team_object is not None and team_object.blocked is True:
+    if (
+        team_object is not None
+        and access_policy.decide(access_policy.Blocked(team_object.blocked is True)).denial is not None
+    ):
         raise Exception(f"Team={team_object.team_id} is blocked. Update via `/team/unblock` if you're an admin.")
 
     # 2. If team can call model (or key's access_group_ids grant it)
@@ -1259,7 +1316,7 @@ async def common_checks(
             if require_trace_id:
                 headers_dict: Final = dict(request.headers)
                 trace_id: Final = get_chain_id_from_headers(headers_dict)
-                if not trace_id:
+                if access_policy.decide(access_policy.AgentTrace(bool(require_trace_id), trace_id)).denial is not None:
                     raise ProxyException(
                         message="Requests made with this agent's key must include the x-litellm-trace-id header.",
                         type=ProxyErrorTypes.bad_request_error,
@@ -1282,32 +1339,28 @@ async def common_checks(
         )
         or pass_through_route
     )
-    team_trace_id_gate_applies: Final = (
-        team_object is not None
-        and _team_metadata_requires_trace_id(team_object)
-        and request.method not in ("GET", "HEAD", "OPTIONS")
-        and (RouteChecks.is_llm_api_route(route=route) or pass_through_route)
-        and not RouteChecks.check_route_access(
-            route=route,
-            allowed_routes=LiteLLMRoutes.trace_telemetry_routes.value,
-        )
+    trace_request: Final = access_policy.decide(
+        access_policy.TraceRequest(team_object is not None and _team_metadata_requires_trace_id(team_object))
     )
-    team_metadata: Final[Mapping[str, object] | None] = (
-        _TRACE_ID_METADATA_ADAPTER.validate_python(
-            team_object.metadata  # pyright: ignore[reportUnknownMemberType]  # validate the narrowed untyped field
+    team_trace: Final = (
+        access_policy.decide(
+            access_policy.TraceGate(
+                required=True,
+                method=request.method,
+                llm_route=RouteChecks.is_llm_api_route(route=route),
+                passthrough=pass_through_route,
+                telemetry=RouteChecks.check_route_access(
+                    route=route, allowed_routes=LiteLLMRoutes.trace_telemetry_routes.value
+                ),
+            )
         )
-        if team_trace_id_gate_applies and team_object is not None
-        else None
+        if trace_request.next_trace is not None
+        else trace_request
     )
     if (
-        team_trace_id_gate_applies
+        team_trace.next_trace is not None
         and team_object is not None
-        and team_metadata is not None
-        and not _request_has_trace_id(
-            request_body=_typed_request_body(request_body),
-            request=request,
-            headers_only=headers_only,
-        )
+        and not _request_has_trace_id(_typed_request_body(request_body), request, headers_only=headers_only)
     ):
         raise ProxyException(
             message=(
@@ -6435,11 +6488,7 @@ def _can_object_call_search_tool(
         ProxyException if access is denied
     """
     # Empty list means all search tools are allowed
-    if not allowed_search_tools:
-        return True
-
-    # Check if the search tool is in the allowlist
-    if search_tool_name in allowed_search_tools:
+    if access_policy.decide(access_policy.Search(search_tool_name, tuple(allowed_search_tools), False)).denial is None:
         return True
 
     # Access denied
@@ -6586,7 +6635,14 @@ def check_search_tool_grants(search_tool_name: str, grants: SearchToolGrants) ->
     for layer in ("key", "team", "user"):
         grant = grants.grants.get(layer)
         if layer in grants.strict_layers:
-            if grant is None or search_tool_name not in (grant.search_tools or ()):
+            if (
+                access_policy.decide(
+                    access_policy.Search(
+                        search_tool_name, tuple(grant.search_tools or ()) if grant is not None else (), True
+                    )
+                ).denial
+                is not None
+            ):
                 raise _search_tool_denied(
                     layer,
                     f"{layer.capitalize()} not allowed to access search tool: {search_tool_name}. "
@@ -7890,13 +7946,18 @@ def _strict_grant_layers(
     The identities that must each grant an object under a deny-by-default policy: a virtual key and its team,
     a keyless team member's team, or a keyless user's own grant. The master key and dashboard sessions need none
     """
-    if not deny_by_default or valid_token is None or not _is_strict_grant_identity(valid_token):
-        return frozenset()
-    virtual_key: Final = valid_token.via_virtual_key and not valid_token.is_session_token
-    has_team: Final = team_object is not None or valid_token.team_id is not None
-    if not virtual_key and not has_team:
-        return frozenset(("user",))
-    return frozenset(layer for layer, required in (("key", virtual_key), ("team", has_team)) if required)
+    decision: Final = access_policy.decide(
+        access_policy.GrantLayers(
+            deny_by_default=deny_by_default,
+            identity_present=valid_token is not None,
+            master_key=valid_token is not None and valid_token.api_key == LITELLM_PROXY_MASTER_KEY_ALIAS,
+            dashboard=valid_token is not None and valid_token.team_id == UI_TEAM_ID,
+            virtual_key=valid_token is not None and valid_token.via_virtual_key,
+            session_token=valid_token is not None and valid_token.is_session_token,
+            team_present=team_object is not None or (valid_token is not None and valid_token.team_id is not None),
+        )
+    )
+    return frozenset(decision.layers)
 
 
 async def _identity_grants(
@@ -8057,7 +8118,16 @@ def _require_vector_store_grant(
     vector_store_ids_to_run: Sequence[str],
     object_permission: _VectorStorePermissionsRow | None,
 ) -> None:
-    if object_permission is None or not object_permission.vector_stores:
+    decision: Final = access_policy.decide(
+        access_policy.VectorStores(
+            requested=tuple(map(_provider_vector_store_id, vector_store_ids_to_run)),
+            allowed=None
+            if object_permission is None or object_permission.vector_stores is None
+            else tuple(map(_provider_vector_store_id, object_permission.vector_stores)),
+            strict=True,
+        )
+    )
+    if decision.denial == "MissingVectorGrant":
         raise ProxyException(
             message=f"{object_type.capitalize()} not allowed to access vector store. Tried to access {vector_store_ids_to_run[0]}. vector_store_deny_by_default is enabled and the {object_type} has no vector store grants",
             type=ProxyErrorTypes.get_vector_store_access_error_type_for_object(object_type),
@@ -8201,24 +8271,20 @@ def _can_object_call_vector_stores(
     """
     Raises ProxyException if the object (key, team, org) cannot access the specific vector store.
     """
-    if object_permissions is None:
-        return True
-
-    if object_permissions.vector_stores is None:
-        return True
-
-    # If length is 0, then the object has access to all vector stores.
-    if len(object_permissions.vector_stores) == 0:
-        return True
-
-    allowed_stores: Final = frozenset(map(_provider_vector_store_id, object_permissions.vector_stores))
-    for vector_store_id in vector_store_ids_to_run:
-        if _provider_vector_store_id(vector_store_id) not in allowed_stores:
-            raise ProxyException(
-                message=f"User not allowed to access vector store. Tried to access {vector_store_id}. Only allowed to access {object_permissions.vector_stores}",
-                type=ProxyErrorTypes.get_vector_store_access_error_type_for_object(object_type),
-                param="vector_store",
-                code=status.HTTP_401_UNAUTHORIZED,
-            )
+    grants: Final = object_permissions.vector_stores if object_permissions is not None else None
+    decision: Final = access_policy.decide(
+        access_policy.VectorStores(
+            requested=tuple(map(_provider_vector_store_id, vector_store_ids_to_run)),
+            allowed=tuple(map(_provider_vector_store_id, grants)) if grants is not None else None,
+            strict=False,
+        )
+    )
+    if decision.rejected_index is not None:
+        raise ProxyException(
+            message=f"User not allowed to access vector store. Tried to access {vector_store_ids_to_run[decision.rejected_index]}. Only allowed to access {grants}",
+            type=ProxyErrorTypes.get_vector_store_access_error_type_for_object(object_type),
+            param="vector_store",
+            code=status.HTTP_401_UNAUTHORIZED,
+        )
 
     return True

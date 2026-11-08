@@ -1,9 +1,12 @@
 from collections.abc import Mapping
+from dataclasses import replace
 from itertools import product
 from types import MappingProxyType
 from typing import Annotated, Final, Literal
 
 from pydantic import Field, TypeAdapter, ValidationError
+
+from litellm._auth import managed
 
 from litellm.proxy._types import LiteLLMRoutes, UserAPIKeyAuth
 from litellm.proxy.agent_endpoints.identity_store import AgentIdentityStore
@@ -159,68 +162,128 @@ def managed_agent_policy(auth: "UserAPIKeyAuth | None") -> AgentResponse | None:
 async def admit_managed_actor(auth: UserAPIKeyAuth, store: AgentIdentityStore | None) -> None:
     delegation_verified: Final = auth._managed_delegation_verified  # pyright: ignore[reportPrivateUsage]  # the one-shot delegation marker is a PrivateAttr by design
     auth._managed_delegation_verified = False  # pyright: ignore[reportPrivateUsage]  # consumed here so a replayed token cannot reuse it
-    if auth.agent_id is None:
+    facts: Final = managed.ActorLookup(
+        agent_id=auth.agent_id,
+        has_database=store is not None,
+        context=_managed_context(auth.managed_agent_context),
+        jwt_claims=bool(auth.jwt_claims),
+        delegation_verified=delegation_verified,
+    )
+    await _drive_actor(auth, store, facts)
+
+
+async def _drive_actor(
+    auth: UserAPIKeyAuth,
+    store: AgentIdentityStore | None,
+    facts: managed.ActorLookup,
+    agent: AgentResponse | None = None,
+) -> None:
+    decision: Final = managed.decide(facts)
+    if decision.denial is not None:
+        raise_identity_failure(_managed_failure(decision.denial))
+    if decision.action == "Allow":
         return
-    if store is None:
+    if decision.action == "ReadRegistry":
         from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
 
+        assert auth.agent_id is not None
         registered: Final = global_agent_registry.get_agent_by_id(auth.agent_id)
-        if auth.managed_agent_context is not None or (
-            registered is not None and (registered.identity_managed or registered.identity is not None)
-        ):
-            raise_identity_failure(
-                AgentIdentityFailure(code="policy_unavailable", message="Managed agent policy requires a database")
-            )
+        await _drive_actor(
+            auth,
+            store,
+            replace(
+                facts,
+                registry_loaded=True,
+                registry_managed=registered is not None
+                and (registered.identity_managed or registered.identity is not None),
+            ),
+        )
         return
-    agent: Final = await store.agent(auth.agent_id)
-    if isinstance(agent, AgentIdentityFailure):
-        raise_identity_failure(agent)
-    if agent is None:
+    if decision.action == "ReadAgent":
+        assert store is not None and auth.agent_id is not None
+        loaded: Final = await store.agent(auth.agent_id)
+        if isinstance(loaded, AgentIdentityFailure):
+            raise_identity_failure(loaded)
+        await _drive_actor(
+            auth,
+            store,
+            replace(facts, agent_loaded=True, agent=_managed_agent(loaded) if loaded is not None else None),
+            loaded,
+        )
+        return
+    if decision.action == "ReadRetired":
+        assert store is not None and auth.agent_id is not None
         retired: Final = await store.retired_agent(auth.agent_id)
         if isinstance(retired, AgentIdentityFailure):
             raise_identity_failure(retired)
-        if auth.managed_agent_context is not None or retired:
-            raise_identity_failure(AgentIdentityFailure(message="Agent no longer exists"))
+        await _drive_actor(auth, store, replace(facts, retired=retired), agent)
         return
-    if not agent.identity_managed:
+    if decision.action == "AssignPolicy":
+        assert agent is not None
+        auth.managed_agent_policy = agent
+        auth.billing_agent_policy = agent
+        auth.requires_fresh_policy = True
+        await _drive_actor(auth, store, replace(facts, policy_assigned=True), agent)
         return
-    if auth.jwt_claims and auth.managed_agent_context is None:
-        raise_identity_failure(AgentIdentityFailure(message="A managed agent requires a matching verified identity"))
-    failure: Final = actor_admission_failure(agent, auth.managed_agent_context)
-    if failure is not None:
-        raise_identity_failure(failure)
-    auth.managed_agent_policy = agent
-    auth.billing_agent_policy = agent
-    auth.requires_fresh_policy = True
-    if (
-        auth.managed_agent_context is not None
-        and auth.managed_agent_context.mode == "delegated"
-        and not delegation_verified
-    ):
+    if decision.action == "ReadHumanGrants":
         from litellm.proxy.agent_endpoints.auth.agent_permission_handler import verified_human_agent_grants
 
+        assert auth.managed_agent_context is not None
         grants: Final = await verified_human_agent_grants(auth.managed_agent_context.user_id, auth.team_id)
-        if agent.agent_id not in grants:
-            raise_identity_failure(
-                AgentIdentityFailure(message="The delegated user is not permitted to invoke this agent")
-            )
+        await _drive_actor(auth, store, replace(facts, human_grants=tuple(grants)), agent)
+        return
+    raise RuntimeError("Invalid managed actor decision")
+
+
+def _managed_agent(agent: AgentResponse) -> managed.Agent:
+    return managed.Agent(
+        agent_id=agent.agent_id,
+        enabled=agent.enabled,
+        identity_managed=agent.identity_managed,
+        identity=managed.BoundIdentity(active=agent.identity.active, revision=agent.identity.revision)
+        if agent.identity is not None
+        else None,
+        execution_mode=agent.execution_mode,
+    )
+
+
+def _managed_context(context: ManagedAgentContext | None) -> managed.Context | None:
+    return (
+        managed.Context(
+            agent_id=context.agent_id,
+            binding_revision=context.binding_revision,
+            mode=context.mode,
+            user_id=context.user_id,
+        )
+        if context is not None
+        else None
+    )
+
+
+def _managed_failure(denial: managed.ManagedDenial) -> AgentIdentityFailure:
+    if denial == "DatabaseRequired":
+        return AgentIdentityFailure(code="policy_unavailable", message="Managed agent policy requires a database")
+    messages: Final[Mapping[managed.ManagedDenial, str]] = MappingProxyType(
+        {
+            "Disabled": "Agent execution is disabled",
+            "MissingContext": "This agent requires its bound identity provider token",
+            "ChangedIdentity": "Agent identity changed during authentication; retry",
+            "ExecutionMode": "Agent is not enabled for this execution mode",
+            "MissingHuman": "A verified human subject is required",
+            "Removed": "Agent no longer exists",
+            "VerifiedIdentityRequired": "A managed agent requires a matching verified identity",
+            "HumanNotPermitted": "The delegated user is not permitted to invoke this agent",
+        }
+    )
+    return AgentIdentityFailure(message=messages[denial])
 
 
 def actor_admission_failure(
     agent: AgentResponse,
     context: ManagedAgentContext | None,
 ) -> AgentIdentityFailure | None:
-    if not agent.enabled or agent.identity is None or not agent.identity.active:
-        return AgentIdentityFailure(message="Agent execution is disabled")
-    if context is None:
-        return AgentIdentityFailure(message="This agent requires its bound identity provider token")
-    if context.agent_id != agent.agent_id or context.binding_revision != agent.identity.revision:
-        return AgentIdentityFailure(message="Agent identity changed during authentication; retry")
-    if agent.execution_mode not in (context.mode, "both"):
-        return AgentIdentityFailure(message="Agent is not enabled for this execution mode")
-    if context.mode == "delegated" and not context.user_id:
-        return AgentIdentityFailure(message="A verified human subject is required")
-    return None
+    decision: Final = managed.decide(managed.Actor(_managed_agent(agent), _managed_context(context)))
+    return _managed_failure(decision.denial) if decision.denial is not None else None
 
 
 _INVOCATION_COST: Final = TypeAdapter(Annotated[float, Field(ge=0, allow_inf_nan=False)])

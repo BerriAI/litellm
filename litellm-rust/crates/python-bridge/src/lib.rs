@@ -39,9 +39,9 @@ mod _native {
     use crate::model_registry::bundled_model_cost_map;
     #[pymodule_export]
     use crate::request_auth::{
-        NativeAuthContinuation, request_auth_budgets, request_auth_litellm_header_token,
-        request_auth_scheme_credential, request_auth_select_api_key,
-        request_auth_select_websocket_api_key, request_auth_start,
+        NativeAuthContinuation, request_auth_access, request_auth_admission, request_auth_budgets,
+        request_auth_litellm_header_token, request_auth_managed, request_auth_scheme_credential,
+        request_auth_select_api_key, request_auth_select_websocket_api_key, request_auth_start,
     };
     #[pymodule_export]
     use crate::router::{RouterCall, RouterCoreHandle};

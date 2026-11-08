@@ -3,10 +3,10 @@ from typing import Final, Protocol, cast
 
 import pytest
 
-from litellm._auth import runtime, rust_core
+from litellm._auth import credential, rust_core
 from litellm._auth.decision import AuthCore
-from litellm._auth.python_core import PythonCore
-from litellm._auth.shadow import ShadowCore
+from tests.unit._auth.reference_core import PythonCore
+from tests.unit._auth.shadow import ShadowCore
 from litellm._auth.credential import PresentedKeys, SelectedKey, WebSocketDenial, WebSocketKeys
 
 
@@ -23,7 +23,6 @@ def core(request: pytest.FixtureRequest) -> AuthCore:
     return factory()
 
 
-@pytest.fixture(params=("python", "rust", "shadow"))
-def credentials(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> CredentialSelector:
-    monkeypatch.setenv("LITELLM_AUTH_CORE", cast(str, request.param))
-    return runtime
+@pytest.fixture(params=("python", "rust"))
+def credentials(request: pytest.FixtureRequest) -> CredentialSelector:
+    return credential if cast(str, request.param) == "python" else rust_core
