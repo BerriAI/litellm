@@ -395,6 +395,14 @@ def _serves_gemini(model: str, custom_llm_provider: str | None) -> bool:
     return isinstance(chat_config, VertexGeminiConfig)
 
 
+def _serves_gemini_or_names_a_gemini_base_model(
+    model: str, custom_llm_provider: str | None, base_model: object
+) -> bool:
+    return _serves_gemini(model, custom_llm_provider) or (
+        isinstance(base_model, str) and bool(base_model) and _serves_gemini(base_model, None)
+    )
+
+
 def _custom_llm_provider(non_default_params: Mapping[str, object], point: Mapping[str, object]) -> str | None:
     provider: Final = non_default_params.get("custom_llm_provider") or point.get(CUSTOM_LLM_PROVIDER_STAMP)
     return provider if isinstance(provider, str) else None
@@ -471,6 +479,7 @@ EXTERNAL_BREAKPOINTS_STAMP: Final = "_litellm_external_breakpoints"
 OUTSIDE_MESSAGES_TTLS_STAMP: Final = "_litellm_outside_messages_cache_control_ttls"
 CUSTOM_LLM_PROVIDER_STAMP: Final = "_litellm_custom_llm_provider"
 PROMPT_CACHING_STAMP: Final = "_litellm_caches_prompts"
+BASE_MODEL_STAMP: Final = "_litellm_base_model"
 
 
 class AnthropicCacheControlHook(CustomPromptManagement):
@@ -587,7 +596,9 @@ class AnthropicCacheControlHook(CustomPromptManagement):
             openai_dialect=openai_dialect,
             answered_tool_ids=answered_tool_ids,
             covers_developer=injection_points[0].get(PROMPT_CACHING_STAMP) is not False
-            and not _serves_gemini(model, custom_llm_provider),
+            and not _serves_gemini_or_names_a_gemini_base_model(
+                model, custom_llm_provider, injection_points[0].get(BASE_MODEL_STAMP)
+            ),
             outside_ttls=(
                 *(_validated_object_list(injection_points[0].get(OUTSIDE_MESSAGES_TTLS_STAMP)) or ()),
                 *tool_config_point_ttls(remaining_points),
@@ -1286,14 +1297,19 @@ class AnthropicCacheControlHook(CustomPromptManagement):
                 if outside_ttls
                 else stamped
             )
+            with_base_model: Final = (
+                AnthropicCacheControlHook._stamped(with_outside_ttls, BASE_MODEL_STAMP, base_model)
+                if isinstance(base_model, str) and base_model
+                else with_outside_ttls
+            )
             with_prompt_caching: Final = (
                 AnthropicCacheControlHook._stamped(
-                    with_outside_ttls,
+                    with_base_model,
                     PROMPT_CACHING_STAMP,
                     _caches_prompts(model, custom_llm_provider, model_info, base_model),
                 )
                 if any(message["role"] == "developer" for message in messages)
-                else with_outside_ttls
+                else with_base_model
             )
             non_default_params["cache_control_injection_points"] = (
                 AnthropicCacheControlHook._stamped(with_prompt_caching, CUSTOM_LLM_PROVIDER_STAMP, custom_llm_provider)
