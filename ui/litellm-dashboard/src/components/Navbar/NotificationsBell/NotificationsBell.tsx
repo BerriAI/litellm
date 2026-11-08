@@ -180,11 +180,12 @@ export const NotificationsBellView: React.FC<NotificationsBellViewProps> = ({
   const count = issues?.total ?? 0;
   const needsAttention = count > 0;
   const showIssues = Boolean(issues || issuesPending || issuesFailed);
-  let label =
-    unreadCount > 0
+  const label = (() => {
+    if (needsAttention) return t("shell.notifications.bell.triggerAlerts", { count });
+    return unreadCount > 0
       ? t("shell.notifications.bell.triggerUnread", { unread: unreadCount })
       : t("shell.notifications.bell.trigger");
-  if (needsAttention) label = t("shell.notifications.bell.triggerAlerts", { count });
+  })();
 
   return (
     <Popover>

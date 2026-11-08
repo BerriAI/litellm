@@ -34,15 +34,15 @@ export default function IssueHistoryChart({ issue, compact = false }: { issue: I
         Daily history was not saved for this alert. Open activity to explore the recorded traffic.
       </p>
     );
-  let caption = "Recorded requests per day. Missing days are left blank.";
-  if (comparison) {
+  const caption = (() => {
+    if (compact) return `${issueDate(data[0].day)} – ${issueDate(data[data.length - 1].day)}`;
+    if (!comparison) return "Recorded requests per day. Missing days are left blank.";
     const baseline =
       issue.grouping_reason === "provider_cohort"
         ? "Baseline uses the observed traffic mix across comparable keys and models."
         : "Baseline uses recorded days in this period.";
-    caption = `Dashed line: usual ${formatAlertValue(metric, comparison.baseline_value)}. ${baseline} Missing days are left blank.`;
-  }
-  if (compact) caption = `${issueDate(data[0].day)} – ${issueDate(data[data.length - 1].day)}`;
+    return `Dashed line: usual ${formatAlertValue(metric, comparison.baseline_value)}. ${baseline} Missing days are left blank.`;
+  })();
   return (
     <figure className="min-w-0 space-y-3" aria-label={label}>
       {!compact && (

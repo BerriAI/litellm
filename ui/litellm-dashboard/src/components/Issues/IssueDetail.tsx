@@ -208,28 +208,29 @@ export default function IssueDetail({ id }: { id: string }) {
   const query = useIssue(accessToken, id);
   const globalAccess = hasCapability(userRole, "viewGlobalSpend");
   const denied = query.error instanceof ApiError && query.error.status === 403;
-  let back = { href: uiHref("usage?view=my-usage"), label: "My usage" };
-  if (globalAccess) back = { href: issuesHref(), label: "Alerts" };
-  else if (query.data?.can_view_activity === true) {
-    const href = resourceHref(query.data);
-    if (href) back = { href, label: "Resource activity" };
-  }
-  let content = (
-    <p role="status" className="text-sm text-muted-foreground">
-      Loading alert…
-    </p>
-  );
-  if (!accessToken) content = <p>Sign in to view this alert.</p>;
-  else if (query.isError)
-    content = (
-      <div role="alert" className="space-y-2">
-        <p>{denied ? "You don’t have access to this alert." : "Could not load this alert."}</p>
-        <Button variant="outline" onClick={() => void query.refetch()}>
-          Retry
-        </Button>
-      </div>
+  const back = (() => {
+    if (globalAccess) return { href: issuesHref(), label: "Alerts" };
+    const href = query.data?.can_view_activity === true ? resourceHref(query.data) : null;
+    return href ? { href, label: "Resource activity" } : { href: uiHref("usage?view=my-usage"), label: "My usage" };
+  })();
+  const content = (() => {
+    if (!accessToken) return <p>Sign in to view this alert.</p>;
+    if (query.isError)
+      return (
+        <div role="alert" className="space-y-2">
+          <p>{denied ? "You don’t have access to this alert." : "Could not load this alert."}</p>
+          <Button variant="outline" onClick={() => void query.refetch()}>
+            Retry
+          </Button>
+        </div>
+      );
+    if (query.data) return <IssueBody key={query.data.id} issue={query.data} />;
+    return (
+      <p role="status" className="text-sm text-muted-foreground">
+        Loading alert…
+      </p>
     );
-  else if (query.data) content = <IssueBody key={query.data.id} issue={query.data} />;
+  })();
   return (
     <div className="min-w-0 space-y-5">
       <a
