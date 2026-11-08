@@ -77,7 +77,12 @@ export default function IssuesInbox() {
   const { pageIndex, pageSize } = table.pagination;
   const { onPaginationChange } = table;
   useEffect(() => {
-    if (query.data && pageIndex > lastPage) onPaginationChange({ pageIndex: lastPage, pageSize });
+    if (query.data && query.data.limit < pageSize) {
+      onPaginationChange({
+        pageIndex: Math.floor((pageIndex * pageSize) / query.data.limit),
+        pageSize: query.data.limit,
+      });
+    } else if (query.data && pageIndex > lastPage) onPaginationChange({ pageIndex: lastPage, pageSize });
   }, [query.data, pageIndex, pageSize, lastPage, onPaginationChange]);
   const changeStatus = (next: IssueStatus) => {
     void setParams({ status: next, state: null, usage_status: null });
@@ -167,6 +172,7 @@ export default function IssuesInbox() {
             <DataTablePagination
               page={pageIndex}
               pageSize={pageSize}
+              pageSizeOptions={Array.from(new Set([pageSize, 25, 50, 100])).sort((a, b) => a - b)}
               rowCount={alerts.total}
               onPageChange={(pageIndex) => onPaginationChange({ pageIndex, pageSize })}
               onPageSizeChange={(pageSize) => onPaginationChange({ pageIndex: 0, pageSize })}

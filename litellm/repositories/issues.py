@@ -217,7 +217,7 @@ class IssuesRepository:
                 FROM settings WHERE c.param_name=$4 AND EXISTS(SELECT 1 FROM changed WHERE inserted)
                 RETURNING c.param_name
             ) SELECT {_RECORD} AS record FROM changed i LEFT JOIN "LiteLLM_Config" c ON c.param_name=i.ack_key""",
-                json.dumps(payload),
+                json.dumps(payload, ensure_ascii=False),
                 reopen,
                 monitoring,
                 _MONITORING_KEY,
@@ -272,14 +272,24 @@ class IssuesRepository:
         )
         rows: Final = TypeAdapter(tuple[_IssueRow, ...]).validate_python(
             await self.database.query_raw(
-                f"SELECT {_RECORD} AS record {_JOIN} WHERE {where} ORDER BY i.last_seen DESC,i.id LIMIT $6 OFFSET $7",
+                f"""WITH candidates AS MATERIALIZED (
+                    SELECT i.id,i.last_seen,octet_length(i.record::text) AS bytes {_JOIN}
+                    WHERE {where} ORDER BY i.last_seen DESC,i.id LIMIT $6 OFFSET $7
+                ), sized AS (
+                    SELECT *,SUM(bytes) OVER(ORDER BY last_seen DESC,id) AS page_bytes,
+                        row_number() OVER(ORDER BY last_seen DESC,id) AS position FROM candidates
+                ) SELECT {_RECORD} AS record {_JOIN} JOIN sized s ON s.id=i.id
+                WHERE s.page_bytes<=1048576 OR s.position=1 ORDER BY i.last_seen DESC,i.id""",
                 *args,
                 limit,
                 offset,
             )
         )
         return IssueList(
-            data=await self._labels(tuple(row.record for row in rows)), total=count[0].count, limit=limit, offset=offset
+            data=await self._labels(tuple(row.record for row in rows)),
+            total=count[0].count,
+            limit=len(rows) if rows and offset + len(rows) < count[0].count else limit,
+            offset=offset,
         )
 
     async def _labels(self, issues: tuple[Issue, ...]) -> tuple[Issue, ...]:

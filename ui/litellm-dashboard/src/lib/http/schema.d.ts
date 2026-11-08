@@ -35491,7 +35491,10 @@ export interface components {
         IssueList: {
             /** Data */
             data: components["schemas"]["Issue"][];
-            /** Limit */
+            /**
+             * Limit
+             * @description Effective page size, reduced for large records. Continue at offset + limit.
+             */
             limit: number;
             /** Offset */
             offset: number;
