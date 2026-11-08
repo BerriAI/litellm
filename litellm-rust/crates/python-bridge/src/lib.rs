@@ -42,6 +42,11 @@ mod _native {
         NativeAuthContinuation, request_auth_budgets, request_auth_litellm_header_token,
         request_auth_scheme_credential, request_auth_select_api_key,
         request_auth_select_websocket_api_key, request_auth_start,
+        request_auth_route_access,
+        request_auth_org_route, request_auth_org_admin,
+        request_auth_model_access,
+        request_auth_model_groups,
+        request_auth_fallback_access,
     };
     #[pymodule_export]
     use crate::router::{RouterCall, RouterCoreHandle};
