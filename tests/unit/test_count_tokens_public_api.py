@@ -61,7 +61,7 @@ def test_acount_tokens_routes_to_mistral():
     ):
         result = asyncio.run(
             litellm.acount_tokens(
-                model="mistral/mistral-large-latest",
+                model="mistral/mistral-large-4",
                 messages=[{"role": "user", "content": "Hello Mistral!"}],
                 api_key="test-mistral-key",
             )
@@ -69,7 +69,7 @@ def test_acount_tokens_routes_to_mistral():
 
         assert result.total_tokens == 25
         assert result.tokenizer_type == "mistral_api"
-        assert result.request_model == "mistral/mistral-large-latest"
+        assert result.request_model == "mistral/mistral-large-4"
 
 
 def test_acount_tokens_fallback_to_local():

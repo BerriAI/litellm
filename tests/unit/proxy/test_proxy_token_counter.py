@@ -5372,7 +5372,7 @@ async def test_mistral_proxy_token_counter_chat_and_responses(monkeypatch: pytes
             {
                 "model_name": "mistral-proxy-model",
                 "litellm_params": {
-                    "model": "mistral/mistral-large-latest",
+                    "model": "mistral/mistral-large-4",
                     "api_key": "test-mistral-key",
                 },
             }
