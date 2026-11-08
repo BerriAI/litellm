@@ -27,22 +27,61 @@ _VERSION_PLACEHOLDER: Final = "{version}"
 _PYTHON_PLACEHOLDER: Final = "{python}"
 
 
+def _optional_str(value: object) -> str | None:
+    if isinstance(value, str):
+        return value
+    return None
+
+
+_OBJECT_MAPPING_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_EMPTY_MAPPING: Final[Mapping[str, object]] = MappingProxyType({})
+
+
+def _mapping(value: object) -> Mapping[str, object]:
+    if value is None:
+        return _EMPTY_MAPPING
+    return _OBJECT_MAPPING_ADAPTER.validate_python(value)
+
+
+_STRINGS_ADAPTER: Final = TypeAdapter(tuple[str, ...])
+
+
+def _string_sequence(value: object) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    return _STRINGS_ADAPTER.validate_python(value)
+
+
+_PROVIDERS_FILE_ADAPTER: Final = TypeAdapter(Mapping[str, Mapping[str, object]])
+
+
+def _read_providers_file(path: str) -> Mapping[str, Mapping[str, object]]:
+    json_path: Final = Path(path)
+    if not json_path.exists():
+        raise Exception(f"Providers file not found: {path}")
+    try:
+        with open(json_path) as handle:
+            return _PROVIDERS_FILE_ADAPTER.validate_python(json.load(handle))
+    except Exception as error:
+        raise Exception(f"Error loading providers file {path}: {error}") from error
+
+
 class SimpleProviderConfig:
     """Simple data class for JSON provider config"""
 
-    def __init__(self, slug: str, data: dict):
+    def __init__(self, slug: str, data: Mapping[str, object]):
         self.slug = slug
         self.base_url: str = _STR_ADAPTER.validate_python(data["base_url"])
-        self.api_key_env: str = data["api_key_env"]
-        self.api_base_env: str | None = data.get("api_base_env")
-        self.base_class = data.get("base_class", "openai_gpt")
+        self.api_key_env: str = _STR_ADAPTER.validate_python(data["api_key_env"])
+        self.api_base_env: str | None = _optional_str(data.get("api_base_env"))
+        self.base_class = _optional_str(data.get("base_class")) or "openai_gpt"
         self.user_agent: str | None = _STR_ADAPTER.validate_python(data["user_agent"]) if "user_agent" in data else None
-        self.param_mappings = data.get("param_mappings", {})
-        self.constraints = data.get("constraints", {})
+        self.param_mappings: Mapping[str, object] = _mapping(data.get("param_mappings"))
+        self.constraints: Mapping[str, object] = _mapping(data.get("constraints"))
         self.special_handling: Mapping[str, bool] = _SPECIAL_HANDLING_ADAPTER.validate_python(
             data.get("special_handling", {})
         )
-        self.supported_endpoints: Sequence[str] = data.get("supported_endpoints", [])
+        self.supported_endpoints: Sequence[str] = _string_sequence(data.get("supported_endpoints"))
         self.model_supported_endpoints: Mapping[str, tuple[str, ...]] = _MODEL_ENDPOINTS_ADAPTER.validate_python(
             data.get("model_supported_endpoints", {})
         )
@@ -84,6 +123,10 @@ class SimpleProviderConfig:
         }
 
 
+def _provider_configs(parsed: Mapping[str, Mapping[str, object]]) -> dict[str, SimpleProviderConfig]:
+    return {slug: SimpleProviderConfig(slug, entry) for slug, entry in parsed.items()}
+
+
 class JSONProviderRegistry:
     """Load providers from JSON once on import"""
 
@@ -114,6 +157,16 @@ class JSONProviderRegistry:
         except Exception as e:
             verbose_logger.warning("Warning: Failed to load JSON provider configs: %s", e)
             cls._loaded = True
+
+    @classmethod
+    def load_file(cls, path: str) -> None:
+        """Merge an external providers.json. Same shape as the bundled file. A repeated slug is replaced."""
+        parsed: Final = _read_providers_file(path)
+        try:
+            loaded: Final = _provider_configs(parsed)
+        except Exception as error:
+            raise Exception(f"Error loading providers file {path}: {error}") from error
+        cls._providers.update(loaded)
 
     @classmethod
     def get(cls, slug: str) -> SimpleProviderConfig | None:

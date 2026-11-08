@@ -31,6 +31,16 @@ Edit `providers.json` and add your provider:
 
 That's it! The provider will be automatically loaded and available.
 
+### From a file at startup
+
+Pass the same JSON at startup instead of editing the bundled file and rebuilding an image.
+
+```
+litellm --providers my-providers.json
+```
+
+The file uses the shape above. Entries are added to the bundled providers, and a slug that already exists uses the entry from this file. A missing path stops startup the same way a missing `--config` does. `PROVIDERS_FILE_PATH` names the same file when the flag is not passed, the way `CONFIG_FILE_PATH` does for `--config`.
+
 ### Optional Configuration Fields
 
 ```json
