@@ -5383,14 +5383,14 @@ def remove_sensitive_keys_from_dict(d: dict) -> dict:
     """
     Remove sensitive keys from a dictionary
     """
-    sensitive_key_phrases: Final = ["key", "secret", "access", "credential"]
-    remove_keys: Final = []
-    for key in d:
-        if any(phrase in key.lower() for phrase in sensitive_key_phrases):
-            remove_keys.append(key)
-    for key in remove_keys:
-        d.pop(key)
-    return d
+    sensitive_key_phrases: Final = ("key", "secret", "access", "credential")
+    return {
+        key: remove_sensitive_keys_from_dict(value) if isinstance(value, dict) else value
+        for key, value in d.items()
+        if not any(phrase in key.lower() for phrase in sensitive_key_phrases)
+        and key.lower() != "token"
+        and not key.lower().endswith("_token")
+    }
 
 
 _TOOL_LIST: Final = TypeAdapter(list[object])
