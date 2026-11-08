@@ -791,7 +791,9 @@ def test_developer_message_cache_control_survives_the_system_role_translation(
 @pytest.mark.parametrize(
     ("case", "unmarked_system"),
     [
-        pytest.param(_BY_ID["anthropic_sonnet45"], [{"type": "text", "text": "Be a good bot!"}], id="anthropic_sonnet45"),
+        pytest.param(
+            _BY_ID["anthropic_sonnet45"], [{"type": "text", "text": "Be a good bot!"}], id="anthropic_sonnet45"
+        ),
         pytest.param(
             _BY_ID["bedrock_invoke_haiku"], [{"type": "text", "text": "Be a good bot!"}], id="bedrock_invoke_haiku"
         ),
@@ -968,10 +970,10 @@ _BEDROCK_CONVERSE_SYSTEMS: Final = pytest.param(
 )
 
 
+@pytest.mark.parametrize(("case", "marked_system", "unmarked_system"), [_ANTHROPIC_SYSTEMS, _BEDROCK_CONVERSE_SYSTEMS])
 @pytest.mark.parametrize(
-    ("case", "marked_system", "unmarked_system"), [_ANTHROPIC_SYSTEMS, _BEDROCK_CONVERSE_SYSTEMS]
+    ("user_marks", "keeps_developer_mark"), [(3, True), (4, False)], ids=["at_limit", "over_limit"]
 )
-@pytest.mark.parametrize(("user_marks", "keeps_developer_mark"), [(3, True), (4, False)], ids=["at_limit", "over_limit"])
 def test_a_developer_cache_control_is_kept_only_within_the_four_mark_limit(
     case: _Case,
     marked_system: list[JsonValue],
@@ -993,9 +995,7 @@ def test_a_developer_cache_control_is_kept_only_within_the_four_mark_limit(
     assert _request_body(route)["system"] == (marked_system if keeps_developer_mark else unmarked_system)
 
 
-@pytest.mark.parametrize(
-    ("case", "marked_system", "unmarked_system"), [_ANTHROPIC_SYSTEMS, _BEDROCK_CONVERSE_SYSTEMS]
-)
+@pytest.mark.parametrize(("case", "marked_system", "unmarked_system"), [_ANTHROPIC_SYSTEMS, _BEDROCK_CONVERSE_SYSTEMS])
 @pytest.mark.parametrize(
     ("user_marks", "developer_mark", "tool_mark", "keeps_developer_mark"),
     [
@@ -1030,9 +1030,7 @@ def test_a_developer_cache_control_counts_tool_marks_and_their_ttl(
     assert _request_body(route)["system"] == (marked_system if keeps_developer_mark else unmarked_system)
 
 
-@pytest.mark.parametrize(
-    ("case", "marked_system", "unmarked_system"), [_ANTHROPIC_SYSTEMS, _BEDROCK_CONVERSE_SYSTEMS]
-)
+@pytest.mark.parametrize(("case", "marked_system", "unmarked_system"), [_ANTHROPIC_SYSTEMS, _BEDROCK_CONVERSE_SYSTEMS])
 @pytest.mark.parametrize(
     ("developer_mark", "keeps_developer_mark"),
     [({"type": "ephemeral"}, True), ({"type": "ephemeral", "ttl": "1h"}, False)],
