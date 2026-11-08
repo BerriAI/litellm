@@ -5775,6 +5775,7 @@ def completion(
     from litellm.integrations.anthropic_cache_control_hook import (
         AnthropicCacheControlHook,
         developer_message_with_valid_cache_control,
+        developer_messages_for_a_prompt_caching_model,
         developer_messages_within_the_cache_limits,
         routed_model_info,
     )
@@ -5980,7 +5981,12 @@ def completion(
             translated_messages: Final = list(
                 provider_config.translate_developer_role_to_system_role(
                     messages=developer_messages_within_the_cache_limits(
-                        checked_messages,
+                        developer_messages_for_a_prompt_caching_model(
+                            checked_messages,
+                            model=model,
+                            custom_llm_provider=custom_llm_provider,
+                            model_info=deployment_model_info,
+                        ),
                         MappingProxyType(
                             {
                                 "tools": typed_tools,

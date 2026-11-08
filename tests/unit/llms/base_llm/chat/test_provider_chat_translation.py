@@ -820,6 +820,44 @@ def test_drop_params_drops_a_malformed_developer_cache_control(
     assert _request_body(route)["system"] == unmarked_system
 
 
+_OPENAI_COMPATIBLE_UNMAPPED: Final = _openai_case(
+    "openai_compatible_unmapped",
+    "openai/offline-unmapped-model",
+    "https://openai-compatible.offline.test/v1/chat/completions",
+    extra={"api_base": "https://openai-compatible.offline.test/v1"},
+)
+
+
+@pytest.mark.parametrize(
+    ("deployment_model_info", "keeps_developer_mark"),
+    [(None, False), ({"supports_prompt_caching": True}, True), ({"supports_prompt_caching": False}, False)],
+    ids=["unmapped_model", "deployment_declares_caching", "deployment_declares_no_caching"],
+)
+@pytest.mark.parametrize("drop_params", [False, True], ids=["strict", "drop_params"])
+def test_a_developer_cache_control_reaches_only_a_model_that_caches_prompts(
+    deployment_model_info: dict[str, JsonValue] | None,
+    keeps_developer_mark: bool,
+    drop_params: bool,
+    respx_mock: MockRouter,
+) -> None:
+    route: Final = _register(_OPENAI_COMPATIBLE_UNMAPPED, respx_mock, "canned-openai-compatible")
+    _complete(
+        _OPENAI_COMPATIBLE_UNMAPPED,
+        {
+            "messages": [
+                {"role": "developer", "content": "Be a good bot!", "cache_control": {"type": "ephemeral"}},
+                {"role": "user", "content": "Hi"},
+            ],
+            "drop_params": drop_params,
+            **({} if deployment_model_info is None else {"model_info": deployment_model_info}),
+        },
+    )
+    unmarked: Final[dict[str, JsonValue]] = {"role": "system", "content": "Be a good bot!"}
+    assert _mapping(_items(_request_body(route)["messages"])[0]) == (
+        {**unmarked, "cache_control": {"type": "ephemeral"}} if keeps_developer_mark else unmarked
+    )
+
+
 def _user_message_with_marked_parts(marks: int) -> dict[str, JsonValue]:
     return {
         "role": "user",
