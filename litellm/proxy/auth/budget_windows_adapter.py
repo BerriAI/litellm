@@ -28,7 +28,7 @@ def _window(raw: object) -> BudgetWindow:
 def _seconds(duration: str) -> int | None:
     try:
         return duration_in_seconds(duration)
-    except Exception:
+    except Exception:  # noqa: BLE001  # preserve invalid-duration skip behavior
         return None
 
 

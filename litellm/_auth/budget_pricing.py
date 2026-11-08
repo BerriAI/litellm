@@ -58,3 +58,29 @@ def price(facts: ModelPriceFacts) -> PriceDecision:
 
 def route(facts: RouteBudgetFacts) -> RouteBudgetDecision:
     return _ROUTE_DECISION.validate_python(_native.request_auth_budget_route(_ROUTE.dump_python(facts)))  # pyright: ignore[reportAny]  # Pydantic serializes the validated frozen facts for the native boundary
+
+
+@dataclass(frozen=True, slots=True)
+class ExemptionFacts:
+    route: RouteBudgetFacts
+    model_input_present: bool
+    router_present: bool
+    model_count: int
+    prices: tuple[ModelPriceFacts, ...] = ()
+    cache_read: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class ExemptionDecision:
+    read_pass_through: bool
+    read_price_cache: bool
+    read_model: int | None
+    exempt: bool
+
+
+_EXEMPTION: Final = TypeAdapter(ExemptionFacts)
+_EXEMPTION_DECISION: Final = TypeAdapter(ExemptionDecision)
+
+
+def exemption(facts: ExemptionFacts) -> ExemptionDecision:
+    return _EXEMPTION_DECISION.validate_python(_native.request_auth_budget_exemption(_EXEMPTION.dump_python(facts)))  # pyright: ignore[reportAny]  # Pydantic serializes frozen facts

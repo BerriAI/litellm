@@ -277,3 +277,15 @@ pub(crate) fn request_auth_fallback_access(py: Python<'_>, facts: &Bound<'_, PyA
     let decision = py.detach(move || core::fallback_access::decide(facts)).map_err(map_error)?;
     to_py(py, &decision)
 }
+
+#[pyfunction]
+pub(crate) fn request_auth_budget_exemption(
+    py: Python<'_>,
+    facts: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    let facts: core::budget_pricing::ExemptionFacts = from_py(facts)?;
+    to_py(
+        py,
+        &py.detach(move || core::budget_pricing::exemption(&facts)),
+    )
+}

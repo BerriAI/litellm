@@ -1,6 +1,8 @@
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from typing import Final
 
+from litellm._auth import common_budgets
 from litellm._auth.common_budgets import BudgetFacts
 from litellm.proxy._types import (
     Litellm_EntityType,
@@ -51,7 +53,7 @@ async def organization_max_budget_check(
             proxy_logging_obj=proxy_logging_obj,
             include_budget_table=True,
         )
-    except Exception:
+    except Exception:  # noqa: BLE001  # preserve organization lookup failure handling
         return
     if org is None:
         return
@@ -218,3 +220,50 @@ async def check_team_member_budget(
             f"{valid_token.user_id}:{team_object.team_id}",
             f"Budget has been exceeded! User={valid_token.user_id} in Team={team_object.team_id} Current cost: {facts.spend}, Max budget: {limit}",
         )
+
+
+@dataclass(frozen=True, slots=True)
+class AccessGroupBudgetReading:
+    name: str
+    facts: BudgetFacts
+
+
+async def read_access_group_budget_row(name: str, row: ModelAccessGroupBudget | None) -> AccessGroupBudgetReading:
+    limit: Final = row.max_budget if row is not None else None
+    facts, _decision = await read_budget(
+        BudgetFacts("AccessGroup", limit),
+        CounterRead(
+            model_access_group_spend_counter_key(name), row.spend if row is not None else 0.0, limit, authoritative=True
+        ),
+    )
+    return AccessGroupBudgetReading(name, facts)
+
+
+async def read_access_group_budget_facts(
+    groups: Sequence[str],
+    prisma_client: PrismaClient | None,
+    user_api_key_cache: UserApiKeyCache,
+) -> tuple[AccessGroupBudgetReading, ...]:
+    from litellm.proxy.auth.auth_checks import get_model_access_group_budgets_batch
+
+    if prisma_client is None or not groups:
+        return ()
+    rows: Final = await get_model_access_group_budgets_batch(
+        access_group_names=groups,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+    )
+    return await _read_access_group_rows(tuple(groups), rows)
+
+
+async def _read_access_group_rows(
+    groups: tuple[str, ...],
+    rows: Mapping[str, ModelAccessGroupBudget],
+) -> tuple[AccessGroupBudgetReading, ...]:
+    readings: tuple[AccessGroupBudgetReading, ...] = ()  # rebind-ok: native-selected IO driver accumulator
+    for name in groups:
+        reading = await read_access_group_budget_row(name, rows.get(name))
+        readings = (*readings, reading)
+        if common_budgets.check(reading.facts).denied:
+            return readings
+    return readings

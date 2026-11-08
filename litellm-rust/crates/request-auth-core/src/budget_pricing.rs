@@ -117,6 +117,63 @@ pub fn route(facts: &RouteBudgetFacts) -> RouteBudgetDecision {
     if mcp_discovery { Skip } else { ReadPricing }
 }
 
+#[derive(Clone, Debug, Deserialize)]
+pub struct ExemptionFacts {
+    pub route: RouteBudgetFacts,
+    pub model_input_present: bool,
+    pub router_present: bool,
+    pub model_count: usize,
+    #[serde(default)]
+    pub cache_read: bool,
+    pub prices: Vec<ModelPriceFacts>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct ExemptionDecision {
+    pub read_pass_through: bool,
+    pub read_price_cache: bool,
+    pub read_model: Option<usize>,
+    pub exempt: bool,
+}
+
+pub fn exemption(facts: &ExemptionFacts) -> ExemptionDecision {
+    let done = |exempt| ExemptionDecision {
+        read_pass_through: false,
+        read_price_cache: false,
+        read_model: None,
+        exempt,
+    };
+    match route(&facts.route) {
+        RouteBudgetDecision::ReadPassThrough => {
+            return ExemptionDecision {
+                read_pass_through: true,
+                ..done(false)
+            };
+        }
+        RouteBudgetDecision::Skip => return done(true),
+        RouteBudgetDecision::ReadPricing => (),
+    }
+    if !facts.model_input_present || !facts.router_present {
+        return done(false);
+    }
+    if !facts.cache_read {
+        return ExemptionDecision {
+            read_price_cache: true,
+            ..done(false)
+        };
+    }
+    if facts.prices.iter().any(|facts| !price(facts).zero_cost) {
+        return done(false);
+    }
+    if facts.prices.len() < facts.model_count {
+        return ExemptionDecision {
+            read_model: Some(facts.prices.len()),
+            ..done(false)
+        };
+    }
+    done(true)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -151,6 +208,53 @@ mod tests {
                 zero_cost,
                 cache_value: Some(zero_cost),
                 read_deployments: false,
+            }
+        );
+    }
+    #[rstest]
+    #[case::read_first(vec![], Some(0), false)]
+    #[case::read_second(vec![true], Some(1), false)]
+    #[case::priced_first(vec![false], None, false)]
+    #[case::all_free(vec![true, true], None, true)]
+    #[case::priced_second(vec![true, false], None, false)]
+    fn exemption_reads_models_in_order(
+        #[case] cached: Vec<bool>,
+        #[case] read: Option<usize>,
+        #[case] exempt: bool,
+    ) {
+        let facts = ExemptionFacts {
+            route: RouteBudgetFacts {
+                side_effect_route: false,
+                discovery_route: false,
+                llm_route: true,
+                route: "/chat/completions".to_owned(),
+                method: None,
+                body_present: false,
+                registered_pass_through: None,
+            },
+            model_input_present: true,
+            router_present: true,
+            model_count: 2,
+            cache_read: true,
+            prices: cached
+                .into_iter()
+                .map(|value| ModelPriceFacts {
+                    cached: Some(value),
+                    lookup_failed: false,
+                    group_found: false,
+                    input_price: None,
+                    output_price: None,
+                    deployments: None,
+                })
+                .collect(),
+        };
+        assert_eq!(
+            exemption(&facts),
+            ExemptionDecision {
+                read_pass_through: false,
+                read_price_cache: false,
+                read_model: read,
+                exempt
             }
         );
     }
