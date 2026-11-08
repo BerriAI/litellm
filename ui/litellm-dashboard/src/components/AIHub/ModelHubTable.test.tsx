@@ -596,13 +596,13 @@ describe("ModelHubTable", () => {
         loadProxySettings: async () => ({ decision_model_providers: ["typesafe", "azure_ai"] }),
         costMap: {
           "typesafe/jev-latest": { litellm_provider: "typesafe", mode: "evaluation" },
-          "azure_ai/Microsoft-Decision-1": { litellm_provider: "azure_ai", mode: "evaluation" },
+          "azure_ai/Decision-1": { litellm_provider: "azure_ai", mode: "evaluation" },
         },
       });
 
       const garden = await screen.findByTestId("decision-model-garden");
       expect(garden).toHaveTextContent("2 decision models across 2 providers answer on /v1/decisions");
-      const foundryCard = within(garden).getByTestId("decision-model-card-azure_ai/Microsoft-Decision-1");
+      const foundryCard = within(garden).getByTestId("decision-model-card-azure_ai/Decision-1");
       expect(within(foundryCard).getByRole("link", { name: "Deploy under your own name" })).toHaveAttribute(
         "href",
         "https://docs.litellm.ai/docs/decisions#supported-providers",

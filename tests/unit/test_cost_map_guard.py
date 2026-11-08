@@ -87,8 +87,8 @@ def test_in_sync_files_pass_for_humans_and_bots() -> None:
     assert _failures(BASE, bot=True) == ()
 
 
-EVALUATION_MODEL: Final = "azure_ai/Microsoft-Decision-1"
-DECISIONS_MODEL: Final = "azure_ai/decisions/Microsoft-Decision-1"
+EVALUATION_MODEL: Final = "azure_ai/Decision-1"
+DECISIONS_MODEL: Final = "azure_ai/decisions/Decision-1"
 INPUT_ONLY_OUTPUT_PRICE_FAILURE: Final = (
     "mode evaluation and decisions rows bill input only; output_cost_per_token must be 0 unless the vendor prices "
     "output tokens for this model (add the source to EVALUATION_OUTPUT_PRICE_SOURCES)"

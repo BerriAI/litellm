@@ -19,7 +19,7 @@ _AZURE_AI_CREDENTIAL_PARAM_KEYS: Final = AZURE_ENTRA_LITELLM_PARAM_KEYS | frozen
 
 
 class AzureAIDecisionsConfig(BaseDecisionsConfig):
-    """Microsoft Foundry decision models (Microsoft-Decision-1), where model is the deployment name"""
+    """Microsoft Foundry decision models (Decision-1), where model is the deployment name"""
 
     path = "/providers/microsoft/v1/systemone"
     api_key_env = ("AZURE_AI_API_KEY",)
@@ -33,7 +33,7 @@ class AzureAIDecisionsConfig(BaseDecisionsConfig):
         return (
             limits
             if limits.max_request_tokens is not None
-            else super().get_input_limits("Microsoft-Decision-1", custom_llm_provider, headers)
+            else super().get_input_limits("Decision-1", custom_llm_provider, headers)
         )
 
     def missing_api_base_message(self, custom_llm_provider: str) -> str:

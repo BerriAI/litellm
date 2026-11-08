@@ -369,7 +369,7 @@ export const DECISION_MODEL_CARDS: GuardrailCardInfo[] = [
     name: "Microsoft Decision Model",
     nameKey: "guardrails.gardenCatalog.decisionModel.microsoft.name",
     description:
-      "Microsoft Foundry decision models, such as Microsoft-Decision-1, answer your yes/no questions about each request or response.",
+      "Microsoft Foundry decision models, such as Decision-1, answer your yes/no questions about each request or response.",
     descriptionKey: "guardrails.gardenCatalog.decisionModel.microsoft.description",
     category: "decision_model",
     logo: providerLogoMap[Providers.Azure_AI_Studio] ?? "",
