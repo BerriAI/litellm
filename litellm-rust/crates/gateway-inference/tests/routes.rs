@@ -6,18 +6,22 @@ use axum::{
     body::{Body, Bytes},
     http::Request,
 };
+use litellm_gateway_inference::Deployment;
 use litellm_http::{
     ClientVariant, HttpClientPool, HttpSettings, Resolution, media::PublicDnsResolver,
 };
 use litellm_inference::resources::CoreResources;
 use litellm_inference_chat::{ChatCompletionsRoute, types::ChatCompletionsRequest};
+use litellm_llms::anthropic::chat::transformation::DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS;
 use rstest::rstest;
 use serde_json::{Value, json};
 use tower::ServiceExt;
 use wiremock::{
-    Mock, MockServer, ResponseTemplate,
-    matchers::{body_partial_json, method},
+    Mock, MockServer, Request as UpstreamRequest, ResponseTemplate,
+    matchers::{any, body_partial_json, method},
 };
+
+const OUTPUT_CAP_CATALOG: &str = r#"{"test-model": {"litellm_provider": "anthropic", "mode": "chat", "max_output_tokens": 4321}}"#;
 
 #[rstest]
 #[case::chat("/chat/completions", Some("public/model"))]
@@ -64,6 +68,70 @@ async fn chat_aliases_call_core_and_use_the_body_model_before_the_path(
     assert_eq!(
         support::json(response).await["choices"][0]["message"]["content"],
         "hello"
+    );
+}
+
+#[rstest]
+#[case::catalog_cap("anthropic/test-model", None, json!({}), json!(4321))]
+#[case::deployment_cap_over_catalog("anthropic/test-model", Some(1234), json!({}), json!(1234))]
+#[case::unmapped_model(
+    "anthropic/unmapped-model",
+    None,
+    json!({}),
+    json!(DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS)
+)]
+#[case::differently_cased_model(
+    "anthropic/TEST-MODEL",
+    None,
+    json!({}),
+    json!(DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS)
+)]
+#[case::client_null_max_tokens("anthropic/test-model", None, json!({"max_tokens": null}), json!(4321))]
+#[case::client_max_tokens("anthropic/test-model", Some(1234), json!({"max_tokens": 16}), json!(16))]
+#[tokio::test]
+async fn chat_sends_anthropic_max_tokens_from_the_client_then_the_model_output_cap(
+    #[case] model: &str,
+    #[case] deployment_cap: Option<i64>,
+    #[case] fields: Value,
+    #[case] expected: Value,
+) {
+    let upstream = MockServer::start().await;
+    Mock::given(any())
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": "msg_test", "model": "test-model", "content": [{"type": "text", "text": "hello"}],
+            "stop_reason": "end_turn", "usage": {"input_tokens": 1, "output_tokens": 1}
+        })))
+        .mount(&upstream)
+        .await;
+    let app = support::app_with_catalog(
+        Deployment {
+            max_output_tokens: deployment_cap,
+            ..support::deployment(model, &upstream.uri())
+        },
+        OUTPUT_CAP_CATALOG,
+    );
+    let body = fields
+        .as_object()
+        .unwrap()
+        .clone()
+        .into_iter()
+        .chain([
+            ("model".into(), json!("public/model")),
+            (
+                "messages".into(),
+                json!([{"role": "user", "content": "hi"}]),
+            ),
+        ])
+        .collect();
+
+    let response = support::post(app, "/v1/chat/completions", Value::Object(body)).await;
+
+    assert_eq!(response.status(), 200);
+    let [sent] = <[UpstreamRequest; 1]>::try_from(upstream.received_requests().await.unwrap())
+        .unwrap_or_else(|requests| panic!("one upstream request, saw {}", requests.len()));
+    assert_eq!(
+        serde_json::from_slice::<Value>(&sent.body).unwrap()["max_tokens"],
+        expected
     );
 }
 

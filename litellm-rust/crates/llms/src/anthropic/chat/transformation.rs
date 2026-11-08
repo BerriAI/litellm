@@ -48,6 +48,8 @@ const SUPPORTED_PARAMS: &[(&str, &str)] = &[
     ("stop", "stop_sequences"),
 ];
 
+pub const DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS: i64 = 128_000;
+
 #[derive(Deserialize)]
 struct TextResponseProjection {
     model: String,
@@ -94,6 +96,13 @@ impl BaseConfig for AnthropicConfig {
 
     fn supported_openai_param_mappings(&self) -> &'static [(&'static str, &'static str)] {
         SUPPORTED_PARAMS
+    }
+
+    fn get_config(&self, max_output_tokens: Option<i64>) -> Map<String, Value> {
+        Map::from_iter([(
+            "max_tokens".to_owned(),
+            json!(max_output_tokens.unwrap_or(DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS)),
+        )])
     }
 
     fn get_complete_url(
@@ -257,7 +266,9 @@ fn anthropic_body(
 mod tests {
     use crate::{
         Error,
-        anthropic::chat::transformation::ANTHROPIC_CHAT_COMPLETIONS_CONFIG,
+        anthropic::chat::transformation::{
+            ANTHROPIC_CHAT_COMPLETIONS_CONFIG, DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS,
+        },
         base_llm::{
             auth::AuthScheme,
             chat::transformation::{BaseConfig, ProviderChatResponseData},
@@ -316,6 +327,17 @@ mod tests {
                 "max_tokens": 128,
                 "temperature": 0.2
             })
+        );
+    }
+
+    #[rstest]
+    #[case::output_cap(Some(4321), 4321)]
+    #[case::negative_output_cap(Some(-5), -5)]
+    #[case::no_output_cap(None, DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS)]
+    fn defaults_max_tokens_to_the_output_cap(#[case] cap: Option<i64>, #[case] expected: i64) {
+        assert_eq!(
+            ANTHROPIC_CHAT_COMPLETIONS_CONFIG.get_config(cap),
+            params(json!({"max_tokens": expected}))
         );
     }
 

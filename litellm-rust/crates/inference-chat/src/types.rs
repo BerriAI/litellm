@@ -29,6 +29,7 @@ pub struct ChatCompletionsCall {
     pub custom_llm_provider: Option<String>,
     pub extra_headers: Option<Map<String, Value>>,
     pub timeout: Option<Duration>,
+    pub max_output_tokens: Option<i64>,
 }
 
 impl From<ChatCompletionsRequest<'_>> for ChatCompletionsCall {
@@ -42,6 +43,7 @@ impl From<ChatCompletionsRequest<'_>> for ChatCompletionsCall {
             custom_llm_provider: request.custom_llm_provider.map(str::to_owned),
             extra_headers: request.extra_headers,
             timeout: request.timeout,
+            max_output_tokens: None,
         }
     }
 }
@@ -53,4 +55,5 @@ pub struct ResolvedChatCompletionsRequest {
     pub api_base: Option<String>,
     pub extra_headers: Option<Map<String, Value>>,
     pub timeout: Option<Duration>,
+    pub max_output_tokens: Option<i64>,
 }

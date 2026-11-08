@@ -13,6 +13,7 @@ use futures_util::future::BoxFuture;
 use litellm_gateway_inference::{Deployment, Gateway, router};
 use litellm_http::{HttpClientPool, HttpSettings, Resolution, media::PublicDnsResolver};
 use litellm_inference::resources::CoreResources;
+use litellm_model_catalog::Catalog;
 use litellm_secret_value::SecretValue;
 use litellm_secrets::source::SecretSource;
 
@@ -72,9 +73,47 @@ pub fn app_with_cache_for_principal(
     )
 }
 
+pub fn deployment(model: &str, api_base: &str) -> Deployment {
+    Deployment {
+        model: model.into(),
+        api_base: Some(api_base.into()),
+        api_key: Some("test-key".into()),
+        timeout: Some(Duration::from_secs(5)),
+        ..Default::default()
+    }
+}
+
+const UNRELATED_CATALOG: &str = r#"{"unrelated-model": {"litellm_provider": "openai"}}"#;
+
+pub fn app_with_catalog(deployment: Deployment, catalog: &str) -> Router {
+    gateway_app(
+        deployment,
+        Catalog::parse(catalog.as_bytes()).unwrap().value,
+        litellm_gateway_auth::Permissions::All,
+        None,
+        None,
+    )
+}
+
 fn configured_app(
     model: &str,
     api_base: &str,
+    permissions: litellm_gateway_auth::Permissions,
+    cache: Option<Arc<dyn litellm_cache_response::ResponseCacheService>>,
+    principal: Option<litellm_gateway_auth::Principal>,
+) -> Router {
+    gateway_app(
+        deployment(model, api_base),
+        Catalog::parse(UNRELATED_CATALOG.as_bytes()).unwrap().value,
+        permissions,
+        cache,
+        principal,
+    )
+}
+
+fn gateway_app(
+    deployment: Deployment,
+    catalog: Catalog,
     permissions: litellm_gateway_auth::Permissions,
     cache: Option<Arc<dyn litellm_cache_response::ResponseCacheService>>,
     principal: Option<litellm_gateway_auth::Principal>,
@@ -83,22 +122,13 @@ fn configured_app(
     let http = Resolution::from(&HttpSettings::default()).config;
     let secrets = Arc::new(NoSecrets);
     let resources = CoreResources::new(pool);
+    let catalog = Arc::new(catalog);
     let gateway = Gateway::new(
         resources,
         http,
         secrets,
-        [(
-            "public/model".into(),
-            Deployment {
-                model: model.into(),
-                api_base: Some(api_base.into()),
-                api_key: Some("test-key".into()),
-                timeout: Some(Duration::from_secs(5)),
-                ..Default::default()
-            },
-        )]
-        .into_iter()
-        .collect(),
+        [("public/model".into(), deployment)].into_iter().collect(),
+        Arc::new(move || Arc::clone(&catalog)),
     )
     .unwrap();
     let gateway = match cache {

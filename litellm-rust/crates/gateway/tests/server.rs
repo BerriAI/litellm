@@ -8,11 +8,13 @@ use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use litellm_config::Config;
 use litellm_gateway_inference::{Error, Gateway};
 use litellm_http::ClientVariant;
+use litellm_model_catalog::{BUNDLED_REGISTRY, Catalog, Mode};
 use litellm_tracing::{Logger, Metadata, Record, Sink};
 use rstest::{fixture, rstest};
 use serde_json::{Value, json};
 use tokio::{net::TcpListener, sync::oneshot, time::timeout};
 use tower::ServiceExt;
+use wiremock::{Mock, MockServer, ResponseTemplate, matchers::any};
 
 struct LogSink(mpsc::Sender<Value>);
 
@@ -318,5 +320,62 @@ async fn readiness_answers_without_credentials_like_the_proxy_with_no_database(
     assert_eq!(
         serde_json::from_slice::<Value>(&body).unwrap(),
         json!({"status": "healthy", "db": "Not connected"})
+    );
+}
+
+fn bundled_anthropic_chat_output_cap() -> (String, u64) {
+    let catalog = Catalog::parse(BUNDLED_REGISTRY).unwrap().value;
+    catalog
+        .model_names()
+        .filter(|name| !name.contains('/'))
+        .find_map(|name| {
+            let attributes = &catalog.lookup(name)?.entry.model()?.attributes;
+            let anthropic_chat = attributes.litellm_provider.as_deref() == Some("anthropic")
+                && attributes.mode == Some(Mode::Chat);
+            anthropic_chat.then_some((name.to_owned(), attributes.max_output_tokens?))
+        })
+        .unwrap()
+}
+
+#[tokio::test]
+async fn chat_sends_the_bundled_output_cap_as_anthropic_max_tokens() {
+    let (model, output_cap) = bundled_anthropic_chat_output_cap();
+    let upstream = MockServer::start().await;
+    Mock::given(any())
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": "msg_test", "model": model, "content": [{"type": "text", "text": "hello"}],
+            "stop_reason": "end_turn", "usage": {"input_tokens": 1, "output_tokens": 1}
+        })))
+        .mount(&upstream)
+        .await;
+    let config = Config::from_yaml(&format!(
+        "model_list:\n  - model_name: public-model\n    litellm_params:\n      model: anthropic/{model}\n      \
+         api_base: {}\n      api_key: test-key\ngeneral_settings:\n  master_key: gateway-key\n",
+        upstream.uri()
+    ))
+    .unwrap();
+    let inference = litellm_gateway::build_inference(&config).unwrap();
+    let request = Request::builder()
+        .method("POST")
+        .uri("/v1/chat/completions")
+        .header("authorization", "Bearer gateway-key")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({"model": "public-model", "messages": [{"role": "user", "content": "hi"}]})
+                .to_string(),
+        ))
+        .unwrap();
+
+    let response = litellm_gateway::router(inference, &config, None, None)
+        .oneshot(request)
+        .await
+        .unwrap();
+
+    assert_eq!(response.status().as_u16(), 200);
+    let [sent] = <[wiremock::Request; 1]>::try_from(upstream.received_requests().await.unwrap())
+        .unwrap_or_else(|requests| panic!("one upstream request, saw {}", requests.len()));
+    assert_eq!(
+        serde_json::from_slice::<Value>(&sent.body).unwrap()["max_tokens"],
+        json!(output_cap)
     );
 }

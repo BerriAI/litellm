@@ -11,7 +11,7 @@ use litellm_llms::base_llm::{
 };
 use litellm_llms_types::formats::chat_completions::ChatCompletionsResponse;
 use litellm_secrets::source::Secrets;
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use super::Error;
 use crate::{
@@ -45,8 +45,12 @@ pub(super) async fn execute(
         &call.optional_params,
         &|key| secrets.get(key),
     )?;
+    let optional_params = under_client_params(
+        config.get_config(call.max_output_tokens),
+        call.optional_params,
+    );
     let body = config
-        .transform_request(provider.model, call.messages, call.optional_params.clone())?
+        .transform_request(provider.model, call.messages, optional_params.clone())?
         .body;
     let environment = ValidatedEnvironment {
         headers: with_default_headers(validated.headers, config.default_headers()),
@@ -56,7 +60,7 @@ pub(super) async fn execute(
     let context = RequestContext {
         model: provider.model.to_owned(),
         custom_llm_provider: provider_name.to_owned(),
-        optional_params: Value::Object(call.optional_params),
+        optional_params: Value::Object(optional_params),
         secret_fields: Vec::new(),
         api_key: call.api_key.map(litellm_secret_value::SecretValue::new),
     };
@@ -134,6 +138,17 @@ pub(super) async fn execute(
     .await
 }
 
+fn under_client_params(
+    defaults: Map<String, Value>,
+    client: Map<String, Value>,
+) -> Map<String, Value> {
+    let unset: Vec<(String, Value)> = defaults
+        .into_iter()
+        .filter(|(name, _)| client.get(name).is_none_or(Value::is_null))
+        .collect();
+    client.into_iter().chain(unset).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Mutex;
@@ -148,6 +163,7 @@ mod tests {
         types::{ChatCompletionsCall, ResolvedChatCompletionsRequest},
     };
     use litellm_inference::provider::resolve_llm_provider;
+    use litellm_llms::anthropic::chat::transformation::DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS;
 
     const ANTHROPIC_MESSAGE: &str = r#"{"id":"msg_1","type":"message","role":"assistant","model":"claude-sonnet-4-5","content":[{"type":"text","text":"hello"}],"stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":11,"output_tokens":4}}"#;
 
@@ -186,6 +202,8 @@ mod tests {
 
     fn prepared(
         api_base: &str,
+        optional_params: Value,
+        max_output_tokens: Option<i64>,
     ) -> (
         litellm_inference::provider::ResolvedProvider<'static>,
         &'static dyn BaseConfig,
@@ -200,12 +218,13 @@ mod tests {
             ChatCompletionsCall {
                 model: "anthropic/claude-sonnet-4-5".into(),
                 messages: json!([{"role": "user", "content": "hi"}]),
-                optional_params: json!({"max_tokens": 16}).as_object().unwrap().clone(),
+                optional_params: optional_params.as_object().unwrap().clone(),
                 api_key: Some("sk-test".into()),
                 api_base: Some(api_base.into()),
                 custom_llm_provider: None,
                 extra_headers: None,
                 timeout: None,
+                max_output_tokens,
             },
             config,
         )
@@ -225,7 +244,8 @@ mod tests {
             .await;
         let interceptors = RecordingHooks::default();
 
-        let (provider, config, request) = prepared(&upstream.uri());
+        let (provider, config, request) =
+            prepared(&upstream.uri(), json!({"max_tokens": 16}), None);
         execute(
             &Client::for_test(),
             &AuthServices::default(),
@@ -261,6 +281,55 @@ mod tests {
     }
 
     #[rstest]
+    #[case::output_cap(json!({}), Some(4321), json!(4321))]
+    #[case::no_output_cap(json!({}), None, json!(DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS))]
+    #[case::client_value(json!({"max_tokens": 16}), Some(4321), json!(16))]
+    #[case::client_null(json!({"max_tokens": null}), Some(4321), json!(4321))]
+    #[tokio::test]
+    async fn an_unset_max_tokens_takes_the_provider_default_before_the_hooks_run(
+        #[case] optional_params: Value,
+        #[case] max_output_tokens: Option<i64>,
+        #[case] expected: Value,
+    ) {
+        let upstream = MockServer::start().await;
+        Mock::given(any())
+            .respond_with(
+                ResponseTemplate::new(200).set_body_raw(ANTHROPIC_MESSAGE, "application/json"),
+            )
+            .mount(&upstream)
+            .await;
+        let interceptors = RecordingHooks::default();
+
+        let (provider, config, request) =
+            prepared(&upstream.uri(), optional_params, max_output_tokens);
+        execute(
+            &Client::for_test(),
+            &AuthServices::default(),
+            config,
+            provider,
+            request,
+            std::sync::Arc::new(|_: &str| None),
+            None,
+            None,
+            &interceptors,
+            None,
+        )
+        .await
+        .expect("chat completions call succeeds");
+
+        let [request] = <[Request; 1]>::try_from(upstream.received_requests().await.unwrap())
+            .unwrap_or_else(|requests| panic!("one request, saw {}", requests.len()));
+        let sent: Value = serde_json::from_slice(&request.body).unwrap();
+        assert_eq!(sent["max_tokens"], expected);
+        let [context] =
+            <[RequestContext; 1]>::try_from(interceptors.contexts.into_inner().unwrap())
+                .unwrap_or_else(|seen| {
+                    panic!("before_provider_request runs once, saw {}", seen.len())
+                });
+        assert_eq!(context.optional_params, json!({"max_tokens": expected}));
+    }
+
+    #[rstest]
     #[tokio::test]
     async fn an_upstream_failure_is_not_reported_as_a_received_response() {
         let upstream = MockServer::start().await;
@@ -270,7 +339,8 @@ mod tests {
             .await;
         let interceptors = RecordingHooks::default();
 
-        let (provider, config, request) = prepared(&upstream.uri());
+        let (provider, config, request) =
+            prepared(&upstream.uri(), json!({"max_tokens": 16}), None);
         let error = execute(
             &Client::for_test(),
             &AuthServices::default(),

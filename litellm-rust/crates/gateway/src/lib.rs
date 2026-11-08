@@ -24,6 +24,7 @@ use litellm_http::{
     media::PublicDnsResolver,
 };
 use litellm_inference::resources::CoreResources;
+use litellm_model_catalog::{BUNDLED_REGISTRY, Catalog};
 use litellm_secrets::source::EnvironmentSecrets;
 use litellm_tracing::ByteChunk;
 use uuid::Uuid;
@@ -65,7 +66,19 @@ pub fn build_inference(config: &Config) -> Result<Arc<Gateway>, Error> {
         Arc::new(EnvironmentSecrets::python_compatible(client)),
     ));
     let resources = CoreResources::new(pool);
-    Ok(Arc::new(Gateway::new(resources, http, secrets, router)?))
+    let catalog = Arc::new(bundled_catalog()?);
+    Ok(Arc::new(Gateway::new(
+        resources,
+        http,
+        secrets,
+        router,
+        Arc::new(move || Arc::clone(&catalog)),
+    )?))
+}
+
+fn bundled_catalog() -> Result<Catalog, Error> {
+    let loaded = Catalog::parse(BUNDLED_REGISTRY).map_err(Error::BundledModelCatalog)?;
+    Ok(loaded.value.without_rejected(&loaded.errors).0)
 }
 
 pub fn install_crypto_provider() {

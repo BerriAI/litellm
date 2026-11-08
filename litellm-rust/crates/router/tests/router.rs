@@ -100,6 +100,7 @@ fn programmatic_deployments_preserve_overrides_and_last_entry_wins() {
         custom_llm_provider: Some("test-provider".into()),
         litellm_params: Default::default(),
         timeout: Some(Duration::from_secs(7)),
+        max_output_tokens: Some(4321),
         shaping: MessagesShaping {
             settings: MessagesSettings {
                 drop_params: true,
@@ -120,5 +121,6 @@ fn programmatic_deployments_preserve_overrides_and_last_entry_wins() {
     assert_eq!(selected.api_base, deployment.api_base);
     assert_eq!(selected.custom_llm_provider, deployment.custom_llm_provider);
     assert_eq!(selected.timeout, deployment.timeout);
+    assert_eq!(selected.max_output_tokens, deployment.max_output_tokens);
     assert_eq!(selected.shaping, deployment.shaping);
 }

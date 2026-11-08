@@ -2,9 +2,10 @@ mod deployment;
 
 use std::collections::HashMap;
 
-use litellm_config::{Config, Spelled};
+use litellm_config::{Config, Object, Spelled};
 use litellm_core_utils::{serde_compat::parse_pydantic_bool, settings::Lookup};
 use litellm_inference_messages::{MessagesSettings, MessagesShaping};
+use litellm_router_core::group_info::coerce_token_limit;
 
 pub use deployment::Deployment;
 
@@ -22,6 +23,15 @@ fn is_on(flag: Option<&Spelled<bool>>, env: &impl Lookup) -> bool {
         },
         None => false,
     }
+}
+
+fn configured_max_output_tokens(model_info: &Object) -> Option<i64> {
+    coerce_token_limit(
+        model_info
+            .get("max_output_tokens")
+            .and_then(|value| serde_json::to_value(value).ok())
+            .as_ref(),
+    )
 }
 
 impl Router {
@@ -51,6 +61,7 @@ impl Router {
                             },
                             ..MessagesShaping::default()
                         },
+                        max_output_tokens: configured_max_output_tokens(&model.model_info),
                         ..Deployment::default()
                     },
                 )
@@ -121,6 +132,34 @@ mod tests {
             .shaping
             .settings
             .drop_params,
+            expected
+        );
+    }
+
+    #[rstest]
+    #[case::integer("\n    model_info:\n      max_output_tokens: 4321", Some(4321))]
+    #[case::numeric_string("\n    model_info:\n      max_output_tokens: \" 4_321 \"", Some(4321))]
+    #[case::float("\n    model_info:\n      max_output_tokens: 4321.9", Some(4321))]
+    #[case::zero("\n    model_info:\n      max_output_tokens: 0", Some(0))]
+    #[case::negative("\n    model_info:\n      max_output_tokens: -5", Some(-5))]
+    #[case::absent("", None)]
+    #[case::null("\n    model_info:\n      max_output_tokens: null", None)]
+    #[case::thousands_separator("\n    model_info:\n      max_output_tokens: \"4,321\"", None)]
+    #[case::boolean("\n    model_info:\n      max_output_tokens: true", None)]
+    fn configured_max_output_tokens_reach_the_deployment(
+        #[case] model_info: &str,
+        #[case] expected: Option<i64>,
+    ) {
+        let config = Config::from_yaml(&format!(
+            "model_list:\n  - model_name: public-model\n    litellm_params:\n      model: provider/model{model_info}"
+        ))
+        .unwrap();
+
+        assert_eq!(
+            Router::from_config(&config, &|_: &str| None::<String>)
+                .get("public-model")
+                .unwrap()
+                .max_output_tokens,
             expected
         );
     }

@@ -27,6 +27,7 @@ pub(super) fn project(
         custom_llm_provider: call.options.custom_llm_provider,
         extra_headers: call.options.extra_headers,
         timeout: call.options.timeout,
+        max_output_tokens: None,
     })
 }
 

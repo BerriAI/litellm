@@ -12,4 +12,5 @@ pub struct Deployment {
     pub litellm_params: LitellmParams,
     pub timeout: Option<Duration>,
     pub shaping: MessagesShaping,
+    pub max_output_tokens: Option<i64>,
 }

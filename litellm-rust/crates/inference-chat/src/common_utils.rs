@@ -72,6 +72,7 @@ pub(super) fn resolve_request(
         api_base: call.api_base,
         extra_headers: call.extra_headers,
         timeout: call.timeout,
+        max_output_tokens: call.max_output_tokens,
     })
 }
 

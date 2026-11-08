@@ -3834,6 +3834,7 @@ dependencies = [
  "litellm-http",
  "litellm-inference",
  "litellm-llms",
+ "litellm-model-catalog",
  "litellm-redis-client",
  "litellm-redis-connect",
  "litellm-redis-resolve",
@@ -3855,6 +3856,7 @@ dependencies = [
  "tracing",
  "uuid",
  "veil",
+ "wiremock",
 ]
 
 [[package]]
@@ -3926,6 +3928,7 @@ dependencies = [
  "litellm-inference-transcription",
  "litellm-llms",
  "litellm-llms-types",
+ "litellm-model-catalog",
  "litellm-router",
  "litellm-secret-value",
  "litellm-secrets",
@@ -4570,8 +4573,10 @@ dependencies = [
  "litellm-core-utils",
  "litellm-inference",
  "litellm-inference-messages",
+ "litellm-router-core",
  "litellm-router-types",
  "rstest",
+ "serde_json",
 ]
 
 [[package]]

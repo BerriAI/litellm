@@ -36,6 +36,10 @@ pub trait BaseConfig: Sync {
     /// Supported OpenAI parameter names paired with their provider names.
     fn supported_openai_param_mappings(&self) -> &'static [(&'static str, &'static str)];
 
+    fn get_config(&self, _max_output_tokens: Option<i64>) -> Map<String, Value> {
+        Map::new()
+    }
+
     fn get_complete_url(
         &self,
         api_base: Option<&str>,

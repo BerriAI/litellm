@@ -6,11 +6,13 @@ use axum::{
     extract::State,
     response::{IntoResponse, Response},
 };
+use litellm_inference::provider::resolve_llm_provider;
 use litellm_inference_chat::types::ChatCompletionsCall;
+use litellm_model_catalog::Catalog;
 use serde_json::{Map, Value};
 
 use crate::{
-    Error, Gateway, JsonObject,
+    Deployment, Error, Gateway, JsonObject,
     request::{self, Path},
 };
 
@@ -55,6 +57,9 @@ async fn handle(
         None => route,
     };
 
+    let max_output_tokens = deployment
+        .max_output_tokens
+        .or_else(|| catalog_max_output_tokens(&(gateway.catalog)(), deployment));
     let messages = body.get("messages").cloned().unwrap_or_default();
     let headers = crate::caching::CacheHeaders::default();
     let response = litellm_host_http::serve_unary(
@@ -71,6 +76,7 @@ async fn handle(
                 custom_llm_provider: deployment.custom_llm_provider.clone(),
                 extra_headers: None,
                 timeout: deployment.timeout,
+                max_output_tokens,
             },
             cache_options.policy,
         ),
@@ -81,4 +87,17 @@ async fn handle(
     )
     .await?;
     Ok(headers.apply(response))
+}
+
+fn catalog_max_output_tokens(catalog: &Catalog, deployment: &Deployment) -> Option<i64> {
+    let provider = resolve_llm_provider(
+        &deployment.model,
+        deployment.custom_llm_provider.as_deref(),
+        "chat completions",
+    )
+    .ok()?;
+    let found = catalog
+        .lookup(provider.model)
+        .filter(|found| found.matched_key == provider.model)?;
+    i64::try_from(found.entry.model()?.attributes.max_output_tokens?).ok()
 }

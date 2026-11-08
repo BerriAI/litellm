@@ -23,14 +23,18 @@ use litellm_inference_ocr::OcrRoute;
 use litellm_inference_responses::ResponsesRoute;
 use litellm_inference_transcription::AudioTranscriptionRoute;
 use litellm_llms::base_llm::ocr::{handler::OcrClient, settings::OcrSettings};
+use litellm_model_catalog::Catalog;
 use litellm_secrets::source::SecretSource;
 
 pub use error::{BodyError, Error};
 pub use litellm_router::{Deployment, Router as ModelRouter};
 pub use request::{JsonObject, RequestId};
 
+pub type CatalogSource = Arc<dyn Fn() -> Arc<Catalog> + Send + Sync>;
+
 pub struct Gateway {
     cache: Option<Arc<dyn litellm_cache_response::ResponseCacheService>>,
+    catalog: CatalogSource,
     pub audio_transcription: AudioTranscriptionRoute,
     pub chat_completions: ChatCompletionsRoute,
     pub messages: MessagesRoute,
@@ -55,11 +59,13 @@ impl Gateway {
         http: HttpClientConfig,
         secrets: Arc<dyn SecretSource>,
         models: ModelRouter,
+        catalog: CatalogSource,
     ) -> Result<Self, litellm_http::Error> {
         let provider = resources.pool.client(&http, ClientVariant::Provider)?;
         let auth = resources.auth.clone();
         Ok(Self {
             cache: None,
+            catalog,
             audio_transcription: AudioTranscriptionRoute::new(
                 provider.clone(),
                 auth.clone(),
