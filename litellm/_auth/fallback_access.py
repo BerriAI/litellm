@@ -3,6 +3,7 @@ from typing import Final, Literal
 
 from pydantic import TypeAdapter
 
+from litellm._auth.failure import native_boundary
 from litellm._auth.model_access import ModelAccessDecision, ModelAccessFacts
 from litellm.rust_bridge import _native
 
@@ -50,5 +51,6 @@ class FallbackAuthorizationDecision:
 _DECISION: Final = TypeAdapter(FallbackAuthorizationDecision)
 
 
+@native_boundary
 def fallback_authorization(facts: FallbackAuthorizationFacts) -> FallbackAuthorizationDecision:
     return _DECISION.validate_python(_native.request_auth_fallback_access(asdict(facts)))

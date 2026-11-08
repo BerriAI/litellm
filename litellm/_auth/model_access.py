@@ -4,6 +4,7 @@ from typing import Final, Literal, TypeAlias
 
 from pydantic import TypeAdapter
 
+from litellm._auth.failure import native_boundary
 from litellm.rust_bridge import _native
 
 ModelObject: TypeAlias = Literal["user", "customer", "team", "key", "org", "project", "agent"]
@@ -55,7 +56,15 @@ class ModelAccessFacts:
 @dataclass(frozen=True, slots=True)
 class ModelAccessDecision:
     kind: Literal[
-        "Allow", "Deny", "Depth", "NoDefaultModels", "NoAgentModels", "EmptyAgentCeiling", "PersonalTeam", "ReadGroups"
+        "Allow",
+        "Deny",
+        "Depth",
+        "NoDefaultModels",
+        "NoAgentModels",
+        "EmptyAgentCeiling",
+        "PersonalTeam",
+        "ReadGroups",
+        "ReadScope",
     ]
     model: str | None = None
     grants: tuple[str, ...] = ()
@@ -82,10 +91,12 @@ _MODELS: Final = TypeAdapter(tuple[str, ...])
 _BOOL: Final = TypeAdapter(bool)
 
 
+@native_boundary
 def model_access(facts: ModelAccessFacts, *, kind: Literal["Object", "Customer"] = "Object") -> ModelAccessDecision:
     return _DECISION.validate_python(_native.request_auth_model_access({kind: asdict(facts)}))
 
 
+@native_boundary
 def grouped_model_access(
     facts: ModelAccessFacts,
     group_ids: tuple[str, ...],
@@ -107,12 +118,21 @@ def grouped_model_access(
     )
 
 
+@native_boundary
 def user_model_access(facts: ModelAccessFacts, *, present: bool) -> ModelAccessDecision:
     return _DECISION.validate_python(
         _native.request_auth_model_access({"User": {"facts": asdict(facts), "present": present}})
     )
 
 
+@native_boundary
+def user_model_precheck(*, present: bool, grants: tuple[str, ...]) -> ModelAccessDecision:
+    return _DECISION.validate_python(
+        _native.request_auth_model_access({"UserPrecheck": {"present": present, "grants": grants}})
+    )
+
+
+@native_boundary
 def agent_model_access(
     facts: ModelAccessFacts, managed_grants: tuple[str, ...] | None, ceilings: tuple[tuple[str, ...], ...]
 ) -> ModelAccessDecision:
@@ -129,6 +149,7 @@ def agent_model_access(
     )
 
 
+@native_boundary
 def personal_model_access(requested: tuple[str, ...], teams: tuple[PersonalModelTeam, ...]) -> ModelAccessDecision:
     return _DECISION.validate_python(
         _native.request_auth_model_access(
@@ -142,16 +163,19 @@ def personal_model_access(requested: tuple[str, ...], teams: tuple[PersonalModel
     )
 
 
+@native_boundary
 def model_candidates(facts: ModelAccessFacts) -> tuple[str, ...]:
     return _MODELS.validate_python(_native.request_auth_model_access({"Candidates": asdict(facts)}))
 
 
+@native_boundary
 def model_access_helper(model: str, facts: ModelAccessFacts) -> bool:
     return _BOOL.validate_python(
         _native.request_auth_model_access({"Helper": {"model": model, "facts": asdict(facts)}})
     )
 
 
+@native_boundary
 def key_model_grants(grants: tuple[str, ...], team_id: str | None, team_grants: tuple[str, ...]) -> tuple[str, ...]:
     return _MODELS.validate_python(
         _native.request_auth_model_access(
@@ -166,6 +190,7 @@ def key_model_grants(grants: tuple[str, ...], team_id: str | None, team_grants: 
     )
 
 
+@native_boundary
 def assigned_model_grants(
     groups: tuple[AssignedModelGroup, ...], team_id: str | None, key_id: str | None
 ) -> tuple[str, ...]:
@@ -182,6 +207,7 @@ def assigned_model_grants(
     )
 
 
+@native_boundary
 def personal_model_access_applies(
     *,
     enabled: bool,

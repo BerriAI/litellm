@@ -6,6 +6,7 @@ from fastapi import HTTPException
 from pydantic import BaseModel
 
 import litellm
+from litellm._auth.failure import NativeAuthFailure
 from litellm._auth.model_access import (
     ModelAccessDecision,
     ModelAccessFacts,
@@ -18,7 +19,7 @@ from litellm._auth.model_access import (
     key_model_grants,
     model_access,
     model_candidates,
-    user_model_access,
+    user_model_precheck,
 )
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.proxy._types import (
@@ -52,6 +53,8 @@ def _provider(model: str) -> ModelProvider | None:
     try:
         stripped, provider, _, _ = litellm.get_llm_provider(model=model)
         return ModelProvider(stripped, provider)
+    except NativeAuthFailure:
+        raise
     except Exception:  # noqa: BLE001  # provider inference failure leaves the raw provider fact absent
         return None
 
@@ -140,7 +143,7 @@ def raise_model_denial(
             )
         case "NoAgentModels":
             raise HTTPException(403, "This agent has no model grants")
-        case "ReadGroups":
+        case "ReadGroups" | "ReadScope":
             raise RuntimeError("model grant lookup was not answered")
         case "Deny" | "NoDefaultModels" | "EmptyAgentCeiling" | "PersonalTeam":
             error_model: Final = decision.model if decision.model is not None else model
@@ -320,10 +323,8 @@ async def can_user_call_model(
     user_object: LiteLLM_UserTable | None,
     key_model_aliases: Mapping[str, str] | None = None,
 ) -> Literal[True]:
-    facts: Final = project_model_facts(
-        model,
-        llm_router,
-        object_model_grants(user_object) if user_object is not None else (),
-        key_model_aliases=key_model_aliases,
-    )
-    return raise_model_denial(user_model_access(facts, present=user_object is not None), model)
+    grants: Final = object_model_grants(user_object) if user_object is not None else ()
+    precheck: Final = user_model_precheck(present=user_object is not None, grants=grants)
+    if precheck.kind != "ReadScope":
+        return raise_model_denial(precheck, model)
+    return can_object_call_model(model, llm_router, grants, key_model_aliases=key_model_aliases)

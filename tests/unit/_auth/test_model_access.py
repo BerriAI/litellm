@@ -1,10 +1,12 @@
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import replace
-from typing import Final
+from typing import Final, Literal
+from unittest.mock import MagicMock
 
 import pytest
 
 from litellm._auth import model_access as native
+from litellm._auth.failure import NativeAuthFailure
 from litellm._auth.model_access import (
     ModelAccessFacts as Facts,
 )
@@ -20,6 +22,8 @@ from litellm._auth.model_access import (
 from litellm._auth.model_access import (
     ModelRegistry as Registry,
 )
+from litellm.proxy._types import LiteLLM_UserTable, ModelAccessDeniedProxyException
+from litellm.proxy.auth import auth_checks, model_access_adapter
 from tests.unit._auth.support import model_reference as reference
 
 _BASE: Final = Facts(("model",), object_type="key")
@@ -214,6 +218,25 @@ def test_group_fallback_waits_for_data(
 )
 def test_user_default_scope(present: bool, grants: tuple[str, ...], kind: str) -> None:
     assert native.user_model_access(replace(_BASE, grants=grants), present=present).kind == kind
+
+
+@pytest.mark.parametrize("policy", (auth_checks.can_user_call_model, model_access_adapter.can_user_call_model))
+@pytest.mark.asyncio
+async def test_user_precheck_does_not_read_registry(
+    policy: Callable[[str, MagicMock, LiteLLM_UserTable | None], Awaitable[Literal[True]]],
+) -> None:
+    router: Final = MagicMock()
+    user: Final = LiteLLM_UserTable(user_id="user", models=["no-default-models"])
+    with pytest.raises(ModelAccessDeniedProxyException, match="model"):
+        await policy("model", router, user)
+    assert not router.mock_calls
+    assert await policy("model", router, None) is True
+    assert not router.mock_calls
+
+
+def test_native_model_decode_failure_is_terminal() -> None:
+    with pytest.raises(NativeAuthFailure):
+        native.model_access(replace(_BASE, fallback_depth=-1))
 
 
 @pytest.mark.parametrize(
