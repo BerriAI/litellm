@@ -761,18 +761,18 @@ def _with_credential(entry: Mapping[str, object]) -> Mapping[str, object] | None
     credential_name: Final = entry.get("litellm_credential_name")
     if not isinstance(credential_name, str):
         return entry
-    if CredentialAccessor.find_credential(credential_name) is None:
-        verbose_proxy_logger.warning(
-            "Ignoring key logging entry for %s: credential %r is not defined",
-            entry.get("callback_name"),
-            credential_name,
-        )
-        return None
     credential_vars: Final = {
         name: str(value)
         for name, value in CredentialAccessor.get_credential_values(credential_name).items()
         if name in CALLBACK_VAR_NAMES and value is not None
     }
+    if not credential_vars:
+        verbose_proxy_logger.warning(
+            "Ignoring key logging entry for %s: credential %r is not defined or holds no logging values",
+            entry.get("callback_name"),
+            credential_name,
+        )
+        return None
     return {**entry, "callback_vars": {**credential_vars, **string_keyed(entry.get("callback_vars"))}}
 
 

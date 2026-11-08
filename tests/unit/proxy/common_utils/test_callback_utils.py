@@ -808,6 +808,24 @@ def test_key_logging_entries_merges_each_referenced_credential_under_its_entry(m
     ]
 
 
+@pytest.mark.parametrize(
+    "credential_values",
+    [{"api_key": "sk-model-key"}, {"arize_api_key": None}],
+    ids=["model-credential", "null-values"],
+)
+def test_key_logging_entries_drops_an_entry_whose_credential_supplies_no_logging_values(
+    monkeypatch: pytest.MonkeyPatch, credential_values: dict[str, object]
+) -> None:
+    monkeypatch.setattr(litellm, "credential_list", [_credential("model-only", credential_values)])
+    kept: Final = {"callback_name": "langfuse", "callback_vars": {"langfuse_public_key": "pk"}}
+    entries: Final = [
+        kept,
+        {"callback_name": "arize", "litellm_credential_name": "model-only", "callback_vars": {}},
+    ]
+
+    assert key_logging_entries({"logging": entries}) == (kept,)
+
+
 def test_key_logging_entries_drops_an_entry_whose_credential_is_not_defined(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "credential_list", [_credential("space-a", {"arize_api_key": "key-a"})])
     kept: Final = {"callback_name": "langfuse", "callback_vars": {"langfuse_public_key": "pk"}}
