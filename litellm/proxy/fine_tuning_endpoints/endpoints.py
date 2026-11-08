@@ -33,6 +33,8 @@ router: Final = APIRouter()
 from litellm.types.llms.openai import LiteLLMFineTuningJobCreate
 
 fine_tuning_config = None
+_JOB_LIST_MAX_PAGES: Final = 5
+_JOB_LIST_SCAN_TIMEOUT: Final = 30.0
 
 
 @runtime_checkable
@@ -110,6 +112,28 @@ async def _owned_job_page(
     )
 
 
+async def _collect_owned_job_pages(
+    response: object,
+    next_page: Callable[[str | None], Awaitable[object]],
+    user_api_key_dict: UserAPIKeyAuth,
+    managed_files_obj: object,
+) -> object:
+    state: tuple[str | None, _OwnedJobPage] = (  # rebind-ok: advance through provider pages without recursion
+        None,
+        await _owned_job_page(response, user_api_key_dict, managed_files_obj),
+    )
+    for _ in range(_JOB_LIST_MAX_PAGES - 1):
+        if state[1].next_cursor is None or state[1].next_cursor == state[0]:
+            break
+        state = (
+            state[1].next_cursor,
+            await _owned_job_page(await next_page(state[1].next_cursor), user_api_key_dict, managed_files_obj),
+        )
+    if state[1].next_cursor is not None and state[1].next_cursor != state[0]:
+        raise HTTPException(status_code=503, detail="Fine-tuning job listing exceeded its page budget")
+    return {**state[1].response, "has_more": False} if state[1].next_cursor is not None else state[1].response
+
+
 async def _owned_job_pages(
     response: object,
     next_page: Callable[[str | None], Awaitable[object]],
@@ -118,16 +142,13 @@ async def _owned_job_pages(
 ) -> object:
     if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
         return response
-    state: tuple[str | None, _OwnedJobPage] = (  # rebind-ok: advance through provider pages without recursion
-        None,
-        await _owned_job_page(response, user_api_key_dict, managed_files_obj),
-    )
-    while state[1].next_cursor is not None and state[1].next_cursor != state[0]:
-        state = (
-            state[1].next_cursor,
-            await _owned_job_page(await next_page(state[1].next_cursor), user_api_key_dict, managed_files_obj),
+    try:
+        return await asyncio.wait_for(
+            _collect_owned_job_pages(response, next_page, user_api_key_dict, managed_files_obj),
+            timeout=_JOB_LIST_SCAN_TIMEOUT,
         )
-    return {**state[1].response, "has_more": False} if state[1].next_cursor is not None else state[1].response
+    except asyncio.TimeoutError as e:
+        raise HTTPException(status_code=504, detail="Fine-tuning job listing timed out") from e
 
 
 def set_fine_tuning_config(config):

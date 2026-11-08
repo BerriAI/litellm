@@ -1,9 +1,11 @@
+import asyncio
 import re
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Optional, cast
 
-from fastapi import APIRouter, Depends, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import ORJSONResponse
 
 import litellm
@@ -39,6 +41,8 @@ if TYPE_CHECKING:
     from litellm.router import Router
 
 router: Final = APIRouter()
+_FILE_LIST_MAX_PAGES: Final = 5
+_FILE_LIST_SCAN_TIMEOUT: Final = 30.0
 
 
 def _provider_file_id_from_managed_id(managed_file_id: str | None) -> str | None:
@@ -148,6 +152,73 @@ async def _with_managed_file_list_ids(
         },
         round_trippable_id_map,
     )
+
+
+@dataclass(frozen=True, slots=True)
+class _ManagedFilePage:
+    response: VectorStoreFileListResponse
+    next_cursor: str | None
+
+
+async def _managed_file_list_page(
+    response: VectorStoreFileListResponse,
+    managed_files_obj: object | None,
+    user_api_key_dict: UserAPIKeyAuth,
+    before: bool,
+) -> _ManagedFilePage:
+    owned: Final = await _with_managed_file_list_ids(response, managed_files_obj, user_api_key_dict)
+    if owned.get("data") or not response.get("has_more"):
+        return _ManagedFilePage(owned, None)
+    if not isinstance(managed_files_obj, ManagedFileIdResolver):
+        return _ManagedFilePage({**owned, "has_more": False}, None)
+    rows: Final = response.get("data") or []
+    cursor: Final = response.get("first_id" if before else "last_id") or (
+        rows[0 if before else -1].get("id") if rows else None
+    )
+    return _ManagedFilePage(owned if cursor is not None else {**owned, "has_more": False}, cursor)
+
+
+async def _collect_managed_file_list_pages(
+    response: VectorStoreFileListResponse,
+    next_page: Callable[[str], Awaitable[VectorStoreFileListResponse]],
+    managed_files_obj: object | None,
+    user_api_key_dict: UserAPIKeyAuth,
+    before: bool,
+) -> VectorStoreFileListResponse:
+    state: tuple[str | None, _ManagedFilePage] = (  # rebind-ok: advance a bounded page scan
+        None,
+        await _managed_file_list_page(response, managed_files_obj, user_api_key_dict, before),
+    )
+    for _ in range(_FILE_LIST_MAX_PAGES - 1):
+        if state[1].next_cursor is None or state[1].next_cursor == state[0]:
+            break
+        state = (
+            state[1].next_cursor,
+            await _managed_file_list_page(
+                await next_page(state[1].next_cursor), managed_files_obj, user_api_key_dict, before
+            ),
+        )
+    if state[1].next_cursor is not None and state[1].next_cursor != state[0]:
+        raise HTTPException(status_code=503, detail="Vector store file listing exceeded its page budget")
+    return {**state[1].response, "has_more": False} if state[1].next_cursor is not None else state[1].response
+
+
+async def _with_managed_file_list_pages(
+    response: VectorStoreFileListResponse,
+    next_page: Callable[[str], Awaitable[VectorStoreFileListResponse]],
+    managed_files_obj: object | None,
+    user_api_key_dict: UserAPIKeyAuth,
+    before: bool = False,
+) -> VectorStoreFileListResponse:
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
+        return await _with_managed_file_list_ids(response, managed_files_obj, user_api_key_dict)
+    try:
+        return await asyncio.wait_for(
+            _collect_managed_file_list_pages(response, next_page, managed_files_obj, user_api_key_dict, before),
+            timeout=_FILE_LIST_SCAN_TIMEOUT,
+        )
+    except asyncio.TimeoutError as e:
+        raise HTTPException(status_code=504, detail="Vector store file listing timed out") from e
 
 
 async def _update_request_data_with_managed_file_id(
@@ -740,9 +811,11 @@ async def vector_store_file_list(
     if provider_enum is not None and "custom_llm_provider" not in data:
         data["custom_llm_provider"] = provider_enum.value
 
+    page_data: Final = MappingProxyType(dict(data))
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
-    try:
-        response: Final[object] = await processor.base_process_llm_request(
+
+    async def fetch_page(page_processor: ProxyBaseLLMRequestProcessing) -> object:
+        return await page_processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -760,16 +833,28 @@ async def vector_store_file_list(
             user_api_base=user_api_base,
             version=version,
         )
+
+    async def next_page(cursor: str) -> VectorStoreFileListResponse:
+        cursor_parameter: Final = "before" if query_params.get("before") else "after"
+        following: Final = await fetch_page(ProxyBaseLLMRequestProcessing(data={**page_data, cursor_parameter: cursor}))
+        if not isinstance(following, dict):
+            raise HTTPException(status_code=502, detail="Invalid vector store file listing response")
+        return cast(VectorStoreFileListResponse, following)  # cast-ok: the provider's file-list response shape
+
+    try:
+        response: Final[object] = await fetch_page(processor)
         if not isinstance(response, dict):
             return response
         managed_files_obj: Final[object | None] = proxy_logging_obj.get_proxy_hook("managed_files")
-        return await _with_managed_file_list_ids(
+        return await _with_managed_file_list_pages(
             response=cast(  # cast-ok: [LIT006] this route returns the provider's file-list response shape
                 VectorStoreFileListResponse,
                 response,
             ),
             managed_files_obj=managed_files_obj,
             user_api_key_dict=user_api_key_dict,
+            next_page=next_page,
+            before=bool(query_params.get("before")),
         )
     except Exception as e:  # noqa: BLE001
         raise await processor.handle_llm_api_exception(

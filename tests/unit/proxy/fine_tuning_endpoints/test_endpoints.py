@@ -457,3 +457,37 @@ async def test_job_listing_continues_until_an_owned_page(seams) -> None:
         page: Final = await _list(custom_llm_provider="openai")
     assert page["data"] == [{**job, "id": _unified_job_id()}]
     assert page["has_more"] is False
+
+
+@pytest.mark.asyncio
+async def test_job_listing_stops_at_its_page_budget() -> None:
+    async def next_page(cursor: str | None) -> object:
+        assert cursor is not None
+        return {"data": [{"id": cursor + "-next"}], "has_more": True}
+
+    fetch: Final = AsyncMock(side_effect=next_page)
+    with pytest.raises(HTTPException) as exc:
+        await endpoints._owned_job_pages(
+            {"data": [{"id": "job-first"}], "has_more": True},
+            fetch,
+            UserAPIKeyAuth(api_key="test"),
+            _OwnedJobIds({}),
+        )
+    assert exc.value.status_code == 503
+    assert exc.value.detail == "Fine-tuning job listing exceeded its page budget"
+    assert fetch.await_count == endpoints._JOB_LIST_MAX_PAGES - 1
+
+
+@pytest.mark.asyncio
+async def test_job_listing_reports_an_expired_scan_deadline(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(endpoints, "_JOB_LIST_SCAN_TIMEOUT", 0)
+
+    async def next_page(cursor: str | None) -> object:
+        pytest.fail("An expired scan must not request another page")
+
+    with pytest.raises(HTTPException) as exc:
+        await endpoints._owned_job_pages(
+            {"data": [], "has_more": False}, next_page, UserAPIKeyAuth(api_key="test"), _OwnedJobIds({})
+        )
+    assert exc.value.status_code == 504
+    assert exc.value.detail == "Fine-tuning job listing timed out"

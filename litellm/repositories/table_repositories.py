@@ -19,6 +19,7 @@ from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.llms.base_llm.managed_resources.isolation import build_owner_filter
 from litellm.repositories.accounting_delivery_repository import LedgerDatabase, LedgerTransaction
+from litellm.repositories.chunked_in import find_many_in
 from litellm.repositories.prisma_protocols import RowT_co, TableActions
 from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
@@ -109,8 +110,8 @@ class ManagedObjectRepository(PrismaTableRepository["prisma_models.LiteLLM_Manag
         owner: Final = build_owner_filter(user_api_key_dict)
         if owner is None or not ids:
             return MappingProxyType({})
-        rows: Final = await self.table.find_many(
-            where={"model_object_id": {"in": tuple(ids)}, "file_purpose": file_purpose, **owner}
+        rows: Final = await find_many_in(
+            self.table, "model_object_id", ids, where={"file_purpose": file_purpose, **owner}
         )
         return MappingProxyType({row.model_object_id: row.unified_object_id for row in rows})
 

@@ -173,6 +173,7 @@ from litellm.litellm_core_utils.core_helpers import (
 from litellm.litellm_core_utils.deployment_pricing import pricing_models
 from litellm.litellm_core_utils.duration_parser import get_budget_window_start
 from litellm.litellm_core_utils.env_utils import get_env_float, get_env_int
+from litellm.litellm_core_utils.get_llm_provider_logic import resolve_model_and_provider_for_metadata
 from litellm.litellm_core_utils.litellm_logging import (
     BilledRoundsDispatch,
     Logging,
@@ -10509,7 +10510,7 @@ def create_model_info_response(
             max_output_tokens = listing_info.max_output_tokens
 
     if scoped:
-        _, scoped_provider, _, _ = litellm.get_llm_provider(
+        _, scoped_provider = resolve_model_and_provider_for_metadata(
             model=str(scoped[0].litellm_params.get("model") or lookup_model)
         )
         base["owned_by"] = scoped_provider

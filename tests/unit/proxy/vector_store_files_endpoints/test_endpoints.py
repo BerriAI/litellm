@@ -22,7 +22,8 @@ import pytest
 from fastapi import HTTPException
 
 import litellm
-from litellm.proxy._types import UserAPIKeyAuth
+import litellm.proxy.vector_store_files_endpoints.endpoints as endpoints
+from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.vector_store_files_endpoints.endpoints import (
     _update_request_data_with_managed_file_id,
     _with_managed_file_list_ids,
@@ -261,6 +262,82 @@ async def test_forged_unified_file_id_rejected_without_ownership_record():
 
     assert exc.value.status_code == 403
     assert data["file_id"] == forged_id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("before", [False, True])
+async def test_file_listing_advances_to_a_populated_page(before: bool) -> None:
+    first: Final[VectorStoreFileListResponse] = {
+        "data": [_vector_store_file_row("file-first"), _vector_store_file_row("file-last")],
+        "first_id": "file-first",
+        "last_id": "file-last",
+        "has_more": True,
+    }
+    following: Final[VectorStoreFileListResponse] = {
+        "data": [_vector_store_file_row(RAW_FILE_ID)],
+        "first_id": RAW_FILE_ID,
+        "last_id": RAW_FILE_ID,
+        "has_more": False,
+    }
+    fetch: Final = AsyncMock(return_value=following)
+    resolver: Final = ManagedFileIdResolverStub(AsyncMock(side_effect=[{}, {RAW_FILE_ID: _unified_file_id()}]))
+    result: Final = await endpoints._with_managed_file_list_pages(first, fetch, resolver, CALLER, before)
+    assert result == {
+        **following,
+        "data": [_vector_store_file_row(_unified_file_id())],
+        "first_id": _unified_file_id(),
+        "last_id": _unified_file_id(),
+    }
+    fetch.assert_awaited_once_with("file-first" if before else "file-last")
+
+
+@pytest.mark.asyncio
+async def test_file_listing_without_a_resolver_is_complete() -> None:
+    page: Final[VectorStoreFileListResponse] = {
+        "data": [_vector_store_file_row(RAW_FILE_ID)], "has_more": True
+    }
+    fetch: Final = AsyncMock()
+    assert await endpoints._with_managed_file_list_pages(page, fetch, None, CALLER) == {
+        "data": [], "has_more": False, "first_id": None, "last_id": None
+    }
+    fetch.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_admin_file_listing_preserves_a_provider_page() -> None:
+    page: Final[VectorStoreFileListResponse] = {
+        "data": [_vector_store_file_row(RAW_FILE_ID)], "has_more": True
+    }
+    fetch: Final = AsyncMock()
+    assert await endpoints._with_managed_file_list_pages(
+        page, fetch, None, UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+    ) == page
+    fetch.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_file_listing_reports_its_page_budget() -> None:
+    async def next_page(cursor: str) -> VectorStoreFileListResponse:
+        return {"data": [_vector_store_file_row(cursor + "-next")], "has_more": True}
+
+    fetch: Final = AsyncMock(side_effect=next_page)
+    resolver: Final = ManagedFileIdResolverStub(AsyncMock(return_value={}))
+    with pytest.raises(HTTPException) as exc:
+        await endpoints._with_managed_file_list_pages(
+            {"data": [_vector_store_file_row("file-first")], "has_more": True}, fetch, resolver, CALLER
+        )
+    assert exc.value.status_code == 503
+    assert fetch.await_count == endpoints._FILE_LIST_MAX_PAGES - 1
+
+
+@pytest.mark.asyncio
+async def test_file_listing_reports_an_expired_deadline(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(endpoints, "_FILE_LIST_SCAN_TIMEOUT", 0)
+    fetch: Final = AsyncMock()
+    with pytest.raises(HTTPException) as exc:
+        await endpoints._with_managed_file_list_pages({"data": [], "has_more": False}, fetch, None, CALLER)
+    assert exc.value.status_code == 504
+    fetch.assert_not_awaited()
 
 
 @pytest.mark.asyncio

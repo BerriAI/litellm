@@ -4,6 +4,7 @@ Tests for gateway repository layer.
 
 import json
 from datetime import datetime, timedelta, timezone
+from itertools import chain
 from types import SimpleNamespace
 from typing import Any, Dict, Final, List, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -17,6 +18,7 @@ from litellm.models.base import DomainModel
 from litellm.models.budget import LiteLLM_BudgetTable
 from litellm.models.credentials import CredentialItem
 from litellm.models.team import LiteLLM_TeamTable
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
 from litellm.repositories.base_repository import BaseRepository
 from litellm.repositories.budget_repository import BudgetRepository
@@ -40,10 +42,45 @@ from litellm.repositories.subscription_account_repository import (
     SubscriptionAccountRepository,
 )
 from litellm.repositories.team_repository import TeamRepository
+from litellm.repositories.table_repositories import ManagedObjectRepository
 from litellm.repositories.user_repository import UserRepository
 from litellm.repositories.verification_token_repository import (
     VerificationTokenRepository,
 )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("size", [0, 1, IN_LIST_CHUNK_SIZE + 1])
+async def test_owned_provider_objects_use_bounded_queries(size: int) -> None:
+    table: Final = MagicMock()
+    row: Final = SimpleNamespace(model_object_id="provider-job", unified_object_id="managed-job")
+    table.find_many = AsyncMock(side_effect=[[], [row]] if size > IN_LIST_CHUNK_SIZE else [[row]])
+    client: Final = SimpleNamespace(db=SimpleNamespace(litellm_managedobjecttable=table))
+    ids: Final = tuple(f"provider-{index}" for index in range(max(0, size - 1))) + (("provider-job",) if size else ())
+    result: Final = await ManagedObjectRepository(client).owned_provider_object_ids(
+        ids, UserAPIKeyAuth(api_key="test", team_id="team-test"), "fine-tune"
+    )
+    assert result == ({"provider-job": "managed-job"} if size else {})
+    chunks: Final = tuple(
+        call.kwargs["where"]["AND"][1]["model_object_id"]["in"] for call in table.find_many.call_args_list
+    )
+    assert tuple(chain.from_iterable(chunks)) == ids
+    assert all(len(chunk) <= IN_LIST_CHUNK_SIZE for chunk in chunks)
+    assert all(
+        call.kwargs["where"]["AND"][0] == {"file_purpose": "fine-tune", "team_id": "team-test"}
+        for call in table.find_many.call_args_list
+    )
+
+
+@pytest.mark.asyncio
+async def test_owned_provider_objects_preserve_query_errors() -> None:
+    table: Final = MagicMock()
+    table.find_many = AsyncMock(side_effect=RuntimeError("query unavailable"))
+    client: Final = SimpleNamespace(db=SimpleNamespace(litellm_managedobjecttable=table))
+    with pytest.raises(RuntimeError, match="query unavailable"):
+        await ManagedObjectRepository(client).owned_provider_object_ids(
+            ("provider-job",), UserAPIKeyAuth(api_key="test"), "fine-tune"
+        )
 
 
 class MockRecord:

@@ -6,6 +6,8 @@ An alias the caller can complete on is listed next to its target and resolves by
 
 import json
 from collections.abc import Sequence
+from pathlib import Path
+from typing import Final
 
 import pytest
 from fastapi import HTTPException
@@ -379,3 +381,21 @@ async def test_hidden_router_settings_alias_the_key_does_not_list_is_not_retriev
     with pytest.raises(HTTPException) as retrieval:
         await proxy_server.model_info(model_id="quiet", user_api_key_dict=caller)
     assert retrieval.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_model_listing_describes_a_provider_without_saved_login(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(tmp_path))
+    metadata_router: Final = Router(
+        model_list=[_deployment("assistant", model="github_copilot/example-model")]
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", metadata_router)
+    monkeypatch.setattr(proxy_server, "llm_model_list", metadata_router.model_list)
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setattr(proxy_server, "user_model", None)
+    caller: Final = UserAPIKeyAuth(api_key="test", user_id="user", models=["assistant"], team_models=[])
+    listing: Final = await proxy_server.model_list(user_api_key_dict=caller, request=None)
+    assert [(row["id"], row["owned_by"]) for row in listing["data"]] == [("assistant", "github_copilot")]
