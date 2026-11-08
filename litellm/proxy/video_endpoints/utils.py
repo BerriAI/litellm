@@ -6,6 +6,7 @@ from opentelemetry.trace import Span
 from pydantic import BaseModel, ConfigDict, TypeAdapter
 
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.auth.auth_utils import video_access_group
 from litellm.proxy.common_utils.resource_ownership import is_proxy_admin
 from litellm.proxy.openai_files_endpoints.common_utils import authorize_model_for_key
 from litellm.types.videos.main import DecodedVideoId, VideoObject
@@ -203,6 +204,20 @@ def video_model_group(decoded: DecodedVideoId, llm_router: "Router | None") -> s
     ):
         return resolved
     return creating_group
+
+
+async def authorized_video_model(
+    decoded: DecodedVideoId, llm_router: "Router | None", user_api_key_dict: UserAPIKeyAuth
+) -> str | None:
+    model: Final = video_model_group(decoded, llm_router)
+    if model is None:
+        return None
+    await authorize_model_for_key(
+        model_id=video_access_group(decoded, llm_router, resolved_model=model) or model,
+        llm_router=llm_router,
+        user_api_key_dict=user_api_key_dict,
+    )
+    return model
 
 
 def fallback_requested_model(requested_model: str | None, response: object, llm_router: "Router | None") -> str | None:

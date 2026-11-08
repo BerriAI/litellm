@@ -849,7 +849,11 @@ async def vector_store_file_list(
             user_model=user_model if isinstance(user_model, str) else None,
             user_api_key_dict=user_api_key_dict,
         )
-        following: Final = await call
+        following: Final = await proxy_logging_obj.post_call_success_hook(  # pyright: ignore[reportUnknownMemberType]  # legacy hooks have untyped response fields
+            data={**processed_data, cursor_parameter: cursor},
+            user_api_key_dict=user_api_key_dict,
+            response=await call,
+        )
         if not isinstance(following, dict):
             raise HTTPException(status_code=502, detail="Invalid vector store file listing response")
         return cast(VectorStoreFileListResponse, following)  # cast-ok: the provider's file-list response shape

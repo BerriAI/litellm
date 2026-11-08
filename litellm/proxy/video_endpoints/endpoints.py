@@ -23,6 +23,7 @@ from litellm.proxy.image_endpoints.endpoints import batch_to_bytesio
 from litellm.proxy.video_endpoints.utils import (
     VideoRequestRoute,
     authorize_video_reference,
+    authorized_video_model,
     encode_character_id_in_response,
     encode_video_id_in_response,
     extract_model_from_target_model_names,
@@ -30,7 +31,6 @@ from litellm.proxy.video_endpoints.utils import (
     get_custom_provider_from_data,
     record_video_ownership,
     routable_model_name,
-    video_model_group,
     video_ownership_store,
     video_reference_to_id,
 )
@@ -299,7 +299,7 @@ async def video_status(
         proxy_logging_obj.get_proxy_hook("managed_files"),
         user_api_key_dict,
     )
-    resolved_model: Final = video_model_group(decoded, llm_router)
+    resolved_model: Final = await authorized_video_model(decoded, llm_router, user_api_key_dict)
     if resolved_model:
         data["model"] = resolved_model
 
@@ -408,7 +408,7 @@ async def video_content(
         proxy_logging_obj.get_proxy_hook("managed_files"),
         user_api_key_dict,
     )
-    resolved_model: Final = video_model_group(decoded, llm_router)
+    resolved_model: Final = await authorized_video_model(decoded, llm_router, user_api_key_dict)
     if resolved_model:
         data["model"] = resolved_model
     # Process request using ProxyBaseLLMRequestProcessing
@@ -522,7 +522,7 @@ async def video_remix(
         proxy_logging_obj.get_proxy_hook("managed_files"),
         user_api_key_dict,
     )
-    resolved_model: Final = video_model_group(decoded, llm_router)
+    resolved_model: Final = await authorized_video_model(decoded, llm_router, user_api_key_dict)
     if resolved_model:
         data["model"] = resolved_model
 
@@ -861,7 +861,7 @@ async def video_edit(
             proxy_logging_obj.get_proxy_hook("managed_files"),
             user_api_key_dict,
         )
-    resolved_model: Final = video_model_group(decoded, llm_router)
+    resolved_model: Final = await authorized_video_model(decoded, llm_router, user_api_key_dict)
     if resolved_model:
         data["model"] = resolved_model
 
@@ -976,7 +976,7 @@ async def video_extension(
         proxy_logging_obj.get_proxy_hook("managed_files"),
         user_api_key_dict,
     )
-    resolved_model: Final = video_model_group(decoded, llm_router)
+    resolved_model: Final = await authorized_video_model(decoded, llm_router, user_api_key_dict)
     if resolved_model:
         data["model"] = resolved_model
 

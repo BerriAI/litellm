@@ -153,7 +153,7 @@ async def test_vector_store_file_list_resolves_managed_ids_and_cursors(empty_fir
     }
     expected_response: Final[VectorStoreFileListResponse] = {
         **provider_response,
-        "data": [{**managed_file, "id": managed_file_id}],
+        "data": [{**managed_file, "id": managed_file_id, "attributes": {} if empty_first else managed_file["attributes"]}],
         "first_id": managed_file_id,
         "last_id": managed_file_id,
     }
@@ -204,8 +204,14 @@ async def test_vector_store_file_list_resolves_managed_ids_and_cursors(empty_fir
         side_effect=[{}, {provider_file_id: managed_file_id}] if empty_first else [{provider_file_id: managed_file_id}]
     )
     managed_files_obj.get_unified_file_ids_for_provider_file_ids = resolver
+
+    async def redact_page(*, data, response, user_api_key_dict):
+        assert data["after"] == "file-earlier"
+        return {**response, "data": [{**row, "attributes": {}} for row in response["data"]]}
+
     proxy_logging_obj = MagicMock()
     proxy_logging_obj.get_proxy_hook.return_value = managed_files_obj
+    proxy_logging_obj.post_call_success_hook = redact_page
     fastapi_response: Final = Response()
 
     with (

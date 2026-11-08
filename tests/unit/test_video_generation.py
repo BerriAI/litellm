@@ -17,6 +17,7 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.gemini.videos.transformation import GeminiVideoConfig
 from litellm.llms.openai.videos.transformation import OpenAIVideoConfig
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.videos.main import VideoObject, VideoResponse
 from litellm.videos import main as videos_main
 from litellm.videos.main import (
@@ -1513,7 +1514,7 @@ class TestVideoEndpointsProxyLitellmParams:
             initialize,
             router,
         )
-        from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+        from litellm.proxy._types import LitellmUserRoles
         from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
         from litellm.proxy.video_endpoints.endpoints import router as video_router
 
@@ -2231,7 +2232,7 @@ def video_proxy_test_client():
     from fastapi.testclient import TestClient
 
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy._types import LitellmUserRoles
     from litellm.proxy.video_endpoints.endpoints import router as video_router
 
     app = FastAPI()
@@ -2432,7 +2433,7 @@ async def test_edit_and_extension_read_cached_body_after_auth_consumes_stream(
     from starlette.requests import Request
 
     import litellm.proxy.video_endpoints.endpoints as endpoints
-    from litellm.proxy._types import LitellmUserRoles, ProxyException, UserAPIKeyAuth
+    from litellm.proxy._types import LitellmUserRoles, ProxyException
     from litellm.proxy.common_utils.http_parsing_utils import read_request_body
 
     body = urlencode(form).encode()
