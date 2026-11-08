@@ -27,7 +27,9 @@ from litellm.caching.llm_caching_handler import LLMClientCache
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy import proxy_server
 from litellm.proxy._types import LiteLLM_ProxyModelTable
+from litellm.proxy.agent_endpoints import agent_registry
 from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
+from litellm.types.agents import AgentResponse
 from litellm.utils import _invalidate_model_cost_lowercase_map
 
 from .conftest import normalize, route_entry_points_to_stubs  # type: ignore[import-not-found]
@@ -381,6 +383,66 @@ def test_saved_model_pages_preserve_database_totals(
     assert first.json()["total_pages"] == second.json()["total_pages"] == 2
     assert [model["model_info"]["id"] for model in first.json()["data"]] == [row.model_id for row in rows[:50]]
     assert [model["model_info"]["id"] for model in second.json()["data"]] == [row.model_id for row in rows[50:]]
+
+
+@pytest.mark.parametrize("blocked", (None, False, True))
+@pytest.mark.parametrize("agent_present", (False, True))
+def test_hidden_agents_do_not_inflate_saved_model_totals(
+    client: TestClient,
+    auth_as: Callable[..., AbstractContextManager[object]],
+    monkeypatch: pytest.MonkeyPatch,
+    mock_prisma: MagicMock,
+    blocked: bool | None,
+    agent_present: bool,
+) -> None:
+    registry: Final = agent_registry.AgentRegistry()
+    if agent_present:
+        registry.register_agent(
+            AgentResponse(
+                agent_id="saved-agent",
+                agent_name="saved-agent",
+                agent_card_params={"url": "https://agent.test"},
+                litellm_params=None,
+                created_at=None,
+                updated_at=None,
+                created_by=None,
+            )
+        )
+    monkeypatch.setattr(agent_registry, "global_agent_registry", registry)
+    monkeypatch.setattr(proxy_server, "llm_router", litellm.Router(model_list=[]))
+    monkeypatch.setattr(proxy_server, "prisma_client", mock_prisma)
+    mock_prisma.db.litellm_proxymodeltable.count.return_value = 0
+    mock_prisma.db.litellm_proxymodeltable.find_many.return_value = []
+    with auth_as(object_permission={"object_permission_id": "saved-permission", "agents": ["saved-agent"]}):
+        response: Final = client.get(
+            "/v2/model/info", params={} if blocked is None else {"blocked": str(blocked).lower()}
+        )
+    expected: Final = (
+        [
+            {
+                "model_name": "a2a/saved-agent",
+                "litellm_params": {"model": "a2a/saved-agent", "custom_llm_provider": "a2a"},
+                "model_info": {
+                    "id": "saved-agent",
+                    "mode": "chat",
+                    "db_model": True,
+                    "created_by": None,
+                    "created_at": None,
+                    "updated_at": None,
+                },
+            }
+        ]
+        if agent_present and blocked is not True
+        else []
+    )
+    assert response.status_code == 200, response.text
+    assert response.json() == {
+        "data": expected,
+        "total_count": len(expected),
+        "current_page": 1,
+        "total_pages": len(expected),
+        "size": 50,
+    }
 
 
 def test_v2_model_info_in_openapi_schema():

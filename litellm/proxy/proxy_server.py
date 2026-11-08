@@ -17971,7 +17971,10 @@ async def model_info_v2(
         user_api_key_dict=user_api_key_dict,
     )
 
-    added_agents_count: Final = len(all_models) - before_agents_count
+    added_agents_count: Final = sum(
+        _matches_model_info_filters(m, exclude_auto_routers, access_group, wildcard_only, blocked)
+        for m in all_models[before_agents_count:]
+    )
 
     # `is True` because direct-call tests bypass FastAPI, so the Query default arrives as a
     # truthy sentinel object rather than False.
