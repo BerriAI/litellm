@@ -150,12 +150,12 @@ class TestNoneLevelPolarity:
 
     def test_none_stays_opt_out_on_an_azure_model_outside_the_gpt_5_family(self):
         """AzureOpenAIGPT5Config is selected by is_model_gpt_5_model, so an azure o-series or
-        anthropic deployment never reaches the gate that refuses none and must keep the level."""
+        anthropic deployment never reaches the gate that refuses none unless its row turns none off."""
         resolved = resolve_supported_reasoning_efforts(
             {
                 "supports_reasoning": True,
                 "litellm_provider": "azure",
-                "key": "azure/o3",
+                "key": "azure/o-series-deployment",
                 "supports_max_reasoning_effort": True,
             },
             deployment_is_mapped=True,

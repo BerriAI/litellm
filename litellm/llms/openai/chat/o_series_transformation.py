@@ -19,12 +19,17 @@ from litellm import verbose_logger
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionUserMessage
 from litellm.utils import (
+    is_explicitly_disabled_factory,
     supports_function_calling,
     supports_parallel_function_calling,
     supports_response_schema,
     supports_system_messages,
 )
 
+from .gpt_5_transformation import (
+    get_effort_level,  # pyright: ignore[reportUnknownVariableType]  # its signature takes the bare reasoning_effort dict
+    unsupported_reasoning_effort_message,
+)
 from .gpt_transformation import OpenAIGPTConfig
 
 
@@ -95,6 +100,19 @@ class OpenAIOSeriesConfig(OpenAIGPTConfig):
         model: str,
         drop_params: bool,
     ):
+        requested_effort: Final = get_effort_level(
+            non_default_params.get("reasoning_effort") or optional_params.get("reasoning_effort")  # pyright: ignore[reportUnknownMemberType]  # the request params arrive as a bare dict
+        )
+        if requested_effort is not None and is_explicitly_disabled_factory(
+            model=model, custom_llm_provider=None, key=f"supports_{requested_effort}_reasoning_effort"
+        ):
+            if not (litellm.drop_params or drop_params):
+                raise litellm.utils.UnsupportedParamsError(
+                    message=unsupported_reasoning_effort_message("reasoning_effort", requested_effort, model),
+                    status_code=400,
+                )
+            non_default_params.pop("reasoning_effort", None)  # pyright: ignore[reportUnknownMemberType]  # the request params arrive as a bare dict
+            optional_params.pop("reasoning_effort", None)  # pyright: ignore[reportUnknownMemberType]  # the request params arrive as a bare dict
         if "max_tokens" in non_default_params:
             optional_params["max_completion_tokens"] = non_default_params.pop("max_tokens")
         if "temperature" in non_default_params:
