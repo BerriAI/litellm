@@ -245,7 +245,7 @@ def _validated_client_headers(client_headers: object) -> Mapping[str, str] | Non
     try:
         return _FORWARDED_HEADERS.validate_python(client_headers)
     except ValidationError as exc:
-        verbose_logger.debug("Ignoring forwarded `headers` that are not a str-to-str mapping: %s", exc)
+        verbose_logger.debug("Ignoring invalid forwarded headers (%d validation errors)", exc.error_count())
         return None
 
 

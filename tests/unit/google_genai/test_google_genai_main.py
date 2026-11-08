@@ -643,6 +643,23 @@ def test_merge_client_forwarded_headers(
 
     assert merged == expected
     assert merged is None or (merged is not extra_headers and merged is not client_headers)
+def test_merge_client_forwarded_headers_validation_log_omits_rejected_values(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    import logging
+
+    from litellm._logging import verbose_logger
+    from litellm.google_genai.main import _merge_client_forwarded_headers
+
+    with caplog.at_level(logging.DEBUG, logger=verbose_logger.name):
+        merged: Final = _merge_client_forwarded_headers(
+            {"x-b": "2"},
+            {"api-key": ["opaque-provider-secret"]},
+        )
+
+    assert merged == {"x-b": "2"}
+    assert "Ignoring invalid forwarded headers (1 validation errors)" in caplog.text
+    assert "opaque-provider-secret" not in caplog.text
 
 
 @pytest.mark.asyncio
