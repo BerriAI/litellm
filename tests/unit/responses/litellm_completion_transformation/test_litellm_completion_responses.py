@@ -3188,6 +3188,27 @@ class TestToolTransformation:
         assert result["gamma__run"] == ("gamma", "run")
         assert "run" not in result
 
+    def test_namespace_tool_name_map_keeps_the_object_tools_beside_a_malformed_entry(self):
+        tools = LiteLLMCompletionResponsesConfig.request_tools(
+            {
+                "tools": [
+                    {
+                        "type": "namespace",
+                        "name": "ns",
+                        "tools": [{"type": "function", "name": "a"}, "junk"],
+                    },
+                    "junk",
+                    {"type": "function", "name": "top", "defer_loading": True},
+                ]
+            }
+        )
+
+        assert LiteLLMCompletionResponsesConfig.namespace_tool_name_map(tools) == {
+            "ns__a": ("ns", "a"),
+            "a": ("ns", "a"),
+            "top": ("top", "top"),
+        }
+
     def test_namespace_tool_name_map_drops_top_level_function_collision(self):
         tools = [
             {"type": "function", "name": "run", "parameters": {"type": "object"}},
@@ -4937,7 +4958,8 @@ class TestEnsureOutputItemContentPartAdded:
             iterator._responses_namespace_tool_call_fields("admin__run")
             iterator._responses_namespace_tool_call_fields("admin__run")
 
-        namespace_map.assert_called_once_with(request["tools"])
+        namespace_map.assert_called_once()
+        assert namespace_map.call_args.args[0] == tuple(request["tools"])
 
     def test_emit_terminal_event_uses_stream_finish_reason(self):
         """
@@ -5339,11 +5361,21 @@ class TestHostedWebSearchReplay:
         ("server_tool_use", "expected_input"),
         (
             (
-                {"type": "server_tool_use", "id": "srvtoolu_01Pending", "name": "web_fetch", "input": {"url": _FETCHED_URL}},
+                {
+                    "type": "server_tool_use",
+                    "id": "srvtoolu_01Pending",
+                    "name": "web_fetch",
+                    "input": {"url": _FETCHED_URL},
+                },
                 {"url": _FETCHED_URL},
             ),
             (
-                {"type": "server_tool_use", "id": "srvtoolu_01Pending", "name": "web_search", "input": {"query": "python"}},
+                {
+                    "type": "server_tool_use",
+                    "id": "srvtoolu_01Pending",
+                    "name": "web_search",
+                    "input": {"query": "python"},
+                },
                 {"query": "python"},
             ),
         ),
@@ -5372,7 +5404,12 @@ class TestHostedWebSearchReplay:
 
         assert [turn["role"] for turn in anthropic_turns] == ["user", "assistant", "user"]
         assert [block for block in anthropic_turns[1]["content"] if block["type"] != "text"] == [
-            {"type": "server_tool_use", "id": "srvtoolu_01Pending", "name": server_tool_use["name"], "input": expected_input},
+            {
+                "type": "server_tool_use",
+                "id": "srvtoolu_01Pending",
+                "name": server_tool_use["name"],
+                "input": expected_input,
+            },
             {"type": "tool_use", "id": "toolu_01Weather", "name": "get_weather", "input": {"city": "Paris"}},
         ]
         assert [(block["type"], block["tool_use_id"]) for block in anthropic_turns[2]["content"]] == [

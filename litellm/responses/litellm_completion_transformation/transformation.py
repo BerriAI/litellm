@@ -279,7 +279,6 @@ TOOL_CALLS_CACHE: Final = InMemoryCache()
 _ANY_KEY_DICT_ADAPTER: Final = TypeAdapter(dict[object, object])
 _STR_KEY_DICT_ADAPTER: Final = TypeAdapter(dict[str, object])
 _OBJECT_LIST_ADAPTER: Final = TypeAdapter(list[object])
-_RESPONSE_TOOLS_ADAPTER: Final = TypeAdapter(list[dict[str, object]])
 _AUDIO_PART_ADAPTER: Final = TypeAdapter(ChatCompletionAudioObject)
 _IMAGE_URL_ADAPTER: Final = TypeAdapter(ChatCompletionImageUrlObject)
 _FILE_PART_ADAPTER: Final = TypeAdapter(_ResponsesFilePart)
@@ -290,6 +289,21 @@ _CACHED_CONTENT_ADAPTER: Final = TypeAdapter(ChatCompletionCachedContent)
 _DICT_ITEMS_LIST_ADAPTER: Final = TypeAdapter(list[dict[object, object]])
 _TEXT_ADAPTER: Final = TypeAdapter(str)
 _RESPONSES_API_TOOL_CHOICE_ADAPTER: Final = TypeAdapter(ToolChoice)
+
+
+def _tool_mapping(entry: object) -> Mapping[str, object] | None:
+    try:
+        return _STR_KEY_DICT_ADAPTER.validate_python(entry)
+    except ValidationError:
+        return None
+
+
+def _tool_mappings(raw_tools: object) -> tuple[Mapping[str, object], ...]:
+    try:
+        entries: Final = _OBJECT_LIST_ADAPTER.validate_python(raw_tools)
+    except ValidationError:
+        return ()
+    return tuple(tool for entry in entries if (tool := _tool_mapping(entry)) is not None)
 
 
 def _validate_responses_media(adapter: TypeAdapter[_MediaT], value: object) -> _MediaT:
@@ -1429,7 +1443,7 @@ class LiteLLMCompletionResponsesConfig:
             replay_reasoning=replay_reasoning,
             native_compaction=native_compaction,
             self_named_namespace_members=LiteLLMCompletionResponsesConfig.self_named_namespace_members(
-                LiteLLMCompletionResponsesConfig._request_tools(responses_api_request)
+                LiteLLMCompletionResponsesConfig.request_tools(responses_api_request)
             ),
         )
         try:
@@ -2702,9 +2716,6 @@ class LiteLLMCompletionResponsesConfig:
             raw_arguments = json.dumps({"content": raw_input}) if raw_input else ""
         raw_name: Final = function_call.get("name") or ""
         namespace: Final = function_call.get("namespace") or ""
-        # namespace == name is the deferred top-level shape: the chat tool is called by its bare name, so
-        # joining would send "<name>__<name>" upstream. Stored history replays without the request's tools,
-        # so only a namespace known to hold a member of its own name still joins.
         deferred_top_level: Final = namespace == raw_name and raw_name not in self_named_namespace_members
         qualify: Final = bool(namespace) and not deferred_top_level and function_call.get("type") != "custom_tool_call"
         tool_call_id: Final = function_call.get("call_id") or function_call.get("id") or ""
@@ -3092,23 +3103,18 @@ class LiteLLMCompletionResponsesConfig:
         return result
 
     @staticmethod
-    def _request_tools(responses_api_request: Mapping[str, object] | None) -> ResponseTools:
-        """The request's tools. A ``tools`` value that is not a list of objects reads as no tools."""
+    def request_tools(responses_api_request: Mapping[str, object] | None) -> ResponseTools:
+        """The request's tools, keeping the entries that are objects."""
         raw_tools: Final = responses_api_request.get("tools") if responses_api_request is not None else None
-        if raw_tools is None:
-            return None
-        try:
-            return tuple(_RESPONSE_TOOLS_ADAPTER.validate_python(raw_tools))
-        except ValidationError:
-            return None
+        return _tool_mappings(raw_tools) if raw_tools is not None else None
 
     @staticmethod
     def _namespace_member_names(tool: Mapping[str, object]) -> tuple[str, ...]:
-        try:
-            members: Final = _RESPONSE_TOOLS_ADAPTER.validate_python(tool.get("tools"))
-        except ValidationError:
-            return ()
-        return tuple(str(member.get("name") or "") for member in members if member.get("type") == "function")
+        return tuple(
+            str(member.get("name") or "")
+            for member in _tool_mappings(tool.get("tools"))
+            if member.get("type") == "function"
+        )
 
     @staticmethod
     def self_named_namespace_members(tools: ResponseTools) -> frozenset[str]:
@@ -3166,9 +3172,7 @@ class LiteLLMCompletionResponsesConfig:
         qualified_entries: Final = tuple(
             (f"{namespace}__{tool_name}", (namespace, tool_name)) for namespace, tool_name in namespace_entries
         )
-        # A deferred top-level function comes back on the wire with namespace == name (the shape the
-        # OpenAI Agents SDK reserves for it, `agents/_tool_identity.py`). Without it the SDK cannot
-        # match the call to its tool and fails with "Tool <name> not found".
+        # The OpenAI Agents SDK reserves namespace == name for a deferred top-level tool (agents/_tool_identity.py)
         deferred_top_level_entries: Final = tuple(
             (name, (name, name)) for name in LiteLLMCompletionResponsesConfig.deferred_top_level_names(tools)
         )
@@ -3206,7 +3210,7 @@ class LiteLLMCompletionResponsesConfig:
                         value=tool_call,
                     )
 
-        request_tools: Final = LiteLLMCompletionResponsesConfig._request_tools(responses_api_request)
+        request_tools: Final = LiteLLMCompletionResponsesConfig.request_tools(responses_api_request)
         custom_tool_names: Final = extract_custom_tool_names(request_tools)
         namespace_tool_names: Final = LiteLLMCompletionResponsesConfig.namespace_tool_name_map(request_tools)
         tool_search: Final = tool_search_routing(request_tools)
