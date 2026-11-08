@@ -1,10 +1,11 @@
+import asyncio
 from datetime import date, datetime, timedelta, timezone
 from typing import Final
 
 import pytest
 from integration._support.actors import ManagementDatabase
 
-from litellm.repositories.usage_alert_health import UsageAlertHealthRepository
+from litellm.repositories.usage_alert_health import UsageAlertFlushRecorder, UsageAlertHealthRepository
 from litellm.repositories.usage_alerts import UsageAlertsRepository
 from litellm.types.proxy.usage_alerts import UsageAlertRuleInput
 
@@ -53,3 +54,17 @@ async def test_freshness_timestamps_use_the_real_prisma_parameter_types(db: Mana
             start.replace(tzinfo=None),
             (start + timedelta(days=1, hours=1)).replace(tzinfo=None),
         )
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_freshness_lock_cannot_stall_committed_spend(db: ManagementDatabase) -> None:
+    recorder: Final = UsageAlertFlushRecorder()
+    async with db.prisma.writer_db.tx(timeout=timedelta(seconds=10)) as transaction:
+        await transaction.execute_raw('LOCK TABLE "LiteLLM_UsageAlertFlush" IN ACCESS EXCLUSIVE MODE')
+        await asyncio.wait_for(recorder.record(db.prisma, "user"), timeout=2)
+        await asyncio.wait_for(recorder.record(db.prisma, "user"), timeout=0.1)
+    await UsageAlertFlushRecorder().record(db.prisma, "user")
+    rows: Final = await db.prisma.writer_db.query_raw(
+        "SELECT source FROM \"LiteLLM_UsageAlertFlush\" WHERE source='user' AND hour=date_trunc('hour',CURRENT_TIMESTAMP AT TIME ZONE 'UTC')"
+    )
+    assert rows == [{"source": "user"}]
