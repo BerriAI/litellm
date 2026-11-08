@@ -574,7 +574,7 @@ async def test_a_budget_hold_on_the_enforcement_counters_never_shows_in_the_gaug
     }
 
 
-def _failed_request(metadata: dict) -> dict:
+def _failed_request(metadata: dict, response_cost: float = 0.0) -> dict:
     return {
         "model": "openai/gpt-5.4-nano",
         "litellm_params": {"metadata": metadata},
@@ -585,6 +585,7 @@ def _failed_request(metadata: dict) -> dict:
             "api_base": "https://api.openai.com",
             "custom_llm_provider": "openai",
             "status": "failure",
+            "response_cost": response_cost,
             "request_tags": [],
             "hidden_params": {"litellm_overhead_time_ms": None, "additional_headers": None},
             "metadata": {
@@ -644,6 +645,27 @@ async def test_failed_request_without_a_carried_org_reads_no_committed_org_spend
     await prometheus_logger.async_log_failure_event(_failed_request(metadata), None, KEY_RESET_AT, KEY_RESET_AT)
 
     prometheus_logger.litellm_remaining_org_budget_metric.labels().set.assert_called_once_with(pytest.approx(460.0))
+
+
+@pytest.mark.asyncio
+async def test_failed_request_that_was_charged_counts_its_own_charge_while_it_waits_in_the_pipeline(
+    prometheus_logger, getters, redis_spend_counters
+):
+    """A stream cut after 40 events still costs 2.0, and that charge is queued when the failure logs."""
+    _stub_gauges(prometheus_logger)
+    _store_committed(redis_spend_counters, key=5.0, team=32.0, user=10.0, org=62.0)
+
+    with _request_scope():
+        await _declare_the_own_two_dollar_charge()
+        await prometheus_logger.async_log_failure_event(
+            _failed_request(_request_metadata(_token_committed_at_auth()), response_cost=2.0),
+            None,
+            KEY_RESET_AT,
+            KEY_RESET_AT,
+        )
+        await flush_post_call_redis_batches()
+
+    prometheus_logger.litellm_remaining_org_budget_metric.labels().set.assert_called_once_with(pytest.approx(436.0))
 
 
 @pytest.mark.asyncio

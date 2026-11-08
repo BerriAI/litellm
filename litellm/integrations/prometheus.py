@@ -284,6 +284,11 @@ def _logged_fields(value: object) -> Mapping[str, object]:
         return _NO_LOGGED_FIELDS
 
 
+def _response_cost_of(logged: Mapping[str, object]) -> float:
+    cost: Final = logged.get("response_cost")
+    return float(cost) if isinstance(cost, (int, float)) else 0.0
+
+
 _GOOGLE_PASS_THROUGH_PROVIDERS: Final = frozenset(
     (litellm.LlmProviders.GEMINI.value, litellm.LlmProviders.VERTEX_AI.value)
 )
@@ -449,6 +454,17 @@ def _committed_spend_before_request(
         user=before(at_auth.user, now.user),
         org=before(at_auth.org, now.org),
         end_user=before(at_auth.end_user, now.end_user),
+    )
+
+
+async def _committed_spend_without_own_charge(
+    counter_keys: EntitySpendCounterKeys, at_auth: CommittedBudgetSpend | None, response_cost: float
+) -> CommittedBudgetSpend:
+    own_charge_before_read: Final = _own_charge()
+    now: Final = await _committed_spend_now(counter_keys)
+    own_charge: Final = own_charge_before_read if _own_charge() == own_charge_before_read else "unknown"
+    return _committed_spend_before_request(
+        at_auth=now if at_auth is None else at_auth, now=now, response_cost=response_cost, own_charge=own_charge
     )
 
 
@@ -2330,9 +2346,8 @@ class PrometheusLogger(CustomLogger):
         budget_metrics_timeout: Final = _get_budget_metrics_per_request_timeout()
 
         async def emit_budget_metrics() -> tuple[object, ...]:
-            own_charge_before_read: Final = _own_charge()
-            committed_now: Final = await _committed_spend_now(
-                _committed_at_auth.counter_keys
+            committed: Final = await _committed_spend_without_own_charge(
+                counter_keys=_committed_at_auth.counter_keys
                 if _row_carries_auth
                 else EntitySpendCounterKeys.of(
                     token=user_api_key,
@@ -2340,14 +2355,9 @@ class PrometheusLogger(CustomLogger):
                     user_id=user_id,
                     org_id=user_api_key_org_id,
                     end_user_id=end_user_id,
-                )
-            )
-            own_charge: Final = own_charge_before_read if _own_charge() == own_charge_before_read else "unknown"
-            committed: Final = _committed_spend_before_request(
-                at_auth=_committed_at_auth if _row_carries_auth else committed_now,
-                now=committed_now,
+                ),
+                at_auth=_committed_at_auth if _row_carries_auth else None,
                 response_cost=response_cost,
-                own_charge=own_charge,
             )
             return await asyncio.gather(
                 self._set_api_key_budget_metrics_after_api_request(
@@ -2918,16 +2928,15 @@ class PrometheusLogger(CustomLogger):
             )
             failure_org_alias: Final = failure_metadata.get("user_api_key_org_alias")
             failure_org: Final = OrgBudgetSnapshot.from_metadata(failure_metadata)
-            failure_own_charge: Final = _own_charge()
-            failure_committed: Final = _committed_spend_before_request(
+            failure_cost: Final = _response_cost_of(_LOGGED_FIELDS.validate_python(standard_logging_payload))
+            failure_committed: Final = await _committed_spend_without_own_charge(
+                counter_keys=_budgeted_org_counter(user_api_key_org_id, failure_org),
                 at_auth=committed_budget_spend_from_metadata(failure_metadata),
-                now=await _committed_spend_now(_budgeted_org_counter(user_api_key_org_id, failure_org)),
-                response_cost=0,
-                own_charge=failure_own_charge,
+                response_cost=failure_cost,
             )
             await self._set_org_budget_metrics_after_api_request(
                 org_id=user_api_key_org_id,
-                response_cost=0,
+                response_cost=failure_cost,
                 carried=failure_org,
                 org_alias=failure_org_alias if isinstance(failure_org_alias, str) else None,
                 committed_spend=failure_committed.org,
