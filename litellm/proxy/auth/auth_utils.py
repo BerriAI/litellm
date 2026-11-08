@@ -2124,7 +2124,7 @@ def _extract_models_from_managed_resource_id(
                 decoded_video: Final = decode_video_id_with_provider(resource_id)
                 _append_model_candidates(
                     candidates=candidates,
-                    value=_video_access_group(decoded_video, llm_router) or decoded_video.get("model_id"),
+                    value=video_access_group(decoded_video, llm_router) or decoded_video.get("model_id"),
                 )
             else:
                 model_id = decode_character_id_with_provider(resource_id).get("model_id")
@@ -2138,7 +2138,9 @@ def _extract_models_from_managed_resource_id(
     return _dedupe_model_candidates(candidates)
 
 
-def _video_access_group(decoded_video: DecodedVideoId, llm_router: Router | None) -> str | None:
+def video_access_group(
+    decoded_video: DecodedVideoId, llm_router: Router | None, *, resolved_model: str | None = None
+) -> str | None:
     """
     The group a key must be allowed to call to use a video: the creating deployment's group, or, while router
     fallbacks skip model access checks, the group whose router fallback created it.
@@ -2146,7 +2148,9 @@ def _video_access_group(decoded_video: DecodedVideoId, llm_router: Router | None
     from litellm.proxy.auth.fallback_model_access import router_fallback_access_check
     from litellm.proxy.video_endpoints.utils import video_model_group
 
-    creating_group: Final = video_model_group(decoded_video, llm_router)
+    creating_group: Final = (
+        resolved_model if resolved_model is not None else video_model_group(decoded_video, llm_router)
+    )
     requested_model: Final = decoded_video.get("requested_model")
     if llm_router is None or creating_group is None or requested_model is None:
         return creating_group

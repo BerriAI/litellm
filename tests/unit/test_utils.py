@@ -6512,6 +6512,34 @@ async def test_wrapper_async_raises_original_exception_even_if_hook_callback_err
 
 
 @pytest.mark.asyncio
+async def test_wrapper_async_lets_a_cancellation_during_the_failure_hook_cancel_the_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    hook_entered: Final = asyncio.Event()
+
+    class HangingLogger(CustomLogger):
+        async def async_post_call_failure_deployment_hook(
+            self, request_data, exception, call_type, fallback_depth=None
+        ):
+            hook_entered.set()
+            await asyncio.Event().wait()
+
+    monkeypatch.setattr(litellm, "callbacks", [HangingLogger()])
+    call: Final = asyncio.create_task(
+        litellm.acompletion(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response=litellm.AuthenticationError(message="bad key", llm_provider="openai", model="gpt-4o-mini"),
+        )
+    )
+    await hook_entered.wait()
+    call.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await call
+
+
+@pytest.mark.asyncio
 async def test_router_fallback_chain_reports_increasing_fallback_depth(monkeypatch: pytest.MonkeyPatch) -> None:
     """Regression: a real Router fallback chain must report fallback_depth=None on the
     first, pre-fallback attempt and fallback_depth=1 on the first fallback hop - the
@@ -6896,41 +6924,6 @@ async def test_router_fallback_not_skipped_when_failure_hook_callback_touches_at
     )
 
     assert response.choices[0].message.content == "fallback worked"
-
-
-@pytest.mark.asyncio
-async def test_wrapper_async_preserves_original_exception_when_hook_await_is_cancelled(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Regression: if the caller's own timeout (e.g. asyncio.wait_for) fires while the
-    failure hook is still being awaited, the real deployment exception must still reach
-    the caller - not get replaced by CancelledError/TimeoutError from the hook's own
-    await getting cancelled."""
-
-    hook_entered: Final = asyncio.Event()
-    hook_released: Final = asyncio.Event()
-
-    class SlowLogger(CustomLogger):
-        async def async_post_call_failure_deployment_hook(
-            self, request_data, exception, call_type, fallback_depth=None
-        ):
-            hook_entered.set()
-            await hook_released.wait()
-
-    monkeypatch.setattr(litellm, "callbacks", [SlowLogger()])
-
-    call: Final = asyncio.create_task(
-        litellm.acompletion(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": "hi"}],
-            mock_response=litellm.AuthenticationError(message="bad key", llm_provider="openai", model="gpt-4o-mini"),
-        )
-    )
-    assert await asyncio.wait_for(hook_entered.wait(), timeout=5)
-    call.cancel()
-
-    with pytest.raises(litellm.AuthenticationError):
-        await call
 
 
 @pytest.mark.asyncio
@@ -8809,7 +8802,8 @@ def test_validate_tool_choice_cursor_format():
         {"type": "invalid"},
         {"type": "function"},
         {"name": "lookup_fruit"},
-        {"type": "file_search"},
+        {"type": "web_search_tool"},
+        {"type": ["web_search"]},
     ],
 )
 def test_validate_tool_choice_invalid_dict_is_a_400(tool_choice):
@@ -8821,6 +8815,24 @@ def test_validate_tool_choice_invalid_dict_is_a_400(tool_choice):
         validate_chat_completion_tool_choice(tool_choice, model=MODEL)
     assert exc_info.value.status_code == 400
     assert exc_info.value.model == MODEL
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+@pytest.mark.parametrize(
+    "tool_choice",
+    [
+        {"type": "web_search"},
+        {"type": "web_search_preview"},
+        {"type": "file_search"},
+        {"type": "tool_search"},
+        {"type": "code_interpreter"},
+        {"type": "mcp", "server_label": "docs", "name": "search"},
+    ],
+    ids=lambda choice: str(choice["type"]),
+)
+def test_validate_tool_choice_forcing_a_hosted_tool_passes_through(tool_choice: dict[str, object]):
+    """Forcing an OpenAI hosted tool is a Responses API choice the bridge sends as is, so validation leaves it alone."""
+    assert validate_chat_completion_tool_choice(tool_choice, model=MODEL) is tool_choice
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")

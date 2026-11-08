@@ -3141,15 +3141,16 @@ experimental = False
 llm_router: Router | None = None
 llm_model_list: list | None = None
 heuristic_v1_tuning_baselines: Mapping[str, str] | None = None
-# Serializes every model reconcile (ProxyConfig.add_deployment and clear_cache) so the
-# read-modify-write of llm_router above is atomic. Without it, two concurrent model
-# writes each reconcile the router against their OWN db snapshot, and the one holding
-# the older snapshot evicts the deployment the newer one just added -- the db keeps the
-# row, this pod stops serving it. Control-plane only (model create/update/delete and
-# the config-sync tick), never on a completion path, so the serialization is free.
-# Module-level rather than per-ProxyConfig because llm_router is a module global and a
-# second ProxyConfig instance must not get its own independent lock over it.
-MODEL_RECONCILE_LOCK: Final = asyncio.Lock()
+# Serializes every db-to-memory reconcile (ProxyConfig.add_deployment and clear_cache)
+# with every control-plane write to the state those reconciles rebuild: llm_router above
+# and litellm.credential_list. Without it, two concurrent writes each reconcile against
+# their OWN db snapshot, and the one holding the older snapshot evicts the deployment or
+# credential the newer one just added -- the db keeps the row, this pod stops serving it.
+# Control-plane only (model and credential create/update/delete and the config-sync
+# tick), never on a completion path, so the serialization is free. Module-level rather
+# than per-ProxyConfig because llm_router is a module global and a second ProxyConfig
+# instance must not get its own independent lock over it.
+DB_RECONCILE_LOCK: Final = asyncio.Lock()
 general_settings: dict = {}
 _GENERAL_SETTINGS_VIEW: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 
@@ -8923,7 +8924,7 @@ class ProxyConfig:
         - Check if model id's in router already
         - If not, add to router
 
-        Serialized against every other model reconcile by MODEL_RECONCILE_LOCK, because
+        Serialized against every other model reconcile by DB_RECONCILE_LOCK, because
         the work below is a read-modify-write of the shared ``llm_router`` global: it
         reads the db into a snapshot and then makes the router match that snapshot. Two
         of those interleaving is not a lost update but an eviction -- the request whose
@@ -8942,7 +8943,7 @@ class ProxyConfig:
         if not ui_settings_already_synced:
             await sync_ui_settings_to_general_settings(prisma_client)
 
-        async with MODEL_RECONCILE_LOCK:
+        async with DB_RECONCILE_LOCK:
             return await self.add_deployment_locked(prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj)
 
     async def add_deployment_locked(
@@ -8950,7 +8951,7 @@ class ProxyConfig:
         prisma_client: PrismaClient,
         proxy_logging_obj: ProxyLogging,
     ) -> ReconcileOutcome:
-        """add_deployment's body, minus the locking. MODEL_RECONCILE_LOCK MUST already
+        """add_deployment's body, minus the locking. DB_RECONCILE_LOCK MUST already
         be held. Split out for the one caller that has to hold the lock across more than
         this reconcile -- clear_cache, which un-serves every db model before calling it
         and would deadlock on a re-acquire."""
@@ -9899,7 +9900,7 @@ class ProxyConfig:
         immediately, and by the periodic job in store_model_in_db-off deployments. Gated the same
         way as startup, so an admin who excluded search_tools from supported_db_objects opts out.
 
-        Serialized by MODEL_RECONCILE_LOCK for the reason add_deployment documents: the body is a
+        Serialized by DB_RECONCILE_LOCK for the reason add_deployment documents: the body is a
         read-modify-write of the shared ``llm_router`` global, so two of them interleaving lets the
         older snapshot's wholesale assignment land last and restore a tool the newer one deleted.
         The lock belongs here rather than in _init_search_tools_in_db, which _init_non_llm_objects_in_db
@@ -9909,7 +9910,7 @@ class ProxyConfig:
             return
         if prisma_client is None:
             return
-        async with MODEL_RECONCILE_LOCK:
+        async with DB_RECONCILE_LOCK:
             await self._init_search_tools_in_db(prisma_client=prisma_client)
 
     @staticmethod
@@ -16908,7 +16909,7 @@ async def _get_caller_byok_team_scope(
     must have `model_info.team_id` ∈ that set, otherwise they belong to a
     team the caller is not a member of and must be dropped.
     """
-    if user_api_key_dict is None or prisma_client is None:
+    if user_api_key_dict is None:
         return None
     if user_api_key_dict.user_role in (
         LitellmUserRoles.PROXY_ADMIN,
@@ -16917,7 +16918,7 @@ async def _get_caller_byok_team_scope(
         return None
     key_team_scope: Final[set[str]] = {user_api_key_dict.team_id} if user_api_key_dict.team_id else set()
     user_id: Final = user_api_key_dict.user_id
-    if user_id is None:
+    if user_id is None or prisma_client is None:
         return key_team_scope
     try:
         user_row: Final = await UserRepository(prisma_client).table.find_unique(where={"user_id": user_id})
@@ -17599,7 +17600,7 @@ async def _find_model_by_id(
     llm_router: Router | None,
     prisma_client: PrismaClient | None,
     proxy_config: "ProxyConfig",
-) -> tuple[list, int | None]:
+) -> tuple[Sequence[dict[str, Any]], int | None]:
     """Find a model by its ID and optionally filter by search term."""
     found_model = None
 
@@ -17796,18 +17797,32 @@ async def model_info_v2(
     # Load existing config
     await proxy_config.get_config()
 
+    allowed_team_ids: Final = await _get_caller_byok_team_scope(user_api_key_dict, prisma_client)
+
     # If modelId is provided, search for the specific model
     if modelId is not None:
-        all_models, search_total_count = await _find_model_by_id(
+        matched_models: Final = await _find_model_by_id(
             model_id=modelId,
             search=search,
             llm_router=llm_router,
             prisma_client=prisma_client,
             proxy_config=proxy_config,
         )
+        all_models, search_total_count = (
+            [
+                m
+                for m in matched_models[0]
+                if not _byok_row_outside_caller_teams(m.get("model_info", {}), allowed_team_ids)
+            ],
+            matched_models[1],
+        )
     else:
         # Normal flow when modelId is not provided
-        all_models = copy.deepcopy(llm_router.registry().all())
+        all_models = [
+            m
+            for m in copy.deepcopy(llm_router.registry().all())
+            if not _byok_row_outside_caller_teams(m.get("model_info", {}), allowed_team_ids)
+        ]
 
         if user_model is not None:
             # if user does not use a config.yaml, https://github.com/BerriAI/litellm/issues/2061
@@ -18595,6 +18610,16 @@ async def model_info_v1(
         # user is trying to get specific model from litellm router
         deployment_info: Final = llm_router.registry().deployment(litellm_model_id)
         if deployment_info is None or await _deployment_hidden_by_listing_callbacks(deployment_info, user_api_key_dict):
+            raise HTTPException(
+                status_code=400,
+                detail={"error": f"Model id = {litellm_model_id} not found on litellm proxy"},
+            )
+        if _byok_row_outside_caller_teams(
+            deployment_info.model_info.model_dump(),
+            await _get_caller_byok_team_scope(user_api_key_dict, prisma_client),
+        ):
+            if include_team_models:
+                return _model_info_json_response([])
             raise HTTPException(
                 status_code=400,
                 detail={"error": f"Model id = {litellm_model_id} not found on litellm proxy"},

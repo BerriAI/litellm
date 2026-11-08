@@ -53,6 +53,8 @@ import { cn } from "@/lib/cva.config";
 import UserEnvVarsModal from "./UserEnvVarsModal";
 import { listMCPUserEnvVarStatus } from "@/components/networking";
 
+const ALL_FILTER_VALUE = "all";
+
 export type SortKey = "created_desc" | "updated_desc" | "name_asc" | "health";
 
 const SORT_OPTIONS: { value: SortKey; labelKey: ParseKeys }[] = [
@@ -628,7 +630,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, i
                         <Select
                           items={teamSelectItems}
                           value={selectedTeam}
-                          onValueChange={(v: string | null) => handleTeamChange(v ?? "all")}
+                          onValueChange={(v: string | null) => handleTeamChange(v ?? ALL_FILTER_VALUE)}
                         >
                           <SelectTrigger className="w-55" aria-label={t("mcpServers.servers.filters.team.label")}>
                             <SelectValue />
@@ -663,7 +665,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, i
                         <Select
                           items={accessGroupSelectItems}
                           value={selectedMcpAccessGroup}
-                          onValueChange={(v: string | null) => handleMcpAccessGroupChange(v ?? "all")}
+                          onValueChange={(v: string | null) => handleMcpAccessGroupChange(v ?? ALL_FILTER_VALUE)}
                         >
                           <SelectTrigger
                             className="w-55"
