@@ -110,7 +110,8 @@ async def _report(
 ) -> None:
     backlog: Final = await repository.backlog()
     record_backlog(backlog, seconds)
-    if writer.accounting_storage_checks.due():
+    interval: Final = float(os.environ.get("LITELLM_ACCOUNTING_DELIVERY_CHECK_INTERVAL_SECONDS", "900"))
+    if writer.accounting_storage_checks.due(interval):
         storage: Final = await repository.storage()
         record_storage(storage)
         if storage.batch_count >= int(
@@ -120,7 +121,7 @@ async def _report(
                 proxy_logging_obj,
                 message=f"Accounting delivery storage requires review. Retained batches={storage.batch_count}, table bytes={storage.table_bytes}.",
             )
-    if backlog.oldest_pending_seconds > 300 and writer.accounting_delay_alerts.due():
+    if backlog.oldest_pending_seconds > 300 and writer.accounting_delay_alerts.due(interval):
         await _alert(
             proxy_logging_obj,
             message=f"Accounting deliveries are delayed. Pending={backlog.pending_count}, oldest={backlog.oldest_pending_seconds:.0f}s.",

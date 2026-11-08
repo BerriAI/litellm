@@ -149,7 +149,6 @@ async def test_worker_checks_storage_and_repeats_delay_alerts_once_per_interval(
 
     monkeypatch.setenv("DATABASE_URL", parity_database)
     monkeypatch.setenv("LITELLM_ACCOUNTING_DELIVERY_ALERT_BYTES", "1")
-    monkeypatch.delenv("LITELLM_ACCOUNTING_DELIVERY_CHECK_INTERVAL_SECONDS", raising=False)
     with psycopg.connect(parity_database, autocommit=True) as connection:
         connection.execute(
             'INSERT INTO "LiteLLM_SpendLogDelivery" '
@@ -161,6 +160,7 @@ async def test_worker_checks_storage_and_repeats_delay_alerts_once_per_interval(
     clock: Final = _Clock()
     writer: Final = DBSpendUpdateWriter(accounting_clock=clock)
     alerts: Final = _Alerts()
+    monkeypatch.setenv("LITELLM_ACCOUNTING_DELIVERY_CHECK_INTERVAL_SECONDS", "100")
 
     async def flush_at(moment: float) -> tuple[str, ...]:
         clock.now = moment
@@ -176,8 +176,8 @@ async def test_worker_checks_storage_and_repeats_delay_alerts_once_per_interval(
                 'INSERT INTO "LiteLLM_SpendLogDelivery" (delivery_id, request_id, accounting_payload, is_batch, state) '
                 "VALUES ('batch', 'batch', '{}'::jsonb, true, 'applied')"
             )
-        within: Final = (await flush_at(10.0), await flush_at(899.0))
-        after: Final = await flush_at(900.0)
+        within: Final = (await flush_at(10.0), await flush_at(99.0))
+        after: Final = await flush_at(100.0)
     finally:
         await client.db.disconnect()
 

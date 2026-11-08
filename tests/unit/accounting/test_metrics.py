@@ -52,11 +52,11 @@ def test_delivery_metrics_are_skipped_when_prometheus_client_is_not_installed(
 
 def test_cadence_is_due_once_per_interval() -> None:
     now = [100.0]
-    cadence = Cadence(900, lambda: now[0])
+    cadence = Cadence(lambda: now[0])
 
     observed = []
     for moment in (100.0, 101.0, 999.9, 1000.0, 1000.0, 1899.0, 1900.0):
         now[0] = moment
-        observed.append(cadence.due())
+        observed.append(cadence.due(900))
 
     assert observed == [True, False, False, True, False, False, True]

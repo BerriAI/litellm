@@ -686,11 +686,8 @@ class DBSpendUpdateWriter:
         accounting_clock: Callable[[], float] = time.monotonic,
     ):
         self.redis_cache = redis_cache
-        accounting_check_seconds: Final = float(
-            os.environ.get("LITELLM_ACCOUNTING_DELIVERY_CHECK_INTERVAL_SECONDS", "900")
-        )
-        self.accounting_storage_checks = Cadence(accounting_check_seconds, accounting_clock)
-        self.accounting_delay_alerts = Cadence(accounting_check_seconds, accounting_clock)
+        self.accounting_storage_checks = Cadence(accounting_clock)
+        self.accounting_delay_alerts = Cadence(accounting_clock)
         self.redis_update_buffer = RedisUpdateBuffer(redis_cache=self.redis_cache)
         self.pod_lock_manager = PodLockManager()
         self.spend_update_queue = SpendUpdateQueue()

@@ -63,16 +63,15 @@ def record_storage(storage: DeliveryStorage) -> None:
 
 
 class Cadence:
-    __slots__ = ("_clock", "_interval_seconds", "_last")
+    __slots__ = ("_clock", "_last")
 
-    def __init__(self, interval_seconds: float, clock: Callable[[], float] = time.monotonic) -> None:
-        self._interval_seconds = interval_seconds
+    def __init__(self, clock: Callable[[], float] = time.monotonic) -> None:
         self._clock = clock
         self._last: float | None = None
 
-    def due(self) -> bool:
+    def due(self, interval_seconds: float) -> bool:
         now: Final = self._clock()
-        if self._last is not None and now - self._last < self._interval_seconds:
+        if self._last is not None and now - self._last < interval_seconds:
             return False
         self._last = now
         return True
