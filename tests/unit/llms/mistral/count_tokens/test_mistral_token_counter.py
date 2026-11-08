@@ -1,5 +1,4 @@
 import json
-from collections.abc import Mapping
 from typing import Final
 from unittest.mock import patch
 
@@ -9,10 +8,8 @@ import respx
 
 import litellm
 from litellm.litellm_core_utils.tool_fields import DropPolicy
-from litellm.llms.mistral.count_tokens.handler import MistralCountTokensHandler
 from litellm.llms.mistral.count_tokens.token_counter import MistralTokenCounter
 from litellm.llms.mistral.count_tokens.transformation import MistralCountTokensConfig
-from litellm.types.utils import TokenCountResponse
 
 COUNT_URL: Final = "https://api.mistral.ai/v1/responses/input_tokens"
 
@@ -434,12 +431,40 @@ async def test_count_tokens_mistral_env_key_takes_precedence_over_generic_litell
 
 
 def test_mistral_config_get_api_key_and_base(monkeypatch: pytest.MonkeyPatch):
+    import litellm
     from litellm.llms.mistral.chat.transformation import MistralConfig
 
+    monkeypatch.setattr(litellm, "api_base", "http://localhost:8000")
     monkeypatch.setenv("MISTRAL_API_KEY", "env-mistral-key")
     monkeypatch.setenv("MISTRAL_API_BASE", "https://custom.mistral.ai")
     assert MistralConfig.get_api_key() == "env-mistral-key"
     assert MistralConfig.get_api_base() == "https://custom.mistral.ai"
+
+
+def test_mistral_azure_key_priority(monkeypatch: pytest.MonkeyPatch):
+    from litellm.llms.mistral.chat.transformation import MistralConfig
+
+    monkeypatch.setenv("MISTRAL_API_KEY", "mistral-public-key")
+    monkeypatch.setenv("MISTRAL_AZURE_API_KEY", "azure-mistral-key")
+
+    config: Final = MistralConfig()
+    # When targeting an Azure base, Azure key takes precedence
+    base, key = config.get_openai_compatible_provider_info(
+        api_base="https://mistral-resource.services.ai.azure.com/models",
+        api_key=None,
+    )
+    assert "azure" in base.lower()
+    assert key == "azure-mistral-key"
+    assert MistralConfig.get_api_key(api_base="https://mistral-resource.services.ai.azure.com/models") == "azure-mistral-key"
+
+    # When targeting standard Mistral, Mistral key takes precedence
+    base_std, key_std = config.get_openai_compatible_provider_info(
+        api_base="https://api.mistral.ai/v1",
+        api_key=None,
+    )
+    assert base_std == "https://api.mistral.ai/v1"
+    assert key_std == "mistral-public-key"
+    assert MistralConfig.get_api_key(api_base="https://api.mistral.ai/v1") == "mistral-public-key"
 
 
 def test_mistral_config_get_models_calls_mistral_endpoint():
@@ -455,4 +480,36 @@ def test_mistral_config_get_models_calls_mistral_endpoint():
     with patch.object(config, "_fetch_model_ids", side_effect=mock_fetch):
         models: Final = config.get_models(api_key="test-key")
         assert models == ["mistral-large-4", "mistral-small-latest"]
+
+
+@pytest.mark.asyncio
+async def test_native_responses_count_dispatches_to_mistral(monkeypatch: pytest.MonkeyPatch):
+    import litellm
+    from litellm.llms.mistral.count_tokens.token_counter import MistralTokenCounter
+    from litellm.proxy.proxy_server import (
+        _native_responses_count,  # pyright: ignore[reportPrivateUsage]  # testing private proxy dispatch helper
+    )
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    counter: Final = MistralTokenCounter()
+    callback: Final = _native_responses_count(
+        provider_counter=counter,
+        custom_llm_provider="mistral",
+        responses_request={"model": "mistral-large-4", "input": "Hello world"},
+        deployment={"litellm_params": {"model": "mistral/mistral-large-4", "api_key": "test-key"}},
+        request_model="mistral-large-4",
+    )
+    assert callback is not None
+
+    with respx.mock:
+        route: Final = respx.post("https://api.mistral.ai/v1/responses/input_tokens").mock(
+            return_value=httpx.Response(200, json={"object": "response.input_tokens", "input_tokens": 5})
+        )
+        result: Final = await callback("mistral-large-4", None)
+        assert result is not None
+        assert getattr(result, "total_tokens", None) == 5
+        assert route.called
+        assert route.calls.last.request.headers["authorization"] == "Bearer test-key"
+        assert json.loads(route.calls.last.request.content) == {"model": "mistral-large-4", "input": "Hello world"}
+
 

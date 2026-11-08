@@ -389,11 +389,17 @@ class MistralConfig(OpenAIGPTConfig):
         )
 
     @staticmethod
-    def get_api_key(api_key: str | None = None) -> str | None:
+    def get_api_key(api_key: str | None = None, api_base: str | None = None) -> str | None:
+        resolved_base: Final = (
+            api_base
+            or get_secret_str("MISTRAL_API_BASE")
+            or get_secret_str("MISTRAL_AZURE_API_BASE")
+        )
+        is_azure: Final = bool(resolved_base and "azure" in resolved_base.lower())
         return (
             api_key
-            or get_secret_str("MISTRAL_API_KEY")
-            or get_secret_str("MISTRAL_AZURE_API_KEY")
+            or (get_secret_str("MISTRAL_AZURE_API_KEY") if is_azure else get_secret_str("MISTRAL_API_KEY"))
+            or (get_secret_str("MISTRAL_API_KEY") if is_azure else get_secret_str("MISTRAL_AZURE_API_KEY"))
             or litellm.api_key
         )
 
@@ -401,7 +407,6 @@ class MistralConfig(OpenAIGPTConfig):
     def get_api_base(api_base: str | None = None) -> str | None:
         return (
             api_base
-            or litellm.api_base
             or get_secret_str("MISTRAL_API_BASE")
             or get_secret_str("MISTRAL_AZURE_API_BASE")
             or "https://api.mistral.ai/v1"
@@ -421,23 +426,22 @@ class MistralConfig(OpenAIGPTConfig):
 
     def _get_openai_compatible_provider_info(self, api_base: str | None, api_key: str | None) -> tuple[str, str | None]:
         # mistral is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.mistral.ai
-        api_base = (
+        resolved_base: Final = (
             api_base
-            or litellm.api_base
             or get_secret_str("MISTRAL_API_BASE")
             or get_secret_str("MISTRAL_AZURE_API_BASE")  # for Azure AI Mistral
             or "https://api.mistral.ai/v1"
         )
 
-        # if api_base does not end with /v1 we add it
-        api_base = ensure_api_route(api_base, "v1")
+        resolved_base_with_v1: Final = ensure_api_route(resolved_base, "v1")
+        is_azure: Final = "azure" in resolved_base_with_v1.lower()
         dynamic_api_key: Final = (
             api_key
-            or get_secret_str("MISTRAL_API_KEY")
-            or get_secret_str("MISTRAL_AZURE_API_KEY")  # for Azure AI Mistral
+            or (get_secret_str("MISTRAL_AZURE_API_KEY") if is_azure else get_secret_str("MISTRAL_API_KEY"))
+            or (get_secret_str("MISTRAL_API_KEY") if is_azure else get_secret_str("MISTRAL_AZURE_API_KEY"))
             or litellm.api_key
         )
-        return api_base, dynamic_api_key
+        return resolved_base_with_v1, dynamic_api_key
 
     # fmt: off
 
