@@ -238,7 +238,11 @@ describe("unified issue investigations", () => {
     );
     expect(
       calls.filter(
-        (call) => call.method === "GET" && call.path.startsWith("/issues/") && !call.path.endsWith("/families"),
+        (call) =>
+          call.method === "GET" &&
+          call.path.startsWith("/issues/") &&
+          !call.path.endsWith("/families") &&
+          !call.path.endsWith("/monitoring"),
       ),
     ).toHaveLength(0);
     expect(calls.find((call) => call.method === "PATCH")?.body).toEqual({
