@@ -368,7 +368,10 @@ def test_the_datadog_llm_failure_log_of_a_stream_that_fails_after_it_opens_match
             route,
             model,
             key=scenario.key(key_alias=failed_open, models=[model]),
-            extra={"stream": True, "messages": [{"role": "user", "content": f"{_MID_STREAM_PROMPT}{uuid.uuid4().hex}"}]},
+            extra={
+                "stream": True,
+                "messages": [{"role": "user", "content": f"{_MID_STREAM_PROMPT}{uuid.uuid4().hex}"}],
+            },
         )
         assert "Overloaded" in mid_stream.text, mid_stream.text
         assert len(rig.wire.drain()) == 2
