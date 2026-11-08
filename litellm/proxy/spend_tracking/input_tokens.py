@@ -49,7 +49,18 @@ TOKENIZE_OFF_EVENT_LOOP_MIN_CHARS: Final = 30_000
 
 _OPENAI_PREFIX: Final = "openai/"
 
-_INPUT_SIZE_FIELDS: Final = ("messages", "prompt", "input", "query", "documents", "tools", "tool_choice")
+_INPUT_SIZE_FIELDS: Final = (
+    "messages",
+    "prompt",
+    "input",
+    "query",
+    "documents",
+    "tools",
+    "tool_choice",
+    "contents",
+    "systemInstruction",
+    "system_instruction",
+)
 
 
 def _approximate_input_size(request_body: Mapping[str, object]) -> int:
@@ -221,6 +232,73 @@ def _served_by_openai(deployment: object) -> bool:
     return served_provider == "openai"
 
 
+def _extract_gemini_text(request_body: Mapping[str, object]) -> str | None:
+    texts: list[str] = []
+
+    sys_inst = request_body.get("systemInstruction") or request_body.get("system_instruction")
+    if isinstance(sys_inst, dict):
+        parts = sys_inst.get("parts")
+        if isinstance(parts, list):
+            for part in parts:
+                if isinstance(part, dict) and isinstance(part.get("text"), str):
+                    texts.append(part["text"])
+        elif isinstance(sys_inst.get("text"), str):
+            texts.append(sys_inst["text"])
+    elif isinstance(sys_inst, str):
+        texts.append(sys_inst)
+
+    tools = request_body.get("tools")
+    if tools is not None:
+        try:
+            texts.append(json.dumps(tools))
+        except Exception:
+            pass
+
+    contents = request_body.get("contents")
+    if isinstance(contents, list):
+        for item in contents:
+            if isinstance(item, dict):
+                parts = item.get("parts")
+                if isinstance(parts, list):
+                    for part in parts:
+                        if not isinstance(part, dict):
+                            continue
+                        if isinstance(part.get("text"), str):
+                            texts.append(part["text"])
+                        elif "functionResponse" in part:
+                            try:
+                                texts.append(json.dumps(part["functionResponse"]))
+                            except Exception:
+                                pass
+                        elif "functionCall" in part:
+                            try:
+                                texts.append(json.dumps(part["functionCall"]))
+                            except Exception:
+                                pass
+                        elif "inlineData" in part or "inline_data" in part or "fileData" in part or "file_data" in part:
+                            return None
+                elif isinstance(item.get("text"), str):
+                    texts.append(item["text"])
+            elif isinstance(item, str):
+                texts.append(item)
+    elif isinstance(contents, dict):
+        parts = contents.get("parts")
+        if isinstance(parts, list):
+            for part in parts:
+                if isinstance(part, dict):
+                    if isinstance(part.get("text"), str):
+                        texts.append(part["text"])
+                    elif "inlineData" in part or "inline_data" in part or "fileData" in part or "file_data" in part:
+                        return None
+        elif isinstance(contents.get("text"), str):
+            texts.append(contents["text"])
+    elif isinstance(contents, str):
+        texts.append(contents)
+
+    combined = " ".join(texts).strip()
+    return combined if combined else None
+
+
 def count_input_tokens_for_model(request_body: dict, model: str) -> int | None:
     try:
         if "messages" in request_body:
@@ -233,6 +311,11 @@ def count_input_tokens_for_model(request_body: dict, model: str) -> int | None:
                 )
             except ValueError:
                 return _count_text_tokens(model=model, text=request_body.get("messages"))
+        if "contents" in request_body:
+            gemini_text: Final = _extract_gemini_text(request_body)
+            if gemini_text is not None:
+                return _count_text_tokens(model=model, text=gemini_text)
+            return None
         if "prompt" in request_body:
             return _count_text_tokens(model=model, text=request_body.get("prompt"))
         if "input" in request_body:

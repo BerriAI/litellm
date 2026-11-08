@@ -280,3 +280,46 @@ def test_a_compaction_item_counts_only_its_summary(model: str) -> None:
     assert count_input_tokens_for_model(request_body=padded_body, model=model) == count_input_tokens_for_model(
         request_body=plain_body, model=model
     )
+
+
+def test_count_input_tokens_for_model_gemini_contents() -> None:
+    body: Final = {
+        "contents": [{"role": "user", "parts": [{"text": "Hello from Gemini Vertex AI passthrough"}]}],
+        "systemInstruction": {"parts": [{"text": "You are a helpful assistant"}]},
+    }
+    tokens: Final = count_input_tokens_for_model(request_body=body, model="gpt-4o")
+    assert tokens is not None
+    assert tokens > 0
+
+
+def test_count_input_tokens_for_model_gemini_function_call() -> None:
+    body: Final = {
+        "contents": [
+            {
+                "role": "model",
+                "parts": [{"functionCall": {"name": "get_weather", "args": {"location": "San Francisco"}}}],
+            },
+            {
+                "role": "user",
+                "parts": [{"functionResponse": {"name": "get_weather", "response": {"temperature": "70F"}}}],
+            },
+        ],
+    }
+    tokens: Final = count_input_tokens_for_model(request_body=body, model="gpt-4o")
+    assert tokens is not None
+    assert tokens > 0
+
+
+def test_count_input_tokens_for_model_gemini_inline_data_returns_none() -> None:
+    body: Final = {
+        "contents": [
+            {
+                "role": "user",
+                "parts": [
+                    {"text": "What is in this image?"},
+                    {"inlineData": {"mimeType": "image/png", "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJ"}},
+                ],
+            }
+        ],
+    }
+    assert count_input_tokens_for_model(request_body=body, model="gpt-4o") is None
