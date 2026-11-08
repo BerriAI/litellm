@@ -415,8 +415,8 @@ class TestResponseAPILoggingUtils:
         assert result.prompt_tokens_details.cache_creation_tokens == 10059
         assert result.prompt_tokens_details.cached_tokens == 0
 
-    @pytest.mark.parametrize("as_model", [False, True])
-    def test_transform_response_api_usage_prices_12h_cache_writes(self, as_model: bool) -> None:
+    @pytest.mark.parametrize("usage_shape", ["dict", "validated_model", "unvalidated_model"])
+    def test_transform_response_api_usage_prices_12h_cache_writes(self, usage_shape: str) -> None:
         usage_data: Final = {
             "input_tokens": 5_000,
             "output_tokens": 0,
@@ -426,7 +426,11 @@ class TestResponseAPILoggingUtils:
                 "cache_write_tokens_details": {"ttl_30m_tokens": 3_000, "ttl_12h_tokens": 2_000},
             },
         }
-        usage_input: Final = ResponseAPIUsage(**usage_data) if as_model else usage_data
+        usage_input: Final = {
+            "dict": usage_data,
+            "validated_model": ResponseAPIUsage(**usage_data),
+            "unvalidated_model": ResponseAPIUsage.model_construct(**usage_data),
+        }[usage_shape]
         usage: Final = ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(usage_input)
         model_info: Final[ModelInfo] = {
             "input_cost_per_token": 1e-6,

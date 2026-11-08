@@ -35,7 +35,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     end_user_cache_key,
     end_user_restricted_registry_cache_key,
 )
-from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity
+from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity, unless_database_fails
 from litellm.proxy.management_endpoints.common_utils import validate_budget_duration
 from litellm.proxy.management_helpers.object_permission_utils import (  # noqa: F401  # legacy module exports
     _set_object_permission,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -437,11 +437,11 @@ async def new_end_user(
                     status_code=422,
                     detail={"error": CommonProxyErrors.no_llm_router.value},
                 )
-            elif data.default_model not in llm_router.get_model_names():
+            elif data.default_model not in llm_router.registry().names():
                 raise HTTPException(
                     status_code=422,
                     detail={
-                        "error": f"Default Model not on proxy. Configure via `/model/new` or config.yaml. Default_model={data.default_model}, proxy_model_names={set(llm_router.get_model_names())}"
+                        "error": f"Default Model not on proxy. Configure via `/model/new` or config.yaml. Default_model={data.default_model}, proxy_model_names={set(llm_router.registry().names())}"
                     },
                 )
 
@@ -522,10 +522,12 @@ async def resolve_customer_daily_activity_scope(
     prisma_client: "PrismaClient",
 ) -> _CustomerDailyActivityScope:
     end_user_table: Final = _typed_table(EndUserRepository(prisma_client))
-    end_user_aliases: Final = (
-        await find_many_in(end_user_table, "user_id", end_user_ids)
+    end_user_aliases: Final = await unless_database_fails(
+        find_many_in(end_user_table, "user_id", end_user_ids)
         if end_user_ids is not None
-        else await end_user_table.find_many(where={})
+        else end_user_table.find_many(where={}),
+        (),
+        "its customer aliases",
     )
     metadata: Final = MappingProxyType({end_user.user_id: {"alias": end_user.alias} for end_user in end_user_aliases})
     return _CustomerDailyActivityScope(end_user_ids, metadata)
