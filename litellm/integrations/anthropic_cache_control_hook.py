@@ -375,7 +375,7 @@ def _builds_anthropic_messages(model: str, custom_llm_provider: str | None) -> b
 
 def _serves_gemini(model: str, custom_llm_provider: str | None) -> bool:
     from litellm.exceptions import BadRequestError
-    from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+    from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider, get_llm_provider
     from litellm.llms.vertex_ai.common_utils import uses_vertex_gemini_api
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
     from litellm.types.utils import LlmProviders
@@ -383,6 +383,8 @@ def _serves_gemini(model: str, custom_llm_provider: str | None) -> bool:
 
     if "gemini" in model.lower():
         return True
+    if declared_authenticating_provider(model, custom_llm_provider) is not None:
+        return False
     try:
         served_model, provider, _, _ = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider)
         chat_config: Final = ProviderConfigManager.get_provider_chat_config(
@@ -771,7 +773,9 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         )
 
         limit_reached = False
-        for point, targeted_role in _points_with_their_target_roles(points, covers_developer):
+        for point, targeted_role in _points_with_their_target_roles(
+            points, covers_developer and any(message["role"] == "developer" for message in messages)
+        ):
             if used_blocks >= max_blocks:
                 limit_reached = True
                 break
