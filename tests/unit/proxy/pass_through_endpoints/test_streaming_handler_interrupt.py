@@ -447,7 +447,7 @@ async def test_chunk_processor_injects_cost_into_openai_passthrough_usage_frame(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("header_value", "cost_expected"), (("true", True), ("1", True), ("false", False), (None, False))
+    ("header_value", "cost_expected"), (("true", True), ("TRUE", True), ("1", False), ("false", False), (None, False))
 )
 async def test_chunk_processor_honors_the_opt_in_header_while_global_flag_is_off(
     monkeypatch: pytest.MonkeyPatch, header_value: str | None, cost_expected: bool

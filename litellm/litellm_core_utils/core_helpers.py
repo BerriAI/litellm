@@ -114,7 +114,6 @@ _Value = TypeVar("_Value")  # rebind-ok: a TypeVar cannot be Final
 
 
 INCLUDE_COST_IN_STREAMING_USAGE_HEADER: Final = "x-litellm-include-cost-in-streaming-usage"
-_TRUE_HEADER_VALUES: Final = frozenset({"true", "1", "yes", "on"})
 
 
 def proxy_request_headers(container: Mapping[str, object] | None) -> Mapping[str, object] | None:
@@ -132,7 +131,7 @@ def stream_cost_injection_requested(request_headers: Mapping[str, object] | None
         (value for name, value in request_headers.items() if name.lower() == INCLUDE_COST_IN_STREAMING_USAGE_HEADER),
         None,
     )
-    return isinstance(header_value, str) and header_value.strip().lower() in _TRUE_HEADER_VALUES
+    return isinstance(header_value, str) and header_value.strip().lower() == "true"
 
 
 def without(
