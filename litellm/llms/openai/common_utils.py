@@ -43,6 +43,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_ssl_configuration,
     http2_enabled,
 )
+from litellm.types.llms.custom_http import VerifyTypes
 
 
 def _is_plain_dict(value: object) -> bool:
@@ -339,6 +340,16 @@ def _is_loop_bound(client_initialization_params: Mapping[str, object]) -> bool:
     return client_initialization_params.get("is_async") is not False
 
 
+def ssl_verify_from_params(litellm_params: Mapping[str, object] | None) -> VerifyTypes | None:
+    """Per-call TLS setting carried on litellm_params. None leaves the global SSL default in place."""
+    if litellm_params is None:
+        return None
+    candidate: Final = litellm_params.get("ssl_verify")
+    if isinstance(candidate, bool | str) or isinstance(candidate, ssl.SSLContext):
+        return candidate
+    return None
+
+
 class BaseOpenAILLM:
     """
     Base class for OpenAI LLMs for getting their httpx clients and SSL verification settings
@@ -420,6 +431,7 @@ class BaseOpenAILLM:
             "organization",
             "api_base",
             "workload_identity_config",
+            "ssl_verify",
         )
         openai_client_fields: Final = (
             BaseOpenAILLM.get_openai_client_initialization_param_fields(client_type=client_type)
@@ -445,8 +457,9 @@ class BaseOpenAILLM:
     @staticmethod
     def _get_async_http_client(
         shared_session: Optional["ClientSession"] = None,
+        ssl_verify: VerifyTypes | None = None,
     ) -> httpx.AsyncClient | DefaultAsyncHttpxClient | None:
-        if litellm.aclient_session is not None:
+        if ssl_verify is None and litellm.aclient_session is not None:
             return litellm.aclient_session
 
         if getattr(litellm, "network_mock", False):
@@ -454,8 +467,7 @@ class BaseOpenAILLM:
 
             return httpx.AsyncClient(transport=MockOpenAITransport())
 
-        # Get unified SSL configuration
-        ssl_config: Final = get_ssl_configuration()
+        ssl_config: Final = get_ssl_configuration(ssl_verify)
         transport: Final = AsyncHTTPHandler.create_async_transport(
             ssl_context=(ssl_config if isinstance(ssl_config, ssl.SSLContext) else None),
             ssl_verify=ssl_config if isinstance(ssl_config, bool) else None,
@@ -475,12 +487,15 @@ class BaseOpenAILLM:
     def get_async_http_client(
         cls,
         shared_session: Optional["ClientSession"] = None,
+        ssl_verify: VerifyTypes | None = None,
     ) -> httpx.AsyncClient | None:
-        return cls._get_async_http_client(shared_session)
+        return cls._get_async_http_client(shared_session, ssl_verify)
 
     @staticmethod
-    def _get_sync_http_client() -> httpx.Client | DefaultHttpxClient | None:
-        if litellm.client_session is not None:
+    def _get_sync_http_client(
+        ssl_verify: VerifyTypes | None = None,
+    ) -> httpx.Client | DefaultHttpxClient | None:
+        if ssl_verify is None and litellm.client_session is not None:
             return litellm.client_session
 
         if getattr(litellm, "network_mock", False):
@@ -488,8 +503,7 @@ class BaseOpenAILLM:
 
             return httpx.Client(transport=MockOpenAITransport())
 
-        # Get unified SSL configuration
-        ssl_config: Final = get_ssl_configuration()
+        ssl_config: Final = get_ssl_configuration(ssl_verify)
 
         return httpx.Client(
             verify=ssl_config,
@@ -499,8 +513,8 @@ class BaseOpenAILLM:
         )
 
     @classmethod
-    def get_sync_http_client(cls) -> httpx.Client | None:
-        return cls._get_sync_http_client()
+    def get_sync_http_client(cls, ssl_verify: VerifyTypes | None = None) -> httpx.Client | None:
+        return cls._get_sync_http_client(ssl_verify)
 
 
 class OpenAICredentials(NamedTuple):
