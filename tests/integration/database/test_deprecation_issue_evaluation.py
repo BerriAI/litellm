@@ -129,7 +129,7 @@ async def test_retirement_issue_http_state_survives_replay_and_reopens_only_for_
         state = {"model": name, "deprecation_date": retirement.isoformat()}
         resolved = gateway.request(
             "PUT",
-            "/alerting/model-deprecations/state",
+            "/alerts/model-deprecations/state",
             {**state, "status": "resolved", "last_seen_date": now.date().isoformat(), "last_seen_requests": 100},
         )
         assert resolved.status_code == 200
@@ -147,7 +147,7 @@ async def test_retirement_issue_http_state_survives_replay_and_reopens_only_for_
         assert gateway.get(path)["status"] == "resolved"
         dismissed = gateway.request("PATCH", path, {"status": "dismissed", "expected_status": "resolved"})
         assert dismissed.status_code == 200
-        assert gateway.get("/alerting/model-deprecations/state", state)["status"] == "dismissed"
+        assert gateway.get("/alerts/model-deprecations/state", state)["status"] == "dismissed"
         await record(now.date(), 110)
         await projector.run(now + timedelta(minutes=20))
         assert gateway.get(path)["status"] == "dismissed"
