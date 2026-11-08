@@ -146,6 +146,7 @@ def _validated_object_list(value: object) -> list[object] | None:
 _MessageT: Final = TypeVar("_MessageT")
 _CacheControlRewrite: TypeAlias = Callable[[object], ChatCompletionCachedContent | None]
 _MARK_CARRYING_MESSAGE_FIELDS: Final = ("content", "tool_calls")
+_REPLAYED_SERVER_TOOL_RESULT_FIELDS: Final = ("web_search_results", "tool_results")
 
 
 def _mark_carrying_blocks(fields: Mapping[str, object]) -> Sequence[object]:
@@ -243,12 +244,23 @@ def _each_cache_control(
     return tuple(itertools.chain.from_iterable(map(cache_controls_of, as_object_list(values) or ())))
 
 
+def _replayed_server_tool_results(fields: Mapping[str, object]) -> tuple[object, ...]:
+    provider_fields: Final = as_str_mapping(fields.get("provider_specific_fields")) or MappingProxyType({})
+    return tuple(
+        itertools.chain.from_iterable(
+            as_object_list(provider_fields.get(key)) or () for key in _REPLAYED_SERVER_TOOL_RESULT_FIELDS
+        )
+    )
+
+
 def _message_cache_controls(message: object) -> tuple[object, ...]:
     fields: Final = as_str_mapping(message)
     if fields is None:
         return ()
     return _own_cache_control(fields) + tuple(
-        itertools.chain.from_iterable(map(_own_cache_control, _mark_carrying_blocks(fields)))
+        itertools.chain.from_iterable(
+            map(_own_cache_control, (*_mark_carrying_blocks(fields), *_replayed_server_tool_results(fields)))
+        )
     )
 
 
@@ -260,8 +272,12 @@ def _tool_cache_controls(tool: object) -> tuple[object, ...]:
 def _request_cache_controls(fields: Mapping[str, object]) -> tuple[object, ...]:
     extra_body: Final = as_str_mapping(fields.get("extra_body")) or MappingProxyType({})
     top_level: Final = extra_body.get("cache_control", fields.get("cache_control"))
-    return (() if top_level is None else (top_level,)) + _each_cache_control(
-        _tool_cache_controls, extra_body["tools"] if "tools" in extra_body else fields.get("tools")
+    return (
+        (() if top_level is None else (top_level,))
+        + _each_cache_control(
+            _tool_cache_controls, extra_body["tools"] if "tools" in extra_body else fields.get("tools")
+        )
+        + _each_cache_control(_message_cache_controls, extra_body.get("messages"))
     )
 
 

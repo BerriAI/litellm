@@ -6276,6 +6276,65 @@ def test_one_hour_developer_mark_follows_the_ttls_of_the_marks_sent_outside_the_
     assert list(kept) == [marked_developer if keeps_the_mark else developer, question]
 
 
+def _server_search_replaying(results_field: str) -> dict[str, object]:
+    return {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {
+                "id": "srvtoolu_backup_rules",
+                "type": "function",
+                "function": {"name": "web_search", "arguments": '{"query": "backup rules"}'},
+            }
+        ],
+        "provider_specific_fields": {
+            results_field: [
+                {
+                    "type": "web_search_tool_result",
+                    "tool_use_id": "srvtoolu_backup_rules",
+                    "content": [],
+                    "cache_control": dict(_ONE_HOUR),
+                }
+            ]
+        },
+    }
+
+
+@pytest.mark.parametrize(
+    ("earlier_turns", "outside_fields"),
+    [
+        pytest.param([_server_search_replaying("web_search_results")], {}, id="replayed_web_search_result"),
+        pytest.param([_server_search_replaying("tool_results")], {}, id="replayed_server_tool_result"),
+        pytest.param(
+            [],
+            {
+                "extra_body": {
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": [{"type": "text", "text": "Which rule covers backups?", "cache_control": dict(_ONE_HOUR)}],
+                        }
+                    ]
+                }
+            },
+            id="envelope_messages",
+        ),
+    ],
+)
+def test_five_minute_developer_mark_is_dropped_before_a_one_hour_mark_the_provider_receives(
+    earlier_turns: list[dict[str, object]], outside_fields: dict[str, object]
+) -> None:
+    developer: Final = {"role": "developer", "content": _DEVELOPER_PREFIX}
+    turns: Final = [*earlier_turns, {"role": "user", "content": "Which rule covers backups?"}]
+
+    kept: Final = developer_messages_within_the_cache_limits(
+        cast(list[AllMessageValues], [{**developer, "cache_control": dict(_FIVE_MINUTES)}, *turns]),
+        MappingProxyType(outside_fields),
+    )
+
+    assert list(kept) == [developer, *turns]
+
+
 def test_system_injection_point_marks_a_developer_prompt_for_openai_prompt_cache_breakpoints(
     respx_mock: respx.MockRouter,
 ) -> None:
