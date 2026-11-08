@@ -140,6 +140,7 @@ import { customBudgetMemberUserIds, shouldPromptMemberBudgetReset } from "./memb
 import { useMemberBudgetReset } from "./useMemberBudgetReset";
 import { fetchClient } from "@/lib/http/api";
 import { BudgetPeriodTooltip } from "@/components/shared/BudgetPeriodTooltip";
+import { codeSamples } from "@/i18n/untranslated/codeSamples";
 
 const UI_MANAGED_METADATA_KEYS: ReadonlySet<string> = new Set([
   "logging",
@@ -1730,7 +1731,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                         {...field}
                         ref={ref}
                         value={typeof value === "string" ? value : ""}
-                        placeholder="example1@test.com, example2@test.com"
+                        placeholder={codeSamples.teams.memberEmails}
                       />
                     )}
                   </FormField>
@@ -2113,7 +2114,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                         ref={ref}
                         value={value ?? ""}
                         rows={4}
-                        placeholder='{"gpt-4": 4096}'
+                        placeholder={codeSamples.models.perModelMaxTokensJson}
                         disabled={!canEditTeamEstimates}
                       />
                     )}
@@ -2408,7 +2409,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                         ref={ref}
                         value={value ?? ""}
                         rows={6}
-                        placeholder='{"namespace": "admin", "mount": "secret", "path_prefix": "litellm"}'
+                        placeholder={codeSamples.teams.vaultConfigJson}
                         disabled={!premiumUser}
                       />
                     )}

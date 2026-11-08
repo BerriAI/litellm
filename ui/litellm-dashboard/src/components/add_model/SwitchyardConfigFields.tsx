@@ -14,6 +14,8 @@ import {
   parseToolSemantics,
   type SwitchyardConfig,
 } from "./switchyard_config";
+import { useTranslation } from "react-i18next";
+import { codeSamples } from "@/i18n/untranslated/codeSamples";
 
 interface Props {
   value: SwitchyardConfig;
@@ -22,6 +24,15 @@ interface Props {
   decisionModels: ModelChoice[];
   onToolSemanticsError: (error: string | null) => void;
 }
+
+const TIERS = ["capable", "efficient"] as const;
+
+const LLM_NUMBER_FIELDS = [
+  ["base_threshold", "addModel.switchyardConfigFields.llmFields.capabilityThreshold"],
+  ["threshold_step", "addModel.switchyardConfigFields.llmFields.thresholdStep"],
+  ["max_output_tokens", "addModel.switchyardConfigFields.llmFields.maxOutputTokens"],
+  ["recent_turn_window", "addModel.switchyardConfigFields.llmFields.recentTurnWindow"],
+] as const;
 
 const isStructured = (instructions: unknown): instructions is Record<string, unknown> =>
   typeof instructions === "object" && instructions !== null;
@@ -35,6 +46,7 @@ export default function SwitchyardConfigFields({
   decisionModels,
   onToolSemanticsError,
 }: Props) {
+  const { t } = useTranslation();
   const id = useId();
   const [toolSemantics, setToolSemantics] = useState(
     value.options.tool_semantics ? JSON.stringify(value.options.tool_semantics, null, 2) : "",
@@ -65,24 +77,24 @@ export default function SwitchyardConfigFields({
       <div className="grid gap-5 md:grid-cols-2">
         <div className="min-w-0 space-y-2">
           <span id={`${id}-heuristic`} className="text-sm font-medium">
-            Heuristic
+            {t("addModel.switchyardConfigFields.heuristic")}
           </span>
           <p
             aria-labelledby={`${id}-heuristic`}
             className="flex min-h-10 items-center rounded-md border bg-muted/30 px-3 py-2 text-sm"
           >
-            Stage Router
+            {t("addModel.switchyardConfigFields.stageRouter")}
           </p>
         </div>
         <div className="min-w-0 space-y-2">
           <label htmlFor={`${id}-bias`} className="text-sm font-medium">
-            Bias
+            {t("addModel.switchyardConfigFields.bias")}
           </label>
           <Select
             value={value.options.picker}
             items={[
-              { value: "efficient_first", label: "Cost-first" },
-              { value: "capable_first", label: "Quality-first (experimental)" },
+              { value: "efficient_first", label: t("addModel.switchyardConfigFields.biasOptions.costFirst") },
+              { value: "capable_first", label: t("addModel.switchyardConfigFields.biasOptions.qualityFirst") },
             ]}
             onValueChange={(picker) =>
               onChange({
@@ -98,29 +110,33 @@ export default function SwitchyardConfigFields({
               <SelectValue className="whitespace-normal break-words" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="efficient_first">Cost-first</SelectItem>
+              <SelectItem value="efficient_first">
+                {t("addModel.switchyardConfigFields.biasOptions.costFirst")}
+              </SelectItem>
               <SelectItem value="capable_first">
-                <span className="whitespace-normal">Quality-first (experimental)</span>
+                <span className="whitespace-normal">
+                  {t("addModel.switchyardConfigFields.biasOptions.qualityFirst")}
+                </span>
               </SelectItem>
             </SelectContent>
           </Select>
           {value.options.picker === "capable_first" && (
-            <p className="text-sm text-muted-foreground">
-              Switchyard has not benchmarked this bias, so it has no calibrated confidence thresholds.
-            </p>
+            <p className="text-sm text-muted-foreground">{t("addModel.switchyardConfigFields.qualityFirstWarning")}</p>
           )}
         </div>
-        {(["capable", "efficient"] as const).map((tier) => (
+        {TIERS.map((tier) => (
           <div key={tier} className="min-w-0 space-y-2">
             <label htmlFor={`${id}-${tier}`} className="text-sm font-medium">
-              {tier === "capable" ? "Capable model" : "Efficient model"}
+              {tier === "capable"
+                ? t("addModel.switchyardConfigFields.capableModel")
+                : t("addModel.switchyardConfigFields.efficientModel")}
             </label>
             <ModelChoiceCombobox
               id={`${id}-${tier}`}
               value={value.models[tier]}
               onChange={(model) => onChange({ ...value, models: { ...value.models, [tier]: model ?? "" } })}
               choices={models}
-              placeholder="Select a model"
+              placeholder={t("addModel.switchyardConfigFields.selectModel")}
               ariaInvalid={undefined}
               ariaDescribedBy={undefined}
             />
@@ -131,10 +147,10 @@ export default function SwitchyardConfigFields({
         <div className="flex items-center justify-between gap-4">
           <div>
             <label htmlFor={`${id}-classifier`} className="text-sm font-medium">
-              Classifier
+              {t("addModel.switchyardConfigFields.classifier")}
             </label>
             <p className="text-sm text-muted-foreground">
-              Ask a judge model when the tool history does not give a confident routing decision.
+              {t("addModel.switchyardConfigFields.classifierDescription")}
             </p>
           </div>
           <Switch
@@ -147,13 +163,13 @@ export default function SwitchyardConfigFields({
           <div className="grid gap-5 md:grid-cols-2">
             <div className="min-w-0 space-y-2">
               <label htmlFor={`${id}-classifier-kind`} className="text-sm font-medium">
-                Classifier type
+                {t("addModel.switchyardConfigFields.classifierType")}
               </label>
               <Select
                 value={classifier.kind}
                 items={[
-                  { value: "llm", label: "LLM judge" },
-                  { value: "decision", label: "Decision model" },
+                  { value: "llm", label: t("addModel.switchyardConfigFields.classifierKinds.llm") },
+                  { value: "decision", label: t("addModel.switchyardConfigFields.classifierKinds.decision") },
                 ]}
                 onValueChange={(kind) => onChange(setClassifierKind(value, kind === "decision" ? "decision" : "llm"))}
               >
@@ -161,21 +177,29 @@ export default function SwitchyardConfigFields({
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="llm">LLM judge</SelectItem>
-                  <SelectItem value="decision">Decision model</SelectItem>
+                  <SelectItem value="llm">{t("addModel.switchyardConfigFields.classifierKinds.llm")}</SelectItem>
+                  <SelectItem value="decision">
+                    {t("addModel.switchyardConfigFields.classifierKinds.decision")}
+                  </SelectItem>
                 </SelectContent>
               </Select>
             </div>
             <div className="min-w-0 space-y-2">
               <label htmlFor={`${id}-judge`} className="text-sm font-medium">
-                {decision ? "Decision model" : "Judge model"}
+                {decision
+                  ? t("addModel.switchyardConfigFields.decisionModel")
+                  : t("addModel.switchyardConfigFields.judgeModel")}
               </label>
               <ModelChoiceCombobox
                 id={`${id}-judge`}
                 value={value.models.judge ?? ""}
                 onChange={(judge) => onChange({ ...value, models: { ...value.models, judge: judge ?? "" } })}
                 choices={decision ? decisionModels : models}
-                placeholder={decision ? "Select a decision model" : "Select a judge model"}
+                placeholder={
+                  decision
+                    ? t("addModel.switchyardConfigFields.selectDecisionModel")
+                    : t("addModel.switchyardConfigFields.selectJudgeModel")
+                }
                 ariaInvalid={undefined}
                 ariaDescribedBy={undefined}
               />
@@ -186,7 +210,7 @@ export default function SwitchyardConfigFields({
       <div className="space-y-3">
         <div className="flex justify-between">
           <span id={`${id}-confidence`} className="text-sm font-medium">
-            Confidence threshold
+            {t("addModel.switchyardConfigFields.confidenceThreshold")}
           </span>
           <span className="text-sm tabular-nums">{stageConfidence(value).toFixed(2)}</span>
         </div>
@@ -204,39 +228,42 @@ export default function SwitchyardConfigFields({
           }
         />
         <p className="text-sm text-muted-foreground">
-          Below this confidence, use {classifier ? "the judge model" : "the bias’s default model"}. Critical errors can
-          still select the capable model.
+          {classifier
+            ? t("addModel.switchyardConfigFields.fallbackToJudge")
+            : t("addModel.switchyardConfigFields.fallbackToDefault")}
         </p>
       </div>
       <details className="rounded-lg border p-4">
-        <summary className="cursor-pointer text-sm font-medium">Advanced settings</summary>
+        <summary className="cursor-pointer text-sm font-medium">
+          {t("addModel.switchyardConfigFields.advancedSettings")}
+        </summary>
         <div className="mt-5 space-y-5">
-          <h3 className="text-sm font-semibold">Stage</h3>
+          <h3 className="text-sm font-semibold">{t("addModel.switchyardConfigFields.sections.stage")}</h3>
           <div className="min-w-0 space-y-2">
-            <label htmlFor={`${id}-recent`}>Recent window</label>
+            <label htmlFor={`${id}-recent`}>{t("addModel.switchyardConfigFields.recentWindow")}</label>
             <Input
               id={`${id}-recent`}
               type="number"
               min={1}
               value={value.options.recent_window ?? ""}
-              placeholder="Library default"
+              placeholder={t("addModel.switchyardConfigFields.libraryDefault")}
               onChange={(event) => setOption("recent_window", event.target.value)}
             />
           </div>
           <div className="min-w-0 space-y-2">
-            <label htmlFor={`${id}-tools`}>Tool semantics</label>
+            <label htmlFor={`${id}-tools`}>{t("addModel.switchyardConfigFields.toolSemantics")}</label>
             <Textarea
               id={`${id}-tools`}
               value={toolSemantics}
-              placeholder={'{"observe": ["read_file"], "mutate": ["edit_file"]}'}
+              placeholder={codeSamples.models.toolSemanticsJson}
               onChange={(event) => changeToolSemantics(event.target.value)}
             />
           </div>
           {decision && (
             <>
-              <h3 className="text-sm font-semibold">Decision model</h3>
+              <h3 className="text-sm font-semibold">{t("addModel.switchyardConfigFields.sections.decisionModel")}</h3>
               <div className="min-w-0 space-y-2">
-                <label htmlFor={`${id}-cutoff`}>Advantage cutoff</label>
+                <label htmlFor={`${id}-cutoff`}>{t("addModel.switchyardConfigFields.advantageCutoff")}</label>
                 <Input
                   id={`${id}-cutoff`}
                   type="number"
@@ -249,16 +276,18 @@ export default function SwitchyardConfigFields({
                   }
                 />
                 <p className="text-sm text-muted-foreground">
-                  Route to the capable model when the decision model’s advantage probability is above this value.
+                  {t("addModel.switchyardConfigFields.advantageCutoffHelp")}
                 </p>
               </div>
               <div className="min-w-0 space-y-2">
-                <label htmlFor={`${id}-instructions`}>Decision instructions</label>
+                <label htmlFor={`${id}-instructions`}>
+                  {t("addModel.switchyardConfigFields.decisionInstructions")}
+                </label>
                 <Textarea
                   id={`${id}-instructions`}
                   readOnly={isStructured(decision.instructions)}
                   value={instructionsText(decision.instructions)}
-                  placeholder="Use Switchyard’s built-in instructions"
+                  placeholder={t("addModel.switchyardConfigFields.decisionInstructionsPlaceholder")}
                   onChange={(event) =>
                     onChange({
                       ...value,
@@ -271,18 +300,11 @@ export default function SwitchyardConfigFields({
           )}
           {llm && (
             <>
-              <h3 className="text-sm font-semibold">Classifier</h3>
+              <h3 className="text-sm font-semibold">{t("addModel.switchyardConfigFields.sections.classifier")}</h3>
               <div className="grid gap-4 md:grid-cols-2">
-                {(
-                  [
-                    ["base_threshold", "Capability threshold"],
-                    ["threshold_step", "Threshold step"],
-                    ["max_output_tokens", "Maximum output tokens"],
-                    ["recent_turn_window", "Recent turn window"],
-                  ] as const
-                ).map(([key, label]) => (
+                {LLM_NUMBER_FIELDS.map(([key, labelKey]) => (
                   <div key={key} className="min-w-0 space-y-2">
-                    <label htmlFor={`${id}-${key}`}>{label}</label>
+                    <label htmlFor={`${id}-${key}`}>{t(labelKey)}</label>
                     <Input
                       id={`${id}-${key}`}
                       type="number"
@@ -296,12 +318,12 @@ export default function SwitchyardConfigFields({
                 ))}
               </div>
               <div className="min-w-0 space-y-2">
-                <label htmlFor={`${id}-format`}>Response format</label>
+                <label htmlFor={`${id}-format`}>{t("addModel.switchyardConfigFields.responseFormat")}</label>
                 <Select
                   value={llm.response_format_type}
                   items={[
-                    { value: "json_schema", label: "JSON schema" },
-                    { value: "json_object", label: "JSON object" },
+                    { value: "json_schema", label: t("addModel.switchyardConfigFields.responseFormats.jsonSchema") },
+                    { value: "json_object", label: t("addModel.switchyardConfigFields.responseFormats.jsonObject") },
                   ]}
                   onValueChange={(format) =>
                     onChange({
@@ -317,17 +339,21 @@ export default function SwitchyardConfigFields({
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="json_schema">JSON schema</SelectItem>
-                    <SelectItem value="json_object">JSON object</SelectItem>
+                    <SelectItem value="json_schema">
+                      {t("addModel.switchyardConfigFields.responseFormats.jsonSchema")}
+                    </SelectItem>
+                    <SelectItem value="json_object">
+                      {t("addModel.switchyardConfigFields.responseFormats.jsonObject")}
+                    </SelectItem>
                   </SelectContent>
                 </Select>
               </div>
               <div className="min-w-0 space-y-2">
-                <label htmlFor={`${id}-prompt`}>Classifier prompt</label>
+                <label htmlFor={`${id}-prompt`}>{t("addModel.switchyardConfigFields.classifierPrompt")}</label>
                 <Textarea
                   id={`${id}-prompt`}
                   value={llm.prompt ?? ""}
-                  placeholder="Use Switchyard’s built-in prompt"
+                  placeholder={t("addModel.switchyardConfigFields.classifierPromptPlaceholder")}
                   onChange={(event) =>
                     onChange({ ...value, classifier: { ...llm, prompt: event.target.value || undefined } })
                   }
