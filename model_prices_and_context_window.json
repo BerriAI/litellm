@@ -42076,7 +42076,7 @@
         "max_output_tokens": 131072,
         "mode": "chat",
         "output_cost_per_token": 2.1e-07,
-        "source": "https://synap.linkrra.com/v1/models?format=openrouter",
+        "source": "https://synap402.com/v1/models?format=openrouter",
         "supports_function_calling": true,
         "supports_response_schema": true,
         "supports_tool_choice": true
@@ -42088,7 +42088,7 @@
         "max_output_tokens": 131072,
         "mode": "chat",
         "output_cost_per_token": 8.5e-08,
-        "source": "https://synap.linkrra.com/v1/models?format=openrouter",
+        "source": "https://synap402.com/v1/models?format=openrouter",
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
@@ -42101,7 +42101,7 @@
         "max_output_tokens": 131072,
         "mode": "chat",
         "output_cost_per_token": 1.1e-06,
-        "source": "https://synap.linkrra.com/v1/models?format=openrouter",
+        "source": "https://synap402.com/v1/models?format=openrouter",
         "supports_function_calling": true,
         "supports_tool_choice": true
     },
@@ -42112,7 +42112,7 @@
         "max_output_tokens": 98304,
         "mode": "chat",
         "output_cost_per_token": 2.8e-07,
-        "source": "https://synap.linkrra.com/v1/models?format=openrouter",
+        "source": "https://synap402.com/v1/models?format=openrouter",
         "supports_function_calling": true,
         "supports_tool_choice": true
     },
@@ -42123,7 +42123,7 @@
         "max_output_tokens": 65536,
         "mode": "chat",
         "output_cost_per_token": 5.5e-07,
-        "source": "https://synap.linkrra.com/v1/models?format=openrouter",
+        "source": "https://synap402.com/v1/models?format=openrouter",
         "supports_function_calling": true,
         "supports_tool_choice": true
     },
@@ -42134,7 +42134,7 @@
         "max_output_tokens": 98304,
         "mode": "chat",
         "output_cost_per_token": 2.7e-07,
-        "source": "https://synap.linkrra.com/v1/models?format=openrouter",
+        "source": "https://synap402.com/v1/models?format=openrouter",
         "supports_function_calling": true,
         "supports_response_schema": true,
         "supports_tool_choice": true

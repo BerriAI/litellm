@@ -7,7 +7,7 @@ import respx
 import litellm
 from litellm.caching.llm_caching_handler import LLMClientCache
 
-_API_BASE: Final = "https://synap.linkrra.com/v1"
+_API_BASE: Final = "https://synap402.com/v1"
 _CHAT_COMPLETION: Final = {
     "id": "chatcmpl_linkrra",
     "object": "chat.completion",
