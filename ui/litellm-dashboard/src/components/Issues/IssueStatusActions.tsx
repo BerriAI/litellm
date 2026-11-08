@@ -17,11 +17,15 @@ export default function IssueStatusActions({ issue, globalAccess = false }: { is
     mutationFn: (status: IssueStatus) => updateIssueStatus(issue, status),
     onSuccess: (updated) => {
       const scope = ["issues", getProxyBaseUrl(), user?.user_id, user?.user_role];
-      client.setQueryData<Issue>([...scope, "detail", issue.id], (previous) => ({
-        ...updated,
-        can_view_activity: updated.can_view_activity ?? previous?.can_view_activity,
-        can_update_status: updated.can_update_status ?? previous?.can_update_status,
-      }));
+      client.setQueryData<Issue>(
+        [...scope, "detail", issue.id],
+        (previous) =>
+          previous && {
+            ...updated,
+            can_view_activity: updated.can_view_activity ?? previous.can_view_activity,
+            can_update_status: updated.can_update_status ?? previous.can_update_status,
+          },
+      );
       client.setQueriesData<components["schemas"]["IssueList"]>(
         { queryKey: [...scope, "list"] },
         (page) =>

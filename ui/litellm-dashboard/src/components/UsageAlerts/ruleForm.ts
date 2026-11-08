@@ -26,9 +26,7 @@ export function ruleInputFromForm(
   metric: RuleInput["metric"],
 ): RuleInput {
   const text = (name: string) => String(data.get(name) ?? "").trim();
-  const channels: NonNullable<RuleInput["notification_channels"]> = [];
-  if (data.has("email")) channels.push("email");
-  if (data.has("slack")) channels.push("slack");
+  const channels = (["email", "slack"] as const).filter((channel) => data.has(channel));
   return {
     name: text("name"),
     scope_type: scope,
