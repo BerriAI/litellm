@@ -42,10 +42,6 @@ def is_bedrock_streaming_endpoint(endpoint: str) -> bool:
 _CONVERSE_ACTIONS: Final = frozenset({"converse", "converse-stream"})
 
 
-def _is_converse_url(url: str) -> bool:
-    return httpx.URL(url).path.rstrip("/").rsplit("/", 1)[-1] in _CONVERSE_ACTIONS
-
-
 _INVOKE_ACTIONS: Final = frozenset({"invoke", "invoke-with-response-stream"})
 _BEDROCK_INVOKE_GUARDRAIL_HEADERS: Final = frozenset(
     {"x-amzn-bedrock-guardrailidentifier", "x-amzn-bedrock-guardrailversion", "x-amzn-bedrock-trace"}

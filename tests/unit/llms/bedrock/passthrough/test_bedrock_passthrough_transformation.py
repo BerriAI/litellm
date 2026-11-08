@@ -986,6 +986,7 @@ def _invoke_guardrail_headers(request: httpx.Request) -> dict[str, str]:
     [
         ("converse", {"guardrailIdentifier": "deployment-guardrail", "guardrailVersion": "3", "trace": "enabled"}),
         ("converse-stream", DEPLOYMENT_GUARDRAIL),
+        ("converse/", {"guardrailIdentifier": "deployment-guardrail", "guardrailVersion": "3", "trace": "enabled"}),
     ],
 )
 async def test_converse_passthrough_sends_the_deployment_guardrail_in_the_body(
@@ -1050,7 +1051,9 @@ async def test_passthrough_without_a_deployment_guardrail_sends_the_caller_guard
     caller_body: Final = {**CONVERSE_BODY, "guardrailConfig": CALLER_GUARDRAIL}
 
     converse: Final = await _sent_passthrough_request("converse", caller_body)
-    invoke: Final = await _sent_passthrough_request("invoke", INVOKE_BODY, request_headers=CALLER_INVOKE_GUARDRAIL_HEADERS)
+    invoke: Final = await _sent_passthrough_request(
+        "invoke", INVOKE_BODY, request_headers=CALLER_INVOKE_GUARDRAIL_HEADERS
+    )
 
     assert json.loads(converse.content) == caller_body
     assert _invoke_guardrail_headers(invoke) == {
