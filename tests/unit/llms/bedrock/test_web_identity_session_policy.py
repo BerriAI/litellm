@@ -52,6 +52,7 @@ from litellm.llms.bedrock.embed.embedding import BedrockEmbedding
 from litellm.llms.bedrock.files.handler import BedrockFilesHandler
 from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
 from litellm.llms.bedrock.model_listing import BedrockModelLister
+from litellm.llms.bedrock.passthrough.transformation import BedrockAgentRuntimeAWS
 from litellm.llms.bedrock.web_identity_session_policy import WebIdentitySessionPolicy, _SessionPolicyStatement
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.llms.opensearch.vector_stores.transformation import OpenSearchVectorStoreConfig
@@ -398,8 +399,6 @@ _BEDROCK_ROUTE_ACTIONS: Final = MappingProxyType(
         "model/{model_id}/converse": "bedrock:InvokeModel",
         "model/{model_id}/converse-stream": "bedrock:InvokeModelWithResponseStream",
         "model/{model_id}/count-tokens": "bedrock:CountTokens",
-        "model/{model_id}/async-invoke": "bedrock:InvokeModel",
-        "async-invoke/{invocation_arn}": "bedrock:GetAsyncInvoke",
         "model/{model_id}/invoke-with-bidirectional-stream": "bedrock:InvokeModel",
         "bedrock-mantle anthropic/v1/messages": "bedrock-mantle:CreateInference",
         "bedrock-mantle anthropic/v1/messages/count_tokens": "bedrock-mantle:CountTokens",
@@ -491,6 +490,34 @@ _CALLER_ROUTE_ACTIONS: Final[MappingProxyType[str, _CallerAndActions]] = Mapping
             ("s3:PutObject", "s3:GetObject", "s3:DeleteObject", "s3:ListBucket", "kms:GenerateDataKey"),
         ),
         "bedrock file download": (BedrockFilesHandler, ("s3:GetObject", "kms:Decrypt")),
+        "bedrock embeddings": (
+            BedrockEmbedding,
+            (
+                "bedrock:InvokeModel",
+                "bedrock:GetAsyncInvoke",
+                "s3:GetObject",
+                "s3:PutObject",
+                "kms:GenerateDataKey",
+                "kms:Decrypt",
+            ),
+        ),
+        "bedrock agent runtime passthrough": (
+            BedrockAgentRuntimeAWS,
+            (
+                "bedrock:InvokeAgent",
+                "bedrock:InvokeInlineAgent",
+                "bedrock:InvokeFlow",
+                "bedrock:Retrieve",
+                "bedrock:RetrieveAndGenerate",
+                "bedrock:GenerateQuery",
+                "bedrock:GetKnowledgeBase",
+                "bedrock:Rerank",
+                "bedrock:OptimizePrompt",
+                "bedrock:InvokeModel",
+                "bedrock:GetInferenceProfile",
+                "sqlworkbench:GetSqlRecommendations",
+            ),
+        ),
         "bedrock model listing": (
             _bedrock_model_lister,
             ("bedrock:ListFoundationModels", "bedrock:ListInferenceProfiles"),
@@ -585,6 +612,7 @@ _KMS_VIA_SERVICE_BY_ROUTE: Final = MappingProxyType(
     {
         "bedrock files": "s3.*",
         "bedrock file download": "s3.*",
+        "bedrock embeddings": "s3.*",
         "s3 logging": "s3.*",
         "sqs logging": "sqs.*",
         "bedrock knowledge base ingestion": "s3.*",
@@ -687,25 +715,16 @@ class TestEachCallerGetsItsOwnCeiling:
         (policy,) = _policies_sent_to_sts((make_caller(),), session_name=f"size-{route}")
         assert len(json.dumps(policy, separators=(",", ":"))) <= _STS_SESSION_POLICY_PLAINTEXT_LIMIT
 
-    def test_bedrock_runtime_ceiling_reaches_other_callers_services_only_through_bedrock_storage(self):
+    def test_bedrock_chat_ceiling_reaches_no_other_callers_service(self):
         every_route_action: Final = itertools.chain.from_iterable(
             actions for _caller, actions in _CALLER_ROUTE_ACTIONS.values()
         )
         other_services: Final = frozenset(
             _service(action) for action in every_route_action if _service(action) != "bedrock"
         )
-        reaching: Final = tuple(
-            stmt
-            for stmt in _captured_policy()["Statement"]
-            if any(_service(action) in other_services for action in stmt["Action"])
-        )
-        reached_actions: Final = itertools.chain.from_iterable(stmt["Action"] for stmt in reaching)
-        assert frozenset(_service(action) for action in reached_actions) == {"s3", "kms"}
-        assert all(
-            stmt["Condition"].get("StringEquals") == {"aws:CalledViaLast": "bedrock.amazonaws.com"}
-            or stmt["Condition"].get("StringLike") == {"kms:ViaService": "s3.*"}
-            for stmt in reaching
-        )
+        (policy,) = _policies_sent_to_sts((BedrockConverseLLM(),), session_name="chat-reach")
+        reached: Final = sorted(action for action in _granted_actions(policy) if _service(action) in other_services)
+        assert not reached, f"a Bedrock chat session can also call {reached}"
 
     @pytest.mark.parametrize(("route", "target_service"), sorted(_PASS_ROLE_TARGET_BY_ROUTE.items()))
     def test_service_role_can_only_be_passed_to_the_routes_service(self, route: str, target_service: str):
@@ -725,12 +744,6 @@ class TestEachCallerGetsItsOwnCeiling:
         assert all(
             stmt["Condition"].get("StringEquals") == {"aws:CalledViaLast": "bedrock.amazonaws.com"} for stmt in granting
         )
-
-    def test_async_invoke_output_bucket_key_is_only_usable_through_s3(self):
-        (policy,) = _policies_sent_to_sts((BedrockEmbedding(),), session_name="async-kms")
-        granting: Final = tuple(stmt for stmt in policy["Statement"] if _grants_kms(stmt))
-        assert {"kms:GenerateDataKey", "kms:Decrypt"} <= _granted_actions(policy)
-        assert all(stmt["Condition"].get("StringLike") == {"kms:ViaService": "s3.*"} for stmt in granting)
 
     def test_transcribe_ceiling_grants_every_operation_the_passthrough_serves(self):
         (policy,) = _policies_sent_to_sts((TranscribeAWS(),), session_name="transcribe-operations")
@@ -869,12 +882,6 @@ class TestWebIdentityCredentialCacheIsPerCeiling:
 
     def test_callers_with_the_same_ceiling_share_one_sts_session(self):
         policies: Final = _policies_sent_to_sts((SagemakerLLM(), SagemakerLLM()), session_name="cache-share")
-        assert len(policies) == 1
-
-    def test_bedrock_chat_and_embeddings_share_one_sts_session(self):
-        policies: Final = _policies_sent_to_sts(
-            (BedrockConverseLLM(), BedrockEmbedding()), session_name="bedrock-share"
-        )
         assert len(policies) == 1
 
 

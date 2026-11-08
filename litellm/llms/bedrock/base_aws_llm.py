@@ -9,7 +9,7 @@ import urllib.parse
 from collections.abc import Callable, Mapping, MutableMapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
-from functools import partial
+from functools import cache, partial
 from threading import Lock
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, ParamSpec, TypeVar, cast, get_args, overload
@@ -181,6 +181,11 @@ class BaseAWSLLM(SignsRequestsWithAWS):
     )
 
     _web_identity_session_policy: ClassVar[WebIdentitySessionPolicy] = BEDROCK_SESSION_POLICY
+
+    @classmethod
+    @cache
+    def _web_identity_session_policy_document(cls) -> str:
+        return session_policy_document(cls._web_identity_session_policy)
 
     def __init__(self) -> None:
         self.iam_cache = BaseAWSLLM._shared_iam_cache
@@ -397,7 +402,7 @@ class BaseAWSLLM(SignsRequestsWithAWS):
             aws_session_name,
         ):
             return self._get_or_set_cached_credentials(
-                {**args, "web_identity_session_policy": session_policy_document(self._web_identity_session_policy)},
+                {**args, "web_identity_session_policy": self._web_identity_session_policy_document()},
                 lambda: self._auth_with_web_identity_token(
                     aws_web_identity_token=cast(str, aws_web_identity_token),
                     aws_role_name=cast(str, aws_role_name),
@@ -1025,7 +1030,7 @@ class BaseAWSLLM(SignsRequestsWithAWS):
             "RoleSessionName": aws_session_name,
             "WebIdentityToken": oidc_token,
             "DurationSeconds": 3600,
-            "Policy": session_policy_document(self._web_identity_session_policy),
+            "Policy": self._web_identity_session_policy_document(),
         }
 
         # Add ExternalId parameter if provided

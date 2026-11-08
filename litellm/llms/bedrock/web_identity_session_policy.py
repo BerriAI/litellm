@@ -91,7 +91,6 @@ BEDROCK_SESSION_POLICY: Final = _policy(
         "BedrockLiteLLM",
         (
             "bedrock:InvokeModelWithResponseStream",
-            "bedrock:GetAsyncInvoke",
             "bedrock:CountTokens",
             "bedrock:Rerank",
             "bedrock:Retrieve",
@@ -131,6 +130,10 @@ BEDROCK_SESSION_POLICY: Final = _policy(
         ),
     ),
     _allow("BedrockMantleLiteLLM", ("bedrock-mantle:CreateInference", "bedrock-mantle:CountTokens")),
+)
+
+BEDROCK_EMBEDDING_SESSION_POLICY: Final = _policy(
+    _allow("BedrockEmbeddingLiteLLM", ("bedrock:InvokeModel", "bedrock:GetAsyncInvoke")),
     _allow(
         "BedrockS3LiteLLM",
         ("s3:GetObject", "s3:PutObject"),
@@ -140,6 +143,26 @@ BEDROCK_SESSION_POLICY: Final = _policy(
         ),
     ),
     _encryption_through("s3.*", _OBJECT_ENCRYPTION),
+)
+
+BEDROCK_AGENT_RUNTIME_SESSION_POLICY: Final = _policy(
+    _allow(
+        "BedrockAgentRuntimeLiteLLM",
+        (
+            "bedrock:InvokeAgent",
+            "bedrock:InvokeInlineAgent",
+            "bedrock:InvokeFlow",
+            "bedrock:Retrieve",
+            "bedrock:RetrieveAndGenerate",
+            "bedrock:GenerateQuery",
+            "bedrock:GetKnowledgeBase",
+            "bedrock:Rerank",
+            "bedrock:OptimizePrompt",
+            "bedrock:InvokeModel",
+            "bedrock:GetInferenceProfile",
+        ),
+    ),
+    _allow("SqlWorkbenchLiteLLM", ("sqlworkbench:GetSqlRecommendations",)),
 )
 
 BEDROCK_MODEL_LISTING_SESSION_POLICY: Final = _policy(
