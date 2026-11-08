@@ -37,7 +37,7 @@ class AssemblyAITranscriptResponse(TypedDict, total=False):
 class AssemblyAIPassthroughLoggingHandler:
     def __init__(self):
         self.assembly_ai_base_url = "https://api.assemblyai.com"
-        self.assembly_ai_eu_base_url = "https://eu.assemblyai.com"
+        self.assembly_ai_eu_base_url = "https://api.eu.assemblyai.com"
         """
         The base URL for the AssemblyAI API
         """
@@ -290,11 +290,18 @@ class AssemblyAIPassthroughLoggingHandler:
     @staticmethod
     def get_assembly_region_from_url(url: str | None) -> Literal["eu"] | None:
         """
-        Get the region from the URL
+        Get the region from the URL.
+
+        Recognizes EU destination by hostname (e.g. api.eu.assemblyai.com, eu.assemblyai.com)
+        or proxy URL route path (e.g. /eu.assemblyai/...).
         """
         if url is None:
             return None
-        if urlparse(url).hostname == "eu.assemblyai.com":
+        parsed = urlparse(url)
+        if parsed.hostname in ("api.eu.assemblyai.com", "eu.assemblyai.com"):
+            return "eu"
+        path = parsed.path
+        if path.startswith("/eu.assemblyai/") or path == "/eu.assemblyai" or "eu.assemblyai" in path.split("/"):
             return "eu"
         return None
 
