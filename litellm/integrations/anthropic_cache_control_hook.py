@@ -313,9 +313,14 @@ def declared_prompt_caching(model_info: Mapping[str, object] | None) -> bool | N
 
 
 def _cost_map_caches_prompts(models: Iterable[str], custom_llm_provider: str | None) -> bool:
-    from litellm.utils import supports_prompt_caching
+    from litellm.utils import supports_factory
 
-    return any(supports_prompt_caching(model=name, custom_llm_provider=custom_llm_provider) for name in models)
+    return any(
+        supports_factory(
+            model=name, custom_llm_provider=custom_llm_provider, key="supports_prompt_caching", catalog_only=True
+        )
+        for name in models
+    )
 
 
 def _caches_prompts(

@@ -24,8 +24,10 @@ from litellm._logging import verbose_logger
 from litellm.integrations.anthropic_cache_control_hook import (
     CARRY_UNMATCHED_MESSAGE_POINTS,
     EXTERNAL_BREAKPOINTS_STAMP,
+    PROMPT_CACHING_STAMP,
     AnthropicCacheControlHook,
     configured_injection_points,
+    developer_messages_for_a_prompt_caching_model,
     supports_openai_prompt_cache_breakpoint,
 )
 from litellm.litellm_core_utils.prompt_templates.factory import (
@@ -5261,6 +5263,37 @@ def test_system_injection_point_on_a_developer_prompt_starts_no_provider_sign_in
 
     assert device_code.called is False
     assert marks == ({"type": "ephemeral"}, {"type": "ephemeral"})
+
+
+@pytest.mark.parametrize(
+    ("custom_llm_provider", "model"),
+    [
+        pytest.param("huggingface", "meta-llama/Llama-3.3-70B-Instruct", id="huggingface"),
+        pytest.param("lemonade", "Qwen3-8B-GGUF", id="lemonade"),
+    ],
+)
+def test_developer_prompt_caching_check_sends_no_model_lookup(custom_llm_provider: str, model: str):
+    messages: Final = cast(
+        list[AllMessageValues],
+        [
+            {"role": "developer", "content": "Answer in French.", "cache_control": {"type": "ephemeral"}},
+            {"role": "user", "content": "Hi"},
+        ],
+    )
+    params: Final[dict[str, object]] = {"cache_control_injection_points": [{"location": "message", "role": "system"}]}
+
+    with respx.mock(assert_all_called=False) as router:
+        lookups: Final = router.route().mock(return_value=Response(500))
+        developer_messages_for_a_prompt_caching_model(
+            messages, model=model, custom_llm_provider=custom_llm_provider, model_info=None, base_model=None
+        )
+        AnthropicCacheControlHook.maybe_seed_default_injection_points(
+            params, list(messages), model, custom_llm_provider
+        )
+
+    assert lookups.called is False
+    seeded: Final = cast(list[dict[str, object]], params["cache_control_injection_points"])
+    assert all(PROMPT_CACHING_STAMP in point for point in seeded)
 
 _SHARED_FOUNDRY_MODEL: Final = "azure_ai/qa-shared-gpt-deployment"
 _SIBLING_BREAKPOINT_FLAGS: Final = MappingProxyType(
