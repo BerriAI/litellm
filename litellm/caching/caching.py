@@ -16,6 +16,7 @@ import traceback
 from collections.abc import Awaitable, Callable, Generator, Mapping
 from contextlib import contextmanager
 from enum import Enum
+from itertools import product
 from typing import Any, Final, Literal, Protocol, cast
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter
@@ -457,8 +458,13 @@ class Cache:
             for source in sources
             if isinstance(raw := source.get(get_metadata_variable_name_from_kwargs(source)), Mapping)
         )
+        auth_sources: Final = tuple(
+            _TENANT_METADATA.validate_python(raw)
+            for source, key in product(sources, ("litellm_metadata", "metadata"))
+            if isinstance(raw := source.get(key), Mapping)
+        )
         metadata: Final = next(
-            (source for source in metadata_sources if source.get("user_api_key_auth") is not None),
+            (source for source in auth_sources if source.get("user_api_key_auth") is not None),
             next((source for source in metadata_sources if any(field in source for field in fields)), None),
         )
         if metadata is None:

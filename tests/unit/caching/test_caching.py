@@ -1677,7 +1677,7 @@ def test_exact_cache_is_not_shared_across_tenants(
     monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL))
 
     def answer(tenant: dict[str, str], content: str) -> object:
-        response = completion(
+        response: Final = completion(
             model="gpt-4o-mini",
             messages=_CACHING_TEST_MESSAGES,
             caching=True,
@@ -1695,11 +1695,11 @@ def test_exact_cache_is_not_shared_across_tenants(
 @pytest.mark.parametrize("metadata_field", ["metadata", "litellm_metadata"])
 @pytest.mark.parametrize("forged_key_param", ["cache_key", "preset_cache_key"])
 def test_exact_cache_rejects_another_tenants_cache_key(metadata_field: str, forged_key_param: str) -> None:
-    cache = Cache(type=LiteLLMCacheType.LOCAL)
-    tenant_a_request = {"model": "gpt-4o-mini", "messages": messages, metadata_field: dict(_TENANT_A_IDENTITY)}
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    tenant_a_request: Final = {"model": "gpt-4o-mini", "messages": messages, metadata_field: dict(_TENANT_A_IDENTITY)}
     cache.add_cache('{"answer": "tenant a"}', **tenant_a_request)
-    tenant_a_key = cache.get_cache_key(**tenant_a_request)
-    forged_key = (
+    tenant_a_key: Final = cache.get_cache_key(**tenant_a_request)
+    forged_key: Final = (
         {"cache_key": tenant_a_key}
         if forged_key_param == "cache_key"
         else {"litellm_params": {"preset_cache_key": tenant_a_key}}
@@ -1719,7 +1719,11 @@ def test_exact_cache_entries_follow_authenticated_identity(
     identity: Final = {"api_key": "key-a", "team_id": "team-a", "org_id": "org-a"}
 
     def request(values: dict[str, str]) -> dict[str, object]:
-        data: Final = {"metadata": {"user_api_key": "request-label"}, metadata_field: {}}
+        data: Final = {
+            "metadata": {"user_api_key": "request-label"},
+            "litellm_metadata": {"trace": "complete"},
+            metadata_field: {},
+        }
         authenticated: Final = LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata(
             data=data,
             user_api_key_dict=UserAPIKeyAuth(**values, is_session_token=True, key_alias="session-label"),
