@@ -210,6 +210,17 @@ describe("issue notifications", () => {
     expect(screen.getByLabelText("Notification content")).toContainElement(update);
   });
 
+  it("lets the reader retry a failed alerts request", async () => {
+    const user = userEvent.setup();
+    const retry = vi.fn();
+    renderWithProviders(
+      <NotificationsBellView currentVersion={null} latestRelease={null} issuesFailed onRetryAlerts={retry} />,
+    );
+    await user.click(screen.getByRole("button", { name: /^notifications/i }));
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    expect(retry).toHaveBeenCalledTimes(1);
+  });
+
   it("opens issue-owned investigations and keeps resources outside the scrolling content", async () => {
     const user = userEvent.setup();
     renderWithProviders(<NotificationsBellView currentVersion={null} latestRelease={null} issues={ISSUES} />);

@@ -224,8 +224,8 @@ export default function IssueFamilySettings({ accessToken }: { accessToken: stri
       ) : (
         <>
           <p className="text-xs text-muted-foreground">
-            Daily monitoring is enabled by default. Checks wait for a usable baseline and complete usage data. Model
-            retirement alerts appear automatically for used models.
+            Daily checks wait for a usable baseline and complete usage data. Model retirement alerts appear
+            automatically for used models.
           </p>
           {delayedChecks > 0 && (
             <p role="status" className="text-xs text-muted-foreground">

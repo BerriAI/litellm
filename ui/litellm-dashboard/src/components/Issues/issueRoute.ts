@@ -5,8 +5,6 @@ export const issueRouteParsers = {
   alert: parseAsString.withOptions({ history: "push" }),
   family: parseAsStringLiteral(ISSUE_FAMILIES),
   status: parseAsStringLiteral(ISSUE_STATUSES),
-  type: parseAsStringLiteral(["usage", "model-deprecations"] as const),
+  kind: parseAsStringLiteral(["performance", "model_deprecation"] as const),
   model: parseAsString,
-  state: parseAsStringLiteral(ISSUE_STATUSES),
-  usage_status: parseAsStringLiteral(ISSUE_STATUSES),
 };
