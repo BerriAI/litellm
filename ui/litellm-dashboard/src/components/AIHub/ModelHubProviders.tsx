@@ -2,6 +2,7 @@
 
 import Image from "next/image";
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import { getProviderLogoAndName } from "@/components/provider_info_helpers";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -55,12 +56,13 @@ export default function ModelHubProviders({
   onSelect,
   loading = false,
 }: ModelHubProvidersProps) {
+  const { t } = useTranslation();
   const availableProviders = Array.from(new Set(providers)).filter(Boolean);
   const selectedProvider = selectedProviders[0] ?? "";
   const initialLoading = loading && availableProviders.length === 0;
-  const emptyLabel = initialLoading ? "Loading providers" : "All providers";
+  const emptyLabel = initialLoading ? t("aiHub.modelHubProviders.loading") : t("aiHub.modelHubProviders.allProviders");
   const items = [
-    { value: "", label: "All providers" },
+    { value: "", label: t("aiHub.modelHubProviders.allProviders") },
     ...availableProviders.map((provider) => ({
       value: provider,
       label: getProviderLogoAndName(provider).displayName,
@@ -75,7 +77,7 @@ export default function ModelHubProviders({
       disabled={initialLoading}
     >
       <SelectTrigger
-        aria-label="Provider"
+        aria-label={t("aiHub.modelHubProviders.ariaLabel")}
         aria-busy={loading}
         className="chat-model-filter-select chat-model-provider-select"
       >

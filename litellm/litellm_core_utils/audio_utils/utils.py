@@ -21,6 +21,16 @@ from litellm.types.files import (
 from litellm.types.utils import FileTypes
 
 
+def normalized_audio_duration_seconds(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    try:
+        seconds: Final = float(value)
+    except OverflowError:
+        return None
+    return seconds if math.isfinite(seconds) and seconds >= 0 else None
+
+
 @dataclass
 class ProcessedAudioFile:
     """
@@ -303,7 +313,7 @@ def calculate_request_duration(file: FileTypes) -> float | None:
                     file_content = content
                 elif hasattr(content, "read") and not isinstance(content, (str, os.PathLike)):
                     # File-like object in tuple
-                    current_pos: Final = getattr(content, "tell", lambda: None)()
+                    current_pos: Final = content.tell() if hasattr(content, "tell") else None
                     # Seek to start to ensure we read the entire content
                     if hasattr(content, "seek"):
                         content.seek(0)
