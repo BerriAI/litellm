@@ -125,8 +125,11 @@ async def test_bounded_activity_routes_keep_exact_totals_and_scoped_permissions(
             )
             assert result.status_code == 200, result.text
             bounded: Final = BoundedDailyActivityResponse.model_validate(result.json())
-            assert bounded.metadata.model_dump(exclude={"api_key_limit"}) == {
-                key: value for key, value in legacy.json()["metadata"].items() if key != "api_key_limit"
+            assert bounded.metadata.entity_total_api_keys is None
+            assert legacy.json()["metadata"]["entity_total_api_keys"] == {owner: 1}
+            pagination_fields: Final = {"api_key_limit", "entity_total_api_keys"}
+            assert bounded.metadata.model_dump(exclude=pagination_fields) == {
+                key: value for key, value in legacy.json()["metadata"].items() if key not in pagination_fields
             }
             models: Final = bounded.model_breakdown
             assert models is not None and models.total_models == 137 and len(models.models) == 20
