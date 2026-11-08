@@ -7813,6 +7813,7 @@ class _ScriptedRedis:
         self.failing_batch_call = failing_batch_call
         self.stored_counter_value = stored_counter_value
         self.released_slots: list[tuple[list[str], list[str]]] = []
+        self.acquired_slots: list[tuple[list[str], list[object]]] = []
         self.batch_calls = 0
         self.batch_call_keys: list[list[str]] = []
         self.batch_call_args: list[list[object]] = []
@@ -7845,6 +7846,7 @@ class _ScriptedRedis:
             if name == "parallel_count_script":
                 return [0 for _ in keys]
             if name == "parallel_acquire_script":
+                self.acquired_slots.append((list(keys), list(args)))
                 return [0, *[1 for _ in keys]]
             if name == "parallel_release_script":
                 self.released_slots.append((list(keys), list(args)))
@@ -10126,3 +10128,28 @@ def test_reuses_request_slot_never_acquires_a_parallel_slot():
     )
 
     assert slot_id is None
+
+
+@pytest.mark.asyncio
+async def test_should_rate_limit_defers_the_parallel_gauge_when_defer_parallel_check_is_set():
+    redis = _ScriptedRedis()
+    handler = _handler_with_redis(redis, force_hash_tag_grouping=False)
+    auth = UserAPIKeyAuth(api_key=hash_token("sk-defer-gauge"), max_parallel_requests=1, rpm_limit=10)
+    descriptors = handler.create_rate_limit_descriptors(
+        user_api_key_dict=auth,
+        data={"model": "test-model"},
+        rpm_limit_type=None,
+        tpm_limit_type=None,
+        model_has_failures=False,
+    )
+
+    deferred = await handler.should_rate_limit(descriptors=descriptors, parallel_slot_id="slot-fixed", defer_parallel_check=True)
+
+    assert "max_parallel_requests" not in [status["rate_limit_type"] for status in deferred["statuses"]]
+    assert not any("max_parallel_requests" in key for key, _ in redis.increments)
+    assert not redis.acquired_slots
+    assert not redis.released_slots
+
+    immediate = await handler.should_rate_limit(descriptors=descriptors, parallel_slot_id="slot-fixed")
+    assert any(status["rate_limit_type"] == "max_parallel_requests" for status in immediate["statuses"])
+    assert any("max_parallel_requests" in key for keys, _args in redis.acquired_slots for key in keys)
