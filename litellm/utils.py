@@ -603,7 +603,14 @@ def print_verbose(
         elif log_level == "ERROR":
             verbose_logger.error(print_statement)
         if litellm.set_verbose is True and logger_only is False:
-            print(print_statement)  # noqa: T201
+            from litellm.litellm_core_utils.redact_messages import redact_logged_message_content
+
+            printable: Final = (
+                redact_logged_message_content(print_statement)
+                if litellm.turn_off_message_logging is True
+                else print_statement
+            )
+            print(printable)  # noqa: T201  # set_verbose prints the line it logs
     except Exception:
         pass
 

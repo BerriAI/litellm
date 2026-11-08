@@ -7,9 +7,11 @@
 #
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
 
+import ast
 import asyncio
 import copy
 import inspect
+import json
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Final, Protocol
@@ -25,6 +27,7 @@ from litellm.litellm_core_utils.core_helpers import (
     get_metadata_variable_name_from_kwargs,
     has_attributes,
 )
+from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.litellm_core_utils.served_output_texts import SERVED_OUTPUT_TEXTS_KEY
 from litellm.llms.base_llm.guardrail_translation.utils import stream_item_field, stream_item_items
 from litellm.llms.vertex_ai.common_utils import (
@@ -50,6 +53,26 @@ class _HasArguments(Protocol):
 
 
 MESSAGE_REDACTION_ENABLE_HEADERS: Final = ("litellm-enable-message-redaction", "x-litellm-enable-message-redaction")
+_LOGGED_MESSAGE_TEXT_KEYS: Final = frozenset(
+    {
+        "arguments",
+        "content",
+        "encrypted_content",
+        "input",
+        "instructions",
+        "output_text",
+        "prompt",
+        "reasoning_content",
+        "reasoning_text",
+        "refusal",
+        "system",
+        "text",
+        "thinking",
+        "transcript",
+    }
+)
+_MAX_LOG_REDACTION_DEPTH: Final = 32
+_LOGGED_STRUCTURE: Final = TypeAdapter(object)
 
 
 def _opted_out_of_message_logging(custom_logger: CustomLogger) -> bool:
@@ -707,6 +730,152 @@ def perform_redaction(model_call_details: dict, result, redact_streaming_respons
         else:
             return {"text": REDACTED_BY_LITELLM}
         return _result
+
+
+def redact_logged_message_content(value: object) -> object:
+    """Copy of a debug payload with prompt and completion text replaced.
+
+    Model names, ids, token counts, and error strings stay. The same marker callback
+    logs already use is written in place of message text, so a process log cannot
+    keep a copy of the prompt or the reply.
+    """
+    return _redact_logged_value(value, 0)
+
+
+def _redact_logged_value(value: object, depth: int) -> object:
+    if depth >= _MAX_LOG_REDACTION_DEPTH:
+        return REDACTED_BY_LITELLM
+    if isinstance(value, str):
+        return _redact_logged_string(value, depth)
+    if isinstance(value, BaseModel):
+        return _redact_logged_model(value, depth)
+    if isinstance(value, dict):
+        return {key: _redact_logged_field(key, item, depth) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return tuple(_redact_logged_value(item, depth + 1) for item in value)
+    if isinstance(value, list):
+        return [_redact_logged_value(item, depth + 1) for item in value]
+    return value
+
+
+def _redact_logged_model(value: BaseModel, depth: int) -> object:
+    try:
+        dumped: Final = value.model_dump()
+    except (TypeError, ValueError):
+        return REDACTED_BY_LITELLM
+    extra: Final = getattr(value, "__pydantic_extra__", None)
+    merged: Final = {**dumped, **extra} if isinstance(extra, dict) else dumped
+    return _redact_logged_value(merged, depth + 1)
+
+
+def _redact_logged_field(key: object, item: object, depth: int) -> object:
+    if isinstance(key, str) and key in _LOGGED_MESSAGE_TEXT_KEYS:
+        return _redact_logged_text_field(item, depth)
+    return _redact_logged_value(item, depth + 1)
+
+
+def _redact_logged_text_field(item: object, depth: int) -> object:
+    if isinstance(item, str):
+        return item if item == "" else REDACTED_BY_LITELLM
+    if isinstance(item, list):
+        return [_redact_logged_text_or_value(part, depth) for part in item]
+    if isinstance(item, tuple):
+        return tuple(_redact_logged_text_or_value(part, depth) for part in item)
+    return _redact_logged_value(item, depth + 1)
+
+
+def _redact_logged_text_or_value(part: object, depth: int) -> object:
+    if isinstance(part, str):
+        return part if part == "" else REDACTED_BY_LITELLM
+    return _redact_logged_value(part, depth + 1)
+
+
+def _redact_logged_string(value: str, depth: int) -> str:
+    if "{" not in value and "[" not in value:
+        return value
+    pieces: Final[list[str]] = []  # mutable-ok: one left-to-right scan of a log line
+    cursor = 0  # rebind-ok: the scan walks the line once
+    while cursor < len(value):
+        opener: Final = _next_logged_opener(value, cursor)
+        if opener is None:
+            pieces.append(value[cursor:])
+            break
+        end: Final = _logged_span_end(value, opener)
+        parsed: Final = None if end is None else _parse_logged_structure(value[opener:end])
+        if end is None or parsed is None:
+            pieces.append(value[cursor : opener + 1])
+            cursor = opener + 1
+            continue
+        redacted: Final = _redact_logged_value(parsed[0], depth + 1)
+        rendered: Final = value[opener:end] if redacted == parsed[0] else _render_logged_structure(redacted, parsed[1])
+        pieces.append(value[cursor:opener])
+        pieces.append(rendered)
+        cursor = end
+    return "".join(pieces)
+
+
+def _parse_logged_structure(span: str) -> tuple[object, bool] | None:
+    loaded: Final = safe_json_loads(span, default=None)
+    if isinstance(loaded, (dict, list)):
+        return (loaded, True)
+    try:
+        literal: Final = _LOGGED_STRUCTURE.validate_python(ast.literal_eval(span))
+    except (ValueError, SyntaxError, MemoryError, TypeError):
+        return None
+    if isinstance(literal, (dict, list, tuple)):
+        return (literal, False)
+    return None
+
+
+def _render_logged_structure(value: object, as_json: bool) -> str:
+    if not as_json:
+        return str(value)
+    try:
+        return json.dumps(value)
+    except TypeError:
+        return str(value)
+
+
+def _next_logged_opener(value: str, start: int) -> int | None:
+    brace: Final = value.find("{", start)
+    bracket: Final = value.find("[", start)
+    if brace < 0:
+        return None if bracket < 0 else bracket
+    if bracket < 0:
+        return brace
+    return min(brace, bracket)
+
+
+def _logged_span_end(value: str, start: int) -> int | None:
+    closers: Final = {"}": "{", "]": "["}
+    stack: Final[list[str]] = []  # mutable-ok: brace matcher for one log span
+    quote: str | None = None  # rebind-ok: quote state while scanning one log span
+    escaped = False  # rebind-ok: escape state while scanning one log span
+    for index, char in enumerate(value[start:], start):
+        if quote is not None:
+            if escaped:
+                escaped = False
+                continue
+            if char == "\\":
+                escaped = True
+                continue
+            if char == quote:
+                quote = None
+            continue
+        if char in ("'", '"'):
+            quote = char
+            continue
+        if char in "{[":
+            stack.append(char)
+            continue
+        if char not in "}]":
+            continue
+        if not stack or stack[-1] != closers[char]:
+            return None
+        stack.pop()
+        if not stack:
+            return index + 1
+    return None
 
 
 def should_redact_message_logging(model_call_details: dict) -> bool:

@@ -42,6 +42,7 @@ from litellm.constants import (
     PDF_DATA_URL_PREFIX,
     PDF_MAX_FORM_XOBJECT_DEPTH,
     PDF_MAX_XOBJECT_DRAWS_PER_PAGE,
+    REDACTED_BY_LITELLM,
     TIKTOKEN_ENCODE_CHUNK_SIZE_CHARS,
     TOKEN_COUNTER_MAX_CONCURRENT_COUNTS,
     TOKEN_COUNTER_MAX_EXACT_CHARS,
@@ -928,7 +929,10 @@ def token_counter(
     if litellm.disable_token_counter is True:
         return 0
 
-    verbose_logger.debug("messages in token_counter: %s, text in token_counter: %s", messages, text)
+    logged_text: Final = (
+        REDACTED_BY_LITELLM if litellm.turn_off_message_logging is True and isinstance(text, str) and text != "" else text
+    )
+    verbose_logger.debug("messages in token_counter: %s, text in token_counter: %s", messages, logged_text)
     if text is not None and messages is not None:
         raise ValueError("text and messages cannot both be set")
     if use_default_image_token_count is None:

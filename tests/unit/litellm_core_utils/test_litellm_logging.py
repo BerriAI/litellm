@@ -8750,6 +8750,171 @@ def test_pre_call_raw_request_honors_per_request_turn_off_message_logging(loggin
     _assert_raw_request_redacted_for_callbacks_only(logging_obj, metadata)
 
 
+_DEBUG_PROMPT: Final = "account number 42896-private"
+_DEBUG_REPLY: Final = "reply body 42896-private"
+_DEBUG_MODEL: Final = "gpt-4o-mini"
+_DEBUG_API_BASE: Final = "https://api.openai.com/v1/chat/completions"
+
+
+def _debug_chat_request() -> dict[str, object]:
+    return {
+        "model": _DEBUG_MODEL,
+        "messages": [{"role": "user", "content": _DEBUG_PROMPT}],
+        "stream": False,
+    }
+
+
+def _debug_chat_response() -> str:
+    return json.dumps(
+        {
+            "id": "chatcmpl-debug",
+            "model": _DEBUG_MODEL,
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": _DEBUG_REPLY},
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {"prompt_tokens": 4, "completion_tokens": 2, "total_tokens": 6},
+        }
+    )
+
+
+def _emit_debug_request_and_response(logging_obj, body: dict[str, object]) -> None:
+    logging_obj.pre_call(
+        input=_DEBUG_PROMPT,
+        api_key="sk-test",
+        additional_args={
+            "api_base": _DEBUG_API_BASE,
+            "headers": {},
+            "complete_input_dict": body,
+        },
+    )
+    logging_obj.post_call(original_response=_debug_chat_response(), input=_DEBUG_PROMPT, api_key="sk-test")
+
+
+def test_debug_logs_include_prompt_and_reply_when_message_logging_is_on(logging_obj, caplog, monkeypatch):
+    monkeypatch.setattr(litellm, "turn_off_message_logging", False)
+    caplog.set_level(logging.DEBUG, logger="LiteLLM")
+    body: Final = _debug_chat_request()
+
+    _emit_debug_request_and_response(logging_obj, body)
+
+    assert _DEBUG_PROMPT in caplog.text
+    assert _DEBUG_REPLY in caplog.text
+    assert body["messages"][0]["content"] == _DEBUG_PROMPT
+
+
+def test_turn_off_message_logging_redacts_prompt_and_reply_in_debug_logs(logging_obj, caplog, monkeypatch):
+    monkeypatch.setattr(litellm, "turn_off_message_logging", True)
+    caplog.set_level(logging.DEBUG, logger="LiteLLM")
+    logging_obj.model_call_details["litellm_params"] = {"metadata": {}}
+    body: Final = _debug_chat_request()
+
+    _emit_debug_request_and_response(logging_obj, body)
+
+    assert _DEBUG_PROMPT not in caplog.text
+    assert _DEBUG_REPLY not in caplog.text
+    assert _DEBUG_MODEL in caplog.text
+    assert _DEBUG_API_BASE in caplog.text
+    assert REDACTED_BY_LITELLM in caplog.text
+    assert "finish_reason" in caplog.text or "total_tokens" in caplog.text
+    assert body["messages"][0]["content"] == _DEBUG_PROMPT
+
+
+def test_per_request_turn_off_message_logging_redacts_debug_prompt_and_reply(logging_obj, caplog, monkeypatch):
+    monkeypatch.setattr(litellm, "turn_off_message_logging", False)
+    caplog.set_level(logging.DEBUG, logger="LiteLLM")
+    logging_obj.model_call_details["litellm_params"] = {"metadata": {}}
+    logging_obj.model_call_details["standard_callback_dynamic_params"] = {"turn_off_message_logging": True}
+    body: Final = _debug_chat_request()
+
+    _emit_debug_request_and_response(logging_obj, body)
+
+    assert _DEBUG_PROMPT not in caplog.text
+    assert _DEBUG_REPLY not in caplog.text
+    assert _DEBUG_MODEL in caplog.text
+    assert body["messages"][0]["content"] == _DEBUG_PROMPT
+
+
+def test_turn_off_message_logging_redacts_debug_payloads_outside_the_curl_line(caplog, monkeypatch):
+    from litellm.litellm_core_utils.token_counter import token_counter
+    from litellm.types.utils import Delta
+
+    monkeypatch.setattr(litellm, "turn_off_message_logging", True)
+    caplog.set_level(logging.DEBUG, logger="LiteLLM")
+    verbose_logger.debug("messages %s", [{"role": "user", "content": _DEBUG_PROMPT}])
+    verbose_logger.debug("delta %s", Delta(content=_DEBUG_REPLY, role="assistant"))
+    verbose_logger.debug(
+        "gemini %s",
+        {"model": _DEBUG_MODEL, "contents": [{"role": "user", "parts": [{"text": _DEBUG_PROMPT}]}]},
+    )
+    verbose_logger.debug(
+        "responses %s",
+        {
+            "model": _DEBUG_MODEL,
+            "input": _DEBUG_PROMPT,
+            "output": [{"type": "message", "content": [{"type": "text", "text": _DEBUG_REPLY}]}],
+        },
+    )
+    verbose_logger.debug(
+        "anthropic %s",
+        {
+            "model": _DEBUG_MODEL,
+            "system": _DEBUG_PROMPT,
+            "content": [{"type": "text", "text": _DEBUG_REPLY}],
+        },
+    )
+    token_counter(model="gpt-4o-mini", text=_DEBUG_PROMPT)
+    verbose_logger.warning("fallback failed: %s", "upstream timed out talking to gpt-4o-mini")
+
+    assert _DEBUG_PROMPT not in caplog.text
+    assert _DEBUG_REPLY not in caplog.text
+    assert _DEBUG_MODEL in caplog.text
+    assert "upstream timed out talking to gpt-4o-mini" in caplog.text
+    assert REDACTED_BY_LITELLM in caplog.text
+
+
+def test_request_str_debug_line_keeps_the_prompt_when_message_logging_is_on(logging_obj, caplog, monkeypatch):
+    monkeypatch.setattr(litellm, "turn_off_message_logging", False)
+    caplog.set_level(logging.DEBUG, logger="LiteLLM")
+
+    logging_obj.pre_call(
+        input=_DEBUG_PROMPT,
+        api_key="",
+        additional_args={
+            "api_base": _DEBUG_API_BASE,
+            "headers": {},
+            "complete_input_dict": {},
+            "request_str": f"chat.send_message({_DEBUG_PROMPT})",
+        },
+    )
+
+    assert _DEBUG_PROMPT in caplog.text
+
+
+def test_turn_off_message_logging_redacts_request_str_debug_line(logging_obj, caplog, monkeypatch):
+    monkeypatch.setattr(litellm, "turn_off_message_logging", True)
+    caplog.set_level(logging.DEBUG, logger="LiteLLM")
+    logging_obj.model_call_details["litellm_params"] = {"metadata": {}}
+
+    logging_obj.pre_call(
+        input=_DEBUG_PROMPT,
+        api_key="",
+        additional_args={
+            "api_base": _DEBUG_API_BASE,
+            "headers": {},
+            "complete_input_dict": {},
+            "request_str": f"chat.send_message({_DEBUG_PROMPT})",
+        },
+    )
+
+    assert _DEBUG_PROMPT not in caplog.text
+    assert _DEBUG_API_BASE in caplog.text
+    assert REDACTED_BY_LITELLM in caplog.text
+
+
 def test_debugging_log_honors_json_logs_set_after_import(logging_obj, monkeypatch):
     monkeypatch.setattr(litellm, "json_logs", True)
     logging_obj.litellm_request_debug = True
