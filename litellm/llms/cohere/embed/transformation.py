@@ -21,6 +21,8 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 import litellm
 from litellm import COHERE_DEFAULT_EMBEDDING_INPUT_TYPE
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from urllib.parse import urlsplit
+
 from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.base_llm import BaseEmbeddingConfig
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -209,7 +211,21 @@ class CohereEmbeddingConfig(BaseEmbeddingConfig):
         # ensure_api_route keeps the route-exists form working verbatim and
         # joins the route onto a bare host, so a gateway host and a full
         # endpoint are both usable as COHERE_API_BASE (see #50248).
-        return ensure_api_route(api_base or "https://api.cohere.ai/v2/embed", "v2/embed")
+        base = api_base or "https://api.cohere.ai/v2/embed"
+        # Fail fast when the value is a chat endpoint: the chat branch reads
+        # COHERE_API_BASE as a complete URL, so a chat-configured deployment
+        # would otherwise get embeddings joined onto it and 404 on upgrade
+        # (review of #50249). An explicit, actionable error beats a silent
+        # break of a working chat-only setup.
+        urlsplit_base = urlsplit(base.rstrip("/"))
+        if urlsplit_base.path.endswith(("/v2/chat", "/v1/chat")):
+            raise ValueError(
+                f"COHERE_API_BASE points at a chat endpoint ({base!r}), but "
+                "embeddings need a base URL ending in /v2/embed (or a bare "
+                "gateway host). Chat and embeddings share this variable with "
+                "different semantics — configure them separately."
+            )
+        return ensure_api_route(base, "v2/embed")
 
     def _transform_request(
         self, model: str, input: list[str], inference_params: dict
