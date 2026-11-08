@@ -3686,7 +3686,7 @@ def test_ProxyConfig__add_deployment_resolves_env_refs_after_db_decrypt(monkeypa
     assert deployment.litellm_params.api_base == "master-secret"
 
 
-def test_ProxyConfig__add_deployment_keeps_team_settings_scoped(monkeypatch):
+def test_ProxyConfig__add_deployment_keeps_team_settings_scoped(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LITELLM_TEST_TEAM_SETTING", "configured-value")
     monkeypatch.setattr(
         "litellm.proxy.proxy_server.decrypt_value_helper",
@@ -4015,8 +4015,8 @@ def test_ProxyConfig_decrypt_model_list_from_db_resolves_env_refs_after_db_decry
 
 
 def test_ProxyConfig_decrypt_model_list_from_db_keeps_decrypted_team_settings_scoped(
-    monkeypatch,
-):
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setenv("LITELLM_TEST_TEAM_SETTING", "configured-value")
     monkeypatch.setattr(
         "litellm.proxy.proxy_server.decrypt_value_helper",
@@ -4043,7 +4043,9 @@ def test_ProxyConfig_decrypt_model_list_from_db_keeps_decrypted_team_settings_sc
 
 @pytest.mark.parametrize("initial_load", (False, True))
 @pytest.mark.parametrize("team_id", (None, "team-1"))
-def test_db_model_parameters_keep_scope_through_decryption_and_router_loading(monkeypatch, initial_load, team_id):
+def test_db_model_parameters_keep_scope_through_decryption_and_router_loading(
+    monkeypatch: pytest.MonkeyPatch, initial_load: bool, team_id: str | None
+) -> None:
     monkeypatch.setenv("LITELLM_SALT_KEY", "test-model-settings-salt")
     monkeypatch.setenv("LITELLM_TEST_MODEL_ENDPOINT", "https://api.openai.com/v1")
     reference: Final = "os.environ/LITELLM_TEST_MODEL_ENDPOINT"

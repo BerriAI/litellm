@@ -17,6 +17,7 @@ def strip_env_refs_for_team_model(
     if info is None or info.get("team_id") is None:
         return litellm_params
 
+    # Private builders keep deep copying linear without recursion and leave caller inputs unchanged
     result: Final = dict[str, object]()
     pending: Final = deque[tuple[Mapping[str, object] | Sequence[object], dict[str, object] | list[object]]](
         ((litellm_params, result),)
