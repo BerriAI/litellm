@@ -3317,6 +3317,7 @@ def _complete_maritalk(ctx: CompletionDispatchContext) -> _CompletionDispatchRes
     model: Final = ctx.model
     model_response: Final = ctx.model_response
     optional_params: Final = ctx.optional_params
+    timeout: Final = ctx.timeout
 
     maritalk_key: Final = api_key or litellm.maritalk_key or get_secret("MARITALK_API_KEY") or litellm.api_key
 
@@ -3334,6 +3335,7 @@ def _complete_maritalk(ctx: CompletionDispatchContext) -> _CompletionDispatchRes
         encoding=_get_encoding(),
         api_key=maritalk_key,
         logging_obj=logging,
+        timeout=timeout,
         custom_llm_provider="maritalk",
         custom_prompt_dict=custom_prompt_dict,
     )

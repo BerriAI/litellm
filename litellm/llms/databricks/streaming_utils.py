@@ -1,6 +1,7 @@
 import json
 from typing import Final
 
+import httpx
 from pydantic import ConfigDict, TypeAdapter
 
 import litellm
@@ -144,6 +145,8 @@ class ModelResponseIterator:
             async for raw_chunk in self.async_response_iterator:
                 if sse_data := _sse_data(raw_chunk):
                     return sse_data
+        except httpx.TimeoutException:
+            raise
         except Exception as e:
             raise RuntimeError(f"Error receiving chunk from stream: {e}")
         raise StopAsyncIteration

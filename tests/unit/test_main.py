@@ -3009,6 +3009,26 @@ def test_responses_bridge_fake_stream_is_bounded_by_the_request_timeout_not_the_
     assert "".join(chunk.choices[0].delta.content or "" for chunk in response) == "hi"
 
 
+def test_maritalk_stream_sends_the_stream_timeout_to_the_upstream_request(respx_mock: respx.MockRouter) -> None:
+    chunk: Final = {"id": "chatcmpl-maritalk", "choices": [{"index": 0, "delta": {"content": "oi"}}]}
+    route: Final = respx_mock.post("https://maritalk.example/api/chat/completions").respond(
+        200, content=f"data: {json.dumps(chunk)}\n\ndata: [DONE]\n\n".encode()
+    )
+
+    response: Final = litellm.completion(
+        model="maritalk/sabia-3",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        stream_timeout=8.0,
+        timeout=600.0,
+        api_key="fake-key",
+        api_base="https://maritalk.example/api",
+    )
+
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in response) == "oi"
+    assert route.calls[0].request.extensions["timeout"]["read"] == 8.0
+
+
 _FOUNDRY_RESPONSES_FUNCTION_CALL_BODY: Final = {
     "id": "resp_foundry",
     "object": "response",

@@ -237,7 +237,7 @@ class CompletionDispatchContext:
     stream: bool | None
     temperature: float | None
     text_completion: bool
-    timeout: float | str | httpx.Timeout | None
+    timeout: float | httpx.Timeout | None
     timeout_for_optional_params: Callable[[Mapping[str, object]], float | httpx.Timeout]
     top_p: float | None
 

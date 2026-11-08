@@ -54,11 +54,12 @@ async def make_call(
     logging_obj,
     streaming_decoder: CustomStreamingDecoder | None = None,
     fake_stream: bool = False,
+    timeout: float | httpx.Timeout | None = None,
 ):
     if client is None:
         client = litellm.module_level_aclient
 
-    response: Final = await client.post(api_base, headers=headers, data=data, stream=not fake_stream)
+    response: Final = await client.post(api_base, headers=headers, data=data, stream=not fake_stream, timeout=timeout)
 
     if streaming_decoder is not None:
         completion_stream = streaming_decoder.aiter_bytes(response.aiter_bytes(chunk_size=1024))
@@ -146,6 +147,7 @@ class OpenAILikeChatHandler(OpenAILikeBase):
         client: AsyncHTTPHandler | None = None,
         streaming_decoder: CustomStreamingDecoder | None = None,
         fake_stream: bool = False,
+        timeout: float | httpx.Timeout | None = None,
     ) -> CustomStreamWrapper:
         data["stream"] = True
         completion_stream: Final = await make_call(
@@ -157,6 +159,7 @@ class OpenAILikeChatHandler(OpenAILikeBase):
             messages=messages,
             logging_obj=logging_obj,
             streaming_decoder=streaming_decoder,
+            timeout=timeout,
         )
         streamwrapper: Final = CustomStreamWrapper(
             completion_stream=completion_stream,
@@ -204,8 +207,8 @@ class OpenAILikeChatHandler(OpenAILikeBase):
                 status_code=e.response.status_code,
                 message=e.response.text,
             )
-        except httpx.TimeoutException:
-            raise OpenAILikeError(status_code=408, message="Timeout error occurred.")
+        except litellm.Timeout as e:
+            raise OpenAILikeError(status_code=408, message=str(e))
         except Exception as e:
             raise OpenAILikeError(status_code=500, message=str(e))
 
@@ -319,6 +322,7 @@ class OpenAILikeChatHandler(OpenAILikeBase):
                     custom_llm_provider=custom_llm_provider,
                     streaming_decoder=streaming_decoder,
                     fake_stream=fake_stream,
+                    timeout=timeout,
                 )
             else:
                 return self.acompletion_function(
@@ -377,8 +381,8 @@ class OpenAILikeChatHandler(OpenAILikeBase):
                         status_code=e.response.status_code,
                         message=e.response.text,
                     )
-                except httpx.TimeoutException:
-                    raise OpenAILikeError(status_code=408, message="Timeout error occurred.")
+                except litellm.Timeout as e:
+                    raise OpenAILikeError(status_code=408, message=str(e))
                 except Exception as e:
                     raise OpenAILikeError(status_code=500, message=str(e))
         return OpenAILikeChatConfig._transform_response(
