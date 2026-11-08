@@ -1,5 +1,7 @@
 import React from "react";
-import { Alert } from "antd";
+import { useTranslation } from "react-i18next";
+import { TriangleAlert } from "lucide-react";
+import { Alert, AlertDescription, AlertTitle } from "@/components/shared/Alert";
 import { AUTH_TYPE } from "@/components/mcp_tools/types";
 
 /**
@@ -8,14 +10,13 @@ import { AUTH_TYPE } from "@/components/mcp_tools/types";
  * that server, so callers reach the upstream without a LiteLLM identity.
  */
 export default function TruePassthroughWarning({ authType }: { authType?: string | null }) {
+  const { t } = useTranslation();
   if (authType !== AUTH_TYPE.TRUE_PASSTHROUGH) return null;
   return (
-    <Alert
-      type="warning"
-      showIcon
-      className="mb-4 rounded-lg"
-      message="True Passthrough disables LiteLLM authentication for this server"
-      description="Anyone who can reach the gateway can call this server without a LiteLLM key. The caller's Authorization header is forwarded to the upstream verbatim, per-key and per-team rate limits and spend tracking do not apply, and the upstream is fully responsible for authenticating callers. Choose OAuth Delegate instead if callers should still authenticate to LiteLLM."
-    />
+    <Alert className="mb-4">
+      <TriangleAlert />
+      <AlertTitle>{t("mcpServers.truePassthroughWarning.title")}</AlertTitle>
+      <AlertDescription>{t("mcpServers.truePassthroughWarning.description")}</AlertDescription>
+    </Alert>
   );
 }

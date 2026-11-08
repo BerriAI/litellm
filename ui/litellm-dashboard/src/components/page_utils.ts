@@ -2,7 +2,8 @@
  * Utility functions for working with navigation pages
  */
 
-import { menuGroups } from "./leftnav";
+import i18n from "@/i18n/i18n";
+import { groupText, labelText, menuGroups } from "./leftnav";
 import { pageDescriptions, PageMetadata } from "./page_metadata";
 import { internalUserRoles } from "@/utils/roles";
 
@@ -43,27 +44,29 @@ export const getAvailablePages = (): PageMetadata[] => {
         item.page !== "settings" &&
         isPageAccessibleToInternalUsers(item.roles)
       ) {
-        const label = typeof item.label === "string" ? item.label : item.key;
         pages.push({
           page: item.page,
-          label: label,
-          group: group.groupLabel,
-          description: pageDescriptions[item.page] || "No description available",
+          label: labelText(item),
+          group: groupText(group.groupLabel),
+          description: pageDescriptions[item.page]
+            ? i18n.t(pageDescriptions[item.page])
+            : i18n.t("adminPanel.pageVisibility.noDescription"),
         });
       }
 
       // Add children items (also skip those internal users cannot access)
       if (item.children) {
-        const parentLabel = typeof item.label === "string" ? item.label : item.key;
+        const parentLabel = labelText(item);
         item.children.forEach((child) => {
           // Include if internal users can access
           if (isPageAccessibleToInternalUsers(child.roles)) {
-            const childLabel = typeof child.label === "string" ? child.label : child.key;
             pages.push({
               page: child.page,
-              label: childLabel,
-              group: `${group.groupLabel} > ${parentLabel}`,
-              description: pageDescriptions[child.page] || "No description available",
+              label: labelText(child),
+              group: `${groupText(group.groupLabel)} > ${parentLabel}`,
+              description: pageDescriptions[child.page]
+                ? i18n.t(pageDescriptions[child.page])
+                : i18n.t("adminPanel.pageVisibility.noDescription"),
             });
           }
         });

@@ -10,11 +10,11 @@ request. Both are pure-CPU and deterministic.
 import pytest
 from mcp.types import Tool as MCPTool
 
-from litellm.experimental_mcp_client.tools import (
+from litellm.mcp_client.tools import (
     transform_mcp_tool_to_openai_tool,
     transform_openai_tool_call_request_to_mcp_tool_call_request,
 )
-from litellm.proxy._experimental.mcp_server.utils import (
+from litellm.proxy.mcp_server.utils import (
     add_server_prefix_to_name,
     split_server_prefix_from_name,
 )

@@ -1,5 +1,10 @@
-import { CodeOutlined, PlayCircleOutlined } from "@ant-design/icons";
-import { Alert, Button, Card, Input, Space, Tabs, Typography } from "antd";
+import { Code, CircleAlert, CirclePlay, Info } from "lucide-react";
+import { useTranslation } from "react-i18next";
+import { Alert, AlertDescription, AlertTitle } from "@/components/shared/Alert";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Textarea } from "@/components/ui/textarea";
 import ModelSelector from "@/components/common_components/ModelSelector";
 import { TestResult } from "./semanticFilterTestUtils";
 
@@ -7,8 +12,8 @@ interface MCPSemanticFilterTestPanelProps {
   accessToken: string | null;
   testQuery: string;
   setTestQuery: (value: string) => void;
-  testModel: string;
-  setTestModel: (value: string) => void;
+  testModel: string | null;
+  setTestModel: (value: string | null) => void;
   isTesting: boolean;
   onTest: () => void;
   filterEnabled: boolean;
@@ -30,148 +35,154 @@ export default function MCPSemanticFilterTestPanel({
   testError,
   curlCommand,
 }: MCPSemanticFilterTestPanelProps) {
+  const { t } = useTranslation();
+  const canRunTest = testQuery && testModel && filterEnabled;
+  const testDisabled = isTesting || !canRunTest;
+
   return (
-    <Card title="Test Configuration" style={{ marginBottom: 16 }}>
-      <Tabs
-        defaultActiveKey="test"
-        items={[
-          {
-            key: "test",
-            label: "Test",
-            children: (
-              <Space direction="vertical" style={{ width: "100%" }} size="large">
-                <div>
-                  <Typography.Text strong style={{ display: "block", marginBottom: 8 }}>
-                    <PlayCircleOutlined /> Test Query
-                  </Typography.Text>
-                  <Input.TextArea
-                    placeholder="Enter a test query to see which tools would be selected..."
-                    value={testQuery}
-                    onChange={(e) => setTestQuery(e.target.value)}
-                    rows={4}
-                    disabled={isTesting}
-                  />
-                </div>
+    <Card className="mb-4">
+      <CardHeader>
+        <CardTitle>{t("mcpServers.semanticFilterTestPanel.title")}</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <Tabs defaultValue="test">
+          <TabsList>
+            <TabsTrigger value="test" className="flex-none">
+              {t("mcpServers.semanticFilterTestPanel.tabs.test")}
+            </TabsTrigger>
+            <TabsTrigger value="api" className="flex-none">
+              {t("mcpServers.semanticFilterTestPanel.tabs.api")}
+            </TabsTrigger>
+          </TabsList>
 
-                <div>
-                  <ModelSelector
-                    accessToken={accessToken || ""}
-                    value={testModel}
-                    onChange={setTestModel}
-                    disabled={isTesting}
-                    showLabel={true}
-                    labelText="Select Model"
-                  />
-                </div>
-
-                <Button
-                  type="primary"
-                  icon={<PlayCircleOutlined />}
-                  onClick={onTest}
-                  loading={isTesting}
-                  disabled={!testQuery || !testModel || !filterEnabled}
-                  block
-                >
-                  Test Filter
-                </Button>
-
-                {!filterEnabled && (
-                  <Alert
-                    type="warning"
-                    message="Semantic filtering is disabled"
-                    description="Enable semantic filtering and save settings to test the filter."
-                    showIcon
-                  />
-                )}
-
-                {testError && (
-                  <Alert
-                    type="error"
-                    message="Semantic filtering did not run"
-                    description={testError}
-                    showIcon
-                    style={{ marginBottom: 16 }}
-                  />
-                )}
-
-                {testResult && (
-                  <div>
-                    <Typography.Title level={5}>Results</Typography.Title>
-                    <Alert
-                      type={testResult.totalTools - testResult.selectedTools > 0 ? "success" : "warning"}
-                      message={`${testResult.selectedTools} of ${testResult.totalTools} tools selected`}
-                      description={`${testResult.totalTools - testResult.selectedTools} tools filtered out`}
-                      showIcon
-                      style={{ marginBottom: 16 }}
-                    />
-                    <div>
-                      <Typography.Text strong style={{ display: "block", marginBottom: 8 }}>
-                        Selected Tools:
-                      </Typography.Text>
-                      <ul style={{ paddingLeft: 20, margin: 0 }}>
-                        {testResult.tools.map((tool, index) => (
-                          <li key={index} style={{ marginBottom: 4 }}>
-                            <Typography.Text>{tool}</Typography.Text>
-                          </li>
-                        ))}
-                      </ul>
-                      {testResult.selectedTools > testResult.tools.length && (
-                        <Typography.Text type="secondary" style={{ display: "block", marginTop: 8 }}>
-                          +{testResult.selectedTools - testResult.tools.length} more selected tools not shown
-                        </Typography.Text>
-                      )}
-                    </div>
-                  </div>
-                )}
-              </Space>
-            ),
-          },
-          {
-            key: "api",
-            label: "API Usage",
-            children: (
+          <TabsContent value="test">
+            <div className="flex w-full flex-col gap-6">
               <div>
-                <Space style={{ marginBottom: 8 }}>
-                  <CodeOutlined />
-                  <Typography.Text strong>API Usage</Typography.Text>
-                </Space>
-                <Typography.Text type="secondary" style={{ display: "block", marginBottom: 8 }}>
-                  Use this curl command to test the semantic filter with your current configuration.
-                </Typography.Text>
-                <Typography.Text strong style={{ display: "block", marginBottom: 8 }}>
-                  Response headers to check:
-                </Typography.Text>
-                <ul style={{ paddingLeft: 20, margin: "0 0 12px 0" }}>
-                  <li>
-                    <Typography.Text>x-litellm-semantic-filter: shows total tools → selected tools</Typography.Text>
-                    <Typography.Text type="secondary" style={{ display: "block" }}>
-                      Example: 10→3
-                    </Typography.Text>
-                  </li>
-                  <li>
-                    <Typography.Text>x-litellm-semantic-filter-tools: CSV of selected tool names</Typography.Text>
-                    <Typography.Text type="secondary" style={{ display: "block" }}>
-                      Example: wikipedia-fetch,github-search,slack-post
-                    </Typography.Text>
-                  </li>
-                </ul>
-                <pre
-                  style={{
-                    background: "#f5f5f5",
-                    padding: 12,
-                    borderRadius: 4,
-                    overflow: "auto",
-                    fontSize: 12,
-                    margin: 0,
-                  }}
-                >
-                  {curlCommand}
-                </pre>
+                <p className="mb-2 flex items-center gap-1.5 font-medium">
+                  <CirclePlay className="size-4" /> {t("mcpServers.semanticFilterTestPanel.testQuery.label")}
+                </p>
+                <Textarea
+                  className="field-sizing-fixed"
+                  placeholder={t("mcpServers.semanticFilterTestPanel.testQuery.placeholder")}
+                  value={testQuery}
+                  onChange={(e) => setTestQuery(e.target.value)}
+                  rows={4}
+                  disabled={isTesting}
+                />
               </div>
-            ),
-          },
-        ]}
-      />
+
+              <div>
+                <ModelSelector
+                  accessToken={accessToken || ""}
+                  value={testModel}
+                  onChange={setTestModel}
+                  disabled={isTesting}
+                  showLabel={true}
+                  labelText={t("mcpServers.semanticFilterTestPanel.modelLabel")}
+                />
+              </div>
+
+              <Button className="w-full" onClick={onTest} disabled={testDisabled}>
+                <CirclePlay />
+                {t("mcpServers.semanticFilterTestPanel.runButton")}
+              </Button>
+
+              {!filterEnabled && (
+                <Alert>
+                  <Info />
+                  <AlertTitle>{t("mcpServers.semanticFilterTestPanel.disabledAlert.title")}</AlertTitle>
+                  <AlertDescription>
+                    {t("mcpServers.semanticFilterTestPanel.disabledAlert.description")}
+                  </AlertDescription>
+                </Alert>
+              )}
+
+              {testError && (
+                <Alert variant="destructive" className="mb-4">
+                  <CircleAlert />
+                  <AlertTitle>{t("mcpServers.semanticFilterTestPanel.errorAlert.title")}</AlertTitle>
+                  <AlertDescription>{testError}</AlertDescription>
+                </Alert>
+              )}
+
+              {testResult && (
+                <div>
+                  <h5 className="mb-2 text-base font-medium">
+                    {t("mcpServers.semanticFilterTestPanel.results.title")}
+                  </h5>
+                  <Alert className="mb-4">
+                    <Info />
+                    <AlertTitle>
+                      {t("mcpServers.semanticFilterTestPanel.results.summary", {
+                        selected: testResult.selectedTools,
+                        total: testResult.totalTools,
+                      })}
+                    </AlertTitle>
+                    <AlertDescription>
+                      {t("mcpServers.semanticFilterTestPanel.results.filteredOut", {
+                        filtered: testResult.totalTools - testResult.selectedTools,
+                      })}
+                    </AlertDescription>
+                  </Alert>
+                  <div>
+                    <p className="mb-2 block font-medium">
+                      {t("mcpServers.semanticFilterTestPanel.results.selectedToolsLabel")}
+                    </p>
+                    <ul className="m-0 list-disc pl-5">
+                      {testResult.tools.map((tool, index) => (
+                        <li key={index} className="mb-1">
+                          <span>{tool}</span>
+                        </li>
+                      ))}
+                    </ul>
+                    {testResult.selectedTools > testResult.tools.length && (
+                      <p className="mt-2 block text-sm text-muted-foreground">
+                        {t("mcpServers.semanticFilterTestPanel.results.moreNotShown", {
+                          more: testResult.selectedTools - testResult.tools.length,
+                        })}
+                      </p>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          </TabsContent>
+
+          <TabsContent value="api">
+            <div>
+              <div className="mb-2 flex items-center gap-2">
+                <Code className="size-4" />
+                <p className="font-medium">{t("mcpServers.semanticFilterTestPanel.api.title")}</p>
+              </div>
+              <p className="mb-2 block text-sm text-muted-foreground">
+                {t("mcpServers.semanticFilterTestPanel.api.description")}
+              </p>
+              <p className="mb-2 block font-medium">{t("mcpServers.semanticFilterTestPanel.api.headersTitle")}</p>
+              <ul className="mt-0 mr-0 mb-3 ml-0 list-disc pl-5">
+                <li>
+                  <span>
+                    {t("mcpServers.semanticFilterTestPanel.api.filterHeader", { header: "x-litellm-semantic-filter" })}
+                  </span>
+                  <span className="block text-sm text-muted-foreground">
+                    {t("mcpServers.semanticFilterTestPanel.api.filterHeaderExample")}
+                  </span>
+                </li>
+                <li>
+                  <span>
+                    {t("mcpServers.semanticFilterTestPanel.api.toolsHeader", {
+                      header: "x-litellm-semantic-filter-tools",
+                    })}
+                  </span>
+                  <span className="block text-sm text-muted-foreground">
+                    {t("mcpServers.semanticFilterTestPanel.api.toolsHeaderExample")}
+                  </span>
+                </li>
+              </ul>
+              <pre className="m-0 overflow-auto rounded-sm bg-muted p-3 text-xs">{curlCommand}</pre>
+            </div>
+          </TabsContent>
+        </Tabs>
+      </CardContent>
     </Card>
   );
 }

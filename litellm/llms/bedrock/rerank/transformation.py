@@ -4,9 +4,11 @@ Translates from Cohere's `/v1/rerank` input format to Bedrock's `/rerank` input 
 Why separate file? Make it easy to see how transformation works
 """
 
-from litellm._uuid import uuid
-from typing import List, Optional, Union
+from typing import Final
 
+from pydantic import TypeAdapter
+
+from litellm._uuid import uuid
 from litellm.types.llms.bedrock import (
     BedrockRerankBedrockRerankingConfiguration,
     BedrockRerankConfiguration,
@@ -29,11 +31,11 @@ from litellm.types.rerank import (
 
 
 class BedrockRerankConfig:
-    def _transform_sources(self, documents: List[Union[str, dict]]) -> List[BedrockRerankSource]:
+    def _transform_sources(self, documents: list[str | dict]) -> list[BedrockRerankSource]:
         """
         Transform the sources from RerankRequest format to Bedrock format.
         """
-        _sources = []
+        _sources: Final = []
         for document in documents:
             if isinstance(document, str):
                 _sources.append(
@@ -58,7 +60,7 @@ class BedrockRerankConfig:
         """
         Transform the request from RerankRequest format to Bedrock format.
         """
-        _sources = self._transform_sources(request_data.documents)
+        _sources: Final = self._transform_sources(request_data.documents)
 
         return BedrockRerankRequest(
             queries=[
@@ -77,6 +79,12 @@ class BedrockRerankConfig:
             sources=_sources,
         )
 
+    def transform_request(
+        self,
+        request_data: RerankRequest,
+    ) -> BedrockRerankRequest:
+        return self._transform_request(request_data)
+
     def _transform_response(self, response: dict) -> RerankResponse:
         """
         Transform the response from Bedrock into the RerankResponse format.
@@ -84,13 +92,15 @@ class BedrockRerankConfig:
         example input:
         {"results":[{"index":0,"relevanceScore":0.6847912669181824},{"index":1,"relevanceScore":0.5980774760246277}]}
         """
-        _billed_units = RerankBilledUnits(**response.get("usage", {"search_units": 1}))  # by default 1 search unit
-        _tokens = RerankTokens(**response.get("usage", {}))
-        rerank_meta = RerankResponseMeta(billed_units=_billed_units, tokens=_tokens)
+        _billed_units: Final = TypeAdapter(RerankBilledUnits).validate_python(
+            response.get("usage", {"search_units": 1})
+        )
+        _tokens: Final = RerankTokens(**response.get("usage", {}))
+        rerank_meta: Final = RerankResponseMeta(billed_units=_billed_units, tokens=_tokens)
 
-        _results: Optional[List[RerankResponseResult]] = None
+        _results: list[RerankResponseResult] | None = None
 
-        bedrock_results = response.get("results")
+        bedrock_results: Final = response.get("results")
         if bedrock_results:
             _results = [
                 RerankResponseResult(
@@ -108,3 +118,9 @@ class BedrockRerankConfig:
             results=_results,
             meta=rerank_meta,
         )  # Return response
+
+    def transform_response(
+        self,
+        response: dict[str, object],  # mutable-ok: mirrors override contract
+    ) -> RerankResponse:
+        return self._transform_response(response)

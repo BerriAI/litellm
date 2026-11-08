@@ -6,6 +6,8 @@ import type { TooltipValueType } from "recharts";
 
 import { cn } from "@/lib/cva.config";
 
+const DEFAULT_PAYLOAD_KEY = "value";
+
 // Format: { THEME_NAME: CSS_SELECTOR }
 const THEMES = { light: "", dark: ".dark" } as const;
 
@@ -178,7 +180,7 @@ const ChartTooltipContent = React.forwardRef<
           {payload
             .filter((item) => item.type !== "none")
             .map((item, index) => {
-              const key = `${nameKey ?? item.name ?? item.dataKey ?? "value"}`;
+              const key = `${nameKey ?? item.name ?? item.dataKey ?? DEFAULT_PAYLOAD_KEY}`;
               const itemConfig = getPayloadConfigFromPayload(config, item, key);
               const indicatorColor = color ?? item.payload?.fill ?? item.color;
               const indicatorVariants = {
@@ -264,12 +266,16 @@ const ChartLegendContent = React.forwardRef<
   return (
     <div
       ref={ref}
-      className={cn("flex items-center justify-center gap-4", verticalAlign === "top" ? "pb-3" : "pt-3", className)}
+      className={cn(
+        "flex flex-wrap items-center justify-center gap-x-4 gap-y-1",
+        verticalAlign === "top" ? "pb-3" : "pt-3",
+        className,
+      )}
     >
       {payload
         .filter((item) => item.type !== "none")
         .map((item, index) => {
-          const key = `${nameKey ?? item.dataKey ?? "value"}`;
+          const key = `${nameKey ?? item.dataKey ?? DEFAULT_PAYLOAD_KEY}`;
           const itemConfig = getPayloadConfigFromPayload(config, item, key);
 
           return (

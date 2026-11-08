@@ -1,5 +1,7 @@
-import { Button, Input, InputNumber } from "antd";
 import React from "react";
+import { useTranslation } from "react-i18next";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 
 export interface TagRateLimitEntry {
   // Stable identity for React list keys so deleting a middle row doesn't shift
@@ -55,6 +57,7 @@ interface TagRateLimitEditorProps {
 }
 
 export function TagRateLimitEditor({ value, onChange }: TagRateLimitEditorProps) {
+  const { t } = useTranslation();
   const addRow = () => {
     onChange([...value, { id: newRowId(), tag: "", rpm_limit: null }]);
   };
@@ -72,31 +75,40 @@ export function TagRateLimitEditor({ value, onChange }: TagRateLimitEditorProps)
       {value.map((row, idx) => (
         <div key={row.id} style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 12 }}>
           <Input
+            aria-label={t("keyTeamHelpers.tagRateLimitEditor.tag")}
             value={row.tag}
             onChange={(e) => updateRow(idx, "tag", e.target.value)}
-            placeholder="Tag (e.g. cell-1)"
+            placeholder={t("keyTeamHelpers.tagRateLimitEditor.tagPlaceholder")}
             style={{ width: 180 }}
           />
-          <InputNumber
+          <Input
+            aria-label={t("keyTeamHelpers.tagRateLimitEditor.rpmLimit")}
+            type="number"
             min={0}
-            value={row.rpm_limit ?? undefined}
-            onChange={(v) => updateRow(idx, "rpm_limit", v ?? null)}
-            placeholder="RPM"
+            value={row.rpm_limit ?? ""}
+            onChange={(e) => updateRow(idx, "rpm_limit", e.target.value === "" ? null : Number(e.target.value))}
+            placeholder={t("keyTeamHelpers.tagRateLimitEditor.rpmPlaceholder")}
             style={{ width: 120 }}
           />
-          <Button type="text" danger size="small" onClick={() => removeRow(idx)} style={{ padding: "0 4px" }}>
+          <Button
+            variant="destructive"
+            size="sm"
+            aria-label={t("keyTeamHelpers.tagRateLimitEditor.removeTagLimit")}
+            onClick={() => removeRow(idx)}
+          >
             ✕
           </Button>
         </div>
       ))}
       <Button
-        size="small"
+        variant="outline"
+        size="sm"
         onClick={(e) => {
           e.preventDefault();
           addRow();
         }}
       >
-        + Add Tag Limit
+        {t("keyTeamHelpers.tagRateLimitEditor.addTagLimit")}
       </Button>
     </div>
   );

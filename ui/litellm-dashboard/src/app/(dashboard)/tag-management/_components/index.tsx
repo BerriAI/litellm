@@ -1,14 +1,15 @@
 import React, { useState, useEffect } from "react";
-import { Icon, Button, Col, Text, Grid } from "@tremor/react";
-import { RefreshIcon } from "@heroicons/react/outline";
+import { RefreshCw } from "lucide-react";
+import { Trans, useTranslation } from "react-i18next";
+import { Button } from "@/components/ui/button";
 import TagInfoView from "./tag_info";
 import { modelInfoCall } from "@/components/networking";
 import { tagCreateCall, tagListCall, tagDeleteCall } from "@/components/networking";
 import { Tag } from "@/components/tag_management/types";
 import TagTable from "./TagTable";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
-import CreateTagModal from "./components/CreateTagModal";
+import CreateTagModal, { CreateTagFormValues } from "./components/CreateTagModal";
 
 interface ModelInfo {
   model_name: string;
@@ -20,6 +21,9 @@ interface ModelInfo {
   };
 }
 
+const numericPayload = (value: string | undefined): number | undefined =>
+  value === undefined || value === "" ? undefined : Number(value);
+
 interface TagProps {
   accessToken: string | null;
   userID: string | null;
@@ -27,6 +31,7 @@ interface TagProps {
 }
 
 const TagManagement: React.FC<TagProps> = ({ accessToken, userID, userRole }) => {
+  const { t } = useTranslation();
   const [tags, setTags] = useState<Tag[]>([]);
   const [isLoadingTags, setIsLoadingTags] = useState(true);
   const [isCreateModalVisible, setIsCreateModalVisible] = useState(false);
@@ -48,7 +53,7 @@ const TagManagement: React.FC<TagProps> = ({ accessToken, userID, userRole }) =>
       setTags(Object.values(response));
     } catch (error) {
       console.error("Error fetching tags:", error);
-      NotificationsManager.fromBackend("Error fetching tags: " + error);
+      toast.fromError(t("tagManagement.page.toasts.fetchTagsFailed", { error: String(error) }));
     } finally {
       setIsLoadingTags(false);
     }
@@ -60,25 +65,24 @@ const TagManagement: React.FC<TagProps> = ({ accessToken, userID, userRole }) =>
     setLastRefreshed(currentDate.toLocaleString());
   };
 
-  const handleCreate = async (formValues: any) => {
+  const handleCreate = async (formValues: CreateTagFormValues) => {
     if (!accessToken) return;
     try {
       await tagCreateCall(accessToken, {
         name: formValues.tag_name,
         description: formValues.description,
         models: formValues.allowed_llms,
-        max_budget: formValues.max_budget,
-        soft_budget: formValues.soft_budget,
-        tpm_limit: formValues.tpm_limit,
-        rpm_limit: formValues.rpm_limit,
+        max_budget: numericPayload(formValues.max_budget),
+        tpm_limit: numericPayload(formValues.tpm_limit),
+        rpm_limit: numericPayload(formValues.rpm_limit),
         budget_duration: formValues.budget_duration,
       });
-      NotificationsManager.success("Tag created successfully");
+      toast.success(t("tagManagement.page.toasts.created"));
       setIsCreateModalVisible(false);
       fetchTags();
     } catch (error) {
       console.error("Error creating tag:", error);
-      NotificationsManager.fromBackend("Error creating tag: " + error);
+      toast.fromError(t("tagManagement.page.toasts.createFailed", { error: String(error) }));
     }
   };
 
@@ -92,11 +96,11 @@ const TagManagement: React.FC<TagProps> = ({ accessToken, userID, userRole }) =>
     setIsDeleting(true);
     try {
       await tagDeleteCall(accessToken, tagToDelete);
-      NotificationsManager.success("Tag deleted successfully");
+      toast.success(t("tagManagement.page.toasts.deleted"));
       fetchTags();
     } catch (error) {
       console.error("Error deleting tag:", error);
-      NotificationsManager.fromBackend("Error deleting tag: " + error);
+      toast.fromError(t("tagManagement.page.toasts.deleteFailed", { error: String(error) }));
     } finally {
       setIsDeleting(false);
       setIsDeleteModalOpen(false);
@@ -114,19 +118,19 @@ const TagManagement: React.FC<TagProps> = ({ accessToken, userID, userRole }) =>
           }
         } catch (error) {
           console.error("Error fetching models:", error);
-          NotificationsManager.fromBackend("Error fetching models: " + error);
+          toast.fromError(t("tagManagement.page.toasts.fetchModelsFailed", { error: String(error) }));
         }
       };
       fetchModels();
     }
-  }, [accessToken, userID, userRole]);
+  }, [accessToken, userID, userRole, t]);
 
   useEffect(() => {
     fetchTags();
   }, [accessToken]);
 
   return (
-    <div className="mx-4 h-[75vh]">
+    <div className="mx-4 h-full">
       {selectedTagId ? (
         <TagInfoView
           tagId={selectedTagId}
@@ -139,51 +143,61 @@ const TagManagement: React.FC<TagProps> = ({ accessToken, userID, userRole }) =>
           editTag={editTag}
         />
       ) : (
-        <div className="gap-2 p-8 h-[75vh] w-full mt-2">
-          <div className="flex justify-between mt-2 w-full items-center mb-4">
-            <h1>Tag Management</h1>
+        <div className="flex h-full w-full flex-col p-8 pt-10">
+          <div className="mt-2 mb-4 flex w-full items-center justify-between">
+            <h1>{t("tagManagement.page.title")}</h1>
             <div className="flex items-center space-x-2">
-              {lastRefreshed && <Text>Last Refreshed: {lastRefreshed}</Text>}
-              <Icon
-                icon={RefreshIcon}
-                variant="shadow"
-                size="xs"
-                className="self-center cursor-pointer"
+              {lastRefreshed && (
+                <p className="text-sm">
+                  {t("tagManagement.page.lastRefreshedPrefix")}
+                  {lastRefreshed}
+                </p>
+              )}
+              <Button
+                variant="outline"
+                size="icon-sm"
+                aria-label={t("tagManagement.page.refresh")}
                 onClick={handleRefreshClick}
-              />
+              >
+                <RefreshCw />
+              </Button>
             </div>
           </div>
 
-          <Text className="mb-4">
-            Click on a tag name to view and edit its details.
+          <div className="mb-4 text-sm">
+            {t("tagManagement.page.intro")}
             <p>
-              You can use tags to restrict the usage of certain LLMs based on tags passed in the request. Read more
-              about tag routing{" "}
-              <a href="https://docs.litellm.ai/docs/proxy/tag_routing" target="_blank" rel="noopener noreferrer">
-                here
-              </a>
-              .
+              <Trans
+                i18nKey="tagManagement.page.routingHelp"
+                components={{
+                  docs: (
+                    <a
+                      href="https://docs.litellm.ai/docs/proxy/tag_routing"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    />
+                  ),
+                }}
+              />
             </p>
-          </Text>
+          </div>
 
-          <Button className="mb-4" onClick={() => setIsCreateModalVisible(true)}>
-            + Create New Tag
+          <Button className="mb-4 self-start" onClick={() => setIsCreateModalVisible(true)}>
+            {t("tagManagement.page.create")}
           </Button>
 
-          <Grid numItems={1} className="gap-2 pt-2 pb-2 h-[75vh] w-full mt-2">
-            <Col numColSpan={1}>
-              <TagTable
-                data={tags}
-                isLoading={isLoadingTags}
-                onEdit={(tag) => {
-                  setSelectedTagId(tag.name);
-                  setEditTag(true);
-                }}
-                onDelete={handleDelete}
-                onSelectTag={setSelectedTagId}
-              />
-            </Col>
-          </Grid>
+          <div className="mt-2 flex min-h-0 flex-1 flex-col">
+            <TagTable
+              data={tags}
+              isLoading={isLoadingTags}
+              onEdit={(tag) => {
+                setSelectedTagId(tag.name);
+                setEditTag(true);
+              }}
+              onDelete={handleDelete}
+              onSelectTag={setSelectedTagId}
+            />
+          </div>
 
           {/* Create Tag Modal */}
           <CreateTagModal
@@ -196,10 +210,12 @@ const TagManagement: React.FC<TagProps> = ({ accessToken, userID, userRole }) =>
           {/* Delete Confirmation Modal */}
           <DeleteResourceModal
             isOpen={isDeleteModalOpen}
-            title="Delete Tag"
-            message="Are you sure you want to delete this tag? This action cannot be undone."
-            resourceInformationTitle="Tag Information"
-            resourceInformation={[{ label: "Tag Name", value: tagToDelete, code: true }]}
+            title={t("tagManagement.page.deleteDialog.title")}
+            message={t("tagManagement.page.deleteDialog.message")}
+            resourceInformationTitle={t("tagManagement.page.deleteDialog.infoTitle")}
+            resourceInformation={[
+              { label: t("tagManagement.page.deleteDialog.tagName"), value: tagToDelete, code: true },
+            ]}
             onCancel={() => {
               setIsDeleteModalOpen(false);
               setTagToDelete(null);

@@ -1,8 +1,10 @@
 import React, { useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { Switch } from "@/components/ui/switch";
 import { Skeleton } from "@/components/ui/skeleton";
-import MessageManager from "@/components/molecules/message_manager";
+import { toast } from "@/lib/toast";
+import { Logo } from "@/components/molecules/logo/Logo";
 import { fetchMCPServers, listMCPTools } from "../networking";
 import { MCPServer } from "../mcp_tools/types";
 
@@ -13,6 +15,7 @@ interface Props {
 }
 
 const MCPConnectPicker: React.FC<Props> = ({ accessToken, selectedServers, onChange }) => {
+  const { t } = useTranslation();
   const [servers, setServers] = useState<MCPServer[]>([]);
   const [loadingServers, setLoadingServers] = useState(true);
   const [togglingOn, setTogglingOn] = useState<Set<string>>(new Set());
@@ -55,12 +58,12 @@ const MCPConnectPicker: React.FC<Props> = ({ accessToken, selectedServers, onCha
     try {
       const result = await listMCPTools(accessToken, serverName);
       if (result?.error) {
-        MessageManager.warning(`Could not load tools for ${serverName} \u2014 it will be excluded from this message.`);
+        toast.warning(t("chat.mcpConnectPicker.toolsUnavailable", { serverName }));
         return;
       }
       onChange([...selectedServers, serverName]);
     } catch {
-      MessageManager.warning(`Could not load tools for ${serverName} \u2014 it will be excluded from this message.`);
+      toast.warning(t("chat.mcpConnectPicker.toolsUnavailable", { serverName }));
     } finally {
       setTogglingOn((prev) => {
         const next = new Set(prev);
@@ -88,7 +91,9 @@ const MCPConnectPicker: React.FC<Props> = ({ accessToken, selectedServers, onCha
           ))}
         </div>
       ) : servers.length === 0 ? (
-        <div className="px-3 py-4 text-muted-foreground text-[13px] text-center">No MCP servers configured</div>
+        <div className="px-3 py-4 text-muted-foreground text-[13px] text-center">
+          {t("chat.mcpConnectPicker.noServers")}
+        </div>
       ) : (
         servers.map((server) => {
           const name = server.server_name ?? server.alias ?? server.server_id;
@@ -98,13 +103,10 @@ const MCPConnectPicker: React.FC<Props> = ({ accessToken, selectedServers, onCha
           return (
             <div key={server.server_id} className="flex items-start justify-between px-3 py-2 gap-3">
               {server.mcp_info?.logo_url && (
-                <img
+                <Logo
                   src={server.mcp_info.logo_url}
-                  alt={`${name} logo`}
+                  label={name}
                   className="w-6 h-6 rounded-md object-contain shrink-0 mt-0.5"
-                  onError={(e) => {
-                    (e.target as HTMLImageElement).style.display = "none";
-                  }}
                 />
               )}
               <div className="flex-1 min-w-0">

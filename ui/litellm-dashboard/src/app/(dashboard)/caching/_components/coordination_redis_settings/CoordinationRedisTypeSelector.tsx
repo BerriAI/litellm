@@ -1,5 +1,6 @@
 import React from "react";
-import { Select } from "antd";
+import { useTranslation } from "react-i18next";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   COORDINATION_REDIS_TYPES,
   COORDINATION_REDIS_TYPE_DESCRIPTIONS,
@@ -12,22 +13,32 @@ interface CoordinationRedisTypeSelectorProps {
   onTypeChange: (type: CoordinationRedisType) => void;
 }
 
-const OPTIONS = COORDINATION_REDIS_TYPES.map((type) => ({ value: type, label: COORDINATION_REDIS_TYPE_LABELS[type] }));
-
-const CoordinationRedisTypeSelector: React.FC<CoordinationRedisTypeSelectorProps> = ({ redisType, onTypeChange }) => (
-  <div className="space-y-2">
-    <label htmlFor="coordination-redis-type" className="text-sm font-medium text-gray-700">
-      Redis Type
-    </label>
-    <Select
-      id="coordination-redis-type"
-      value={redisType}
-      onChange={onTypeChange}
-      options={OPTIONS}
-      style={{ width: "100%" }}
-    />
-    <p className="text-xs text-gray-500">{COORDINATION_REDIS_TYPE_DESCRIPTIONS[redisType]}</p>
-  </div>
-);
+const CoordinationRedisTypeSelector: React.FC<CoordinationRedisTypeSelectorProps> = ({ redisType, onTypeChange }) => {
+  const { t } = useTranslation();
+  return (
+    <div className="space-y-2">
+      <label htmlFor="coordination-redis-type" className="text-sm font-medium">
+        {t("caching.coordinationRedis.redisType.label")}
+      </label>
+      <Select value={redisType} onValueChange={(value) => value !== null && onTypeChange(value)}>
+        <SelectTrigger id="coordination-redis-type" className="w-full">
+          <SelectValue>
+            {Object.hasOwn(COORDINATION_REDIS_TYPE_LABELS, redisType)
+              ? t(COORDINATION_REDIS_TYPE_LABELS[redisType])
+              : ""}
+          </SelectValue>
+        </SelectTrigger>
+        <SelectContent>
+          {COORDINATION_REDIS_TYPES.map((type) => (
+            <SelectItem key={type} value={type}>
+              {t(COORDINATION_REDIS_TYPE_LABELS[type])}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      <p className="text-xs text-muted-foreground">{COORDINATION_REDIS_TYPE_DESCRIPTIONS[redisType]}</p>
+    </div>
+  );
+};
 
 export default CoordinationRedisTypeSelector;

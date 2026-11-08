@@ -1,5 +1,7 @@
 import React, { useEffect, useState } from "react";
-import { Spin } from "antd";
+import { useTranslation } from "react-i18next";
+import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
+import { cn } from "@/lib/cva.config";
 import { fetchOpenAPIRegistry } from "@/components/networking";
 
 export interface OpenAPIKeyTool {
@@ -29,6 +31,7 @@ interface OpenAPIQuickPickerProps {
 }
 
 const OpenAPIQuickPicker: React.FC<OpenAPIQuickPickerProps> = ({ accessToken, selectedName, onSelect }) => {
+  const { t } = useTranslation();
   const [apis, setApis] = useState<OpenAPIRegistryEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [imgErrors, setImgErrors] = useState<Set<string>>(new Set());
@@ -49,9 +52,9 @@ const OpenAPIQuickPicker: React.FC<OpenAPIQuickPickerProps> = ({ accessToken, se
   if (loading) {
     return (
       <div className="mb-4">
-        <span className="text-sm font-medium text-gray-700">Popular APIs</span>
+        <span className="text-sm font-medium">{t("mcpServers.openApiQuickPicker.title")}</span>
         <div className="flex justify-center py-6">
-          <Spin size="small" />
+          <UiLoadingSpinner className="size-5 text-muted-foreground" />
         </div>
       </div>
     );
@@ -61,7 +64,7 @@ const OpenAPIQuickPicker: React.FC<OpenAPIQuickPickerProps> = ({ accessToken, se
 
   return (
     <div className="mb-4">
-      <span className="text-sm font-medium text-gray-700 block mb-2">Popular APIs</span>
+      <span className="mb-2 block text-sm font-medium">{t("mcpServers.openApiQuickPicker.title")}</span>
 
       <div className="grid grid-cols-5 gap-2">
         {apis.map((api) => {
@@ -73,34 +76,30 @@ const OpenAPIQuickPicker: React.FC<OpenAPIQuickPickerProps> = ({ accessToken, se
               type="button"
               title={api.description}
               onClick={() => onSelect(api)}
-              className={`flex flex-col items-center gap-1.5 p-3 rounded-lg border transition-all cursor-pointer
-                ${
-                  isSelected
-                    ? "border-blue-500 bg-blue-50 shadow-xs"
-                    : "border-gray-200 hover:border-blue-300 hover:bg-gray-50"
-                }`}
+              className={cn(
+                "flex cursor-pointer flex-col items-center gap-1.5 rounded-lg border p-3 transition-all",
+                isSelected ? "border-primary bg-accent shadow-xs" : "border-border hover:bg-accent",
+              )}
             >
               {imgFailed ? (
-                <span className="w-7 h-7 rounded-full bg-gray-200 flex items-center justify-center text-sm font-bold text-gray-600">
+                <span className="flex h-7 w-7 items-center justify-center rounded-full bg-muted text-sm font-bold text-muted-foreground">
                   {api.title.charAt(0)}
                 </span>
               ) : (
                 <img
                   src={api.icon_url}
                   alt={api.title}
-                  className="w-7 h-7 object-contain"
+                  className="h-7 w-7 object-contain"
                   onError={() => handleImgError(api.name)}
                 />
               )}
-              <span className="text-xs text-gray-600 text-center leading-tight font-medium">{api.title}</span>
+              <span className="text-center text-xs leading-tight font-medium text-muted-foreground">{api.title}</span>
             </button>
           );
         })}
       </div>
 
-      <p className="text-xs text-gray-400 mt-2">
-        Select an API to pre-fill the spec URL and OAuth 2.0 settings, or enter your own spec URL below.
-      </p>
+      <p className="mt-2 text-xs text-muted-foreground">{t("mcpServers.openApiQuickPicker.hint")}</p>
     </div>
   );
 };

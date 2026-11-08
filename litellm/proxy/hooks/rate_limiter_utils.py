@@ -2,19 +2,37 @@
 Shared utility functions for rate limiter hooks.
 """
 
-from typing import Optional, Tuple, Union
+from collections.abc import Mapping
+from typing import Final
+
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import PROXY_LLM_PROVIDER_FALLBACK
+from litellm.cost_calculator import ResponsesWebSocketTokenUsageProcessor
+from litellm.litellm_core_utils.core_helpers import iter_items
 from litellm.types.router import ModelGroupInfo
-from litellm.types.utils import PriorityReservationDict
+from litellm.types.utils import CallTypes, PriorityReservationDict, Usage
 
-PROXY_LLM_PROVIDER_FALLBACK = "litellm_proxy"
+_SOCKET_SESSION_EVENTS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
+
+
+def socket_session_usage(kwargs: Mapping[str, object], response_obj: object) -> Usage | None:
+    if not isinstance(response_obj, list):
+        return None
+    match kwargs.get("call_type"):
+        case CallTypes.aresponses_websocket.value:
+            return ResponsesWebSocketTokenUsageProcessor.collect_and_combine_usage_from_responses_ws_results(
+                _SOCKET_SESSION_EVENTS.validate_python(response_obj)
+            )
+        case _:
+            return None
 
 
 def resolve_llm_provider_for_rate_limit(
-    model: Optional[str],
-) -> Tuple[str, str]:
+    model: str | None,
+) -> tuple[str, str]:
     """
     Resolve ``(model, llm_provider)`` for a request being rejected by an
     internal proxy-side rate-limit hook.
@@ -53,7 +71,7 @@ def resolve_llm_provider_for_rate_limit(
             custom_llm_provider or PROXY_LLM_PROVIDER_FALLBACK,
         )
     except Exception as e:
-        alias_resolution = _resolve_provider_from_router_alias(model)
+        alias_resolution: Final = _resolve_provider_from_router_alias(model)
         if alias_resolution is not None:
             return alias_resolution
         verbose_proxy_logger.debug(
@@ -68,7 +86,7 @@ def resolve_llm_provider_for_rate_limit(
 
 def _resolve_provider_from_router_alias(
     model: str,
-) -> Optional[Tuple[str, str]]:
+) -> tuple[str, str] | None:
     """
     Resolve a router ``model_name`` alias to ``(underlying_model, provider)``
     by scanning the active router's ``model_list``.
@@ -86,10 +104,10 @@ def _resolve_provider_from_router_alias(
     if llm_router is None:
         return None
     try:
-        model_list = getattr(llm_router, "model_list", None)
+        model_list: Final[object] = llm_router.registry().all()
         if not model_list:
             return None
-        for deployment in model_list:
+        for deployment in iter_items(model_list):
             if not isinstance(deployment, dict):
                 continue
             if deployment.get("model_name") != model:
@@ -120,9 +138,7 @@ def _resolve_provider_from_router_alias(
         return None
 
 
-def convert_priority_to_percent(
-    value: Union[float, PriorityReservationDict], model_info: Optional[ModelGroupInfo]
-) -> float:
+def convert_priority_to_percent(value: float | PriorityReservationDict, model_info: ModelGroupInfo | None) -> float:
     """
     Convert priority reservation value to percentage (0.0-1.0).
 
@@ -143,8 +159,8 @@ def convert_priority_to_percent(
         return float(value)
 
     if isinstance(value, dict):
-        val_type = value.get("type", "percent")
-        val_num = value.get("value", 1.0)
+        val_type: Final = value.get("type", "percent")
+        val_num: Final = value.get("value", 1.0)
 
         if val_type == "percent":
             return float(val_num)

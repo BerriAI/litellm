@@ -1,0 +1,3 @@
+-- AlterTable
+ALTER TABLE "LiteLLM_Config" ADD COLUMN IF NOT EXISTS "last_run_at" TIMESTAMP(3),
+ADD COLUMN IF NOT EXISTS "reload_revision" BIGINT NOT NULL DEFAULT 0;

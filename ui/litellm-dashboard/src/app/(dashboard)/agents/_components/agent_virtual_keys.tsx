@@ -1,9 +1,9 @@
 import React from "react";
-import { Button, Tooltip, Typography } from "antd";
-import { KeyOutlined } from "@ant-design/icons";
+import { useTranslation } from "react-i18next";
+import { KeyRound } from "lucide-react";
 import { KeyResponse } from "@/components/key_team_helpers/key_list";
-
-const { Title, Text } = Typography;
+import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 
 interface AgentVirtualKeysProps {
   keys: KeyResponse[];
@@ -12,30 +12,35 @@ interface AgentVirtualKeysProps {
 }
 
 const AgentVirtualKeys: React.FC<AgentVirtualKeysProps> = ({ keys, isLoading, onKeyClick }) => {
+  const { t } = useTranslation();
   return (
-    <div style={{ marginTop: 24 }}>
-      <Title level={4}>Virtual Keys</Title>
+    <div className="mt-6">
+      <h4 className="text-base font-semibold text-foreground">{t("agents.virtualKeys.title")}</h4>
       {isLoading ? (
-        <Text className="mt-2 block">Loading keys...</Text>
+        <p className="mt-2 text-sm text-muted-foreground">{t("agents.virtualKeys.loading")}</p>
       ) : keys.length === 0 ? (
-        <Text className="mt-2 block text-gray-500">No virtual key assigned to this agent.</Text>
+        <p className="mt-2 text-sm text-muted-foreground">{t("agents.virtualKeys.empty")}</p>
       ) : (
         <div className="mt-3 flex flex-col gap-2">
           {keys.map((key) => (
-            <div key={key.token} className="flex items-center gap-3 border border-gray-100 rounded-sm px-3 py-2">
-              <KeyOutlined className="text-gray-400" />
-              <span className="font-medium">{key.key_alias || "Unnamed key"}</span>
-              {key.key_name && <span className="font-mono text-xs text-gray-500">{key.key_name}</span>}
-              <Tooltip title={key.token}>
-                <Button
-                  size="small"
-                  type="link"
-                  className="font-mono text-blue-500 ml-auto"
-                  onClick={() => onKeyClick(key)}
-                >
-                  {key.token?.slice(0, 12)}...
-                </Button>
-              </Tooltip>
+            <div key={key.token} className="flex items-center gap-3 rounded-sm border border-border px-3 py-2">
+              <KeyRound className="size-4 text-muted-foreground" />
+              <span className="text-sm font-medium text-foreground">
+                {key.key_alias || t("agents.virtualKeys.unnamed")}
+              </span>
+              {key.key_name && <span className="font-mono text-xs text-muted-foreground">{key.key_name}</span>}
+              <TooltipProvider delay={300}>
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <Button variant="link" size="sm" className="ml-auto font-mono" onClick={() => onKeyClick(key)}>
+                        {key.token?.slice(0, 12)}...
+                      </Button>
+                    }
+                  />
+                  <TooltipContent>{key.token}</TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
             </div>
           ))}
         </div>

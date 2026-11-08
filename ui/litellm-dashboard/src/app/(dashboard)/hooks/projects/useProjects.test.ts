@@ -115,8 +115,8 @@ describe("useProjects", () => {
     expect(global.fetch).not.toHaveBeenCalled();
   });
 
-  it("should fetch when userRole is an internal user role", async () => {
-    mockUseAuthorized.mockReturnValue({ accessToken: "test-token", userRole: "Internal User" });
+  it.each(["Internal User", "Org Admin"])("should fetch when userRole is %s", async (userRole) => {
+    mockUseAuthorized.mockReturnValue({ accessToken: "test-token", userRole });
     (global.fetch as any).mockResolvedValue({ ok: true, json: async () => mockProjects });
     const { result } = renderHook(() => useProjects(), { wrapper: makeWrapper(queryClient) });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
