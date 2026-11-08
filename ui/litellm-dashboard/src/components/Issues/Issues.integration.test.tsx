@@ -40,6 +40,11 @@ let families = FAMILY_SETTINGS;
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 
+async function refreshed(response: () => Response) {
+  if (holdReads) await refreshBarrier;
+  return response();
+}
+
 function activity() {
   const successful = allFailed ? 0 : 40;
   const metrics = {
@@ -128,10 +133,7 @@ describe("unified issue investigations", () => {
       if (url.pathname === "/management/v1/users/me")
         return json({ user_id: auth.userId, user_role: auth.userRole === "Admin" ? "proxy_admin" : "internal_user" });
       if (url.pathname === "/issues/foreign-issue") return json({ detail: "Forbidden private-project metadata" }, 403);
-      if (url.pathname === "/issues") {
-        if (holdReads) await refreshBarrier;
-        return listResponse(url.searchParams);
-      }
+      if (url.pathname === "/issues") return refreshed(() => listResponse(url.searchParams));
       if (url.pathname === "/issues/monitoring")
         return json({ enabled: true, incidents_used: 0, incident_limit: null });
       if (url.pathname === "/issues/families") return json(families);
@@ -162,8 +164,7 @@ describe("unified issue investigations", () => {
           holdReads = Boolean(refreshBarrier);
           return json({ ...detail, can_update_status: null, can_view_activity: null });
         }
-        if (holdReads) await refreshBarrier;
-        return json(detail);
+        return refreshed(() => json(detail));
       }
       return json({ detail: "Unexpected request" }, 404);
     });
@@ -290,6 +291,25 @@ describe("unified issue investigations", () => {
     } finally {
       await act(async () => refresh.resolve());
     }
+  });
+
+  it("waits for permissions when opening an alert first resolved from the feed", async () => {
+    const refresh = Promise.withResolvers<void>();
+    refreshBarrier = refresh.promise;
+    const view = renderWithProviders(<IssuesInbox />);
+    await screen.findByRole("link", { name: "Spend on Checkout key rose to 20× normal" });
+    try {
+      await userEvent.click(screen.getAllByRole("button", { name: "Mark resolved" })[0]);
+      await waitFor(() => expect(calls.filter((call) => call.path === "/issues")).toHaveLength(2));
+      view.rerender(<IssueDetail id={detail.id} />);
+      await waitFor(() =>
+        expect(calls.some((call) => call.method === "GET" && call.path === `/issues/${detail.id}`)).toBe(true),
+      );
+      expect(screen.queryByText("You don’t have access to this alert’s activity.")).not.toBeInTheDocument();
+    } finally {
+      await act(async () => refresh.resolve());
+    }
+    expect(await screen.findByRole("link", { name: "View key activity" })).toBeVisible();
   });
 
   it("leaves missing history unavailable instead of fabricating a chart", async () => {
