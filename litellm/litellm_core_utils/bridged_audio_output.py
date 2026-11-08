@@ -83,7 +83,8 @@ def _refusal_message(refusal: AudioOutputRefusal, endpoint: BridgedEndpoint) -> 
             return (
                 f"The request asks {refusal.model} for audio through {' and '.join(refusal.params)}, "
                 f"which {endpoint} cannot carry. Leave out {' and '.join(refusal.params)}, "
-                "or set drop_params: true to send the request without it."
+                "or set drop_params: true to send the request without it. "
+                f"If {refusal.model} can return audio, call /v1/chat/completions to get it."
             )
         case _:
             assert_never(refusal)

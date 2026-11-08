@@ -171,7 +171,8 @@ async def test_audio_request_is_refused_without_drop_params(
     assert refusal.value.status_code == 400
     assert (
         f"asks {VOICE_MODEL} for audio through {named}, which {endpoint} cannot carry. "
-        f"Leave out {named}, or set drop_params: true to send the request without it."
+        f"Leave out {named}, or set drop_params: true to send the request without it. "
+        f"If {VOICE_MODEL} can return audio, call /v1/chat/completions to get it."
     ) in str(refusal.value)
     assert upstream.call_count == 0
 
