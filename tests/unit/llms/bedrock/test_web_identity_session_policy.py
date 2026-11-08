@@ -33,11 +33,11 @@ import base64
 import itertools
 import json
 from collections.abc import Callable
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from fnmatch import fnmatchcase
 from types import MappingProxyType
 from typing import Final, TypeAlias
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from pydantic import TypeAdapter
@@ -73,6 +73,8 @@ from litellm.rag.ingestion.s3_vectors_ingestion import S3VectorsRAGIngestion
 from litellm.secret_managers.aws_secret_manager_v2 import AWSSecretsManagerV2
 from litellm.types.router import GenericLiteLLMParams
 
+_STS_SESSION_EXPIRATION: Final = datetime(2099, 1, 1, tzinfo=timezone.utc)
+
 # Actions the Claude Platform on AWS service is documented to call.
 # Source: AWS IAM action reference + the #27678 surface area.
 _CLAUDE_PLATFORM_ACTIONS = {
@@ -99,7 +101,7 @@ def _captured_policy_document() -> str:
             "AccessKeyId": "k",
             "SecretAccessKey": "s",
             "SessionToken": "t",
-            "Expiration": datetime.now(timezone.utc) + timedelta(hours=1),
+            "Expiration": _STS_SESSION_EXPIRATION,
         },
         "PackedPolicySize": 0,
     }
@@ -132,7 +134,7 @@ def _captured_policy() -> WebIdentitySessionPolicy:
 
 
 def _granted_actions(policy: WebIdentitySessionPolicy) -> frozenset[str]:
-    return frozenset(action for stmt in policy["Statement"] for action in stmt["Action"])
+    return frozenset(itertools.chain.from_iterable(stmt["Action"] for stmt in policy["Statement"]))
 
 
 def _statement_by_sid(policy: WebIdentitySessionPolicy, sid: str) -> _SessionPolicyStatement:
@@ -601,9 +603,6 @@ _PASS_ROLE_TARGET_BY_ROUTE: Final = MappingProxyType(
 )
 
 
-_STS_SESSION_EXPIRATION: Final = datetime(2099, 1, 1, tzinfo=timezone.utc)
-
-
 def _sts_mock() -> MagicMock:
     sts: Final = MagicMock()
     sts.assume_role_with_web_identity.return_value = {
@@ -635,6 +634,15 @@ def _policies_sent_to_sts(callers: tuple[BaseAWSLLM, ...], session_name: str) ->
         _SESSION_POLICY_ADAPTER.validate_python(json.loads(call.kwargs["Policy"]))
         for call in sts.assume_role_with_web_identity.call_args_list
     )
+
+
+_PROXY_ROLE_ARN: Final = "arn:aws:iam::123456789012:role/litellm-role"
+
+_KNOWLEDGE_BASE_ROLE_ACTIONS: Final = frozenset({"iam:CreateRole", "iam:PutRolePolicy", "iam:PassRole"})
+
+
+def _role_created_in_account(**create_role_request: str) -> dict[str, dict[str, str]]:
+    return {"Role": {"Arn": f"arn:aws:iam::123456789012:role/{create_role_request['RoleName']}"}}
 
 
 def _service(action: str) -> str:
@@ -691,7 +699,8 @@ class TestEachCallerGetsItsOwnCeiling:
             for stmt in _captured_policy()["Statement"]
             if any(_service(action) in other_services for action in stmt["Action"])
         )
-        assert frozenset(_service(action) for stmt in reaching for action in stmt["Action"]) == {"s3", "kms"}
+        reached_actions: Final = itertools.chain.from_iterable(stmt["Action"] for stmt in reaching)
+        assert frozenset(_service(action) for action in reached_actions) == {"s3", "kms"}
         assert all(
             stmt["Condition"].get("StringEquals") == {"aws:CalledViaLast": "bedrock.amazonaws.com"}
             or stmt["Condition"].get("StringLike") == {"kms:ViaService": "s3.*"}
@@ -745,6 +754,40 @@ class TestEachCallerGetsItsOwnCeiling:
             stmt["Condition"].get("StringEquals") == {"iam:AWSServiceName": "observability.aoss.amazonaws.com"}
             for stmt in granting
         )
+
+    async def test_knowledge_base_ingestion_can_only_create_and_pass_the_roles_it_names(self):
+        ingestion: Final = BedrockRAGIngestion(
+            ingest_options={
+                "vector_store": {
+                    "custom_llm_provider": "bedrock",
+                    "aws_region_name": "us-east-1",
+                    "aws_web_identity_token": "oidc/google/litellm",
+                    "aws_role_name": _PROXY_ROLE_ARN,
+                    "aws_session_name": "kb-role-scope",
+                }
+            }
+        )
+        sts: Final = _sts_mock()
+        iam: Final = MagicMock()
+        iam.create_role.side_effect = _role_created_in_account
+        with (
+            patch("boto3.client", return_value=sts),
+            patch("boto3.Session", return_value=MagicMock(client=MagicMock(return_value=iam))),
+            patch("litellm.llms.bedrock.base_aws_llm.get_secret", return_value="oidc-jwt-token"),
+            patch("asyncio.sleep", new=AsyncMock()),
+        ):
+            role_arn: Final = await ingestion._create_bedrock_role(
+                "abcd1234", "123456789012", "arn:aws:aoss:us-east-1:123456789012:collection/kb"
+            )
+        policy: Final = _SESSION_POLICY_ADAPTER.validate_python(
+            json.loads(sts.assume_role_with_web_identity.call_args.kwargs["Policy"])
+        )
+        granting: Final = tuple(
+            stmt for stmt in policy["Statement"] if _KNOWLEDGE_BASE_ROLE_ACTIONS & set(stmt["Action"])
+        )
+        assert _granted_actions(policy) >= _KNOWLEDGE_BASE_ROLE_ACTIONS
+        assert all(fnmatchcase(role_arn, stmt["Resource"]) for stmt in granting)
+        assert not any(fnmatchcase(_PROXY_ROLE_ARN, stmt["Resource"]) for stmt in granting)
 
     def test_config_bucket_reader_signs_with_a_read_only_ceiling(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setenv("AWS_WEB_IDENTITY_TOKEN", "oidc/google/litellm")

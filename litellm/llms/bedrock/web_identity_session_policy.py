@@ -27,6 +27,8 @@ _KmsViaService: TypeAlias = Literal["s3.*", "sqs.*", "secretsmanager.*"]
 
 _ViaServiceLike: Final = TypedDict("_ViaServiceLike", {"kms:ViaService": ReadOnly[_KmsViaService]})
 
+_StatementResource: TypeAlias = Literal["*", "arn:*:iam::*:role/litellm-bedrock-kb-*"]
+
 
 class _SessionPolicyCondition(TypedDict):
     Bool: ReadOnly[_SecureTransportBool]
@@ -38,7 +40,7 @@ class _SessionPolicyStatement(TypedDict):
     Sid: ReadOnly[str]
     Effect: ReadOnly[Literal["Allow"]]
     Action: ReadOnly[tuple[str, ...]]
-    Resource: ReadOnly[Literal["*"]]
+    Resource: ReadOnly[_StatementResource]
     Condition: NotRequired[ReadOnly[_SessionPolicyCondition]]
 
 
@@ -53,9 +55,12 @@ _SECURE_TRANSPORT_ONLY: Final = _SessionPolicyCondition(Bool=_SECURE_TRANSPORT)
 
 
 def _allow(
-    sid: str, actions: tuple[str, ...], condition: _SessionPolicyCondition = _SECURE_TRANSPORT_ONLY
+    sid: str,
+    actions: tuple[str, ...],
+    condition: _SessionPolicyCondition = _SECURE_TRANSPORT_ONLY,
+    resource: _StatementResource = "*",
 ) -> _SessionPolicyStatement:
-    return _SessionPolicyStatement(Sid=sid, Effect="Allow", Action=actions, Resource="*", Condition=condition)
+    return _SessionPolicyStatement(Sid=sid, Effect="Allow", Action=actions, Resource=resource, Condition=condition)
 
 
 def _allow_over_any_transport(sid: str, actions: tuple[str, ...]) -> _SessionPolicyStatement:
@@ -204,7 +209,11 @@ BEDROCK_KNOWLEDGE_BASE_INGESTION_SESSION_POLICY: Final = _policy(
             StringEquals=_ServiceLinkedRoleEquals({"iam:AWSServiceName": "observability.aoss.amazonaws.com"}),
         ),
     ),
-    _allow("KnowledgeBaseRoleLiteLLM", ("iam:CreateRole", "iam:PutRolePolicy")),
+    _allow(
+        "KnowledgeBaseRoleLiteLLM",
+        ("iam:CreateRole", "iam:PutRolePolicy"),
+        resource="arn:*:iam::*:role/litellm-bedrock-kb-*",
+    ),
     _allow(
         "KnowledgeBaseServiceRoleLiteLLM",
         ("iam:PassRole",),
@@ -212,6 +221,7 @@ BEDROCK_KNOWLEDGE_BASE_INGESTION_SESSION_POLICY: Final = _policy(
             Bool=_SECURE_TRANSPORT,
             StringEquals=_PassedToServiceEquals({"iam:PassedToService": "bedrock.amazonaws.com"}),
         ),
+        resource="arn:*:iam::*:role/litellm-bedrock-kb-*",
     ),
 )
 
