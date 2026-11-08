@@ -77,7 +77,7 @@ def test_activity_link_escapes_entity_identity_and_includes_baseline() -> None:
     assert query["activity_model"] == ["provider/model?foo=bar&other=1"]
     assert query["activity_from"] == ["2026-10-28"]
     assert query["activity_to"] == ["2026-11-04"]
-    assert query["alert"] == ["qa-alert"]
+    assert query["signal"] == ["qa-alert"]
     assert query["detail_tab"] == ["activity"]
 
 
