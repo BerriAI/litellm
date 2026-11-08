@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 pub mod budget_alerts;
+pub mod budget_context;
 pub mod budget_pricing;
 pub mod common_budgets;
 pub mod credential;
