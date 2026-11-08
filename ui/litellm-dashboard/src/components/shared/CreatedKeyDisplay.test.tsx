@@ -2,6 +2,7 @@ import { cloneElement, type MouseEventHandler, type ReactElement, type ReactNode
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { TerminologyProvider, useTerminology } from "@/contexts/TerminologyContext";
 import CreatedKeyDisplay, { buildAgentInstructions } from "./CreatedKeyDisplay";
 
 import { toast } from "@/lib/toast";
@@ -10,6 +11,10 @@ const mockCopy = vi.hoisted(() => vi.fn<(text: string) => void>());
 
 vi.mock("@/components/networking", () => ({
   getProxyBaseUrl: vi.fn(() => "http://gw.test:4000/"),
+}));
+
+vi.mock("@/app/(dashboard)/hooks/uiConfig/useUIConfig", () => ({
+  useUIConfig: () => ({ data: { use_si_terminology: true } }),
 }));
 
 vi.mock("react-copy-to-clipboard", () => ({
@@ -157,6 +162,23 @@ describe("CreatedKeyDisplay", () => {
     );
     expect(screen.getByRole("button", { name: "Copied!" })).toBeInTheDocument();
     expect(toast.success).toHaveBeenCalledWith("Instructions copied");
+  });
+
+  it("copies agent instructions in AI wording even when the UI uses SI terminology", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    const GatewayLabel = () => <span>{useTerminology()("AI Gateway")}</span>;
+    render(
+      <TerminologyProvider>
+        <GatewayLabel />
+        <CreatedKeyDisplay apiKey="sk-test-123" />
+      </TerminologyProvider>,
+    );
+
+    expect(screen.getByText("SI Gateway")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Copy instructions" }));
+
+    expect(mockCopy).toHaveBeenLastCalledWith(buildAgentInstructions("http://gw.test:4000", "sk-test-123"));
+    expect(mockCopy.mock.calls.at(-1)?.[0]).toContain("Use this LiteLLM AI gateway for model inference.");
   });
 });
 

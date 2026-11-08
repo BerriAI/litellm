@@ -1,11 +1,14 @@
 "use client";
 
 import React, { useMemo } from "react";
+import type { ParseKeys } from "i18next";
+import { useTranslation } from "react-i18next";
 import { ArrowDownRight, ArrowUpRight } from "lucide-react";
 import { ProviderLogo } from "@/components/molecules/models/ProviderLogo";
 import type { DailyData } from "@/components/UsagePage/types";
 import { cn } from "@/lib/cva.config";
 import {
+  colorForModel,
   formatMetricValue,
   leaderboard,
   OTHER_COLOR,
@@ -20,24 +23,32 @@ import { Segmented } from "./Primitives";
 import { providerForModel } from "./modelProvider";
 
 const METRIC_OPTIONS = [
-  { value: "spend", label: "Spend" },
-  { value: "tokens", label: "Tokens" },
-  { value: "requests", label: "Requests" },
-] as const satisfies readonly { value: UsageMetric; label: string }[];
+  { value: "spend", labelKey: "usage.breakdown.metricOptions.spend" },
+  { value: "tokens", labelKey: "usage.breakdown.metricOptions.tokens" },
+  { value: "requests", labelKey: "usage.breakdown.metricOptions.requests" },
+] as const satisfies readonly { value: UsageMetric; labelKey: ParseKeys }[];
 
 const DIMENSION_OPTIONS = [
-  { value: "model_groups", label: "Model" },
-  { value: "models", label: "Deployment" },
-  { value: "providers", label: "Provider" },
-] as const satisfies readonly { value: BreakdownDimension; label: string }[];
+  { value: "model_groups", labelKey: "usage.breakdown.dimensionOptions.modelGroups" },
+  { value: "models", labelKey: "usage.breakdown.dimensionOptions.models" },
+  { value: "providers", labelKey: "usage.breakdown.dimensionOptions.providers" },
+] as const satisfies readonly { value: BreakdownDimension; labelKey: ParseKeys }[];
 
 export interface BreakdownState {
   metric: UsageMetric;
   dimension: BreakdownDimension;
 }
 
-export const useBreakdown = (results: readonly DailyData[], { metric, dimension }: BreakdownState, top = 6) => {
-  const series = useMemo(() => seriesBy(results, dimension, metric, top), [results, dimension, metric, top]);
+export const useBreakdown = (
+  results: readonly DailyData[],
+  { metric, dimension }: BreakdownState,
+  top = 6,
+  colorByKey?: ReadonlyMap<string, string>,
+) => {
+  const series = useMemo(
+    () => seriesBy(results, dimension, metric, { top, colorByKey }),
+    [results, dimension, metric, top, colorByKey],
+  );
   const ranking = useMemo(() => leaderboard(results, dimension, metric), [results, dimension, metric]);
   return { series, ranking };
 };
@@ -51,19 +62,20 @@ export function BreakdownControls({
   onChange: (next: BreakdownState) => void;
   showDimension?: boolean;
 }) {
+  const { t } = useTranslation();
   return (
     <div className="flex flex-wrap items-center gap-2">
       <Segmented
-        label="Metric"
+        label={t("usage.breakdown.metricLabel")}
         value={state.metric}
-        options={METRIC_OPTIONS}
+        options={METRIC_OPTIONS.map(({ value, labelKey }) => ({ value, label: t(labelKey) }))}
         onChange={(metric) => onChange({ ...state, metric })}
       />
       {showDimension && (
         <Segmented
-          label="Group by"
+          label={t("usage.breakdown.groupByLabel")}
           value={state.dimension}
-          options={DIMENSION_OPTIONS}
+          options={DIMENSION_OPTIONS.map(({ value, labelKey }) => ({ value, label: t(labelKey) }))}
           onChange={(dimension) => onChange({ ...state, dimension })}
         />
       )}
@@ -114,6 +126,7 @@ export function Leaderboard({
   limit = 10,
   columns = 1,
   dense = false,
+  colorByKey,
 }: {
   ranking: readonly LeaderRow[];
   series: Series;
@@ -122,15 +135,18 @@ export function Leaderboard({
   limit?: number;
   columns?: 1 | 2;
   dense?: boolean;
+  colorByKey?: ReadonlyMap<string, string>;
 }) {
+  const { t } = useTranslation();
   const colorOf = (name: string) => {
+    if (colorByKey) return colorForModel(name, colorByKey);
     const index = series.labels.indexOf(name);
     return index === -1 ? OTHER_COLOR : series.colors[index];
   };
   const value = (row: LeaderRow) => rankValue(row, metric);
   const rows = ranking.slice(0, limit);
   if (rows.length === 0) {
-    return <p className="py-8 text-center text-xs text-muted-foreground">No usage in this range</p>;
+    return <p className="py-8 text-center text-xs text-muted-foreground">{t("usage.breakdown.empty")}</p>;
   }
   const half = columns === 2 ? Math.ceil(rows.length / 2) : rows.length;
   const groups = columns === 2 ? [rows.slice(0, half), rows.slice(half)] : [rows];
@@ -156,7 +172,9 @@ export function Leaderboard({
                 <span className="min-w-0">
                   <span className="block truncate text-sm font-medium text-foreground">{row.key}</span>
                   {providerForModel(row.key) && (
-                    <span className="block truncate text-xs text-muted-foreground">by {providerForModel(row.key)}</span>
+                    <span className="block truncate text-xs text-muted-foreground">
+                      {t("usage.breakdown.byProvider", { provider: providerForModel(row.key) })}
+                    </span>
                   )}
                 </span>
               </span>

@@ -8,6 +8,7 @@ import { ChevronRight } from "lucide-react";
 import { createContext, Fragment, useContext, useState, type ComponentProps, type ReactNode } from "react";
 
 import { Inspector } from "@/components/shared/Inspector";
+import i18n from "@/i18n/i18n";
 import { Skeleton } from "@/components/ui/skeleton";
 import { TableBody, TableCell, TableHead, TableHeader } from "@/components/ui/table";
 import { cn } from "@/lib/cva.config";
@@ -176,7 +177,12 @@ interface IndentProps<T> {
   readonly className?: string;
 }
 
-function Indent<T>({ row, toggleLabel = (expanded) => (expanded ? "Collapse" : "Expand"), className }: IndentProps<T>) {
+function Indent<T>({
+  row,
+  toggleLabel = (expanded) =>
+    expanded ? i18n.t("shared.inspectorTable.collapse") : i18n.t("shared.inspectorTable.expand"),
+  className,
+}: IndentProps<T>) {
   if (row.depth > 0) {
     const last = row.getParentRow()?.subRows.at(-1)?.id === row.id;
     return (

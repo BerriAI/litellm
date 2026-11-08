@@ -36,6 +36,7 @@ from litellm.proxy.proxy_server import (
     get_openapi_schema,
     mount_swagger_ui,
 )
+from tests.unit.litellm_core_utils.attribute_forwarder import AttributeForwarder
 
 from .conftest import normalize
 
@@ -207,6 +208,17 @@ def test_inject_websocket_stubs_into_openapi_schema_adds_stub():
         "responses": {"101": {"description": "WebSocket Protocol Switched"}},
         "tags": ["WebSocket"],
     }
+
+
+def test_inject_websocket_stubs_into_openapi_schema_documents_query_params_that_forward_their_fields():
+    query_param: Final = AttributeForwarder(SimpleNamespace(name="session_id", required=True))
+    route: Final = SimpleNamespace(path="/ws/chat", name="ws_chat", dependant=SimpleNamespace(query_params=[query_param]))
+
+    result: Final = _inject_websocket_stubs_into_openapi_schema({"paths": {}}, [route])
+
+    assert result["paths"]["/ws/chat"]["get"]["parameters"] == [
+        {"name": "session_id", "in": "query", "required": True, "schema": {"type": "string"}}
+    ]
 
 
 def test_inject_websocket_stubs_into_openapi_schema_does_not_overwrite_existing_get():

@@ -207,6 +207,26 @@ def test_claude_platform_api_key_auth_sets_workspace_and_key_headers():
     assert headers["anthropic-beta"] == "skills-2025-10-02"
 
 
+def test_claude_platform_chat_sends_the_binding_beta_when_thinking_carries_block_binding():
+    from litellm.llms.bedrock.claude_platform.transformation import (
+        BedrockClaudePlatformConfig,
+    )
+
+    headers: Final = BedrockClaudePlatformConfig().validate_environment(
+        api_key="fake-platform-key",
+        headers={},
+        model="claude-opus-5-5",
+        messages=[{"role": "user", "content": "hello"}],
+        optional_params={
+            "workspace_id": "wrkspc_test",
+            "thinking": {"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": "error"}},
+        },
+        litellm_params={},
+    )
+
+    assert "thinking-binding-controls-2026-08-01" in headers["anthropic-beta"].split(",")
+
+
 def test_claude_platform_does_not_use_standard_anthropic_api_key(monkeypatch):
     from litellm.llms.bedrock.claude_platform.transformation import (
         BedrockClaudePlatformConfig,

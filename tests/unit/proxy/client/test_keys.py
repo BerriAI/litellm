@@ -524,3 +524,27 @@ def test_list_gives_up_at_the_timeout_instead_of_hanging(hanging_server):
         client.list()
 
     assert time.monotonic() - started < 10
+
+
+@responses.activate
+def test_update_sends_only_the_given_fields_and_returns_the_updated_key(client):
+    updated = {"key": "key-abc", "key_alias": "renamed", "models": ["gpt-4o"]}
+    responses.add(
+        responses.POST,
+        f"{client._base_url}/key/update",
+        json=updated,
+        status=200,
+        match=[
+            responses.matchers.json_params_matcher({"key": "key-abc", "key_alias": "renamed", "models": ["gpt-4o"]})
+        ],
+    )
+
+    assert client.update(key="key-abc", key_alias="renamed", models=["gpt-4o"]) == updated
+
+
+@responses.activate
+def test_update_failure_carries_the_server_response_text(client):
+    responses.add(responses.POST, f"{client._base_url}/key/update", status=400, body="key not found")
+
+    with pytest.raises(Exception, match="Error updating key: key not found"):
+        client.update(key="key-abc")

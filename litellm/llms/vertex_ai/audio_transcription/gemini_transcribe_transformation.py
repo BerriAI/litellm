@@ -3,6 +3,7 @@ from collections.abc import Mapping, Sequence
 from typing import Final
 
 from httpx import Headers, Response
+from pydantic import TypeAdapter
 
 import litellm
 from litellm.exceptions import UnsupportedParamsError
@@ -45,6 +46,7 @@ from litellm.types.utils import (
 
 DEFAULT_GEMINI_TRANSCRIBE_LOCATION: Final = "global"
 AUDIO_MODALITY: Final = "AUDIO"
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class VertexGeminiAudioTranscriptionConfig(BaseAudioTranscriptionConfig, VertexBase):
@@ -177,11 +179,11 @@ class VertexGeminiAudioTranscriptionConfig(BaseAudioTranscriptionConfig, VertexB
         raw_response: Response,
     ) -> TranscriptionResponse:
         try:
-            response_json: Final = raw_response.json()
+            response_json: Final = _DECODED_JSON.validate_python(raw_response.json())
         except ValueError:
             raise VertexAIError(
                 status_code=raw_response.status_code,
-                message=f"Received non-JSON response from Vertex AI Gemini transcription: {raw_response.text}",
+                message="Received non-JSON response from Vertex AI Gemini transcription",
             )
         parsed: Final = VertexGeminiTranscriptionResponse.model_validate(response_json)
         texts: Final = tuple(

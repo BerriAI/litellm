@@ -6,6 +6,7 @@ import pytest
 
 from litellm.repositories.unit_of_work import (
     LinkedSpendResetWrites,
+    SpendResetWrites,
     budget_cascade_unit_of_work,
     enduser_spend_reset_unit_of_work,
     spend_reset_unit_of_work,
@@ -38,6 +39,9 @@ class FakeBatch:
         self.litellm_modelaccessgroupbudgettable = FakeBatchTable("litellm_modelaccessgroupbudgettable", self.calls)
         self.litellm_projecttable = FakeBatchTable("litellm_projecttable", self.calls)
         self.litellm_endusertable = FakeBatchTable("litellm_endusertable", self.calls)
+
+    def execute_raw(self, query: str, *args: object) -> None:
+        self.calls.append(("execute_raw", {"query": query}, {"args": args}))
 
     async def commit(self) -> None:
         self.commit_count += 1
@@ -164,17 +168,20 @@ async def test_every_cascade_dependent_writes_to_its_own_table_on_the_one_batch(
         return batches[-1]
 
     async with budget_cascade_unit_of_work(_new_batch) as uow:
-        writes = [getattr(uow, field.name) for field in fields(uow)]
+        uow.row_locks.queue_row_locks(["budget-1"])
+        writes = [getattr(uow, field.name) for field in fields(uow) if field.name != "row_locks"]
         for write in writes:
-            if isinstance(write, LinkedSpendResetWrites):
+            if isinstance(write, SpendResetWrites):
                 write.queue_spend_zero(where={"budget_id": "budget-1"})
             else:
                 write.queue_window_advance(budget_id="budget-1", budget_reset_at=reset_at)
 
     assert len(batches) == 1, "the cascade must open exactly one transaction"
     batch = batches[0]
-    assert len(batch.calls) == len(writes), "a dependent bound to a batch of its own would not land here"
-    assert len({call[0] for call in batch.calls}) == len(writes), "two dependents share one table"
+    table_writes = [call for call in batch.calls if call[0] != "execute_raw"]
+    assert len(table_writes) == len(writes), "a dependent bound to a batch of its own would not land here"
+    assert len({call[0] for call in table_writes}) == len(writes), "two dependents share one table"
+    assert [call[0] for call in batch.calls].count("execute_raw") > 0, "the row locks share the cascade's batch"
     assert batch.commit_count == 1
 
 
@@ -192,3 +199,18 @@ async def test_budget_cascade_raising_inside_block_skips_commit():
         await _blow_up_mid_transaction()
 
     assert batch.commit_count == 0
+
+
+async def test_membership_total_spend_repair_is_queued_on_the_cascade_batch_ahead_of_the_reset():
+    batch = FakeBatch()
+
+    async with budget_cascade_unit_of_work(lambda: batch) as uow:
+        uow.team_memberships.queue_total_spend_repair(["budget-1", "budget-2"])
+        uow.team_memberships.queue_spend_zero(where={"budget_id": "budget-1"})
+        assert batch.commit_count == 0
+
+    assert batch.commit_count == 1
+    repair, reset = batch.calls
+    assert repair[0] == "execute_raw"
+    assert repair[2] == {"args": (["budget-1", "budget-2"],)}
+    assert reset == ("litellm_teammembership.update_many", {"budget_id": "budget-1"}, {"spend": 0})

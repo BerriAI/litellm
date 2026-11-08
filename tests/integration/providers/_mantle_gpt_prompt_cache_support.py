@@ -475,10 +475,6 @@ def row_key(request_id: str) -> str:
     return upstream_id_of(request_id.split("_cache_hit", 1)[0])
 
 
-def caller_sees_upstream_id(endpoint: Endpoint, *, stream: bool) -> bool:
-    return (endpoint, stream) != ("messages", True)
-
-
 def usage_of(payload: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
     usage: Final = payload.get("usage")
     return JSON.validate_python(usage) if isinstance(usage, dict) else {}
@@ -733,10 +729,9 @@ def marked_cell(gateway: Gateway, endpoint: Endpoint, *, stream: bool) -> None:
         assert_answered(outcome, marker)
         assert_wire(received, expected_wire(GPT, prompt_text(marker), endpoint=endpoint, marked=True), streaming=stream)
         assert_usage(endpoint, outcome.usage)
-        row: Final = success_row(name, marker)
+        row: Final = success_row(name, marker, outcome.response_id)
         assert_priced_row(row, GPT)
-        if caller_sees_upstream_id(endpoint, stream=stream):
-            assert row_key(str(row["request_id"])) == outcome.response_id, (row, outcome.response_id)
+        assert row_key(str(row["request_id"])) == outcome.response_id, (row, outcome.response_id)
         if not stream:
             assert math.isclose(float(outcome.headers["x-litellm-response-cost"]), expected_spend(GPT), rel_tol=1e-9), (
                 outcome.headers
@@ -901,7 +896,7 @@ def assert_marked_sdk_cell(
         only_received(wire), expected_wire(GPT, prompt_text(marker), endpoint=endpoint, marked=True), streaming=stream
     )
     assert_usage(endpoint, outcome.usage)
-    assert_priced_row(success_row(name, marker), GPT)
+    assert_priced_row(success_row(name, marker, outcome.response_id), GPT)
 
 
 HOSTILE_OPTIONS: Final[dict[str, JsonValue]] = {
