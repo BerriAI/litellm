@@ -1,7 +1,7 @@
 import json
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from itertools import chain
+from itertools import accumulate, chain, repeat, takewhile
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, TypeAlias
 from urllib.parse import quote
@@ -170,22 +170,25 @@ def _children(value: object) -> Sequence[object]:
     return ()
 
 
-def _forbidden_key(level: Sequence[object], forbidden: frozenset[str]) -> str | None:
-    if not level:
-        return None
-    keys: Final[Iterable[str]] = chain.from_iterable(map(_own_keys, level))
-    key: Final = next((key for key in keys if key in forbidden), None)
-    if key is not None:
-        return key
-    return _forbidden_key(tuple(chain.from_iterable(map(_children, level))), forbidden)
+def _next_level(level: Sequence[object], _: None) -> Sequence[object]:
+    return tuple(chain.from_iterable(map(_children, level)))
 
 
-def _dump(value: object) -> str:
-    if isinstance(value, _JsonObject):
-        return "{" + ",".join(f"{json.dumps(key)}:{_dump(child)}" for key, child in value.pairs) + "}"
-    if isinstance(value, list):
-        return "[" + ",".join(map(_dump, _JSON_ARRAY.validate_python(value))) + "]"
-    return json.dumps(value)
+def _forbidden_key(value: object, forbidden: frozenset[str]) -> str | None:
+    levels: Final = takewhile(bool, accumulate(repeat(None), _next_level, initial=(value,)))
+    keys: Final[Iterable[str]] = chain.from_iterable(map(_own_keys, chain.from_iterable(levels)))
+    return next((key for key in keys if key in forbidden), None)
+
+
+def _plain(value: _JsonObject) -> Mapping[str, object]:
+    return dict(value.pairs)
+
+
+def _bulk_action_json(name: str, metadata: Sequence[tuple[str, object]]) -> bytes:
+    fields: Final = ",".join(
+        f"{json.dumps(key)}:{json.dumps(child, default=_plain, separators=(',', ':'))}" for key, child in metadata
+    )
+    return f"{{{json.dumps(name)}:{{{fields}}}}}".encode()
 
 
 def _unparseable(api: str) -> IndexRefusal:
@@ -193,7 +196,7 @@ def _unparseable(api: str) -> IndexRefusal:
 
 
 def _index_reference(value: object, forbidden: frozenset[str]) -> IndexRefusal | None:
-    key: Final = _forbidden_key((value,), forbidden)
+    key: Final = _forbidden_key(value, forbidden)
     if key is None:
         return None
     return IndexRefusal(
@@ -254,7 +257,7 @@ def _bulk_action_line(action: _BulkAction | None, line: bytes, index: _BulkIndex
             f"Remove '_index' or set it to '{index.name}'.",
         )
     rewritten: Final = tuple((key, index.provider_name if key == "_index" else value) for key, value in pairs)
-    return _dump(_JsonObject(((action.name, _JsonObject(rewritten)),))).encode()
+    return _bulk_action_json(action.name, rewritten)
 
 
 def _bulk_entry(line: bytes, lines: Iterator[bytes], index: _BulkIndex) -> tuple[bytes | IndexRefusal, ...]:
