@@ -1,6 +1,6 @@
 ---
 name: litellm-setup
-description: Set up a self-hosted LiteLLM proxy, the OpenAI-compatible LLM gateway, on this machine, from install through provider keys, config.yaml, a master key, optional Postgres and Admin UI, and a verified chat completion. Use when the user asks to set up LiteLLM, install the LiteLLM proxy, self-host an LLM gateway, or put one endpoint in front of OpenAI, Anthropic, Gemini, Azure, Bedrock, Ollama, or other providers. Not for using the LiteLLM Python SDK inside an app
+description: Set up a self-hosted LiteLLM proxy, the OpenAI-compatible LLM gateway, on this machine, from install through provider keys, config.yaml, a master key, optional Postgres and Admin UI, and a verified chat completion. Use when the user asks to set up LiteLLM, install the LiteLLM proxy, self-host an LLM gateway, or put one endpoint in front of OpenAI, Anthropic, Gemini, Azure, Bedrock, Ollama, or other providers. For the LiteLLM Python SDK inside an app, use litellm-sdk instead
 ---
 
 # Set up a LiteLLM proxy

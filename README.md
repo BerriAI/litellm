@@ -39,6 +39,28 @@
 
 <img alt="LiteLLM AI Gateway" src="https://github.com/user-attachments/assets/c5ee0412-6fb5-4fb6-ab5b-bafae4209ca6" />
 
+## Set up with your coding agent
+
+Paste a prompt into your coding agent to set up the Python SDK in your project or run the Gateway with your existing OpenAI SDK.
+
+Python SDK
+
+```text
+Set up the LiteLLM Python SDK in this project by following https://raw.githubusercontent.com/BerriAI/litellm/main/skills/litellm-sdk/SKILL.md
+```
+
+Gateway
+
+```text
+Set up the LiteLLM Gateway in this project by following https://raw.githubusercontent.com/BerriAI/litellm/main/skills/litellm-setup/SKILL.md
+```
+
+Or install both skills to get `/litellm-sdk` and `/litellm-setup` in your coding agent.
+
+```shell
+npx skills add BerriAI/litellm -g
+```
+
 ---
 
 ## What is LiteLLM
