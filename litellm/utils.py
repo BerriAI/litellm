@@ -91,6 +91,7 @@ from litellm.litellm_core_utils.allowed_tools_tool_choice import (
 )
 from litellm.litellm_core_utils.attempt_settlement import mark_attempt_answered
 from litellm.litellm_core_utils.core_helpers import (
+    as_str_mapping,
     bind_budget_reservation_to_callbacks,
     has_attributes,
     iter_items,
@@ -5380,18 +5381,30 @@ def pre_process_non_default_params(
     return non_default_params
 
 
-def remove_sensitive_keys_from_dict(d: dict) -> dict:
+def remove_sensitive_keys_from_dict(d: Mapping[str, object]) -> dict[str, object]:
     """
     Remove sensitive keys from a dictionary
     """
-    sensitive_key_phrases: Final = ["key", "secret", "access", "credential"]
-    remove_keys: Final = []
-    for key in d:
-        if any(phrase in key.lower() for phrase in sensitive_key_phrases):
-            remove_keys.append(key)
-    for key in remove_keys:
-        d.pop(key)
-    return d
+    sensitive_key_phrases: Final = ("key", "secret", "access", "credential")
+    result: Final = dict[str, object]()
+    pending: Final = [(d, result)]
+    while pending:
+        source, target = pending.pop()
+        for key, value in source.items():
+            if (
+                any(phrase in key.lower() for phrase in sensitive_key_phrases)
+                or key.lower() == "token"
+                or key.lower().endswith("_token")
+            ):
+                continue
+            mapping = as_str_mapping(value) if isinstance(value, dict) else None
+            if mapping is not None:
+                nested = dict[str, object]()
+                target[key] = nested
+                pending.append((mapping, nested))
+            else:
+                target[key] = value
+    return result
 
 
 _TOOL_LIST: Final = TypeAdapter(list[object])
