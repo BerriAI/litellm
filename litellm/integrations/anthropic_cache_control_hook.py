@@ -802,6 +802,14 @@ def _serves_gemini(model: str, custom_llm_provider: str | None) -> bool:
     return isinstance(chat_config, VertexGeminiConfig)
 
 
+def _serves_gemini_or_names_a_gemini_base_model(
+    model: str, custom_llm_provider: str | None, base_model: object
+) -> bool:
+    return _serves_gemini(model, custom_llm_provider) or (
+        isinstance(base_model, str) and bool(base_model) and _serves_gemini(base_model, None)
+    )
+
+
 def _translates_prompt_cache_breakpoint(model: str, custom_llm_provider: str | None) -> bool:
     return (custom_llm_provider or _served_provider_for_model(model)) == "bedrock" or _builds_anthropic_messages(
         model, custom_llm_provider
@@ -947,6 +955,7 @@ CARRY_UNMATCHED_MESSAGE_POINTS: Final = "_litellm_carry_unmatched_cache_control_
 EXTERNAL_BREAKPOINTS_STAMP: Final = "_litellm_external_breakpoints"
 OUTSIDE_MESSAGES_TTLS_STAMP: Final = "_litellm_outside_messages_cache_control_ttls"
 CUSTOM_LLM_PROVIDER_STAMP: Final = "_litellm_custom_llm_provider"
+BASE_MODEL_STAMP: Final = "_litellm_base_model"
 
 
 def _accepts_cache_control(part: object) -> bool:
@@ -1081,7 +1090,9 @@ class AnthropicCacheControlHook(CustomPromptManagement):
             max_blocks=MAX_CACHE_CONTROL_BLOCKS - reserved_blocks,
             openai_dialect=openai_dialect,
             answered_tool_ids=answered_tool_ids,
-            covers_developer=not _serves_gemini(model, custom_llm_provider),
+            covers_developer=not _serves_gemini_or_names_a_gemini_base_model(
+                model, custom_llm_provider, injection_points[0].get(BASE_MODEL_STAMP)
+            ),
             outside_ttls=(
                 *(_validated_object_list(injection_points[0].get(OUTSIDE_MESSAGES_TTLS_STAMP)) or ()),
                 *tool_config_point_ttls(remaining_points),
@@ -1860,6 +1871,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         enable_prompt_caching: bool | None = None,
         api_base: object = None,
         model_info: Mapping[str, object] | None = None,
+        base_model: object = None,
     ) -> None:
         """For /chat/completions: resolve the injection points the request should carry.
 
@@ -1904,10 +1916,15 @@ class AnthropicCacheControlHook(CustomPromptManagement):
                 if outside_ttls
                 else stamped
             )
-            non_default_params["cache_control_injection_points"] = (
-                AnthropicCacheControlHook._stamped(with_outside_ttls, CUSTOM_LLM_PROVIDER_STAMP, custom_llm_provider)
-                if custom_llm_provider is not None and _marks_a_server_tool_call(messages)
+            with_base_model: Final = (
+                AnthropicCacheControlHook._stamped(with_outside_ttls, BASE_MODEL_STAMP, base_model)
+                if isinstance(base_model, str) and base_model
                 else with_outside_ttls
+            )
+            non_default_params["cache_control_injection_points"] = (
+                AnthropicCacheControlHook._stamped(with_base_model, CUSTOM_LLM_PROVIDER_STAMP, custom_llm_provider)
+                if custom_llm_provider is not None and _marks_a_server_tool_call(messages)
+                else with_base_model
             )
             return
         points: Final = AnthropicCacheControlHook.get_default_injection_points(

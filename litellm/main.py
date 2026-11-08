@@ -766,6 +766,7 @@ async def acompletion(
     )
     from litellm.types.llms.openai import AllMessageValues
 
+    caller_model_info: Final = routed_model_info(caller_kwargs.get("model_info"))
     AnthropicCacheControlHook.maybe_seed_default_injection_points(
         non_default_params=kwargs,
         messages=cast(list[AllMessageValues], messages),  # cast-ok: acompletion types messages as a bare List
@@ -774,7 +775,8 @@ async def acompletion(
         tools=tools,
         enable_prompt_caching=cast(bool | None, kwargs.get("enable_prompt_caching")),  # cast-ok: untyped kwargs
         api_base=base_url or kwargs.get("api_base"),
-        model_info=routed_model_info(caller_kwargs.get("model_info")),
+        model_info=caller_model_info,
+        base_model=caller_kwargs.get("base_model") or (caller_model_info or {}).get("base_model"),
     )
 
     prompt_id: Final = cast(str | None, kwargs.get("prompt_id", None))  # cast-ok: read from untyped kwargs
@@ -5790,6 +5792,7 @@ def completion(
         enable_prompt_caching=cast(bool | None, kwargs.get("enable_prompt_caching")),  # cast-ok: untyped kwargs
         api_base=base_url or kwargs.get("api_base"),
         model_info=routed_model_info(cast(object, model_info)),  # cast-ok: untyped kwargs
+        base_model=cast(object, base_model),  # cast-ok: untyped kwargs
     )
 
     if isinstance(litellm_logging_obj, LiteLLMLoggingObj) and (
