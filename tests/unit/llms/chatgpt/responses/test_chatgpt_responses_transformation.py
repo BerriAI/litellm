@@ -679,6 +679,10 @@ def test_prompt_cache_key_keeps_one_session_header_across_requests(call: str) ->
             )
 
     assert [call.args[0].headers["session_id"] for call in upstream.call_args_list] == ["conv-123", "conv-123"]
+    assert [json.loads(call.args[0].content)["prompt_cache_key"] for call in upstream.call_args_list] == [
+        "conv-123",
+        "conv-123",
+    ]
 
 
 _CITY_SCHEMA: Final = {
