@@ -17599,7 +17599,7 @@ async def _find_model_by_id(
     llm_router: Router | None,
     prisma_client: PrismaClient | None,
     proxy_config: "ProxyConfig",
-) -> tuple[list, int | None]:
+) -> tuple[Sequence[dict[str, Any]], int | None]:
     """Find a model by its ID and optionally filter by search term."""
     found_model = None
 
@@ -17800,16 +17800,21 @@ async def model_info_v2(
 
     # If modelId is provided, search for the specific model
     if modelId is not None:
-        all_models, search_total_count = await _find_model_by_id(
+        matched_models: Final = await _find_model_by_id(
             model_id=modelId,
             search=search,
             llm_router=llm_router,
             prisma_client=prisma_client,
             proxy_config=proxy_config,
         )
-        all_models = [
-            m for m in all_models if not _byok_row_outside_caller_teams(m.get("model_info", {}), allowed_team_ids)
-        ]
+        all_models, search_total_count = (
+            [
+                m
+                for m in matched_models[0]
+                if not _byok_row_outside_caller_teams(m.get("model_info", {}), allowed_team_ids)
+            ],
+            matched_models[1],
+        )
     else:
         # Normal flow when modelId is not provided
         all_models = [
@@ -18603,14 +18608,17 @@ async def model_info_v1(
     if litellm_model_id is not None:
         # user is trying to get specific model from litellm router
         deployment_info: Final = llm_router.registry().deployment(litellm_model_id)
-        if (
-            deployment_info is None
-            or _byok_row_outside_caller_teams(
-                deployment_info.model_info.model_dump(),
-                await _get_caller_byok_team_scope(user_api_key_dict, prisma_client),
+        if deployment_info is None or await _deployment_hidden_by_listing_callbacks(deployment_info, user_api_key_dict):
+            raise HTTPException(
+                status_code=400,
+                detail={"error": f"Model id = {litellm_model_id} not found on litellm proxy"},
             )
-            or await _deployment_hidden_by_listing_callbacks(deployment_info, user_api_key_dict)
+        if _byok_row_outside_caller_teams(
+            deployment_info.model_info.model_dump(),
+            await _get_caller_byok_team_scope(user_api_key_dict, prisma_client),
         ):
+            if include_team_models:
+                return _model_info_json_response([])
             raise HTTPException(
                 status_code=400,
                 detail={"error": f"Model id = {litellm_model_id} not found on litellm proxy"},

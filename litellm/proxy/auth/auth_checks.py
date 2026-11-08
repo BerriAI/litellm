@@ -4971,11 +4971,7 @@ def _owning_team_names_for_team_deployment(
     deployment: Final = llm_router.registry().deployments(model, source="first_in_group")
     if deployment is None or deployment.model_info.team_id != team_id:
         return ()
-    public_name: Final = (
-        deployment.model_info.team_public_model_name
-        if deployment is not None and deployment.model_info.team_id == team_id
-        else None
-    )
+    public_name: Final = deployment.model_info.team_public_model_name
     legacy_aliases: Final = tuple(alias for alias, target in (team_model_aliases or {}).items() if target == model)
     return (*((public_name,) if public_name else ()), *legacy_aliases)
 
