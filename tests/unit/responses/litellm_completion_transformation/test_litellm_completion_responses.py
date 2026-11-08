@@ -2953,6 +2953,25 @@ class TestToolTransformation:
 
         assert [call["function"]["name"] for call in messages[0]["tool_calls"]] == ["get_reporting_categories"]
 
+    def test_function_call_echo_with_namespace_equal_to_name_keeps_bare_name_without_request_tools(self):
+        """Stored history (previous_response_id) is rebuilt with no request tools. A deferred call echoed
+        there still carries namespace == name and must go to the provider under its bare name, not
+        "get_reporting_categories__get_reporting_categories"."""
+        messages = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+            input=[
+                {
+                    "type": "function_call",
+                    "name": "get_reporting_categories",
+                    "namespace": "get_reporting_categories",
+                    "call_id": "call_7",
+                    "arguments": "{}",
+                }
+            ],
+            responses_api_request={},
+        )
+
+        assert [call["function"]["name"] for call in messages[0]["tool_calls"]] == ["get_reporting_categories"]
+
     def test_function_call_echo_from_namespace_with_member_of_same_name_keeps_qualified_name(self):
         """A namespace "search" with a member "search" is advertised as the chat tool
         "search__search" and comes back as name == namespace == "search". Its echo must
