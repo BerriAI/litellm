@@ -8831,6 +8831,7 @@ def test_validate_tool_choice_invalid_dict_is_a_400(tool_choice):
         {"type": "web_search"},
         {"type": "web_search_preview"},
         {"type": "file_search"},
+        {"type": "tool_search"},
         {"type": "code_interpreter"},
         {"type": "mcp", "server_label": "docs", "name": "search"},
     ],

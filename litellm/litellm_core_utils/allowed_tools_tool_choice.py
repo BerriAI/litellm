@@ -11,6 +11,7 @@ ALLOWED_TOOLS_TOOL_CHOICE_PROVIDERS: Final = frozenset({"openai", "azure", "lite
 HOSTED_TOOL_CHOICE_TYPES: Final = frozenset(
     {
         "file_search",
+        "tool_search",
         "web_search",
         "web_search_preview",
         "web_search_preview_2025_03_11",
