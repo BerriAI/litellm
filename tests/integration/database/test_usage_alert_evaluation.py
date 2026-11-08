@@ -20,13 +20,13 @@ from litellm.repositories.accounting_delivery_repository import (
 )
 from litellm.repositories.usage_alert_health import UsageAlertFlushRecorder, UsageAlertHealthRepository
 from litellm.repositories.usage_alerts import UsageAlertsRepository
-from litellm.types.proxy.usage_alerts import UsageAlertRuleInput
+from litellm.types.proxy.usage_alerts import AlertRuleInput
 
 
 @pytest.mark.asyncio(loop_scope="session")
 async def test_batch_checkpoints_preserve_rule_revisions_and_incomplete_status(db: ManagementDatabase) -> None:
     repository: Final = UsageAlertsRepository.from_prisma(db.prisma)
-    definition: Final = UsageAlertRuleInput(
+    definition: Final = AlertRuleInput(
         name="Daily evaluation", scope_type="team", scope_id="team-example", metric="spend", direction="increase"
     )
     rule: Final = await repository.save_rule(definition, "qa-admin")

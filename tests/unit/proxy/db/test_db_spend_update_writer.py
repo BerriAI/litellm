@@ -3294,8 +3294,9 @@ class _WindowSpendFakeDB:
 
 
 class _WindowSpendFakePrisma:
-    def __init__(self, db):
+    def __init__(self, db, writer_db=None):
         self.db = db
+        self.writer_db = writer_db if writer_db is not None else db
 
 
 def _window_spend_upserts(db):
@@ -5513,6 +5514,59 @@ async def test_cancel_that_lands_while_the_daily_batch_is_committing_waits_for_t
     final_db = _DailySpendFakeDB(failing_table=None)
     await flush(final_db)
     assert _daily_upserts(final_db, table) == [], "the final flush must not write the committed batch again"
+
+
+class _FreshnessRecordingDB:
+    def __init__(self) -> None:
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+        self.recorded: tuple[object, ...] = ()
+
+    @asynccontextmanager
+    async def tx(self, *, max_wait: timedelta, timeout: timedelta):
+        yield self
+
+    async def query_raw(self, query: str, *args: object):
+        if "pg_try_advisory_xact_lock" in query:
+            return [{"acquired": True}]
+        self.started.set()
+        await self.release.wait()
+        self.recorded = args
+        return [{"source": args[0]}]
+
+
+@pytest.mark.parametrize("entity_type", ("user", "team"))
+@pytest.mark.parametrize("cancel_during", ("commit", "freshness"))
+@pytest.mark.asyncio
+async def test_cancelled_daily_flush_records_freshness_after_commit_without_requeuing(entity_type, cancel_during):
+    writer = DBSpendUpdateWriter()
+    queue = writer.daily_spend_update_queue if entity_type == "user" else writer.daily_team_spend_update_queue
+    await queue.add_update({"key-a": _daily_entity_txn(entity_type + "_id")})
+    db = _CommittingDailySpendFakeDB()
+    freshness = _FreshnessRecordingDB()
+    tick = asyncio.ensure_future(
+        writer._flush_daily_spend_queue(
+            queue=queue,
+            entity_type=entity_type,
+            commit=_DAILY_SPEND_COMMITS[entity_type],
+            n_retry_times=0,
+            prisma_client=_WindowSpendFakePrisma(db, freshness),
+            proxy_logging_obj=MagicMock(),
+        )
+    )
+    await asyncio.wait_for(db.committing.wait(), timeout=5)
+    if cancel_during == "freshness":
+        db.commit_release.set()
+        await asyncio.wait_for(freshness.started.wait(), timeout=5)
+    tick.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await tick
+    db.commit_release.set()
+    freshness.release.set()
+    await queue.settle_interrupted_commits()
+    assert freshness.recorded and freshness.recorded[0] == entity_type
+    assert len(_daily_upserts(db, "LiteLLM_Daily" + entity_type.title() + "Spend")) == 1
+    assert queue.update_queue.empty()
 
 
 @pytest.mark.asyncio

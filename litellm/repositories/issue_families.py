@@ -10,10 +10,10 @@ from pydantic import BaseModel, TypeAdapter
 
 from litellm.repositories.usage_alerts import AlertDatabase
 from litellm.types.proxy.issues import (
-    IssueFamilyList,
-    IssueFamilyPolicy,
-    IssueFamilySetting,
-    IssueFamilyUpdate,
+    AlertFamilyList,
+    AlertFamilyPolicy,
+    AlertFamilySetting,
+    AlertFamilyUpdate,
 )
 from litellm.types.proxy.usage_alert_defaults import (
     DEFAULT_USAGE_POLICIES,
@@ -22,11 +22,11 @@ from litellm.types.proxy.usage_alert_defaults import (
     PerformanceIssueFamily,
     default_usage_rule_id,
 )
-from litellm.types.proxy.usage_alerts import UsageAlertEvaluationCounts, UsageAlertRule
+from litellm.types.proxy.usage_alerts import AlertRule, UsageAlertEvaluationCounts
 
 
 class _RuleRow(BaseModel, frozen=True):
-    record: UsageAlertRule
+    record: AlertRule
 
 
 class _Count(BaseModel, frozen=True):
@@ -37,14 +37,14 @@ class _ProjectionState(BaseModel, frozen=True):
     pending: bool
 
 
-def _setting(family: PerformanceIssueFamily, rules: tuple[UsageAlertRule, ...]) -> IssueFamilySetting:
+def _setting(family: PerformanceIssueFamily, rules: tuple[AlertRule, ...]) -> AlertFamilySetting:
     policies: Final = tuple(policy for policy in DEFAULT_USAGE_POLICIES if policy.family == family)
     groups: Final = tuple(
         (policy, tuple(rule for rule in rules if rule.metric == policy.metric and rule.direction == policy.direction))
         for policy in policies
     )
     values: Final = tuple(
-        IssueFamilyPolicy(
+        AlertFamilyPolicy(
             direction=policy.direction,
             enabled=group[0].enabled if group and len({rule.enabled for rule in group}) == 1 else None,
             multiplier=group[0].multiplier if group and len({rule.multiplier for rule in group}) == 1 else None,
@@ -69,7 +69,7 @@ def _setting(family: PerformanceIssueFamily, rules: tuple[UsageAlertRule, ...]) 
         for policy, group in groups
     )
     family_rules: Final = tuple(chain.from_iterable(group for _, group in groups))
-    return IssueFamilySetting(
+    return AlertFamilySetting(
         family=family,
         enabled=family_rules[0].enabled if family_rules and len({r.enabled for r in family_rules}) == 1 else None,
         total_rules=len(family_rules),
@@ -81,7 +81,7 @@ def _setting(family: PerformanceIssueFamily, rules: tuple[UsageAlertRule, ...]) 
     )
 
 
-async def family_settings(database: AlertDatabase) -> IssueFamilyList:
+async def family_settings(database: AlertDatabase) -> AlertFamilyList:
     rows: Final = TypeAdapter(tuple[_RuleRow, ...]).validate_python(
         await database.query_raw(
             'SELECT record FROM "LiteLLM_UsageAlertRule" WHERE id=ANY($1::text[]) AND NOT deleted',
@@ -94,7 +94,7 @@ async def family_settings(database: AlertDatabase) -> IssueFamilyList:
                 WHERE id LIKE 'performance-dirty:%' AND NOT completed LIMIT 1) AS pending"""
         )
     )
-    return IssueFamilyList(
+    return AlertFamilyList(
         data=tuple(
             _setting(family, tuple(row.record for row in rows))
             for family in ("spend", "latency", "reliability", "traffic")
@@ -106,8 +106,8 @@ async def family_settings(database: AlertDatabase) -> IssueFamilyList:
 async def update_family(
     database: AlertDatabase,
     family: PerformanceIssueFamily,
-    data: IssueFamilyUpdate,
-) -> IssueFamilySetting | None:
+    data: AlertFamilyUpdate,
+) -> AlertFamilySetting | None:
     policies: Final = tuple(policy for policy in DEFAULT_USAGE_POLICIES if policy.family == family)
     if any(update.direction not in {policy.direction for policy in policies} for update in data.policies):
         raise ValueError("This family does not support that direction")
@@ -126,7 +126,7 @@ async def update_family(
         policy.direction: policy.model_dump(exclude_none=True, exclude={"direction"}) for policy in data.policies
     }
     records: Final = tuple(
-        UsageAlertRule.model_validate(
+        AlertRule.model_validate(
             {
                 **row.record.model_dump(),
                 **({"enabled": data.enabled} if data.enabled is not None else {}),

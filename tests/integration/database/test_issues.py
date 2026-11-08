@@ -25,28 +25,30 @@ from litellm.repositories.issue_activity import IssueActivityRepository
 from litellm.repositories.issues import IssuesRepository
 from litellm.repositories.usage_alerts import AlertDatabase, UsageAlertsRepository
 from litellm.types.proxy.issues import (
-    IssueActivityResponse,
-    IssueCohort,
-    IssueComparison,
-    IssueDeliveryBinding,
-    IssueDeliveryInput,
-    IssueFamilyPolicyUpdate,
-    IssueFamilyUpdate,
-    IssueInput,
-    IssueList,
-    IssueModelPair,
-    IssueSignal,
-    IssueSignalInput,
-    IssueSignalList,
+    AlertActivityResponse,
+    AlertCohort,
+    AlertComparison,
+    AlertDeliveryBinding,
+    AlertDeliveryInput,
+    AlertDeprecation,
+    AlertFamilyPolicyUpdate,
+    AlertFamilyUpdate,
+    AlertInput,
+    AlertList,
+    AlertModelPair,
+    AlertSignal,
+    AlertSignalInput,
+    AlertSignalList,
 )
+from litellm.types.proxy.model_deprecation import DeprecationAlertState, ModelDeprecationInfo
 from litellm.types.proxy.usage_alert_defaults import default_usage_rule_id, default_usage_rules
-from litellm.types.proxy.usage_alerts import UsageAlert, UsageAlertObservation, UsageAlertRule, UsageAlertRuleInput
+from litellm.types.proxy.usage_alerts import AlertRule, AlertRuleInput, PerformanceSignal, UsageAlertObservation
 
 
-def _issue(cohort: IssueCohort) -> IssueInput:
+def _issue(cohort: AlertCohort) -> AlertInput:
     identity: Final = str(uuid4())
     day: Final = date.today() - timedelta(days=3)
-    return IssueInput(
+    return AlertInput(
         id=identity,
         cohort_key=identity,
         kind="performance",
@@ -60,7 +62,7 @@ def _issue(cohort: IssueCohort) -> IssueInput:
         grouping_reason="same_resource",
         explanation="Requests increased for this resource.",
         comparisons=(
-            IssueComparison(
+            AlertComparison(
                 metric="requests",
                 direction="increase",
                 observed_value=420,
@@ -74,12 +76,12 @@ def _issue(cohort: IssueCohort) -> IssueInput:
     )
 
 
-def _signals(issue_id: str, inputs: tuple[IssueSignalInput, ...]) -> tuple[IssueSignal, ...]:
-    return tuple(IssueSignal.model_validate({**signal.model_dump(), "issue_id": issue_id}) for signal in inputs)
+def _signals(issue_id: str, inputs: tuple[AlertSignalInput, ...]) -> tuple[AlertSignal, ...]:
+    return tuple(AlertSignal.model_validate({**signal.model_dump(), "issue_id": issue_id}) for signal in inputs)
 
 
-def _delivery(data: IssueDeliveryInput, rule: UsageAlertRule, source: UsageAlert) -> IssueDeliveryBinding:
-    return IssueDeliveryBinding(
+def _delivery(data: AlertDeliveryInput, rule: AlertRule, source: PerformanceSignal) -> AlertDeliveryBinding:
+    return AlertDeliveryBinding(
         delivery=data, rule_id=rule.id, rule_revision=rule.updated_at.isoformat(), source_id=source.id
     )
 
@@ -114,11 +116,11 @@ async def test_issue_http_scope_pagination_and_source_visibility(gateway: Gatewa
         viewer_key: Final = scenario.key(user_id=viewer, key_type="read_only")
         inference_key: Final = scenario.key(user_id=owner, key_type="llm_api", key_alias="Example checkout")
         reporting_id: Final = sha256(inference_key.encode()).hexdigest()
-        first: Final = _issue(IssueCohort(scope_type="key", scope_id=reporting_id))
+        first: Final = _issue(AlertCohort(scope_type="key", scope_id=reporting_id))
         second: Final = _issue(first.cohort)
-        global_issue: Final = _issue(IssueCohort(scope_type="provider", scope_id="example-provider"))
+        global_issue: Final = _issue(AlertCohort(scope_type="provider", scope_id="example-provider"))
         rule: Final = await alerts.save_rule(
-            UsageAlertRuleInput(
+            AlertRuleInput(
                 name="Visibility fixture",
                 scope_type="key",
                 scope_id=reporting_id,
@@ -158,18 +160,18 @@ async def test_issue_http_scope_pagination_and_source_visibility(gateway: Gatewa
                 _signals(
                     first.id,
                     (
-                        IssueSignalInput(source="usage_alert", source_id=source.id, usage_alert=source),
-                        IssueSignalInput(
-                            source="usage_alert",
+                        AlertSignalInput(source="performance", source_id=source.id, performance=source),
+                        AlertSignalInput(
+                            source="performance",
                             source_id=broader.id,
-                            usage_alert=broader,
+                            performance=broader,
                             grouping_reason="dominant_key",
                             explanation="Parent contribution evidence.",
                         ),
                     ),
                 )
             )
-            path: Final = f"/issues/{first.id}"
+            path: Final = f"/alerts/{first.id}"
             own: Final = gateway.request("GET", path, key=owner_key)
             assert own.status_code == 200 and own.json()["scope_label"] == "Example checkout"
             assert own.json()["can_update_status"] is False, "Broader source scopes require their own write permission"
@@ -186,23 +188,23 @@ async def test_issue_http_scope_pagination_and_source_visibility(gateway: Gatewa
             pages: Final = tuple(
                 gateway.request(
                     "GET",
-                    "/issues",
+                    "/alerts",
                     key=owner_key,
                     params={"scope_type": "key", "scope_id": reporting_id, "limit": "1", "offset": str(offset)},
                 )
                 for offset in (0, 1, 2)
             )
             assert all(page.status_code == 200 for page in pages)
-            for offset, parsed in enumerate(IssueList.model_validate(page.json()) for page in pages):
+            for offset, parsed in enumerate(AlertList.model_validate(page.json()) for page in pages):
                 assert parsed.total == 2 and len(parsed.data) == (1 if offset < 2 else 0)
-            assert gateway.request("GET", "/issues", key=owner_key).status_code == 403
+            assert gateway.request("GET", "/alerts", key=owner_key).status_code == 403
             for suffix in ("", "/signals", "/activity", "/keys", "/users", "/impact"):
-                assert gateway.request("GET", f"/issues/{global_issue.id}{suffix}", key=owner_key).status_code == 403
+                assert gateway.request("GET", f"/alerts/{global_issue.id}{suffix}", key=owner_key).status_code == 403
                 assert gateway.request("GET", path + suffix, key=outsider_key).status_code == 403
                 assert gateway.request("GET", path + suffix, key=inference_key).status_code == 403
             public_signals: Final = gateway.request("GET", path + "/signals", key=owner_key, params={"limit": "1"})
             assert public_signals.status_code == 200
-            visible: Final = IssueSignalList.model_validate(public_signals.json())
+            visible: Final = AlertSignalList.model_validate(public_signals.json())
             assert visible.total == 1 and tuple(row.source_id for row in visible.data) == (source.id,)
             assert "99999" not in public_signals.text
             end: Final = gateway.request("GET", path + "/signals", key=owner_key, params={"limit": "1", "offset": "1"})
@@ -223,11 +225,11 @@ async def test_issue_http_scope_pagination_and_source_visibility(gateway: Gatewa
             )
             assert gateway.request("PATCH", path, {"status": "dismissed", "expected_status": "open"}).status_code == 200
             assert gateway.request("PATCH", path, {"status": "resolved", "expected_status": "open"}).status_code == 409
-            assert gateway.request("GET", f"/issues/{second.id}", key=owner_key).json()["status"] == "open"
-            assert gateway.request("GET", f"/issues/{second.id}", key=owner_key).json()["can_update_status"] is True
+            assert gateway.request("GET", f"/alerts/{second.id}", key=owner_key).json()["status"] == "open"
+            assert gateway.request("GET", f"/alerts/{second.id}", key=owner_key).json()["can_update_status"] is True
             assert (
                 gateway.request(
-                    "PATCH", f"/issues/{second.id}", {"status": "dismissed", "expected_status": "open"}, key=owner_key
+                    "PATCH", f"/alerts/{second.id}", {"status": "dismissed", "expected_status": "open"}, key=owner_key
                 ).status_code
                 == 200
             )
@@ -258,11 +260,11 @@ async def test_issue_detail_reports_team_status_permission(gateway: Gateway, db:
             key_type="management",
             metadata={"service_account_id": "example-activity-service"},
         )
-        issue: Final = _issue(IssueCohort(scope_type="team", scope_id=team))
-        permitted_issue: Final = _issue(IssueCohort(scope_type="team", scope_id=permitted_team))
+        issue: Final = _issue(AlertCohort(scope_type="team", scope_id=team))
+        permitted_issue: Final = _issue(AlertCohort(scope_type="team", scope_id=permitted_team))
         try:
             await store.upsert_issues((issue, permitted_issue))
-            path: Final = f"/issues/{issue.id}"
+            path: Final = f"/alerts/{issue.id}"
             assert gateway.request("GET", path, key=admin_key).json()["can_update_status"] is True
             assert gateway.request("GET", path, key=admin_key).json()["can_view_activity"] is True
             assert gateway.request("GET", path, key=member_key).json()["can_update_status"] is False
@@ -273,10 +275,10 @@ async def test_issue_detail_reports_team_status_permission(gateway: Gateway, db:
             for suffix in ("/activity", "/keys", "/impact"):
                 assert gateway.request("GET", path + suffix, key=admin_key).status_code == 200
                 assert (
-                    gateway.request("GET", f"/issues/{permitted_issue.id}" + suffix, key=member_key).status_code == 200
+                    gateway.request("GET", f"/alerts/{permitted_issue.id}" + suffix, key=member_key).status_code == 200
                 )
             assert (
-                gateway.request("GET", f"/issues/{permitted_issue.id}", key=member_key).json()["can_view_activity"]
+                gateway.request("GET", f"/alerts/{permitted_issue.id}", key=member_key).json()["can_view_activity"]
                 is True
             )
             assert (
@@ -307,7 +309,7 @@ async def test_issue_activity_bounds_models_without_losing_totals(gateway: Gatew
     provider: Final = f"example-provider-{identity}"
     day: Final = date.today() - timedelta(days=5)
     model_count: Final = 137
-    cohort: Final = IssueCohort(scope_type="key", scope_id=key)
+    cohort: Final = AlertCohort(scope_type="key", scope_id=key)
     issue: Final = _issue(cohort).model_copy(update={"range_start": day, "range_end": day + timedelta(days=2)})
     await _query(
         db,
@@ -330,9 +332,9 @@ async def test_issue_activity_bounds_models_without_losing_totals(gateway: Gatew
         await store.upsert_issues((issue,))
         scope: Final = issue_activity_scope(cohort, day, day + timedelta(days=2))
         original: Final = await get_daily_activity_aggregated(repository.activity, scope, api_key_limit=20)
-        response: Final = gateway.request("GET", f"/issues/{issue.id}/activity")
+        response: Final = gateway.request("GET", f"/alerts/{issue.id}/activity")
         assert response.status_code == 200
-        bounded: Final = IssueActivityResponse.model_validate(response.json())
+        bounded: Final = AlertActivityResponse.model_validate(response.json())
         assert bounded.metadata.model_dump(exclude={"api_key_limit"}) == original.metadata.model_dump(
             exclude={"api_key_limit"}
         )
@@ -353,30 +355,30 @@ async def test_issue_activity_bounds_models_without_losing_totals(gateway: Gatew
             await repository.database.query_raw(query.sql, *query.params)
         )
         assert len(raw) == 3 + 1 + 100 + 1
-        largest: Final = gateway.request("GET", f"/issues/{issue.id}/activity", params={"model_limit": "100"})
+        largest: Final = gateway.request("GET", f"/alerts/{issue.id}/activity", params={"model_limit": "100"})
         assert largest.status_code == 200
-        large_models: Final = IssueActivityResponse.model_validate(largest.json()).model_breakdown
+        large_models: Final = AlertActivityResponse.model_validate(largest.json()).model_breakdown
         assert large_models is not None and len(large_models.models) == 100
         assert large_models.other is not None and large_models.other.model_count == model_count - 100
-        assert gateway.request("GET", f"/issues/{issue.id}/activity", params={"model_limit": "101"}).status_code == 422
+        assert gateway.request("GET", f"/alerts/{issue.id}/activity", params={"model_limit": "101"}).status_code == 422
         assert (
             gateway.request(
                 "GET",
-                f"/issues/{issue.id}/activity",
+                f"/alerts/{issue.id}/activity",
                 params={"start_date": day.isoformat(), "end_date": (day + timedelta(days=366)).isoformat()},
             ).status_code
             == 422
         )
         non_key: Final = await repository.daily_activity(
-            IssueCohort(scope_type="provider", scope_id=provider), day, day + timedelta(days=2)
+            AlertCohort(scope_type="provider", scope_id=provider), day, day + timedelta(days=2)
         )
         assert non_key.model_breakdown is None and non_key.metadata == bounded.metadata
         assert len(non_key.results) == 3
         async with db.prisma.writer_db.tx(timeout=timedelta(seconds=10)) as blocker:
             await blocker.execute_raw('LOCK TABLE "LiteLLM_DailyUserSpend" IN ACCESS EXCLUSIVE MODE')
-            busy: Final = gateway.request("GET", f"/issues/{issue.id}/activity")
+            busy: Final = gateway.request("GET", f"/alerts/{issue.id}/activity")
             assert busy.status_code == 503 and busy.headers["Retry-After"] == "5"
-        assert gateway.request("GET", f"/issues/{issue.id}/activity").status_code == 200
+        assert gateway.request("GET", f"/alerts/{issue.id}/activity").status_code == 200
     finally:
         await _remove_issues(db, (issue.id,))
         await _query(db, 'DELETE FROM "LiteLLM_DailyUserSpend" WHERE user_id=$1 RETURNING id', identity)
@@ -424,22 +426,22 @@ async def test_issue_provider_pairs_filter_activity_pages_counts_and_exports(
         RETURNING id""",
         json.dumps(entries),
     )
-    cohort: Final = IssueCohort(
+    cohort: Final = AlertCohort(
         scope_type="provider",
         scope_id=provider,
-        model_pairs=(IssueModelPair(provider=provider, model="example-model-a"),),
+        model_pairs=(AlertModelPair(provider=provider, model="example-model-a"),),
     )
     store: Final = IssuesRepository.from_prisma(db.prisma)
     issue: Final = _issue(cohort).model_copy(update={"range_start": day, "range_end": day})
     try:
         await store.upsert_issues((issue,))
-        activity_http: Final = gateway.request("GET", f"/issues/{issue.id}/activity")
+        activity_http: Final = gateway.request("GET", f"/alerts/{issue.id}/activity")
         assert activity_http.status_code == 200 and activity_http.json()["metadata"]["total_api_requests"] == 100
-        keys_http: Final = gateway.request("GET", f"/issues/{issue.id}/keys", params={"limit": "1"})
+        keys_http: Final = gateway.request("GET", f"/alerts/{issue.id}/keys", params={"limit": "1"})
         assert keys_http.status_code == 200 and keys_http.json()["api_keys"][0]["metrics"]["api_requests"] == 100
-        users_http: Final = gateway.request("GET", f"/issues/{issue.id}/users")
+        users_http: Final = gateway.request("GET", f"/alerts/{issue.id}/users")
         assert users_http.status_code == 200 and users_http.json()["total_users"] == 1
-        impact_http: Final = gateway.request("GET", f"/issues/{issue.id}/impact")
+        impact_http: Final = gateway.request("GET", f"/alerts/{issue.id}/impact")
         assert impact_http.status_code == 200 and impact_http.json()["requests"] == 100
         daily: Final = await repository.daily_activity(cohort, day, day)
         assert daily.metadata.total_api_requests == 100 and daily.metadata.total_spend == 10
@@ -453,15 +455,15 @@ async def test_issue_provider_pairs_filter_activity_pages_counts_and_exports(
         assert users.total_users == 1 and users.users[0].api_requests == 100 and users.users[0].timed_requests == 100
         impact: Final = await repository.impact(cohort, day, day)
         assert (impact.keys, impact.users, impact.models, impact.requests) == (1, 1, 1, 100)
-        pairs: Final = IssueCohort(
+        pairs: Final = AlertCohort(
             scope_type="deployment",
             model_pairs=(
-                IssueModelPair(provider=provider, model="example-model-a"),
-                IssueModelPair(provider=other, model="example-model-b"),
+                AlertModelPair(provider=provider, model="example-model-a"),
+                AlertModelPair(provider=other, model="example-model-b"),
             ),
         )
         assert (await repository.daily_activity(pairs, day, day)).metadata.total_api_requests == 100
-        injected: Final = IssueCohort(scope_type="provider", scope_id=provider + "' OR true --")
+        injected: Final = AlertCohort(scope_type="provider", scope_id=provider + "' OR true --")
         assert (await repository.impact(injected, day, day)).requests == 0
         from litellm.repositories.issue_activity import issue_activity_scope
         from litellm.types.repositories.daily_activity import ExportType
@@ -488,8 +490,8 @@ async def test_issue_provider_pairs_filter_activity_pages_counts_and_exports(
 async def test_issue_delivery_guards_snapshot_freeze_and_delayed_recovery(db: ManagementDatabase) -> None:
     store: Final = IssuesRepository.from_prisma(db.prisma)
     alerts: Final = UsageAlertsRepository.from_prisma(db.prisma)
-    original: Final = _issue(IssueCohort(scope_type="user", scope_id=f"fixture-{uuid4()}"))
-    definition: Final = UsageAlertRuleInput(
+    original: Final = _issue(AlertCohort(scope_type="user", scope_id=f"fixture-{uuid4()}"))
+    definition: Final = AlertRuleInput(
         name="Delivery fixture",
         scope_type="user",
         scope_id=original.cohort.scope_id,
@@ -503,8 +505,8 @@ async def test_issue_delivery_guards_snapshot_freeze_and_delayed_recovery(db: Ma
     observation: Final = UsageAlertObservation(
         entity_id=rule.scope_id, day=original.observed_on, observed=420, baseline=120, threshold=360, breached=True
     )
-    delivery: Final = IssueDeliveryInput(id=str(uuid4()), issue_id=original.id, channel="slack")
-    invalid: Final = IssueDeliveryInput(
+    delivery: Final = AlertDeliveryInput(id=str(uuid4()), issue_id=original.id, channel="slack")
+    invalid: Final = AlertDeliveryInput(
         id=str(uuid4()), issue_id=original.id, channel="email", email_recipients=("outside@example.com",)
     )
     next_issue_id: Final = str(uuid4())
@@ -520,7 +522,7 @@ async def test_issue_delivery_guards_snapshot_freeze_and_delayed_recovery(db: Ma
         assert await store.active_signals(original.observed_on, scope_ids=()) == ()
         assert await store.active_signals(original.observed_on, scope_ids=("other-example-user",)) == ()
         await store.add_signal_batch(
-            _signals(initial.id, (IssueSignalInput(source="usage_alert", source_id=source.id, usage_alert=source),))
+            _signals(initial.id, (AlertSignalInput(source="performance", source_id=source.id, performance=source),))
         )
         await store.queue_deliveries((_delivery(delivery, rule, source),))
         await store.queue_deliveries((_delivery(invalid, rule, source),))
@@ -658,7 +660,7 @@ async def test_late_default_override_stops_queued_delivery_and_recovers_on_fresh
         await alerts.ensure_default_rules(default_usage_rules(("slack",)))
         rule: Final = await alerts.get_rule(default_usage_rule_id("key", "requests", "increase"))
         assert rule is not None
-        issues: Final = tuple(_issue(IssueCohort(scope_type="key", scope_id=key)) for key in ("key-a", "key-b"))
+        issues: Final = tuple(_issue(AlertCohort(scope_type="key", scope_id=key)) for key in ("key-a", "key-b"))
         observations: Final = tuple(
             UsageAlertObservation(
                 entity_id=issue.cohort.scope_id,
@@ -673,15 +675,15 @@ async def test_late_default_override_stops_queued_delivery_and_recovers_on_fresh
         sources: Final = await alerts.record_observations(rule, observations)
         await store.upsert_issues(issues)
         for issue in issues:
-            source: UsageAlert = next(source for source in sources if source.scope_id == issue.cohort.scope_id)
+            source: PerformanceSignal = next(source for source in sources if source.scope_id == issue.cohort.scope_id)
             await store.add_signal_batch(
-                _signals(issue.id, (IssueSignalInput(source="usage_alert", source_id=source.id, usage_alert=source),))
+                _signals(issue.id, (AlertSignalInput(source="performance", source_id=source.id, performance=source),))
             )
             await store.queue_deliveries(
-                (_delivery(IssueDeliveryInput(id=issue.id, issue_id=issue.id, channel="slack"), rule, source),)
+                (_delivery(AlertDeliveryInput(id=issue.id, issue_id=issue.id, channel="slack"), rule, source),)
             )
             assert await store.pending_delivery(issue.id) is not None
-        definition: Final = UsageAlertRuleInput(
+        definition: Final = AlertRuleInput(
             name="Project A threshold",
             scope_type="key",
             scope_id="key-a",
@@ -728,7 +730,7 @@ async def test_family_settings_preserve_custom_deleted_rules_and_abort_concurren
         store: Final = IssuesRepository(borrowed)
         await alerts.ensure_default_rules(default_usage_rules())
         custom: Final = await alerts.save_rule(
-            UsageAlertRuleInput(
+            AlertRuleInput(
                 name="Custom spend", scope_type="key", scope_id="example-key", metric="spend", direction="increase"
             ),
             "qa-admin",
@@ -738,8 +740,8 @@ async def test_family_settings_preserve_custom_deleted_rules_and_abort_concurren
         await alerts.delete_rule(removed_id)
         result: Final = await store.update_family(
             "spend",
-            IssueFamilyUpdate(
-                enabled=False, policies=(IssueFamilyPolicyUpdate(direction="increase", multiplier=5, min_value=25),)
+            AlertFamilyUpdate(
+                enabled=False, policies=(AlertFamilyPolicyUpdate(direction="increase", multiplier=5, min_value=25),)
             ),
         )
         assert result is not None and result.total_rules == 4 and result.enabled_rules == 0
@@ -750,8 +752,8 @@ async def test_family_settings_preserve_custom_deleted_rules_and_abort_concurren
         with pytest.raises(ValidationError, match="min_history_days"):
             await store.update_family(
                 "spend",
-                IssueFamilyUpdate(
-                    policies=(IssueFamilyPolicyUpdate(direction="increase", baseline_days=1, min_history_days=7),)
+                AlertFamilyUpdate(
+                    policies=(AlertFamilyPolicyUpdate(direction="increase", baseline_days=1, min_history_days=7),)
                 ),
             )
         assert await store.family_settings() == baseline
@@ -766,7 +768,7 @@ async def test_family_settings_preserve_custom_deleted_rules_and_abort_concurren
                     .validate_python(await transaction.query_raw("SELECT pg_backend_pid() AS pid"))[0]
                     .pid
                 )
-                update: Final = tasks.create_task(store.update_family("spend", IssueFamilyUpdate(enabled=True)))
+                update: Final = tasks.create_task(store.update_family("spend", AlertFamilyUpdate(enabled=True)))
                 async with asyncio.timeout(10):
                     while (
                         not TypeAdapter(tuple[_Blocked, ...])
@@ -805,7 +807,7 @@ async def test_family_edit_requires_a_new_evaluation(db: ManagementDatabase) -> 
         assert rule is not None
         await alerts.record_evaluations(((rule, "complete"),), date.today() - timedelta(days=1), completed=True)
         result: Final = await store.update_family(
-            "spend", IssueFamilyUpdate(policies=(IssueFamilyPolicyUpdate(direction="increase", multiplier=5),))
+            "spend", AlertFamilyUpdate(policies=(AlertFamilyPolicyUpdate(direction="increase", multiplier=5),))
         )
         saved: Final = await alerts.get_rule(rule.id)
         assert result is not None and saved is not None
@@ -825,7 +827,7 @@ async def test_deleted_key_owner_retains_historical_issue_access(gateway: Gatewa
         owner_key: Final = scenario.key(user_id=owner, key_type="management")
         outsider_key: Final = scenario.key(user_id=outsider, key_type="management")
         reporting_id: Final = sha256(uuid4().bytes).hexdigest()
-        issue: Final = _issue(IssueCohort(scope_type="key", scope_id=reporting_id))
+        issue: Final = _issue(AlertCohort(scope_type="key", scope_id=reporting_id))
         await _query(
             db,
             'INSERT INTO "LiteLLM_DeletedVerificationToken" (id,token,user_id,models) VALUES ($1,$1,$2,ARRAY[]::text[])',
@@ -834,7 +836,7 @@ async def test_deleted_key_owner_retains_historical_issue_access(gateway: Gatewa
         )
         try:
             await store.upsert_issues((issue,))
-            path: Final = f"/issues/{issue.id}"
+            path: Final = f"/alerts/{issue.id}"
             detail: Final = gateway.request("GET", path, key=owner_key)
             assert detail.status_code == 200, "Deleted key owner must retain historical issue access"
             assert detail.json()["can_update_status"] is True
@@ -863,9 +865,9 @@ async def test_deleted_key_owner_retains_historical_issue_access(gateway: Gatewa
 async def test_issue_status_rechecks_changed_scope_set_and_caps_sources(db: ManagementDatabase) -> None:
     store: Final = IssuesRepository.from_prisma(db.prisma)
     alerts: Final = UsageAlertsRepository.from_prisma(db.prisma)
-    issue: Final = _issue(IssueCohort(scope_type="user", scope_id=f"fixture-{uuid4()}"))
+    issue: Final = _issue(AlertCohort(scope_type="user", scope_id=f"fixture-{uuid4()}"))
     rule: Final = await alerts.save_rule(
-        UsageAlertRuleInput(
+        AlertRuleInput(
             name="Scope guard",
             scope_type="user",
             scope_id=issue.cohort.scope_id,
@@ -893,13 +895,13 @@ async def test_issue_status_rechecks_changed_scope_set_and_caps_sources(db: Mana
         )[0]
         await store.upsert_issues((issue,))
         await store.add_signal_batch(
-            _signals(issue.id, (IssueSignalInput(source="usage_alert", source_id=source.id, usage_alert=source),))
+            _signals(issue.id, (AlertSignalInput(source="performance", source_id=source.id, performance=source),))
         )
         authorized: Final = await store.status_scopes(issue.id)
         assert authorized == (issue.cohort,)
         assert await store.set_status(issue.id, "dismissed", "open", authorized_scopes=authorized) is not None
         context: Final = source.model_copy(update={"id": str(uuid4()), "metric": "spend"})
-        same_scope: Final = (IssueSignalInput(source="usage_alert", source_id=context.id, usage_alert=context),)
+        same_scope: Final = (AlertSignalInput(source="performance", source_id=context.id, performance=context),)
         await store.add_signal_batch(_signals(issue.id, same_scope))
         unchanged: Final = await store.get_issue(issue.id)
         assert unchanged is not None and unchanged.status == "dismissed"
@@ -907,7 +909,7 @@ async def test_issue_status_rechecks_changed_scope_set_and_caps_sources(db: Mana
         assert await store.get_issue(issue.id) == unchanged
         broader: Final = source.model_copy(update={"id": str(uuid4()), "scope_type": "deployment", "scope_id": None})
         await store.add_signal_batch(
-            _signals(issue.id, (IssueSignalInput(source="usage_alert", source_id=broader.id, usage_alert=broader),))
+            _signals(issue.id, (AlertSignalInput(source="performance", source_id=broader.id, performance=broader),))
         )
         assert await store.set_status(issue.id, "dismissed", "open", authorized_scopes=authorized) is None
         current: Final = await store.get_issue(issue.id)
@@ -918,7 +920,7 @@ async def test_issue_status_rechecks_changed_scope_set_and_caps_sources(db: Mana
         await store.add_signal_batch(
             _signals(
                 issue.id,
-                (IssueSignalInput(source="usage_alert", source_id=broader_context.id, usage_alert=broader_context),),
+                (AlertSignalInput(source="performance", source_id=broader_context.id, performance=broader_context),),
             )
         )
         repeated_scope: Final = await store.get_issue(issue.id)
@@ -954,7 +956,7 @@ async def test_issue_status_rechecks_changed_scope_set_and_caps_sources(db: Mana
                 )
                 await locked.add_signal_batch(
                     _signals(
-                        issue.id, (IssueSignalInput(source="usage_alert", source_id=racing.id, usage_alert=racing),)
+                        issue.id, (AlertSignalInput(source="performance", source_id=racing.id, performance=racing),)
                     )
                 )
         assert update.result() is None
@@ -964,10 +966,10 @@ async def test_issue_status_rechecks_changed_scope_set_and_caps_sources(db: Mana
             _signals(
                 issue.id,
                 tuple(
-                    IssueSignalInput(
-                        source="usage_alert",
+                    AlertSignalInput(
+                        source="performance",
                         source_id=f"scope-{index}",
-                        usage_alert=source.model_copy(
+                        performance=source.model_copy(
                             update={"id": f"scope-{index}", "scope_id": f"other-user-{index}"}
                         ),
                     )
@@ -989,22 +991,22 @@ async def test_issue_status_rechecks_changed_scope_set_and_caps_sources(db: Mana
 async def test_resource_recovery_ignores_broader_and_traffic_context(db: ManagementDatabase) -> None:
     store: Final = IssuesRepository.from_prisma(db.prisma)
     alerts: Final = UsageAlertsRepository.from_prisma(db.prisma)
-    fixture: Final = _issue(IssueCohort(scope_type="user", scope_id=f"fixture-{uuid4()}"))
+    fixture: Final = _issue(AlertCohort(scope_type="user", scope_id=f"fixture-{uuid4()}"))
     issue: Final = fixture.model_copy(
         update={"family": "spend", "comparisons": (fixture.comparisons[0].model_copy(update={"metric": "spend"}),)}
     )
     definitions: Final = (
-        UsageAlertRuleInput(
+        AlertRuleInput(
             name="Primary cost", scope_type="user", scope_id=issue.cohort.scope_id, metric="spend", direction="increase"
         ),
-        UsageAlertRuleInput(
+        AlertRuleInput(
             name="Traffic context",
             scope_type="user",
             scope_id=issue.cohort.scope_id,
             metric="requests",
             direction="increase",
         ),
-        UsageAlertRuleInput(name="Broader cost", scope_type="deployment", metric="spend", direction="increase"),
+        AlertRuleInput(name="Broader cost", scope_type="deployment", metric="spend", direction="increase"),
     )
     rules: Final = tuple([await alerts.save_rule(definition, "qa-admin") for definition in definitions])
     assert all(rule is not None for rule in rules)
@@ -1035,7 +1037,7 @@ async def test_resource_recovery_ignores_broader_and_traffic_context(db: Managem
             _signals(
                 issue.id,
                 tuple(
-                    IssueSignalInput(source="usage_alert", source_id=source.id, usage_alert=source)
+                    AlertSignalInput(source="performance", source_id=source.id, performance=source)
                     for source in sources
                 ),
             )
@@ -1072,7 +1074,7 @@ async def test_resource_recovery_ignores_broader_and_traffic_context(db: Managem
 async def test_provider_recovery_pages_saved_cohorts_and_rejects_stale_observations(db: ManagementDatabase) -> None:
     store: Final = IssuesRepository.from_prisma(db.prisma)
     prefix: Final = f"fixture-{uuid4()}"
-    initial: Final = _issue(IssueCohort(scope_type="provider", scope_id="example-provider"))
+    initial: Final = _issue(AlertCohort(scope_type="provider", scope_id="example-provider"))
     template: Final = initial.model_copy(update={"observed_at": initial.observed_at.replace(microsecond=123789)})
     inputs: Final = tuple(
         template.model_copy(update={"id": prefix + suffix, "cohort_key": prefix + suffix})
@@ -1111,11 +1113,11 @@ async def test_issue_prune_removes_expired_children_in_bounded_passes(
 ) -> None:
     store: Final = IssuesRepository.from_prisma(db.prisma)
     alerts: Final = UsageAlertsRepository.from_prisma(db.prisma)
-    expired: Final = _issue(IssueCohort(scope_type="user", scope_id=f"fixture-{uuid4()}"))
+    expired: Final = _issue(AlertCohort(scope_type="user", scope_id=f"fixture-{uuid4()}"))
     open_issue: Final = _issue(expired.cohort)
     recent: Final = _issue(expired.cohort)
     rule: Final = await alerts.save_rule(
-        UsageAlertRuleInput(
+        AlertRuleInput(
             name="Prune fixture",
             scope_type="user",
             scope_id=expired.cohort.scope_id,
@@ -1126,7 +1128,7 @@ async def test_issue_prune_removes_expired_children_in_bounded_passes(
     )
     assert rule is not None
     deliveries: Final = tuple(
-        IssueDeliveryInput(id=str(uuid4()), issue_id=expired.id, channel="slack") for _ in range(2)
+        AlertDeliveryInput(id=str(uuid4()), issue_id=expired.id, channel="slack") for _ in range(2)
     )
     try:
         await store.upsert_issues((expired, open_issue, recent))
@@ -1146,7 +1148,7 @@ async def test_issue_prune_removes_expired_children_in_bounded_passes(
             )
         )[0]
         await store.add_signal_batch(
-            _signals(expired.id, (IssueSignalInput(source="usage_alert", source_id=source.id, usage_alert=source),))
+            _signals(expired.id, (AlertSignalInput(source="performance", source_id=source.id, performance=source),))
         )
         for delivery in deliveries:
             await store.queue_deliveries((_delivery(delivery, rule, source),))
@@ -1191,6 +1193,61 @@ async def test_issue_prune_removes_expired_children_in_bounded_passes(
         )
 
 
+@pytest.mark.asyncio(loop_scope="session")
+async def test_prune_preserves_retirement_reopened_by_new_usage(db: ManagementDatabase) -> None:
+    store: Final = IssuesRepository.from_prisma(db.prisma)
+    original: Final = _issue(AlertCohort(scope_type="model", scope_id=f"retirement-{uuid4()}"))
+    name: Final = original.cohort.scope_id or "example-model"
+    retirement: Final = original.observed_on + timedelta(days=10)
+    details: Final = AlertDeprecation(
+        model=ModelDeprecationInfo(
+            model_name=name, deprecation_date=retirement, days_until_deprecation=10, status="imminent"
+        ),
+        usage_model=name,
+        requests=10,
+        last_used_date=original.observed_on,
+        last_day_requests=10,
+        state=DeprecationAlertState(model=name, deprecation_date=retirement),
+    )
+    issue: Final = original.model_copy(
+        update={
+            "kind": "model_deprecation",
+            "family": "retirement",
+            "deprecation": details,
+            "grouping_reason": "model_deprecation",
+            "comparisons": (),
+        }
+    )
+    try:
+        await store.upsert_issues((issue,))
+        assert await store.set_status(issue.id, "dismissed", "open") is not None
+        await store.upsert_issues(
+            (
+                issue.model_copy(
+                    update={
+                        "deprecation": details.model_copy(update={"last_day_requests": 11, "requests": 11}),
+                        "observed_at": original.observed_at + timedelta(minutes=1),
+                    }
+                ),
+            )
+        )
+        await _query(
+            db, "UPDATE \"LiteLLM_Issue\" SET updated_at=TIMESTAMP '2000-01-01' WHERE id=$1 RETURNING id", issue.id
+        )
+        reopened: Final = await store.get_issue(issue.id)
+        assert reopened is not None and reopened.status == "open"
+        await store.prune(retention_days=90, limit=10)
+        assert await store.get_issue(issue.id) == reopened
+    finally:
+        await _query(
+            db,
+            'DELETE FROM "LiteLLM_Config" WHERE param_name IN '
+            '(SELECT ack_key FROM "LiteLLM_Issue" WHERE id=$1) RETURNING param_name',
+            issue.id,
+        )
+        await _remove_issues(db, (issue.id,))
+
+
 class _MeasuredActivityDatabase:
     def __init__(self, database: DailyActivityQueryDatabase) -> None:
         self.database = database
@@ -1215,7 +1272,7 @@ async def test_issue_resource_metadata_bounds_labels_and_deleted_history(
     day: Final = date.today() - timedelta(days=3)
     with gateway.scenario() as scenario:
         owner: Final = scenario.user(user_role="internal_user")
-        issue: Final = _issue(IssueCohort(scope_type="provider", scope_id=identity)).model_copy(
+        issue: Final = _issue(AlertCohort(scope_type="provider", scope_id=identity)).model_copy(
             update={"range_start": day, "range_end": day}
         )
         try:
@@ -1266,7 +1323,7 @@ async def test_issue_resource_metadata_bounds_labels_and_deleted_history(
             totals: Final = await repository.daily_activity(issue.cohort, day, day)
             assert totals.metadata.total_api_requests == 30
             for endpoint in ("keys", "users"):
-                response: Final = gateway.request("GET", f"/issues/{issue.id}/{endpoint}", params={"limit": "1"})
+                response: Final = gateway.request("GET", f"/alerts/{issue.id}/{endpoint}", params={"limit": "1"})
                 assert response.status_code == 200 and len(response.content) < 2048
                 assert "padding" not in response.text
             await _query(
@@ -1289,8 +1346,8 @@ async def test_issue_resource_metadata_bounds_labels_and_deleted_history(
 async def test_disabled_later_breach_requires_new_healthy_primary_evidence(db: ManagementDatabase) -> None:
     store: Final = IssuesRepository.from_prisma(db.prisma)
     alerts: Final = UsageAlertsRepository.from_prisma(db.prisma)
-    issue: Final = _issue(IssueCohort(scope_type="user", scope_id=f"fixture-{uuid4()}"))
-    definition: Final = UsageAlertRuleInput(
+    issue: Final = _issue(AlertCohort(scope_type="user", scope_id=f"fixture-{uuid4()}"))
+    definition: Final = AlertRuleInput(
         name="Primary traffic",
         scope_type="user",
         scope_id=issue.cohort.scope_id,
@@ -1315,7 +1372,7 @@ async def test_disabled_later_breach_requires_new_healthy_primary_evidence(db: M
             _signals(
                 issue.id,
                 tuple(
-                    IssueSignalInput(source="usage_alert", source_id=source.id, usage_alert=source)
+                    AlertSignalInput(source="performance", source_id=source.id, performance=source)
                     for source in sources
                 ),
             )
