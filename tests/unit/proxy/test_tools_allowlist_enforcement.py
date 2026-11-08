@@ -86,6 +86,63 @@ class TestExtractRequestToolNames:
             "get_current_weather",
         ]
 
+    def test_openai_responses_namespace_tools(self):
+        """Codex sends MCP tools grouped in a namespace; the allowlist must see each member."""
+        data = {
+            "tools": [
+                {"type": "function", "name": "exec_command"},
+                {
+                    "type": "namespace",
+                    "name": "mcp__mock",
+                    "tools": [{"type": "function", "name": "search_issues"}, {"type": "function", "name": "get_issue"}],
+                },
+            ]
+        }
+        assert extract_request_tool_names("/v1/responses", data) == ["exec_command", "search_issues", "get_issue"]
+
+    def test_openai_responses_tool_search_output_in_input(self):
+        """With tool_search, deferred MCP tools arrive only in input[], never in tools[]."""
+        data = {
+            "tools": [{"type": "tool_search"}],
+            "input": [
+                {"role": "user", "content": "find the issue"},
+                {"type": "tool_search_call", "call_id": "ts_1", "execution": "client"},
+                {
+                    "type": "tool_search_output",
+                    "call_id": "ts_1",
+                    "tools": [
+                        {
+                            "type": "namespace",
+                            "name": "mcp__mock",
+                            "tools": [{"type": "function", "name": "search_issues", "defer_loading": True}],
+                        }
+                    ],
+                },
+            ],
+        }
+        assert extract_request_tool_names("/v1/responses", data) == ["search_issues"]
+
+    def test_openai_responses_namespace_inside_additional_tools(self):
+        """A namespace carried by an additional_tools input item is opened into its members."""
+        data = {
+            "input": [
+                {
+                    "type": "additional_tools",
+                    "role": "developer",
+                    "tools": [
+                        {
+                            "type": "namespace",
+                            "name": "functions",
+                            "tools": [{"type": "custom", "name": "exec"}, {"type": "function", "name": "wait"}],
+                        },
+                        {"type": "function", "name": "search_issues"},
+                    ],
+                },
+                {"role": "user", "content": "hi"},
+            ],
+        }
+        assert extract_request_tool_names("/v1/responses", data) == ["exec", "wait", "search_issues"]
+
     def test_anthropic_tools(self):
         data = {"tools": [{"name": "get_weather"}, {"name": "run_sql"}]}
         assert extract_request_tool_names("/v1/messages", data) == [
@@ -277,6 +334,46 @@ class TestCheckToolsAllowlist:
             await check
         assert exc_info.value.type == ProxyErrorTypes.tool_access_denied
         assert "delete_user" in str(exc_info.value.message)
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            {
+                "tools": [
+                    {"type": "namespace", "name": "mcp__mock", "tools": [{"type": "function", "name": "run_shell"}]}
+                ]
+            },
+            {
+                "tools": [{"type": "tool_search"}],
+                "input": [
+                    {
+                        "type": "tool_search_output",
+                        "call_id": "ts_1",
+                        "tools": [
+                            {
+                                "type": "namespace",
+                                "name": "mcp__mock",
+                                "tools": [{"type": "function", "name": "run_shell", "defer_loading": True}],
+                            }
+                        ],
+                    }
+                ],
+            },
+        ],
+        ids=["namespace_in_tools", "tool_search_output_in_input"],
+    )
+    @pytest.mark.asyncio
+    async def test_disallowed_namespace_member_raises_on_responses_route(self, body):
+        token = _token(metadata={"allowed_tools": ["get_weather"]})
+        with pytest.raises(ProxyException) as exc_info:
+            await check_tools_allowlist(
+                request_body=body,
+                valid_token=token,
+                team_object=None,
+                route="/v1/responses",
+            )
+        assert exc_info.value.type == ProxyErrorTypes.tool_access_denied
+        assert "run_shell" in str(exc_info.value.message)
 
     @pytest.mark.parametrize(
         "loaded_tool",
