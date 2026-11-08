@@ -34,6 +34,10 @@ flag_management:
       carryforward: false
     - name: integrations
       carryforward: false
+    - name: integration-database
+      carryforward: false
+    - name: integration-database-replica
+      carryforward: false
     - name: llm-vertex-ai
       carryforward: false
     - name: llm-other-providers
