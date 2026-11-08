@@ -972,6 +972,11 @@ class ProxyInitializationHelpers:
     help="Path to the proxy configuration file (e.g. config.yaml). Usage `litellm --config config.yaml`",
 )
 @click.option(
+    "--providers",
+    default=None,
+    help="Path to an OpenAI-compatible providers file (e.g. providers.json). Usage `litellm --providers providers.json`",
+)
+@click.option(
     "--max_budget",
     default=None,
     type=float,
@@ -1245,6 +1250,7 @@ def run_server(
     drop_params,
     add_function_to_prompt,
     config,
+    providers: str | None,
     max_budget,
     test,
     local,
@@ -1333,6 +1339,11 @@ def run_server(
         ProxyInitializationHelpers.run_test_chat_completion(host, port, model, test)
         return
     else:
+        if providers is not None:
+            from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+            JSONProviderRegistry.load_file(providers)
+            os.environ["PROVIDERS_FILE_PATH"] = providers
         worker_headers: Final = _DECODED_JSON.validate_python(json.loads(headers) if headers else headers)
         save_worker_config(
             model=model,
