@@ -767,7 +767,7 @@ def _with_credential(entry: Mapping[str, object]) -> Mapping[str, object] | None
         if name in CALLBACK_VAR_NAMES and value is not None
     }
     if not credential_vars:
-        verbose_proxy_logger.warning(
+        verbose_proxy_logger.error(
             "Ignoring key logging entry for %s: credential %r is not defined or holds no logging values",
             entry.get("callback_name"),
             credential_name,

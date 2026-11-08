@@ -1,5 +1,6 @@
 import copy
 import json
+import logging
 import sys
 from types import ModuleType, SimpleNamespace
 from typing import Final
@@ -824,6 +825,18 @@ def test_key_logging_entries_drops_an_entry_whose_credential_supplies_no_logging
     ]
 
     assert key_logging_entries({"logging": entries}) == (kept,)
+
+
+def test_a_dropped_credential_reference_is_logged_as_an_error_so_key_health_reports_it(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr(litellm, "credential_list", [])
+    entry: Final = {"callback_name": "arize", "litellm_credential_name": "missing", "callback_vars": {}}
+
+    with caplog.at_level(logging.WARNING):
+        key_logging_entries({"logging": [entry]})
+
+    assert [record.levelno for record in caplog.records if "missing" in record.getMessage()] == [logging.ERROR]
 
 
 def test_key_logging_entries_drops_an_entry_whose_credential_is_not_defined(monkeypatch: pytest.MonkeyPatch) -> None:
