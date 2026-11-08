@@ -13360,6 +13360,7 @@ class TestTotalTimeout:
         post_call: Callable[..., object] | None = None,
         route_type: str = "acompletion",
         proxy_logging_obj: MagicMock | None = None,
+        preparation: Callable[..., Awaitable[tuple[dict[str, object], MagicMock]]] | None = None,
     ) -> tuple[object, MagicMock]:
         from litellm.proxy._types import UserAPIKeyAuth
 
@@ -13394,6 +13395,8 @@ class TestTotalTimeout:
             return llm_call(kwargs["data"])
 
         monkeypatch.setattr(litellm.proxy.common_request_processing, "route_request", fake_route_request)
+        if preparation is not None:
+            monkeypatch.setattr(processor, "_pre_call_with_fallbacks", preparation)
         result: Final = await processor.base_process_llm_request(
             request=self._request(headers),
             fastapi_response=Response(),
@@ -13402,7 +13405,7 @@ class TestTotalTimeout:
             proxy_logging_obj=hooks,
             general_settings={},
             proxy_config=MagicMock(spec=ProxyConfig),
-            skip_pre_call_logic=True,
+            skip_pre_call_logic=preparation is None,
         )
         return result, logging_obj
 
@@ -13540,13 +13543,14 @@ class TestTotalTimeout:
         assert raised.value.param == "total_timeout"
         assert called == []
 
+    @pytest.mark.parametrize("header", ["60", "10s", "", "0"], ids=["valid", "with_a_unit", "empty", "zero"])
     @pytest.mark.parametrize(
         ("body", "route_type"),
         [({"stream": True}, "acompletion"), ({"background": True}, "aresponses"), ({}, "aembedding")],
         ids=["streaming", "background_responses", "other_route"],
     )
-    async def test_a_header_total_timeout_leaves_a_request_it_cannot_apply_unbounded(
-        self, monkeypatch: pytest.MonkeyPatch, body: Mapping[str, object], route_type: str
+    async def test_a_header_total_timeout_leaves_a_request_it_cannot_apply_unbounded_whatever_its_value(
+        self, monkeypatch: pytest.MonkeyPatch, body: Mapping[str, object], route_type: str, header: str
     ) -> None:
         bounded: Final[list[bool]] = []
 
@@ -13555,7 +13559,7 @@ class TestTotalTimeout:
             return litellm.ModelResponse()
 
         await self._process(
-            monkeypatch, answered, body=body, headers={"x-litellm-total-timeout": "60"}, route_type=route_type
+            monkeypatch, answered, body=body, headers={"x-litellm-total-timeout": header}, route_type=route_type
         )
 
         assert bounded == [False]
@@ -13629,3 +13633,29 @@ class TestTotalTimeout:
 
         assert expired.code == "408"
         assert moderation_stopped
+
+    def test_a_budget_that_runs_out_while_preparing_lets_preparation_finish_then_ends_before_the_call(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        async def preparation_outlasts_the_budget() -> tuple[ProxyException, bool, bool]:
+            prepared: Final = asyncio.Event()
+            called: Final = asyncio.Event()
+
+            async def slow_admission(**_: object) -> tuple[dict[str, object], MagicMock]:
+                await asyncio.sleep(120)
+                prepared.set()
+                return {"model": "fake-model"}, MagicMock()
+
+            async def provider(_: Mapping[str, object]) -> object:
+                called.set()
+                return litellm.ModelResponse()
+
+            with pytest.raises(ProxyException) as raised:
+                await self._process(monkeypatch, provider, body={"total_timeout": 60}, preparation=slow_admission)
+            return raised.value, prepared.is_set(), called.is_set()
+
+        expired, prepared, called = _run_on_autojump_clock(preparation_outlasts_the_budget())
+
+        assert expired.code == "408"
+        assert prepared
+        assert not called

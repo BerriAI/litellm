@@ -9,7 +9,7 @@ import asyncio
 import contextlib
 import math
 import sys
-from collections.abc import AsyncGenerator, Callable, Mapping
+from collections.abc import AsyncGenerator, Callable, Generator, Mapping
 from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Final
@@ -28,6 +28,9 @@ if sys.version_info >= (3, 11):
     def _disarm(scope: _Scope) -> None:
         scope.reschedule(None)
 
+    def _rearm(scope: _Scope, when: float) -> None:
+        scope.reschedule(when)
+
 else:
     from async_timeout import Timeout as _Scope
     from async_timeout import timeout_at as _timeout_at
@@ -39,6 +42,9 @@ else:
 
     def _disarm(scope: _Scope) -> None:
         scope.reject()
+
+    def _rearm(scope: _Scope, when: float) -> None:
+        scope.update(when)
 
 
 TOTAL_TIMEOUT_HEADER: Final = "x-litellm-total-timeout"
@@ -99,12 +105,15 @@ class TotalTimeoutExpired(TimeoutError):
 
 
 class TotalDeadline:
-    __slots__ = ("_at", "_clock", "_released", "_scope", "from_body")
+    __slots__ = ("_at", "_clock", "_released", "_scope", "_scope_at", "from_body")
 
-    def __init__(self, at: float, clock: Callable[[], float], scope: _Scope, *, from_body: bool) -> None:
+    def __init__(
+        self, at: float, clock: Callable[[], float], scope: _Scope, scope_at: float, *, from_body: bool
+    ) -> None:
         self._at: Final = at
         self._clock: Final = clock
         self._scope: Final = scope
+        self._scope_at: Final = scope_at
         self._released: bool = False
         self.from_body: Final = from_body
 
@@ -113,6 +122,19 @@ class TotalDeadline:
 
     def allows_wait(self, seconds: float) -> bool:
         return self._released or self._clock() + seconds < self._at
+
+    @contextlib.contextmanager
+    def held(self) -> Generator[None, None, None]:
+        """Run the block without interrupting it; a deadline that passed meanwhile fires right after it."""
+        if self._released:
+            yield
+            return
+        _disarm(self._scope)
+        try:
+            yield
+        finally:
+            if not self._released:
+                _rearm(self._scope, self._scope_at)
 
     def release(self) -> None:
         self._released = True
@@ -125,6 +147,16 @@ _CURRENT: Final[ContextVar[TotalDeadline | None]] = ContextVar("total_deadline",
 
 def current_total_deadline() -> TotalDeadline | None:
     return _CURRENT.get()
+
+
+@contextlib.contextmanager
+def total_timeout_held() -> Generator[None, None, None]:
+    deadline: Final = _CURRENT.get()
+    if deadline is None:
+        yield
+        return
+    with deadline.held():
+        yield
 
 
 def enforce_total_timeout_scope(call: Mapping[str, object]) -> None:
@@ -149,8 +181,9 @@ async def total_deadline(
     while a ``TimeoutError`` raised inside the block passes through as it was."""
     loop: Final = asyncio.get_running_loop()
     now: Final = clock if clock is not None else loop.time
-    scope: Final = _timeout_at(loop.time() + seconds)
-    deadline: Final = TotalDeadline(now() + seconds, now, scope, from_body=from_body)
+    scope_at: Final = loop.time() + seconds
+    scope: Final = _timeout_at(scope_at)
+    deadline: Final = TotalDeadline(now() + seconds, now, scope, scope_at, from_body=from_body)
     try:
         async with scope:
             token: Final = _CURRENT.set(deadline)

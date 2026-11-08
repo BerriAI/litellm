@@ -300,6 +300,7 @@ from litellm.litellm_core_utils.total_deadline import (
     current_total_deadline,
     total_deadline,
     total_timeout_from_request,
+    total_timeout_held,
 )
 from litellm.proxy.anthropic_endpoints.answered_status import with_answered_status
 from litellm.proxy.anthropic_endpoints.streaming_model_restamp import (
@@ -3204,25 +3205,27 @@ class ProxyBaseLLMRequestProcessing:
         """The request's ``total_timeout`` when it bounds this request: a body one on a request it cannot
         bound is refused, a header one is ignored."""
         body: Final = _REQUEST_FIELDS.validate_python(self.data)  # pyright: ignore[reportUnknownMemberType]  # self.data is the untyped request dict
-        parsed: Final = total_timeout_from_request(request.headers.get(TOTAL_TIMEOUT_HEADER), body)
+        header: Final = request.headers.get(TOTAL_TIMEOUT_HEADER)
         self.data.pop(TOTAL_TIMEOUT_FIELD, None)  # pyright: ignore[reportUnknownMemberType]  # self.data is the untyped request dict
+        bounded: Final = (
+            route_type in _TOTAL_TIMEOUT_ROUTE_TYPES
+            and is_streaming_request is not True
+            and bounded_by_total_timeout(body)
+        )
+        if header is not None and not bounded:
+            verbose_proxy_logger.debug("%s ignored for this %s request", TOTAL_TIMEOUT_HEADER, route_type)
+            return None
+        parsed: Final = total_timeout_from_request(header, body)
         if parsed is None:
             return None
         if isinstance(parsed, InvalidTotalTimeout):
             raise _total_timeout_refused(parsed.message)
-        if (
-            route_type in _TOTAL_TIMEOUT_ROUTE_TYPES
-            and is_streaming_request is not True
-            and bounded_by_total_timeout(body)
-        ):
-            return parsed
-        if parsed.from_body:
+        if not bounded:
             raise _total_timeout_refused(
                 f"{TOTAL_TIMEOUT_FIELD} applies only to non-streaming, non-background "
                 "/v1/chat/completions, /v1/messages and /v1/responses requests"
             )
-        verbose_proxy_logger.debug("%s ignored for this %s request", TOTAL_TIMEOUT_HEADER, route_type)
-        return None
+        return parsed
 
     async def _within_total_timeout(
         self,
@@ -3289,22 +3292,26 @@ class ProxyBaseLLMRequestProcessing:
                 )
             self.route_type = route_type
         else:
-            self.data, logging_obj = await self._pre_call_with_fallbacks(
-                request=request,
-                general_settings=general_settings,
-                proxy_logging_obj=proxy_logging_obj,
-                user_api_key_dict=user_api_key_dict,
-                version=version,
-                proxy_config=proxy_config,
-                user_model=user_model,
-                user_temperature=user_temperature,
-                user_request_timeout=user_request_timeout,
-                user_max_tokens=user_max_tokens,
-                user_api_base=user_api_base,
-                model=model,
-                route_type=route_type,
-                llm_router=llm_router,
-            )
+            # Pre-call admission reserves shared quota before it records what it took, so a total_timeout never
+            # interrupts it: a deadline that passed meanwhile ends the request right after, before dispatch,
+            # where the failure path hands back what it reserved.
+            with total_timeout_held():
+                self.data, logging_obj = await self._pre_call_with_fallbacks(
+                    request=request,
+                    general_settings=general_settings,
+                    proxy_logging_obj=proxy_logging_obj,
+                    user_api_key_dict=user_api_key_dict,
+                    version=version,
+                    proxy_config=proxy_config,
+                    user_model=user_model,
+                    user_temperature=user_temperature,
+                    user_request_timeout=user_request_timeout,
+                    user_max_tokens=user_max_tokens,
+                    user_api_base=user_api_base,
+                    model=model,
+                    route_type=route_type,
+                    llm_router=llm_router,
+                )
             phase_event("litellm.request.pre_call_completed")
 
         _post_call_guardrails_active: Final = self._has_post_call_guardrails()
