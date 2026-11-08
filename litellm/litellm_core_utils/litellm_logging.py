@@ -917,6 +917,7 @@ class Logging(LiteLLMLoggingBaseClass):
             "litellm_params": litellm_params,
             "applied_guardrails": applied_guardrails,
             "model": model,
+            "standard_callback_dynamic_params": self.standard_callback_dynamic_params,
         }
 
         # Set by proxy request handlers to defer spend-log fire until after
@@ -1756,10 +1757,26 @@ class Logging(LiteLLMLoggingBaseClass):
                         except Exception:
                             details_to_log = self.model_call_details.copy()
                         if should_redact_message_logging(self.model_call_details):
-                            # make a copy of the _model_Call_details and log it
+                            redact_message_input_output_from_logging(
+                                model_call_details=details_to_log,
+                                result=None,
+                            )
+                            additional_args_to_log = details_to_log.get("additional_args")
+                            if isinstance(additional_args_to_log, dict) and isinstance(
+                                additional_args_to_log.get("complete_input_dict"), dict
+                            ):
+                                details_to_log["additional_args"] = {
+                                    **additional_args_to_log,
+                                    "complete_input_dict": {
+                                        k: v
+                                        for k, v in additional_args_to_log["complete_input_dict"].items()
+                                        if k not in ("messages", "input", "prompt")
+                                    },
+                                }
                             details_to_log.pop("messages", None)
                             details_to_log.pop("input", None)
                             details_to_log.pop("prompt", None)
+                            details_to_log.pop("raw_request_typed_dict", None)
 
                         add_breadcrumb(
                             category="litellm.llm_call",

@@ -8761,14 +8761,25 @@ def test_pre_call_sentry_breadcrumb_honors_per_request_turn_off_message_logging(
     )
     logging_obj.model_call_details["messages"] = [{"role": "user", "content": "SECRET-MESSAGE"}]
     logging_obj.model_call_details["prompt"] = "SECRET-PROMPT"
+    logging_obj.model_call_details["litellm_params"] = {
+        "proxy_server_request": {
+            "body": {"messages": [{"role": "user", "content": "SECRET-PROXY-BODY"}]},
+        },
+    }
     logging_obj.model_call_details["standard_callback_dynamic_params"] = {"turn_off_message_logging": True}
 
-    logging_obj.pre_call(input="SECRET-INPUT", api_key="", additional_args={})
+    logging_obj.pre_call(
+        input="SECRET-INPUT",
+        api_key="",
+        additional_args={"complete_input_dict": {"messages": [{"role": "user", "content": "SECRET-COMPLETE-INPUT"}]}},
+    )
 
     assert len(breadcrumbs) == 1
     assert "SECRET-MESSAGE" not in breadcrumbs[0]["message"]
     assert "SECRET-PROMPT" not in breadcrumbs[0]["message"]
     assert "SECRET-INPUT" not in breadcrumbs[0]["message"]
+    assert "SECRET-PROXY-BODY" not in breadcrumbs[0]["message"]
+    assert "SECRET-COMPLETE-INPUT" not in breadcrumbs[0]["message"]
 
 
 def test_debugging_log_honors_json_logs_set_after_import(logging_obj, monkeypatch):
