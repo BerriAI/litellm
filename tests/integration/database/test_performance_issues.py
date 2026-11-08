@@ -22,7 +22,13 @@ from litellm.repositories.daily_activity_buckets import api_key_bucket
 from litellm.repositories.issues import IssuesRepository
 from litellm.repositories.usage_alert_metrics import IssueMetricWindow, UsageAlertMetricsRepository
 from litellm.repositories.usage_alerts import UsageAlertsRepository
-from litellm.types.proxy.usage_alerts import UsageAlertObservation, AlertRule, AlertRuleInput, UsageAlertScope
+from litellm.types.proxy.usage_alerts import (
+    AlertRule,
+    AlertRuleInput,
+    UsageAlertObservation,
+    UsageAlertProjectionWork,
+    UsageAlertScope,
+)
 
 _DAY: Final = date(2026, 11, 4)
 _NOW: Final = datetime(2026, 11, 5, 3, microsecond=987654, tzinfo=timezone.utc)
@@ -183,6 +189,14 @@ async def _coverage(prisma: PrismaClient, day: date) -> None:
         ON CONFLICT(source,hour) DO UPDATE SET observed_at=EXCLUDED.observed_at RETURNING source""",
         day.isoformat(),
     )
+
+
+async def _finish_projection(job: UsageAlertJob, now: datetime, work: UsageAlertProjectionWork) -> None:
+    async with asyncio.timeout(60):
+        while not await job._performance_projection.run_pending(
+            now, work, job._store, asyncio.get_running_loop().time() + 10
+        ):
+            continue
 
 
 async def _seed(prisma: PrismaClient, *, reliability: bool = False) -> None:
@@ -375,8 +389,14 @@ async def test_retirement_detects_used_model_after_unused_model_in_the_same_alia
 async def test_single_key_reliability_collapses_matching_scopes_without_traffic_growth(db: ManagementDatabase) -> None:
     async with _isolated(db) as prisma:
         await _seed(prisma, reliability=True)
-        await UsageAlertJob.from_prisma(prisma, SlackAlerting(alerting=[], alert_types=[]))._run(_NOW)
+        job: Final = UsageAlertJob.from_prisma(prisma, SlackAlerting(alerting=[], alert_types=[]))
         issues: Final = IssuesRepository.from_prisma(prisma)
+        async with asyncio.timeout(60):
+            while True:
+                await job.run(_NOW)
+                if await job._store.pending_projection_work() is None and (await issues.list_issues()).total:
+                    break
+                await asyncio.sleep(0.1)
         page: Final = await issues.list_issues()
         assert page.total == 1, tuple((item.cohort.scope_type, item.cohort.scope_id, item.title) for item in page.data)
         issue: Final = page.data[0]
@@ -632,19 +652,15 @@ async def test_entity_page_progress_resumes_old_day_without_early_completion(db:
         assert "evaluation_progress" not in AlertRule.model_json_schema(mode="serialization")["properties"]
         first: Final = await job._store.list_alerts(limit=500)
         assert first.total == 10
-        projector: Final = job._performance_projection
-        assert projector is not None
         work: Final = await job._store.pending_projection_work()
         assert work is not None
-        assert await projector.run_pending(_NOW, work, job._store, asyncio.get_running_loop().time() + 10)
+        await _finish_projection(job, _NOW, work)
         await job._store.finish_projection_work(work)
         assert (await IssuesRepository.from_prisma(prisma).list_issues()).total == 10
         await job._scope_page((partial,), _DAY, True)
         next_work: Final = await job._store.pending_projection_work()
         assert next_work is not None and next_work.version != work.version
-        assert await projector.run_pending(
-            _NOW + timedelta(hours=1), next_work, job._store, asyncio.get_running_loop().time() + 10
-        )
+        await _finish_projection(job, _NOW + timedelta(hours=1), next_work)
         await job._store.finish_projection_work(next_work)
         assert (await IssuesRepository.from_prisma(prisma).list_issues()).total == 20
         await job._run(_NOW + timedelta(days=1))
@@ -842,11 +858,9 @@ async def test_partial_broad_default_waits_for_its_key_family_only(db: Managemen
         await job._scope_page(spend, _DAY, True)
         assert await sources.active_signals(_DAY, scope_type="key", metric="spend", completed_only=True)
         assert not await sources.active_signals(_DAY, scope_type="deployment", metric="spend", completed_only=True)
-        projector: Final = job._performance_projection
-        assert projector is not None
         work: Final = await job._store.pending_projection_work()
         assert work is not None
-        assert await projector.run_pending(_NOW, work, job._store, asyncio.get_running_loop().time() + 10)
+        await _finish_projection(job, _NOW, work)
         partial: Final = await sources.list_issues()
         assert len(partial.data) == 1 and partial.data[0].cohort.scope_type == "key"
         while not await job._store.completed_rule_ids((spend[0],), _DAY):
