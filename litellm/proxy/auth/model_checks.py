@@ -26,7 +26,8 @@ from litellm.repositories.object_permission_repository import ObjectPermissionRe
 from litellm.responses.main import strip_responses_routing_prefix
 from litellm.router import Router
 from litellm.router_api import RouterRegistry, fallback_chain
-from litellm.types.router import CredentialLiteLLMParams, LiteLLM_Params
+from litellm.router_rust.surface.registry import cost_map_backend_model
+from litellm.types.router import CredentialLiteLLMParams, Deployment, LiteLLM_Params
 from litellm.types.utils import LlmProviders
 from litellm.utils import (
     AZURE_MODEL_PLACEHOLDER,
@@ -759,7 +760,12 @@ def wildcard_deployment_priced_model(
 def _model_other_deployments_bill(
     registry: RouterRegistry, routed_name: str, candidates: AbstractSet[str], team_id: str | None
 ) -> str | RoutedElsewhere:
-    billed: Final = frozenset(registry.names(routed_name, kind="litellm_base_models", team_id=team_id))
+    rows: Final = registry.deployments(routed_name, team_id=team_id) or ()
+    billed: Final = frozenset(
+        cost_map_backend_model(Deployment.model_validate(row))
+        for row in rows
+        if _model_info_field(row, "id") in candidates
+    )
     if len(billed) != 1 or any(_declares_its_own_rate(registry, model_id) for model_id in candidates):
         return ROUTED_ELSEWHERE
     return next(iter(billed))

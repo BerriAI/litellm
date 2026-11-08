@@ -20333,9 +20333,9 @@ def test_router_warns_when_a_deployment_enforces_endpoints_without_a_list(caplog
     assert "Deployment 'embed-from-api' sets enforce_supported_endpoints without" in caplog.text
 
 
-def test_registry_finds_a_team_deployment_by_public_and_internal_name_for_its_team_only():
-    internal_name = "model_name_team-a_row"
-    router = Router(
+def test_registry_finds_a_team_deployment_by_public_and_internal_name_for_its_team_only() -> None:
+    internal_name: Final = "model_name_team-a_row"
+    router: Final = Router(
         model_list=[
             {
                 "model_name": internal_name,
@@ -20344,7 +20344,7 @@ def test_registry_finds_a_team_deployment_by_public_and_internal_name_for_its_te
             }
         ]
     )
-    registry = router.registry()
+    registry: Final = router.registry()
 
     assert [row["model_info"]["id"] for row in registry.deployments("public-chat", team_id="team-a")] == ["team-row"]
     assert [row["model_info"]["id"] for row in registry.deployments(internal_name, team_id="team-a")] == ["team-row"]
