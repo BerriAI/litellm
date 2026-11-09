@@ -57,6 +57,11 @@ mod _native {
         request_auth_select_websocket_api_key, request_auth_start,
     };
     #[pymodule_export]
+    use crate::request_auth::{
+        request_auth_budget_lookup_emails, request_auth_budget_lookup_member,
+        request_auth_budget_lookup_organization, request_auth_budget_lookup_soft,
+    };
+    #[pymodule_export]
     use crate::router::{RouterCall, RouterCoreHandle};
     #[pymodule_export]
     use crate::routes::audio_transcription::{atranscription, transcription};

@@ -8,7 +8,7 @@ from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
-from litellm._auth import common_budgets
+from litellm._auth import budget_lookup, common_budgets
 from litellm._auth.common_budgets import AlertFacts, BudgetDecision, BudgetFacts, MemberLimitFacts
 from litellm.constants import EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE
 from litellm.models.budget import LiteLLM_BudgetTable
@@ -24,7 +24,6 @@ from litellm.proxy._types import (
 from litellm.proxy.utils import ProxyLogging
 
 _METADATA: Final = TypeAdapter(Mapping[str, object])
-_ITEMS: Final = TypeAdapter(tuple[object, ...])
 AlertKind: TypeAlias = Literal[
     "token_budget",
     "user_budget",
@@ -302,11 +301,7 @@ async def virtual_key_soft_budget_check(
 
 
 def _soft_emails(raw: object) -> tuple[str, ...]:
-    if isinstance(raw, str):
-        return tuple(email.strip() for email in raw.split(",") if email.strip())
-    if isinstance(raw, list):
-        return tuple(email for email in _ITEMS.validate_python(raw) if isinstance(email, str) and email.strip())
-    return ()
+    return budget_lookup.emails(raw)
 
 
 async def team_soft_budget_check(
@@ -316,7 +311,11 @@ async def team_soft_budget_check(
 ) -> None:
     if team_object is None:
         return
-    emails: Final = _soft_emails(metadata(team_object.metadata).get("soft_budget_alerting_emails"))  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # validated legacy metadata boundary
+    if not budget_lookup.read_soft_emails(
+        budget_lookup.SoftFacts(team_object.soft_budget, team_object.spend, valid_token is not None)
+    ):
+        return
+    emails: Final = _soft_emails(budget_lookup.soft_email_value(team_object.metadata))  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # raw legacy metadata projection
     result: Final = common_budgets.check(
         BudgetFacts(
             "TeamSoft",

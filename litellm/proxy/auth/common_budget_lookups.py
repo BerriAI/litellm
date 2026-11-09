@@ -2,9 +2,8 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Final
 
-from litellm._auth import common_budgets
+from litellm._auth import budget_lookup, common_budgets
 from litellm._auth.common_budgets import BudgetFacts
-from litellm._auth.failure import NativeAuthFailure
 from litellm.proxy._types import (
     Litellm_EntityType,
     LiteLLM_TagTable,
@@ -13,11 +12,11 @@ from litellm.proxy._types import (
     LiteLLM_UserTable,
     UserAPIKeyAuth,
 )
+from litellm.proxy.auth import budget_lookup_adapter
 from litellm.proxy.auth.common_budget_adapter import (
     CounterRead,
     emit_alert,
     key_alert_info,
-    metadata,
     raise_budget,
     read_budget,
     resolve_effective_team_member_budget,
@@ -35,31 +34,15 @@ async def organization_max_budget_check(
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
 ) -> None:
-    from litellm.proxy.auth.auth_checks import get_org_object
-
-    if valid_token is None or prisma_client is None:
-        return
-    org_id: Final = (
-        valid_token.org_id
-        if valid_token.org_id is not None
-        else (team_object.organization_id if team_object is not None else None)
+    reading: Final = await budget_lookup_adapter.organization(
+        budget_lookup.OrganizationFacts(valid_token is not None, prisma_client is not None, team_object is not None),
+        budget_lookup_adapter.LookupIO(valid_token, team_object, prisma_client, user_api_key_cache, proxy_logging_obj),
     )
-    if org_id is None:
+    if reading is None:
         return
-    try:
-        org: Final = await get_org_object(
-            org_id=org_id,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            proxy_logging_obj=proxy_logging_obj,
-            include_budget_table=True,
-        )
-    except NativeAuthFailure:
-        raise
-    except Exception:  # noqa: BLE001  # preserve organization lookup failure handling
-        return
-    if org is None:
-        return
+    assert valid_token is not None
+    org_id: Final = reading.org_id
+    org: Final = reading.row
     carry_organization_budget_state(valid_token=valid_token, org_table=org)
     limit: Final = org.litellm_budget_table.max_budget if org.litellm_budget_table is not None else None
     facts, result = await read_budget(
@@ -164,38 +147,19 @@ async def check_team_member_budget(
     team_membership: LiteLLM_TeamMembership | None = None,
     team_membership_loaded: bool = False,
 ) -> None:
-    from litellm.proxy.auth.auth_checks import (
-        get_team_member_default_budget,
-        get_team_membership,
-        get_utc_datetime,
-    )
     from litellm.proxy.auth.budget_alert_adapter import team_member_max_budget_alert_check
 
-    if team_object is None or team_object.team_id is None or valid_token is None or valid_token.user_id is None:  # pyright: ignore[reportUnnecessaryComparison]  # retain the legacy None guard for constructed cache rows
+    reading: Final = await budget_lookup_adapter.member(
+        budget_lookup.MemberFacts(team_object is not None, valid_token is not None, team_membership_loaded),
+        budget_lookup_adapter.LookupIO(valid_token, team_object, prisma_client, user_api_key_cache, proxy_logging_obj),
+        team_membership,
+    )
+    if reading is None:
         return
-    membership: Final = (
-        team_membership
-        if team_membership_loaded
-        else await get_team_membership(
-            user_id=valid_token.user_id,
-            team_id=team_object.team_id,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            proxy_logging_obj=proxy_logging_obj,
-        )
-    )
-    row: Final = membership.litellm_budget_table if membership is not None else None
-    now: Final = get_utc_datetime()
-    team_metadata: Final = metadata(team_object.metadata)  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # typed projection of legacy metadata
-    default_id: Final = team_metadata.get("team_member_budget_id")
-    default: Final = (
-        await get_team_member_default_budget(
-            budget_id=default_id, prisma_client=prisma_client, user_api_key_cache=user_api_key_cache
-        )
-        if (row is None or row.max_budget is None) and isinstance(default_id, str)
-        else None
-    )
-    limit: Final = resolve_effective_team_member_budget(row, default, now)
+    assert team_object is not None and valid_token is not None and valid_token.user_id is not None
+    membership: Final = reading.membership
+    team_metadata: Final = reading.metadata
+    limit: Final = resolve_effective_team_member_budget(reading.row, reading.default, reading.now)
     facts, result = await read_budget(
         BudgetFacts("TeamMember", limit),
         CounterRead(
