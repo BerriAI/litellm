@@ -52543,6 +52543,49 @@
         "mode": "chat",
         "output_cost_per_token": 8e-06
     },
+    "vercel_ai_gateway/typesafe-ai/jev": {
+        "input_cost_per_token": 4.2e-08,
+        "litellm_provider": "vercel_ai_gateway",
+        "max_input_tokens": 32000,
+        "metadata": {
+            "notes": "Vercel AI Gateway model list entry typesafe-ai/jev, read 2026-11-09: input 0.000000042 per token, output 0, context window 32000."
+        },
+        "mode": "evaluation",
+        "output_cost_per_token": 0.0,
+        "source": "https://ai-gateway.vercel.sh/v1/models"
+    },
+    "vercel_ai_gateway/typesafe-ai/jev-1.13.0": {
+        "input_cost_per_token": 4.2e-08,
+        "litellm_provider": "vercel_ai_gateway",
+        "max_input_tokens": 32000,
+        "metadata": {
+            "notes": "Vercel AI Gateway model list entry typesafe-ai/jev-1.13.0, read 2026-11-09: input 0.000000042 per token, output 0, context window 32000."
+        },
+        "mode": "evaluation",
+        "output_cost_per_token": 0.0,
+        "source": "https://ai-gateway.vercel.sh/v1/models",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supports_vision": true
+    },
+    "vercel_ai_gateway/typesafe-ai/jev-1.14.0": {
+        "input_cost_per_token": 4.2e-08,
+        "litellm_provider": "vercel_ai_gateway",
+        "max_input_tokens": 32000,
+        "metadata": {
+            "notes": "Vercel AI Gateway model list entry typesafe-ai/jev-1.14.0, read 2026-11-09: input 0.000000042 per token, output 0, context window 32000."
+        },
+        "mode": "evaluation",
+        "output_cost_per_token": 0.0,
+        "source": "https://ai-gateway.vercel.sh/v1/models",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supports_vision": true
+    },
     "vercel_ai_gateway/vercel/v0-1.0-md": {
         "input_cost_per_token": 3e-06,
         "litellm_provider": "vercel_ai_gateway",
