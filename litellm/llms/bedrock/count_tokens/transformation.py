@@ -6,7 +6,7 @@ to AWS Bedrock's CountTokens API format and vice versa.
 """
 
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Final, Literal
 
 from pydantic import JsonValue
@@ -54,6 +54,11 @@ def _converse_message_problem(index: int, message: JsonValue) -> str | None:
     if "content" not in message:
         return f"Message {index} must have a 'content' field"
     return None
+
+
+def count_tokens_messages_problem(messages: Sequence[JsonValue]) -> str | None:
+    problems: Final = (_converse_message_problem(index, message) for index, message in enumerate(messages))
+    return next((problem for problem in problems if problem is not None), None)
 
 
 def _sanitized_bedrock_tool_name(raw_name: JsonValue) -> str:
@@ -283,5 +288,4 @@ class BedrockCountTokensConfig(BaseAWSLLM):
         messages: Final = _json_list(request_data.get("messages"))
         if not messages:
             return "messages parameter is required for Converse input"
-        problems: Final = (_converse_message_problem(index, message) for index, message in enumerate(messages))
-        return next((problem for problem in problems if problem is not None), None)
+        return count_tokens_messages_problem(messages)

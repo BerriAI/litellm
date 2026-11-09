@@ -97,6 +97,37 @@ async def test_claude_model_message_without_content_is_rejected_without_calling_
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("message", "problem"),
+    [
+        ({"role": "user"}, "Message 0 must have a 'content' field"),
+        ({"content": "hi"}, "Message 0 must have a 'role' field"),
+    ],
+)
+async def test_mantle_counted_model_rejects_a_malformed_message_without_calling_mantle(
+    message: dict[str, str], problem: str
+) -> None:
+    bedrock: Final = _Bedrock(runtime=(200, {"inputTokens": 1353}), mantle=(200, {"input_tokens": 1336}))
+
+    result: Final = await _counter(bedrock).count_tokens(
+        model_to_use="bedrock_mantle/anthropic.claude-opus-5-5",
+        messages=[message],
+        contents=None,
+        deployment=DEPLOYMENT,
+        request_model="claude-opus-5-5",
+    )
+
+    assert result is not None
+    assert (result.error, result.status_code, result.error_message, result.rejected_before_provider_call) == (
+        True,
+        400,
+        problem,
+        True,
+    )
+    assert bedrock.posted_hosts() == ()
+
+
+@pytest.mark.asyncio
 async def test_bedrock_runtime_count_is_kept_when_it_answers() -> None:
     bedrock: Final = _Bedrock(runtime=(200, {"inputTokens": 1353}), mantle=(200, {"input_tokens": 1336}))
 
