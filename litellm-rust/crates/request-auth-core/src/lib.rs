@@ -10,6 +10,8 @@ pub mod budget_alerts;
 pub mod budget_context;
 pub mod budget_lookup;
 pub mod budget_pricing;
+pub mod claude_membership;
+pub mod claude_normalization;
 pub mod codex_models;
 pub mod codex_normalization;
 pub mod codex_turn;

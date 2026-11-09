@@ -251,6 +251,85 @@ mod tests {
     use super::*;
     use rstest::{fixture, rstest};
 
+    fn helper(model: &str, grants: &[String]) -> model_helpers::Facts {
+        model_helpers::Facts {
+            kind: model_helpers::Kind::Helper,
+            model: model.into(),
+            grants: Some(grants.to_owned()),
+            team_id: None,
+            team_aliases: vec![],
+            router_present: false,
+            groups: None,
+            names: None,
+            provider_loaded: false,
+            provider: None,
+            provider_reads: None,
+        }
+    }
+
+    #[rstest]
+    #[case::all_candidates_both_grants(true, true, true)]
+    #[case::mixed_candidates(false, true, false)]
+    #[case::team_denies(true, false, false)]
+    #[case::mixed_and_team_denies(false, false, false)]
+    fn prefix_requires_all_chatgpt_deployments_and_both_grants(
+        base: Facts,
+        #[case] all_chatgpt: bool,
+        #[case] team_allows: bool,
+        #[case] allowed: bool,
+    ) {
+        let grants = Grants {
+            key: vec!["chatgpt/model".into()],
+            team: vec![
+                if team_allows {
+                    "chatgpt/model"
+                } else {
+                    "other"
+                }
+                .into(),
+            ],
+        };
+        let first = Candidate {
+            provider_loaded: true,
+            provider: Some("chatgpt".into()),
+            model: Some("chatgpt/model".into()),
+            name: Some("chatgpt/model".into()),
+            public_loaded: false,
+            public_name: None,
+        };
+        let second = Candidate {
+            provider: Some(if all_chatgpt { "chatgpt" } else { "openai" }.into()),
+            model: Some(
+                if all_chatgpt {
+                    "chatgpt/model"
+                } else {
+                    "openai/model"
+                }
+                .into(),
+            ),
+            ..first.clone()
+        };
+        let facts = Facts {
+            kind: Kind::Chatgpt,
+            candidates: Some(vec![first, second]),
+            bare: vec![helper("model", &grants.key)],
+            prefixed: vec![
+                helper("chatgpt/model", &grants.key),
+                helper("chatgpt/model", &grants.team),
+            ],
+            grants: Some(grants.clone()),
+            prefixed_grants: Some(grants),
+            ..base
+        };
+        assert_eq!(
+            decide(&facts).unwrap(),
+            Decision::Complete {
+                allowed,
+                target: allowed.then(|| "chatgpt/model".into())
+            }
+        );
+    }
+
     #[fixture]
     fn base() -> Facts {
         Facts {

@@ -19,9 +19,7 @@ class Registry:
     deployments: tuple[Deployment | None, ...]
     alias: str | None = None
     groups: Mapping[str, tuple[str, ...]] = field(default_factory=dict[str, tuple[str, ...]])
-    calls: list[tuple[object, ...]] = field(
-        default_factory=list[tuple[object, ...]]
-    )  # mutable-ok: ordered raw registry IO trace
+    calls: list[tuple[object, ...]] = field(default_factory=list)  # mutable-ok: ordered raw registry IO trace
 
     def names(self, model: str | None = None, *, kind: str = "all", team_id: str | None = None) -> tuple[str, ...]:
         self.calls.append(("names", model, kind, team_id))
@@ -50,9 +48,7 @@ class Router:
 
     def registry(self) -> RouterRegistry:
         self.reader.calls.append(("registry",))
-        return cast(
-            RouterRegistry, self.reader
-        )  # cast-ok: narrow raw registry double implements only the exercised IO methods
+        return cast(RouterRegistry, self.reader)  # cast-ok: raw registry double supplies the selected IO methods
 
 
 def deployment(

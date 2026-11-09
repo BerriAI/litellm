@@ -21,6 +21,7 @@ from litellm._auth.codex_turn import (
 from litellm._auth.failure import NativeAuthFailure, NativeAuthRuntimeError
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.codex_model_adapter import read_codex_model_facts
+from litellm.proxy.auth.model_policy_read import require_native_fact
 from litellm.proxy.auth.route_enable_adapter import read_route_enable_facts
 from litellm.proxy.auth.route_policy_adapter import read_virtual_route_facts
 from litellm.proxy.auth.route_scope_adapter import read_route_scope_facts
@@ -32,9 +33,10 @@ if TYPE_CHECKING:
     )
 
 RESPONSES_PATH: Final = "/v1/responses"
+_KEY_FACTS: Final = CodexKeyFacts()
 
 
-def read_codex_key_facts(token: UserAPIKeyAuth, facts: CodexKeyFacts = CodexKeyFacts()) -> CodexKeyFacts:
+def read_codex_key_facts(token: UserAPIKeyAuth, facts: CodexKeyFacts = _KEY_FACTS) -> CodexKeyFacts:
     decision: Final = codex_key(facts)
     match decision.kind:
         case "Complete":
@@ -176,9 +178,15 @@ async def _read(facts: CodexTurnFacts, source: _Source) -> CodexTurnFacts:
             routing: Final = read_codex_model_facts(facts.model, source.router, source.token.team_id)
             return await _read(replace(facts, routing=routing), source)
         case "ReadJwt":
-            if source.access is None or facts.model is None:
-                raise NativeAuthRuntimeError("Codex JWT read without access context")
-            return await _read(replace(facts, access=await read_codex_access_facts(source.access, facts.model)), source)
+            return await _read(
+                replace(
+                    facts,
+                    access=await read_codex_access_facts(
+                        require_native_fact(source.access), require_native_fact(facts.model)
+                    ),
+                ),
+                source,
+            )
         case "ReadCatalog":
             if source.headers is None or source.caller is None or source.cache is None:
                 raise NativeAuthRuntimeError("Codex catalog read without IO context")

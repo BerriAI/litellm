@@ -17,6 +17,7 @@ from litellm._auth.failure import NativeAuthRuntimeError, native_boundary
 from litellm._auth.model_helpers import ModelHelperFacts
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.model_helper_adapter import read_model_helper_facts
+from litellm.proxy.auth.model_policy_read import require_native_fact
 from litellm.proxy.common_utils.codex_model_catalog import bundled_codex_models
 from litellm.router_api import RegistryReader
 from litellm.types.router import Deployment
@@ -73,48 +74,45 @@ def read_codex_model_facts(
             case "ReadBundled":
                 return replace(state, facts=replace(facts, bundled=tuple(bundled_codex_models())))
             case "ReadCost":
-                if decision.model is None:
-                    raise NativeAuthRuntimeError("Codex price lookup without model")
-                return replace(state, facts=replace(facts, priced=decision.model in litellm.model_cost))  # pyright: ignore[reportUnknownMemberType]  # dynamically loaded registry, only raw key presence is read
+                priced: Final = require_native_fact(decision.model) in litellm.model_cost  # pyright: ignore[reportUnknownMemberType]  # raw key presence in the dynamically loaded cost registry
+                return replace(state, facts=replace(facts, priced=priced))
             case "ReadCandidates":
-                if router is None or decision.model is None:
-                    raise NativeAuthRuntimeError("Codex deployment lookup without router or model")
-                registry: Final = router.registry()
+                registry: Final = require_native_fact(router).registry()
                 loaded: Final = tuple(
                     registry.deployment(model_id)
-                    for model_id in registry.names(decision.model, kind="route_candidates", team_id=team_id)
+                    for model_id in registry.names(
+                        require_native_fact(decision.model), kind="route_candidates", team_id=team_id
+                    )
                 )
                 deployments: Final = tuple(deployment for deployment in loaded if deployment is not None)
                 return _State(replace(facts, candidates=tuple(CodexCandidate() for _ in deployments)), deployments)
             case "ReadAlias":
-                if router is None or decision.model is None:
-                    raise NativeAuthRuntimeError("Codex alias lookup without router or model")
                 return replace(
                     state,
                     facts=replace(
-                        facts, alias_loaded=True, alias=router.registry().resolve(decision.model, kind="alias")
+                        facts,
+                        alias_loaded=True,
+                        alias=require_native_fact(router)
+                        .registry()
+                        .resolve(require_native_fact(decision.model), kind="alias"),
                     ),
                 )
             case "ReadCandidate":
-                if facts.candidates is None or decision.field is None:
-                    raise NativeAuthRuntimeError("Codex candidate projection without deployment")
+                candidates: Final = require_native_fact(facts.candidates)
                 updated: Final = _candidate(
-                    decision.field, facts.candidates[decision.index], state.deployments[decision.index]
+                    require_native_fact(decision.field), candidates[decision.index], state.deployments[decision.index]
                 )
                 return replace(
                     state,
                     facts=replace(
                         facts,
                         candidates=tuple(
-                            updated if index == decision.index else value
-                            for index, value in enumerate(facts.candidates)
+                            updated if index == decision.index else value for index, value in enumerate(candidates)
                         ),
                     ),
                 )
             case "ReadGrants":
-                if token is None:
-                    raise NativeAuthRuntimeError("Codex model grants without token")
-                grant_read: Final = _grants(token)
+                grant_read: Final = _grants(require_native_fact(token))
                 return replace(
                     state,
                     facts=(
@@ -124,12 +122,16 @@ def read_codex_model_facts(
                     ),
                 )
             case "ReadHelper":
-                selected: Final = facts.prefixed_grants if decision.prefixed else facts.grants
-                if selected is None or decision.model is None:
-                    raise NativeAuthRuntimeError("Codex helper lookup without model grants")
+                selected: Final = require_native_fact(facts.prefixed_grants if decision.prefixed else facts.grants)
                 grants: Final = (selected.key, selected.team)[decision.index]
                 scope: Final = read_model_helper_facts(
-                    ModelHelperFacts("Helper", decision.model, grants, team_id=team_id, router_present=bool(router)),
+                    ModelHelperFacts(
+                        "Helper",
+                        require_native_fact(decision.model),
+                        grants,
+                        team_id=team_id,
+                        router_present=bool(router),
+                    ),
                     router,
                 )
                 updated_facts: Final = (
