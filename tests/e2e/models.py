@@ -1282,9 +1282,14 @@ class CostMapEntry(BaseModel):
     input_cost_per_token: float | None = None
     output_cost_per_token: float | None = None
     cache_read_input_token_cost: float | None = None
+    cache_creation_input_token_cost: float | None = None
+    cache_creation_input_token_cost_above_1hr: float | None = None
     supports_function_calling: bool | None = None
     supports_reasoning: bool | None = None
     supports_response_schema: bool | None = None
+    supports_sampling_params: bool | None = None
+    supports_forced_tool_use: bool | None = None
+    thinking_always_on: bool | None = None
 
 
 class CostMap(RootModel[dict[str, CostMapEntry]]):
