@@ -19,6 +19,7 @@ pub mod fallback_candidate;
 mod key;
 pub mod key_model_access;
 pub mod managed;
+pub mod managed_models;
 pub mod member_models;
 pub mod model_access;
 pub mod model_attribution;
@@ -39,6 +40,7 @@ pub mod reservation;
 pub mod resolved_models;
 pub mod route_access;
 pub mod spend_counter_policy;
+pub mod team_aliases;
 pub mod team_override;
 pub mod unpriced_models;
 

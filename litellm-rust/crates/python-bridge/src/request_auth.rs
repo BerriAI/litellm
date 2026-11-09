@@ -784,3 +784,29 @@ pub(crate) fn request_auth_agent_group_load(
     let facts: core::agent_ceilings::LoadFacts = from_py(facts)?;
     to_py(py, &py.detach(move || core::agent_ceilings::load(&facts)))
 }
+
+#[pyfunction]
+pub(crate) fn request_auth_team_aliases(py: Python<'_>, facts: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
+    let facts: core::team_aliases::Facts = from_py(facts)?;
+    let decision = py.detach(move || core::team_aliases::decide(&facts)).map_err(map_error)?;
+    to_py(py, &decision)
+}
+
+#[pyfunction]
+pub(crate) fn request_auth_managed_models(py: Python<'_>, facts: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
+    let facts: core::managed_models::Facts = from_py(facts)?;
+    let decision = py.detach(move || core::managed_models::decide(&facts)).map_err(map_error)?;
+    to_py(py, &decision)
+}
+
+#[pyfunction]
+pub(crate) fn request_auth_agent_ceiling_source(py: Python<'_>, facts: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
+    let facts: core::managed_models::CeilingSource = from_py(facts)?;
+    to_py(py, &py.detach(move || core::managed_models::ceiling_source(&facts)))
+}
+
+#[pyfunction]
+pub(crate) fn request_auth_managed_model_grants(py: Python<'_>, facts: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
+    let facts: core::managed_models::GrantFacts = from_py(facts)?;
+    to_py(py, &py.detach(move || core::managed_models::grants(&facts)))
+}
