@@ -1,0 +1,27 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT jsonb_build_object(\n'user_row', (SELECT to_jsonb(u) || jsonb_build_object('teams', COALESCE(to_jsonb(u.teams), '[]'::jsonb),\n    'models', COALESCE(to_jsonb(u.models), '[]'::jsonb),\n    'allowed_cache_controls', COALESCE(to_jsonb(u.allowed_cache_controls), '[]'::jsonb),\n    'policies', COALESCE(to_jsonb(u.policies), '[]'::jsonb), 'organization_memberships', COALESCE((SELECT jsonb_agg(to_jsonb(om)) FROM \"LiteLLM_OrganizationMembership\" om WHERE om.user_id = u.user_id), '[]'::jsonb)) FROM \"LiteLLM_UserTable\" u WHERE u.user_id=$1),\n 'team_row', (SELECT to_jsonb(t) || jsonb_build_object('admins', COALESCE(to_jsonb(t.admins), '[]'::jsonb),\n    'members', COALESCE(to_jsonb(t.members), '[]'::jsonb),\n    'models', COALESCE(to_jsonb(t.models), '[]'::jsonb),\n    'team_member_permissions', COALESCE(to_jsonb(t.team_member_permissions), '[]'::jsonb),\n    'access_group_ids', COALESCE(to_jsonb(t.access_group_ids), '[]'::jsonb),\n    'policies', COALESCE(to_jsonb(t.policies), '[]'::jsonb),\n    'default_team_member_models', COALESCE(to_jsonb(t.default_team_member_models), '[]'::jsonb), 'litellm_model_table', (SELECT (to_jsonb(m) - 'aliases') || jsonb_build_object('model_aliases', m.aliases) FROM \"LiteLLM_ModelTable\" m WHERE m.id=t.model_id), 'object_permission', (SELECT to_jsonb(op) || jsonb_build_object('mcp_servers', COALESCE(to_jsonb(op.mcp_servers), '[]'::jsonb),\n    'mcp_access_groups', COALESCE(to_jsonb(op.mcp_access_groups), '[]'::jsonb),\n    'mcp_toolsets', COALESCE(to_jsonb(op.mcp_toolsets), '[]'::jsonb),\n    'blocked_tools', COALESCE(to_jsonb(op.blocked_tools), '[]'::jsonb),\n    'vector_stores', COALESCE(to_jsonb(op.vector_stores), '[]'::jsonb),\n    'agents', COALESCE(to_jsonb(op.agents), '[]'::jsonb),\n    'agent_access_groups', COALESCE(to_jsonb(op.agent_access_groups), '[]'::jsonb),\n    'models', COALESCE(to_jsonb(op.models), '[]'::jsonb),\n    'search_tools', COALESCE(to_jsonb(op.search_tools), '[]'::jsonb),\n    'skills', COALESCE(to_jsonb(op.skills), '[]'::jsonb)) FROM \"LiteLLM_ObjectPermissionTable\" op WHERE op.object_permission_id = t.object_permission_id)) FROM \"LiteLLM_TeamTable\" t WHERE t.team_id=$2),\n'membership_row', (SELECT to_jsonb(tm) || jsonb_build_object('litellm_budget_table', (SELECT to_jsonb(b) || jsonb_build_object('allowed_models', COALESCE(to_jsonb(b.allowed_models), '[]'::jsonb)) FROM \"LiteLLM_BudgetTable\" b WHERE b.budget_id = tm.budget_id)) FROM \"LiteLLM_TeamMembership\" tm WHERE tm.user_id=$3 AND tm.team_id=$2),\n'organization_row', (SELECT to_jsonb(o) || jsonb_build_object('models', COALESCE(to_jsonb(o.models), '[]'::jsonb), 'litellm_budget_table', (SELECT to_jsonb(b) || jsonb_build_object('allowed_models', COALESCE(to_jsonb(b.allowed_models), '[]'::jsonb)) FROM \"LiteLLM_BudgetTable\" b WHERE b.budget_id = o.budget_id), 'object_permission', (SELECT to_jsonb(op) || jsonb_build_object('mcp_servers', COALESCE(to_jsonb(op.mcp_servers), '[]'::jsonb),\n    'mcp_access_groups', COALESCE(to_jsonb(op.mcp_access_groups), '[]'::jsonb),\n    'mcp_toolsets', COALESCE(to_jsonb(op.mcp_toolsets), '[]'::jsonb),\n    'blocked_tools', COALESCE(to_jsonb(op.blocked_tools), '[]'::jsonb),\n    'vector_stores', COALESCE(to_jsonb(op.vector_stores), '[]'::jsonb),\n    'agents', COALESCE(to_jsonb(op.agents), '[]'::jsonb),\n    'agent_access_groups', COALESCE(to_jsonb(op.agent_access_groups), '[]'::jsonb),\n    'models', COALESCE(to_jsonb(op.models), '[]'::jsonb),\n    'search_tools', COALESCE(to_jsonb(op.search_tools), '[]'::jsonb),\n    'skills', COALESCE(to_jsonb(op.skills), '[]'::jsonb)) FROM \"LiteLLM_ObjectPermissionTable\" op WHERE op.object_permission_id = o.object_permission_id)) FROM \"LiteLLM_OrganizationTable\" o WHERE o.organization_id=$4),\n'project_row', (SELECT to_jsonb(p) || jsonb_build_object('models', COALESCE(to_jsonb(p.models), '[]'::jsonb), 'litellm_budget_table', (SELECT to_jsonb(b) || jsonb_build_object('allowed_models', COALESCE(to_jsonb(b.allowed_models), '[]'::jsonb)) FROM \"LiteLLM_BudgetTable\" b WHERE b.budget_id = p.budget_id), 'object_permission', (SELECT to_jsonb(op) || jsonb_build_object('mcp_servers', COALESCE(to_jsonb(op.mcp_servers), '[]'::jsonb),\n    'mcp_access_groups', COALESCE(to_jsonb(op.mcp_access_groups), '[]'::jsonb),\n    'mcp_toolsets', COALESCE(to_jsonb(op.mcp_toolsets), '[]'::jsonb),\n    'blocked_tools', COALESCE(to_jsonb(op.blocked_tools), '[]'::jsonb),\n    'vector_stores', COALESCE(to_jsonb(op.vector_stores), '[]'::jsonb),\n    'agents', COALESCE(to_jsonb(op.agents), '[]'::jsonb),\n    'agent_access_groups', COALESCE(to_jsonb(op.agent_access_groups), '[]'::jsonb),\n    'models', COALESCE(to_jsonb(op.models), '[]'::jsonb),\n    'search_tools', COALESCE(to_jsonb(op.search_tools), '[]'::jsonb),\n    'skills', COALESCE(to_jsonb(op.skills), '[]'::jsonb)) FROM \"LiteLLM_ObjectPermissionTable\" op WHERE op.object_permission_id = p.object_permission_id)) FROM \"LiteLLM_ProjectTable\" p WHERE p.project_id=$5)) AS \"data!: AuthData\"\n",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "data!: AuthData",
+        "type_info": "Jsonb",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "d804605eae54eaeaa01c7f511cb33c8443365b9262f2827e1c0b09f715b0227b"
+}

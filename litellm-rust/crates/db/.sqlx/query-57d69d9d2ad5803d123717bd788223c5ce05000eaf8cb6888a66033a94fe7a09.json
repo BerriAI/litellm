@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT COALESCE(spend, 0.0)::float8 AS \"spend!\" FROM \"LiteLLM_VerificationToken\" WHERE token=$1\n",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "spend!",
+        "type_info": "Float8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "57d69d9d2ad5803d123717bd788223c5ce05000eaf8cb6888a66033a94fe7a09"
+}
