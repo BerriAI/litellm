@@ -91,11 +91,9 @@ class DatabricksDecisionsConfig(BaseDecisionsConfig):
             return deployment_api_key
 
         env_key: Final = self._first_secret(self.api_key_env)
-        # If an explicit static api_key was passed as argument (not from env), it takes precedence
-        if api_key and api_key != env_key:
-            return api_key
 
-        # If deployment OAuth credentials are provided, they take precedence over global env credentials
+        # If deployment OAuth credentials are provided, they take precedence over ALL ambient keys,
+        # including a non-Databricks api_key passed from the router (e.g. OPENAI_API_KEY / litellm.api_key).
         has_deployment_oauth: Final = any(
             _get_credential_param(litellm_params, k) is not None
             for k in ("client_id", "client_secret", "databricks_client_id", "databricks_client_secret")
@@ -106,6 +104,11 @@ class DatabricksDecisionsConfig(BaseDecisionsConfig):
                 return None
             client_id, client_secret = creds
             return DatabricksBase().get_cached_oauth_m2m_token(api_base, client_id, client_secret)
+
+        # Ambient static key: only use the passed api_key if it differs from the Databricks env keys
+        # (i.e. it is an explicitly configured Databricks PAT, not an arbitrary ambient key).
+        if api_key and api_key != env_key:
+            return api_key
 
         # Fallback to global static key (from env) if present
         if api_key:
