@@ -22,9 +22,14 @@ from litellm.proxy.auth.common_budget_adapter import (
     resolve_effective_team_member_budget,
 )
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
-from litellm.redis.stores.spend_counters import model_access_group_counter
 from litellm.proxy.spend_tracking.carried_budget_state import carry_organization_budget_state
 from litellm.proxy.utils import PrismaClient, ProxyLogging
+from litellm.redis.stores.spend_counters import (
+    model_access_group_counter,
+    org_counter,
+    tag_counter,
+    team_member_counter,
+)
 from litellm.types.proxy.model_access_group_budget import ModelAccessGroupBudget
 
 
@@ -47,7 +52,7 @@ async def organization_max_budget_check(
     carry_organization_budget_state(valid_token=valid_token, org_table=org)
     limit: Final = org.litellm_budget_table.max_budget if org.litellm_budget_table is not None else None
     facts, result = await read_budget(
-        BudgetFacts("Organization", limit), CounterRead(f"spend:org:{org_id}", org.spend or 0.0, limit)
+        BudgetFacts("Organization", limit), CounterRead(org_counter(org_id), org.spend or 0.0, limit)
     )
     if result.alert is not None:
         info: Final = key_alert_info(valid_token, facts.spend, limit, Litellm_EntityType.ORGANIZATION)
@@ -89,7 +94,7 @@ async def check_tag_row(name: str, row: LiteLLM_TagTable | None) -> None:
     )
     facts, result = await read_budget(
         BudgetFacts("Tag", limit),
-        CounterRead(f"spend:tag:{name}", (row.spend or 0.0) if row is not None else 0.0, limit, authoritative=True),
+        CounterRead(tag_counter(name), (row.spend or 0.0) if row is not None else 0.0, limit, authoritative=True),
     )
     if result.denied:
         raise_budget(
@@ -164,7 +169,7 @@ async def check_team_member_budget(
     facts, result = await read_budget(
         BudgetFacts("TeamMember", limit),
         CounterRead(
-            f"spend:team_member:{valid_token.user_id}:{team_object.team_id}",
+            team_member_counter(valid_token.user_id, team_object.team_id),
             (membership.spend or 0.0) if membership is not None else 0.0,
             limit,
         ),
@@ -200,9 +205,7 @@ async def read_access_group_budget_row(name: str, row: ModelAccessGroupBudget | 
     limit: Final = row.max_budget if row is not None else None
     facts, _decision = await read_budget(
         BudgetFacts("AccessGroup", limit),
-        CounterRead(
-            model_access_group_counter(name), row.spend if row is not None else 0.0, limit, authoritative=True
-        ),
+        CounterRead(model_access_group_counter(name), row.spend if row is not None else 0.0, limit, authoritative=True),
     )
     return AccessGroupBudgetReading(name, facts)
 

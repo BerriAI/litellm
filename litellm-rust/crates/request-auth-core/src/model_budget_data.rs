@@ -25,6 +25,8 @@ pub struct ResolveFacts {
     pub key_entries: Vec<Entry>,
     pub team: bool,
     pub access_groups: Option<Vec<String>>,
+    #[serde(default)]
+    pub excluded_entries: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -60,6 +62,18 @@ fn exact<'a>(entries: &'a [Entry], names: &[&str]) -> Option<&'a Entry> {
 }
 
 pub fn resolve(facts: &ResolveFacts) -> Resolution {
+    if !facts.excluded_entries.is_empty() {
+        return resolve(&ResolveFacts {
+            entries: facts
+                .entries
+                .iter()
+                .filter(|entry| !facts.excluded_entries.contains(&entry.name))
+                .cloned()
+                .collect(),
+            excluded_entries: vec![],
+            ..facts.clone()
+        });
+    }
     let names = candidates(facts);
     let key_replaces = facts.team
         && exact(&facts.key_entries, &names)
@@ -123,6 +137,24 @@ pub fn resolve(facts: &ResolveFacts) -> Resolution {
         entry,
         named_model: false,
     }
+}
+
+pub fn team_exclusions(facts: &[ResolveFacts]) -> Vec<String> {
+    facts
+        .iter()
+        .flat_map(|facts| {
+            let names = candidates(facts);
+            if exact(&facts.key_entries, &names)
+                .is_some_and(|entry| entry.max_budget.is_some_and(|limit| limit >= 0.0))
+            {
+                names.into_iter().map(str::to_owned).collect::<Vec<_>>()
+            } else {
+                vec![]
+            }
+        })
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect()
 }
 
 fn glob(pattern: &str, name: &str) -> bool {
@@ -259,5 +291,41 @@ mod tests {
     #[case::not_regex("a?*", "ab", false)]
     fn wildcard(#[case] pattern: &str, #[case] name: &str, #[case] matches: bool) {
         assert_eq!(glob(pattern, name), matches);
+    }
+
+    #[rstest]
+    #[case::alias_zero("alias", Some(0.0), vec!["alias"])]
+    #[case::target_positive("target", Some(1.0), vec!["target"])]
+    #[case::target_infinite("target", Some(f64::INFINITY), vec!["target"])]
+    #[case::negative("target", Some(-1.0), vec![])]
+    #[case::nan("target", Some(f64::NAN), vec![])]
+    #[case::missing("alias", None, vec![])]
+    fn team_alias_overrides(
+        #[case] key: &str,
+        #[case] limit: Option<f64>,
+        #[case] expected: Vec<&str>,
+    ) {
+        let entry = Entry {
+            name: key.into(),
+            max_budget: limit,
+            duration: Some("1h".into()),
+            duration_seconds: Some(3600.0),
+        };
+        let alias = ResolveFacts {
+            model: "alias".into(),
+            bedrock_base: "alias".into(),
+            bedrock_provider: String::new(),
+            entries: vec![],
+            key_entries: vec![entry],
+            team: true,
+            access_groups: None,
+            excluded_entries: vec![],
+        };
+        let target = ResolveFacts {
+            model: "target".into(),
+            bedrock_base: "target".into(),
+            ..alias.clone()
+        };
+        assert_eq!(team_exclusions(&[alias, target]), expected);
     }
 }

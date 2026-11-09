@@ -24,6 +24,7 @@ pub mod managed_models;
 pub mod member_models;
 pub mod model_access;
 pub mod model_attribution;
+pub mod model_budget_aliases;
 pub mod model_budget_data;
 mod model_budgets;
 pub mod model_groups;

@@ -6,7 +6,7 @@ from typing import Final
 from pydantic import TypeAdapter
 
 import litellm
-from litellm._auth import model_budget_data
+from litellm._auth import model_budget_aliases, model_budget_data
 from litellm._auth.failure import NativeAuthFailure
 from litellm._auth.model_budget_data import (
     ModelBudgetEntity,
@@ -19,6 +19,7 @@ from litellm._auth.model_budget_data import (
 from litellm.caching.caching import DualCache
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
+from litellm.litellm_core_utils.get_model_cost_map import AliasedCostEntry
 from litellm.llms.bedrock.common_utils import get_bedrock_base_model
 from litellm.proxy._types import Litellm_EntityType
 from litellm.proxy.hooks.model_budget_shared_windows import SharedWindows
@@ -57,6 +58,10 @@ def _spend(raw: object) -> float:
         return 0.0
 
 
+def _price_entry(model: str) -> object:
+    return _OBJECT.validate_python(litellm.model_cost.get(model))  # pyright: ignore[reportUnknownMemberType]  # raw catalog IO
+
+
 @dataclass(frozen=True, slots=True)
 class ModelBudgetReading:
     snapshot: ModelBudgetSnapshot
@@ -72,6 +77,7 @@ class ModelBudgetIO:
     process_started_at: float
     clock: Callable[[], float] = time.time
     monotonic: Callable[[], float] = time.monotonic
+    price_entry: Callable[[str], object] = _price_entry
 
     async def counter(self, key: str) -> float:
         redis: Final = self.cache.redis_cache
@@ -79,6 +85,70 @@ class ModelBudgetIO:
             await self.cache.async_get_cache(key=key) if redis is None else await redis.async_get_cache(key=key)  # pyright: ignore[reportUnknownMemberType]  # cache APIs remain legacy IO
         )
         return _spend(raw)
+
+
+@dataclass(frozen=True, slots=True)
+class AliasReading:
+    row: model_budget_aliases.Row
+    source: AliasedCostEntry | None
+
+
+def read_alias_models(model: str, io: ModelBudgetIO, readings: tuple[AliasReading, ...] = ()) -> tuple[str, ...]:
+    decision: Final = model_budget_aliases.decide(
+        model_budget_aliases.Facts(model, tuple(reading.row for reading in readings))
+    )
+    match decision.read:
+        case None:
+            return decision.models
+        case "Entry":
+            raw: Final = io.price_entry(decision.key)
+            source: Final = raw if isinstance(raw, AliasedCostEntry) else None
+            entry: Final = AliasReading(
+                model_budget_aliases.Row(decision.key, source.names if source is not None else ()), source
+            )
+            return read_alias_models(model, io, (*readings, entry))
+        case "Prefix":
+            prefix_known: Final = decision.key.partition("/")[0] in litellm.provider_list
+            updated: Final = tuple(
+                replace(reading, row=replace(reading.row, prefix_known=prefix_known))
+                if reading.row.key == decision.key
+                else reading
+                for reading in readings
+            )
+            return read_alias_models(model, io, updated)
+        case "Provider":
+            selected: Final = next(reading for reading in readings if reading.row.key == decision.key)
+            assert selected.source is not None
+            provider: Final = selected.source.get("litellm_provider")
+            provided: Final = replace(
+                selected,
+                row=replace(selected.row, provider_read=True, provider=provider if isinstance(provider, str) else None),
+            )
+            return read_alias_models(
+                model, io, tuple(provided if reading.row.key == decision.key else reading for reading in readings)
+            )
+
+
+def _resolve_facts(
+    model: str,
+    budgets: Mapping[str, object],
+    io: ModelBudgetIO,
+    key_budgets: Mapping[str, object] | None = None,
+    *,
+    team: bool = False,
+    excluded_entries: tuple[str, ...] = (),
+) -> ModelBudgetResolveFacts:
+    base: Final = get_bedrock_base_model(model)
+    raw_price: Final = as_str_mapping(io.price_entry(base)) or {}
+    return ModelBudgetResolveFacts(
+        model=model,
+        bedrock_base=base,
+        bedrock_provider=str(raw_price.get("litellm_provider") or ""),
+        entries=tuple(_entry(name, config) for name, config in budgets.items()),
+        key_entries=tuple(_entry(name, config) for name, config in (key_budgets or {}).items()),
+        team=team,
+        excluded_entries=excluded_entries,
+    )
 
 
 def resolve_model_budget(
@@ -89,17 +159,9 @@ def resolve_model_budget(
     key_budgets: Mapping[str, object] | None = None,
     *,
     team: bool = False,
+    excluded_entries: tuple[str, ...] = (),
 ) -> ModelBudgetResolution:
-    base: Final = get_bedrock_base_model(model)
-    raw_price: Final = as_str_mapping(_OBJECT.validate_python(litellm.model_cost.get(base))) or {}  # pyright: ignore[reportUnknownMemberType]  # project the legacy pricing map value
-    facts: Final = ModelBudgetResolveFacts(
-        model=model,
-        bedrock_base=base,
-        bedrock_provider=str(raw_price.get("litellm_provider") or ""),
-        entries=tuple(_entry(name, config) for name, config in budgets.items()),
-        key_entries=tuple(_entry(name, config) for name, config in (key_budgets or {}).items()),
-        team=team,
-    )
+    facts: Final = _resolve_facts(model, budgets, io, key_budgets, team=team, excluded_entries=excluded_entries)
     initial: Final = model_budget_data.resolve(facts)
     if not initial.read_groups:
         return initial
@@ -116,7 +178,55 @@ async def read_model_budget(
     budgets: Mapping[str, object] | None,
     key_budgets: Mapping[str, object] | None = None,
 ) -> ModelBudgetReading:
-    resolution: Final = resolve_model_budget(model, budgets or {}, io, team_id, key_budgets, team=entity == "Team")
+    models: Final = read_alias_models(model, io)
+    exclusions: Final = (
+        model_budget_data.team_exclusions(
+            tuple(_resolve_facts(candidate, {}, io, key_budgets, team=True) for candidate in models)
+        )
+        if entity == "Team"
+        else ()
+    )
+    scope_models: Final = read_alias_models(model, io) if entity == "Team" else models
+    return await _read_scope(io, entity, entity_id, team_id, scope_models, budgets, exclusions)
+
+
+async def _read_scope(
+    io: ModelBudgetIO,
+    entity: ModelBudgetEntity,
+    entity_id: str | None,
+    team_id: str | None,
+    models: tuple[str, ...],
+    budgets: Mapping[str, object] | None,
+    excluded_entries: tuple[str, ...],
+    readings: tuple[ModelBudgetReading, ...] = (),
+) -> ModelBudgetReading:
+    decision: Final = model_budget_aliases.scope(
+        model_budget_aliases.ScopeFacts(models, tuple(reading.snapshot for reading in readings), bool(budgets))
+    )
+    if decision.read_index is not None:
+        reading: Final = await _read_single(
+            io, entity, entity_id, team_id, models[decision.read_index], budgets, excluded_entries
+        )
+        return await _read_scope(
+            io, entity, entity_id, team_id, models, budgets, excluded_entries, (*readings, reading)
+        )
+    return (
+        readings[decision.result_index]
+        if decision.result_index is not None
+        else ModelBudgetReading(ModelBudgetSnapshot(), None, False)
+    )
+
+
+async def _read_single(
+    io: ModelBudgetIO,
+    entity: ModelBudgetEntity,
+    entity_id: str | None,
+    team_id: str | None,
+    model: str,
+    budgets: Mapping[str, object] | None,
+    excluded_entries: tuple[str, ...],
+) -> ModelBudgetReading:
+    resolution: Final = resolve_model_budget(model, budgets or {}, io, team_id, excluded_entries=excluded_entries)
     entry: Final = resolution.entry
     if entry is None:
         return ModelBudgetReading(ModelBudgetSnapshot(), None, False)
