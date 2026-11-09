@@ -84,10 +84,10 @@ async def run_performance_alerts(
         while not state.completed and clock() < deadline:
             if state.scope == "key" and not keys_ready:
                 verbose_proxy_logger.info("Performance alerts skipping keys until %s is built", KEY_DATE_INDEX)
-                state = next_scope(state)  # rebind-ok: keys wait for their index
+                state = next_scope(state)
                 await store.save(claim.owner, state)
                 continue
-            state = await _step(store, claim.owner, state)  # rebind-ok: advance to the next saved position
+            state = await _step(store, claim.owner, state)
             await sleep(PAUSE_SECONDS)
         if state.completed:
             verbose_proxy_logger.info(
