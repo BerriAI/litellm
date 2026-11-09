@@ -11,3 +11,12 @@ ignore:
     package:
       name: zlib
       type: apk
+  - vulnerability: GHSA-v4x8-3wr5-3wq8
+    reason: >-
+      filelock ReadWriteLock advisory, and no package in the image takes ReadWriteLock;
+      the fix (4.2.1) is blocked by litellm's own filelock<4.0 cap until #48635 or #48802 lifts it,
+      and the image then moves off 3.32.7, which retires this version-scoped rule
+    package:
+      name: filelock
+      version: 3.32.7
+      type: python

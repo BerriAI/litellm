@@ -131,6 +131,18 @@ describe("KeySavingsTab", () => {
     expect(screen.getByTestId("key-savings-scope-note")).toHaveTextContent("Showing your own requests");
   });
 
+  it.each([
+    ["unattributed", "raw:unattributed"],
+    ["raw:unattributed", "raw:raw:unattributed"],
+    ["raw:raw:key", "raw:raw:raw:key"],
+  ])("requests savings for the real key %s", (keyToken, bucket) => {
+    const hook = scopedRange().mockReturnValue(mockActivity());
+
+    renderTab({ keyToken, userRole: "Admin" });
+
+    expect(hook).toHaveBeenCalledWith("test-token", { userId: null, apiKey: bucket }, activity);
+  });
+
   it("reads the whole key for a proxy admin, with no scope note to contradict it", () => {
     const hook = scopedRange().mockReturnValue(mockActivity());
 

@@ -67,6 +67,12 @@ pub(crate) enum Repr {
     #[error("alias {alias:?} already belongs to {taken_by}")]
     #[strum_discriminants(strum(serialize = "alias_taken"))]
     AliasTaken { alias: String, taken_by: String },
+    #[error("alias_of {target:?} is not a model name")]
+    #[strum_discriminants(strum(serialize = "alias_target_missing"))]
+    AliasTargetMissing { target: String },
+    #[error("an alias_of row carries no other field")]
+    #[strum_discriminants(strum(serialize = "alias_row_field"))]
+    AliasRowField,
     #[error("{first} and {second} price the same meter under the same conditions")]
     #[strum_discriminants(strum(serialize = "duplicate_price"))]
     DuplicatePrice { first: String, second: String },
@@ -109,6 +115,12 @@ pub(crate) enum Repr {
         #[source]
         cause: Option<DateCause>,
     },
+    #[error("not a field litellm reads")]
+    #[strum_discriminants(strum(serialize = "unread_field"))]
+    UnreadField,
+    #[error("has no rules")]
+    #[strum_discriminants(strum(serialize = "no_fallback_rules"))]
+    NoFallbackRules,
 }
 
 /// What a problem takes out of the served map
@@ -135,6 +147,8 @@ impl Error {
             | Repr::UnknownTimezone { .. }
             | Repr::AliasShadowsModel { .. }
             | Repr::AliasTaken { .. }
+            | Repr::AliasTargetMissing { .. }
+            | Repr::AliasRowField
             | Repr::DuplicatePrice { .. }
             | Repr::SuffixInsideBlock { .. }
             | Repr::TierRange
@@ -148,7 +162,7 @@ impl Error {
             | Repr::NoOffPeakHours
             | Repr::EmptyList
             | Repr::InvalidDate { .. } => Rejects::Row,
-            Repr::MissingProvider => Rejects::Nothing,
+            Repr::MissingProvider | Repr::UnreadField | Repr::NoFallbackRules => Rejects::Nothing,
         }
     }
 }
@@ -321,6 +335,8 @@ mod tests {
     #[case::unknown_timezone(Repr::UnknownTimezone { zone: "invalid".into() }, Rejects::Row)]
     #[case::alias_shadows_model(Repr::AliasShadowsModel { alias: "model".into() }, Rejects::Row)]
     #[case::alias_taken(Repr::AliasTaken { alias: "alias".into(), taken_by: "owner".into() }, Rejects::Row)]
+    #[case::alias_target_missing(Repr::AliasTargetMissing { target: "owner".into() }, Rejects::Row)]
+    #[case::alias_row_field(Repr::AliasRowField, Rejects::Row)]
     #[case::duplicate_price(Repr::DuplicatePrice { first: "a".into(), second: "b".into() }, Rejects::Row)]
     #[case::suffix_inside_block(Repr::SuffixInsideBlock { block: "tiered_pricing" }, Rejects::Row)]
     #[case::tier_range(Repr::TierRange, Rejects::Row)]
@@ -334,6 +350,8 @@ mod tests {
     #[case::no_off_peak_hours(Repr::NoOffPeakHours, Rejects::Row)]
     #[case::empty_list(Repr::EmptyList, Rejects::Row)]
     #[case::invalid_date(Repr::InvalidDate { cause: None }, Rejects::Row)]
+    #[case::unread_field(Repr::UnreadField, Rejects::Nothing)]
+    #[case::no_fallback_rules(Repr::NoFallbackRules, Rejects::Nothing)]
     fn policy_classifies_each_error(#[case] error: Repr, #[case] expected: Rejects) {
         assert_eq!(Error::from(error).rejects(), expected);
     }
