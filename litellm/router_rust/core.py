@@ -70,6 +70,7 @@ from litellm.litellm_core_utils.routing_common_utils import (
 )
 from litellm.litellm_core_utils.routing_groups import validate_routing_strategy
 from litellm.litellm_core_utils.secret_redaction import redact_string
+from litellm.litellm_core_utils.token_counter import request_token_count_scope
 from litellm.litellm_core_utils.total_deadline import (
     TotalTimeoutNotApplicable,
     current_total_deadline,
@@ -2983,6 +2984,7 @@ class RustCore(
         with (
             request_parent_otel_span(get_parent_otel_span_from_kwargs(request)),
             owning_picks(self._selectors.reservations, call_id_of(CALL_IDENTITY.validate_python(request))),
+            request_token_count_scope(),
         ):
             call, prepared = self._start(plan, request, routed, prepared_already=prepared_already)
             arm_compaction_state(self._port, plan, prepared)  # pyright: ignore[reportArgumentType]  # the call's own dict
@@ -3064,6 +3066,7 @@ class RustCore(
         with (
             request_parent_otel_span(get_parent_otel_span_from_kwargs(request)),
             owning_picks(self._selectors.reservations, call_id_of(CALL_IDENTITY.validate_python(request))),
+            request_token_count_scope(),
         ):
             call, prepared = self._start(plan, request, overrides)
             with picks_reserve(plan.endpoint not in _UNRESERVED_OPS):
