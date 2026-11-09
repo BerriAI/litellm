@@ -8,6 +8,7 @@ import { usesClassifierContext } from "../add_model/classifier_types";
 export type { StoredComplexityRouterConfig } from "../add_model/build_complexity_router_config";
 import { getForecastConfigError, isForecastClassifier } from "../add_model/forecast_classifier_config";
 import React, { useEffect, useMemo, useState } from "react";
+import SwitchyardRouterForm from "../add_model/SwitchyardRouterForm";
 import { useTranslation } from "react-i18next";
 import {
   complexityRouterSchema,
@@ -277,7 +278,7 @@ const EditClassifierTabs = ({
   );
 };
 
-const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
+const ExistingEditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
   isVisible,
   onCancel,
   onSuccess,
@@ -822,6 +823,47 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
       </Dialog>
     </AutoRouterAvailabilityContext.Provider>
   );
+};
+
+const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = (props) => {
+  const { t } = useTranslation();
+  if (props.modelData?.litellm_params?.model?.startsWith("auto_router/switchyard")) {
+    return (
+      <Dialog
+        open={props.isVisible}
+        onOpenChange={(open) => {
+          if (!open) props.onCancel();
+        }}
+      >
+        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>{t("editAutoRouter.editAutoRouterModal.switchyardTitle")}</DialogTitle>
+          </DialogHeader>
+          <SwitchyardRouterForm
+            key={props.modelData.model_info.id}
+            accessToken={props.accessToken}
+            onSuccess={(saved) => {
+              props.onSuccess({
+                ...props.modelData,
+                model_name: saved.model_name,
+                litellm_params: {
+                  ...props.modelData.litellm_params,
+                  switchyard_router_config: saved.switchyard_router_config,
+                },
+              });
+              props.onCancel();
+            }}
+            initial={{
+              name: props.modelData.model_name,
+              modelId: props.modelData.model_info.id,
+              config: props.modelData.litellm_params.switchyard_router_config,
+            }}
+          />
+        </DialogContent>
+      </Dialog>
+    );
+  }
+  return <ExistingEditAutoRouterModal {...props} />;
 };
 
 export default EditAutoRouterModal;

@@ -9,6 +9,8 @@ import React from "react";
 import { useTranslation } from "react-i18next";
 import { useMyTeamMember } from "./useMyTeamMember";
 
+const DEFAULT_TEAM_ROLE = "user";
+
 interface MyUserTabProps {
   teamId: string;
 }
@@ -90,7 +92,9 @@ export default function MyUserTab({ teamId }: MyUserTabProps) {
             <div>
               <span className="text-muted-foreground">{t("teams.myUserTab.teamRole")}</span>
               <div className="mt-1">
-                <Badge variant={data.role === "admin" ? "default" : "secondary"}>{data.role || "user"}</Badge>
+                <Badge variant={data.role === "admin" ? "default" : "secondary"}>
+                  {data.role || DEFAULT_TEAM_ROLE}
+                </Badge>
               </div>
             </div>
           </div>

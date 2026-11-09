@@ -9006,7 +9006,7 @@ class TestConsumedRequestTagsStamp:
             self.rewrite_to = rewrite_to
 
         async def async_pre_routing_hook(
-            self, model, request_kwargs, messages=None, input=None, specific_deployment=False
+            self, model, request_kwargs, messages=None, input=None, specific_deployment=False, call_type=None
         ):
             from litellm.types.router import PreRoutingHookResponse
 
@@ -9097,7 +9097,7 @@ class TestClaudeCodeSubagentSessionRouterBinding:
             self.routed_model = routed_model
 
         async def async_pre_routing_hook(
-            self, model, request_kwargs, messages=None, input=None, specific_deployment=False
+            self, model, request_kwargs, messages=None, input=None, specific_deployment=False, call_type=None
         ):
             from litellm.types.router import PreRoutingHookResponse
 
@@ -10151,7 +10151,7 @@ class TestModelGroupAliasReachesPreRoutingStrategies:
 
     class _RewriteStrategy:
         async def async_pre_routing_hook(
-            self, model, request_kwargs, messages=None, input=None, specific_deployment=False
+            self, model, request_kwargs, messages=None, input=None, specific_deployment=False, call_type=None
         ):
             from litellm.types.router import PreRoutingHookResponse
 
@@ -10268,7 +10268,7 @@ class TestTeamPublicNameReachesPreRoutingStrategies:
             self.rewrite_to = rewrite_to
 
         async def async_pre_routing_hook(
-            self, model, request_kwargs, messages=None, input=None, specific_deployment=False
+            self, model, request_kwargs, messages=None, input=None, specific_deployment=False, call_type=None
         ):
             from litellm.types.router import PreRoutingHookResponse
 
@@ -10505,7 +10505,7 @@ class TestAutoRouterCompressionDecoupling:
             self.received_messages: list[dict] | None = None
 
         async def async_pre_routing_hook(
-            self, model, request_kwargs, messages=None, input=None, specific_deployment=False
+            self, model, request_kwargs, messages=None, input=None, specific_deployment=False, call_type=None
         ):
             from litellm.types.router import PreRoutingHookResponse
 
@@ -20331,3 +20331,22 @@ def test_router_warns_when_a_deployment_enforces_endpoints_without_a_list(caplog
 
     assert "Deployment 'embed-from-config' sets enforce_supported_endpoints without" in caplog.text
     assert "Deployment 'embed-from-api' sets enforce_supported_endpoints without" in caplog.text
+
+
+def test_registry_finds_a_team_deployment_by_public_and_internal_name_for_its_team_only() -> None:
+    internal_name: Final = "model_name_team-a_row"
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": internal_name,
+                "litellm_params": {"model": "openai/gpt-5.5", "api_key": "x"},
+                "model_info": {"id": "team-row", "team_id": "team-a", "team_public_model_name": "public-chat"},
+            }
+        ]
+    )
+    registry: Final = router.registry()
+
+    assert [row["model_info"]["id"] for row in registry.deployments("public-chat", team_id="team-a")] == ["team-row"]
+    assert [row["model_info"]["id"] for row in registry.deployments(internal_name, team_id="team-a")] == ["team-row"]
+    assert list(registry.deployments("public-chat", team_id="team-b")) == []
+    assert list(registry.deployments("public-chat")) == []

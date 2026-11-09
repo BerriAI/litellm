@@ -154,7 +154,9 @@ const ContentFilterDetails: React.FC<ContentFilterDetailsProps> = ({ response })
               <div key={idx} className="p-3 bg-muted rounded-md">
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-1">
-                    <KV label={t("logs.detail.contentFilter.pattern")}>{detection.pattern_name || "unknown"}</KV>
+                    <KV label={t("logs.detail.contentFilter.pattern")}>
+                      {detection.pattern_name || t("logs.detail.contentFilter.unknown")}
+                    </KV>
                   </div>
                   <div className="space-y-1">
                     <KV label={t("logs.detail.contentFilter.action")}>
@@ -177,7 +179,7 @@ const ContentFilterDetails: React.FC<ContentFilterDetailsProps> = ({ response })
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-1">
                     <KV label={t("logs.detail.contentFilter.keyword")} mono>
-                      {detection.keyword || "unknown"}
+                      {detection.keyword || t("logs.detail.contentFilter.unknown")}
                     </KV>
                     {detection.description && (
                       <KV label={t("logs.detail.contentFilter.description")}>{detection.description}</KV>
@@ -207,9 +209,11 @@ const ContentFilterDetails: React.FC<ContentFilterDetailsProps> = ({ response })
               <div key={idx} className="p-3 bg-muted rounded-md">
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-1">
-                    <KV label={t("logs.detail.contentFilter.category")}>{detection.category || "unknown"}</KV>
+                    <KV label={t("logs.detail.contentFilter.category")}>
+                      {detection.category || t("logs.detail.contentFilter.unknown")}
+                    </KV>
                     <KV label={t("logs.detail.contentFilter.keyword")} mono>
-                      {detection.keyword || "unknown"}
+                      {detection.keyword || t("logs.detail.contentFilter.unknown")}
                     </KV>
                     {detection.severity && (
                       <KV label={t("logs.detail.contentFilter.severity")}>

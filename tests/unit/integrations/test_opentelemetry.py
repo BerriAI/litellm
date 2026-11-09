@@ -372,6 +372,35 @@ def test_v1_routing_diagnostics_add_scalar_attributes_and_preserve_legacy_metada
     assert finished.attributes["metadata.routing_decision"] == str(decision)
 
 
+@pytest.mark.parametrize(
+    ("decision", "expected"),
+    [({"router_model_name": "auto-router", "routed_model": "answer"}, "answer"), ("not-a-mapping", "auto-router")],
+    ids=["routed", "malformed-decision"],
+)
+def test_v1_auto_router_response_model_names_the_routed_model(decision: object, expected: str) -> None:
+    exporter: Final = InMemorySpanExporter()
+    provider: Final = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    otel: Final = OpenTelemetry(tracer_provider=provider)
+    with provider.get_tracer(__name__).start_as_current_span("inference") as span:
+        otel.set_attributes(
+            span,
+            {
+                "model": "gpt-4o-mini",
+                "standard_logging_object": {
+                    "id": "routing-call",
+                    "call_type": "acompletion",
+                    "model_group": "auto-router",
+                    "metadata": {"routing_decision": decision},
+                },
+            },
+            {"model": "auto-router", "choices": [], "usage": {"prompt_tokens": 3}},
+        )
+    (finished,) = exporter.get_finished_spans()
+    attributes: Final = finished.attributes
+    assert (attributes["gen_ai.response.model"], attributes["gen_ai.usage.input_tokens"]) == (expected, 3)
+
+
 def test_v1_server_tool_calls_lead_the_completion_function_call_attributes() -> None:
     exporter: Final = InMemorySpanExporter()
     provider: Final = TracerProvider()
@@ -7567,6 +7596,57 @@ class TestOpentelemetryUnitTests:
             f"{SpanAttributes.LLM_COMPLETIONS.value}.0.function_call.name": "get_weather",
             f"{SpanAttributes.LLM_COMPLETIONS.value}.1.function_call.arguments": '{"city": "New York"}',
             f"{SpanAttributes.LLM_COMPLETIONS.value}.1.function_call.name": "get_news",
+        }
+
+    def test_chat_response_tool_calls_are_recorded_per_call_on_the_span(self):
+        from litellm.types.utils import ModelResponse
+
+        response: Final = ModelResponse(
+            id="chatcmpl-tools",
+            model="gpt-4o",
+            choices=[
+                {
+                    "index": 0,
+                    "finish_reason": "tool_calls",
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "id": "call_weather",
+                                "type": "function",
+                                "function": {"name": "get_weather", "arguments": '{"city": "SF"}'},
+                            },
+                            {
+                                "id": "call_time",
+                                "type": "function",
+                                "function": {"name": "get_time", "arguments": "{}"},
+                            },
+                        ],
+                    },
+                }
+            ],
+        )
+        span: Final = TracerProvider().get_tracer("otel-tool-call-tests").start_span("litellm_request")
+
+        OpenTelemetry().set_attributes(
+            span=span,
+            kwargs={
+                "model": "gpt-4o",
+                "messages": [{"role": "user", "content": "weather and time in SF?"}],
+                "optional_params": {},
+                "litellm_params": {"custom_llm_provider": "openai"},
+                "standard_logging_object": {"id": "call-tools", "call_type": "completion", "metadata": {}},
+            },
+            response_obj=response,
+        )
+
+        completions: Final = SpanAttributes.LLM_COMPLETIONS.value
+        assert {key: value for key, value in span.attributes.items() if ".function_call." in key} == {
+            f"{completions}.0.function_call.name": "get_weather",
+            f"{completions}.0.function_call.arguments": '{"city": "SF"}',
+            f"{completions}.1.function_call.name": "get_time",
+            f"{completions}.1.function_call.arguments": "{}",
         }
 
     @pytest.mark.asyncio

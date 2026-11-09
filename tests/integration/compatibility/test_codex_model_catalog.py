@@ -36,7 +36,7 @@ pytestmark: Final = pytest.mark.shares_worker_state
 
 T = TypeVar("T")
 
-CLIENT_VERSION: Final = "0.159.3"
+CLIENT_VERSION: Final = "0.166.0"
 CONSISTENT_READS: Final = 6
 CONVERGENCE_SECONDS: Final = 60
 RELOAD_MARGIN_SECONDS: Final = 5.0

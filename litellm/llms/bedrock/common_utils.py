@@ -13,7 +13,7 @@ import warnings
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias
+from typing import TYPE_CHECKING, Final, Literal, Protocol, TypeAlias
 
 from typing_extensions import (
     ReadOnly,
@@ -24,8 +24,11 @@ from typing_extensions import (
 if TYPE_CHECKING:
     from botocore.eventstream import EventStreamMessage
     from botocore.model import ServiceModel, Shape
+    from botocore.parsers import EventStreamJSONParser
 
     from litellm.types.llms.bedrock import BedrockCreateBatchRequest
+
+    from .base_aws_llm import BaseAWSLLM
 
 import httpx
 from pydantic import ConfigDict, TypeAdapter, ValidationError
@@ -33,7 +36,7 @@ from pydantic import ConfigDict, TypeAdapter, ValidationError
 import litellm
 from litellm import verbose_logger
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
-from litellm.litellm_core_utils.core_helpers import lax_bool
+from litellm.litellm_core_utils.core_helpers import decoded_json_object, lax_bool, require_attributes
 from litellm.litellm_core_utils.optional_imports import ensure_optional_import
 from litellm.litellm_core_utils.prompt_templates.json_schema_utils import (
     schema_property_count,
@@ -135,7 +138,7 @@ _BEDROCK_AWS_AUTH_PARAMETER_KEYS: Final[tuple[str, ...]] = (*AWS_AUTH_PARAM_KEYS
 def merge_bedrock_aws_request_params(
     litellm_params: Mapping[str, object],
     optional_params: Mapping[str, object],
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """Merge deployment and request parameters without allowing auth escalation.
 
     Deployment configuration is authoritative for AWS authentication. When a
@@ -2516,15 +2519,16 @@ class BedrockEventStreamDecoderBase:
                 ),
             )
         response_dict: Final = event.to_response_dict()
-        parsed_response: Final = self.parser.parse(response_dict, response_stream_shape)
+        parsed_response: Final = parse_bedrock_event_stream(self.parser, response_dict, response_stream_shape)
 
         if response_dict["status_code"] != 200:
             raise build_bedrock_stream_error(response_dict, response_stream_shape)
-        if "chunk" in parsed_response:
-            chunk = parsed_response.get("chunk")
-            if not chunk:
+        parsed_fields: Final = decoded_json_object(parsed_response)
+        if "chunk" in parsed_fields:
+            event_chunk: Final = parsed_fields.get("chunk")
+            if not event_chunk:
                 return None
-            return chunk.get("bytes").decode()
+            return bedrock_event_chunk_text(event_chunk)
         else:
             chunk = response_dict.get("body")
             if not chunk:
@@ -2539,6 +2543,20 @@ _JSON_VALUE: Final = TypeAdapter(object)
 def _decoded_json_value(raw: str) -> object:
     """Decode a JSON document into an opaque value for isinstance narrowing."""
     return _JSON_VALUE.validate_python(json.loads(raw))
+
+
+class _DecodablePayload(Protocol):
+    def decode(self) -> str: ...
+
+
+def parse_bedrock_event_stream(
+    parser: EventStreamJSONParser, response_dict: Mapping[str, object], response_stream_shape: Shape
+) -> object:
+    return _JSON_VALUE.validate_python(parser.parse(response_dict, response_stream_shape))
+
+
+def bedrock_event_chunk_text(chunk: object) -> str:
+    return require_attributes(decoded_json_object(chunk).get("bytes"), _DecodablePayload, "decode").decode()
 
 
 def get_anthropic_beta_from_headers(headers: dict) -> list[str]:
@@ -2625,11 +2643,8 @@ class CommonBatchFilesUtils:
     Provides shared functionality to reduce code duplication between batches and files.
     """
 
-    def __init__(self):
-        # Import here to avoid circular imports
-        from .base_aws_llm import BaseAWSLLM
-
-        self._base_aws = BaseAWSLLM()
+    def __init__(self, aws: BaseAWSLLM) -> None:
+        self._base_aws = aws
 
     def get_bedrock_model_id_from_litellm_model(self, model: str) -> str:
         """
@@ -2820,3 +2835,13 @@ class CommonBatchFilesUtils:
         Get Bedrock-specific error class.
         """
         return BedrockError(status_code=status_code, message=error_message, headers=headers)
+
+
+def bedrock_model_encrypts_agent_messages(model: str) -> bool:
+    """Only OpenAI's GPT models on Bedrock lock Codex worker messages.
+
+    Open-weight models (gpt-oss, Gemma, Grok) never lock them, so Codex puts plain text in the locked
+    slot, which Bedrock rejects with ``invalid_encrypted_content`` unless it is rewritten to text first.
+    """
+    name: Final = f".{model.rsplit('/', 1)[-1]}"
+    return ".openai.gpt-" in name and ".openai.gpt-oss" not in name
