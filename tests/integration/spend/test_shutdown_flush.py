@@ -16,7 +16,7 @@ import httpx
 import psycopg
 import pytest
 import yaml
-from integration._support.client import Gateway, delete_key_if_present, eventually, string_value
+from integration._support.client import Gateway, delete_key_if_present, eventually, object_value, string_value
 from integration._support.database import read_rows
 from integration._support.process import OwnedProxy, owned_proxy_process
 from integration._support.wire import Reply, Request, wire_server
@@ -25,7 +25,6 @@ from psycopg import sql
 REQUESTS_WHILE_BLOCKED: Final = 6
 CANCEL_LOG_LINE: Final = "in-flight scheduled job(s) for shutdown"
 BATCH_DRAINED_LOG_LINE: Final = f"flushed {REQUESTS_WHILE_BLOCKED} daily spend update items from in-memory queue"
-MODEL_INSERT_ARRIVED_LOG_LINE: Final = "path=/model/new"
 COMMIT_DELAY_SECONDS: Final = 15
 BURST_REQUESTS: Final = 30
 
@@ -356,8 +355,15 @@ class _Shutdown:
             for outcome in pool.map(lambda _: self.chat(), range(requests)):
                 assert outcome is None
 
-    def logged(self, line: str, times: int = 1) -> bool:
-        return self.owned.log.read_text(errors="replace").count(line) >= times
+    def logged(self, line: str) -> bool:
+        return line in self.owned.log.read_text(errors="replace")
+
+    def other_requests_in_flight(self) -> int:
+        response: Final = self.owned.gateway.request("GET", "/health/backlog")
+        assert response.status_code == 200, response.text
+        in_flight: Final = object_value(response.json())["in_flight_requests"]
+        assert isinstance(in_flight, int)
+        return in_flight - 1
 
     def chat_while_spend_update_is_blocked(self, blocker: psycopg.Connection, table: str) -> None:
         blocker.execute(f'LOCK TABLE "{table}" IN EXCLUSIVE MODE')
@@ -463,7 +469,7 @@ def test_daily_spend_batch_cancelled_while_waiting_for_a_pool_connection_is_writ
         eventually(lambda: _waiting_on("LiteLLM_ProxyModelTable"), lambda waiting: waiting == 1, seconds=30)
         shutdown.chat_while_spend_update_is_blocked(memberships, "LiteLLM_TeamMembership")
         second: Final = shutdown.start_blocked_model_insert()
-        eventually(lambda: shutdown.logged(MODEL_INSERT_ARRIVED_LOG_LINE, times=2), lambda seen: seen, seconds=30)
+        eventually(shutdown.other_requests_in_flight, lambda in_flight: in_flight == 2, seconds=30)
         memberships.rollback()
         eventually(lambda: _waiting_on("LiteLLM_ProxyModelTable"), lambda waiting: waiting == 2, seconds=30)
         shutdown.terminate_once(lambda: shutdown.logged(BATCH_DRAINED_LOG_LINE), models.rollback)

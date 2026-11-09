@@ -48,6 +48,15 @@ def _mount_app(prefix: str, attr_name: str = "app") -> Callable[["FastAPI", obje
     return _register
 
 
+def _include_skill_hub(app: "FastAPI", module: object) -> None:
+    from litellm.proxy.discovery_endpoints.skill_hub_submissions import router
+    from litellm.proxy.discovery_endpoints.skill_scanning import router as scan_router
+
+    _include_router()(app, module)
+    app.include_router(router)
+    app.include_router(scan_router)
+
+
 @dataclass(frozen=True)
 class LazyFeature:
     name: str
@@ -105,10 +114,10 @@ LAZY_FEATURES: Final[tuple[LazyFeature, ...]] = (
     LazyFeature(
         name="a2a",
         module_path="litellm.proxy.agent_endpoints.a2a_endpoints",
-        # ``/v1/a2a/{agent_id}/message/send`` is caught via the suffix so the
+        # ``/v1/a2a/{agent_id}/message/send`` and ``/message/stream`` are caught via suffixes so the
         # ``/v1/a2a`` prefix doesn't subsume the discover prefix below.
         path_prefixes=("/a2a",),
-        path_suffixes=("/message/send",),
+        path_suffixes=("/message/send", "/message/stream"),
     ),
     LazyFeature(
         name="a2a_registration",
@@ -234,10 +243,12 @@ LAZY_FEATURES: Final[tuple[LazyFeature, ...]] = (
             "/mistral/",
             "/nvidia_nim/",
             "/openai/",
+            "/opensearch/",
             "/openai_passthrough/",
             "/tinyfish/",
             "/transcribe",
             "/typesafe/",
+            "/eu_jev/",
             "/laya/",
             "/bespoke/",
             "/openrouter/",
@@ -281,6 +292,12 @@ LAZY_FEATURES: Final[tuple[LazyFeature, ...]] = (
         name="decisions",
         module_path="litellm.proxy.decisions_endpoints.endpoints",
         path_prefixes=("/v1/decisions", "/decisions", "/v1/systemone", "/systemone", "/v1/extraction", "/extraction"),
+    ),
+    LazyFeature(
+        name="skill_hub",
+        module_path="litellm.proxy.discovery_endpoints.skill_hub_endpoints",
+        path_prefixes=("/skill-hub",),
+        register_fn=_include_skill_hub,
     ),
     LazyFeature(
         name="claude_code_marketplace",
@@ -355,8 +372,8 @@ class LazyFeatureMiddleware:
             fastapi_app.state.lazy_locks = {}
 
     @property
-    def _loaded(self) -> set:
-        return self._fastapi_app.state.lazy_loaded
+    def _loaded(self) -> set[str]:
+        return _lazy_loaded(self._fastapi_app)
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         # Short-circuit once every feature has loaded.
@@ -503,10 +520,13 @@ def _lazy_lock(app: "FastAPI", module_path: str) -> asyncio.Lock:
 
 
 def _register_feature(app: "FastAPI", feat: LazyFeature, module: object, features: tuple[LazyFeature, ...]) -> None:
-    before: Final = len(app.router.routes)
+    routes_before: Final = frozenset(id(route) for route in app.router.routes)
     feat.register_fn(app, module)
     lazy_routes: Final[Mapping[str, tuple[BaseRoute, ...]]] = MappingProxyType(
-        {**_lazy_routes(app), feat.module_path: tuple(app.router.routes[before:])}
+        {
+            **_lazy_routes(app),
+            feat.module_path: tuple(route for route in app.router.routes if id(route) not in routes_before),
+        }
     )
     app.state.lazy_routes = lazy_routes  # rebind-ok: the app owns the record of which routes each feature added
     app.router.routes[:] = _route_table(  # rebind-ok: the app owns its route table

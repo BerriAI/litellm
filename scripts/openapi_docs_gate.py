@@ -101,6 +101,23 @@ def _install_termination_handlers() -> None:
             signal.signal(termination, _exit_on_termination)
 
 
+def _install_base_native(worktree: Path, repo_root: Path) -> None:
+    env: Final = {
+        **os.environ,
+        "CARGO_TARGET_DIR": str(
+            Path(os.environ.get("CARGO_TARGET_DIR", repo_root / "litellm-rust" / "target")).resolve()
+        ),
+    }
+    _run(
+        [
+            "uv", "pip", "install", "--python", sys.executable, "--no-deps",
+            "--target", str(worktree.parent / "native-install"), "--editable", str(worktree),
+        ],
+        cwd=worktree,
+        env=env,
+    )
+
+
 def base_counts(ref: str, repo_root: Path = REPO_ROOT, checker: Path = CHECKER) -> Mapping[str, int]:
     """Rule counts at `ref`, measured with the *current* checker over the base tree."""
     _install_termination_handlers()
@@ -111,6 +128,7 @@ def base_counts(ref: str, repo_root: Path = REPO_ROOT, checker: Path = CHECKER) 
         (worktree / "scripts").mkdir(parents=True, exist_ok=True)
         base_checker: Final = worktree / "scripts" / "check_openapi_docs.py"
         shutil.copy(checker, base_checker)
+        _install_base_native(worktree, repo_root)
         return count_by_rule(_check(worktree, base_checker))
     finally:
         # Teardown must never raise, or it masks the real error when the body failed.

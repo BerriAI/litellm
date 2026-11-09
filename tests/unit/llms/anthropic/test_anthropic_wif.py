@@ -452,6 +452,31 @@ class TestResolutionMatrix:
         assert params.service_account_id is None
         assert params.workspace_id is None
 
+    def test_env_inline_oidc_reference_resolves_like_the_param(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv("ANTHROPIC_FEDERATION_RULE_ID", "fdrl_env")
+        monkeypatch.setenv("ANTHROPIC_ORGANIZATION_ID", "org-env")
+        monkeypatch.setenv("ANTHROPIC_IDENTITY_TOKEN", "oidc/google/https://api.anthropic.com")
+        poster = ScriptedPoster([token_response()])
+        engine = JwtBearerTokenExchangeEngine(
+            poster=poster,
+            assertion_reader={"oidc/google/https://api.anthropic.com": "google-id-token"}.get,
+            clock=FakeClock(),
+            refresh_executor=ManualExecutor(),
+        )
+
+        token = get_anthropic_wif_token(None, None, "claude-opus-4-6", engine)
+
+        assert token == "sk-ant-oat01-minted"
+        assert [request.json_body()["assertion"] for request in poster.requests] == ["google-id-token"]
+
+    def test_env_inline_env_path_reference_is_rejected(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv("ANTHROPIC_FEDERATION_RULE_ID", "fdrl_env")
+        monkeypatch.setenv("ANTHROPIC_ORGANIZATION_ID", "org-env")
+        monkeypatch.setenv("ANTHROPIC_IDENTITY_TOKEN", "oidc/env_path/ANTHROPIC_TOKEN_PATH")
+
+        with pytest.raises(litellm.AuthenticationError):
+            resolve_anthropic_wif_params(None)
+
     def test_file_param_beats_inline_param(self):
         params = resolve_anthropic_wif_params(
             {
