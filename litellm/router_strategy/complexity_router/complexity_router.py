@@ -801,6 +801,34 @@ def _newest_turn_is_human_ask(
     return _last_human_ask_index(messages, marker_pairs) == newest_activity
 
 
+_CLAUDE_CODE_REQUEST_CLASS_HEADER: Final = "x-claude-code-request-class"
+_CLAUDE_CODE_AUXILIARY_SENTINEL: Final = f"{_CLAUDE_CODE_REQUEST_CLASS_HEADER}: auxiliary"
+_PIN_WRITING_REQUEST_CLASSES: Final = frozenset({None, "main", "subagent"})
+
+
+def _claude_code_request_class(request_kwargs: Mapping[str, object]) -> str | None:
+    proxy_request: Final = request_kwargs.get("proxy_server_request")
+    if not isinstance(proxy_request, Mapping):
+        return None
+    headers: Final = cast(Mapping[str, object], proxy_request).get("headers")  # cast-ok: proxy request is JSON-shaped
+    if not isinstance(headers, Mapping):
+        return None
+    return next(
+        (
+            value.strip().lower()
+            for key, value in cast(Mapping[object, object], headers).items()  # cast-ok: header map from the proxy
+            if isinstance(key, str) and key.lower() == _CLAUDE_CODE_REQUEST_CLASS_HEADER and isinstance(value, str)
+        ),
+        None,
+    )
+
+
+def _request_class_may_write_pin(request_kwargs: Mapping[str, object]) -> bool:
+    """Claude Code's gateway hint names side requests (summaries, titles), compaction and workflow
+    agents. Only a real main or subagent turn decides the tier a session's later turns replay."""
+    return _claude_code_request_class(request_kwargs) in _PIN_WRITING_REQUEST_CLASSES
+
+
 _CODEX_TURN_METADATA_KEY: Final = "x-codex-turn-metadata"
 _CODEX_COMPACTION_SUMMARY_PREFIX: Final = (
     "Another language model started to solve this problem and produced a summary of its thinking process."
@@ -3475,8 +3503,11 @@ class ComplexityRouter(CustomLogger):
             self._reminder_markers_for_request(request_kwargs),
         )
 
-    def _matched_housekeeping_sentinel(self, newest_ask: str | None) -> str | None:
-        """The client housekeeping sentinel on this request's newest ask, or None.
+    def _matched_housekeeping_sentinel(
+        self, newest_ask: str | None, request_kwargs: Mapping[str, object]
+    ) -> str | None:
+        """The client housekeeping sentinel on this request's newest ask, or None. Claude Code's
+        `auxiliary` request-class hint counts as one, so it keeps working when the prompts change.
 
         Read from the newest ask alone, never the whole history, for the reason `_newest_turn_ask`
         exists: a title request quoted into a later turn's context would otherwise keep matching and
@@ -3490,6 +3521,8 @@ class ComplexityRouter(CustomLogger):
         """
         if self.config.classifier_type == "custom" or not self.config.route_housekeeping_to_cheapest_tier:
             return None
+        if _claude_code_request_class(request_kwargs) == "auxiliary":
+            return _CLAUDE_CODE_AUXILIARY_SENTINEL
         if not newest_ask:
             return None
         return next(
@@ -4537,6 +4570,9 @@ class ComplexityRouter(CustomLogger):
         conversation_continuing: Final = _conversation_is_continuing(resolved_messages)
 
         use_session_affinity: Final = self._uses_tier_pin
+        request_class_may_write_pin: Final = _request_class_may_write_pin(
+            cast(Mapping[str, object], request_kwargs)  # cast-ok: the hook's request_kwargs is an untyped dict
+        )
         session_id: Final = self._get_tier_pin_session_id(request_kwargs) if use_session_affinity else None
         cache_key = self._get_session_affinity_cache_key(session_id, request_kwargs) if session_id is not None else None
 
@@ -4649,7 +4685,7 @@ class ComplexityRouter(CustomLogger):
                         if pin_placement is not None and pin_context_original_tier is not None
                         else floor_model
                     )
-                    if escalated:
+                    if escalated and request_class_may_write_pin:
                         await self.ctx.health().store.async_set_cache(
                             key=cache_key,
                             value=_session_affinity_cache_value(session_model, resolved_pin_tier),
@@ -4751,6 +4787,7 @@ class ComplexityRouter(CustomLogger):
             and response is not None
             and _decision_is_pinnable(response.routing_decision)
             and self._matched_plan_mode_signal(request_kwargs, resolved_messages) is None
+            and request_class_may_write_pin
         )
         if pinnable and cache_key is not None and response is not None:
             await self.ctx.health().store.async_set_cache(
@@ -4970,7 +5007,7 @@ class ComplexityRouter(CustomLogger):
                 ),
             )
 
-        housekeeping_sentinel: Final = self._matched_housekeeping_sentinel(newest_ask)
+        housekeeping_sentinel: Final = self._matched_housekeeping_sentinel(newest_ask, request_kwargs)
         housekeeping_tier: Final = self._cheapest_configured_tier() if housekeeping_sentinel is not None else None
         outcome: Final = (
             ClassificationOutcome(tier=housekeeping_tier, score=None, signals=("housekeeping",), cause="housekeeping")
