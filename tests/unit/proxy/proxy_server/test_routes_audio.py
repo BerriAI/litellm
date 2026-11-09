@@ -522,15 +522,15 @@ def _route_speech_to(
         ),
     )
 
-    async def _add_data(data, **kwargs):
+    async def _add_data(data: dict[str, object], **kwargs: object) -> dict[str, object]:
         return data
 
     monkeypatch.setattr(proxy_server, "add_litellm_data_to_request", _add_data)
 
-    async def _llm_call():
+    async def _llm_call() -> HttpxBinaryResponseContent:
         return response
 
-    async def _fake_route_request(*args, **kwargs):
+    async def _fake_route_request(*args: object, **kwargs: object) -> Awaitable[HttpxBinaryResponseContent]:
         return _llm_call()
 
     monkeypatch.setattr(proxy_server, "route_request", _fake_route_request)

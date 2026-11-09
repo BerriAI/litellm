@@ -4079,12 +4079,16 @@ class _SpeechLogger(CustomLogger):
         super().__init__()
         self.logged_payloads: Final[asyncio.Queue[dict[str, object]]] = asyncio.Queue()
         self.failed_payloads: Final[asyncio.Queue[dict[str, object]]] = asyncio.Queue()
+        self.sync_failed_payloads: Final[queue.Queue[dict[str, object]]] = queue.Queue()
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
         await self.logged_payloads.put(kwargs["standard_logging_object"])
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time) -> None:
         await self.failed_payloads.put(kwargs["standard_logging_object"])
+
+    def log_failure_event(self, kwargs, response_obj, start_time, end_time) -> None:
+        self.sync_failed_payloads.put(kwargs["standard_logging_object"])
 
 
 class _SyncSpeechLogger(CustomLogger):
@@ -4248,6 +4252,7 @@ async def test_aspeech_stream_broken_mid_clip_is_billed_as_a_failure(
     await asyncio.sleep(0)
     await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10)
     assert speech_logger.logged_payloads.empty()
+    assert speech_logger.sync_failed_payloads.empty()
 
 
 @pytest.mark.usefixtures("local_model_cost_map")

@@ -1744,7 +1744,7 @@ def _async_speech_end_logger(
                 traceback_exception: Final = "".join(traceback.format_exception(error))
                 _bill_failed_speech_stream(logging_obj, result)
                 unbind_budget_reservation_from_callbacks(logging_obj.litellm_params)
-                logging_obj.failure_handler(error, traceback_exception, start_time, end_time)
+                logging_obj.failure_handler(error, traceback_exception, start_time, end_time, for_async_request=True)
                 await logging_obj.async_failure_handler(error, traceback_exception, start_time, end_time)
                 return
             case StreamClosedEarly():

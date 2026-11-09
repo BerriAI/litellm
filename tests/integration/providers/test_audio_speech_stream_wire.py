@@ -379,6 +379,7 @@ def test_a_health_check_on_a_deployment_level_streamed_speech_model_leaves_no_pr
         assert response.status_code == 200, response.text[:400]
         report: Final = object_value(response.json())
         assert (report["healthy_count"], report["unhealthy_count"]) == (1, 0), report
+        eventually(lambda: _held_upstream_connections(wire), lambda held: held == 0)
 
 
 def _mistral_peer(request: Request) -> Reply:
