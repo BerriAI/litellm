@@ -335,6 +335,7 @@ _SELECTION_CALLS: Final[Mapping[str, str]] = MappingProxyType(
         "acompletion": "_acompletion",
         "completion": "_completion",
         "atext_completion": "_atext_completion",
+        "text_completion": "_text_completion",
     }
 )
 
@@ -374,6 +375,15 @@ PLANS: Final[Mapping[str, Plan]] = MappingProxyType(
             "text",
             splits_stream_timeout=True,
             fail_key="group",
+            named=("prompt",),
+        ),
+        "text_completion": Plan(
+            "text_completion",
+            "text_completion",
+            "text",
+            sync=True,
+            splits_stream_timeout=True,
+            stamp="deployment",
             named=("prompt",),
         ),
         # `_asearch_with_fallbacks`: the search tool name routes as the model, with no deployment
@@ -2115,37 +2125,6 @@ class RustEndpoints:
             return await self._core.drive(plan, kwargs, _SINGLE_ATTEMPT)
         prepared: Final = prepare_request(plan, kwargs, str(model), self._core.resolved.model_group_alias)
         return await self._direct("amoderation", prepared)
-
-    def text_completion(self, request: Mapping[str, object]) -> object:
-        """The sync `text_completion`: one pick, no retries, the group name as the model."""
-        from litellm.litellm_core_utils.routing_common_utils import deployment_model_id_pin
-
-        kwargs: Final = without(request, "is_retry", "is_fallback", "is_async")
-        model: Final = kwargs.get("model")
-        prompt: Final = kwargs.get("prompt")
-        if "model" not in kwargs:
-            raise TypeError("text_completion() missing 1 required positional argument: 'model'")
-        kwargs["num_retries"] = kwargs.get("num_retries", self._core.resolved.num_retries)
-        metadata_bucket(kwargs, "metadata").update({"model_group": model})
-        with endpoint_selection("text_completion", model=model):
-            deployment: Final = self._core.router.get_available_deployment(
-                model=model,  # pyright: ignore[reportArgumentType]  # the name as given
-                messages=_user_message(prompt),
-                specific_deployment=kwargs.pop("specific_deployment", None),  # pyright: ignore[reportArgumentType]  # the request's value, as given
-                request_kwargs=kwargs,
-            )
-        data: Final = as_dict(deployment.get("litellm_params"))
-        for key, value in self._core.resolved.default_litellm_params.items():
-            if key not in kwargs:
-                kwargs[key] = value
-            elif key == "metadata":
-                bucket = kwargs[key]
-                if isinstance(bucket, dict):
-                    bucket.update(as_dict(value))  # pyright: ignore[reportUnknownMemberType]  # the request's metadata dict
-        pinned: Final = deployment_model_id_pin(data)
-        if pinned is not None:
-            kwargs["model_id"] = pinned
-        return self._invoke("text_completion")(**{**data, "prompt": prompt, "caching": self._cache_responses, **kwargs})
 
     async def aadapter_completion(
         self,
