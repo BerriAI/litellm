@@ -3433,3 +3433,54 @@ def test_declared_boundary_matches_deployments_whose_credentials_cannot_be_resol
     matches, _ = check._find_deployments_on_same_encryption_boundary([peer], "region-1")
 
     assert matches == [peer]
+
+
+async def _forwarded_reasoning_after_order_fallback(boundary: str | None) -> tuple:
+    primary: Final = _regional_deployment("reasoning", "region-1", boundary)
+    backup: Final = _regional_deployment("reasoning", "region-3", boundary)
+    router: Final = litellm.Router(
+        model_list=[
+            primary | {"litellm_params": primary["litellm_params"] | {"order": 1}},
+            backup | {"litellm_params": backup["litellm_params"] | {"order": 2}},
+        ],
+        optional_pre_call_checks=["encrypted_content_affinity"],
+        disable_cooldowns=True,
+        num_retries=0,
+    )
+
+    async def upstream(*, litellm_params, **_kwargs):
+        if "region-1" in litellm_params.api_base:
+            raise litellm.InternalServerError("upstream 500", llm_provider="openai", model="gpt-5.6")
+        return _build_mock_response(output_items=[], response_id="resp_second")
+
+    handler: Final = AsyncMock(side_effect=upstream)
+    with patch(
+        "litellm.llms.custom_httpx.llm_http_handler.BaseLLMHTTPHandler.async_response_api_handler",
+        new=handler,
+    ):
+        response: Final = await router.aresponses(
+            model="reasoning",
+            input=[
+                {
+                    "type": "reasoning",
+                    "summary": [],
+                    "encrypted_content": ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id(
+                        "blob-from-region-1", "region-1"
+                    ),
+                },
+                {"role": "user", "content": "follow-up"},
+            ],
+            litellm_metadata={},
+        )
+    forwarded_reasoning: Final = handler.await_args.kwargs["input"][0]
+    return response._hidden_params["model_id"], forwarded_reasoning.get("encrypted_content")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("boundary", "expected_reasoning"),
+    [("org-1", "blob-from-region-1"), (None, None)],
+    ids=["declared", "undeclared"],
+)
+async def test_order_fallback_keeps_reasoning_only_on_a_declared_boundary_peer(boundary, expected_reasoning):
+    assert await _forwarded_reasoning_after_order_fallback(boundary) == ("region-3", expected_reasoning)
