@@ -18,6 +18,7 @@ from litellm.exceptions import (
     Timeout,
 )
 from litellm.integrations.websearch_interception.handler import (
+    WEBSEARCH_ACCUMULATED_NATIVE_BLOCKS_KEY,
     WEBSEARCH_EMIT_NATIVE_BLOCKS_KEY,
     WEBSEARCH_NATIVE_BLOCKS_METADATA_KEY,
     WebSearchInterceptionLogger,
@@ -448,6 +449,55 @@ class TestFailedSearchOutcome:
 
 class TestPostHookInjectsBlocks:
     """The post-hook must prepend blocks; absent metadata is a no-op."""
+
+    @pytest.mark.asyncio
+    async def test_accumulates_blocks_across_agentic_rounds(self):
+        logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"])
+        round_one = [
+            {"type": "server_tool_use", "id": "srvtoolu_r1", "name": "web_search", "input": {"query": "a"}},
+            WebSearchTransformation.build_web_search_tool_result_block(
+                tool_use_id="srvtoolu_r1",
+                search_response=_make_search_response(),
+            ),
+        ]
+        round_two = [
+            {"type": "server_tool_use", "id": "srvtoolu_r2", "name": "web_search", "input": {"query": "b"}},
+            WebSearchTransformation.build_web_search_tool_result_block(
+                tool_use_id="srvtoolu_r2",
+                search_response=_make_search_response(),
+            ),
+        ]
+        kwargs: dict = {WEBSEARCH_EMIT_NATIVE_BLOCKS_KEY: True}
+        response = {
+            "id": "msg_1",
+            "content": [{"type": "text", "text": "intermediate"}],
+        }
+
+        await logger.async_post_agentic_loop_response_hook(
+            response=response,
+            plan=AgenticLoopPlan(
+                run_agentic_loop=True,
+                metadata={WEBSEARCH_NATIVE_BLOCKS_METADATA_KEY: round_one},
+            ),
+            kwargs=kwargs,
+        )
+        final = await logger.async_post_agentic_loop_response_hook(
+            response={"id": "msg_2", "content": [{"type": "text", "text": "final"}]},
+            plan=AgenticLoopPlan(
+                run_agentic_loop=True,
+                metadata={WEBSEARCH_NATIVE_BLOCKS_METADATA_KEY: round_two},
+            ),
+            kwargs=kwargs,
+        )
+
+        assert kwargs[WEBSEARCH_ACCUMULATED_NATIVE_BLOCKS_KEY] == [*round_one, *round_two]
+        assert [b["type"] for b in final["content"][:4]] == [
+            "server_tool_use",
+            "web_search_tool_result",
+            "server_tool_use",
+            "web_search_tool_result",
+        ]
+        assert final["content"][4]["type"] == "text"
 
     @pytest.mark.asyncio
     async def test_injects_when_metadata_present(self):
