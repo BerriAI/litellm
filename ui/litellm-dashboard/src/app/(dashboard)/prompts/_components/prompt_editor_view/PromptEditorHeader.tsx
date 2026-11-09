@@ -1,8 +1,17 @@
 import React from "react";
-import { Button as TremorButton } from "@tremor/react";
-import { Input, Select } from "antd";
-import { ArrowLeftIcon, SaveIcon, ClockIcon } from "lucide-react";
+import { ArrowLeftIcon, SaveIcon, ClockIcon, LoaderCircleIcon } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import PromptCodeSnippets from "./PromptCodeSnippets";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+
+const ENVIRONMENT_ITEMS = [
+  { value: "development", labelKey: "prompts.editorHeader.environments.development" },
+  { value: "staging", labelKey: "prompts.editorHeader.environments.staging" },
+  { value: "production", labelKey: "prompts.editorHeader.environments.production" },
+] as const;
 
 interface PromptEditorHeaderProps {
   promptName: string;
@@ -13,7 +22,7 @@ interface PromptEditorHeaderProps {
   editMode?: boolean;
   onShowHistory?: () => void;
   version?: string | null;
-  promptModel?: string;
+  promptModel?: string | null;
   promptVariables?: Record<string, string>;
   accessToken: string | null;
   proxySettings?: {
@@ -40,52 +49,61 @@ const PromptEditorHeader: React.FC<PromptEditorHeaderProps> = ({
   environment,
   onEnvironmentChange,
 }) => {
+  const { t } = useTranslation();
   return (
-    <div className="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between">
+    <div className="bg-background border-b border-border px-6 py-3 flex items-center justify-between">
       <div className="flex items-center space-x-3">
-        <TremorButton icon={ArrowLeftIcon} variant="light" onClick={onBack} size="xs">
-          Back
-        </TremorButton>
+        <Button variant="ghost" onClick={onBack} size="sm">
+          <ArrowLeftIcon />
+          {t("prompts.editorHeader.back")}
+        </Button>
         <Input
+          aria-label={t("prompts.editorHeader.nameLabel")}
           value={promptName}
           onChange={(e) => onNameChange(e.target.value)}
           className="text-base font-medium border-none shadow-none"
           style={{ width: "200px" }}
         />
-        {version && (
-          <span className="px-2 py-0.5 text-xs bg-blue-100 text-blue-700 rounded-sm font-medium">{version}</span>
-        )}
+        {version && <Badge>{version}</Badge>}
         <Select
+          items={ENVIRONMENT_ITEMS.map((item) => ({ value: item.value, label: t(item.labelKey) }))}
           value={environment}
-          onChange={onEnvironmentChange}
-          style={{ width: 140 }}
-          size="small"
-          options={[
-            { label: "Development", value: "development" },
-            { label: "Staging", value: "staging" },
-            { label: "Production", value: "production" },
-          ]}
-        />
-        <span className="px-2 py-0.5 text-xs bg-gray-100 text-gray-600 rounded-sm">Draft</span>
-        <span className="text-xs text-gray-400">Unsaved changes</span>
+          onValueChange={(value) => onEnvironmentChange(String(value))}
+        >
+          <SelectTrigger size="sm" className="w-[140px]" aria-label={t("prompts.editorHeader.environmentLabel")}>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {ENVIRONMENT_ITEMS.map((item) => (
+              <SelectItem key={item.value} value={item.value}>
+                {t(item.labelKey)}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Badge variant="secondary">{t("prompts.editorHeader.draft")}</Badge>
+        <span className="text-xs text-muted-foreground">{t("prompts.editorHeader.unsaved")}</span>
       </div>
       <div className="flex items-center space-x-2">
         <PromptCodeSnippets
           promptId={promptName}
-          model={promptModel}
+          model={promptModel ?? "YOUR_MODEL"}
           promptVariables={promptVariables}
           accessToken={accessToken}
           version={version?.replace("v", "") || "1"}
+          environment={environment}
           proxySettings={proxySettings}
         />
         {editMode && onShowHistory && (
-          <TremorButton icon={ClockIcon} variant="secondary" onClick={onShowHistory}>
-            History
-          </TremorButton>
+          <Button variant="outline" onClick={onShowHistory}>
+            <ClockIcon />
+            {t("prompts.editorHeader.history")}
+          </Button>
         )}
-        <TremorButton icon={SaveIcon} onClick={onSave} loading={isSaving} disabled={isSaving}>
-          {editMode ? "Update" : "Save"}
-        </TremorButton>
+        <Button onClick={onSave} disabled={isSaving}>
+          {isSaving ? <LoaderCircleIcon className="animate-spin" /> : <SaveIcon />}
+          {editMode ? t("prompts.editorHeader.update") : t("prompts.editorHeader.save")}
+        </Button>
       </div>
     </div>
   );

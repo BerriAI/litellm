@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { renderWithProviders, screen } from "../../../../../tests/test-utils";
 import { ProjectDetail } from "./ProjectDetailsPage";
 import { ProjectResponse } from "@/app/(dashboard)/hooks/projects/useProjects";
+import { useUserLookup } from "@/app/(dashboard)/hooks/users/useUsers";
 
 const mockUseProjectDetails = vi.fn();
 vi.mock("@/app/(dashboard)/hooks/projects/useProjectDetails", () => ({
@@ -14,12 +15,28 @@ vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
   useTeam: (id?: string) => mockUseTeam(id),
 }));
 
-vi.mock("./ProjectModals/EditProjectModal", () => ({
-  EditProjectModal: ({ isOpen }: { isOpen: boolean }) => (isOpen ? <div data-testid="edit-modal" /> : null),
+const mockUseAuthorized = vi.fn();
+vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
+  default: () => mockUseAuthorized(),
 }));
 
-vi.mock("@/components/common_components/DefaultProxyAdminTag", () => ({
-  default: ({ userId }: { userId: string }) => <span>{userId}</span>,
+const mockUseUISettings = vi.fn();
+vi.mock("@/app/(dashboard)/hooks/uiSettings/useUISettings", () => ({
+  useUISettings: () => mockUseUISettings(),
+}));
+
+vi.mock("@/app/(dashboard)/hooks/users/useUsers", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/app/(dashboard)/hooks/users/useUsers")>();
+  return { ...actual, useUserLookup: vi.fn() };
+});
+
+vi.mock("next/navigation", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("next/navigation")>()),
+  useRouter: () => ({ push: vi.fn() }),
+}));
+
+vi.mock("./ProjectModals/EditProjectModal", () => ({
+  EditProjectModal: ({ isOpen }: { isOpen: boolean }) => (isOpen ? <div data-testid="edit-modal" /> : null),
 }));
 
 vi.mock("./ProjectKeysSection", () => ({
@@ -59,17 +76,23 @@ const yAxisTickLabels = (container: HTMLElement) =>
 
 describe("ProjectDetail", () => {
   const onBack = vi.fn();
+  const mockUseUserLookup = vi.mocked(useUserLookup);
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockUseUserLookup.mockReturnValue({ data: null } as ReturnType<typeof useUserLookup>);
     mockUseTeam.mockReturnValue({ data: undefined, isLoading: false });
+    mockUseAuthorized.mockReturnValue({ userId: "admin-user", userRole: "Admin", isViewOnly: false });
+    mockUseUISettings.mockReturnValue({ data: { values: {} } });
   });
 
   describe("when loading", () => {
-    it("should show a loading spinner", () => {
+    it("should show a busy indicator and neither the project nor the not-found state", () => {
       mockUseProjectDetails.mockReturnValue({ data: undefined, isLoading: true });
       renderWithProviders(<ProjectDetail projectId="proj-1" onBack={onBack} />);
-      expect(screen.getByRole("img", { hidden: true })).toBeInTheDocument();
+      expect(document.querySelector('[aria-busy="true"]')).toBeInTheDocument();
+      expect(screen.queryByText("Project not found")).not.toBeInTheDocument();
+      expect(screen.queryByRole("heading")).not.toBeInTheDocument();
     });
   });
 
@@ -99,6 +122,21 @@ describe("ProjectDetail", () => {
       expect(screen.getByText("My Project")).toBeInTheDocument();
     });
 
+    it("shows the creator alias as a link to the user page", () => {
+      mockUseUserLookup.mockImplementation(
+        (userId) =>
+          ({
+            data: userId === "user-1" ? { user_alias: "Alice", user_email: "alice@example.com" } : null,
+          }) as ReturnType<typeof useUserLookup>,
+      );
+      renderWithProviders(<ProjectDetail projectId="proj-1" onBack={onBack} />);
+
+      expect(screen.getByRole("link", { name: "Alice" })).toHaveAttribute(
+        "href",
+        expect.stringContaining("/users?user=user-1"),
+      );
+    });
+
     it("should display the project alias as the page title", () => {
       renderWithProviders(<ProjectDetail projectId="proj-1" onBack={onBack} />);
       expect(screen.getByRole("heading", { name: "My Project" })).toBeInTheDocument();
@@ -126,7 +164,7 @@ describe("ProjectDetail", () => {
     it("should call onBack when the back button is clicked", async () => {
       const user = userEvent.setup();
       renderWithProviders(<ProjectDetail projectId="proj-1" onBack={onBack} />);
-      await user.click(screen.getByRole("button", { name: "" }));
+      await user.click(screen.getAllByRole("button")[0]);
       expect(onBack).toHaveBeenCalledOnce();
     });
 
@@ -167,6 +205,40 @@ describe("ProjectDetail", () => {
       renderWithProviders(<ProjectDetail projectId="proj-1" onBack={onBack} />);
       await user.click(screen.getByRole("button", { name: /edit project/i }));
       expect(screen.getByTestId("edit-modal")).toBeInTheDocument();
+    });
+
+    it.each([
+      { who: "a proxy admin without the setting", role: "Admin", teamRole: "user", fields: [], visible: true },
+      {
+        who: "the project team's admin without the setting",
+        role: "Internal User",
+        teamRole: "admin",
+        fields: [],
+        visible: false,
+      },
+      {
+        who: "the project team's admin when the setting grants projects",
+        role: "Internal User",
+        teamRole: "admin",
+        fields: ["projects"],
+        visible: true,
+      },
+      {
+        who: "a plain member of the project team when the setting grants projects",
+        role: "Internal User",
+        teamRole: "user",
+        fields: ["projects"],
+        visible: false,
+      },
+    ])("should gate 'Edit Project' for $who", ({ role, teamRole, fields, visible }) => {
+      mockUseAuthorized.mockReturnValue({ userId: "caller", userRole: role, isViewOnly: false });
+      mockUseUISettings.mockReturnValue({ data: { values: { team_admin_editable_team_fields: fields } } });
+      mockUseTeam.mockReturnValue({
+        data: { team_id: "team-1", members_with_roles: [{ user_id: "caller", role: teamRole }] },
+        isLoading: false,
+      });
+      renderWithProviders(<ProjectDetail projectId="proj-1" onBack={onBack} />);
+      expect(screen.queryByRole("button", { name: /edit project/i }) !== null).toBe(visible);
     });
 
     it("should show 'No team assigned' when the project has no team", () => {
@@ -240,13 +312,11 @@ describe("ProjectDetail", () => {
     it("should show team information when team data is available", () => {
       mockUseTeam.mockReturnValue({
         data: {
-          team_info: {
-            team_id: "team-1",
-            team_alias: "Engineering",
-            models: ["gpt-4"],
-            spend: 50,
-            members_with_roles: [],
-          },
+          team_id: "team-1",
+          team_alias: "Engineering",
+          models: ["gpt-4"],
+          spend: 50,
+          members_with_roles: [],
         },
         isLoading: false,
       });

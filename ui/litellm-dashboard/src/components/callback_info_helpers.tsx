@@ -1,3 +1,4 @@
+import type { ParseKeys } from "i18next";
 import arizeLogo from "../../public/assets/logos/arize.png";
 import awsLogo from "../../public/assets/logos/aws.svg";
 import braintrustLogo from "../../public/assets/logos/braintrust.png";
@@ -6,8 +7,12 @@ import galileoLogo from "../../public/assets/logos/galileo.ico";
 import lagoLogo from "../../public/assets/logos/lago.svg";
 import langfuseLogo from "../../public/assets/logos/langfuse.png";
 import langsmithLogo from "../../public/assets/logos/langsmith.png";
+import newrelicLogo from "../../public/assets/logos/newrelic.png";
 import openmeterLogo from "../../public/assets/logos/openmeter.png";
 import otelLogo from "../../public/assets/logos/otel.png";
+import pointfiveLogo from "../../public/assets/logos/pointfive.png";
+import signozLogo from "../../public/assets/logos/signoz.svg";
+import databricksLogo from "../../public/assets/logos/databricks.svg";
 
 interface CallbackConfig {
   id: string;
@@ -15,7 +20,9 @@ interface CallbackConfig {
   logo?: string;
   supports_key_team_logging: boolean;
   dynamic_params: Record<string, "text" | "password" | "select" | "upload" | "number">;
-  description: string;
+  dynamic_param_options?: Record<string, readonly string[]>;
+  success_event_params?: string[];
+  descriptionKey: ParseKeys;
 }
 
 export const CALLBACK_CONFIGS: CallbackConfig[] = [
@@ -27,8 +34,15 @@ export const CALLBACK_CONFIGS: CallbackConfig[] = [
     dynamic_params: {
       arize_api_key: "password",
       arize_space_id: "password",
+      arize_success_sampling_rate: "number",
+      arize_error_sampling_rate: "number",
+      arize_otlp_protocol: "select",
     },
-    description: "Arize Logging Integration",
+    dynamic_param_options: {
+      arize_otlp_protocol: ["grpc", "http/protobuf"],
+    },
+    success_event_params: ["arize_otlp_protocol"],
+    descriptionKey: "callbackInfo.descriptions.arize",
   },
   {
     id: "braintrust",
@@ -39,7 +53,7 @@ export const CALLBACK_CONFIGS: CallbackConfig[] = [
       braintrust_api_key: "password",
       braintrust_project_name: "text",
     },
-    description: "Braintrust Logging Integration",
+    descriptionKey: "callbackInfo.descriptions.braintrust",
   },
   {
     id: "custom_callback_api",
@@ -49,7 +63,7 @@ export const CALLBACK_CONFIGS: CallbackConfig[] = [
       custom_callback_api_url: "text",
       custom_callback_api_headers: "text",
     },
-    description: "Custom Callback API Logging Integration",
+    descriptionKey: "callbackInfo.descriptions.customCallbackApi",
   },
   {
     id: "galileo",
@@ -64,7 +78,7 @@ export const CALLBACK_CONFIGS: CallbackConfig[] = [
       GALILEO_USERNAME: "text",
       GALILEO_PASSWORD: "password",
     },
-    description: "Galileo AI Observability Integration",
+    descriptionKey: "callbackInfo.descriptions.galileo",
   },
   {
     id: "datadog",
@@ -75,7 +89,18 @@ export const CALLBACK_CONFIGS: CallbackConfig[] = [
       dd_api_key: "password",
       dd_site: "text",
     },
-    description: "Datadog Logging Integration",
+    descriptionKey: "callbackInfo.descriptions.datadog",
+  },
+  {
+    id: "newrelic",
+    displayName: "New Relic",
+    logo: newrelicLogo.src,
+    supports_key_team_logging: true,
+    dynamic_params: {
+      newrelic_api_key: "password",
+      newrelic_region: "text",
+    },
+    descriptionKey: "callbackInfo.descriptions.newrelic",
   },
   {
     id: "lago",
@@ -86,7 +111,7 @@ export const CALLBACK_CONFIGS: CallbackConfig[] = [
       lago_api_url: "text",
       lago_api_key: "password",
     },
-    description: "Lago Billing Logging Integration",
+    descriptionKey: "callbackInfo.descriptions.lago",
   },
   {
     id: "langfuse",
@@ -97,8 +122,9 @@ export const CALLBACK_CONFIGS: CallbackConfig[] = [
       langfuse_public_key: "text",
       langfuse_secret_key: "password",
       langfuse_host: "text",
+      langfuse_environment: "text",
     },
-    description: "Langfuse v2 Logging Integration",
+    descriptionKey: "callbackInfo.descriptions.langfuse",
   },
   {
     id: "langfuse_otel",
@@ -109,8 +135,13 @@ export const CALLBACK_CONFIGS: CallbackConfig[] = [
       langfuse_public_key: "text",
       langfuse_secret_key: "password",
       langfuse_host: "text",
+      langfuse_environment: "text",
+      langfuse_span_scope: "select",
     },
-    description: "Langfuse v3 OTEL Logging Integration",
+    dynamic_param_options: {
+      langfuse_span_scope: ["full", "llm_only"],
+    },
+    descriptionKey: "callbackInfo.descriptions.langfuseOtel",
   },
   {
     id: "langsmith",
@@ -123,7 +154,7 @@ export const CALLBACK_CONFIGS: CallbackConfig[] = [
       langsmith_base_url: "text",
       langsmith_sampling_rate: "number",
     },
-    description: "Langsmith Logging Integration",
+    descriptionKey: "callbackInfo.descriptions.langsmith",
   },
   {
     id: "openmeter",
@@ -134,7 +165,7 @@ export const CALLBACK_CONFIGS: CallbackConfig[] = [
       openmeter_api_key: "password",
       openmeter_base_url: "text",
     },
-    description: "OpenMeter Logging Integration",
+    descriptionKey: "callbackInfo.descriptions.openmeter",
   },
   {
     id: "otel",
@@ -144,8 +175,34 @@ export const CALLBACK_CONFIGS: CallbackConfig[] = [
     dynamic_params: {
       otel_endpoint: "text",
       otel_headers: "text",
+      otel_exporter_otlp_protocol: "select",
     },
-    description: "OpenTelemetry Logging Integration",
+    descriptionKey: "callbackInfo.descriptions.otel",
+  },
+  {
+    id: "pointfive",
+    displayName: "PointFive",
+    logo: pointfiveLogo.src,
+    supports_key_team_logging: false,
+    dynamic_params: {
+      POINTFIVE_API_KEY: "password",
+      POINTFIVE_API_URL: "text",
+    },
+    descriptionKey: "callbackInfo.descriptions.pointfive",
+  },
+  {
+    id: "zerobus",
+    displayName: "Databricks Zerobus",
+    logo: databricksLogo.src,
+    supports_key_team_logging: false,
+    dynamic_params: {
+      ZEROBUS_WORKSPACE_URL: "text",
+      ZEROBUS_SERVER_ENDPOINT: "text",
+      ZEROBUS_CLIENT_ID: "text",
+      ZEROBUS_CLIENT_SECRET: "password",
+      ZEROBUS_TABLE_NAME: "text",
+    },
+    descriptionKey: "callbackInfo.descriptions.zerobus",
   },
   {
     id: "s3",
@@ -158,7 +215,18 @@ export const CALLBACK_CONFIGS: CallbackConfig[] = [
       aws_secret_access_key: "password",
       aws_region: "text",
     },
-    description: "S3 Bucket (AWS) Logging Integration",
+    descriptionKey: "callbackInfo.descriptions.s3",
+  },
+  {
+    id: "signoz",
+    displayName: "SigNoz",
+    logo: signozLogo.src,
+    supports_key_team_logging: true,
+    dynamic_params: {
+      signoz_ingestion_endpoint: "text",
+      signoz_ingestion_key: "password",
+    },
+    descriptionKey: "callbackInfo.descriptions.signoz",
   },
   {
     id: "SQS",
@@ -171,7 +239,7 @@ export const CALLBACK_CONFIGS: CallbackConfig[] = [
       aws_secret_access_key: "password",
       aws_region: "text",
     },
-    description: "SQS Queue (AWS) Logging Integration",
+    descriptionKey: "callbackInfo.descriptions.sqs",
   },
 ];
 

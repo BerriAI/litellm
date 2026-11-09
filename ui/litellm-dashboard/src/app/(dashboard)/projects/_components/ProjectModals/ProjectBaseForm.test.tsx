@@ -2,12 +2,18 @@ import React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import userEvent from "@testing-library/user-event";
 import { renderWithProviders, screen, waitFor } from "../../../../../../tests/test-utils";
-import { Form } from "antd";
-import { ProjectBaseForm, ProjectFormValues } from "./ProjectBaseForm";
+import { useZodForm } from "@/lib/forms/useZodForm";
+import { ProjectBaseForm } from "./ProjectBaseForm";
+import { emptyProjectFormValues, projectFormSchema } from "./projectFormSchema";
 
 const mockUseTeams = vi.fn();
 vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
   useTeams: () => mockUseTeams(),
+}));
+
+const mockUseAuthorized = vi.fn();
+vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
+  default: () => mockUseAuthorized(),
 }));
 
 vi.mock("@/components/organisms/create_key_button", () => ({
@@ -23,13 +29,15 @@ vi.mock("@/components/key_team_helpers/fetch_available_models_team_key", () => (
 }));
 
 function FormWrapper() {
-  const [form] = Form.useForm<ProjectFormValues>();
-  return <ProjectBaseForm form={form} />;
+  const [advancedOpen, setAdvancedOpen] = React.useState(false);
+  const form = useZodForm(projectFormSchema, { defaultValues: emptyProjectFormValues });
+  return <ProjectBaseForm form={form} advancedOpen={advancedOpen} onAdvancedOpenChange={setAdvancedOpen} />;
 }
 
 describe("ProjectBaseForm", () => {
   beforeEach(() => {
     mockUseTeams.mockReturnValue({ data: [], isLoading: false });
+    mockUseAuthorized.mockReturnValue({ accessToken: "token", userId: "admin-user", userRole: "Admin" });
   });
 
   it("should render", () => {
@@ -81,6 +89,32 @@ describe("ProjectBaseForm", () => {
     expect(screen.getByText("Sales")).toBeInTheDocument();
   });
 
+  it("should offer a team admin only the teams they administer", async () => {
+    const user = userEvent.setup();
+    mockUseAuthorized.mockReturnValue({ accessToken: "token", userId: "team-admin", userRole: "Internal User" });
+    mockUseTeams.mockReturnValue({
+      data: [
+        {
+          team_id: "team-1",
+          team_alias: "Engineering",
+          models: [],
+          members_with_roles: [{ user_id: "team-admin", role: "admin" }],
+        },
+        {
+          team_id: "team-2",
+          team_alias: "Sales",
+          models: [],
+          members_with_roles: [{ user_id: "team-admin", role: "user" }],
+        },
+      ],
+      isLoading: false,
+    });
+    renderWithProviders(<FormWrapper />);
+    await user.click(screen.getByLabelText("Team"));
+    expect(await screen.findByText("Engineering")).toBeInTheDocument();
+    expect(screen.queryByText("Sales")).not.toBeInTheDocument();
+  });
+
   it("should show the Max Budget field", () => {
     renderWithProviders(<FormWrapper />);
     expect(screen.getByPlaceholderText("0.00")).toBeInTheDocument();
@@ -98,5 +132,19 @@ describe("ProjectBaseForm", () => {
     await waitFor(() => {
       expect(screen.getByText("Guardrails")).toBeInTheDocument();
     });
+  });
+
+  it("should show combined, input, and output TPM limit inputs for a model row", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<FormWrapper />);
+    await user.click(screen.getByText("Advanced Settings"));
+    await user.click(screen.getByRole("button", { name: /add model limit/i }));
+
+    expect(screen.getByPlaceholderText("TPM Limit")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("Input TPM Limit")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("Output TPM Limit")).toBeInTheDocument();
+    expect(screen.getByLabelText("TPM Limit")).toBeInTheDocument();
+    expect(screen.getByLabelText("Input TPM Limit")).toBeInTheDocument();
+    expect(screen.getByLabelText("Output TPM Limit")).toBeInTheDocument();
   });
 });

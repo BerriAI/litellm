@@ -1,6 +1,7 @@
 import React from "react";
-import { ClearOutlined } from "@ant-design/icons";
-import { Button as TremorButton } from "@tremor/react";
+import { Trash2 } from "lucide-react";
+import { useTranslation } from "react-i18next";
+import { Button } from "@/components/ui/button";
 import { ConversationPanelProps } from "./types";
 import { useConversation } from "./useConversation";
 import VariableInput from "./VariableInput";
@@ -9,6 +10,7 @@ import VariableWarning from "./VariableWarning";
 import MessageInput from "./MessageInput";
 
 const ConversationPanel: React.FC<ConversationPanelProps> = ({ prompt, accessToken }) => {
+  const { t } = useTranslation();
   const {
     isLoading,
     messages,
@@ -27,7 +29,7 @@ const ConversationPanel: React.FC<ConversationPanelProps> = ({ prompt, accessTok
   } = useConversation(prompt, accessToken);
 
   return (
-    <div className="flex flex-col h-full bg-white">
+    <div className="flex flex-col h-full bg-background">
       {!variablesFilled && (
         <VariableInput
           extractedVariables={extractedVariables}
@@ -37,14 +39,11 @@ const ConversationPanel: React.FC<ConversationPanelProps> = ({ prompt, accessTok
       )}
 
       {messages.length > 0 && (
-        <div className="p-3 border-b border-gray-200 bg-white flex justify-end">
-          <TremorButton
-            onClick={handleClearConversation}
-            className="bg-gray-100 hover:bg-gray-200 text-gray-700 border-gray-300"
-            icon={ClearOutlined}
-          >
-            Clear Chat
-          </TremorButton>
+        <div className="p-3 border-b border-border bg-background flex justify-end">
+          <Button type="button" variant="outline" size="sm" onClick={handleClearConversation}>
+            <Trash2 aria-hidden="true" />
+            {t("prompts.conversation.panel.clearChat")}
+          </Button>
         </div>
       )}
 
@@ -55,7 +54,7 @@ const ConversationPanel: React.FC<ConversationPanelProps> = ({ prompt, accessTok
         messagesEndRef={messagesEndRef}
       />
 
-      <div className="p-4 border-t border-gray-200 bg-white">
+      <div className="p-4 border-t border-border bg-background">
         <VariableWarning extractedVariables={extractedVariables} variables={variables} />
 
         <MessageInput

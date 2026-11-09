@@ -2,10 +2,14 @@
 #    On success, logs events to Promptlayer
 import os
 import traceback
+from typing import Final
 
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import decoded_json_object
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class PromptLayerLogger:
@@ -17,7 +21,7 @@ class PromptLayerLogger:
     def log_event(self, kwargs, response_obj, start_time, end_time, print_verbose):
         # Method definition
         try:
-            new_kwargs = {}
+            new_kwargs: Final = {}
             new_kwargs["model"] = kwargs["model"]
             new_kwargs["messages"] = kwargs["messages"]
 
@@ -43,7 +47,7 @@ class PromptLayerLogger:
             if isinstance(response_obj, BaseModel):
                 response_obj = response_obj.model_dump()
 
-            request_response = litellm.module_level_client.post(
+            request_response: Final = litellm.module_level_client.post(
                 "https://api.promptlayer.com/rest/track-request",
                 json={
                     "function_name": "openai.ChatCompletion.create",
@@ -60,15 +64,15 @@ class PromptLayerLogger:
                 },
             )
 
-            response_json = request_response.json()
-            if not request_response.json().get("success", False):
+            response_json: Final = decoded_json_object(_DECODED_JSON.validate_python(request_response.json()))
+            if not response_json.get("success", False):
                 raise Exception("Promptlayer did not successfully log the response!")
 
             print_verbose(f"Prompt Layer Logging: success - final response object: {request_response.text}")
 
             if "request_id" in response_json:
                 if metadata:
-                    response = litellm.module_level_client.post(
+                    response: Final = litellm.module_level_client.post(
                         "https://api.promptlayer.com/rest/track-metadata",
                         json={
                             "request_id": response_json["request_id"],
@@ -80,4 +84,3 @@ class PromptLayerLogger:
 
         except Exception:
             print_verbose(f"error: Prompt Layer Error - {traceback.format_exc()}")
-            pass

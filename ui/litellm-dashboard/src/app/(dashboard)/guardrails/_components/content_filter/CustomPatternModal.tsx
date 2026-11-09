@@ -1,8 +1,10 @@
 import React from "react";
-import { Typography, Select, Modal, Space, Button, Input } from "antd";
-
-const { Text } = Typography;
-const { Option } = Select;
+import { useTranslation } from "react-i18next";
+import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { ACTION_ITEMS, translateOptions } from "./action_options";
 
 interface CustomPatternModalProps {
   visible: boolean;
@@ -27,51 +29,78 @@ const CustomPatternModal: React.FC<CustomPatternModalProps> = ({
   onAdd,
   onCancel,
 }) => {
+  const { t } = useTranslation();
+  const actionItems = translateOptions(ACTION_ITEMS, t);
   return (
-    <Modal title="Add custom regex pattern" open={visible} onCancel={onCancel} footer={null} width={800}>
-      <Space direction="vertical" style={{ width: "100%" }} size="large">
-        <div>
-          <Text strong>Pattern name</Text>
-          <Input
-            placeholder="e.g., internal_id, employee_code"
-            value={patternName}
-            onChange={(e) => onNameChange(e.target.value)}
-            style={{ marginTop: 8 }}
-          />
+    <Dialog open={visible} onOpenChange={(open) => !open && onCancel()}>
+      <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[800px]">
+        <DialogHeader>
+          <DialogTitle>{t("guardrails.contentFilter.customPatternModal.title")}</DialogTitle>
+        </DialogHeader>
+
+        <div className="space-y-6">
+          <div>
+            <p className="font-semibold">{t("guardrails.contentFilter.customPatternModal.nameLabel")}</p>
+            <Input
+              className="mt-2"
+              placeholder={t("guardrails.contentFilter.customPatternModal.namePlaceholder", {
+                example: "internal_id, employee_code",
+              })}
+              value={patternName}
+              onChange={(e) => onNameChange(e.target.value)}
+            />
+          </div>
+
+          <div>
+            <p className="font-semibold">{t("guardrails.contentFilter.customPatternModal.regexLabel")}</p>
+            <Input
+              className="mt-2"
+              placeholder={t("guardrails.contentFilter.customPatternModal.regexPlaceholder", {
+                example: "ID-[0-9]{6}",
+              })}
+              value={patternRegex}
+              onChange={(e) => onRegexChange(e.target.value)}
+            />
+            <p className="text-xs text-muted-foreground">
+              {t("guardrails.contentFilter.customPatternModal.regexHelp")}
+            </p>
+          </div>
+
+          <div>
+            <p className="font-semibold">{t("guardrails.contentFilter.customPatternModal.actionLabel")}</p>
+            <p className="mt-1 mb-2 text-muted-foreground">
+              {t("guardrails.contentFilter.customPatternModal.actionDescription")}
+            </p>
+            <Select
+              items={actionItems}
+              value={patternAction}
+              onValueChange={(value: string | null) => value && onActionChange(value as "BLOCK" | "MASK")}
+            >
+              <SelectTrigger
+                className="w-full"
+                aria-label={t("guardrails.contentFilter.customPatternModal.actionLabel")}
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {actionItems.map((item) => (
+                  <SelectItem key={item.value} value={item.value}>
+                    {item.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
         </div>
 
-        <div>
-          <Text strong>Regex pattern</Text>
-          <Input
-            placeholder="e.g., ID-[0-9]{6}"
-            value={patternRegex}
-            onChange={(e) => onRegexChange(e.target.value)}
-            style={{ marginTop: 8 }}
-          />
-          <Text type="secondary" style={{ fontSize: 12 }}>
-            Enter a valid regular expression to match sensitive data
-          </Text>
-        </div>
-
-        <div>
-          <Text strong>Action</Text>
-          <Text type="secondary" style={{ display: "block", marginTop: 4, marginBottom: 8 }}>
-            Choose what action the guardrail should take when this pattern is detected
-          </Text>
-          <Select value={patternAction} onChange={onActionChange} style={{ width: "100%" }}>
-            <Option value="BLOCK">Block</Option>
-            <Option value="MASK">Mask</Option>
-          </Select>
-        </div>
-      </Space>
-
-      <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px", marginTop: "24px" }}>
-        <Button onClick={onCancel}>Cancel</Button>
-        <Button type="primary" onClick={onAdd}>
-          Add
-        </Button>
-      </div>
-    </Modal>
+        <DialogFooter>
+          <Button variant="outline" onClick={onCancel}>
+            {t("guardrails.contentFilter.customPatternModal.cancel")}
+          </Button>
+          <Button onClick={onAdd}>{t("guardrails.contentFilter.customPatternModal.add")}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 };
 

@@ -1,25 +1,93 @@
 import React, { useEffect, useState } from "react";
-import { Modal, Form, Button as Button2, Select, Checkbox } from "antd";
-import { Text, TextInput } from "@tremor/react";
+import { FormProvider, useWatch, type UseFormReturn } from "react-hook-form";
+import { useTranslation } from "react-i18next";
 import { getSSOSettings, updateSSOSettings } from "./networking";
-import NotificationsManager from "./molecules/notifications_manager";
+import { CLEARED_SSO_SETTINGS } from "./Settings/AdminSettings/SSOSettings/utils";
+import { toast } from "@/lib/toast";
 import { parseErrorMessage } from "./shared/errorUtils";
-import { Logo } from "@/components/molecules/logo/Logo";
-import { ssoProviderDisplayNames, ssoProviderLogoMap } from "./Settings/AdminSettings/SSOSettings/constants";
-import { renderProviderFields } from "./Settings/AdminSettings/SSOSettings/Modals/BaseSSOSettingsForm";
+import { Button } from "@/components/ui/button";
+import { FieldGroup } from "@/components/ui/field";
+import {
+  GroupClaimField,
+  MappingToggleField,
+  ProxyAdminEmailField,
+  ProxyBaseUrlField,
+  RoleMappingTeamFields,
+  SSOProviderSelectField,
+  buildSSOSettingsPatch,
+  emptySSOSettingsFormValues,
+  renderProviderFields,
+  submitMountedSSOValues,
+  type SSOSettingsFormValues,
+} from "./Settings/AdminSettings/SSOSettings/Modals/BaseSSOSettingsForm";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 interface SSOModalsProps {
   isAddSSOModalVisible: boolean;
   isInstructionsModalVisible: boolean;
   handleAddSSOOk: () => void;
   handleAddSSOCancel: () => void;
-  handleShowInstructions: (formValues: Record<string, any>) => void;
+  handleShowInstructions: (formValues: SSOSettingsFormValues) => void;
   handleInstructionsOk: () => void;
   handleInstructionsCancel: () => void;
-  form: any; // Replace with proper Form type if available
+  form: UseFormReturn<SSOSettingsFormValues>;
   accessToken: string | null;
   ssoConfigured?: boolean; // Add optional prop to indicate if SSO is configured
 }
+
+const buildLegacySSOPayload = (formValues: SSOSettingsFormValues): Record<string, unknown> => {
+  const {
+    proxy_admin_teams,
+    admin_viewer_teams,
+    internal_user_teams,
+    internal_viewer_teams,
+    default_role,
+    group_claim,
+    use_role_mappings,
+    ...rest
+  } = formValues;
+
+  const payload: Record<string, unknown> = {
+    ...rest,
+  };
+
+  if (typeof payload.saml_allow_unsolicited === "boolean") {
+    payload.saml_allow_unsolicited = payload.saml_allow_unsolicited ? "true" : "false";
+  }
+
+  // Add role mappings if use_role_mappings is checked
+  if (use_role_mappings) {
+    // Helper function to split comma-separated string into array
+    const splitTeams = (teams: string | undefined): string[] => {
+      if (!teams || teams.trim() === "") return [];
+      return teams
+        .split(",")
+        .map((team) => team.trim())
+        .filter((team) => team.length > 0);
+    };
+
+    // Map default role display values to backend values
+    const defaultRoleMapping: Record<string, string> = {
+      internal_user_viewer: "internal_user_viewer",
+      internal_user: "internal_user",
+      proxy_admin_viewer: "proxy_admin_viewer",
+      proxy_admin: "proxy_admin",
+    };
+
+    payload.role_mappings = {
+      provider: "generic",
+      group_claim,
+      default_role: (default_role ? defaultRoleMapping[default_role] : undefined) || "internal_user",
+      roles: {
+        proxy_admin: splitTeams(proxy_admin_teams),
+        proxy_admin_viewer: splitTeams(admin_viewer_teams),
+        internal_user: splitTeams(internal_user_teams),
+        internal_user_viewer: splitTeams(internal_viewer_teams),
+      },
+    };
+  }
+  return payload;
+};
 
 const detectSSOProvider = (values: Record<string, unknown>): string | null => {
   if (values.google_client_id) return "google";
@@ -44,7 +112,11 @@ const SSOModals: React.FC<SSOModalsProps> = ({
   accessToken,
   ssoConfigured = false, // Default to false if not provided
 }) => {
+  const { t } = useTranslation();
   const [isClearConfirmModalVisible, setIsClearConfirmModalVisible] = useState(false);
+  const provider = useWatch({ control: form.control, name: "sso_provider" });
+  const useRoleMappings = useWatch({ control: form.control, name: "use_role_mappings" });
+  const showRoleMappingToggle = provider === "okta" || provider === "generic";
 
   // Load existing SSO settings when modal opens
   useEffect(() => {
@@ -79,20 +151,29 @@ const SSOModals: React.FC<SSOModalsProps> = ({
             }
 
             // Set form values with existing data (excluding UI access control fields)
-            const formValues = {
-              sso_provider: selectedProvider,
+            const formValues: SSOSettingsFormValues = {
+              sso_provider: selectedProvider ?? "",
               proxy_base_url: ssoData.values.proxy_base_url,
               user_email: ssoData.values.user_email,
-              ...ssoData.values,
+              google_client_id: ssoData.values.google_client_id,
+              google_client_secret: ssoData.values.google_client_secret,
+              microsoft_client_id: ssoData.values.microsoft_client_id,
+              microsoft_client_secret: ssoData.values.microsoft_client_secret,
+              microsoft_tenant: ssoData.values.microsoft_tenant,
+              generic_client_id: ssoData.values.generic_client_id,
+              generic_client_secret: ssoData.values.generic_client_secret,
+              generic_authorization_endpoint: ssoData.values.generic_authorization_endpoint,
+              generic_token_endpoint: ssoData.values.generic_token_endpoint,
+              generic_userinfo_endpoint: ssoData.values.generic_userinfo_endpoint,
+              generic_scope: ssoData.values.generic_scope,
+              saml_idp_metadata_url: ssoData.values.saml_idp_metadata_url,
+              saml_idp_metadata_xml: ssoData.values.saml_idp_metadata_xml,
+              saml_sp_entity_id: ssoData.values.saml_sp_entity_id,
               ...roleMappingFields,
               saml_allow_unsolicited: ssoData.values.saml_allow_unsolicited === "true",
             };
 
-            // Clear form first, then set values with a small delay to ensure proper initialization
-            form.resetFields();
-            setTimeout(() => {
-              form.setFieldsValue(formValues);
-            }, 100);
+            form.reset({ ...emptySSOSettingsFormValues, ...formValues });
           }
         } catch (error) {
           console.error("Failed to load SSO settings:", error);
@@ -104,63 +185,19 @@ const SSOModals: React.FC<SSOModalsProps> = ({
   }, [isAddSSOModalVisible, accessToken, form]);
 
   // Enhanced form submission handler
-  const handleFormSubmit = async (formValues: Record<string, any>) => {
+  const handleFormSubmit = async (formValues: SSOSettingsFormValues) => {
     if (!accessToken) {
-      NotificationsManager.fromBackend("No access token available");
+      toast.fromError(t("adminPanel.ssoModals.toasts.noAccessToken"));
       return;
     }
 
     try {
-      const {
-        proxy_admin_teams,
-        admin_viewer_teams,
-        internal_user_teams,
-        internal_viewer_teams,
-        default_role,
-        group_claim,
-        use_role_mappings,
-        ...rest
-      } = formValues;
-
-      const payload: any = {
-        ...rest,
-      };
-
-      if (typeof payload.saml_allow_unsolicited === "boolean") {
-        payload.saml_allow_unsolicited = payload.saml_allow_unsolicited ? "true" : "false";
-      }
-
-      // Add role mappings if use_role_mappings is checked
-      if (use_role_mappings) {
-        // Helper function to split comma-separated string into array
-        const splitTeams = (teams: string | undefined): string[] => {
-          if (!teams || teams.trim() === "") return [];
-          return teams
-            .split(",")
-            .map((team) => team.trim())
-            .filter((team) => team.length > 0);
-        };
-
-        // Map default role display values to backend values
-        const defaultRoleMapping: Record<string, string> = {
-          internal_user_viewer: "internal_user_viewer",
-          internal_user: "internal_user",
-          proxy_admin_viewer: "proxy_admin_viewer",
-          proxy_admin: "proxy_admin",
-        };
-
-        payload.role_mappings = {
-          provider: "generic",
-          group_claim,
-          default_role: defaultRoleMapping[default_role] || "internal_user",
-          roles: {
-            proxy_admin: splitTeams(proxy_admin_teams),
-            proxy_admin_viewer: splitTeams(admin_viewer_teams),
-            internal_user: splitTeams(internal_user_teams),
-            internal_user_viewer: splitTeams(internal_viewer_teams),
-          },
-        };
-      }
+      const payload = buildSSOSettingsPatch(
+        { ...emptySSOSettingsFormValues, ...form.formState.defaultValues },
+        formValues,
+        "admin-panel",
+        buildLegacySSOPayload,
+      );
 
       // Save SSO settings using the new API
       await updateSSOSettings(accessToken, payload);
@@ -168,45 +205,22 @@ const SSOModals: React.FC<SSOModalsProps> = ({
       // Continue with the original flow (show instructions)
       handleShowInstructions(formValues);
     } catch (error: unknown) {
-      NotificationsManager.fromBackend("Failed to save SSO settings: " + parseErrorMessage(error));
+      toast.fromError(t("adminPanel.ssoModals.toasts.saveFailed", { error: parseErrorMessage(error) }));
     }
   };
 
   // Handle clearing SSO settings
   const handleClearSSO = async () => {
     if (!accessToken) {
-      NotificationsManager.fromBackend("No access token available");
+      toast.fromError(t("adminPanel.ssoModals.toasts.noAccessToken"));
       return;
     }
 
     try {
-      // Clear all SSO settings
-      const clearSettings = {
-        google_client_id: null,
-        google_client_secret: null,
-        microsoft_client_id: null,
-        microsoft_client_secret: null,
-        microsoft_tenant: null,
-        generic_client_id: null,
-        generic_client_secret: null,
-        generic_authorization_endpoint: null,
-        generic_token_endpoint: null,
-        generic_userinfo_endpoint: null,
-        saml_idp_metadata_url: null,
-        saml_idp_metadata_xml: null,
-        saml_sp_entity_id: null,
-        saml_allow_unsolicited: null,
-        generic_scope: null,
-        proxy_base_url: null,
-        user_email: null,
-        sso_provider: null,
-        role_mappings: null,
-      };
-
-      await updateSSOSettings(accessToken, clearSettings);
+      await updateSSOSettings(accessToken, CLEARED_SSO_SETTINGS);
 
       // Clear the form
-      form.resetFields();
+      form.reset(emptySSOSettingsFormValues);
 
       // Close the confirmation modal
       setIsClearConfirmModalVisible(false);
@@ -214,243 +228,94 @@ const SSOModals: React.FC<SSOModalsProps> = ({
       // Close the main SSO modal and trigger refresh
       handleAddSSOOk();
 
-      NotificationsManager.success("SSO settings cleared successfully");
+      toast.success(t("adminPanel.ssoModals.toasts.clearSuccess"));
     } catch (error) {
       console.error("Failed to clear SSO settings:", error);
-      NotificationsManager.fromBackend("Failed to clear SSO settings");
+      toast.fromError(t("adminPanel.ssoModals.toasts.clearFailed"));
     }
   };
 
   // Helper function to render provider fields
   return (
     <>
-      <Modal
-        title={ssoConfigured ? "Edit SSO Settings" : "Add SSO"}
-        open={isAddSSOModalVisible}
-        width={800}
-        footer={null}
-        onOk={handleAddSSOOk}
-        onCancel={handleAddSSOCancel}
-      >
-        <Form
-          form={form}
-          onFinish={handleFormSubmit}
-          labelCol={{ span: 8 }}
-          wrapperCol={{ span: 16 }}
-          labelAlign="left"
-        >
-          <>
-            <Form.Item
-              label="SSO Provider"
-              name="sso_provider"
-              rules={[{ required: true, message: "Please select an SSO provider" }]}
-            >
-              <Select>
-                {Object.entries(ssoProviderLogoMap).map(([value, logo]) => (
-                  <Select.Option key={value} value={value}>
-                    <div style={{ display: "flex", alignItems: "center", padding: "4px 0" }}>
-                      {logo && (
-                        <Logo
-                          src={logo}
-                          label={ssoProviderDisplayNames[value] || value}
-                          className="h-6 w-6 mr-3 object-contain"
-                        />
-                      )}
-                      <span>
-                        {ssoProviderDisplayNames[value] || value.charAt(0).toUpperCase() + value.slice(1) + " SSO"}
-                      </span>
-                    </div>
-                  </Select.Option>
-                ))}
-              </Select>
-            </Form.Item>
-
-            <Form.Item
-              noStyle
-              shouldUpdate={(prevValues, currentValues) => prevValues.sso_provider !== currentValues.sso_provider}
-            >
-              {({ getFieldValue }) => {
-                const provider = getFieldValue("sso_provider");
-                return provider ? renderProviderFields(provider) : null;
+      <Dialog open={isAddSSOModalVisible} onOpenChange={(open) => !open && handleAddSSOCancel()}>
+        <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[800px]">
+          <DialogHeader>
+            <DialogTitle>
+              {ssoConfigured ? t("adminPanel.ssoModals.titleEdit") : t("adminPanel.ssoModals.titleAdd")}
+            </DialogTitle>
+          </DialogHeader>
+          <FormProvider {...form}>
+            <form
+              onSubmit={(event) => {
+                event.preventDefault();
+                submitMountedSSOValues(form, "admin-panel", handleFormSubmit)();
               }}
-            </Form.Item>
-
-            <Form.Item
-              label="Proxy Admin Email"
-              name="user_email"
-              rules={[{ required: true, message: "Please enter the email of the proxy admin" }]}
             >
-              <TextInput />
-            </Form.Item>
-            <Form.Item
-              label="Proxy Base URL"
-              name="proxy_base_url"
-              normalize={(value) => value?.trim()}
-              rules={[
-                { required: true, message: "Please enter the proxy base url" },
-                {
-                  pattern: /^https?:\/\/.+/,
-                  message: "URL must start with http:// or https://",
-                },
-                {
-                  validator: (_, value) => {
-                    // Only check for trailing slash if the URL starts with http:// or https://
-                    if (value && /^https?:\/\/.+/.test(value) && value.endsWith("/")) {
-                      return Promise.reject("URL must not end with a trailing slash");
-                    }
-                    return Promise.resolve();
-                  },
-                },
-              ]}
-            >
-              <TextInput placeholder="https://example.com" />
-            </Form.Item>
-
-            <Form.Item
-              noStyle
-              shouldUpdate={(prevValues, currentValues) => prevValues.sso_provider !== currentValues.sso_provider}
-            >
-              {({ getFieldValue }) => {
-                const provider = getFieldValue("sso_provider");
-                return provider === "okta" || provider === "generic" ? (
-                  <Form.Item label="Use Role Mappings" name="use_role_mappings" valuePropName="checked">
-                    <Checkbox />
-                  </Form.Item>
-                ) : null;
-              }}
-            </Form.Item>
-
-            <Form.Item
-              noStyle
-              shouldUpdate={(prevValues, currentValues) =>
-                prevValues.use_role_mappings !== currentValues.use_role_mappings
-              }
-            >
-              {({ getFieldValue }) => {
-                const useRoleMappings = getFieldValue("use_role_mappings");
-                return useRoleMappings ? (
-                  <Form.Item
-                    label="Group Claim"
-                    name="group_claim"
-                    rules={[{ required: true, message: "Please enter the group claim" }]}
-                  >
-                    <TextInput />
-                  </Form.Item>
-                ) : null;
-              }}
-            </Form.Item>
-
-            <Form.Item
-              noStyle
-              shouldUpdate={(prevValues, currentValues) =>
-                prevValues.use_role_mappings !== currentValues.use_role_mappings
-              }
-            >
-              {({ getFieldValue }) => {
-                const useRoleMappings = getFieldValue("use_role_mappings");
-                return useRoleMappings ? (
+              <FieldGroup>
+                <SSOProviderSelectField />
+                {provider ? renderProviderFields(provider) : null}
+                <ProxyAdminEmailField />
+                <ProxyBaseUrlField />
+                {showRoleMappingToggle && (
+                  <MappingToggleField name="use_role_mappings" label={t("adminPanel.ssoModals.useRoleMappings")} />
+                )}
+                {useRoleMappings && (
                   <>
-                    <Form.Item label="Default Role" name="default_role" initialValue="Internal User">
-                      <Select>
-                        <Select.Option value="internal_user_viewer">Internal Viewer</Select.Option>
-                        <Select.Option value="internal_user">Internal User</Select.Option>
-                        <Select.Option value="proxy_admin_viewer">Admin Viewer</Select.Option>
-                        <Select.Option value="proxy_admin">Proxy Admin</Select.Option>
-                      </Select>
-                    </Form.Item>
-
-                    <Form.Item label="Proxy Admin Teams" name="proxy_admin_teams">
-                      <TextInput />
-                    </Form.Item>
-
-                    <Form.Item label="Admin Viewer Teams" name="admin_viewer_teams">
-                      <TextInput />
-                    </Form.Item>
-
-                    <Form.Item label="Internal User Teams" name="internal_user_teams">
-                      <TextInput />
-                    </Form.Item>
-
-                    <Form.Item label="Internal Viewer Teams" name="internal_viewer_teams">
-                      <TextInput />
-                    </Form.Item>
+                    <GroupClaimField />
+                    <RoleMappingTeamFields />
                   </>
-                ) : null;
-              }}
-            </Form.Item>
-          </>
-          <div
-            style={{
-              textAlign: "right",
-              marginTop: "10px",
-              display: "flex",
-              justifyContent: "flex-end",
-              alignItems: "center",
-              gap: "8px",
-            }}
-          >
-            {ssoConfigured && (
-              <Button2
-                onClick={() => setIsClearConfirmModalVisible(true)}
-                style={{
-                  backgroundColor: "#6366f1",
-                  borderColor: "#6366f1",
-                  color: "white",
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.backgroundColor = "#5558eb";
-                  e.currentTarget.style.borderColor = "#5558eb";
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.backgroundColor = "#6366f1";
-                  e.currentTarget.style.borderColor = "#6366f1";
-                }}
-              >
-                Clear
-              </Button2>
-            )}
-            <Button2 htmlType="submit">Save</Button2>
-          </div>
-        </Form>
-      </Modal>
+                )}
+              </FieldGroup>
+              <div className="mt-4 flex items-center justify-end gap-2">
+                {ssoConfigured && (
+                  <Button type="button" variant="secondary" onClick={() => setIsClearConfirmModalVisible(true)}>
+                    {t("adminPanel.ssoModals.clear")}
+                  </Button>
+                )}
+                <Button type="submit">{t("adminPanel.ssoModals.save")}</Button>
+              </div>
+            </form>
+          </FormProvider>
+        </DialogContent>
+      </Dialog>
 
       {/* Clear Confirmation Modal */}
-      <Modal
-        title="Confirm Clear SSO Settings"
-        open={isClearConfirmModalVisible}
-        onOk={handleClearSSO}
-        onCancel={() => setIsClearConfirmModalVisible(false)}
-        okText="Yes, Clear"
-        cancelText="Cancel"
-        okButtonProps={{
-          danger: true,
-          style: {
-            backgroundColor: "#dc2626",
-            borderColor: "#dc2626",
-          },
-        }}
-      >
-        <p>Are you sure you want to clear all SSO settings? This action cannot be undone.</p>
-        <p>Users will no longer be able to login using SSO after this change.</p>
-      </Modal>
+      <Dialog open={isClearConfirmModalVisible} onOpenChange={(open) => !open && setIsClearConfirmModalVisible(false)}>
+        <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>{t("adminPanel.ssoModals.clearConfirm.title")}</DialogTitle>
+          </DialogHeader>
+          <p>{t("adminPanel.ssoModals.clearConfirm.message")}</p>
+          <p>{t("adminPanel.ssoModals.clearConfirm.warning")}</p>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsClearConfirmModalVisible(false)}>
+              {t("adminPanel.ssoModals.clearConfirm.cancel")}
+            </Button>
+            <Button onClick={handleClearSSO} variant="destructive">
+              {t("adminPanel.ssoModals.clearConfirm.confirm")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
-      <Modal
-        title="SSO Setup Instructions"
-        open={isInstructionsModalVisible}
-        width={800}
-        footer={null}
-        onOk={handleInstructionsOk}
-        onCancel={handleInstructionsCancel}
-      >
-        <p>Follow these steps to complete the SSO setup:</p>
-        <Text className="mt-2">1. DO NOT Exit this TAB</Text>
-        <Text className="mt-2">2. Open a new tab, visit your proxy base url</Text>
-        <Text className="mt-2">3. Confirm your SSO is configured correctly and you can login on the new Tab</Text>
-        <Text className="mt-2">4. If Step 3 is successful, you can close this tab</Text>
-        <div style={{ textAlign: "right", marginTop: "10px" }}>
-          <Button2 onClick={handleInstructionsOk}>Done</Button2>
-        </div>
-      </Modal>
+      <Dialog open={isInstructionsModalVisible} onOpenChange={(open) => !open && handleInstructionsCancel()}>
+        <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[800px]">
+          <DialogHeader>
+            <DialogTitle>{t("adminPanel.ssoModals.instructions.title")}</DialogTitle>
+          </DialogHeader>
+          <p>{t("adminPanel.ssoModals.instructions.intro")}</p>
+          <p className="text-sm mt-2">{t("adminPanel.ssoModals.instructions.step1")}</p>
+          <p className="text-sm mt-2">{t("adminPanel.ssoModals.instructions.step2")}</p>
+          <p className="text-sm mt-2">{t("adminPanel.ssoModals.instructions.step3")}</p>
+          <p className="text-sm mt-2">{t("adminPanel.ssoModals.instructions.step4")}</p>
+          <div style={{ textAlign: "right", marginTop: "10px" }}>
+            <Button type="button" onClick={handleInstructionsOk}>
+              {t("adminPanel.ssoModals.instructions.done")}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </>
   );
 };

@@ -1,6 +1,9 @@
+import { observeResponseHeaders, type ResponseHeadersListener } from "@/lib/http/observeResponseHeaders";
 import openai from "openai";
-import { getProxyBaseUrl } from "@/components/networking";
-import NotificationManager from "@/components/molecules/notifications_manager";
+import { getGatewayBaseUrl } from "@/components/networking";
+import { buildPlaygroundHeaders, type CustomHeaders } from "@/components/llm_calls/request_headers";
+import i18n from "@/i18n/i18n";
+import { toast } from "@/lib/toast";
 
 export async function makeOpenAIAudioTranscriptionRequest(
   audioFile: File,
@@ -14,19 +17,22 @@ export async function makeOpenAIAudioTranscriptionRequest(
   responseFormat?: string,
   temperature?: number,
   customBaseUrl?: string,
+  customHeaders?: CustomHeaders,
+  onResponseHeaders?: ResponseHeadersListener,
 ) {
   // base url should be the current base_url
   const isLocal = process.env.NODE_ENV === "development";
   if (isLocal !== true) {
     console.log = function () {};
   }
-  const proxyBaseUrl = customBaseUrl || getProxyBaseUrl();
+  const proxyBaseUrl = customBaseUrl || getGatewayBaseUrl();
 
   const client = new openai.OpenAI({
     apiKey: accessToken,
     baseURL: proxyBaseUrl,
     dangerouslyAllowBrowser: true,
-    defaultHeaders: tags && tags.length > 0 ? { "x-litellm-tags": tags.join(",") } : undefined,
+    defaultHeaders: buildPlaygroundHeaders(tags, customHeaders),
+    ...(onResponseHeaders ? { fetch: observeResponseHeaders(onResponseHeaders) } : {}),
   });
 
   try {
@@ -45,7 +51,7 @@ export async function makeOpenAIAudioTranscriptionRequest(
     // The response is a transcription object with a text field
     if (response && response.text) {
       updateUI(response.text, selectedModel);
-      NotificationManager.success(`Audio transcribed successfully`);
+      toast.success(i18n.t("playground.llmCalls.audioTranscriptions.success"));
     } else {
       throw new Error("No transcription text in response");
     }
@@ -54,7 +60,7 @@ export async function makeOpenAIAudioTranscriptionRequest(
 
     if (signal?.aborted) {
     } else {
-      let errorMessage = "Failed to transcribe audio";
+      let errorMessage = i18n.t("playground.llmCalls.audioTranscriptions.defaultError");
 
       if (error?.error?.message) {
         errorMessage = error.error.message;
@@ -62,7 +68,7 @@ export async function makeOpenAIAudioTranscriptionRequest(
         errorMessage = error.message;
       }
 
-      NotificationManager.fromBackend(`Audio transcription failed: ${errorMessage}`);
+      toast.fromError(i18n.t("playground.llmCalls.audioTranscriptions.failed", { message: String(errorMessage) }));
     }
     throw error; // Re-throw to allow the caller to handle the error
   }

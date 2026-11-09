@@ -24,13 +24,13 @@ __all__ = [
     "Policy",
     "PolicyConfig",
     "PolicyGuardrails",
+    # Resolver types
+    "PolicyMatchContext",
     "PolicyScope",
     # Validation types
     "PolicyValidateRequest",
     "PolicyValidationError",
     "PolicyValidationErrorType",
     "PolicyValidationResponse",
-    # Resolver types
-    "PolicyMatchContext",
     "ResolvedPolicy",
 ]
