@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Final
 
-from pydantic import TypeAdapter
+from pydantic import BaseModel, TypeAdapter
 
 from litellm._auth.common_budgets import BudgetFacts, WindowFacts, window_start
 from litellm._auth.failure import NativeAuthFailure
@@ -23,7 +23,7 @@ _WINDOW: Final = TypeAdapter(BudgetWindow)
 
 
 def _window(raw: object) -> BudgetWindow:
-    return _WINDOW.validate_python(raw, from_attributes=True)
+    return _WINDOW.validate_python(raw.model_dump() if isinstance(raw, BaseModel) else raw)
 
 
 def _seconds(duration: str) -> int | None:
