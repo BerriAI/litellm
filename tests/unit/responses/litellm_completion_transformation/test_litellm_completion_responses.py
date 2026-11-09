@@ -5949,12 +5949,12 @@ async def test_bridge_rejects_untranslatable_tool_choice_with_a_400(stream: bool
             model="anthropic/claude-haiku-4-5",
             input="Which fruit is red?",
             tools=[{"type": "function", "name": "lookup_fruit", "parameters": {"type": "object"}}],
-            tool_choice={"type": "file_search"},
+            tool_choice={"type": "web_search_tool"},
             stream=stream,
             api_key="sk-unused",
         )
     assert exc_info.value.status_code == 400
-    assert "tool_choice={'type': 'file_search'}" in str(exc_info.value)
+    assert "tool_choice={'type': 'web_search_tool'}" in str(exc_info.value)
 
 
 def test_cache_control_on_user_message():

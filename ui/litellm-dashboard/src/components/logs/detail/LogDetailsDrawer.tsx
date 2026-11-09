@@ -86,7 +86,10 @@ function TraceEventRow({ row, isSelected, onClick }: TraceEventRowProps) {
         <ClassifyTag origin={row.metadata?.internal_call_origin} className="ml-auto" />
       </div>
       <div className="text-[10px] text-muted-foreground mt-0 flex items-center gap-1.5 font-mono">
-        <span>{durationValue}s</span>
+        <span>
+          {durationValue}
+          {t("logs.detail.drawer.secondsSuffix")}
+        </span>
         {row.spend ? (
           <>
             <span>·</span>
@@ -363,7 +366,7 @@ export function LogDetailsDrawer({
                       ? mcpCount
                       : logsForList.filter((row) => MCP_CALL_TYPES.includes(row.call_type)).length,
                   ].map((count, i) => {
-                    const label = [" LLM", " Agent", " MCP"][i];
+                    const label = [" LLM", t("logs.detail.drawer.agentCountSuffix"), " MCP"][i];
                     return count > 0 ? (
                       <span key={label}>
                         <span className="mx-1.5">·</span>
@@ -377,7 +380,8 @@ export function LogDetailsDrawer({
                   {isSessionMode && (
                     <>
                       <span className="mx-1.5">·</span>
-                      {sessionDurationSeconds}s
+                      {sessionDurationSeconds}
+                      {t("logs.detail.drawer.secondsSuffix")}
                     </>
                   )}
                 </div>

@@ -65,6 +65,7 @@ from litellm.litellm_core_utils.token_counter import (
     offload_token_count,
     split_embedding_input_tokens,
 )
+from litellm.litellm_core_utils.total_deadline import total_timeout_held
 from litellm.llms.azure.ptu_capacity import normalized_tokens
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import (
@@ -3801,6 +3802,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 raise cancellation
 
     @with_service_target(RATE_LIMITS_TARGET)
+    @total_timeout_held()
     async def async_pre_call_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
