@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from "react";
+import { useTranslation } from "react-i18next";
 import { UserGroupIcon } from "@heroicons/react/outline";
 import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { getAgentsList } from "../networking";
+import { InheritedGrant, inheritedGrantTooltip } from "./inheritedGrants";
 
 interface Agent {
   agent_id: string;
@@ -14,16 +16,25 @@ interface Agent {
 interface AgentPermissionsProps {
   agents: string[];
   agentAccessGroups?: string[];
+  inheritedAgents?: InheritedGrant[];
   accessToken?: string | null;
 }
 
-export function AgentPermissions({ agents, agentAccessGroups = [], accessToken }: AgentPermissionsProps) {
+export function AgentPermissions({
+  agents,
+  agentAccessGroups = [],
+  inheritedAgents = [],
+  accessToken,
+}: AgentPermissionsProps) {
+  const { t } = useTranslation();
   const [agentDetails, setAgentDetails] = useState<Agent[]>([]);
+  const inheritedOnlyAgents = inheritedAgents.filter((grant) => !agents.includes(grant.id));
+  const agentIdCount = agents.length + inheritedOnlyAgents.length;
 
   // Fetch agent details when component mounts
   useEffect(() => {
     const fetchAgentDetails = async () => {
-      if (accessToken && agents.length > 0) {
+      if (accessToken && agentIdCount > 0) {
         try {
           const response = await getAgentsList(accessToken);
           if (response && response.agents && Array.isArray(response.agents)) {
@@ -35,7 +46,7 @@ export function AgentPermissions({ agents, agentAccessGroups = [], accessToken }
       }
     };
     fetchAgentDetails();
-  }, [accessToken, agents.length]);
+  }, [accessToken, agentIdCount]);
 
   // Function to get display name for agent
   const getAgentDisplayName = (agentId: string) => {
@@ -47,10 +58,18 @@ export function AgentPermissions({ agents, agentAccessGroups = [], accessToken }
     return agentId;
   };
 
-  // Merge agents and access groups into one list
   const mergedItems = [
-    ...agents.map((agent) => ({ type: "agent", value: agent })),
-    ...agentAccessGroups.map((group) => ({ type: "accessGroup", value: group })),
+    ...agents.map((agent) => ({
+      type: "agent",
+      value: agent,
+      tooltip: t("permissions.agentPermissions.fullId", { id: agent }),
+    })),
+    ...inheritedOnlyAgents.map((grant) => ({
+      type: "agent",
+      value: grant.id,
+      tooltip: inheritedGrantTooltip(grant, t),
+    })),
+    ...agentAccessGroups.map((group) => ({ type: "accessGroup", value: group, tooltip: "" })),
   ];
   const totalCount = mergedItems.length;
 
@@ -58,7 +77,7 @@ export function AgentPermissions({ agents, agentAccessGroups = [], accessToken }
     <div className="space-y-3">
       <div className="flex items-center gap-2">
         <UserGroupIcon className="h-4 w-4 text-purple-600" />
-        <p className="text-sm font-semibold text-foreground">Agents</p>
+        <p className="text-sm font-semibold text-foreground">{t("permissions.agentPermissions.title")}</p>
         <Badge variant="secondary">{totalCount}</Badge>
       </div>
 
@@ -77,7 +96,7 @@ export function AgentPermissions({ agents, agentAccessGroups = [], accessToken }
                             {getAgentDisplayName(item.value)}
                           </span>
                         </TooltipTrigger>
-                        <TooltipContent>{`Full ID: ${item.value}`}</TooltipContent>
+                        <TooltipContent>{item.tooltip}</TooltipContent>
                       </Tooltip>
                     </TooltipProvider>
                   ) : (
@@ -85,7 +104,7 @@ export function AgentPermissions({ agents, agentAccessGroups = [], accessToken }
                       <span className="inline-block w-1.5 h-1.5 bg-success rounded-full shrink-0"></span>
                       <span className="text-sm font-medium text-foreground truncate">{item.value}</span>
                       <span className="ml-1 px-1.5 py-0.5 text-[9px] font-semibold text-success bg-success/10 border border-success/20 rounded-sm uppercase tracking-wide shrink-0">
-                        Group
+                        {t("permissions.agentPermissions.group")}
                       </span>
                     </div>
                   )}
@@ -97,7 +116,7 @@ export function AgentPermissions({ agents, agentAccessGroups = [], accessToken }
       ) : (
         <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-muted border border-border">
           <UserGroupIcon className="h-4 w-4 text-muted-foreground" />
-          <p className="text-muted-foreground text-sm">No agents or access groups configured</p>
+          <p className="text-muted-foreground text-sm">{t("permissions.agentPermissions.empty")}</p>
         </div>
       )}
     </div>

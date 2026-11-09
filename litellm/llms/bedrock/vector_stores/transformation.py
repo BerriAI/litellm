@@ -1,18 +1,22 @@
+from collections.abc import Mapping
 from copy import deepcopy
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final, Protocol, cast, runtime_checkable
 from urllib.parse import urlparse
 
 import httpx
 
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.url_utils import encode_url_path_segment
+from litellm.litellm_core_utils.core_helpers import decoded_json_object
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
 from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreConfig
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.types.integrations.rag.bedrock_knowledgebase import (
     BedrockKBContent,
     BedrockKBResponse,
     BedrockKBRetrievalConfiguration,
     BedrockKBRetrievalQuery,
+    BedrockKBUserContext,
 )
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.vector_stores import (
@@ -31,12 +35,46 @@ else:
     LiteLLMLoggingObj = Any
 
 
+@runtime_checkable
+class _SupportsSetDefault(Protocol):
+    def setdefault(self, key: str, default: object, /) -> object: ...
+
+
+@runtime_checkable
+class _SupportsSetItem(Protocol):
+    def __setitem__(self, key: str, value: object, /) -> None: ...
+
+
+def _setdefault_target(value: object) -> _SupportsSetDefault:
+    if isinstance(value, _SupportsSetDefault):
+        return value
+    raise AttributeError(f"{type(value).__name__!r} object has no attribute 'setdefault'", name="setdefault", obj=value)
+
+
+def _item_assignment_target(value: object) -> _SupportsSetItem:
+    if isinstance(value, _SupportsSetItem):
+        return value
+    raise TypeError(f"'{type(value).__name__}' object does not support item assignment")
+
+
+def _vector_search_configuration(retrieval_config: object) -> Mapping[str, object]:
+    return decoded_json_object(decoded_json_object(retrieval_config).get("vectorSearchConfiguration", {}))
+
+
 class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
     """Vector store configuration for AWS Bedrock Knowledge Bases."""
 
     def __init__(self) -> None:
         BaseVectorStoreConfig.__init__(self)
         BaseAWSLLM.__init__(self)
+
+    def get_error_class(
+        self,
+        error_message: str,
+        status_code: int,
+        headers: dict[str, object] | httpx.Headers,  # mutable-ok: base passes response headers as a dict
+    ) -> BedrockError:
+        return BedrockError(status_code=status_code, message=error_message, headers=headers)
 
     def get_auth_credentials(self, litellm_params: dict) -> BaseVectorStoreAuthCredentials:
         return {}
@@ -185,7 +223,7 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
             aws_region_name=self.get_aws_region_name_for_non_llm_api_calls(aws_region_name=aws_region_name),
             endpoint_type="agent",
         )
-        return f"{endpoint_url}/knowledgebases"
+        return join_api_base(endpoint_url, "knowledgebases")
 
     def transform_search_vector_store_request(
         self,
@@ -195,47 +233,69 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
         api_base: str,
         litellm_logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
-        extra_body: dict[str, Any] | None = None,
+        extra_body: dict[str, object] | None = None,
     ) -> tuple[str, dict]:
         if isinstance(query, list):
             query = " ".join(query)
 
         encoded_vector_store_id: Final = encode_url_path_segment(vector_store_id, field_name="vector_store_id")
-        url: Final = f"{api_base}/{encoded_vector_store_id}/retrieve"
+        url: Final = join_api_base(api_base, f"{encoded_vector_store_id}/retrieve")
 
-        request_body: Final[dict[str, Any]] = {
+        request_body: Final[dict[str, object]] = {
             "retrievalQuery": BedrockKBRetrievalQuery(text=query),
         }
 
-        retrieval_config: dict[str, Any] = {}
-
-        if isinstance(extra_body, dict):
-            retrieval_config = deepcopy(
-                extra_body.get("retrievalConfiguration") or extra_body.get("retrieval_configuration") or {}
-            )
+        retrieval_config: Final[object] = (
+            deepcopy(extra_body.get("retrievalConfiguration") or extra_body.get("retrieval_configuration") or {})
+            if isinstance(extra_body, dict)
+            else {}
+        )
         max_results: Final = vector_store_search_optional_params.get("max_num_results")
         if max_results is not None:
-            existing_number_of_results = retrieval_config.get("vectorSearchConfiguration", {}).get("numberOfResults")
+            existing_number_of_results: Final = _vector_search_configuration(retrieval_config).get("numberOfResults")
             if existing_number_of_results is not None and existing_number_of_results != max_results:
                 verbose_logger.debug(
                     "Overriding extra_body retrievalConfiguration.vectorSearchConfiguration.numberOfResults (%s) with max_num_results=%s",
                     existing_number_of_results,
                     max_results,
                 )
-            retrieval_config.setdefault("vectorSearchConfiguration", {})["numberOfResults"] = max_results
+            _item_assignment_target(_setdefault_target(retrieval_config).setdefault("vectorSearchConfiguration", {}))[
+                "numberOfResults"
+            ] = max_results
         filters: Final = vector_store_search_optional_params.get("filters")
         if filters is not None:
-            existing_filter: Final = retrieval_config.get("vectorSearchConfiguration", {}).get("filter")
+            existing_filter: Final = _vector_search_configuration(retrieval_config).get("filter")
             if existing_filter is not None and existing_filter != filters:
                 verbose_logger.debug(
                     "Overriding extra_body retrievalConfiguration.vectorSearchConfiguration.filter with filters from vector_store_search_optional_params"
                 )
-            retrieval_config.setdefault("vectorSearchConfiguration", {})["filter"] = filters
+            _item_assignment_target(_setdefault_target(retrieval_config).setdefault("vectorSearchConfiguration", {}))[
+                "filter"
+            ] = filters
         if retrieval_config:
             request_body["retrievalConfiguration"] = cast(BedrockKBRetrievalConfiguration, retrieval_config)
+        user_context: Final = self._user_context(extra_body=extra_body, litellm_params=litellm_params)
+        if user_context is not None:
+            request_body["userContext"] = user_context
 
         litellm_logging_obj.model_call_details["query"] = query
         return url, request_body
+
+    @staticmethod
+    def _user_context(
+        extra_body: Mapping[str, object] | None, litellm_params: Mapping[str, object]
+    ) -> BedrockKBUserContext | None:
+        sources: Final = tuple(source for source in (extra_body, litellm_params) if isinstance(source, Mapping))
+        found: Final = next(
+            (
+                source[key]
+                for source in sources
+                for key in ("userContext", "user_context")
+                if source.get(key) is not None
+            ),
+            None,
+        )
+        return None if found is None else cast(BedrockKBUserContext, found)
 
     def sign_request(
         self,
@@ -288,7 +348,7 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
         data_source_id: Final = metadata.get("x-amz-bedrock-kb-data-source-id", "unknown") if metadata else "unknown"
         return f"bedrock-kb-document-{data_source_id}"
 
-    def _get_attributes_from_metadata(self, metadata: dict[str, Any]) -> dict[str, Any]:
+    def _get_attributes_from_metadata(self, metadata: dict[str, object]) -> dict[str, object]:
         """
         Extract all attributes from Bedrock KB metadata.
         Returns a copy of the metadata dictionary.

@@ -1,7 +1,7 @@
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Literal
 
-from pydantic import BaseModel
+from litellm.types.llms.base import LiteLLMBaseModel
 
 if TYPE_CHECKING:
     Protocol = Literal["otlp_grpc", "otlp_http"]
@@ -9,7 +9,7 @@ else:
     Protocol = Any
 
 
-class LangfuseOtelConfig(BaseModel):
+class LangfuseOtelConfig(LiteLLMBaseModel):
     otlp_auth_headers: str | None = None
     protocol: Protocol = "otlp_http"
 
@@ -29,8 +29,11 @@ class LangfuseSpanAttributes(str, Enum):
     # ---- Observation input/output ----
     OBSERVATION_INPUT = "langfuse.observation.input"
     OBSERVATION_OUTPUT = "langfuse.observation.output"
+    OBSERVATION_COMPLETION_START_TIME = "langfuse.observation.completion_start_time"
 
     # ---- Trace-level metadata ----
+    TRACE_INPUT = "langfuse.trace.input"
+    TRACE_OUTPUT = "langfuse.trace.output"
     TRACE_USER_ID = "user.id"
     SESSION_ID = "session.id"
     TAGS = "langfuse.trace.tags"

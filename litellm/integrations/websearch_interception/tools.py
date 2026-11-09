@@ -6,12 +6,67 @@ Native provider tools (like Anthropic's web_search_20250305) are converted
 to this format for consistent interception and execution.
 """
 
-from typing import Any, Final
+from collections.abc import Mapping
+from typing import Final, Protocol
 
 from litellm.constants import LITELLM_WEB_SEARCH_TOOL_NAME
+from litellm.litellm_core_utils.core_helpers import require_attributes
 
 
-def get_litellm_web_search_tool() -> dict[str, Any]:
+class _SupportsGetWithDefault(Protocol):
+    def get(self, key: str, default: str, /) -> object: ...
+
+
+class _SupportsStartswith(Protocol):
+    def startswith(self, prefix: str, /) -> object: ...
+
+
+_WEB_SEARCH_TOOL_DESCRIPTION: Final = (
+    "Search the web for information. Use this when you need current "
+    "information or answers to questions that require up-to-date data."
+)
+
+
+def _web_search_input_schema() -> dict[str, object]:  # mutable-ok: plain-dict tool shape, as the get_* builders
+    """
+    JSON schema for the web search tool's input, shared by every tool format.
+
+    ``query`` stays required so providers and callers that only understand a
+    single query string keep working unchanged. ``objective`` and
+    ``search_queries`` are optional richer inputs; they are forwarded only to
+    search providers that support them (see
+    ``BaseSearchConfig.supports_rich_search_input``).
+    """
+    return {
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "The search query to execute",
+            },
+            "objective": {
+                "type": "string",
+                "description": (
+                    "Natural-language description of the goal behind the "
+                    "search, including any source or freshness requirements."
+                ),
+            },
+            "search_queries": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": (
+                    "Two to five short keyword queries (3-6 words each) "
+                    "covering different angles of the objective, e.g. varying "
+                    "names, synonyms, or phrasings. Provide together with "
+                    "objective for the best results."
+                ),
+            },
+        },
+        "required": ["query"],
+    }
+
+
+def get_litellm_web_search_tool() -> dict[str, object]:
     """
     Get the standard LiteLLM web search tool definition.
 
@@ -32,24 +87,12 @@ def get_litellm_web_search_tool() -> dict[str, Any]:
     """
     return {
         "name": LITELLM_WEB_SEARCH_TOOL_NAME,
-        "description": (
-            "Search the web for information. Use this when you need current "
-            "information or answers to questions that require up-to-date data."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "query": {
-                    "type": "string",
-                    "description": "The search query to execute",
-                }
-            },
-            "required": ["query"],
-        },
+        "description": _WEB_SEARCH_TOOL_DESCRIPTION,
+        "input_schema": _web_search_input_schema(),
     }
 
 
-def get_litellm_web_search_tool_openai() -> dict[str, Any]:
+def get_litellm_web_search_tool_openai() -> dict[str, object]:
     """
     Get the standard LiteLLM web search tool definition in OpenAI format.
 
@@ -64,25 +107,13 @@ def get_litellm_web_search_tool_openai() -> dict[str, Any]:
         "type": "function",
         "function": {
             "name": LITELLM_WEB_SEARCH_TOOL_NAME,
-            "description": (
-                "Search the web for information. Use this when you need current "
-                "information or answers to questions that require up-to-date data."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "The search query to execute",
-                    }
-                },
-                "required": ["query"],
-            },
+            "description": _WEB_SEARCH_TOOL_DESCRIPTION,
+            "parameters": _web_search_input_schema(),
         },
     }
 
 
-def get_litellm_web_search_tool_responses() -> dict[str, Any]:
+def get_litellm_web_search_tool_responses() -> dict[str, object]:
     """
     Get the standard LiteLLM web search tool definition in Responses API format.
 
@@ -97,24 +128,12 @@ def get_litellm_web_search_tool_responses() -> dict[str, Any]:
     return {
         "type": "function",
         "name": LITELLM_WEB_SEARCH_TOOL_NAME,
-        "description": (
-            "Search the web for information. Use this when you need current "
-            "information or answers to questions that require up-to-date data."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "query": {
-                    "type": "string",
-                    "description": "The search query to execute",
-                }
-            },
-            "required": ["query"],
-        },
+        "description": _WEB_SEARCH_TOOL_DESCRIPTION,
+        "parameters": _web_search_input_schema(),
     }
 
 
-def is_web_search_tool_responses(tool: dict[str, Any]) -> bool:
+def is_web_search_tool_responses(tool: Mapping[str, object]) -> bool:
     """
     Check if a tool is a web search tool for the Responses API.
 
@@ -151,7 +170,11 @@ def is_web_search_tool_responses(tool: dict[str, Any]) -> bool:
     return tool_type == "web_search" or tool_type.startswith("web_search_")
 
 
-def is_web_search_tool_chat_completion(tool: dict[str, Any]) -> bool:
+def is_chat_completion_request_web_search_tool(tool: Mapping[str, object]) -> bool:
+    return tool.get("type") == "web_search" or is_web_search_tool(dict(tool))
+
+
+def is_web_search_tool_chat_completion(tool: Mapping[str, object]) -> bool:
     """
     Check if a tool is a web search tool for Chat Completions API (strict check).
 
@@ -184,7 +207,7 @@ def is_web_search_tool_chat_completion(tool: dict[str, Any]) -> bool:
     # Check for OpenAI format: {"type": "function", "function": {"name": "litellm_web_search"}}
     if tool_type == "function" and "function" in tool:
         function_def: Final = tool.get("function", {})
-        function_name: Final = function_def.get("name", "")
+        function_name: Final = require_attributes(function_def, _SupportsGetWithDefault, "get").get("name", "")
         if function_name == LITELLM_WEB_SEARCH_TOOL_NAME:
             return True
 
@@ -195,7 +218,7 @@ def is_web_search_tool_chat_completion(tool: dict[str, Any]) -> bool:
     return False
 
 
-def is_anthropic_native_web_search_tool(tool: dict[str, Any]) -> bool:
+def is_anthropic_native_web_search_tool(tool: Mapping[str, object]) -> bool:
     """
     Check if a tool is an Anthropic-native ``web_search_*`` tool.
 
@@ -216,7 +239,7 @@ def is_anthropic_native_web_search_tool(tool: dict[str, Any]) -> bool:
     return tool_type.startswith("web_search_") and tool_type != "function"
 
 
-def is_web_search_tool(tool: dict[str, Any]) -> bool:
+def is_web_search_tool(tool: Mapping[str, object]) -> bool:
     """
     Check if a tool is a web search tool (native or LiteLLM standard).
 
@@ -268,7 +291,7 @@ def is_web_search_tool(tool: dict[str, Any]) -> bool:
     # Check for OpenAI format: {"type": "function", "function": {"name": "..."}}
     if tool_type == "function" and "function" in tool:
         function_def: Final = tool.get("function", {})
-        function_name: Final = function_def.get("name", "")
+        function_name: Final = require_attributes(function_def, _SupportsGetWithDefault, "get").get("name", "")
         if function_name == LITELLM_WEB_SEARCH_TOOL_NAME:
             return True
 
@@ -277,7 +300,7 @@ def is_web_search_tool(tool: dict[str, Any]) -> bool:
         return True
 
     # Check for native Anthropic web_search_* types
-    if tool_type.startswith("web_search_"):
+    if require_attributes(tool_type, _SupportsStartswith, "startswith").startswith("web_search_"):
         return True
 
     # Check for Claude Code's web_search with a type field

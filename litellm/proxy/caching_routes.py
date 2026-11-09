@@ -1,10 +1,13 @@
-from typing import Any, Final
+from collections.abc import Mapping
+from typing import Final
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import RedisCache
+from litellm.litellm_core_utils.core_helpers import decoded_json_object
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.proxy._types import ProxyErrorTypes, ProxyException
@@ -12,6 +15,7 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.types.caching import CachePingResponse, HealthCheckCacheParams
 
 masker: Final = SensitiveDataMasker()
+_DECODED_JSON: Final = TypeAdapter(object)
 
 router: Final = APIRouter(
     prefix="/cache",
@@ -19,7 +23,11 @@ router: Final = APIRouter(
 )
 
 
-def _extract_cache_params() -> dict[str, Any]:
+def _copy_cache_params(cache_params: Mapping[str, object]) -> Mapping[str, object]:
+    return dict(**cache_params)
+
+
+def _extract_cache_params() -> dict[str, object]:
     """
     Safely extracts and cleans cache parameters.
 
@@ -40,7 +48,9 @@ def _extract_cache_params() -> dict[str, Any]:
         return {}
     try:
         cache_params: Final = vars(litellm.cache.cache)
-        cleaned_params: Final = HealthCheckCacheParams(**cache_params).model_dump() if cache_params else {}
+        cleaned_params: Final = (
+            HealthCheckCacheParams.model_validate(_copy_cache_params(cache_params)).model_dump() if cache_params else {}
+        )
         return masker.mask_dict(cleaned_params)
     except (AttributeError, TypeError) as e:
         verbose_proxy_logger.debug("Error extracting cache params: %s", e)
@@ -56,8 +66,8 @@ async def cache_ping():
     """
     Endpoint for checking if cache can be pinged
     """
-    litellm_cache_params: dict[str, Any] = {}
-    cleaned_cache_params: dict[str, Any] = {}
+    litellm_cache_params: dict[str, object] = {}
+    cleaned_cache_params: dict[str, object] = {}
     if litellm.cache is None:
         raise ProxyException(
             message=safe_dumps(
@@ -133,7 +143,7 @@ async def cache_delete(request: Request):
 
     ```shell
     curl -X POST "http://0.0.0.0:4000/cache/delete" \
-    -H "Authorization: Bearer sk-1234" \
+    -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
     -d '{"keys": ["key1", "key2"]}'
     ```
 
@@ -142,7 +152,7 @@ async def cache_delete(request: Request):
         if litellm.cache is None:
             raise HTTPException(status_code=503, detail="Cache not initialized. litellm.cache is None")
 
-        request_data: Final = await request.json()
+        request_data: Final = decoded_json_object(_DECODED_JSON.validate_python(await request.json()))
         keys: Final = request_data.get("keys", None)
 
         if litellm.cache.type == "redis":
@@ -162,7 +172,7 @@ async def cache_delete(request: Request):
         )
 
 
-def _get_redis_client_info(cache_instance) -> tuple[list, int]:
+def _get_redis_client_info(cache_instance: RedisCache) -> tuple[list[object], int]:
     """
     Helper function to safely get Redis client list information.
 
@@ -226,7 +236,7 @@ async def cache_flushall():
 
     Usage:
     ```
-    curl -X POST http://0.0.0.0:4000/cache/flushall -H "Authorization: Bearer sk-1234"
+    curl -X POST http://0.0.0.0:4000/cache/flushall -H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
     """
     try:

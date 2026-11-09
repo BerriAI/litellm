@@ -1,5 +1,9 @@
 import React from "react";
+import { useTranslation } from "react-i18next";
 import type { ColumnDef } from "@tanstack/react-table";
+import { Route } from "lucide-react";
+import { cn } from "@/lib/cva.config";
+import { Panel } from "../../overview/Primitives";
 import { Meter, MeterIndicator, MeterTrack } from "@/components/shared/Meter";
 import { DataTable } from "@/components/shared/DataTable";
 import { MoneyCell } from "@/components/shared/table_cells";
@@ -21,6 +25,7 @@ interface EndpointRow {
 }
 
 const EndpointUsageTable: React.FC<EndpointUsageTableProps> = ({ endpointData }) => {
+  const { t } = useTranslation();
   const calculateSuccessRate = (successful: number, total: number): number => {
     if (total === 0) return 0;
     return (successful / total) * 100;
@@ -39,12 +44,12 @@ const EndpointUsageTable: React.FC<EndpointUsageTableProps> = ({ endpointData })
 
   const columns: ColumnDef<EndpointRow>[] = [
     {
-      header: "Endpoint",
+      header: t("usage.endpointUsage.table.columns.endpoint"),
       accessorKey: "endpoint",
-      cell: ({ row }) => <span className="font-medium">{row.original.endpoint}</span>,
+      cell: ({ row }) => <span className="font-mono text-xs text-foreground">{row.original.endpoint}</span>,
     },
     {
-      header: "Successful / Failed",
+      header: t("usage.endpointUsage.table.columns.successfulFailed"),
       id: "requests",
       cell: ({ row }) => {
         const record = row.original;
@@ -54,31 +59,37 @@ const EndpointUsageTable: React.FC<EndpointUsageTableProps> = ({ endpointData })
         const totalPercentage = successPercentage + failurePercentage;
 
         return (
-          <div className="flex items-center space-x-3">
-            <div className="flex-1 relative">
-              <Meter value={successPercentage} max={totalPercentage || 100} aria-label="Successful requests">
-                <MeterTrack className={failurePercentage > 0 ? "bg-destructive" : undefined}>
-                  <MeterIndicator className="bg-success" />
+          <div className="flex items-center gap-3">
+            <div className="relative min-w-16 flex-1">
+              <Meter
+                value={successPercentage}
+                max={totalPercentage || 100}
+                aria-label={t("usage.endpointUsage.table.successfulRequests")}
+              >
+                <MeterTrack className={failurePercentage > 0 ? "h-1 bg-destructive/70" : "h-1"}>
+                  <MeterIndicator className="bg-[#2b3fd6]" />
                 </MeterTrack>
               </Meter>
             </div>
-            <div className="flex items-center space-x-2 text-sm min-w-[100px]">
-              <span className="text-success font-medium">{record.successful_requests.toLocaleString()}</span>
+            <div className="flex min-w-[100px] items-center gap-1.5 text-xs tabular-nums">
+              <span className="text-foreground">{record.successful_requests.toLocaleString()}</span>
               <span className="text-muted-foreground">/</span>
-              <span className="text-destructive font-medium">{record.failed_requests.toLocaleString()}</span>
+              <span className={record.failed_requests > 0 ? "text-destructive" : "text-muted-foreground"}>
+                {record.failed_requests.toLocaleString()}
+              </span>
             </div>
           </div>
         );
       },
     },
     {
-      header: "Total Request",
+      header: t("usage.endpointUsage.table.columns.totalRequest"),
       accessorKey: "api_requests",
       meta: { numeric: true },
-      cell: ({ row }) => row.original.api_requests.toLocaleString(),
+      cell: ({ row }) => <span className="tabular-nums">{row.original.api_requests.toLocaleString()}</span>,
     },
     {
-      header: "Success Rate",
+      header: t("usage.endpointUsage.table.columns.successRate"),
       accessorKey: "successRate",
       meta: { numeric: true },
       cell: ({ row }) => {
@@ -86,13 +97,10 @@ const EndpointUsageTable: React.FC<EndpointUsageTableProps> = ({ endpointData })
         const successRateStr = value.toFixed(2);
         return (
           <span
-            className={
-              value >= 95
-                ? "text-success font-medium"
-                : value >= 80
-                  ? "text-warning font-medium"
-                  : "text-destructive font-medium"
-            }
+            className={cn(
+              "tabular-nums",
+              value >= 95 ? "text-foreground" : value >= 80 ? "text-warning" : "text-destructive",
+            )}
           >
             {successRateStr}%
           </span>
@@ -100,13 +108,13 @@ const EndpointUsageTable: React.FC<EndpointUsageTableProps> = ({ endpointData })
       },
     },
     {
-      header: "Total Tokens",
+      header: t("usage.endpointUsage.table.columns.totalTokens"),
       accessorKey: "total_tokens",
       meta: { numeric: true },
-      cell: ({ row }) => row.original.total_tokens.toLocaleString(),
+      cell: ({ row }) => <span className="tabular-nums">{row.original.total_tokens.toLocaleString()}</span>,
     },
     {
-      header: "Spend",
+      header: t("usage.endpointUsage.table.columns.spend"),
       accessorKey: "spend",
       meta: { numeric: true },
       cell: ({ row }) => <MoneyCell value={row.original.spend} decimals={2} />,
@@ -114,13 +122,26 @@ const EndpointUsageTable: React.FC<EndpointUsageTableProps> = ({ endpointData })
   ];
 
   return (
-    <DataTable
-      columns={columns}
-      data={dataSource}
-      getRowId={(row) => row.key}
-      noDataMessage="No endpoint usage data"
-      size="compact"
-    />
+    <Panel
+      icon={Route}
+      title={t("usage.endpointUsage.table.title")}
+      action={
+        <span className="text-xs text-muted-foreground tabular-nums">
+          {dataSource.length.toLocaleString()}{" "}
+          {dataSource.length === 1
+            ? t("usage.endpointUsage.table.endpointSingular")
+            : t("usage.endpointUsage.table.endpointPlural")}
+        </span>
+      }
+    >
+      <DataTable
+        columns={columns}
+        data={dataSource}
+        getRowId={(row) => row.key}
+        noDataMessage={t("usage.endpointUsage.table.noData")}
+        size="compact"
+      />
+    </Panel>
   );
 };
 

@@ -3,7 +3,7 @@ import json
 import os
 import time
 from collections.abc import Coroutine, Mapping
-from typing import Any, Final
+from typing import Final
 from urllib.parse import unquote
 
 import httpx
@@ -53,14 +53,18 @@ class VertexAIFilesHandler(GCSBucketBase):
 
         Sources them from the deployment's ``litellm_params`` (``gcs_bucket_name`` /
         ``bucket_name`` and ``vertex_credentials``), mirroring the write path in
-        ``VertexAIFilesConfig._get_configured_bucket_name``, and falls back to the global
-        ``GCS_BUCKET_NAME`` / ``GCS_PATH_SERVICE_ACCOUNT`` env vars. This lets Vertex batch
-        run entirely at the model-group level, so output written to a per-model bucket is
-        readable without setting the global env vars.
+        ``VertexAIFilesConfig._get_configured_bucket_name``, and falls back to the
+        ``GCS_BATCH_BUCKET_NAME`` then ``GCS_BUCKET_NAME`` / ``GCS_PATH_SERVICE_ACCOUNT``
+        env vars. This lets Vertex batch run entirely at the model-group level, so output
+        written to a per-model bucket is readable without setting the global env vars.
         """
         params: Final[Mapping[str, object]] = litellm_params or {}
         bucket_candidate: Final = params.get("gcs_bucket_name") or params.get("bucket_name")
-        configured_bucket_name = bucket_candidate if isinstance(bucket_candidate, str) else os.getenv("GCS_BUCKET_NAME")
+        configured_bucket_name = (
+            bucket_candidate
+            if isinstance(bucket_candidate, str)
+            else os.getenv("GCS_BATCH_BUCKET_NAME") or os.getenv("GCS_BUCKET_NAME")
+        )
 
         credentials: Final = params.get("vertex_credentials") or vertex_credentials
         if isinstance(credentials, dict):
@@ -193,7 +197,7 @@ class VertexAIFilesHandler(GCSBucketBase):
         timeout: float | httpx.Timeout,
         max_retries: int | None,
         litellm_params: dict | None = None,
-    ) -> HttpxBinaryResponseContent | Coroutine[Any, Any, HttpxBinaryResponseContent]:
+    ) -> HttpxBinaryResponseContent | Coroutine[object, object, HttpxBinaryResponseContent]:
         """
         Download file content from GCS bucket for VertexAI files.
         Supports both sync and async operations.

@@ -7,26 +7,32 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { SimpleTooltip } from "@/components/ui/tooltip";
+import { UserReference } from "@/components/shared/UserReference";
 import { applyPtuModelInfo } from "../utils/ptuModelInfo";
 import { usePtuCostAttributionEnabled } from "@/app/(dashboard)/hooks/uiSettings/usePtuCostAttributionEnabled";
 import { ArrowLeft, CheckIcon, CopyIcon, Info } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { copyToClipboard as utilCopyToClipboard } from "../utils/dataUtils";
 import { stripMaskedSecrets } from "../utils/maskedSecretUtils";
+import { editableModelExtraParams, parseModelExtraParams } from "../utils/modelEditParams";
 import { truncateString } from "../utils/textUtils";
 import AutoRouterConnectionTest from "./add_model/auto_router_connection_test";
-import { AutoRouterTestTarget, buildAutoRouterTestTargets } from "./add_model/build_auto_router_test_targets";
-import { normalizeTierModels } from "./add_model/complexity_router_tiers";
+import { buildSavedJevConnectionTestRequest } from "./add_model/build_auto_router_routing_test_request";
+import { AutoRouterTestTarget, buildComplexityRouterTestTargets } from "./add_model/build_auto_router_test_targets";
 import {
   hasAutoRouterEditor,
   isAutoRouterDeployment,
   isComplexityRouter as isComplexityRouterParams,
 } from "./add_model/auto_router_strategies";
-import { canModifyModel } from "@/utils/modelPermissions";
+import { canEditAutoRouter, canModifyModel } from "@/utils/modelPermissions";
+import { isProxyAdminTierRole, teamsUserCanAssign } from "@/utils/roles";
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import DeleteResourceModal from "./common_components/DeleteResourceModal";
 import EditAutoRouterModal from "./edit_auto_router/edit_auto_router_modal";
 import ReuseCredentialsModal from "./model_add/reuse_credentials";
+import { credentialLabelsByName } from "./shared/credentialOptions";
+import { CredentialIdentity } from "./shared/CredentialIdentity";
 import { toast } from "@/lib/toast";
 import {
   CredentialItem,
@@ -35,17 +41,19 @@ import {
   credentialListCall,
   getGuardrailsList,
   modelDeleteCall,
-  modelInfoV1Call,
   modelPatchUpdateCall,
   tagListCall,
   testConnectionRequest,
 } from "./networking";
-import { Logo } from "@/components/molecules/logo/Logo";
+import { ProviderLogo } from "@/components/molecules/models/ProviderLogo";
+import { ModelPricingSummary } from "@/components/molecules/models/ModelPricingSummary";
 import UpdateModelCredentialsModal from "./update_model_credentials_modal";
-import ModelInfoEditForm, { type ModelEditFormValues, type TouchedPricingField } from "./ModelInfoEditForm";
+import ModelInfoEditForm, { type ModelEditSubmitValues, type TouchedPricingField } from "./ModelInfoEditForm";
 import { Tag } from "./tag_management/types";
 import { getDisplayModelName } from "./view_model/model_name_display";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import KubernetesPodsCard from "./model_info/KubernetesPodsCard";
+import { modelKeys } from "@/app/(dashboard)/hooks/models/useModels";
 
 interface ModelInfoViewProps {
   modelId: string;
@@ -58,60 +66,6 @@ interface ModelInfoViewProps {
   modelAccessGroups: string[] | null;
 }
 
-interface ComplexityRouterTierConfig {
-  tiers?: {
-    SIMPLE?: unknown;
-    MEDIUM?: unknown;
-    COMPLEX?: unknown;
-    REASONING?: unknown;
-  };
-  semantic_keyword_matching?: boolean;
-  embedding_model?: string;
-  default_model?: string;
-}
-
-interface ComplexityRouterModelData {
-  litellm_params?: {
-    complexity_router_config?: ComplexityRouterTierConfig | string;
-    complexity_router_default_model?: string;
-  };
-}
-
-const buildComplexityRouterTestTargets = (
-  modelData: ComplexityRouterModelData | null | undefined,
-): AutoRouterTestTarget[] => {
-  const rawConfig = modelData?.litellm_params?.complexity_router_config;
-  let config: ComplexityRouterTierConfig = {};
-  if (typeof rawConfig === "string") {
-    try {
-      config = JSON.parse(rawConfig);
-    } catch {
-      config = {};
-    }
-  } else if (rawConfig) {
-    config = rawConfig;
-  }
-
-  const tiers: [string, string[]][] =
-    config.tiers && typeof config.tiers === "object"
-      ? Object.entries(config.tiers).map(([tier, models]) => [tier, normalizeTierModels(models)])
-      : [];
-
-  // Mirrors init_complexity_router_deployment (litellm/router.py): litellm_params wins, otherwise
-  // pure tier-derivation. complexity_router_config.default_model is a UI-only marker the backend
-  // never reads — folding it in here could point Test Connection at a model the router never
-  // calls (see PR #36615 discussion).
-  const effectiveDefaultModel = modelData?.litellm_params?.complexity_router_default_model || undefined;
-
-  const testTargetParams = {
-    tiers,
-    semanticMatchingEnabled: Boolean(config.semantic_keyword_matching),
-    embeddingModel: config.embedding_model,
-    defaultModel: effectiveDefaultModel,
-  };
-  return buildAutoRouterTestTargets(testTargetParams);
-};
-
 export default function ModelInfoView({
   modelId,
   onClose,
@@ -122,6 +76,7 @@ export default function ModelInfoView({
   onModelUpdate,
   modelAccessGroups,
 }: ModelInfoViewProps) {
+  const { t } = useTranslation();
   const queryClient = useQueryClient();
   const [localModelData, setLocalModelData] = useState<any>(null);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
@@ -142,7 +97,21 @@ export default function ModelInfoView({
   const [credentialsList, setCredentialsList] = useState<CredentialItem[]>([]);
 
   // Fetch model data using hook
-  const { data: rawModelDataResponse, isLoading: isLoadingModel } = useModelsInfo(1, 50, undefined, modelId);
+  const { data: rawModelDataResponse, isLoading: isLoadingModel } = useModelsInfo(
+    1,
+    50,
+    undefined,
+    modelId,
+    undefined,
+    undefined,
+    undefined,
+    false,
+    undefined,
+    undefined,
+    false,
+    undefined,
+    { useStoredParams: true },
+  );
   const { data: modelCostMapData } = useModelCostMap();
   const { data: modelHubData } = useModelHub();
   const { data: teams } = useTeams();
@@ -169,26 +138,43 @@ export default function ModelInfoView({
   // Keep modelData variable name for backwards compatibility
   const modelData = transformedModelData;
 
-  const canEditModel = canModifyModel({ userRole, userID, isViewOnly }, teams ?? null, {
+  const aliasForTeam = (teamId: string | null | undefined): string | null =>
+    teams?.find((team) => team.team_id === teamId)?.team_alias || null;
+  const teamAlias = aliasForTeam(modelData?.model_info?.team_id);
+  const rawModelInfoEntries = Object.entries(modelData?.model_info ?? {}).flatMap((entry) =>
+    entry[0] === "team_id" && teamAlias ? [entry, ["team_alias", teamAlias]] : [entry],
+  );
+  const rawModelData = modelData && { ...modelData, model_info: Object.fromEntries(rawModelInfoEntries) };
+
+  const isAdmin = userRole === "Admin";
+  const actor = { userRole, userID, isViewOnly };
+  const origin = {
     teamId: modelData?.model_info?.team_id,
     isDbModel: modelData?.model_info?.db_model === true,
-  });
-  const isAdmin = userRole === "Admin";
+    createdBy: modelData?.model_info?.created_by,
+    model: modelData?.litellm_params?.model,
+  };
+  const canEditModel = canModifyModel(actor, teams ?? null, origin);
+  const canEditRouter = canEditAutoRouter(actor, teams ?? null, origin);
+  const assignableTeams = useMemo(() => teamsUserCanAssign(teams ?? null, userRole, userID), [teams, userRole, userID]);
   // Editor-aware on purpose: an adaptive or quality router must not offer Edit Auto Router.
   const isAutoRouterModel = hasAutoRouterEditor(modelData?.litellm_params);
   // Broader than the editor check: adaptive and quality routers equally have no upstream
   // credential, so the credential actions are meaningless for every auto-router strategy.
   const isAnyAutoRouter = isAutoRouterDeployment(modelData?.litellm_params);
-  const deleteLabel = isAnyAutoRouter ? "Delete Auto-Router" : "Delete Model";
+  const deleteLabel = isAnyAutoRouter
+    ? t("modelInfoView.deleteLabel.autoRouter")
+    : t("modelInfoView.deleteLabel.model");
   const isComplexityRouterModel = isComplexityRouterParams(modelData?.litellm_params);
 
   const usingExistingCredential =
     modelData?.litellm_params?.litellm_credential_name != null &&
     modelData?.litellm_params?.litellm_credential_name != undefined;
+  const hasChangedModelId = localModelData?.model_info?.id !== modelData?.model_info?.id;
 
   // Initialize localModelData from modelData when available
   useEffect(() => {
-    if (modelData && !localModelData) {
+    if (modelData && (!localModelData || hasChangedModelId)) {
       let processedModelData = modelData;
       if (!processedModelData.litellm_model_name) {
         processedModelData = {
@@ -203,11 +189,9 @@ export default function ModelInfoView({
       setLocalModelData(processedModelData);
 
       // Check if cache control is enabled
-      if (processedModelData?.litellm_params?.cache_control_injection_points) {
-        setShowCacheControl(true);
-      }
+      setShowCacheControl(Boolean(processedModelData?.litellm_params?.cache_control_injection_points));
     }
-  }, [modelData, localModelData]);
+  }, [modelData, localModelData, hasChangedModelId]);
 
   useEffect(() => {
     const getExistingCredential = async () => {
@@ -219,30 +203,6 @@ export default function ModelInfoView({
         credential_values: existingCredentialResponse["credential_values"],
         credential_info: existingCredentialResponse["credential_info"],
       });
-    };
-
-    const getModelInfo = async () => {
-      if (!accessToken) return;
-      // Only fetch if we don't have modelData yet
-      if (modelData) return;
-      let modelInfoResponse = await modelInfoV1Call(accessToken, modelId);
-      let specificModelData = modelInfoResponse.data[0];
-      if (specificModelData && !specificModelData.litellm_model_name) {
-        specificModelData = {
-          ...specificModelData,
-          litellm_model_name:
-            specificModelData?.litellm_params?.litellm_model_name ??
-            specificModelData?.litellm_params?.model ??
-            specificModelData?.model_info?.key ??
-            null,
-        };
-      }
-      setLocalModelData(specificModelData);
-
-      // Check if cache control is enabled
-      if (specificModelData?.litellm_params?.cache_control_injection_points) {
-        setShowCacheControl(true);
-      }
     };
 
     const fetchGuardrails = async () => {
@@ -277,7 +237,6 @@ export default function ModelInfoView({
     };
 
     getExistingCredential();
-    getModelInfo();
     fetchGuardrails();
     fetchTags();
     fetchCredentials();
@@ -292,32 +251,27 @@ export default function ModelInfoView({
         custom_llm_provider: localModelData.litellm_params?.custom_llm_provider,
       },
     };
-    toast.info("Storing credential..");
+    toast.info(t("modelInfoView.toasts.storingCredential"));
     let credentialResponse = await credentialCreateCall(accessToken, credentialItem);
-    toast.success("Credential stored successfully");
+    toast.success(t("modelInfoView.toasts.credentialStored"));
   };
 
   const handleModelUpdate = async (
-    values: ModelEditFormValues,
+    values: ModelEditSubmitValues,
     isFieldTouched: (field: TouchedPricingField) => boolean,
   ) => {
     try {
       if (!accessToken) return;
       setIsSaving(true);
 
-      // Parse LiteLLM extra params from JSON text area
-      let parsedExtraParams: Record<string, any> = {};
-      try {
-        parsedExtraParams = values.litellm_extra_params ? JSON.parse(values.litellm_extra_params) : {};
-        delete parsedExtraParams.litellm_credential_name;
-      } catch (e) {
-        toast.fromError("Invalid JSON in LiteLLM Params");
-        setIsSaving(false);
+      const parsedExtraParams = parseModelExtraParams(values.litellm_extra_params);
+      if (parsedExtraParams === null) {
+        toast.fromError(t("modelInfoView.toasts.invalidLitellmParams"));
         return;
       }
 
-      let updatedLitellmParams: Record<string, any> = {
-        ...parsedExtraParams,
+      const updatedLitellmParams: Record<string, unknown> = {
+        ...editableModelExtraParams(parsedExtraParams),
         model: values.litellm_model_name,
         api_base: values.api_base,
         custom_llm_provider: values.custom_llm_provider,
@@ -331,55 +285,30 @@ export default function ModelInfoView({
       };
 
       if (isFieldTouched("input_cost")) {
-        if (values.input_cost !== undefined && values.input_cost !== null && values.input_cost !== "") {
-          updatedLitellmParams.input_cost_per_token = Number(values.input_cost) / 1_000_000;
-        } else {
-          // Explicit null signals the backend to remove the pricing override.
-          updatedLitellmParams.input_cost_per_token = null;
-        }
+        updatedLitellmParams.input_cost_per_token = values.input_cost;
       }
       if (isFieldTouched("output_cost")) {
-        if (values.output_cost !== undefined && values.output_cost !== null && values.output_cost !== "") {
-          updatedLitellmParams.output_cost_per_token = Number(values.output_cost) / 1_000_000;
-        } else {
-          updatedLitellmParams.output_cost_per_token = null;
+        updatedLitellmParams.output_cost_per_token = values.output_cost;
+      }
+      if (isFieldTouched("cache_read_cost")) {
+        updatedLitellmParams.cache_read_input_token_cost = values.cache_read_cost;
+      } else if (isFieldTouched("input_cost")) {
+        const cacheReadCost = values.cache_read_cost ?? values.input_cost;
+        if (cacheReadCost !== null) {
+          updatedLitellmParams.cache_read_input_token_cost = cacheReadCost;
         }
       }
-
-      // Cache Read Cost:
-      //   - explicit value provided → use it
-      //   - field touched but empty → explicit null (signals backend to remove override)
-      //   - only input_cost touched → fall back to input_cost (guarded against null)
-      if (isFieldTouched("cache_read_cost") || isFieldTouched("input_cost")) {
-        if (values.cache_read_cost !== undefined && values.cache_read_cost !== null && values.cache_read_cost !== "") {
-          updatedLitellmParams.cache_read_input_token_cost = Number(values.cache_read_cost) / 1_000_000;
-        } else if (isFieldTouched("cache_read_cost")) {
-          updatedLitellmParams.cache_read_input_token_cost = null;
-        } else if (
-          updatedLitellmParams.input_cost_per_token !== undefined &&
-          updatedLitellmParams.input_cost_per_token !== null
-        ) {
-          updatedLitellmParams.cache_read_input_token_cost = updatedLitellmParams.input_cost_per_token;
-        }
-      }
-
-      // Cache Write Cost: explicit value if provided, else explicit null so the
-      // backend removes the override and falls back to the model-level default.
-      // Sending 0 here would persist a zero rate even when the user intended to unset it.
       if (isFieldTouched("cache_write_cost")) {
-        if (
-          values.cache_write_cost !== undefined &&
-          values.cache_write_cost !== null &&
-          values.cache_write_cost !== ""
-        ) {
-          updatedLitellmParams.cache_creation_input_token_cost = Number(values.cache_write_cost) / 1_000_000;
-        } else {
-          updatedLitellmParams.cache_creation_input_token_cost = null;
-        }
+        updatedLitellmParams.cache_creation_input_token_cost = values.cache_write_cost;
+      }
+      if (isFieldTouched("cache_write_cost_1h")) {
+        updatedLitellmParams.cache_creation_input_token_cost_above_1hr = values.cache_write_cost_1h;
       }
 
-      if (values.litellm_credential_name) {
-        updatedLitellmParams.litellm_credential_name = values.litellm_credential_name;
+      const storedCredentialName: string | null = localModelData?.litellm_params?.litellm_credential_name ?? null;
+      const selectedCredentialName: string | null = values.litellm_credential_name ?? null;
+      if (selectedCredentialName !== storedCredentialName) {
+        updatedLitellmParams.litellm_credential_name = selectedCredentialName;
       } else {
         delete updatedLitellmParams.litellm_credential_name;
       }
@@ -396,8 +325,11 @@ export default function ModelInfoView({
       }
 
       // Handle cache control settings
+      const hadInjectionPoints = Boolean(localModelData?.litellm_params?.cache_control_injection_points);
       if (values.cache_control && (values.cache_control_injection_points?.length ?? 0) > 0) {
         updatedLitellmParams.cache_control_injection_points = values.cache_control_injection_points;
+      } else if (hadInjectionPoints) {
+        updatedLitellmParams.cache_control_injection_points = null;
       } else {
         delete updatedLitellmParams.cache_control_injection_points;
       }
@@ -405,7 +337,7 @@ export default function ModelInfoView({
       // Parse the model_info from the form values
       let updatedModelInfo;
       try {
-        updatedModelInfo = values.model_info ? JSON.parse(values.model_info) : modelData.model_info;
+        updatedModelInfo = values.model_info ? JSON.parse(values.model_info) : modelData?.model_info;
         // Update access_groups from the form
         if (values.model_access_group) {
           updatedModelInfo = {
@@ -420,21 +352,31 @@ export default function ModelInfoView({
             health_check_model: values.health_check_model,
           };
         }
+        if (values.team_id) updatedModelInfo = { ...updatedModelInfo, team_id: values.team_id };
         updatedModelInfo = applyPtuModelInfo(updatedModelInfo, values, ptuCostAttributionEnabled);
       } catch (e) {
-        toast.fromError("Invalid JSON in Model Info");
+        toast.fromError(t("modelInfoView.toasts.invalidModelInfo"));
         return;
       }
 
+      const paramsToRemove = Object.keys(editableModelExtraParams(localModelData?.litellm_params ?? {})).filter(
+        (key) => !Object.prototype.hasOwnProperty.call(parsedExtraParams, key),
+      );
       // Final guard: never PATCH a redacted secret. The /model/info snapshot that
-      // seeds this form masks secrets, and any save re-sends the whole params blob;
+      // seeds this form masks secrets;
       // without this strip a masked value would be re-encrypted over the real secret.
       // Credential rotation has its own dedicated path (UpdateModelCredentialsModal).
       const safeLitellmParams = stripMaskedSecrets(updatedLitellmParams);
+      const localLitellmParams = Object.fromEntries(
+        Object.entries({ ...localModelData?.litellm_params, ...safeLitellmParams }).filter(
+          ([key]) => key !== "litellm_credential_name" && !paramsToRemove.includes(key),
+        ),
+      );
 
       const updateData = {
         model_name: values.model_name,
         litellm_params: safeLitellmParams,
+        ...(paramsToRemove.length > 0 && { litellm_params_to_remove: paramsToRemove }),
         model_info: updatedModelInfo,
       };
 
@@ -444,7 +386,10 @@ export default function ModelInfoView({
         ...localModelData,
         model_name: values.model_name,
         litellm_model_name: values.litellm_model_name,
-        litellm_params: safeLitellmParams,
+        litellm_params:
+          selectedCredentialName === null
+            ? localLitellmParams
+            : { ...localLitellmParams, litellm_credential_name: selectedCredentialName },
         model_info: updatedModelInfo,
       };
 
@@ -454,11 +399,11 @@ export default function ModelInfoView({
         onModelUpdate(updatedModelData);
       }
 
-      toast.success("Model settings updated successfully");
+      toast.success(t("modelInfoView.toasts.updateSuccess"));
       setIsEditing(false);
     } catch (error) {
       console.error("Error updating model:", error);
-      toast.fromError("Failed to update model settings");
+      toast.fromError(error);
     } finally {
       setIsSaving(false);
     }
@@ -470,9 +415,9 @@ export default function ModelInfoView({
       <div className="p-4">
         <Button variant="ghost" onClick={onClose} className="mb-4">
           <ArrowLeft className="size-4" />
-          Back to Models
+          {t("modelInfoView.backToModels")}
         </Button>
-        <p className="text-sm">Loading...</p>
+        <p className="text-sm">{t("modelInfoView.loading")}</p>
       </div>
     );
   }
@@ -483,9 +428,9 @@ export default function ModelInfoView({
       <div className="p-4">
         <Button variant="ghost" onClick={onClose} className="mb-4">
           <ArrowLeft className="size-4" />
-          Back to Models
+          {t("modelInfoView.backToModels")}
         </Button>
-        <p className="text-sm">Model not found</p>
+        <p className="text-sm">{t("modelInfoView.notFound")}</p>
       </div>
     );
   }
@@ -495,7 +440,7 @@ export default function ModelInfoView({
     if (isComplexityRouterModel) {
       const targets = buildComplexityRouterTestTargets(localModelData ?? modelData);
       if (targets.length === 0) {
-        toast.warning("No complexity tiers are configured yet, so there is nothing to test.");
+        toast.warning(t("modelInfoView.toasts.noComplexityTiers"));
         return;
       }
       setAutoRouterTestTargets(targets);
@@ -504,7 +449,7 @@ export default function ModelInfoView({
       return;
     }
     try {
-      toast.info("Testing connection...");
+      toast.info(t("modelInfoView.toasts.testingConnection"));
       const response = await testConnectionRequest(
         accessToken,
         {
@@ -519,21 +464,19 @@ export default function ModelInfoView({
           // backend silently falls back to deployments[0] and probes
           // the wrong endpoint.
           id: localModelData.model_info?.id,
-          mode: localModelData.model_info?.mode,
         },
-        localModelData.model_info?.mode,
       );
 
       if (response.status === "success") {
-        toast.success("Connection test successful!");
+        toast.success(t("modelInfoView.toasts.connectionSuccess"));
       } else {
         throw new Error(response?.result?.error || response?.message || "Unknown error");
       }
     } catch (error) {
       if (error instanceof Error) {
-        toast.error("Error testing connection: " + truncateString(error.message, 100));
+        toast.error(t("modelInfoView.toasts.connectionError", { error: truncateString(error.message, 100) }));
       } else {
-        toast.error("Error testing connection: " + String(error));
+        toast.error(t("modelInfoView.toasts.connectionError", { error: String(error) }));
       }
     }
   };
@@ -543,7 +486,7 @@ export default function ModelInfoView({
       setDeleteLoading(true);
       if (!accessToken) return;
       await modelDeleteCall(accessToken, modelId);
-      toast.success("Model deleted successfully");
+      toast.success(t("modelInfoView.toasts.deleteSuccess"));
 
       if (onModelUpdate) {
         onModelUpdate({
@@ -555,7 +498,7 @@ export default function ModelInfoView({
       onClose();
     } catch (error) {
       console.error("Error deleting the model:", error);
-      toast.fromError("Failed to delete model");
+      toast.fromError(t("modelInfoView.toasts.deleteFailed"));
     } finally {
       setDeleteLoading(false);
       setIsDeleteModalOpen(false);
@@ -594,15 +537,17 @@ export default function ModelInfoView({
         <div>
           <Button variant="ghost" onClick={onClose} className="mb-4">
             <ArrowLeft className="size-4" />
-            Back to Models
+            {t("modelInfoView.backToModels")}
           </Button>
-          <h2 className="text-xl font-semibold">Public Model Name: {getDisplayModelName(modelData)}</h2>
+          <h2 className="text-xl font-semibold">
+            {t("modelInfoView.header.publicModelName", { name: getDisplayModelName(modelData) })}
+          </h2>
           <div className="flex items-center cursor-pointer">
             <span className="text-sm text-muted-foreground font-mono">{modelData.model_info.id}</span>
             <Button
               variant="ghost"
               size="icon-xs"
-              aria-label="Copy model ID"
+              aria-label={t("modelInfoView.header.copyModelId")}
               onClick={() => copyToClipboard(modelData.model_info.id, "model-id")}
               className={`left-2 z-raised transition-all duration-200 ${
                 copiedStates["model-id"]
@@ -623,7 +568,7 @@ export default function ModelInfoView({
               data-testid="test-connection-button"
             >
               <RefreshIcon className="h-4 w-4" />
-              Test Connection
+              {t("modelInfoView.header.testConnection")}
             </Button>
           )}
 
@@ -637,7 +582,7 @@ export default function ModelInfoView({
                 data-testid="update-api-key-button"
               >
                 <KeyIcon className="h-4 w-4" />
-                Update API Key
+                {t("modelInfoView.header.updateApiKey")}
               </Button>
 
               <Button
@@ -648,7 +593,7 @@ export default function ModelInfoView({
                 data-testid="reuse-credentials-button"
               >
                 <KeyIcon className="h-4 w-4" />
-                Re-use Credentials
+                {t("modelInfoView.header.reuseCredentials")}
               </Button>
             </>
           )}
@@ -668,10 +613,10 @@ export default function ModelInfoView({
       <Tabs defaultValue="overview">
         <TabsList variant="line" className="mb-6 h-auto w-full justify-start rounded-none border-b p-0">
           <TabsTrigger value="overview" className="flex-none rounded-none px-4 py-2">
-            Overview
+            {t("modelInfoView.tabs.overview")}
           </TabsTrigger>
           <TabsTrigger value="raw" className="flex-none rounded-none px-4 py-2">
-            Raw JSON
+            {t("modelInfoView.tabs.rawJson")}
           </TabsTrigger>
         </TabsList>
 
@@ -680,28 +625,34 @@ export default function ModelInfoView({
             {/* Overview Grid */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 mb-6">
               <Card className="block p-6">
-                <p className="text-sm">Provider</p>
+                <p className="text-sm">{t("modelInfoView.overview.provider")}</p>
                 <div className="mt-2 flex items-center space-x-2">
-                  {modelData.provider && <Logo provider={modelData.provider} className="w-4 h-4" />}
-                  <h3 className="text-lg font-medium">{modelData.provider || "Not Set"}</h3>
+                  {modelData.provider && (
+                    <ProviderLogo
+                      provider={modelData.provider}
+                      logoUrl={modelData.model_info.logo_url}
+                      className="w-4 h-4"
+                    />
+                  )}
+                  <h3 className="text-lg font-medium">{modelData.provider || t("modelInfoView.notSet")}</h3>
                 </div>
               </Card>
               <Card className="block p-6">
-                <p className="text-sm">LiteLLM Model</p>
+                <p className="text-sm">{t("modelInfoView.overview.litellmModel")}</p>
                 <div className="mt-2 overflow-hidden">
-                  <SimpleTooltip content={modelData.litellm_model_name || "Not Set"} className="w-full min-w-0">
+                  <SimpleTooltip
+                    content={modelData.litellm_model_name || t("modelInfoView.notSet")}
+                    className="w-full min-w-0"
+                  >
                     <div className="break-all text-sm font-medium leading-relaxed cursor-pointer">
-                      {modelData.litellm_model_name || "Not Set"}
+                      {modelData.litellm_model_name || t("modelInfoView.notSet")}
                     </div>
                   </SimpleTooltip>
                 </div>
               </Card>
               <Card className="block p-6">
-                <p className="text-sm">Pricing</p>
-                <div className="mt-2">
-                  <p className="text-sm">Input: ${modelData.input_cost}/1M tokens</p>
-                  <p className="text-sm">Output: ${modelData.output_cost}/1M tokens</p>
-                </div>
+                <p className="text-sm">{t("modelInfoView.overview.pricing")}</p>
+                <ModelPricingSummary model={modelData} />
               </Card>
             </div>
 
@@ -716,14 +667,14 @@ export default function ModelInfoView({
                     d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
                   />
                 </svg>
-                Created At{" "}
+                {t("modelInfoView.audit.createdAt")}{" "}
                 {modelData.model_info.created_at
                   ? new Date(modelData.model_info.created_at).toLocaleDateString("en-US", {
                       month: "short",
                       day: "numeric",
                       year: "numeric",
                     })
-                  : "Not Set"}
+                  : t("modelInfoView.notSet")}
               </div>
               <div className="flex items-center gap-x-2">
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -734,28 +685,39 @@ export default function ModelInfoView({
                     d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"
                   />
                 </svg>
-                Created By {modelData.model_info.created_by || "Not Set"}
+                {t("modelInfoView.audit.createdBy")}{" "}
+                {modelData.model_info.created_by ? (
+                  <UserReference userId={modelData.model_info.created_by} />
+                ) : (
+                  t("modelInfoView.notSet")
+                )}
               </div>
             </div>
+
+            {modelData?.litellm_params?.kubernetes_pod_discovery === true && isProxyAdminTierRole(userRole ?? "") && (
+              <div className="mb-6">
+                <KubernetesPodsCard modelId={modelId} />
+              </div>
+            )}
 
             {/* Settings Card */}
             <Card className="block p-6">
               <div className="flex justify-between items-center mb-4">
-                <h3 className="text-lg font-medium">Model Settings</h3>
+                <h3 className="text-lg font-medium">{t("modelInfoView.settings.title")}</h3>
                 <div className="flex gap-2">
-                  {isAutoRouterModel && canEditModel && !isEditing && (
+                  {isAutoRouterModel && canEditRouter && !isEditing && (
                     <Button onClick={() => setIsAutoRouterModalOpen(true)} className="flex items-center">
-                      Edit Auto Router
+                      {t("modelInfoView.settings.editAutoRouter")}
                     </Button>
                   )}
                   {canEditModel ? (
                     !isEditing && (
                       <Button onClick={() => setIsEditing(true)} className="flex items-center">
-                        Edit Settings
+                        {t("modelInfoView.settings.editSettings")}
                       </Button>
                     )
                   ) : (
-                    <SimpleTooltip content="Only DB models can be edited. You must be an admin or the creator of the model to edit it.">
+                    <SimpleTooltip content={t("modelInfoView.settings.readOnlyHint")}>
                       <Info className="size-4 text-muted-foreground" />
                     </SimpleTooltip>
                   )}
@@ -763,8 +725,10 @@ export default function ModelInfoView({
               </div>
               {localModelData ? (
                 <ModelInfoEditForm
+                  key={localModelData.model_info?.id}
                   localModelData={localModelData}
                   modelData={modelData}
+                  teamAlias={aliasForTeam(localModelData.model_info?.team_id)}
                   accessToken={accessToken}
                   isEditing={isEditing}
                   isSaving={isSaving}
@@ -779,16 +743,19 @@ export default function ModelInfoView({
                   tagsList={tagsList}
                   credentialsList={credentialsList}
                   healthCheckModelOptions={healthCheckModelOptions}
+                  teams={assignableTeams}
                 />
               ) : (
-                <p className="text-sm">Loading...</p>
+                <p className="text-sm">{t("modelInfoView.loading")}</p>
               )}
             </Card>
           </TabsContent>
 
           <TabsContent value="raw" keepMounted>
             <Card className="block p-6">
-              <pre className="bg-muted p-4 rounded-sm text-xs overflow-auto">{JSON.stringify(modelData, null, 2)}</pre>
+              <pre className="bg-muted p-4 rounded-sm text-xs overflow-auto">
+                {JSON.stringify(rawModelData, null, 2)}
+              </pre>
             </Card>
           </TabsContent>
         </div>
@@ -797,25 +764,29 @@ export default function ModelInfoView({
       <DeleteResourceModal
         isOpen={isDeleteModalOpen}
         title={deleteLabel}
-        alertMessage="This action cannot be undone."
-        message={`Are you sure you want to delete this ${isAnyAutoRouter ? "auto-router" : "model"}?`}
-        resourceInformationTitle="Model Information"
+        alertMessage={t("modelInfoView.deleteModal.alert")}
+        message={t("modelInfoView.deleteModal.message", {
+          resource: isAnyAutoRouter
+            ? t("modelInfoView.deleteModal.resourceAutoRouter")
+            : t("modelInfoView.deleteModal.resourceModel"),
+        })}
+        resourceInformationTitle={t("modelInfoView.deleteModal.infoTitle")}
         resourceInformation={[
           {
-            label: "Model Name",
-            value: modelData?.model_name || "Not Set",
+            label: t("modelInfoView.deleteModal.modelName"),
+            value: modelData?.model_name || t("modelInfoView.notSet"),
           },
           {
-            label: "LiteLLM Model Name",
-            value: modelData?.litellm_model_name || "Not Set",
+            label: t("modelInfoView.deleteModal.litellmModelName"),
+            value: modelData?.litellm_model_name || t("modelInfoView.notSet"),
           },
           {
-            label: "Provider",
-            value: modelData?.provider || "Not Set",
+            label: t("modelInfoView.deleteModal.provider"),
+            value: modelData?.provider || t("modelInfoView.notSet"),
           },
           {
-            label: "Created By",
-            value: modelData?.model_info?.created_by || "Not Set",
+            label: t("modelInfoView.deleteModal.createdBy"),
+            value: modelData?.model_info?.created_by || t("modelInfoView.notSet"),
           },
         ]}
         onCancel={() => setIsDeleteModalOpen(false)}
@@ -835,12 +806,18 @@ export default function ModelInfoView({
         <Dialog open={isCredentialModalOpen} onOpenChange={(open) => !open && setIsCredentialModalOpen(false)}>
           <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto">
             <DialogHeader>
-              <DialogTitle>Using Existing Credential</DialogTitle>
+              <DialogTitle>{t("modelInfoView.existingCredentialDialog.title")}</DialogTitle>
             </DialogHeader>
-            <p className="text-sm">{modelData.litellm_params.litellm_credential_name}</p>
+            <CredentialIdentity
+              className="text-sm"
+              credentialName={modelData.litellm_params.litellm_credential_name ?? ""}
+              label={credentialLabelsByName(credentialsList).get(
+                modelData.litellm_params.litellm_credential_name ?? "",
+              )}
+            />
             <DialogFooter>
               <Button variant="outline" onClick={() => setIsCredentialModalOpen(false)}>
-                Cancel
+                {t("modelInfoView.existingCredentialDialog.cancel")}
               </Button>
             </DialogFooter>
           </DialogContent>
@@ -854,7 +831,7 @@ export default function ModelInfoView({
           accessToken={accessToken}
           modelId={modelId}
           onUpdated={() => {
-            queryClient.invalidateQueries({ queryKey: ["models", "list"] });
+            queryClient.invalidateQueries({ queryKey: modelKeys.lists() });
           }}
         />
       )}
@@ -867,23 +844,29 @@ export default function ModelInfoView({
         modelData={localModelData || modelData}
         accessToken={accessToken || ""}
         userRole={userRole || ""}
+        isMemberManaged={!canEditModel}
       />
 
       <Dialog open={isAutoRouterTestModalOpen} onOpenChange={(open) => !open && setIsAutoRouterTestModalOpen(false)}>
         <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[700px]">
           <DialogHeader>
-            <DialogTitle>Connection Test Results</DialogTitle>
+            <DialogTitle>{t("modelInfoView.connectionTestDialog.title")}</DialogTitle>
           </DialogHeader>
           {isAutoRouterTestModalOpen && accessToken && (
             <AutoRouterConnectionTest
               key={autoRouterTestId}
               accessToken={accessToken}
               targets={autoRouterTestTargets}
+              jevRequest={buildSavedJevConnectionTestRequest(
+                (localModelData ?? modelData)?.litellm_params?.complexity_router_config,
+                (localModelData ?? modelData)?.model_info?.id,
+                (localModelData ?? modelData)?.model_info?.team_id,
+              )}
             />
           )}
           <DialogFooter>
             <Button variant="outline" onClick={() => setIsAutoRouterTestModalOpen(false)}>
-              Close
+              {t("modelInfoView.connectionTestDialog.close")}
             </Button>
           </DialogFooter>
         </DialogContent>

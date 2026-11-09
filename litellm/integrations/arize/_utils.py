@@ -1,18 +1,21 @@
 import json
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Final, Protocol
 
-from typing_extensions import override
+from pydantic import ConfigDict, TypeAdapter
+from typing_extensions import ReadOnly, TypedDict, override
 
 from litellm._logging import verbose_logger
 from litellm.integrations.opentelemetry_utils.base_otel_llm_obs_attributes import (
     BaseLLMObsOTELAttributes,
     safe_set_attribute,
 )
+from litellm.litellm_core_utils.core_helpers import iter_items, require_attributes, subscript
 from litellm.litellm_core_utils.redact_messages import (
     should_redact_message_logging,
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.llms.anthropic.common_utils import tool_calls_with_server_tool_calls
 from litellm.types.utils import CallTypes, StandardLoggingMCPToolCall, StandardLoggingPayload
 
 if TYPE_CHECKING:
@@ -29,33 +32,43 @@ from litellm.integrations._types.open_inference import (
     ToolCallAttributes,
 )
 
+_JSON_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
+
+
+class _SupportsGetWithDefault(Protocol):
+    def get(self, key: str, default: object = None, /) -> object: ...
+
 
 class ArizeOTELAttributes(BaseLLMObsOTELAttributes):
     @staticmethod
     @override
-    def set_messages(span: "Span", kwargs: dict[str, Any]):
+    def set_messages(span: "Span", kwargs: Mapping[str, object]):
         messages: Final = kwargs.get("messages")
 
         # for /chat/completions
         # https://docs.arize.com/arize/large-language-models/tracing/semantic-conventions
         if messages:
-            last_message: Final = messages[-1]
+            last_message: Final = subscript(messages, -1)
             safe_set_attribute(
                 span,
                 SpanAttributes.INPUT_VALUE,
-                last_message.get("content", ""),
+                require_attributes(last_message, _SupportsGetWithDefault, "get").get("content", ""),
             )
 
             # LLM_INPUT_MESSAGES shows up under `input_messages` tab on the span page.
-            for idx, msg in enumerate(messages):
+            for idx, msg in enumerate(iter_items(messages)):
                 prefix = f"{SpanAttributes.LLM_INPUT_MESSAGES}.{idx}"
                 # Set the role per message.
-                safe_set_attribute(span, f"{prefix}.{MessageAttributes.MESSAGE_ROLE}", msg.get("role"))
+                safe_set_attribute(
+                    span,
+                    f"{prefix}.{MessageAttributes.MESSAGE_ROLE}",
+                    require_attributes(msg, _SupportsGetWithDefault, "get").get("role"),
+                )
                 # Set the content per message.
                 safe_set_attribute(
                     span,
                     f"{prefix}.{MessageAttributes.MESSAGE_CONTENT}",
-                    msg.get("content", ""),
+                    require_attributes(msg, _SupportsGetWithDefault, "get").get("content", ""),
                 )
 
                 # Additive: emit structured tool_calls / multimodal content
@@ -492,12 +505,12 @@ def _sanitize_optional_params(optional_params: dict | None) -> dict:
     return optional_params
 
 
-def _set_metadata_attributes(span: "Span", metadata: Any | None, span_attrs) -> None:
+def _set_metadata_attributes(span: "Span", metadata: object | None, span_attrs) -> None:
     if metadata is not None:
         safe_set_attribute(span, span_attrs.METADATA, safe_dumps(metadata))
 
 
-def _extract_metadata_tools(metadata: Any | None) -> list | None:
+def _extract_metadata_tools(metadata: object | None) -> list | None:
     if not isinstance(metadata, dict):
         return None
     llm_obj: Final = metadata.get("llm")
@@ -609,9 +622,7 @@ def _coerce_response_obj_for_attrs(response_obj):
     text: Final = getattr(response_obj, "text", None)
     if isinstance(text, str) and text:
         try:
-            parsed: Final = json.loads(text)
-            if isinstance(parsed, dict):
-                return parsed
+            return _JSON_OBJECT.validate_python(json.loads(text))
         except Exception:
             pass
     return response_obj
@@ -662,15 +673,29 @@ def _to_plain_dict(value):
 
 
 def _get_tool_calls(message) -> list | None:
-    """Return ``message.tool_calls`` only when it's a non-empty list.
-
-    Works for dicts and Pydantic message objects via ``_safe_get``.
+    """Return the message's tool calls, Claude's server tool calls first, or
+    ``None`` when there are none. Works for dicts and Pydantic message objects.
     """
-    tool_calls: Final = _safe_get(message, "tool_calls")
-    return tool_calls if isinstance(tool_calls, list) and tool_calls else None
+    tool_calls: Final = tool_calls_with_server_tool_calls(message)
+    return list(tool_calls) if tool_calls else None
 
 
-def _normalize_tool_call(raw_tc) -> dict[str, Any] | None:
+class _NormalizedToolCallFunction(TypedDict):
+    """The ``function`` sub-object of a normalized tool call."""
+
+    name: ReadOnly[object]
+    arguments: ReadOnly[object]
+
+
+class _NormalizedToolCall(TypedDict):
+    """A tool call reduced to the stable shape the OpenInference emitters read."""
+
+    id: ReadOnly[object]
+    type: ReadOnly[object]
+    function: ReadOnly[_NormalizedToolCallFunction]
+
+
+def _normalize_tool_call(raw_tc) -> _NormalizedToolCall | None:
     """Normalize a single tool_call (dict or Pydantic) into a stable shape:
 
         {"id": str|None, "type": str, "function": {"name": str|None, "arguments": str|None}}
@@ -868,7 +893,7 @@ def _set_session_and_user_attrs(span: "Span", kwargs: dict, standard_logging_pay
         safe_set_attribute(span, "litellm.key_alias", str(key_alias))
 
 
-def _set_response_cost_attr(span: "Span", standard_logging_payload) -> None:
+def _set_response_cost_attr(span: "Span", standard_logging_payload: Mapping[str, object] | None) -> None:
     """Emit cost attributes from the StandardLoggingPayload when present.
 
     Uses the OpenInference `llm.cost.total` key so Arize / Phoenix can
@@ -876,15 +901,22 @@ def _set_response_cost_attr(span: "Span", standard_logging_payload) -> None:
     single total in `StandardLoggingPayload.response_cost`, so we cannot
     split it into prompt/completion. We also keep the legacy
     `llm.response.cost` key for back-compat with any consumer querying it.
+    When the price lookup failed, the call's total is unknown, so no cost is
+    emitted and the backend does not record the call as free. A guardrail fee
+    in `response_cost` stays on the guardrail span, as in OTel v2.
     """
     if not isinstance(standard_logging_payload, dict):
         return
     cost: Final = standard_logging_payload.get("response_cost")
-    if cost is None:
+    cost_lookup_failed: Final = (
+        standard_logging_payload.get("response_cost_failure_debug_info") is not None
+        and standard_logging_payload.get("cache_hit") is not True
+    )
+    if not isinstance(cost, (int, float, str)) or cost_lookup_failed:
         return
     try:
         cost_value: Final = float(cost)
-    except (TypeError, ValueError):
+    except ValueError:
         return
     safe_set_attribute(span, "llm.cost.total", cost_value)
     safe_set_attribute(span, "llm.response.cost", cost_value)
@@ -1047,9 +1079,7 @@ def _parse_passthrough_response(raw_response_obj, coerced_response_obj, kwargs):
             inner = candidate.get("response")
             if isinstance(inner, str):
                 try:
-                    parsed = json.loads(inner)
-                    if isinstance(parsed, dict):
-                        return parsed
+                    return _JSON_OBJECT.validate_python(json.loads(inner))
                 except Exception:
                     continue
             if isinstance(inner, dict):
@@ -1063,9 +1093,7 @@ def _parse_passthrough_response(raw_response_obj, coerced_response_obj, kwargs):
         return original
     if isinstance(original, str):
         try:
-            parsed = json.loads(original)
-            if isinstance(parsed, dict):
-                return parsed
+            return _JSON_OBJECT.validate_python(json.loads(original))
         except Exception:
             return None
     return None
@@ -1124,7 +1152,10 @@ def _set_mcp_tool_output(span: "Span", coerced_response_obj: object) -> None:
         safe_set_attribute(span, SpanAttributes.OUTPUT_MIME_TYPE, OpenInferenceMimeTypeValues.TEXT.value)
         return
 
-    structured: Final[object] = coerced_response_obj.get("structuredContent")
+    structured: Final[object] = coerced_response_obj.get(
+        "structured_content",
+        coerced_response_obj.get("structuredContent"),  # pyright: ignore[reportUnknownMemberType]  # tolerant dual-spelling lookup on untyped payloads
+    )
     payload: Final[object] = content if content else structured if structured is not None else content
     if payload is None:
         return

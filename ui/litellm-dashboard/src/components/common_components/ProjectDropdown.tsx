@@ -1,11 +1,12 @@
 import React from "react";
+import { useTranslation } from "react-i18next";
 import { SearchSelect } from "@/components/shared/SearchSelect";
 import { ProjectResponse } from "@/app/(dashboard)/hooks/projects/useProjects";
 
 interface ProjectDropdownProps {
   projects?: ProjectResponse[] | null;
-  value?: string;
-  onChange?: (value: string) => void;
+  value?: string | null;
+  onChange?: (value: string | null) => void;
   disabled?: boolean;
   loading?: boolean;
   /** When set, only show projects belonging to this team */
@@ -22,6 +23,7 @@ const ProjectDropdown: React.FC<ProjectDropdownProps> = ({
   teamId,
   id,
 }) => {
+  const { t } = useTranslation();
   const filtered = teamId ? projects?.filter((p) => p.team_id === teamId) : projects;
 
   return (
@@ -37,8 +39,8 @@ const ProjectDropdown: React.FC<ProjectDropdownProps> = ({
       }
       value={value}
       onValueChange={(projectId) => onChange?.(projectId)}
-      placeholder="Search or select a project"
-      emptyText={loading ? "Loading projects…" : "No projects found"}
+      placeholder={t("projectDropdown.placeholder")}
+      emptyText={loading ? t("projectDropdown.loading") : t("projectDropdown.empty")}
       disabled={disabled}
       inputId={id}
     />

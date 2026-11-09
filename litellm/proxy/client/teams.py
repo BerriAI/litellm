@@ -4,8 +4,11 @@ import builtins
 from typing import Any, Final
 
 import requests
+from pydantic import TypeAdapter
 
 from .exceptions import UnauthorizedError
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class TeamsManagementClient:
@@ -40,7 +43,7 @@ class TeamsManagementClient:
         self,
         user_id: str | None = None,
         organization_id: str | None = None,
-    ) -> list[dict[str, Any]]:
+    ) -> builtins.list[dict[str, Any]]:
         """
         List teams that the user belongs to.
 
@@ -80,7 +83,7 @@ class TeamsManagementClient:
         page_size: int = 10,
         sort_by: str | None = None,
         sort_order: str = "asc",
-    ) -> dict[str, Any]:
+    ) -> object:
         """
         Get a paginated list of teams with filtering and sorting options.
 
@@ -125,7 +128,7 @@ class TeamsManagementClient:
             raise UnauthorizedError("Authentication failed. Check your API key.")
 
         response.raise_for_status()
-        return response.json()
+        return _DECODED_JSON.validate_python(response.json())
 
     def get_available(self) -> builtins.list[dict[str, Any]]:
         """

@@ -27,9 +27,9 @@ describe("buildProjectCreateParams", () => {
     expect(result.description).toBe("A description");
   });
 
-  it("should pass through max_budget when provided", () => {
-    const result = buildProjectCreateParams({ ...baseValues, max_budget: 50.0 });
-    expect(result.max_budget).toBe(50.0);
+  it.each([50.0, 1e308])("should preserve a finite max_budget of %s", (maxBudget) => {
+    const result = buildProjectCreateParams({ ...baseValues, max_budget: maxBudget });
+    expect(JSON.parse(JSON.stringify(result)).max_budget).toBe(maxBudget);
   });
 
   it("should build model_rpm_limit from modelLimits entries", () => {

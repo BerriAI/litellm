@@ -5,7 +5,7 @@ Provides create, list, get, and delete operations for skills
 
 import asyncio
 import contextvars
-from collections.abc import Coroutine
+from collections.abc import Coroutine, Mapping, Sequence
 from functools import partial
 from typing import Any, Final
 
@@ -14,6 +14,7 @@ import httpx
 import litellm
 from litellm.constants import request_timeout
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import is_str_keyed_dict
 from litellm.llms.base_llm.skills.transformation import BaseSkillsAPIConfig
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.types.llms.anthropic_skills import (
@@ -35,7 +36,7 @@ DEFAULT_ANTHROPIC_API_BASE: Final = "https://api.anthropic.com/v1"
 _litellm_skills_handler = None
 
 
-def _get_user_api_key_auth_from_kwargs(kwargs: dict[str, Any]) -> Any | None:
+def _get_user_api_key_auth_from_kwargs(kwargs: Mapping[str, object]) -> Any | None:
     for metadata_key in ("metadata", "litellm_metadata"):
         metadata = kwargs.get(metadata_key)
         if isinstance(metadata, dict) and metadata.get("user_api_key_auth") is not None:
@@ -44,16 +45,16 @@ def _get_user_api_key_auth_from_kwargs(kwargs: dict[str, Any]) -> Any | None:
 
 
 def _get_skill_request_metadata(
-    kwargs: dict[str, Any],
-    extra_body: dict[str, Any] | None,
-) -> dict[str, Any] | None:
-    if extra_body and isinstance(extra_body.get("metadata"), dict):
-        return extra_body["metadata"]
+    kwargs: Mapping[str, object],
+    extra_body: Mapping[str, object] | None,
+) -> dict[str, object] | None:
+    extra_body_metadata: Final = extra_body.get("metadata") if extra_body else None
+    if is_str_keyed_dict(extra_body_metadata):
+        return extra_body_metadata
 
     metadata: Final = kwargs.get("metadata")
-    if isinstance(metadata, dict) and isinstance(metadata.get("requester_metadata"), dict):
-        return metadata["requester_metadata"]
-    return None
+    requester_metadata: Final = metadata.get("requester_metadata") if is_str_keyed_dict(metadata) else None
+    return requester_metadata if is_str_keyed_dict(requester_metadata) else None
 
 
 def _get_litellm_skills_handler():
@@ -70,10 +71,10 @@ def _get_litellm_skills_handler():
 
 @client
 async def acreate_skill(
-    files: list[Any] | None = None,
+    files: Sequence[object] | None = None,
     display_title: str | None = None,
-    extra_headers: dict[str, Any] | None = None,
-    extra_query: dict[str, Any] | None = None,
+    extra_headers: dict[str, str] | None = None,
+    extra_query: Mapping[str, object] | None = None,
     extra_body: dict[str, Any] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
@@ -133,15 +134,15 @@ async def acreate_skill(
 
 @client
 def create_skill(
-    files: list[Any] | None = None,
+    files: Sequence[object] | None = None,
     display_title: str | None = None,
-    extra_headers: dict[str, Any] | None = None,
-    extra_query: dict[str, Any] | None = None,
+    extra_headers: dict[str, str] | None = None,
+    extra_query: Mapping[str, object] | None = None,
     extra_body: dict[str, Any] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     **kwargs,
-) -> Skill | Coroutine[Any, Any, Skill]:
+) -> Skill | Coroutine[object, object, Skill]:
     """
     Create a new skill
 
@@ -182,10 +183,14 @@ def create_skill(
         if extra_body:
             create_request.update(extra_body)
 
-        # Route to LiteLLM DB if custom_llm_provider="litellm_proxy"
+        # Route to LiteLLM DB if custom_llm_provider="litellm_proxy". description/instructions
+        # arrive as top-level kwargs from the REST form endpoint, or nested in extra_body from
+        # the SDK convention used by other providers' create_request above.
         if custom_llm_provider == LlmProviders.LITELLM_PROXY.value:
             return _get_litellm_skills_handler().create_skill_handler(
                 display_title=display_title,
+                description=kwargs.get("description") or (extra_body.get("description") if extra_body else None),
+                instructions=kwargs.get("instructions") or (extra_body.get("instructions") if extra_body else None),
                 files=files,
                 metadata=_get_skill_request_metadata(kwargs, extra_body),
                 user_id=kwargs.get("user_id"),
@@ -262,8 +267,8 @@ async def alist_skills(
     limit: int | None = None,
     page: str | None = None,
     source: str | None = None,
-    extra_headers: dict[str, Any] | None = None,
-    extra_query: dict[str, Any] | None = None,
+    extra_headers: dict[str, str] | None = None,
+    extra_query: Mapping[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     **kwargs,
@@ -325,12 +330,12 @@ def list_skills(
     limit: int | None = None,
     page: str | None = None,
     source: str | None = None,
-    extra_headers: dict[str, Any] | None = None,
-    extra_query: dict[str, Any] | None = None,
+    extra_headers: dict[str, str] | None = None,
+    extra_query: Mapping[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     **kwargs,
-) -> ListSkillsResponse | Coroutine[Any, Any, ListSkillsResponse]:
+) -> ListSkillsResponse | Coroutine[object, object, ListSkillsResponse]:
     """
     List all skills
 
@@ -443,8 +448,8 @@ def list_skills(
 @client
 async def aget_skill(
     skill_id: str,
-    extra_headers: dict[str, Any] | None = None,
-    extra_query: dict[str, Any] | None = None,
+    extra_headers: dict[str, str] | None = None,
+    extra_query: Mapping[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     **kwargs,
@@ -500,12 +505,12 @@ async def aget_skill(
 @client
 def get_skill(
     skill_id: str,
-    extra_headers: dict[str, Any] | None = None,
-    extra_query: dict[str, Any] | None = None,
+    extra_headers: dict[str, str] | None = None,
+    extra_query: Mapping[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     **kwargs,
-) -> Skill | Coroutine[Any, Any, Skill]:
+) -> Skill | Coroutine[object, object, Skill]:
     """
     Get a skill by ID
 
@@ -607,8 +612,8 @@ def get_skill(
 @client
 async def adelete_skill(
     skill_id: str,
-    extra_headers: dict[str, Any] | None = None,
-    extra_query: dict[str, Any] | None = None,
+    extra_headers: dict[str, str] | None = None,
+    extra_query: Mapping[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     **kwargs,
@@ -664,12 +669,12 @@ async def adelete_skill(
 @client
 def delete_skill(
     skill_id: str,
-    extra_headers: dict[str, Any] | None = None,
-    extra_query: dict[str, Any] | None = None,
+    extra_headers: dict[str, str] | None = None,
+    extra_query: Mapping[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     **kwargs,
-) -> DeleteSkillResponse | Coroutine[Any, Any, DeleteSkillResponse]:
+) -> DeleteSkillResponse | Coroutine[object, object, DeleteSkillResponse]:
     """
     Delete a skill by ID
 

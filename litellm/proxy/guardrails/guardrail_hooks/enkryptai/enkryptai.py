@@ -6,7 +6,7 @@
 # +-------------------------------------------------------------+
 
 import os
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, AsyncIterable
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional
 
@@ -123,9 +123,10 @@ class EnkryptAIGuardrails(CustomGuardrail):
                 url=self.api_url,
                 json=payload,
                 headers=headers,
+                timeout=self.timeout,
             )
             response.raise_for_status()
-            response_json: Final = response.json()
+            response_json: Final[EnkryptAIResponse] = response.json()
 
             end_time = datetime.now()
             duration = (end_time - start_time).total_seconds()
@@ -465,7 +466,7 @@ class EnkryptAIGuardrails(CustomGuardrail):
     async def async_post_call_streaming_iterator_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
-        response: Any,
+        response: AsyncIterable[ModelResponseStream],
         request_data: dict,
     ) -> AsyncGenerator[ModelResponseStream, None]:
         """

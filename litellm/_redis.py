@@ -13,19 +13,22 @@ import json
 # s/o [@Frank Colson](https://www.linkedin.com/in/frank-colson-422b9b183/) for this redis implementation
 import os
 from collections.abc import Callable, Mapping
+from functools import reduce
 from types import MappingProxyType
 from typing import Final
 from urllib.parse import urlsplit, urlunsplit
 
 import redis
 import redis.asyncio as async_redis
+from pydantic import TypeAdapter
 from redis.credentials import CredentialProvider
 
 from litellm import get_secret, get_secret_str
 from litellm._redis_credential_provider import (
     AzureADCredentialProvider,
+    ElastiCacheIAMCredentialProvider,
     GCPIAMCredentialProvider,
-    _generate_gcp_iam_access_token,
+    generate_gcp_iam_access_token,
 )
 from litellm.constants import (
     REDIS_CLUSTER_HEALTH_CHECK_INTERVAL,
@@ -36,7 +39,18 @@ from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 
 from ._logging import verbose_logger
 
+_generate_gcp_iam_access_token = generate_gcp_iam_access_token
+
 AZURE_REDIS_SCOPE: Final = "https://redis.azure.com/.default"
+_UNWRAPPED_INIT: Final = TypeAdapter(object)
+
+_AWS_IAM_KWARG_NAMES: Final = (
+    "aws_iam_auth",
+    "aws_iam_user_name",
+    "aws_iam_cache_name",
+    "aws_iam_region",
+    "aws_iam_serverless",
+)
 
 
 def _unwrapped_init_args(cls: type) -> frozenset[str]:
@@ -53,7 +67,7 @@ def _unwrapped_init_args(cls: type) -> frozenset[str]:
     ``@deprecated_args`` too, which the same class of bug as ``_init_arg_names``
     would otherwise silently empty this allowlist through (see its docstring).
     """
-    spec: Final = inspect.getfullargspec(inspect.unwrap(cls.__init__))
+    spec: Final = inspect.getfullargspec(_UNWRAPPED_INIT.validate_python(inspect.unwrap(cls.__init__)))
     return frozenset(spec.args + spec.kwonlyargs)
 
 
@@ -75,6 +89,7 @@ def _get_redis_kwargs():
         "azure_client_id",
         "azure_tenant_id",
         "azure_client_secret",
+        *_AWS_IAM_KWARG_NAMES,
     }
 
     available_args: Final = {x for x in _unwrapped_init_args(redis.Redis) if x not in exclude_args} | include_args
@@ -100,7 +115,7 @@ def _init_arg_names(cls: type) -> frozenset[str]:
         name
         for klass in inspect.getmro(cls)
         if klass is not object
-        for spec in (inspect.getfullargspec(inspect.unwrap(klass.__init__)),)
+        for spec in (inspect.getfullargspec(_UNWRAPPED_INIT.validate_python(inspect.unwrap(klass.__init__))),)
         for name in spec.args + spec.kwonlyargs
     )
 
@@ -223,7 +238,7 @@ def _coerce_redis_kwargs_types(
             "socket_keepalive": bool,
         }
     )
-    result: Final = dict(redis_kwargs)  # mutable-ok: per-key try/except coercion below needs to drop individual keys
+    result: Final = dict(redis_kwargs)
     for key, value in redis_kwargs.items():
         if not isinstance(value, str):
             continue
@@ -270,6 +285,40 @@ def _redis_kwargs_from_environment():
     return return_dict
 
 
+def _coerces_to_true(value: object | None) -> bool:
+    return _str_to_bool(value) if isinstance(value, str) else bool(value)
+
+
+def _uses_tls(redis_kwargs: Mapping[str, object]) -> bool:
+    if redis_kwargs.get("startup_nodes") is not None:
+        return _coerces_to_true(redis_kwargs.get("ssl"))
+    url: Final = redis_kwargs.get("url")
+    if isinstance(url, str):
+        return urlsplit(url).scheme.lower() == "rediss"
+    return _coerces_to_true(redis_kwargs.get("ssl"))
+
+
+def _build_elasticache_iam_provider(redis_kwargs: Mapping[str, object]) -> ElastiCacheIAMCredentialProvider:
+    user_name: Final = redis_kwargs.get("aws_iam_user_name")
+    cache_name: Final = redis_kwargs.get("aws_iam_cache_name")
+    region: Final = redis_kwargs.get("aws_iam_region")
+    required_settings: Final = (
+        ("aws_iam_user_name", user_name),
+        ("aws_iam_cache_name", cache_name),
+        ("aws_iam_region", region),
+    )
+    missing_settings: Final = tuple(name for name, value in required_settings if not value)
+    if missing_settings:
+        raise ValueError("AWS ElastiCache IAM Redis authentication requires: " + ", ".join(missing_settings))
+
+    return ElastiCacheIAMCredentialProvider(
+        user_name=str(user_name),
+        cache_name=str(cache_name),
+        region=str(region),
+        is_serverless=_coerces_to_true(redis_kwargs.get("aws_iam_serverless")),
+    )
+
+
 def create_gcp_iam_redis_connect_func(
     service_account: str,
     ssl_ca_certs: str | None = None,
@@ -295,7 +344,7 @@ def create_gcp_iam_redis_connect_func(
 
         self._parser.on_connect(self)
 
-        auth_args: Final = (_generate_gcp_iam_access_token(service_account),)
+        auth_args: Final = (generate_gcp_iam_access_token(service_account),)
         self.send_command("AUTH", *auth_args, check_health=False)
 
         try:
@@ -460,36 +509,80 @@ def _url_without_userinfo(url: str) -> str:
     return urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
 
 
+def _setting_text(redis_kwargs: Mapping[str, object], setting: str) -> str | None:
+    value: Final = redis_kwargs.get(setting)
+    return value if isinstance(value, str) and value else None
+
+
+def _or_secrets(value: object, read: Callable[[str], object], *names: str) -> object:
+    return reduce(lambda found, name: found or read(name), names, value)
+
+
+def merge_redis_kwargs(
+    env_overrides: Mapping[str, object],
+) -> dict[str, object]:  # mutable-ok: _get_redis_client_logic swaps settings for client objects in place
+    overrides: Final = {
+        k: get_secret(v.replace("os.environ/", "")) if isinstance(v, str) and v.startswith("os.environ/") else v
+        for k, v in env_overrides.items()
+    }
+    # An explicitly configured connection target outranks REDIS_URL from the
+    # environment. Without this, the url branch strips the caller's
+    # host/port/password and silently connects to whatever REDIS_URL names.
+    caller_named_a_target: Final = any(
+        overrides.get(key) is not None for key in ("host", "startup_nodes", "sentinel_nodes")
+    )
+    drops_environment_url: Final = caller_named_a_target and overrides.get("url") is None
+    layered: Final = {
+        **{k: v for k, v in _redis_kwargs_from_environment().items() if not (k == "url" and drops_environment_url)},
+        **overrides,
+    }
+
+    def fallback(setting: str, read: Callable[[str], object], *names: str) -> tuple[str, object]:
+        return setting, _or_secrets(layered.get(setting), read, *names)
+
+    targets: Final = (
+        fallback("startup_nodes", get_secret, "REDIS_CLUSTER_NODES"),
+        fallback("sentinel_nodes", get_secret, "REDIS_SENTINEL_NODES"),
+        fallback("sentinel_password", get_secret_str, "REDIS_SENTINEL_PASSWORD"),
+        fallback("service_name", get_secret, "REDIS_SERVICE_NAME"),
+    )
+    if layered.get("credential_provider") is not None:
+        return {**layered, **{k: v for k, v in targets if v is not None}}
+
+    identities: Final = dict(
+        (
+            fallback("gcp_service_account", get_secret_str, "REDIS_GCP_SERVICE_ACCOUNT"),
+            fallback("gcp_ssl_ca_certs", get_secret_str, "REDIS_GCP_SSL_CA_CERTS"),
+            fallback("azure_redis_ad_token", get_secret, "REDIS_AZURE_AD_TOKEN"),
+        )
+    )
+    gcp_enabled: Final = identities["gcp_service_account"] is not None
+    azure_enabled: Final = str(identities["azure_redis_ad_token"]).lower() == "true"
+    azure: Final = (
+        (
+            fallback("azure_client_id", get_secret_str, "AZURE_CLIENT_ID"),
+            fallback("azure_tenant_id", get_secret_str, "AZURE_TENANT_ID"),
+            fallback("azure_client_secret", get_secret_str, "AZURE_CLIENT_SECRET"),
+        )
+        if azure_enabled and not gcp_enabled
+        else ()
+    )
+    aws: Final = (
+        (fallback("aws_iam_region", get_secret_str, "AWS_REGION", "AWS_DEFAULT_REGION"),)
+        if _coerces_to_true(layered.get("aws_iam_auth")) and not gcp_enabled and not azure_enabled
+        else ()
+    )
+    filled: Final = (*targets, *identities.items(), *azure, *aws)
+    return {**layered, **{k: v for k, v in filled if v is not None}}
+
+
 def _get_redis_client_logic(**env_overrides):
     """
     Common functionality across sync + async redis client implementations
     """
-    ### check if "os.environ/<key-name>" passed in
-    for k, v in env_overrides.items():
-        if isinstance(v, str) and v.startswith("os.environ/"):
-            v = v.replace("os.environ/", "")
-            value = get_secret(v)
-            env_overrides[k] = value
+    redis_kwargs: Final = merge_redis_kwargs(env_overrides)
 
-    environment_kwargs: Final = _redis_kwargs_from_environment()
-
-    # An explicitly configured connection target outranks REDIS_URL from the
-    # environment. Without this, the url branch below strips the caller's
-    # host/port/password and silently connects to whatever REDIS_URL names.
-    caller_named_a_target: Final = any(
-        env_overrides.get(key) is not None for key in ("host", "startup_nodes", "sentinel_nodes")
-    )
-    if caller_named_a_target and env_overrides.get("url") is None:
-        environment_kwargs.pop("url", None)
-
-    redis_kwargs: Final = {
-        **environment_kwargs,
-        **env_overrides,
-    }
-
-    _startup_nodes: Final[str | list | None] = redis_kwargs.get("startup_nodes", None) or get_secret(
-        "REDIS_CLUSTER_NODES"
-    )
+    _startup_nodes: Final = redis_kwargs.get("startup_nodes") or None
 
     # If startup_nodes resolved to None (not set by kwarg or env), remove the key
     # entirely so callers can rely on key presence as a reliable cluster-mode signal.
@@ -498,31 +591,14 @@ def _get_redis_client_logic(**env_overrides):
     elif _startup_nodes is None:
         redis_kwargs.pop("startup_nodes", None)
 
-    _sentinel_nodes: Final[str | list | None] = redis_kwargs.get("sentinel_nodes", None) or get_secret(
-        "REDIS_SENTINEL_NODES"
-    )
-
-    if _sentinel_nodes is not None and isinstance(_sentinel_nodes, str):
+    _sentinel_nodes: Final = redis_kwargs.get("sentinel_nodes")
+    if isinstance(_sentinel_nodes, str):
         redis_kwargs["sentinel_nodes"] = json.loads(_sentinel_nodes)
-
-    _sentinel_password: Final[str | None] = redis_kwargs.get("sentinel_password", None) or get_secret_str(
-        "REDIS_SENTINEL_PASSWORD"
-    )
-
-    if _sentinel_password is not None:
-        redis_kwargs["sentinel_password"] = _sentinel_password
-
-    _service_name: Final[str | None] = redis_kwargs.get("service_name", None) or get_secret("REDIS_SERVICE_NAME")
-
-    if _service_name is not None:
-        redis_kwargs["service_name"] = _service_name
 
     if redis_kwargs.get("credential_provider") is None:
         # Handle GCP IAM authentication
-        _gcp_service_account: Final = redis_kwargs.get("gcp_service_account") or get_secret_str(
-            "REDIS_GCP_SERVICE_ACCOUNT"
-        )
-        _gcp_ssl_ca_certs: Final = redis_kwargs.get("gcp_ssl_ca_certs") or get_secret_str("REDIS_GCP_SSL_CA_CERTS")
+        _gcp_service_account: Final = _setting_text(redis_kwargs, "gcp_service_account")
+        _gcp_ssl_ca_certs: Final = _setting_text(redis_kwargs, "gcp_ssl_ca_certs")
 
         if _gcp_service_account is not None:
             verbose_logger.debug("Setting up GCP IAM authentication for Redis with service account.")
@@ -537,9 +613,10 @@ def _get_redis_client_logic(**env_overrides):
                 redis_kwargs["ssl_ca_certs"] = _gcp_ssl_ca_certs
 
         # Handle Azure AD authentication (after GCP IAM block)
-        _azure_redis_ad_token: Final = redis_kwargs.get("azure_redis_ad_token") or get_secret("REDIS_AZURE_AD_TOKEN")
+        _azure_redis_ad_token: Final = redis_kwargs.get("azure_redis_ad_token") or None
 
         _azure_ad_enabled: Final = _azure_redis_ad_token is not None and str(_azure_redis_ad_token).lower() == "true"
+        _aws_iam_enabled: Final = _coerces_to_true(redis_kwargs.get("aws_iam_auth"))
 
         if _azure_ad_enabled and _gcp_service_account is not None:
             verbose_logger.warning(
@@ -548,11 +625,9 @@ def _get_redis_client_logic(**env_overrides):
             )
 
         if _azure_ad_enabled and _gcp_service_account is None:
-            _azure_client_id: Final = redis_kwargs.get("azure_client_id") or get_secret_str("AZURE_CLIENT_ID")
-            _azure_tenant_id: Final = redis_kwargs.get("azure_tenant_id") or get_secret_str("AZURE_TENANT_ID")
-            _azure_client_secret: Final = redis_kwargs.get("azure_client_secret") or get_secret_str(
-                "AZURE_CLIENT_SECRET"
-            )
+            _azure_client_id: Final = _setting_text(redis_kwargs, "azure_client_id")
+            _azure_tenant_id: Final = _setting_text(redis_kwargs, "azure_tenant_id")
+            _azure_client_secret: Final = _setting_text(redis_kwargs, "azure_client_secret")
 
             verbose_logger.debug("Setting up Azure AD authentication for Redis.")
             redis_kwargs["redis_connect_func"] = create_azure_ad_redis_connect_func(
@@ -567,6 +642,22 @@ def _get_redis_client_logic(**env_overrides):
             # credentials via inspection or logging.
             redis_kwargs["redis_connect_func"]._azure_redis_ad_token = True
 
+        if _aws_iam_enabled and _gcp_service_account is not None:
+            verbose_logger.warning(
+                "Both GCP IAM (gcp_service_account) and AWS ElastiCache IAM (aws_iam_auth) are configured "
+                "for Redis. Using GCP IAM. Remove one to avoid misconfiguration."
+            )
+        elif _aws_iam_enabled and _azure_ad_enabled:
+            verbose_logger.warning(
+                "Both Azure AD (azure_redis_ad_token) and AWS ElastiCache IAM (aws_iam_auth) are configured "
+                "for Redis. Using Azure AD. Remove one to avoid misconfiguration."
+            )
+        elif _aws_iam_enabled:
+            if not _uses_tls(redis_kwargs):
+                raise ValueError("AWS ElastiCache IAM Redis authentication requires TLS")
+            verbose_logger.debug("Setting up AWS ElastiCache IAM authentication for Redis.")
+            redis_kwargs["credential_provider"] = _build_elasticache_iam_provider(redis_kwargs)
+
     redis_kwargs.pop("gcp_service_account", None)
     redis_kwargs.pop("gcp_ssl_ca_certs", None)
 
@@ -575,13 +666,16 @@ def _get_redis_client_logic(**env_overrides):
     redis_kwargs.pop("azure_client_id", None)
     redis_kwargs.pop("azure_tenant_id", None)
     redis_kwargs.pop("azure_client_secret", None)
+    for aws_iam_key in _AWS_IAM_KWARG_NAMES:
+        redis_kwargs.pop(aws_iam_key, None)
 
     if redis_kwargs.get("credential_provider") is not None:
         redis_kwargs.pop("redis_connect_func", None)
         redis_kwargs.pop("username", None)
         redis_kwargs.pop("password", None)
-        if redis_kwargs.get("url") is not None:
-            redis_kwargs["url"] = _url_without_userinfo(redis_kwargs["url"])
+        _url: Final = redis_kwargs.get("url")
+        if isinstance(_url, str):
+            redis_kwargs["url"] = _url_without_userinfo(_url)
 
     if "url" in redis_kwargs and redis_kwargs["url"] is not None:
         # Only strip host/port/db/password when not routing to a cluster.
@@ -608,7 +702,10 @@ def _get_redis_client_logic(**env_overrides):
         if redis_kwargs.get("startup_nodes")
         else redis.Redis
     )
-    return _coerce_redis_kwargs_types(redis_kwargs, client=coercion_client)
+    coerced_kwargs: Final = _coerce_redis_kwargs_types(redis_kwargs, client=coercion_client)
+    if coerced_kwargs.get("socket_timeout") is None:
+        coerced_kwargs["socket_timeout"] = REDIS_SOCKET_TIMEOUT
+    return coerced_kwargs
 
 
 def init_redis_cluster(redis_kwargs) -> redis.RedisCluster:
@@ -624,11 +721,12 @@ def init_redis_cluster(redis_kwargs) -> redis.RedisCluster:
     verbose_logger.debug("init_redis_cluster: startup nodes are being initialized.")
     from redis.cluster import ClusterNode
 
+    auth_kwargs: Final = _credential_provider_auth_kwargs(redis_kwargs)
     args: Final = _get_redis_cluster_kwargs()
     cluster_kwargs: Final = {}
-    for arg in redis_kwargs:
+    for arg in auth_kwargs:
         if arg in args:
-            cluster_kwargs[arg] = redis_kwargs[arg]
+            cluster_kwargs[arg] = auth_kwargs[arg]
 
     new_startup_nodes: Final[list[ClusterNode]] = []
 
@@ -654,7 +752,6 @@ def _init_redis_sentinel(redis_kwargs) -> redis.Redis:
     sentinel_password: Final = redis_kwargs.get("sentinel_password")
     service_name: Final = redis_kwargs.get("service_name")
     connection_kwargs: Final = _get_redis_sentinel_connection_kwargs(redis_kwargs)
-    connection_kwargs.setdefault("socket_timeout", REDIS_SOCKET_TIMEOUT)
     sentinel_kwargs: Final = _sentinel_auth_kwargs(connection_kwargs, sentinel_password)
 
     if not sentinel_nodes or not service_name:
@@ -687,7 +784,6 @@ def _init_async_redis_sentinel(redis_kwargs) -> async_redis.Redis:
     sentinel_password: Final = redis_kwargs.get("sentinel_password")
     service_name: Final = redis_kwargs.get("service_name")
     connection_kwargs: Final = _get_redis_sentinel_connection_kwargs(redis_kwargs)
-    connection_kwargs.setdefault("socket_timeout", REDIS_SOCKET_TIMEOUT)
     sentinel_kwargs: Final = _sentinel_auth_kwargs(connection_kwargs, sentinel_password)
 
     if not sentinel_nodes or not service_name:
@@ -706,13 +802,13 @@ def _init_async_redis_sentinel(redis_kwargs) -> async_redis.Redis:
     return sentinel.master_for(service_name, **connection_kwargs)
 
 
-def _async_credential_provider(redis_connect_func: object | None) -> CredentialProvider | None:
-    """The Azure AD and GCP IAM connect funcs run their AUTH exchange with the blocking client
-    API, so on an async connection their ``send_command``/``read_response`` calls return
-    coroutines nobody awaits and every connect fails. Async paths authenticate through a
-    ``CredentialProvider`` instead, which redis-py consults per connection so the token stays
-    fresh. Any other ``redis_connect_func`` is left where it is, since redis-py awaits it
-    itself when it is a coroutine function."""
+def _credential_provider_from_connect_func(redis_connect_func: object | None) -> CredentialProvider | None:
+    """Translate IAM callbacks for paths that need credentials during the standard handshake.
+
+    Async connections cannot run blocking AUTH callbacks. Sync clusters authenticate before
+    invoking the callback, so they also need the provider during the initial handshake.
+    redis-py consults the provider for each connection, keeping token refresh intact.
+    """
     gcp_service_account: Final = getattr(redis_connect_func, "_gcp_service_account", None)
     if gcp_service_account is not None:
         return GCPIAMCredentialProvider(gcp_service_account)
@@ -724,21 +820,20 @@ def _async_credential_provider(redis_connect_func: object | None) -> CredentialP
     return None
 
 
-def _async_auth_kwargs(redis_kwargs: dict) -> dict:
-    """Swaps a connect func an async path cannot run for the equivalent credential provider,
-    which supersedes any static username or password redis-py would otherwise reject it with."""
+def _credential_provider_auth_kwargs(redis_kwargs: dict) -> dict:
+    """Use a credential provider instead of an IAM callback and conflicting static credentials."""
     explicit_provider: Final = redis_kwargs.get("credential_provider")
     credential_provider: Final = (
         explicit_provider
         if explicit_provider is not None
-        else _async_credential_provider(redis_kwargs.get("redis_connect_func"))
+        else _credential_provider_from_connect_func(redis_kwargs.get("redis_connect_func"))
     )
     if credential_provider is None:
         return redis_kwargs
 
     superseded: Final = frozenset({"redis_connect_func", "username", "password"})
     kept: Final = ((k, v) for k, v in redis_kwargs.items() if k not in superseded)
-    return dict(kept, credential_provider=credential_provider)  # mutable-ok: the branches below mutate these kwargs
+    return dict(kept, credential_provider=credential_provider)
 
 
 def get_redis_client(**env_overrides):
@@ -769,7 +864,7 @@ def get_redis_async_client(
     connection_pool: async_redis.BlockingConnectionPool | None = None,
     **env_overrides,
 ) -> async_redis.Redis | async_redis.RedisCluster:
-    redis_kwargs: Final = _async_auth_kwargs(_get_redis_client_logic(**env_overrides))
+    redis_kwargs: Final = _credential_provider_auth_kwargs(_get_redis_client_logic(**env_overrides))
 
     if "startup_nodes" in redis_kwargs:
         from redis.cluster import ClusterNode
@@ -841,7 +936,7 @@ def get_redis_async_client(
 def get_redis_connection_pool(
     **env_overrides,
 ) -> async_redis.BlockingConnectionPool | None:
-    redis_kwargs: Final = _async_auth_kwargs(_get_redis_client_logic(**env_overrides))
+    redis_kwargs: Final = _credential_provider_auth_kwargs(_get_redis_client_logic(**env_overrides))
     verbose_logger.debug("get_redis_connection_pool: redis_kwargs", redis_kwargs)
 
     if "startup_nodes" in redis_kwargs:
@@ -865,6 +960,10 @@ def get_redis_connection_pool(
     if redis_kwargs.pop("ssl", None):
         redis_kwargs["connection_class"] = async_redis.SSLConnection
     return async_redis.BlockingConnectionPool(timeout=REDIS_CONNECTION_POOL_TIMEOUT, **redis_kwargs)
+
+
+def _mask_for_display(masker: SensitiveDataMasker, redis_kwargs: Mapping[str, object]) -> Mapping[str, object]:
+    return masker.mask_dict(redis_kwargs)
 
 
 def _redis_kwargs_for_logging(redis_kwargs: Mapping[str, object]) -> Mapping[str, object]:
@@ -898,7 +997,7 @@ def _pretty_print_redis_config(redis_kwargs: dict) -> None:
         masker = SensitiveDataMasker()
 
         # Mask sensitive data in redis_kwargs
-        masked_redis_kwargs = masker.mask_dict(redis_kwargs_for_logging)
+        masked_redis_kwargs = _mask_for_display(masker, redis_kwargs_for_logging)
 
         # Create main panel title
         title: Final = Text("Redis Configuration", style="bold blue")
@@ -961,7 +1060,7 @@ def _pretty_print_redis_config(redis_kwargs: dict) -> None:
     except ImportError:
         # Fallback to simple logging if rich is not available
         masker = SensitiveDataMasker()
-        masked_redis_kwargs = masker.mask_dict(redis_kwargs_for_logging)
+        masked_redis_kwargs = _mask_for_display(masker, redis_kwargs_for_logging)
         verbose_logger.info("Redis configuration: %s", masked_redis_kwargs)
     except Exception as e:
         verbose_logger.error("Error pretty printing Redis configuration: %s", e)

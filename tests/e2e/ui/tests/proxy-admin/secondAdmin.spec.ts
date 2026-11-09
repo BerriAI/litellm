@@ -1,3 +1,4 @@
+import { expectUnrestrictedDashboard, setInvitedUserPassword } from "../../helpers/userOnboarding";
 import { test, expect } from "@playwright/test";
 import { ADMIN_STORAGE_PATH } from "../../constants";
 import { Page } from "../../fixtures/pages";
@@ -46,19 +47,13 @@ test.describe("Second proxy admin", () => {
 
     const userId = await inviteAdminUser();
     try {
-      const passwordRes = await request.post("/user/update", {
-        headers: auth,
-        data: { user_email: email, password },
-      });
-      expect(passwordRes.ok(), `setting password failed (${passwordRes.status()}): ${await passwordRes.text()}`).toBe(
-        true,
-      );
+      await setInvitedUserPassword(request, userId, password);
 
       await page.goto("/ui/login");
       await page.getByPlaceholder("Enter your username").fill(email);
       await page.getByPlaceholder("Enter your password").fill(password);
       await page.getByRole("button", { name: "Login", exact: true }).click();
-      await expect(page.locator("a", { hasText: "Virtual Keys" })).toBeVisible({ timeout: 30_000 });
+      await expectUnrestrictedDashboard(page);
       await dismissFeedbackPopup(page);
 
       await navigateToPage(page, Page.ApiKeys);
@@ -74,7 +69,7 @@ test.describe("Second proxy admin", () => {
       await page.getByRole("button", { name: "Create Key", exact: true }).click();
 
       await expect(page.getByText("Save your Key")).toBeVisible({ timeout: 10_000 });
-      const apiKey = (await page.getByRole("dialog", { name: "Save your Key" }).locator("pre").innerText()).trim();
+      const apiKey = (await page.getByRole("dialog", { name: "Save your Key" }).locator("pre").filter({ hasText: /^sk-/ }).innerText()).trim();
       expect(apiKey).toMatch(/^sk-/);
       await page.keyboard.press("Escape");
 

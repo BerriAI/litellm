@@ -5,7 +5,7 @@ LiteLLM SDK Functions for Creating and Searching Vector Stores
 import asyncio
 import builtins
 import contextvars
-from collections.abc import Coroutine, Mapping
+from collections.abc import Coroutine, Iterator, Mapping
 from functools import partial
 from typing import TYPE_CHECKING, Final
 
@@ -31,7 +31,7 @@ from litellm.types.vector_stores import (
     VectorStoreSearchResponse,
     VectorStoreSearchResult,
 )
-from litellm.utils import ProviderConfigManager, client
+from litellm.utils import ProviderConfigManager, client, load_credentials_from_list
 from litellm.vector_stores.utils import VectorStoreRequestUtils
 
 if TYPE_CHECKING:
@@ -53,8 +53,12 @@ def _direct_vector_store_embedding_executor(
     )
 
 
+def _items_without_key(values: Mapping[str, object], excluded_key: str) -> Iterator[tuple[str, object]]:
+    return ((key, value) for key, value in values.items() if key != excluded_key)
+
+
 def mock_vector_store_search_response(
-    mock_results: list[VectorStoreSearchResult] | None = None,
+    mock_results: builtins.list[VectorStoreSearchResult] | None = None,
 ):
     """Mock response for vector store search"""
     if mock_results is None:
@@ -108,7 +112,7 @@ def mock_vector_store_create_response(
 @client
 async def acreate(
     name: str | None = None,
-    file_ids: list[str] | None = None,
+    file_ids: builtins.list[str] | None = None,
     expires_after: dict | None = None,
     chunking_strategy: dict | None = None,
     metadata: dict[str, str] | None = None,
@@ -172,7 +176,7 @@ async def acreate(
 @client
 def create(
     name: str | None = None,
-    file_ids: list[str] | None = None,
+    file_ids: builtins.list[str] | None = None,
     expires_after: dict | None = None,
     chunking_strategy: dict | None = None,
     metadata: dict[str, str] | None = None,
@@ -285,7 +289,7 @@ def create(
 @client
 async def asearch(
     vector_store_id: str,
-    query: str | list[str],
+    query: str | builtins.list[str],
     filters: dict | None = None,
     max_num_results: int | None = None,
     ranking_options: dict | None = None,
@@ -307,9 +311,7 @@ async def asearch(
     embedding_executor: Final = _direct_vector_store_embedding_executor(
         kwargs.pop("_direct_vector_store_embedding_executor", None), router, kwargs
     )
-    local_vars: Final = {  # mutable-ok: exception logging requires a sanitized mutable snapshot
-        key: value for key, value in locals().items() if key != "embedding_executor"
-    }
+    local_vars: Final = dict(_items_without_key(locals(), "embedding_executor"))
 
     try:
         loop: Final = asyncio.get_event_loop()
@@ -360,7 +362,7 @@ async def asearch(
 @client
 def search(
     vector_store_id: str,
-    query: str | list[str],
+    query: str | builtins.list[str],
     filters: dict | None = None,
     max_num_results: int | None = None,
     ranking_options: dict | None = None,
@@ -393,9 +395,7 @@ def search(
     embedding_executor: Final = _direct_vector_store_embedding_executor(
         kwargs.pop("_direct_vector_store_embedding_executor", None), router, kwargs
     )
-    local_vars: Final = {  # mutable-ok: exception logging requires a sanitized mutable snapshot
-        key: value for key, value in locals().items() if key != "embedding_executor"
-    }
+    local_vars: Final = dict(_items_without_key(locals(), "embedding_executor"))
     try:
         litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
         litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
@@ -407,6 +407,7 @@ def search(
                 kwargs.update(registry_credentials)
             except Exception:
                 pass
+            load_credentials_from_list(kwargs)
 
         # get llm provider logic
         litellm_params: Final = GenericLiteLLMParams(vector_store_id=vector_store_id, **kwargs)
@@ -697,7 +698,7 @@ def list(
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     **kwargs,
-):
+) -> Mapping[str, object] | Coroutine[object, object, Mapping[str, object]]:
     """
     List vector stores.
 
@@ -995,7 +996,7 @@ def delete(
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     **kwargs,
-):
+) -> Mapping[str, object] | Coroutine[object, object, Mapping[str, object]]:
     """
     Delete a vector store.
 

@@ -4,7 +4,8 @@ Translate from OpenAI's `/v1/embeddings` to Sagemaker's `/invoke`
 In the Huggingface TGI format.
 """
 
-from typing import TYPE_CHECKING, Any, Final
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, Final
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -15,10 +16,25 @@ from httpx._models import Headers, Response
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
 from litellm.llms.voyage.embedding.transformation import VoyageEmbeddingConfig
+from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import EmbeddingResponse, Usage
 
 from ..common_utils import SagemakerError
 from .cohere_transformation import SagemakerCohereEmbeddingConfig
+from .openai_transformation import SagemakerOpenAIEmbeddingConfig
+
+OPENAI_COMPATIBLE_ROUTE: Final = "openai/"
+
+
+def _model_specific_config(model: str) -> BaseEmbeddingConfig | None:
+    if model.startswith(OPENAI_COMPATIBLE_ROUTE):
+        return SagemakerOpenAIEmbeddingConfig()
+    model_lower: Final = model.lower()
+    if "voyage" in model_lower:
+        return VoyageEmbeddingConfig()
+    if "cohere" in model_lower:
+        return SagemakerCohereEmbeddingConfig()
+    return None
 
 
 class SagemakerEmbeddingConfig(BaseEmbeddingConfig):
@@ -35,25 +51,22 @@ class SagemakerEmbeddingConfig(BaseEmbeddingConfig):
         Factory method to get the appropriate embedding config based on model type
 
         Args:
-            model: The model name
+            model: The model name, optionally prefixed with the `openai/` route for
+                endpoints whose container serves the OpenAI embeddings API
 
         Returns:
             Appropriate embedding config instance
         """
-        model_lower: Final = model.lower()
-        if "voyage" in model_lower:
-            return VoyageEmbeddingConfig()
-        if "cohere" in model_lower:
-            return SagemakerCohereEmbeddingConfig()
-        return cls()
+        specific_config: Final = _model_specific_config(model)
+        return cls() if specific_config is None else specific_config
+
+    @staticmethod
+    def get_endpoint_name(model: str) -> str:
+        return model.removeprefix(OPENAI_COMPATIBLE_ROUTE)
 
     def get_supported_openai_params(self, model: str) -> list[str]:
-        model_lower: Final = model.lower()
-        if "voyage" in model_lower:
-            return VoyageEmbeddingConfig().get_supported_openai_params(model)
-        if "cohere" in model_lower:
-            return SagemakerCohereEmbeddingConfig().get_supported_openai_params(model)
-        return []
+        specific_config: Final = _model_specific_config(model)
+        return [] if specific_config is None else specific_config.get_supported_openai_params(model)
 
     def map_openai_params(
         self,
@@ -147,7 +160,7 @@ class SagemakerEmbeddingConfig(BaseEmbeddingConfig):
         self,
         headers: dict,
         model: str,
-        messages: list[Any],
+        messages: Sequence[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         api_key: str | None = None,

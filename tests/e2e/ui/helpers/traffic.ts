@@ -1,4 +1,4 @@
-import { APIRequestContext, expect } from "@playwright/test";
+import { APIRequestContext, APIResponse, expect } from "@playwright/test";
 
 /** Model names served by fixtures/config.yml, both backed by the mock LLM server. */
 export const CHAT_MODEL_A = "fake-openai-gpt-4";
@@ -11,9 +11,18 @@ export const DEPLOYMENT_MODEL_B = "openai/fake-claude";
 /** The only completion text fixtures/mock_llm_server/server.py ever returns. */
 export const MOCK_RESPONSE_TEXT = "This is a mock response.";
 
-export const masterKey = (): string => process.env.LITELLM_MASTER_KEY || "sk-1234";
+export const masterKey = (): string => {
+  const key = process.env.LITELLM_MASTER_KEY;
+  if (!key) {
+    throw new Error("LITELLM_MASTER_KEY must be set");
+  }
+  return key;
+};
 
 export const rootPath = (): string => process.env.SERVER_ROOT_PATH ?? "";
+
+/** Date.now() alone collides: `--repeat-each` starts its copies inside the same millisecond. */
+export const uniqueSuffix = (): string => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
 interface ChatOptions {
   model: string;
@@ -25,9 +34,8 @@ interface ChatOptions {
   traceId?: string;
 }
 
-/** POST /v1/chat/completions and return the completion id (the Logs Request ID). */
-export async function sendChatCompletion(request: APIRequestContext, opts: ChatOptions): Promise<string> {
-  const res = await request.post(`${rootPath()}/v1/chat/completions`, {
+const postChatCompletion = (request: APIRequestContext, opts: ChatOptions): Promise<APIResponse> =>
+  request.post(`${rootPath()}/v1/chat/completions`, {
     headers: {
       Authorization: `Bearer ${opts.apiKey ?? masterKey()}`,
       "Content-Type": "application/json",
@@ -39,10 +47,39 @@ export async function sendChatCompletion(request: APIRequestContext, opts: ChatO
       ...(opts.traceId ? { litellm_trace_id: opts.traceId } : {}),
     },
   });
+
+/** POST /v1/chat/completions and return the completion id (the Logs Request ID). */
+export async function sendChatCompletion(request: APIRequestContext, opts: ChatOptions): Promise<string> {
+  const res = await postChatCompletion(request, opts);
   expect(res.ok(), `chat completion for ${opts.model} failed (${res.status()}): ${await res.text()}`).toBe(true);
   const body = await res.json();
   expect(body.choices?.[0]?.message?.content).toContain(MOCK_RESPONSE_TEXT);
   return body.id as string;
+}
+
+export interface ServedChat {
+  requestId: string;
+  callId: string;
+}
+
+export async function sendChatCompletionWithCallId(request: APIRequestContext, opts: ChatOptions): Promise<ServedChat> {
+  const res = await postChatCompletion(request, opts);
+  expect(res.ok(), `chat completion for ${opts.model} failed (${res.status()}): ${await res.text()}`).toBe(true);
+  const callId = res.headers()["x-litellm-call-id"];
+  expect(callId, "proxy did not return an x-litellm-call-id header").toBeTruthy();
+  const body = await res.json();
+  expect(body.choices?.[0]?.message?.content).toContain(MOCK_RESPONSE_TEXT);
+  return { requestId: body.id as string, callId };
+}
+
+export interface ChatAttempt {
+  status: number;
+  body: string;
+}
+
+export async function attemptChatCompletion(request: APIRequestContext, opts: ChatOptions): Promise<ChatAttempt> {
+  const res = await postChatCompletion(request, opts);
+  return { status: res.status(), body: await res.text() };
 }
 
 /** `key` is the sk- value to authenticate with; `token` is its hash, which spend aggregates are keyed by. */
@@ -66,6 +103,33 @@ export async function createVirtualKey(
   };
 }
 
+export interface KeyInfo {
+  key_alias: string | null;
+  max_budget: number | null;
+  budget_duration: string | null;
+  budget_reset_at: string | null;
+  blocked: boolean | null;
+  models: string[];
+  team_id: string | null;
+}
+
+export async function readKeyInfo(request: APIRequestContext, token: string): Promise<KeyInfo> {
+  const res = await request.get(`${rootPath()}/key/info?key=${encodeURIComponent(token)}`, {
+    headers: { Authorization: `Bearer ${masterKey()}` },
+  });
+  expect(res.ok(), `GET /key/info for ${token} failed (${res.status()}): ${await res.text()}`).toBe(true);
+  const body = await res.json();
+  return body.info as KeyInfo;
+}
+
+export async function deleteVirtualKey(request: APIRequestContext, token: string): Promise<void> {
+  const res = await request.post(`${rootPath()}/key/delete`, {
+    headers: { Authorization: `Bearer ${masterKey()}`, "Content-Type": "application/json" },
+    data: { keys: [token] },
+  });
+  expect(res.ok(), `key delete for ${token} failed (${res.status()}): ${await res.text()}`).toBe(true);
+}
+
 /** Spend logs are flushed on a timer, so an assertion straight after a completion races the writer. */
 export async function waitForSpendLog(
   request: APIRequestContext,
@@ -81,7 +145,7 @@ export async function waitForSpendLog(
     lastStatus = res.status();
     if (res.ok()) {
       const body = await res.json();
-      const rows = Array.isArray(body) ? body : (body?.data ?? []);
+      const rows = Array.isArray(body) ? body : body?.data ?? [];
       if (rows.length > 0) {
         return;
       }

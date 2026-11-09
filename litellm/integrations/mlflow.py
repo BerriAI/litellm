@@ -1,14 +1,35 @@
 import json
 import threading
-from typing import TYPE_CHECKING, Any, Final
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, Any, Final, Protocol
 
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.core_helpers import attribute_or_none, iter_items, require_attributes
 
 if TYPE_CHECKING:
     from litellm.types.utils import StandardLoggingPayload
 else:
     StandardLoggingPayload = Any
+
+
+class _ChoiceWithMessage(Protocol):
+    @property
+    def message(self) -> object: ...
+
+
+class _ExcludeNoneDumpable(Protocol):
+    def model_dump(self, *, exclude_none: bool) -> object: ...
+
+
+def _dumped_choice_message(choice: object) -> object:
+    message: Final = require_attributes(choice, _ChoiceWithMessage, "message").message
+    return require_attributes(message, _ExcludeNoneDumpable, "model_dump").model_dump(exclude_none=True)
+
+
+def _output_messages(response_obj: object) -> Sequence[object]:
+    choices: Final = attribute_or_none(response_obj, "choices") if hasattr(response_obj, "choices") else ()
+    return [_dumped_choice_message(c) for c in iter_items(choices)]
 
 
 class MlflowLogger(CustomLogger):
@@ -62,7 +83,7 @@ class MlflowLogger(CustomLogger):
 
         inputs: Final = self._construct_input(kwargs)
         input_messages: Final = inputs.get("messages", [])
-        output_messages: Final = [c.message.model_dump(exclude_none=True) for c in getattr(response_obj, "choices", [])]
+        output_messages: Final = _output_messages(response_obj)
         if messages := [*input_messages, *output_messages]:
             set_span_chat_messages(span, messages)
         if tools := inputs.get("tools"):
@@ -133,17 +154,17 @@ class MlflowLogger(CustomLogger):
         if final_response:
             end_time_ns: Final = int(end_time.timestamp() * 1e9)
 
-            self._extract_and_set_chat_attributes(span, kwargs, final_response)
-            self._end_span_or_trace(
-                span=span,
-                outputs=final_response,
-                status=SpanStatusCode.OK,
-                end_time_ns=end_time_ns,
-            )
-
-            # Remove the stream_id from the map
-            with self._lock:
-                self._stream_id_to_span.pop(litellm_call_id)
+            try:
+                self._extract_and_set_chat_attributes(span, kwargs, final_response)
+                self._end_span_or_trace(
+                    span=span,
+                    outputs=final_response,
+                    status=SpanStatusCode.OK,
+                    end_time_ns=end_time_ns,
+                )
+            finally:
+                with self._lock:
+                    self._stream_id_to_span.pop(litellm_call_id, None)
 
     def _add_chunk_events(self, span, response_obj):
         from mlflow.entities import SpanEvent
@@ -282,15 +303,15 @@ class MlflowLogger(CustomLogger):
         """End an MLflow span or a trace."""
         if span.parent_id is None:
             self._client.end_trace(
-                trace_id=span.request_id,
+                span.request_id,
                 outputs=outputs,
                 status=status,
                 end_time_ns=end_time_ns,
             )
         else:
             self._client.end_span(
-                trace_id=span.request_id,
-                span_id=span.span_id,
+                span.request_id,
+                span.span_id,
                 outputs=outputs,
                 status=status,
                 end_time_ns=end_time_ns,

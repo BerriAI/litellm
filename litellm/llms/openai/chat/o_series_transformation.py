@@ -11,8 +11,8 @@ Translations handled by LiteLLM:
 - Logprobs => drop param (if user opts in to dropping param)
 """
 
-from collections.abc import Coroutine
-from typing import Any, Final, Literal, cast, overload
+from collections.abc import Coroutine, Sequence
+from typing import Final, Literal, cast, overload
 
 import litellm
 from litellm import verbose_logger
@@ -37,7 +37,15 @@ class OpenAIOSeriesConfig(OpenAIGPTConfig):
     def get_config(cls):
         return super().get_config()
 
-    def translate_developer_role_to_system_role(self, messages: list[AllMessageValues]) -> list[AllMessageValues]:
+    def translate_developer_role_to_system_role(
+        self,
+        messages: Sequence[AllMessageValues],
+        *,
+        model: str,
+        custom_llm_provider: str | None,
+        api_base: str | None,
+        model_info: object,
+    ) -> Sequence[AllMessageValues]:
         """
         O-series models support `developer` role.
         """
@@ -126,7 +134,7 @@ class OpenAIOSeriesConfig(OpenAIGPTConfig):
     @overload
     def _transform_messages(
         self, messages: list[AllMessageValues], model: str, is_async: Literal[True]
-    ) -> Coroutine[Any, Any, list[AllMessageValues]]: ...
+    ) -> Coroutine[object, object, list[AllMessageValues]]: ...
 
     @overload
     def _transform_messages(
@@ -138,19 +146,20 @@ class OpenAIOSeriesConfig(OpenAIGPTConfig):
 
     def _transform_messages(
         self, messages: list[AllMessageValues], model: str, is_async: bool = False
-    ) -> list[AllMessageValues] | Coroutine[Any, Any, list[AllMessageValues]]:
+    ) -> list[AllMessageValues] | Coroutine[object, object, list[AllMessageValues]]:
         """
         Handles limitations of O-1 model family.
         - modalities: image => drop param (if user opts in to dropping param)
         - role: system ==> translate to role 'user'
         """
         _supports_system_messages: Final = supports_system_messages(model, "openai")
-        for i, message in enumerate(messages):
+        transformed_messages: Final = list(messages)
+        for i, message in enumerate(transformed_messages):
             if message["role"] == "system" and not _supports_system_messages:
                 new_message = ChatCompletionUserMessage(content=message["content"], role="user")
-                messages[i] = new_message  # Replace the old message with the new one
+                transformed_messages[i] = new_message  # Replace the old message with the new one
 
         if is_async:
-            return super()._transform_messages(messages, model, is_async=cast(Literal[True], True))
+            return super()._transform_messages(transformed_messages, model, is_async=cast(Literal[True], True))
         else:
-            return super()._transform_messages(messages, model, is_async=cast(Literal[False], False))
+            return super()._transform_messages(transformed_messages, model, is_async=cast(Literal[False], False))

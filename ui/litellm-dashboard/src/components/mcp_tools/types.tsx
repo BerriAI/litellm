@@ -1,3 +1,5 @@
+import type { ParseKeys } from "i18next";
+
 /** A single MCP tool event emitted by the LiteLLM proxy during a Responses API turn. */
 export interface MCPEvent {
   type: string;
@@ -38,6 +40,7 @@ export const AUTH_TYPE = {
   BEARER_TOKEN: "bearer_token",
   TOKEN: "token",
   BASIC: "basic",
+  AUTHORIZATION: "authorization",
   OAUTH2: "oauth2",
   OAUTH2_TOKEN_EXCHANGE: "oauth2_token_exchange",
   OAUTH2_ID_JAG: "oauth2_id_jag",
@@ -46,18 +49,19 @@ export const AUTH_TYPE = {
   OAUTH_DELEGATE: "oauth_delegate",
 };
 
-export const AUTH_TYPE_ITEMS = [
-  { value: AUTH_TYPE.NONE, label: "None" },
-  { value: AUTH_TYPE.API_KEY, label: "API Key" },
-  { value: AUTH_TYPE.BEARER_TOKEN, label: "Bearer Token" },
-  { value: AUTH_TYPE.TOKEN, label: "Token" },
-  { value: AUTH_TYPE.BASIC, label: "Basic Auth" },
-  { value: AUTH_TYPE.OAUTH2, label: "OAuth" },
-  { value: AUTH_TYPE.OAUTH2_TOKEN_EXCHANGE, label: "OAuth Token Exchange (OBO)" },
-  { value: AUTH_TYPE.OAUTH2_ID_JAG, label: "ID-JAG (Okta Cross App Access)" },
-  { value: AUTH_TYPE.AWS_SIGV4, label: "AWS SigV4 (Bedrock AgentCore MCPs)" },
-  { value: AUTH_TYPE.TRUE_PASSTHROUGH, label: "True Passthrough (no LiteLLM auth)" },
-  { value: AUTH_TYPE.OAUTH_DELEGATE, label: "OAuth Delegate (client-supplied upstream token)" },
+export const AUTH_TYPE_ITEMS: { value: string; label: ParseKeys }[] = [
+  { value: AUTH_TYPE.NONE, label: "mcpTools.authTypes.none" },
+  { value: AUTH_TYPE.API_KEY, label: "mcpTools.authTypes.apiKey" },
+  { value: AUTH_TYPE.BEARER_TOKEN, label: "mcpTools.authTypes.bearerToken" },
+  { value: AUTH_TYPE.TOKEN, label: "mcpTools.authTypes.token" },
+  { value: AUTH_TYPE.BASIC, label: "mcpTools.authTypes.basic" },
+  { value: AUTH_TYPE.AUTHORIZATION, label: "mcpTools.authTypes.authorization" },
+  { value: AUTH_TYPE.OAUTH2, label: "mcpTools.authTypes.oauth2" },
+  { value: AUTH_TYPE.OAUTH2_TOKEN_EXCHANGE, label: "mcpTools.authTypes.oauth2TokenExchange" },
+  { value: AUTH_TYPE.OAUTH2_ID_JAG, label: "mcpTools.authTypes.oauth2IdJag" },
+  { value: AUTH_TYPE.AWS_SIGV4, label: "mcpTools.authTypes.awsSigv4" },
+  { value: AUTH_TYPE.TRUE_PASSTHROUGH, label: "mcpTools.authTypes.truePassthrough" },
+  { value: AUTH_TYPE.OAUTH_DELEGATE, label: "mcpTools.authTypes.oauthDelegate" },
 ];
 
 // The two client-forwarded token modes: the caller supplies the upstream Authorization (forwarded
@@ -181,10 +185,23 @@ export const preservedDeclaredAppCredentials = (
 // Everything the admin typed into `credentials` and nothing minted: the declared app plus the config
 // keys. This is what must survive the invalidation reset and what a client-forwarded row may persist,
 // so dropping a key from here silently discards admin input on an unrelated edit.
+const adminScopes = (value: unknown): string[] | undefined => {
+  if (!Array.isArray(value)) return undefined;
+  const kept = value.filter((scope): scope is string => typeof scope === "string" && scope !== "");
+  return kept.length > 0 ? kept : undefined;
+};
+
 export const preservedAdminCredentials = (
   credentials: Record<string, unknown> | null | undefined,
-): Record<string, string> | undefined =>
-  pickStringCredentials(credentials, [...DECLARED_APP_CREDENTIAL_KEYS, ...ADMIN_CONFIG_CREDENTIAL_KEYS]);
+): Record<string, string | string[]> | undefined => {
+  const strings = pickStringCredentials(credentials, [
+    ...DECLARED_APP_CREDENTIAL_KEYS,
+    ...ADMIN_CONFIG_CREDENTIAL_KEYS,
+  ]);
+  const scopes = adminScopes(credentials?.scopes);
+  if (scopes === undefined) return strings;
+  return { ...(strings ?? {}), scopes };
+};
 
 // Drop minted token keys, keeping everything else (the declared app plus any non-token config).
 export const withoutMintedTokenCredentials = (
@@ -264,11 +281,11 @@ export const TRANSPORT = {
   OPENAPI: "openapi",
 };
 
-export const TRANSPORT_ITEMS = [
-  { value: TRANSPORT.HTTP, label: "Streamable HTTP (Recommended)" },
-  { value: TRANSPORT.SSE, label: "Server-Sent Events (SSE)" },
-  { value: TRANSPORT.STDIO, label: "Standard Input/Output (stdio)" },
-  { value: TRANSPORT.OPENAPI, label: "OpenAPI Spec" },
+export const TRANSPORT_ITEMS: { value: string; label: ParseKeys }[] = [
+  { value: TRANSPORT.HTTP, label: "mcpTools.transports.http" },
+  { value: TRANSPORT.SSE, label: "mcpTools.transports.sse" },
+  { value: TRANSPORT.STDIO, label: "mcpTools.transports.stdio" },
+  { value: TRANSPORT.OPENAPI, label: "mcpTools.transports.openapi" },
 ];
 
 export const handleTransport = (transport?: string | null, specPath?: string | null): string => {
@@ -321,6 +338,8 @@ export interface MCPServerCostInfo {
 // Define MCP provider info
 export interface MCPInfo {
   server_name: string;
+  is_public?: boolean;
+  is_public_explicit?: boolean;
   description?: string;
   logo_url?: string;
   mcp_server_cost_info?: MCPServerCostInfo | null;
@@ -405,8 +424,11 @@ export interface MCPToolsViewerProps {
   extraHeaders?: string[] | null;
 }
 
+export const MCP_REACHABLE_DESCRIPTION: ParseKeys = "mcpTools.reachableDescription";
+
 export interface MCPServer {
   server_id: string;
+  is_config?: boolean;
   server_name?: string | null;
   alias?: string | null;
   description?: string | null;
@@ -434,7 +456,7 @@ export interface MCPServer {
   updated_by: string;
   extra_headers?: string[] | null;
   static_headers?: Record<string, string> | null;
-  status?: "healthy" | "unhealthy" | "unknown";
+  status?: "healthy" | "reachable" | "unhealthy" | "unknown";
   last_health_check?: string | null;
   health_check_error?: string | null;
   teams?: Team[];
@@ -448,6 +470,7 @@ export interface MCPServer {
   oauth_passthrough?: boolean;
   dcr_bridge?: boolean | null;
   max_concurrent_requests?: number | null;
+  rpm?: number | null;
   /** Redacted to null in server responses; present when constructing a server locally. */
   credentials?: Record<string, unknown> | null;
 
@@ -517,6 +540,7 @@ export interface MCPServerProps {
   accessToken: string | null;
   userRole: string | null;
   userID: string | null;
+  isViewOnly?: boolean;
 }
 
 export interface MCPToolsetTool {
@@ -559,4 +583,51 @@ export interface MCPSubmissionsSummary {
   active: number;
   rejected: number;
   items: MCPServer[];
+}
+
+export interface MCPGatewaySession {
+  session_id_prefix: string;
+  client_name: string | null;
+  client_version: string | null;
+  user_id: string | null;
+  user_email: string | null;
+  key_alias: string | null;
+  team_id: string | null;
+  team_alias: string | null;
+  client_ip: string | null;
+  idle_seconds: number;
+  in_flight_requests: number;
+}
+
+export interface MCPGatewaySessionGroupCount {
+  label: string | null;
+  count: number;
+}
+
+export interface MCPGatewaySessionsResponse {
+  worker_pid: number;
+  total_sessions: number;
+  by_client: MCPGatewaySessionGroupCount[];
+  by_user: MCPGatewaySessionGroupCount[];
+  sessions: MCPGatewaySession[];
+}
+
+export interface MCPGatewaySessionsTerminateResponse {
+  worker_pid: number;
+  terminated_sessions: number;
+  sessions: MCPGatewaySession[];
+}
+
+export type MCPGatewaySessionSelector =
+  | { session_id_prefix: string; user_id?: undefined }
+  | { user_id: string; session_id_prefix?: undefined };
+
+export type MCPServerUserCredentialType = "oauth2" | "byok";
+
+export interface MCPServerUserCredentialListItem {
+  user_id: string;
+  credential_type: MCPServerUserCredentialType;
+  expires_at: string | null;
+  connected_at: string | null;
+  updated_at: string;
 }

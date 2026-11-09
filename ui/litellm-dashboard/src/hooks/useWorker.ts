@@ -4,6 +4,8 @@ import { useState, useCallback, useEffect } from "react";
 import { switchToWorkerUrl, WorkerInfo } from "@/components/networking";
 import { useUIConfig } from "@/app/(dashboard)/hooks/uiConfig/useUIConfig";
 
+import { getLocalStorageItem } from "@/utils/localStorageUtils";
+
 const SELECTED_WORKER_KEY = "litellm_selected_worker_id";
 
 interface UseWorkerReturn {
@@ -21,8 +23,7 @@ export const useWorker = (): UseWorkerReturn => {
   const workers: WorkerInfo[] = uiConfig?.workers ?? [];
 
   const [selectedWorkerId, setSelectedWorkerId] = useState<string | null>(() => {
-    if (typeof window === "undefined") return null;
-    return localStorage.getItem(SELECTED_WORKER_KEY);
+    return getLocalStorageItem(SELECTED_WORKER_KEY);
   });
 
   // Once workers are loaded, restore proxyBaseUrl from the persisted selection

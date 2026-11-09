@@ -5,7 +5,7 @@ BitBucket API client for fetching .prompt files from BitBucket repositories.
 import base64
 import urllib.parse
 from collections.abc import Mapping
-from typing import Final, TypedDict
+from typing import Final, Protocol, TypedDict
 
 from typing_extensions import NotRequired, ReadOnly
 
@@ -36,6 +36,30 @@ class BitBucketFileMetadata(TypedDict):
     last_modified: ReadOnly[str | None]
 
 
+class _SrcListingResponse(Protocol):
+    def json(self) -> BitBucketSrcListing: ...
+
+
+class _RepositoryInfoResponse(Protocol):
+    def json(self) -> Mapping[str, object]: ...
+
+
+class _BranchListingResponse(Protocol):
+    def json(self) -> BitBucketBranchListing: ...
+
+
+def _src_listing(response: _SrcListingResponse) -> BitBucketSrcListing:
+    return response.json()
+
+
+def _repository_info(response: _RepositoryInfoResponse) -> Mapping[str, object]:
+    return response.json()
+
+
+def _branch_listing(response: _BranchListingResponse) -> BitBucketBranchListing:
+    return response.json()
+
+
 def _sanitize_file_path(file_path: str) -> str:
     """Reject path traversal and URL-encode each path segment."""
     if "#" in file_path or "?" in file_path:
@@ -45,6 +69,10 @@ def _sanitize_file_path(file_path: str) -> str:
         if part == "..":
             raise ValueError(f"Invalid file path {file_path!r}: path traversal detected")
     return "/".join(urllib.parse.quote(part, safe="") for part in parts)
+
+
+def _content_type(headers: Mapping[str, str]) -> str:
+    return headers.get("content-type", "")
 
 
 class BitBucketClient:
@@ -119,7 +147,7 @@ class BitBucketClient:
             response.raise_for_status()
 
             # BitBucket returns file content as base64 encoded
-            if response.headers.get("content-type", "").startswith("text/"):
+            if _content_type(response.headers).startswith("text/"):
                 return response.text
             else:
                 # For binary files or when content-type is not text, try to decode as base64
@@ -162,7 +190,7 @@ class BitBucketClient:
             response: Final = self.http_handler.get(url, headers=self.headers)
             response.raise_for_status()
 
-            data: Final[BitBucketSrcListing] = response.json()
+            data: Final = _src_listing(response)
             return [
                 file_path
                 for item in data.get("values", [])
@@ -197,7 +225,7 @@ class BitBucketClient:
         try:
             response: Final = self.http_handler.get(url, headers=self.headers)
             response.raise_for_status()
-            return response.json()
+            return _repository_info(response)
         except Exception as e:
             raise Exception(f"Failed to get repository info: {e}")
 
@@ -227,7 +255,7 @@ class BitBucketClient:
             response: Final = self.http_handler.get(url, headers=self.headers)
             response.raise_for_status()
 
-            data: Final[BitBucketBranchListing] = response.json()
+            data: Final = _branch_listing(response)
             return data.get("values", [])
         except Exception as e:
             raise Exception(f"Failed to get branches: {e}")

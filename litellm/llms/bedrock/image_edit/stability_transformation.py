@@ -22,11 +22,15 @@ API Reference: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parame
 """
 
 import base64
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, Protocol, cast, runtime_checkable
 
 import httpx
+from httpx._types import RequestFiles
+from pydantic import TypeAdapter
 
+from litellm.litellm_core_utils.core_helpers import decoded_json_object, iter_items, json_contains
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
+from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.types.images.main import ImageEditOptionalRequestParams
 from litellm.types.llms.stability import (
     OPENAI_SIZE_TO_STABILITY_ASPECT_RATIO,
@@ -41,6 +45,19 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
+@runtime_checkable
+class _SupportsGetItem(Protocol):
+    def __getitem__(self, key: str | int, /) -> object: ...
+
+
+def _subscript(value: object, key: str | int) -> object:
+    if isinstance(value, _SupportsGetItem):
+        return value[key]
+    raise TypeError(f"'{type(value).__name__}' object is not subscriptable")
 
 
 class BedrockStabilityImageEditConfig(BaseImageEditConfig):
@@ -84,6 +101,21 @@ class BedrockStabilityImageEditConfig(BaseImageEditConfig):
                 return True
         return False
 
+    @classmethod
+    def is_stability_edit_model(
+        cls,
+        model: str | None = None,
+    ) -> bool:
+        return cls._is_stability_edit_model(model)
+
+    def get_error_class(
+        self,
+        error_message: str,
+        status_code: int,
+        headers: dict[str, object] | httpx.Headers,  # mutable-ok: base passes response headers as a dict
+    ) -> BedrockError:
+        return BedrockError(status_code=status_code, message=error_message, headers=headers)
+
     def get_supported_openai_params(self, model: str) -> list:
         """
         Return list of OpenAI params supported by Bedrock Stability.
@@ -116,7 +148,7 @@ class BedrockStabilityImageEditConfig(BaseImageEditConfig):
         }
 
         # Create a copy to not mutate original - convert TypedDict to regular dict
-        mapped_params: Final[dict[str, Any]] = dict(image_edit_optional_params)
+        mapped_params: Final[dict[str, object]] = dict(image_edit_optional_params)
 
         for k, v in image_edit_optional_params.items():
             if k in param_mapping:
@@ -156,14 +188,14 @@ class BedrockStabilityImageEditConfig(BaseImageEditConfig):
         image_edit_optional_request_params: dict,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> tuple[dict, Any]:
+    ) -> tuple[dict, RequestFiles]:
         """
         Transform OpenAI-style request to Bedrock Stability request format.
 
         Returns the request body dict that will be JSON-encoded by the handler.
         """
         # Build Bedrock Stability request
-        data: Final[dict[str, Any]] = {
+        data: Final[dict[str, object]] = {
             "output_format": "png",  # Default to PNG
         }
 
@@ -282,7 +314,7 @@ class BedrockStabilityImageEditConfig(BaseImageEditConfig):
         OpenAI expects: {"data": [{"b64_json": "base64..."}], "created": timestamp}
         """
         try:
-            response_data: Final = raw_response.json()
+            response_data: Final = _DECODED_JSON.validate_python(raw_response.json())
         except Exception as e:
             raise self.get_error_class(
                 error_message=f"Error parsing Bedrock Stability response: {e}",
@@ -291,18 +323,19 @@ class BedrockStabilityImageEditConfig(BaseImageEditConfig):
             )
 
         # Check for errors in response
-        if "errors" in response_data:
+        if json_contains(response_data, "errors"):
             raise self.get_error_class(
-                error_message=f"Bedrock Stability error: {response_data['errors']}",
+                error_message=f"Bedrock Stability error: {_subscript(response_data, 'errors')}",
                 status_code=raw_response.status_code,
                 headers=raw_response.headers,
             )
 
         # Check finish_reasons
-        finish_reasons: Final = response_data.get("finish_reasons", [])
-        if finish_reasons and finish_reasons[0]:
+        response_fields: Final = decoded_json_object(response_data)
+        finish_reasons: Final = response_fields.get("finish_reasons", [])
+        if finish_reasons and _subscript(finish_reasons, 0):
             raise self.get_error_class(
-                error_message=f"Bedrock Stability error: {finish_reasons[0]}",
+                error_message=f"Bedrock Stability error: {_subscript(finish_reasons, 0)}",
                 status_code=400,
                 headers=raw_response.headers,
             )
@@ -312,9 +345,9 @@ class BedrockStabilityImageEditConfig(BaseImageEditConfig):
             model_response.data = []
 
         # Extract images from response
-        images: Final = response_data.get("images", [])
+        images: Final = response_fields.get("images", [])
         if images:
-            for image_b64 in images:
+            for image_b64 in iter_items(images):
                 if image_b64:
                     model_response.data.append(
                         ImageObject(
@@ -325,17 +358,16 @@ class BedrockStabilityImageEditConfig(BaseImageEditConfig):
                     )
 
         if not hasattr(model_response, "_hidden_params"):
-            model_response._hidden_params = {}
-        if "additional_headers" not in model_response._hidden_params:
-            model_response._hidden_params["additional_headers"] = {}
+            model_response.hidden_params = {}
+        additional_headers: Final = cast(  # cast-ok: provider headers are stored as a mutable mapping
+            dict[str, object], model_response.hidden_params.setdefault("additional_headers", {})
+        )
 
         # Set cost based on model
         model_info: Final = get_model_info(model, custom_llm_provider="bedrock")
         cost_per_image: Final = model_info.get("output_cost_per_image", 0)
         if cost_per_image is not None:
-            model_response._hidden_params["additional_headers"]["llm_provider-x-litellm-response-cost"] = float(
-                cost_per_image
-            )
+            additional_headers["llm_provider-x-litellm-response-cost"] = float(cost_per_image)
 
         return model_response
 

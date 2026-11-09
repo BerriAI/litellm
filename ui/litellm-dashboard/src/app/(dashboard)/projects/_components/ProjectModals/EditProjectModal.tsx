@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Save } from "lucide-react";
 
 import { toast } from "@/lib/toast";
@@ -10,7 +11,7 @@ import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { ProjectResponse } from "@/app/(dashboard)/hooks/projects/useProjects";
 import { useUpdateProject, ProjectUpdateParams } from "@/app/(dashboard)/hooks/projects/useUpdateProject";
 import { ProjectBaseForm } from "./ProjectBaseForm";
-import { projectFormSchema, type ProjectFormValues } from "./projectFormSchema";
+import { projectFormSchema, type ProjectFormValues, type ProjectSubmitValues } from "./projectFormSchema";
 import { buildProjectUpdateParams } from "./projectFormUtils";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
@@ -58,7 +59,7 @@ export const toFormValues = (project: ProjectResponse): ProjectFormValues => {
 
   return {
     project_alias: project.project_alias ?? "",
-    team_id: project.team_id ?? "",
+    team_id: project.team_id ?? null,
     description: project.description ?? "",
     models: project.models ?? [],
     max_budget: project.litellm_budget_table?.max_budget ?? undefined,
@@ -70,6 +71,7 @@ export const toFormValues = (project: ProjectResponse): ProjectFormValues => {
 };
 
 function EditProjectForm({ project, onClose, onSuccess }: Omit<EditProjectModalProps, "isOpen">) {
+  const { t } = useTranslation();
   const form = useZodForm(projectFormSchema, { defaultValues: toFormValues(project) });
   const updateMutation = useUpdateProject();
   const [advancedOpen, setAdvancedOpen] = useState(false);
@@ -81,12 +83,12 @@ function EditProjectForm({ project, onClose, onSuccess }: Omit<EditProjectModalP
   };
 
   const handleSubmit = form.handleSubmit((values) => {
-    const submitted: ProjectFormValues = advancedEverOpened
+    const submitted: ProjectSubmitValues = advancedEverOpened
       ? values
       : { ...values, guardrails: undefined, modelLimits: undefined, metadata: undefined };
 
     const params: ProjectUpdateParams = {
-      ...buildProjectUpdateParams(submitted),
+      ...buildProjectUpdateParams(submitted, project.litellm_budget_table?.max_budget),
       team_id: submitted.team_id,
     };
 
@@ -94,12 +96,12 @@ function EditProjectForm({ project, onClose, onSuccess }: Omit<EditProjectModalP
       { projectId: project.project_id, params },
       {
         onSuccess: () => {
-          toast.success("Project updated successfully");
+          toast.success(t("projects.editModal.toast.updated"));
           onSuccess?.();
           onClose();
         },
         onError: (error) => {
-          toast.error(error.message || "Failed to update project");
+          toast.error(error.message || t("projects.editModal.toast.failed"));
         },
       },
     );
@@ -111,11 +113,11 @@ function EditProjectForm({ project, onClose, onSuccess }: Omit<EditProjectModalP
 
       <div className="mt-6 flex justify-end gap-2 border-t border-border pt-4">
         <Button type="button" variant="outline" onClick={onClose}>
-          Cancel
+          {t("projects.editModal.cancel")}
         </Button>
         <Button type="button" onClick={() => void handleSubmit()} disabled={updateMutation.isPending}>
           {updateMutation.isPending ? <UiLoadingSpinner /> : <Save />}
-          Save Changes
+          {t("projects.editModal.submit")}
         </Button>
       </div>
     </form>
@@ -123,11 +125,12 @@ function EditProjectForm({ project, onClose, onSuccess }: Omit<EditProjectModalP
 }
 
 export function EditProjectModal({ isOpen, project, onClose, onSuccess }: EditProjectModalProps) {
+  const { t } = useTranslation();
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[720px]">
         <DialogHeader>
-          <DialogTitle className="text-lg">Edit Project</DialogTitle>
+          <DialogTitle className="text-lg">{t("projects.editModal.title")}</DialogTitle>
         </DialogHeader>
         <EditProjectForm key={project.project_id} project={project} onClose={onClose} onSuccess={onSuccess} />
       </DialogContent>

@@ -2,14 +2,18 @@
 
 import { useMemo, useState } from "react";
 import { RefreshCw } from "lucide-react";
+import { parseAsString, useQueryStates } from "nuqs";
 import { useQueryClient } from "@tanstack/react-query";
+import type { ParseKeys } from "i18next";
+import { useTranslation } from "react-i18next";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
+import { useUrlTab } from "@/hooks/useUrlTab";
 import { all_admin_roles, internalUserRoles } from "@/utils/roles";
-import { canCreateModels } from "@/utils/modelPermissions";
+import { autoRouterCreationScope, canCreateModels } from "@/utils/modelPermissions";
 import BetaBadge from "@/components/BetaBadge";
-import CostOptimizationFeedbackBanner from "@/components/molecules/cost_optimization_feedback_banner";
+import DecisionModelsBanner from "@/components/molecules/DecisionModelsBanner";
 import ModelInfoView from "@/components/model_info_view";
 import TeamInfoView from "@/components/team/TeamInfo";
 import { useModelDetailRouting } from "@/app/(dashboard)/models-and-endpoints/detailNavigation";
@@ -27,29 +31,36 @@ import PriceDataPanel from "@/app/(dashboard)/models-and-endpoints/panels/PriceD
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
-type ModelTabSlug =
-  | "add"
-  | "auto-routers"
-  | "llm-credentials"
-  | "pass-through"
-  | "health"
-  | "retry-settings"
-  | "model-group-alias"
-  | "access-group-budgets"
-  | "price-data";
+const MODEL_TAB_SLUGS = [
+  "add",
+  "auto-routers",
+  "llm-credentials",
+  "pass-through",
+  "health",
+  "retry-settings",
+  "model-group-alias",
+  "access-group-budgets",
+  "price-data",
+] as const;
+
+type ModelTabSlug = (typeof MODEL_TAB_SLUGS)[number];
 
 const BASE_TAB_KEY = "all-models";
 
-const TAB_LABELS: Record<ModelTabSlug, string> = {
-  add: "Add Model",
-  "auto-routers": "Auto-Routers",
-  "llm-credentials": "LLM Credentials",
-  "pass-through": "Pass-Through Endpoints",
-  health: "Health Status",
-  "retry-settings": "Model Retry Settings",
-  "model-group-alias": "Model Group Alias",
-  "access-group-budgets": "Model Access Group Budgets",
-  "price-data": "Price Data Reload",
+const TAB_KEYS = [BASE_TAB_KEY, ...MODEL_TAB_SLUGS] as const;
+
+const PREFILL_URL_PARAMS = { provider: parseAsString, litellm_model: parseAsString };
+
+const TAB_LABELS: Record<ModelTabSlug, ParseKeys> = {
+  add: "modelsAndEndpoints.page.tabs.add",
+  "auto-routers": "modelsAndEndpoints.page.tabs.autoRouters",
+  "llm-credentials": "modelsAndEndpoints.page.tabs.llmCredentials",
+  "pass-through": "modelsAndEndpoints.page.tabs.passThrough",
+  health: "modelsAndEndpoints.page.tabs.health",
+  "retry-settings": "modelsAndEndpoints.page.tabs.retrySettings",
+  "model-group-alias": "modelsAndEndpoints.page.tabs.modelGroupAlias",
+  "access-group-budgets": "modelsAndEndpoints.page.tabs.accessGroupBudgets",
+  "price-data": "modelsAndEndpoints.page.tabs.priceData",
 };
 
 const renderPanel = (key: string) => {
@@ -80,6 +91,7 @@ const renderPanel = (key: string) => {
 };
 
 export default function ModelsAndEndpointsPage() {
+  const { t } = useTranslation();
   const { accessToken, userRole, userId: userID, premiumUser, isViewOnly } = useAuthorized();
   const { data: teams } = useTeams();
   const { data: uiSettings } = useUISettings();
@@ -87,7 +99,8 @@ export default function ModelsAndEndpointsPage() {
   const { modelId, teamId, close } = useModelDetailRouting();
   const { availableModelAccessGroups, allModelsOnProxy } = useModelDashboardData();
 
-  const [activeKey, setActiveKey] = useState<string>(BASE_TAB_KEY);
+  const [requestedTab, setRequestedTab] = useUrlTab(TAB_KEYS, BASE_TAB_KEY);
+  const [, setPrefillParams] = useQueryStates(PREFILL_URL_PARAMS);
   const [lastRefreshed, setLastRefreshed] = useState("");
 
   const isInternalUser = userRole && internalUserRoles.includes(userRole);
@@ -100,38 +113,55 @@ export default function ModelsAndEndpointsPage() {
     },
   );
   const isAdmin = all_admin_roles.includes(userRole);
+  const canViewAutoRouters =
+    autoRouterCreationScope(
+      { userRole, userID, isViewOnly },
+      { teams: teams ?? null, disabledForInternalUsers: false },
+    ) !== "forbidden";
 
   const visibleSlugs = useMemo<Array<"" | ModelTabSlug>>(
     () => [
       "",
       ...(canCreate ? (["add"] as const) : []),
-      ...(isAdmin || canCreate ? (["auto-routers"] as const) : []),
-      ...(isAdmin
-        ? ([
-            "llm-credentials",
-            "pass-through",
-            "health",
-            "retry-settings",
-            "model-group-alias",
-            "access-group-budgets",
-            "price-data",
-          ] as const)
+      ...(isAdmin || canViewAutoRouters ? (["auto-routers"] as const) : []),
+      // effectiveSessionRole reports proxy_admin_viewer as "Admin", so isAdmin alone would show a
+      // viewer these write-only panels; only the raw-role isViewOnly separates them. Health Status
+      // stays: it is the bucket's one read view, and viewers keep read parity with admins.
+      ...(!isViewOnly && (isAdmin || isInternalUser) ? (["llm-credentials"] as const) : []),
+      ...(isAdmin && !isViewOnly ? (["pass-through"] as const) : []),
+      ...(isAdmin ? (["health"] as const) : []),
+      ...(isAdmin && !isViewOnly
+        ? (["retry-settings", "model-group-alias", "access-group-budgets", "price-data"] as const)
         : []),
     ],
-    [canCreate, isAdmin],
+    [canCreate, canViewAutoRouters, isAdmin, isInternalUser, isViewOnly],
   );
 
-  const allModelsLabel = isAdmin ? "All Models" : "Your Models";
+  const visibleKeys: readonly string[] = visibleSlugs.map((slug) => slug || BASE_TAB_KEY);
+  const activeKey = visibleKeys.includes(requestedTab) ? requestedTab : BASE_TAB_KEY;
+
+  const handleTabChange = (key: string) => {
+    const next = TAB_KEYS.find((tabKey) => tabKey === key);
+    if (next === undefined) {
+      return;
+    }
+    setRequestedTab(next);
+    void setPrefillParams({ provider: null, litellm_model: null });
+  };
+
+  const allModelsLabel = isAdmin
+    ? t("modelsAndEndpoints.page.tabs.deployedModels")
+    : t("modelsAndEndpoints.page.tabs.yourModels");
   const tabLabel = (slug: "" | ModelTabSlug): React.ReactNode => {
     if (!slug) return allModelsLabel;
     if (slug === "auto-routers" || slug === "access-group-budgets") {
       return (
         <span className="flex items-center gap-2">
-          {TAB_LABELS[slug]} <BetaBadge />
+          {t(TAB_LABELS[slug])} <BetaBadge />
         </span>
       );
     }
-    return TAB_LABELS[slug];
+    return t(TAB_LABELS[slug]);
   };
 
   const handleRefreshClick = () => {
@@ -148,8 +178,8 @@ export default function ModelsAndEndpointsPage() {
           teamId={teamId}
           onClose={close}
           accessToken={accessToken}
-          is_team_admin={userRole === "Admin"}
-          is_proxy_admin={userRole === "Proxy Admin"}
+          is_team_admin={userRole === "Admin" && !isViewOnly}
+          is_proxy_admin={userRole === "Admin" && !isViewOnly}
           userModels={allModelsOnProxy}
           editTeam={false}
           onUpdate={invalidateModels}
@@ -164,16 +194,16 @@ export default function ModelsAndEndpointsPage() {
       <div className="mt-2 flex w-full flex-col gap-2 p-8">
         <div className="mb-4 flex items-center justify-between">
           <div>
-            <h2 className="text-lg font-semibold">Model Management</h2>
+            <h2 className="text-lg font-semibold">{t("modelsAndEndpoints.page.title")}</h2>
             {isAdmin ? (
-              <p className="text-sm text-muted-foreground">Add and manage models for the proxy</p>
+              <p className="text-sm text-muted-foreground">{t("modelsAndEndpoints.page.adminDescription")}</p>
             ) : (
-              <p className="text-sm text-muted-foreground">Add models for teams you are an admin for.</p>
+              <p className="text-sm text-muted-foreground">{t("modelsAndEndpoints.page.userDescription")}</p>
             )}
           </div>
         </div>
 
-        <CostOptimizationFeedbackBanner />
+        {!isViewOnly && <DecisionModelsBanner />}
 
         {modelId ? (
           <ModelInfoView
@@ -187,7 +217,7 @@ export default function ModelsAndEndpointsPage() {
             modelAccessGroups={availableModelAccessGroups}
           />
         ) : (
-          <Tabs value={activeKey} onValueChange={setActiveKey}>
+          <Tabs value={activeKey} onValueChange={handleTabChange}>
             <div className="flex min-w-0 flex-nowrap items-center gap-3 border-b">
               <div className="no-scrollbar scroll-fade-e -mb-1.5 min-w-0 flex-1 overflow-x-auto pb-1.5">
                 <TabsList variant="line" className="w-max justify-start">
@@ -203,9 +233,16 @@ export default function ModelsAndEndpointsPage() {
               </div>
               <div className="flex shrink-0 items-center gap-2 pb-1">
                 {lastRefreshed && (
-                  <span className="text-xs text-muted-foreground">Last Refreshed: {lastRefreshed}</span>
+                  <span className="text-xs text-muted-foreground">
+                    {t("modelsAndEndpoints.page.lastRefreshed", { time: lastRefreshed })}
+                  </span>
                 )}
-                <Button variant="ghost" size="icon-sm" onClick={handleRefreshClick} aria-label="Refresh models">
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  onClick={handleRefreshClick}
+                  aria-label={t("modelsAndEndpoints.page.refreshModels")}
+                >
                   <RefreshCw />
                 </Button>
               </div>

@@ -2,8 +2,11 @@ import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useHealthReadinessDetails } from "@/app/(dashboard)/hooks/healthReadiness/useHealthReadinessDetails";
 import { useDisableBlogPosts } from "@/app/(dashboard)/hooks/useDisableBlogPosts";
 import { useDisableBouncingIcon } from "@/app/(dashboard)/hooks/useDisableBouncingIcon";
+import { useDisableLiteAdmin } from "@/app/(dashboard)/hooks/useDisableLiteAdmin";
+import { ARIA_AGENT_LABEL } from "@/components/liteadmin/aria-brand";
 import { useDisableShowNewBadge } from "@/app/(dashboard)/hooks/useDisableShowNewBadge";
 import { useDisableShowPrompts } from "@/app/(dashboard)/hooks/useDisableShowPrompts";
+import LanguageField from "./LanguageField";
 import { emitLocalStorageChange, removeLocalStorageItem, setLocalStorageItem } from "@/utils/localStorageUtils";
 import { navAccountDisplayName } from "@/components/Navbar/navDisplayName";
 import CopyButton from "@/components/shared/CopyButton";
@@ -14,8 +17,13 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/cva.config";
-import { ChevronsUpDown, Crown, IdCard, LogOut, Mail, ShieldCheck } from "lucide-react";
+import { uiHref } from "@/utils/uiHref";
+import { isProxyAdminRole } from "@/utils/roles";
+import { ChevronsUpDown, Crown, IdCard, KeyRound, LogOut, Mail, ShieldCheck } from "lucide-react";
+import { useRouter } from "next/navigation";
 import React from "react";
+import { Trans, useTranslation } from "react-i18next";
+import { productNames } from "@/i18n/untranslated/productNames";
 
 const RELEASE_NOTES_URL = "https://docs.litellm.ai/release_notes";
 
@@ -81,13 +89,27 @@ interface SidebarAccountMenuProps {
 }
 
 const SidebarAccountMenu: React.FC<SidebarAccountMenuProps> = ({ onLogout, collapsed = false }) => {
-  const { userId, userEmail, userRoleLabel: userRole, premiumUser, accessToken } = useAuthorized();
+  const {
+    userId,
+    userEmail,
+    userRole: role,
+    userRoleLabel: userRole,
+    isViewOnly,
+    premiumUser,
+    accessToken,
+    loginMethod,
+  } = useAuthorized();
+  const { t } = useTranslation();
+  const router = useRouter();
+  const [open, setOpen] = React.useState(false);
   const { data: healthData } = useHealthReadinessDetails(accessToken);
   const version = healthData?.litellm_version;
   const disableShowPrompts = useDisableShowPrompts();
   const disableBlogPosts = useDisableBlogPosts();
   const disableBouncingIcon = useDisableBouncingIcon();
   const disableShowNewBadge = useDisableShowNewBadge();
+  const [disableLiteAdmin, setDisableLiteAdmin] = useDisableLiteAdmin(userId);
+  const canUseLiteAdmin = userId && !isViewOnly && isProxyAdminRole(role);
 
   const setFlag = (key: string, checked: boolean) => {
     if (checked) {
@@ -101,29 +123,29 @@ const SidebarAccountMenu: React.FC<SidebarAccountMenuProps> = ({ onLogout, colla
   const toggles = [
     {
       key: "disableShowNewBadge",
-      label: "Hide New Feature Indicators",
-      ariaLabel: "Toggle hide new feature indicators",
+      label: t("shell.sidebarAccountMenu.toggles.newBadge.label"),
+      ariaLabel: t("shell.sidebarAccountMenu.toggles.newBadge.ariaLabel"),
       checked: disableShowNewBadge,
       onCheckedChange: (checked: boolean) => setFlag("disableShowNewBadge", checked),
     },
     {
       key: "disableShowPrompts",
-      label: "Hide All Prompts",
-      ariaLabel: "Toggle hide all prompts",
+      label: t("shell.sidebarAccountMenu.toggles.prompts.label"),
+      ariaLabel: t("shell.sidebarAccountMenu.toggles.prompts.ariaLabel"),
       checked: disableShowPrompts,
       onCheckedChange: (checked: boolean) => setFlag("disableShowPrompts", checked),
     },
     {
       key: "disableBlogPosts",
-      label: "Hide Blog Posts",
-      ariaLabel: "Toggle hide blog posts",
+      label: t("shell.sidebarAccountMenu.toggles.blogPosts.label"),
+      ariaLabel: t("shell.sidebarAccountMenu.toggles.blogPosts.ariaLabel"),
       checked: disableBlogPosts,
       onCheckedChange: (checked: boolean) => setFlag("disableBlogPosts", checked),
     },
     {
       key: "disableBouncingIcon",
-      label: "Hide Bouncing Icon",
-      ariaLabel: "Toggle hide bouncing icon",
+      label: t("shell.sidebarAccountMenu.toggles.bouncingIcon.label"),
+      ariaLabel: t("shell.sidebarAccountMenu.toggles.bouncingIcon.ariaLabel"),
       checked: disableBouncingIcon,
       onCheckedChange: (checked: boolean) => setFlag("disableBouncingIcon", checked),
     },
@@ -133,10 +155,13 @@ const SidebarAccountMenu: React.FC<SidebarAccountMenuProps> = ({ onLogout, colla
   const initials = initialsFromIdentity(userEmail, userId);
   const hue = hueFromString(seed);
   const displayName = navAccountDisplayName(userEmail, userId);
-  const triggerLabel = `Account menu — ${userRole ?? "Unknown role"} — signed in as ${userEmail || userId || "unknown"}`;
+  const triggerLabel = t("shell.sidebarAccountMenu.triggerLabel", {
+    role: userRole ?? t("shell.sidebarAccountMenu.unknownRole"),
+    identity: userEmail || userId || t("shell.sidebarAccountMenu.unknownIdentity"),
+  });
 
   return (
-    <Popover>
+    <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger
         className={cn(
           "flex w-full items-center rounded-lg border border-transparent transition-colors hover:bg-sidebar-accent",
@@ -169,12 +194,12 @@ const SidebarAccountMenu: React.FC<SidebarAccountMenuProps> = ({ onLogout, colla
         data-testid="sidebar-account-menu-panel"
       >
         <div className="flex items-center gap-2 border-b border-border px-3 py-3">
-          <span className="text-[15px] font-bold tracking-tight text-foreground">LiteLLM</span>
+          <span className="text-[15px] font-bold tracking-tight text-foreground">{productNames.liteLLM}</span>
           {!disableBouncingIcon && (
             <span
               className="animate-bounce text-lg leading-none"
               style={{ animationDuration: "2s" }}
-              title="Thanks for using LiteLLM!"
+              title={t("shell.sidebarAccountMenu.thanks")}
               aria-hidden
             >
               🌴
@@ -193,27 +218,27 @@ const SidebarAccountMenu: React.FC<SidebarAccountMenuProps> = ({ onLogout, colla
         </div>
 
         <div className="flex flex-col px-3 py-2">
-          <InfoRow icon={<Crown className="size-[17px]" />} label="Tier">
+          <InfoRow icon={<Crown className="size-[17px]" />} label={t("shell.sidebarAccountMenu.tier")}>
             {premiumUser ? (
               <Badge variant="outline" className="gap-1 border-warning/30 bg-warning/10 text-warning">
                 <Crown />
-                Premium
+                {t("shell.sidebarAccountMenu.premium")}
               </Badge>
             ) : (
-              <Badge variant="secondary" className="gap-1" title="Upgrade to Premium for advanced features">
+              <Badge variant="secondary" className="gap-1" title={t("shell.sidebarAccountMenu.upgradeHint")}>
                 <Crown />
-                Standard
+                {t("shell.sidebarAccountMenu.standard")}
               </Badge>
             )}
           </InfoRow>
-          <InfoRow icon={<ShieldCheck className="size-[17px]" />} label="Role">
+          <InfoRow icon={<ShieldCheck className="size-[17px]" />} label={t("shell.sidebarAccountMenu.role")}>
             <Badge variant="secondary">{userRole}</Badge>
           </InfoRow>
-          <InfoRow icon={<Mail className="size-[17px]" />} label="Email">
-            <MonoValue value={userEmail} copyLabel="Copy email" />
+          <InfoRow icon={<Mail className="size-[17px]" />} label={t("shell.sidebarAccountMenu.email")}>
+            <MonoValue value={userEmail} copyLabel={t("shell.sidebarAccountMenu.copyEmail")} />
           </InfoRow>
-          <InfoRow icon={<IdCard className="size-[17px]" />} label="User ID">
-            <MonoValue value={userId} copyLabel="Copy user ID" />
+          <InfoRow icon={<IdCard className="size-[17px]" />} label={t("shell.sidebarAccountMenu.userId")}>
+            <MonoValue value={userId} copyLabel={t("shell.sidebarAccountMenu.copyUserId")} />
           </InfoRow>
         </div>
 
@@ -231,9 +256,37 @@ const SidebarAccountMenu: React.FC<SidebarAccountMenuProps> = ({ onLogout, colla
               />
             </div>
           ))}
+          {premiumUser === true && canUseLiteAdmin && (
+            <div className="flex h-[38px] items-center justify-between gap-3 px-3">
+              <span className="text-[13px] text-foreground">
+                <Trans i18nKey="shell.sidebarAccountMenu.hideAria" components={{ name: <>{ARIA_AGENT_LABEL}</> }} />
+              </span>
+              <Switch
+                size="sm"
+                checked={disableLiteAdmin}
+                onCheckedChange={setDisableLiteAdmin}
+                aria-label={t("shell.sidebarAccountMenu.toggleHideAria", { name: ARIA_AGENT_LABEL })}
+              />
+            </div>
+          )}
+          <LanguageField />
         </div>
 
         <Separator />
+
+        {loginMethod === "username_password" && (
+          <Button
+            variant="ghost"
+            onClick={() => {
+              setOpen(false);
+              router.push(uiHref("change-password"));
+            }}
+            className="h-[42px] w-full justify-start gap-2.5 rounded-none px-3 text-sm font-medium text-foreground"
+          >
+            <KeyRound className="size-[19px] text-muted-foreground" />
+            {t("shell.sidebarAccountMenu.changePassword")}
+          </Button>
+        )}
 
         <Button
           variant="ghost"
@@ -241,7 +294,7 @@ const SidebarAccountMenu: React.FC<SidebarAccountMenuProps> = ({ onLogout, colla
           className="h-[42px] w-full justify-start gap-2.5 rounded-none px-3 text-sm font-medium text-foreground"
         >
           <LogOut className="size-[19px] text-muted-foreground" />
-          Logout
+          {t("shell.sidebarAccountMenu.logout")}
         </Button>
       </PopoverContent>
     </Popover>
