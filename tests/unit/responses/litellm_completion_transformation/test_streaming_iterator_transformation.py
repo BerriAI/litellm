@@ -1776,6 +1776,53 @@ async def test_completed_output_follows_the_streamed_output_indexes(sync_mode: b
 
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
+async def test_reasoning_item_is_announced_with_an_empty_summary(sync_mode: bool):
+    iterator: Final = _build_iterator([_reasoning_chunk("thinking"), _chunk("Hello", finish_reason="stop")])
+
+    events: Final = await _collect_events(iterator, sync_mode)
+
+    reasoning_added: Final = next(
+        event
+        for event in events
+        if getattr(event, "type", None) == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED and event.item.type == "reasoning"
+    )
+    assert reasoning_added.model_dump(mode="json", exclude_none=True)["item"]["summary"] == []
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_completed_reasoning_item_keeps_the_streamed_summary(sync_mode: bool):
+    iterator: Final = _build_iterator(
+        [
+            _reasoning_chunk("thinking"),
+            _tool_call_chunk(),
+            _chunk("Hello"),
+            _chunk("!", finish_reason="stop"),
+        ]
+    )
+
+    events: Final = await _collect_events(iterator, sync_mode)
+
+    reasoning_done: Final = next(
+        event.model_dump(mode="json", exclude_none=True)["item"]
+        for event in events
+        if getattr(event, "type", None) == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE and event.item.type == "reasoning"
+    )
+    completed: Final = next(
+        event for event in events if getattr(event, "type", None) == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+    )
+    completed_reasoning: Final = next(
+        item
+        for item in completed.model_dump(mode="json", exclude_none=True)["response"]["output"]
+        if item["type"] == "reasoning"
+    )
+    assert reasoning_done["summary"] == [{"type": "summary_text", "text": "thinking"}]
+    assert completed_reasoning["id"] == reasoning_done["id"]
+    assert completed_reasoning["summary"] == reasoning_done["summary"]
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
 async def test_reasoning_only_stream_lists_no_message_item_it_never_announced(sync_mode: bool):
     iterator: Final = _build_iterator([_reasoning_chunk("thinking"), _chunk("", finish_reason="stop")])
 
