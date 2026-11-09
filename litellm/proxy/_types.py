@@ -2517,7 +2517,7 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
 
     use_spend_logs_ledger: bool = Field(
         True,
-        description="Apply request accounting from stored SpendLogs deliveries. Set to false to roll back to the previous in-memory and Redis spend queues. When unset, use_redis_transaction_buffer selects those queues instead.",
+        description="Apply request accounting from stored SpendLogs deliveries. Set to false to roll back to the previous in-memory and Redis spend queues.",
     )
 
     request_tag_mappings: Sequence[RequestTagMapping] | None = Field(
