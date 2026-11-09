@@ -25,6 +25,8 @@ import type { generalSettingsItem } from "@/app/(dashboard)/router-settings/_com
 import { FIELD_GROUPS, MCP_REQUIRED_FIELD_DEFS, SETTINGS_KEY } from "./MCPStandardsSettings";
 import { toast } from "@/lib/toast";
 
+const DEFAULT_TRANSPORT = "sse";
+
 type MCPStatus = "active" | "pending_review" | "rejected";
 
 const STATUS_CONFIG: Record<MCPStatus, { labelKey: ParseKeys; bg: string; text: string; dot: string }> = {
@@ -476,7 +478,7 @@ function MCPServerCard({ server, onApprove, onReject, requiredFields }: MCPServe
             <div className="flex items-center gap-3 mt-1.5 text-xs text-muted-foreground">
               <span>
                 {t("mcpServers.submissionsTab.card.transport")}{" "}
-                <span className="text-muted-foreground">{server.transport ?? "sse"}</span>
+                <span className="text-muted-foreground">{server.transport ?? DEFAULT_TRANSPORT}</span>
               </span>
               <span>·</span>
               <span>

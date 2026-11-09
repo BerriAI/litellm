@@ -47,6 +47,8 @@ macro_rules! attributes {
 }
 
 attributes! {
+    /// Model this row is another name for; such a row carries no other key.
+    alias_of: String,
     /// Other names this entry is served under.
     aliases: Vec<String>,
     audio_transcription_config: String,
