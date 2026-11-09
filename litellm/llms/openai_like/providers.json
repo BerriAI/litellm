@@ -314,5 +314,11 @@
       "supports_function_calling": true,
       "supports_reasoning": true
     }
+  },
+  "cheapaimodel": {
+    "base_url": "https://api.cheapaimodel.ai/v1",
+    "api_key_env": "CHEAPAIMODEL_API_KEY",
+    "api_base_env": "CHEAPAIMODEL_API_BASE",
+    "supported_endpoints": ["/v1/chat/completions"]
   }
 }
