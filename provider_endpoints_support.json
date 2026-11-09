@@ -5281,8 +5281,8 @@
       "url": "https://kitani.ai/docs",
       "endpoints": {
         "chat_completions": true,
-        "responses": true,
-        "text_completion": true,
+        "responses": false,
+        "text_completion": false,
         "embeddings": false,
         "image_generations": false,
         "image_edits": false,
@@ -5295,11 +5295,11 @@
         "realtime": false,
         "video_generations": false,
         "batches": false,
-        "messages": true,
-        "interactions": true,
+        "messages": false,
+        "interactions": false,
         "systemone": false,
-        "a2a": true,
-        "generateContent": true
+        "a2a": false,
+        "generateContent": false
       }
     },
     "empiriolabs": {
