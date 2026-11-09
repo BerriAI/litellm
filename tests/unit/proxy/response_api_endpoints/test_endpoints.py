@@ -2746,6 +2746,95 @@ class TestResponsesWSFirstFrameModelAuth:
         }
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("nested", [False, True], ids=["top-level", "nested-response"])
+    async def test_frame_guard_refuses_a_non_admin_s3_image_in_an_unlisted_bucket_while_a_proxy_admin_key_passes(
+        self, nested: bool
+    ):
+        from litellm.proxy._types import LitellmUserRoles
+        from litellm.proxy.response_api_endpoints.endpoints import _responses_ws_frame_guard
+        from litellm.responses.streaming_iterator import ResponsesWsFrameRejection
+
+        image_turn: Final = {
+            "input": [
+                {"role": "user", "content": [{"type": "input_image", "image_url": "s3://media-bucket/dir/cat.png"}]}
+            ]
+        }
+        frame: Final = json.dumps(
+            {"type": "response.create", "response": image_turn}
+            if nested
+            else {"type": "response.create", **image_turn}
+        )
+
+        def guard_for(user_role: LitellmUserRoles):
+            proxy_logging_obj = MagicMock(during_call_hook=AsyncMock())
+            proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=lambda **kwargs: kwargs["data"])
+            key = UserAPIKeyAuth(api_key="sk-test", user_id="user-a", user_role=user_role)
+            return proxy_logging_obj, _responses_ws_frame_guard(
+                {"model": "nova", "litellm_metadata": {}}, key, proxy_logging_obj, MagicMock()
+            )
+
+        refused_logging, refused_guard = guard_for(LitellmUserRoles.INTERNAL_USER)
+        admin_logging, admin_guard = guard_for(LitellmUserRoles.PROXY_ADMIN)
+
+        with pytest.raises(ResponsesWsFrameRejection) as refused:
+            await refused_guard(frame)
+        admitted = await admin_guard(frame)
+
+        assert "s3://media-bucket/dir/cat.png" in str(refused.value)
+        assert "allowed_client_side_s3_buckets" in str(refused.value)
+        refused_logging.pre_call_hook.assert_not_awaited()
+        assert "s3://media-bucket/dir/cat.png" in admitted.frame
+        admin_logging.pre_call_hook.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("nested", [False, True], ids=["top-level", "nested-response"])
+    async def test_frame_guard_refuses_an_unlisted_s3_image_when_only_the_frame_names_an_admitted_aws_identity(
+        self, nested: bool
+    ):
+        from litellm import Router
+        from litellm.proxy._types import LitellmUserRoles
+        from litellm.proxy.common_request_processing import refuse_s3_media_the_key_may_not_read
+        from litellm.proxy.response_api_endpoints.endpoints import _responses_ws_frame_guard
+        from litellm.responses.streaming_iterator import ResponsesWsFrameRejection
+
+        router: Final = Router(
+            model_list=[
+                {
+                    "model_name": "nova",
+                    "litellm_params": {
+                        "model": "bedrock/converse/us.amazon.nova-2-lite-v1:0",
+                        "configurable_clientside_auth_params": ["aws_role_name"],
+                    },
+                }
+            ]
+        )
+        turn: Final = {
+            "aws_role_name": "arn:aws:iam::111122223333:role/reader",
+            "input": [
+                {"role": "user", "content": [{"type": "input_image", "image_url": "s3://media-bucket/dir/cat.png"}]}
+            ],
+        }
+        proxy_logging_obj: Final = MagicMock(during_call_hook=AsyncMock())
+        proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=lambda **kwargs: kwargs["data"])
+        guard: Final = _responses_ws_frame_guard(
+            {"model": "nova", "litellm_metadata": {}},
+            UserAPIKeyAuth(api_key="sk-test", user_id="user-a", user_role=LitellmUserRoles.INTERNAL_USER),
+            proxy_logging_obj,
+            MagicMock(),
+            refuse_s3_media=lambda data, key: refuse_s3_media_the_key_may_not_read(data, key, {}, None, router),
+        )
+
+        with pytest.raises(ResponsesWsFrameRejection) as refused:
+            await guard(
+                json.dumps(
+                    {"type": "response.create", "response": turn} if nested else {"type": "response.create", **turn}
+                )
+            )
+
+        assert "allowed_client_side_s3_buckets" in str(refused.value)
+        proxy_logging_obj.pre_call_hook.assert_not_awaited()
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize("nested", [True, False])
     async def test_frame_guard_forwards_the_tool_choice_a_guardrail_rewrote(self, nested: bool):
         from litellm.proxy.response_api_endpoints.endpoints import _responses_ws_frame_guard

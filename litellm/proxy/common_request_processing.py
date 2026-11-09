@@ -115,7 +115,12 @@ from litellm.proxy.auth.auth_checks import (
     request_skips_budget_checks,
     tag_max_budget_check_for_tags,
 )
-from litellm.proxy.auth.auth_utils import ClientSideStorageAllowlist, check_response_size_is_safe, get_request_route
+from litellm.proxy.auth.auth_utils import (
+    ClientSideStorageAllowlist,
+    check_response_size_is_safe,
+    deployment_admits_a_client_aws_identity,
+    get_request_route,
+)
 from litellm.proxy.bug_report_config import build_proxy_bug_report
 from litellm.proxy.common_utils.callback_utils import (
     get_logging_caching_headers,
@@ -1075,6 +1080,7 @@ async def refuse_s3_media_the_key_may_not_read(
     user_api_key_dict: UserAPIKeyAuth,
     general_settings: Mapping[str, object],
     managed_files: object,
+    llm_router: Router | None,
 ) -> None:
     if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
         return
@@ -1089,7 +1095,9 @@ async def refuse_s3_media_the_key_may_not_read(
             detail=f"Raw s3:// URIs under LiteLLM-managed storage can only be sent by a proxy admin key "
             f"({', '.join(managed_uris)}). Use a LiteLLM managed file id that this key's user or team created.",
         )
-    if general_settings.get("allow_client_side_credentials") is True:
+    if general_settings.get("allow_client_side_credentials") is True or deployment_admits_a_client_aws_identity(
+        data, llm_router
+    ):
         return
     is_listed: Final = partial(
         ClientSideStorageAllowlist.model_validate(general_settings).admits, "allowed_client_side_s3_buckets"
@@ -2720,6 +2728,7 @@ class ProxyBaseLLMRequestProcessing:
             user_api_key_dict,
             _REQUEST_FIELDS.validate_python(general_settings),
             proxy_logging_obj.get_proxy_hook("managed_files"),
+            llm_router,
         )
         self.data = await add_litellm_data_to_request(
             data=self.data,

@@ -54,7 +54,7 @@ from litellm.proxy.auth.auth_checks import (
     requests_guardrail_modification,
     require_guardrail_modification_permission,
 )
-from litellm.proxy.auth.auth_utils import carries_client_side_overrides
+from litellm.proxy.auth.auth_utils import carries_client_side_overrides, without_a_client_aws_identity
 from litellm.proxy.auth.user_api_key_auth import (
     UserAPIKeyAuth,
     user_api_key_auth,
@@ -66,6 +66,7 @@ from litellm.proxy.common_request_processing import (
     cost_headers,
     create_response,
     proxy_exception_from_route_error,
+    refuse_s3_media_the_key_may_not_read,
     resolve_counted_tool_fields,
     resolve_litellm_call_id,
 )
@@ -2218,6 +2219,18 @@ async def _key_team_object(user_api_key_dict: UserAPIKeyAuth) -> LiteLLM_TeamTab
         return team_from_key
 
 
+async def _refuse_s3_media_this_proxy_bars(data: Mapping[str, object], user_api_key_dict: UserAPIKeyAuth) -> None:
+    from litellm.proxy.proxy_server import general_settings, llm_router, proxy_logging_obj
+
+    await refuse_s3_media_the_key_may_not_read(
+        data,
+        user_api_key_dict,
+        _WS_FRAME.validate_python(general_settings),
+        proxy_logging_obj.get_proxy_hook("managed_files"),
+        llm_router,
+    )
+
+
 def _responses_ws_frame_guard(
     admitted: Mapping[str, object],
     user_api_key_dict: UserAPIKeyAuth,
@@ -2225,6 +2238,9 @@ def _responses_ws_frame_guard(
     record_refused_turn: Callable[[tuple[Mapping[str, object], ...], Exception], None],
     *,
     team_object: Callable[[UserAPIKeyAuth], Awaitable[LiteLLM_TeamTable | None]] = _key_team_object,
+    refuse_s3_media: Callable[[Mapping[str, object], UserAPIKeyAuth], Awaitable[None]] = (
+        _refuse_s3_media_this_proxy_bars
+    ),
 ) -> ResponsesWsFrameGuard:
     """Socket admission skips guardrails (the first frame's ``input`` is not part of the admitted request), so every
     ``response.create`` frame gets the pre_call and during_call guardrail walks the HTTP ``/v1/responses`` path runs on
@@ -2272,6 +2288,9 @@ def _responses_ws_frame_guard(
         )
         try:
             _reject_guarded_field_beside_nested_response(frame_obj, nested)
+            await refuse_s3_media(
+                {**without_a_client_aws_identity({**frame_obj, **body}), "model": model}, user_api_key_dict
+            )
             await _check_frame_may_modify_guardrails(selection_sources, user_api_key_dict, team_object)
             frame_data: Final = {
                 **turn_data,

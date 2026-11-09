@@ -61,6 +61,7 @@ _MEDIA_URI_KEYS: Final = frozenset({"url", "image_url", "file_id", "file_url", "
 _ENCODED_FILE_ID_PREFIXES: Final = ("file-", "batch_")
 _EMBEDDED_S3_URI: Final = re.compile(r"s3://[^;]*")
 _MODEL_FILE_ID_MAPPING_KEY: Final = "model_file_id_mapping"
+_KEYS_THAT_MAY_HIDE_AN_S3_URI: Final = frozenset({"file_id", _MODEL_FILE_ID_MAPPING_KEY})
 
 
 def is_s3_uri(value: str) -> bool:
@@ -162,6 +163,23 @@ def _refused_in_some_decoding(
     return bool(parts) and (not settled or not all(map(is_allowed, parts)))
 
 
+def _may_name_an_s3_uri(value: object) -> bool:
+    if isinstance(value, str):
+        return is_s3_uri(value)
+    fields: Final = as_str_mapping(value)
+    if fields is not None:
+        return not _KEYS_THAT_MAY_HIDE_AN_S3_URI.isdisjoint(fields) or any(map(_may_name_an_s3_uri, fields.values()))
+    items: Final = as_object_list(value)
+    return items is not None and any(map(_may_name_an_s3_uri, items))
+
+
+def _may_carry_s3_media(request_body: Mapping[str, object]) -> bool:
+    try:
+        return _may_name_an_s3_uri(request_body)
+    except RecursionError:
+        return True
+
+
 def media_file_ids(request_body: Mapping[str, object]) -> tuple[str, ...]:
     return tuple(dict.fromkeys(filter(None, map(_media_file_id, _body_nodes(request_body)))))
 
@@ -169,6 +187,8 @@ def media_file_ids(request_body: Mapping[str, object]) -> tuple[str, ...]:
 def s3_media_uris(
     request_body: Mapping[str, object], trusted_file_ids: frozenset[str] = frozenset()
 ) -> tuple[str, ...]:
+    if not _may_carry_s3_media(request_body):
+        return ()
     media_uris: Final = chain.from_iterable(
         map(partial(_media_uri_candidates, trusted_file_ids), _body_nodes(request_body))
     )
