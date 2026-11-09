@@ -1,11 +1,14 @@
 """Counts the Redis round trips and DB queries auth object reads cost per cache regime, and checks that the
 per-object getters still enforce on their own when the prefetch cannot help."""
 
+import json
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import HTTPException
 
+from litellm._auth.failure import NativeAuthFailure
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.proxy._types import (
     LiteLLM_OrganizationTable,
@@ -73,6 +76,51 @@ ALL_ROWS = {
     "organization_row": ORG_ROW,
     "project_row": None,
 }
+
+
+@pytest.mark.asyncio
+async def test_native_prefetch_fills_all_getters_with_one_read_and_preserves_optional_ids():
+    native = SimpleNamespace(auth_read=AsyncMock(return_value=[ALL_ROWS]))
+    prisma = _prisma()
+    prisma.native_auth_database = native
+    cache = _cache(None)
+
+    await prefetch_auth_objects(refs=_refs(), prisma_client=prisma, user_api_key_cache=cache)
+    user, team, member, org = await _read_all_through_getters(cache, prisma)
+
+    assert user is not None and user.user_id == USER_ID
+    assert team.team_id == TEAM_ID
+    assert member is not None and member.spend == 3.0
+    assert org is not None and org.litellm_budget_table.max_budget == 1000.0
+    assert native.auth_read.await_count == 1
+    kind, ids = native.auth_read.call_args.args
+    assert kind == "prefetch"
+    assert len(ids) == 1 and json.loads(ids[0]) == [USER_ID, TEAM_ID, USER_ID, ORG_ID, None]
+    assert prisma.db.mock_calls == []
+
+    await prefetch_auth_objects(refs=_refs(), prisma_client=prisma, user_api_key_cache=cache)
+    assert native.auth_read.await_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("rows", [[{"user_row": {"spend": "bad"}}], {"user_row": USER_ROW}])
+async def test_native_prefetch_invalid_projection_is_terminal_without_legacy_query(rows):
+    prisma = _prisma()
+    prisma.native_auth_database = SimpleNamespace(auth_read=AsyncMock(return_value=rows))
+    with pytest.raises(NativeAuthFailure):
+        await prefetch_auth_objects(
+            refs=AuthObjectRefs(user_id=USER_ID), prisma_client=prisma, user_api_key_cache=_cache(None)
+        )
+    assert prisma.db.mock_calls == []
+
+
+@pytest.mark.asyncio
+async def test_native_prefetch_transport_failure_is_not_best_effort():
+    prisma = _prisma()
+    prisma.native_auth_database = SimpleNamespace(auth_read=AsyncMock(side_effect=RuntimeError("offline")))
+    with pytest.raises(NativeAuthFailure):
+        await prefetch_auth_objects(refs=_refs(), prisma_client=prisma, user_api_key_cache=_cache(None))
+    assert prisma.db.mock_calls == []
 
 
 def _prisma(rows: dict[str, object] | None = ALL_ROWS) -> MagicMock:

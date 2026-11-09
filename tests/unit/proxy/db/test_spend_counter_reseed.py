@@ -16,6 +16,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from litellm._auth.failure import NativeAuthFailure
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import PROXY_DB_LOOKUP_MAX_CONCURRENCY
@@ -25,6 +26,69 @@ from litellm.redis.stores.connection import connect
 from litellm.redis.stores.spend_counters import SpendCounterStore
 
 WINDOW_START = datetime(2026, 8, 1, tzinfo=timezone.utc)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("counter", "kind", "entity_id"),
+    [
+        ("spend:key:k", "key", "k"),
+        ("spend:user:u", "user", "u"),
+        ("spend:team:t", "team", "t"),
+        ("spend:org:o", "org", "o"),
+        ("spend:project:p", "project", "p"),
+        ("spend:team_member:u:with:colon:t", "member", "u:with:colon:t"),
+    ],
+)
+async def test_native_reseed_reads_authoritative_zero_without_a_prisma_handle(counter, kind, entity_id):
+    native = SimpleNamespace(auth_spend=AsyncMock(return_value=0.0))
+    prisma = SimpleNamespace(native_auth_database=native)
+    assert await SpendCounterReseed.from_db(prisma, counter) == 0.0
+    native.auth_spend.assert_awaited_once_with(kind, entity_id)
+
+
+@pytest.mark.asyncio
+async def test_native_reseed_distinguishes_missing_from_failure():
+    native = SimpleNamespace(auth_spend=AsyncMock(side_effect=[None, RuntimeError("offline")]))
+    prisma = SimpleNamespace(native_auth_database=native)
+    assert await SpendCounterReseed.from_db(prisma, "spend:user:u") is None
+    with pytest.raises(NativeAuthFailure):
+        await SpendCounterReseed.from_db(prisma, "spend:user:u")
+    assert native.auth_spend.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_native_end_user_floor_preserves_zero():
+    native = SimpleNamespace(auth_spend=AsyncMock(return_value=0.0))
+    assert (
+        await SpendCounterReseed.end_user_from_db(SimpleNamespace(native_auth_database=native), "spend:end_user:u")
+        == 0.0
+    )
+    native.auth_spend.assert_awaited_once_with("end_user", "u")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("row", [None, {"spend": 99.0, "window_start": WINDOW_START - timedelta(days=1)}])
+async def test_native_stale_or_missing_window_uses_native_spend_aggregate(row):
+    native = SimpleNamespace(auth_read=AsyncMock(side_effect=[[row] if row else [], [{"spend": 4.5}]]))
+    value = await SpendCounterReseed.window_from_db(
+        SimpleNamespace(native_auth_database=native), "Key", "hash", "1d", WINDOW_START
+    )
+    assert value == 4.5
+    assert native.auth_read.call_args_list[0].args == ("budget_window", ["Key", "hash", "1d"])
+    assert native.auth_read.call_args_list[1].args == ("window_spend", ["Key", "hash", WINDOW_START.isoformat()])
+
+
+@pytest.mark.asyncio
+async def test_native_current_window_does_not_range_scan_and_failure_does_not_fallback():
+    native = SimpleNamespace(
+        auth_read=AsyncMock(side_effect=[[{"spend": 0.0, "window_start": WINDOW_START}], RuntimeError("offline")])
+    )
+    prisma = SimpleNamespace(native_auth_database=native)
+    assert await SpendCounterReseed.window_from_db(prisma, "Key", "hash", "1d", WINDOW_START) == 0.0
+    with pytest.raises(NativeAuthFailure):
+        await SpendCounterReseed.window_from_db(prisma, "Key", "hash", "1d", WINDOW_START)
+    assert native.auth_read.await_count == 2
 
 
 class _FakeFindUniqueTable:

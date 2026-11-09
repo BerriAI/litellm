@@ -633,6 +633,37 @@ async def test_get_key_object_should_reconnect_once_on_db_connection_error():
 
 
 @pytest.mark.asyncio
+async def test_native_key_lookup_populates_cache_without_prisma_io():
+    native = SimpleNamespace(auth_read=AsyncMock(return_value=[{"token": "native-hash", "team_models": None, "team_blocked": None}]))
+    prisma = MagicMock(native_auth_database=native)
+    prisma.get_data = AsyncMock(side_effect=AssertionError("legacy read"))
+    prisma.attempt_db_reconnect = AsyncMock(side_effect=AssertionError("legacy reconnect"))
+    cache = UserApiKeyCache()
+    first = await get_key_object("native-hash", prisma, cache)
+    second = await get_key_object("native-hash", prisma, cache)
+    assert first.token == second.token == "native-hash"
+    assert first.team_models == second.team_models == []
+    assert native.auth_read.await_count == 1
+    prisma.get_data.assert_not_awaited()
+    prisma.attempt_db_reconnect.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_native_key_transport_error_never_enters_prisma_reconnect():
+    from litellm._auth.failure import NativeAuthFailure
+
+    native = SimpleNamespace(auth_read=AsyncMock(side_effect=httpx.ConnectError("db offline")))
+    prisma = MagicMock(native_auth_database=native)
+    prisma.get_data = AsyncMock()
+    prisma.attempt_db_reconnect = AsyncMock()
+    with pytest.raises(NativeAuthFailure):
+        await fetch_key_object_from_db_with_reconnect("hash", prisma, None, None, check_db_only=True)
+    native.auth_read.assert_awaited_once_with("key", ["hash"], writer=True)
+    prisma.get_data.assert_not_awaited()
+    prisma.attempt_db_reconnect.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_get_key_object_should_raise_if_reconnect_fails_on_db_connection_error():
     mock_prisma_client = MagicMock()
     mock_prisma_client.get_data = AsyncMock(side_effect=httpx.ConnectError("db not reachable after outage"))

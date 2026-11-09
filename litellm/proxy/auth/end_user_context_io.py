@@ -9,6 +9,7 @@ from litellm.proxy._types import LiteLLM_BudgetTable
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, get_management_object_ttl
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.repositories.budget_repository import BudgetRepository
+from litellm.repositories.native_auth_repository import native_auth_repository
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,14 +30,22 @@ async def read_default_budget(budget_id: str, io: EndUserIO) -> LiteLLM_BudgetTa
     if cached is not None:
         return cached
     try:
-        table: Final = auth_checks._dictable_table(BudgetRepository(io.prisma), "budget")  # pyright: ignore[reportPrivateUsage]  # shared raw repository projection
-        record: Final = await table.find_unique(where={"budget_id": budget_id})
+        native: Final = native_auth_repository(io.prisma)
+        record: Final = (
+            await native.one("budget", [budget_id], LiteLLM_BudgetTable)
+            if native is not None
+            else await auth_checks._dictable_table(BudgetRepository(io.prisma), "budget").find_unique(
+                where={"budget_id": budget_id}
+            )  # pyright: ignore[reportPrivateUsage]  # shared raw repository projection
+        )
         if record is None:
             verbose_proxy_logger.warning(
                 "Default end user budget not found in database: %s", budget_id.replace("\r", "").replace("\n", "")
             )
             return None
-        row: Final = LiteLLM_BudgetTable.model_validate(record.dict())
+        row: Final = LiteLLM_BudgetTable.model_validate(
+            record.model_dump() if isinstance(record, LiteLLM_BudgetTable) else record.dict()
+        )
         await io.cache.async_set_cache(
             key=key, value=row, model_type=LiteLLM_BudgetTable, ttl=get_management_object_ttl(io.cache)
         )

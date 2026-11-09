@@ -4,6 +4,7 @@ the readers and the fallback, so enforcement never depends on this running."""
 
 from __future__ import annotations
 
+import json
 import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
@@ -12,6 +13,7 @@ from typing import Final, Literal, TypeAlias
 
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
+from litellm._auth.failure import NativeAuthFailure, NativeAuthRuntimeError
 from litellm._internal_context import service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.redis_batch import Batch
@@ -32,6 +34,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
 from litellm.proxy.db.db_span import db_span
 from litellm.proxy.utils import PrismaClient
 from litellm.redis.stores.auth_cache import AuthCacheStore
+from litellm.repositories.native_auth_repository import native_auth_repository
 
 _RowKind: TypeAlias = Literal["user_row", "team_row", "membership_row", "organization_row", "project_row"]
 
@@ -235,7 +238,7 @@ async def _fill_from_redis(
 
 
 def _validate_row(
-    row_value: object, model_type: type[BaseModel], row: _RowKind, refreshed_at: float
+    row_value: object, model_type: type[BaseModel], row: _RowKind, refreshed_at: float, *, native: bool = False
 ) -> BaseModel | None:
     if row_value is None:
         return None
@@ -246,6 +249,8 @@ def _validate_row(
             return model_type.model_validate(stamped)
         return model_type.model_validate(columns)
     except ValidationError as e:
+        if native:
+            raise NativeAuthRuntimeError(f"Invalid native auth {row} projection") from e
         verbose_proxy_logger.warning("auth prefetch: %s did not validate as %s: %s", row, model_type.__name__, e)
         return None
 
@@ -253,6 +258,20 @@ def _validate_row(
 async def _fetch_rows(
     refs: AuthObjectRefs, kinds: frozenset[_RowKind], prisma_client: PrismaClient
 ) -> Mapping[str, object]:
+    native: Final = native_auth_repository(prisma_client)
+    if native is not None:
+        refs_json: Final = json.dumps(
+            [
+                refs.user_id if "user_row" in kinds else None,
+                refs.team_id if kinds & _TEAM_BOUND_ROWS else None,
+                refs.membership_user_id if "membership_row" in kinds else None,
+                refs.organization_id if "organization_row" in kinds else None,
+                refs.project_id if "project_row" in kinds else None,
+            ]
+        )
+        async with db_span("prefetch_auth_objects", AUTH_OBJECTS_TARGET):
+            rows: Final = await native.read("prefetch", [refs_json])
+        return rows[0] if rows else _NO_ROWS
     async with db_span("prefetch_auth_objects", AUTH_OBJECTS_TARGET):
         row: Final[object] = await prisma_client.db.query_first(  # pyright: ignore[reportAny]  # prisma types query_first as Any
             _SQL,
@@ -289,8 +308,12 @@ async def _fill_from_db(
     )
     rows: Final = await _fetch_rows(refs, frozenset(model_for), prisma_client)
     refreshed_at: Final = time.time()
+    native: Final = native_auth_repository(prisma_client) is not None
     objects: Final[Mapping[_RowKind, BaseModel | None]] = MappingProxyType(
-        {row: _validate_row(rows.get(row), model_type, row, refreshed_at) for row, model_type in model_for.items()}
+        {
+            row: _validate_row(rows.get(row), model_type, row, refreshed_at, native=native)
+            for row, model_type in model_for.items()
+        }
     )
     writes: Final = tuple((entry, value) for entry in entries if (value := objects[entry.row]) is not None)
     if writes:
@@ -313,6 +336,8 @@ async def prefetch_auth_objects(
         if prisma_client is None:
             return
         await _fill_from_db(refs, _missing_in_memory(missing, user_api_key_cache), user_api_key_cache, prisma_client)
+    except NativeAuthFailure:
+        raise
     except Exception as e:  # noqa: BLE001  # warm-up only; the getters enforce and fail closed on their own
         verbose_proxy_logger.warning("auth prefetch skipped, falling back to per-object lookups: %s", e)
 

@@ -140,6 +140,12 @@ from litellm.redis.stores.spend_counters import (
     team_member_counter,
 )
 from litellm.repositories.budget_repository import BudgetRepository
+from litellm.repositories.native_auth_repository import (
+    EndUserRegistryRow,
+    ModelAccessGroupRow,
+    TagRegistryRow,
+    native_auth_repository,
+)
 from litellm.repositories.object_permission_repository import ObjectPermissionRepository
 from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.prisma_protocols import DatabaseClient, RowT_co
@@ -1494,8 +1500,13 @@ async def get_team_member_default_budget(
         return cached_budget
 
     try:
-        budget_record: Final = await _dictable_table(BudgetRepository(prisma_client), "budget").find_unique(
-            where={"budget_id": budget_id}
+        native: Final = native_auth_repository(prisma_client)
+        budget_record: Final = (
+            await native.one("budget", [budget_id], LiteLLM_BudgetTable)
+            if native is not None
+            else await _dictable_table(BudgetRepository(prisma_client), "budget").find_unique(
+                where={"budget_id": budget_id}
+            )
         )
     except NativeAuthFailure:
         raise
@@ -1509,7 +1520,9 @@ async def get_team_member_default_budget(
         verbose_proxy_logger.warning("Team-default member budget not found in database: %s", budget_id)
         return None
 
-    budget: Final = LiteLLM_BudgetTable.model_validate(budget_record.dict())
+    budget: Final = LiteLLM_BudgetTable.model_validate(
+        budget_record.model_dump() if isinstance(budget_record, BaseModel) else budget_record.dict()
+    )
     await user_api_key_cache.async_set_cache(
         key=cache_key,
         value=budget,
@@ -1721,9 +1734,16 @@ async def load_end_user_restricted_registry(
     """The set of end-user ids whose ``LiteLLM_EndUserTable`` row carries a restriction."""
 
     async def fetch_ids() -> tuple[str, ...]:
-        restricted_rows: Final = await _end_user_table(EndUserRepository(prisma_client)).find_many(
-            where=_restricted_end_user_where(),
-            take=END_USER_RESTRICTED_REGISTRY_MAX_SIZE + 1,
+        native: Final = native_auth_repository(prisma_client)
+        restricted_rows: Final = (
+            await native.many(
+                "end_user_restricted_registry", [str(END_USER_RESTRICTED_REGISTRY_MAX_SIZE + 1)], EndUserRegistryRow
+            )
+            if native is not None
+            else await _end_user_table(EndUserRepository(prisma_client)).find_many(
+                where=_restricted_end_user_where(),
+                take=END_USER_RESTRICTED_REGISTRY_MAX_SIZE + 1,
+            )
         )
         return tuple(row.user_id for row in restricted_rows)
 
@@ -1820,16 +1840,23 @@ async def get_end_user_object(
 
     # Fetch from database
     try:
-        response: Final = await _dictable_table(EndUserRepository(prisma_client), "end_user").find_unique(
-            where={"user_id": end_user_id},
-            include={"litellm_budget_table": True, "object_permission": True},
+        native: Final = native_auth_repository(prisma_client)
+        response: Final = (
+            await native.one("end_user", [end_user_id], LiteLLM_EndUserTable)
+            if native is not None
+            else await _dictable_table(EndUserRepository(prisma_client), "end_user").find_unique(
+                where={"user_id": end_user_id},
+                include={"litellm_budget_table": True, "object_permission": True},
+            )
         )
 
         if response is None:
             raise Exception
 
         end_user_row: Final = await _apply_default_budget_to_end_user(
-            end_user_obj=LiteLLM_EndUserTable.model_validate(response.dict()),
+            end_user_obj=LiteLLM_EndUserTable.model_validate(
+                response.model_dump() if isinstance(response, BaseModel) else response.dict()
+            ),
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
             parent_otel_span=parent_otel_span,
@@ -1911,8 +1938,13 @@ async def _load_tag_registry(
     """The set of tag names that have a row in ``LiteLLM_TagTable``."""
 
     async def fetch_ids() -> tuple[str, ...]:
-        registry_rows: Final = await _tag_table(TagRepository(prisma_client)).find_many(
-            take=TAG_REGISTRY_MAX_SIZE + 1,
+        native: Final = native_auth_repository(prisma_client)
+        registry_rows: Final = (
+            await native.many("tag_registry", [str(TAG_REGISTRY_MAX_SIZE + 1)], TagRegistryRow)
+            if native is not None
+            else await _tag_table(TagRepository(prisma_client)).find_many(
+                take=TAG_REGISTRY_MAX_SIZE + 1,
+            )
         )
         return tuple(row.tag_name for row in registry_rows)
 
@@ -1933,9 +1965,16 @@ async def load_model_access_group_registry(
     """The set of model access group names that have a row in ``LiteLLM_ModelAccessGroupBudgetTable``."""
 
     async def fetch_ids() -> tuple[str, ...]:
-        registry_rows: Final = await _model_access_group_budget_table(
-            ModelAccessGroupBudgetRepository(prisma_client)
-        ).find_many(take=MODEL_ACCESS_GROUP_REGISTRY_MAX_SIZE + 1)
+        native: Final = native_auth_repository(prisma_client)
+        registry_rows: Final = (
+            await native.many(
+                "model_access_group_registry", [str(MODEL_ACCESS_GROUP_REGISTRY_MAX_SIZE + 1)], ModelAccessGroupRow
+            )
+            if native is not None
+            else await _model_access_group_budget_table(ModelAccessGroupBudgetRepository(prisma_client)).find_many(
+                take=MODEL_ACCESS_GROUP_REGISTRY_MAX_SIZE + 1
+            )
+        )
         return tuple(row.access_group_name for row in registry_rows)
 
     return await _load_bounded_registry(
@@ -1967,11 +2006,14 @@ async def _fetch_uncached_model_access_group_budgets(
         return ()
 
     try:
-        db_rows: Final = await _model_access_group_budget_table(
-            ModelAccessGroupBudgetRepository(prisma_client)
-        ).find_many(
-            where={"access_group_name": {"in": list(uncached_groups)}},
-            include={"litellm_budget_table": True},
+        native: Final = native_auth_repository(prisma_client)
+        db_rows: Final = (
+            await native.many("model_access_group", uncached_groups, ModelAccessGroupRow)
+            if native is not None
+            else await _model_access_group_budget_table(ModelAccessGroupBudgetRepository(prisma_client)).find_many(
+                where={"access_group_name": {"in": list(uncached_groups)}},
+                include={"litellm_budget_table": True},
+            )
         )
         fetched: Final = tuple((row.access_group_name, _model_access_group_budget(row)) for row in db_rows)
         for fetched_name, fetched_obj in fetched:
@@ -2053,11 +2095,24 @@ async def _fetch_uncached_tags(
         return ()
 
     try:
-        db_tags: Final = await _tag_table(TagRepository(prisma_client)).find_many(
-            where={"tag_name": {"in": list(tags_to_fetch)}},
-            include={"litellm_budget_table": True},
+        native: Final = native_auth_repository(prisma_client)
+        db_tags: Final = (
+            await native.many("tag", tags_to_fetch, LiteLLM_TagTable)
+            if native is not None
+            else await _tag_table(TagRepository(prisma_client)).find_many(
+                where={"tag_name": {"in": list(tags_to_fetch)}},
+                include={"litellm_budget_table": True},
+            )
         )
-        fetched: Final = tuple((db_tag.tag_name, LiteLLM_TagTable.model_validate(db_tag.dict())) for db_tag in db_tags)
+        fetched: Final = tuple(
+            (
+                db_tag.tag_name,
+                LiteLLM_TagTable.model_validate(
+                    db_tag.model_dump() if isinstance(db_tag, BaseModel) else db_tag.dict()
+                ),
+            )
+            for db_tag in db_tags
+        )
         for fetched_name, fetched_obj in fetched:
             await user_api_key_cache.async_set_cache(
                 key=tag_cache_key(fetched_name),
@@ -2209,13 +2264,24 @@ async def _fetch_team_membership_from_db(
     use_writer: bool = False,
 ) -> LiteLLM_TeamMembership | None:
     _ = parent_otel_span, proxy_logging_obj
-    response: Final = await _dictable_table(
-        TeamMembershipRepository(prisma_client, use_writer=use_writer), "team_membership"
-    ).find_unique(
-        where={"user_id_team_id": {"user_id": user_id, "team_id": team_id}},
-        include={"litellm_budget_table": True},
+    native: Final = native_auth_repository(prisma_client)
+    response: Final = (
+        await native.one("member", [user_id, team_id], LiteLLM_TeamMembership, writer=use_writer)
+        if native is not None
+        else await _dictable_table(
+            TeamMembershipRepository(prisma_client, use_writer=use_writer), "team_membership"
+        ).find_unique(
+            where={"user_id_team_id": {"user_id": user_id, "team_id": team_id}},
+            include={"litellm_budget_table": True},
+        )
     )
-    membership: Final = None if response is None else LiteLLM_TeamMembership.model_validate(response.dict())
+    membership: Final = (
+        None
+        if response is None
+        else LiteLLM_TeamMembership.model_validate(
+            response.model_dump() if isinstance(response, BaseModel) else response.dict()
+        )
+    )
     _key: Final = team_membership_reservation_cache_key(user_id=user_id, team_id=team_id)
     if membership is None:
         await user_api_key_cache.async_set_cache(
@@ -2427,18 +2493,27 @@ async def _get_fuzzy_user_object(
     """
 
     response = None
+    native: Final = native_auth_repository(prisma_client)
     if sso_user_id is not None:
-        response = await _user_table(UserRepository(prisma_client)).find_unique(
-            where={"sso_user_id": sso_user_id},
-            include={"organization_memberships": True},
+        response = (
+            await native.one("user_sso", [sso_user_id], LiteLLM_UserTable)
+            if native is not None
+            else await _user_table(UserRepository(prisma_client)).find_unique(
+                where={"sso_user_id": sso_user_id},
+                include={"organization_memberships": True},
+            )
         )
 
     if response is None and user_email is not None:
         # Use case-insensitive query to handle emails with different casing
         # This matches the pattern used in _check_duplicate_user_email
-        response = await _user_table(UserRepository(prisma_client)).find_first(
-            where={"user_email": {"equals": user_email, "mode": "insensitive"}},
-            include={"organization_memberships": True},
+        response = (
+            await native.one("user_email", [user_email], LiteLLM_UserTable)
+            if native is not None
+            else await _user_table(UserRepository(prisma_client)).find_first(
+                where={"user_email": {"equals": user_email, "mode": "insensitive"}},
+                include={"organization_memberships": True},
+            )
         )
 
         if response is not None and sso_user_id is not None:  # update sso_user_id
@@ -2528,8 +2603,13 @@ async def get_user_object(
         )
 
         if should_check_db:
-            response = await _user_table(UserRepository(prisma_client, use_writer=bool(check_db_only))).find_unique(
-                where={"user_id": user_id}, include={"organization_memberships": True}
+            native: Final = native_auth_repository(prisma_client)
+            response = (
+                await native.one("user", [user_id], LiteLLM_UserTable, writer=bool(check_db_only))
+                if native is not None
+                else await _user_table(UserRepository(prisma_client, use_writer=bool(check_db_only))).find_unique(
+                    where={"user_id": user_id}, include={"organization_memberships": True}
+                )
             )
 
             if response is None:
@@ -3074,8 +3154,13 @@ class AccessGroupNotFoundError(HTTPException):
 async def _get_team_db_check(
     team_id: str, prisma_client: PrismaClient, team_id_upsert: bool | None = None, *, use_writer: bool = False
 ) -> "_PrismaTeamRow | None":
-    response = await _team_table(TeamRepository(prisma_client, use_writer=use_writer)).find_unique(
-        where={"team_id": team_id}, include=_TEAM_GRANT_RELATIONS
+    native: Final = native_auth_repository(prisma_client)
+    response = (
+        await native.one("team", [team_id], LiteLLM_TeamTable, writer=use_writer)
+        if native is not None
+        else await _team_table(TeamRepository(prisma_client, use_writer=use_writer)).find_unique(
+            where={"team_id": team_id}, include=_TEAM_GRANT_RELATIONS
+        )
     )
 
     if response is None and team_id_upsert:
@@ -3321,14 +3406,21 @@ async def get_access_object(
 
     # Not in cache - fetch from DB
     try:
-        response: Final = await _dictable_table(
-            AccessGroupRepository(prisma_client, use_writer=check_db_only), "access_group"
-        ).find_unique(where={"access_group_id": access_group_id})
+        native: Final = native_auth_repository(prisma_client)
+        response: Final = (
+            await native.one("access_group", [access_group_id], LiteLLM_AccessGroupTable, writer=check_db_only)
+            if native is not None
+            else await _dictable_table(
+                AccessGroupRepository(prisma_client, use_writer=check_db_only), "access_group"
+            ).find_unique(where={"access_group_id": access_group_id})
+        )
 
         if response is None:
             raise AccessGroupNotFoundError(access_group_id=access_group_id)
 
-        _response: Final = LiteLLM_AccessGroupTable.model_validate(response.dict())
+        _response: Final = LiteLLM_AccessGroupTable.model_validate(
+            response.model_dump() if isinstance(response, BaseModel) else response.dict()
+        )
 
         # Save to cache
         await cache_access_object(
@@ -3400,8 +3492,13 @@ async def get_team_object_by_alias(
 
     # Query database by team_alias
     try:
-        teams: Final = await _team_table(TeamRepository(prisma_client)).find_many(
-            where={"team_alias": team_alias}, include=_TEAM_GRANT_RELATIONS
+        native: Final = native_auth_repository(prisma_client)
+        teams: Final = (
+            await native.many("team_alias", [team_alias], LiteLLM_TeamTable)
+            if native is not None
+            else await _team_table(TeamRepository(prisma_client)).find_many(
+                where={"team_alias": team_alias}, include=_TEAM_GRANT_RELATIONS
+            )
         )
 
         if not teams:
@@ -3512,8 +3609,13 @@ async def get_org_object_by_alias(
 
     # Query database by organization_alias
     try:
-        orgs = await _model_dump_table(OrganizationRepository(prisma_client), "organization").find_many(
-            where={"organization_alias": org_alias}
+        native: Final = native_auth_repository(prisma_client)
+        orgs = (
+            await native.many("org_alias", [org_alias], LiteLLM_OrganizationTable)
+            if native is not None
+            else await _model_dump_table(OrganizationRepository(prisma_client), "organization").find_many(
+                where={"organization_alias": org_alias}
+            )
         )
 
         if not orgs:
@@ -3735,6 +3837,9 @@ async def _fetch_key_object_from_db_unbounded(
     *,
     check_db_only: bool = False,
 ) -> BaseModel | None:
+    native: Final = native_auth_repository(prisma_client)
+    if native is not None:
+        return await native.key(hashed_token, writer=check_db_only)
     fetch: Final = partial(prisma_client.get_data, use_writer=True) if check_db_only else prisma_client.get_data
     async with db_lookup_gate.current():
         try:
@@ -3978,16 +4083,25 @@ async def get_object_permission(
 
     # else, check db
     try:
-        response: Final = await _dictable_table(
-            ObjectPermissionRepository(prisma_client, use_writer=check_db_only), "object_permission"
-        ).find_unique(where={"object_permission_id": object_permission_id})
+        native: Final = native_auth_repository(prisma_client)
+        response: Final = (
+            await native.one(
+                "object_permission", [object_permission_id], LiteLLM_ObjectPermissionTable, writer=check_db_only
+            )
+            if native is not None
+            else await _dictable_table(
+                ObjectPermissionRepository(prisma_client, use_writer=check_db_only), "object_permission"
+            ).find_unique(where={"object_permission_id": object_permission_id})
+        )
 
         if response is None:
             if check_db_only:
                 raise HTTPException(status_code=403, detail="Referenced object permission does not exist")
             return None
 
-        _perm_obj: Final = LiteLLM_ObjectPermissionTable.model_validate(response.dict())
+        _perm_obj: Final = LiteLLM_ObjectPermissionTable.model_validate(
+            response.model_dump() if isinstance(response, BaseModel) else response.dict()
+        )
         await user_api_key_cache.async_set_cache(
             key=key,
             value=_perm_obj,
@@ -4119,8 +4233,11 @@ async def get_org_object(
     if include_budget_table:
         query_kwargs["include"] = {"litellm_budget_table": True}
 
-    response: Final = await _model_dump_table(OrganizationRepository(prisma_client), "organization").find_unique(
-        **query_kwargs
+    native: Final = native_auth_repository(prisma_client)
+    response: Final = (
+        await native.one("org", [org_id], LiteLLM_OrganizationTable)
+        if native is not None
+        else await _model_dump_table(OrganizationRepository(prisma_client), "organization").find_unique(**query_kwargs)
     )
 
     if response is None:
@@ -5456,9 +5573,14 @@ async def get_project_object(
         return deserialized_project
 
     # Fetch from DB
-    project_row: Final = await _model_dump_table(ProjectRepository(prisma_client), "project").find_unique(
-        where={"project_id": project_id},
-        include={"litellm_budget_table": True},
+    native: Final = native_auth_repository(prisma_client)
+    project_row: Final = (
+        await native.one("project", [project_id], LiteLLM_ProjectTableCachedObj)
+        if native is not None
+        else await _model_dump_table(ProjectRepository(prisma_client), "project").find_unique(
+            where={"project_id": project_id},
+            include={"litellm_budget_table": True},
+        )
     )
     if project_row is None:
         return None
