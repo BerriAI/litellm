@@ -1,6 +1,7 @@
+import sys
 from base64 import urlsafe_b64encode
 from functools import reduce
-from typing import Final
+from typing import Final, cast
 from urllib.parse import quote
 
 import pytest
@@ -326,6 +327,16 @@ def test_is_managed_s3_uri_leaves_other_objects_alone(uri: str):
 )
 def test_s3_media_uris_ignores_what_never_becomes_an_s3_media_source(request_body: dict[str, object]):
     assert s3_media_uris(request_body) == ()
+
+
+def test_s3_media_uris_finds_an_s3_object_nested_deeper_than_the_recursion_limit():
+    nested: Final = reduce(
+        lambda inner, _: [inner],
+        range(sys.getrecursionlimit() + 100),
+        cast(object, [{"type": "image_url", "image_url": {"url": _MANAGED_UPLOAD}}]),
+    )
+
+    assert s3_media_uris({"messages": [{"role": "user", "content": nested}]}) == (_MANAGED_UPLOAD,)
 
 
 def test_s3_media_uris_skips_only_the_objects_a_trusted_file_id_embeds():

@@ -2916,6 +2916,42 @@ def test_bedrock_converse_tool_result_s3_media_keeps_its_bucket_owner(part: Mapp
     ]
 
 
+@pytest.mark.parametrize(
+    "file, expected_media",
+    [
+        pytest.param(
+            {"file_id": "s3://media-bucket/clips/demo.mp4"},
+            [{"video": {"format": "mp4", "source": _s3_source("s3://media-bucket/clips/demo.mp4")}}],
+            id="s3-video-is-forwarded",
+        ),
+        pytest.param(
+            {"file_data": "data:video/mp4;base64,AAAAGGZ0eXBtcDQy"},
+            [],
+            id="inline-video-is-dropped",
+        ),
+    ],
+)
+def test_bedrock_converse_tool_result_video_is_forwarded_only_from_s3(
+    file: Mapping[str, object], expected_media: list[Mapping[str, object]]
+):
+    messages: Final = [
+        {"role": "user", "content": "Describe the clip."},
+        {
+            "tool_call_id": "tooluse_video_1",
+            "role": "tool",
+            "name": "fetch_clip",
+            "content": [{"type": "text", "text": "clip:"}, {"type": "file", "file": file}],
+        },
+    ]
+
+    with respx.mock:
+        converted: Final = _bedrock_converse_messages_pt(
+            messages=messages, model=_S3_MEDIA_MODEL, llm_provider="bedrock"
+        )
+
+    assert converted[-1]["content"][-1]["toolResult"]["content"] == [{"text": "clip:"}, *expected_media]
+
+
 @pytest.mark.parametrize("bucket_owner", [111122223333, ""], ids=["int", "empty-string"])
 @pytest.mark.parametrize("part_for", [_owned_image_url_part, _owned_file_part], ids=["image-url", "file"])
 def test_bedrock_converse_tool_result_s3_media_with_a_bucket_owner_that_is_not_an_account_id_is_a_bad_request(

@@ -234,6 +234,27 @@ def _allow_model_level_clientside_configurable_parameters(
     )
 
 
+_CLIENT_AWS_IDENTITY_PARAMS: Final = ("aws_role_name", "aws_web_identity_token", "aws_profile_name")
+
+
+def _sends_a_value(body: Mapping[str, object], param: str) -> bool:
+    value: Final = body.get(param)
+    return isinstance(value, str) and bool(value)
+
+
+def deployment_admits_a_client_aws_identity(body: Mapping[str, object], llm_router: Router | None) -> bool:
+    model: Final = body.get("model")
+    if not isinstance(model, str):
+        return False
+    return any(
+        _allow_model_level_clientside_configurable_parameters(
+            model=model, param=param, request_body_value=body[param], llm_router=llm_router
+        )
+        for param in _CLIENT_AWS_IDENTITY_PARAMS
+        if _sends_a_value(body, param)
+    )
+
+
 # Config dicts whose entries are spread as ``**dict`` into outbound LLM
 # API calls. ``litellm_embedding_config`` is consumed by the Milvus
 # vector store transformer. ``extra_body`` is the OpenAI-SDK passthrough

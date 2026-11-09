@@ -4081,7 +4081,7 @@ def _append_bedrock_tool_result_media_block(
         tool_result_content_blocks.append(BedrockToolResultContentBlock(image=processed_block["image"]))
     elif "document" in processed_block:
         tool_result_content_blocks.append(BedrockToolResultContentBlock(document=processed_block["document"]))
-    elif "video" in processed_block:
+    elif "video" in processed_block and "s3Location" in processed_block["video"]["source"]:
         tool_result_content_blocks.append(BedrockToolResultContentBlock(video=processed_block["video"]))
     else:
         verbose_logger.warning(

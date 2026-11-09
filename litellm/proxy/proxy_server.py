@@ -17681,7 +17681,7 @@ async def async_queue_request(
         data = await request.json()
         data.pop("_litellm_strip_stream_usage", None)
         await refuse_s3_media_the_key_may_not_read(
-            data, user_api_key_dict, general_settings, proxy_logging_obj.get_proxy_hook("managed_files")
+            data, user_api_key_dict, general_settings, proxy_logging_obj.get_proxy_hook("managed_files"), llm_router
         )
 
         # Include original request and headers in the data
