@@ -3,6 +3,7 @@
 import json
 import logging
 import re
+from typing import Final
 
 import httpx
 import pytest
@@ -158,7 +159,7 @@ def test_complete_url_appends_to_openai_v1_base():
     assert url == "https://bedrock-runtime.us-west-2.amazonaws.com/openai/v1/chat/completions"
 
 
-SIGNING_HOST_API_BASES = pytest.mark.parametrize(
+SIGNING_HOST_API_BASES: Final = pytest.mark.parametrize(
     "api_base",
     ["https://signing-host.example.com", "https://signing-host.example.com/openai/v1/chat/completions"],
     ids=["bare", "full-chat-url"],
@@ -166,10 +167,12 @@ SIGNING_HOST_API_BASES = pytest.mark.parametrize(
 
 
 @SIGNING_HOST_API_BASES
-def test_complete_url_sends_to_the_runtime_endpoint_over_api_base_like_converse(monkeypatch, api_base):
+def test_complete_url_sends_to_the_runtime_endpoint_over_api_base_like_converse(
+    monkeypatch: pytest.MonkeyPatch, api_base: str
+) -> None:
     monkeypatch.delenv("AWS_BEDROCK_RUNTIME_ENDPOINT", raising=False)
-    cfg = AmazonBedrockRuntimeChatCompletionsConfig()
-    url = cfg.get_complete_url(
+    cfg: Final = AmazonBedrockRuntimeChatCompletionsConfig()
+    url: Final = cfg.get_complete_url(
         api_base=api_base,
         api_key=None,
         model="us.openai.gpt-5.6-sol",
@@ -193,22 +196,29 @@ def test_complete_url_sends_to_the_env_runtime_endpoint_over_api_base_like_conve
 
 
 @SIGNING_HOST_API_BASES
-def test_complete_url_skips_an_unused_malformed_region_when_api_base_is_set(monkeypatch, api_base):
+def test_complete_url_skips_an_unused_malformed_region_when_api_base_is_set(
+    monkeypatch: pytest.MonkeyPatch, api_base: str
+) -> None:
     monkeypatch.delenv("AWS_BEDROCK_RUNTIME_ENDPOINT", raising=False)
-    url = AmazonBedrockRuntimeChatCompletionsConfig().get_complete_url(
+    url: Final = AmazonBedrockRuntimeChatCompletionsConfig().get_complete_url(
         api_base=api_base,
         api_key=None,
         model="us.openai.gpt-5.6-sol",
-        optional_params={"aws_region_name": "Not A Region", "aws_bedrock_runtime_endpoint": "https://egress.example.com"},
+        optional_params={
+            "aws_region_name": "Not A Region",
+            "aws_bedrock_runtime_endpoint": "https://egress.example.com",
+        },
         litellm_params={},
     )
     assert url == "https://egress.example.com/openai/v1/chat/completions"
 
 
 @pytest.mark.parametrize("api_base", [None, "https://signing-host.example.com/openai/v1/chat/completions"])
-def test_complete_url_uses_a_full_chat_completions_runtime_endpoint_as_is(monkeypatch, api_base):
+def test_complete_url_uses_a_full_chat_completions_runtime_endpoint_as_is(
+    monkeypatch: pytest.MonkeyPatch, api_base: str | None
+) -> None:
     monkeypatch.delenv("AWS_BEDROCK_RUNTIME_ENDPOINT", raising=False)
-    url = AmazonBedrockRuntimeChatCompletionsConfig().get_complete_url(
+    url: Final = AmazonBedrockRuntimeChatCompletionsConfig().get_complete_url(
         api_base=api_base,
         api_key=None,
         model="us.openai.gpt-5.6-sol",
@@ -227,10 +237,10 @@ def test_complete_url_uses_a_full_chat_completions_runtime_endpoint_as_is(monkey
     ids=["no-region", "unused-malformed-region", "empty-runtime-endpoint"],
 )
 def test_complete_url_uses_a_full_chat_completions_api_base_as_is_without_a_runtime_endpoint(
-    monkeypatch, optional_params
-):
+    monkeypatch: pytest.MonkeyPatch, optional_params: dict[str, str]
+) -> None:
     monkeypatch.delenv("AWS_BEDROCK_RUNTIME_ENDPOINT", raising=False)
-    url = AmazonBedrockRuntimeChatCompletionsConfig().get_complete_url(
+    url: Final = AmazonBedrockRuntimeChatCompletionsConfig().get_complete_url(
         api_base="https://gateway.example.com/bedrock/openai/v1/chat/completions/",
         api_key=None,
         model="us.openai.gpt-5.6-sol",
@@ -240,9 +250,11 @@ def test_complete_url_uses_a_full_chat_completions_api_base_as_is_without_a_runt
     assert url == "https://gateway.example.com/bedrock/openai/v1/chat/completions"
 
 
-def test_complete_url_keeps_a_full_chat_completions_api_base_over_the_env_runtime_endpoint(monkeypatch):
+def test_complete_url_keeps_a_full_chat_completions_api_base_over_the_env_runtime_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setenv("AWS_BEDROCK_RUNTIME_ENDPOINT", "https://env-egress.example.com")
-    url = AmazonBedrockRuntimeChatCompletionsConfig().get_complete_url(
+    url: Final = AmazonBedrockRuntimeChatCompletionsConfig().get_complete_url(
         api_base="https://gateway.example.com/bedrock/openai/v1/chat/completions",
         api_key=None,
         model="us.openai.gpt-5.6-sol",
@@ -258,10 +270,10 @@ def test_complete_url_keeps_a_full_chat_completions_api_base_over_the_env_runtim
 )
 @pytest.mark.parametrize("api_base", [None, "https://signing-host.example.com/openai/v1/chat/completions"])
 def test_complete_url_swaps_a_responses_route_on_the_runtime_endpoint_for_chat_completions(
-    monkeypatch, api_base, runtime_endpoint
-):
+    monkeypatch: pytest.MonkeyPatch, api_base: str | None, runtime_endpoint: str
+) -> None:
     monkeypatch.delenv("AWS_BEDROCK_RUNTIME_ENDPOINT", raising=False)
-    url = AmazonBedrockRuntimeChatCompletionsConfig().get_complete_url(
+    url: Final = AmazonBedrockRuntimeChatCompletionsConfig().get_complete_url(
         api_base=api_base,
         api_key=None,
         model="us.openai.gpt-5.6-sol",

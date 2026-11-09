@@ -724,7 +724,9 @@ class _CannedChatClient(AsyncHTTPHandler):
     ],
 )
 @pytest.mark.asyncio
-async def test_bedrock_reported_api_base_names_the_host_called(monkeypatch, deployment_hosts, expected_api_base):
+async def test_bedrock_reported_api_base_names_the_host_called(
+    monkeypatch: pytest.MonkeyPatch, deployment_hosts: dict[str, str], expected_api_base: str | None
+) -> None:
     monkeypatch.delenv("AWS_BEDROCK_RUNTIME_ENDPOINT", raising=False)
     response: Final = await litellm.acompletion(
         model="bedrock/us.openai.gpt-6.1-sol",
@@ -737,4 +739,3 @@ async def test_bedrock_reported_api_base_names_the_host_called(monkeypatch, depl
     )
 
     assert response._hidden_params["api_base"] == expected_api_base
-
