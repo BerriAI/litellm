@@ -99,11 +99,11 @@ const facetPaths = (): string[] =>
 const modelQueries = (): QueryRecord[] => modelCalls().map((call) => (call[1] as { query: QueryRecord }).query);
 const lastModelQuery = (): QueryRecord => modelQueries()[modelQueries().length - 1];
 
-const renderHub = () => {
+const renderHub = (props: React.ComponentProps<typeof PublicModelHub> = {}) => {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
   return render(
     <QueryClientProvider client={client}>
-      <PublicModelHub />
+      <PublicModelHub {...props} />
     </QueryClientProvider>,
   );
 };
@@ -134,6 +134,7 @@ beforeEach(() => {
     value: {
       pathname: "/",
       origin: "http://localhost:3000",
+      href: "http://localhost:3000/",
     },
   });
 });
@@ -148,6 +149,9 @@ describe("PublicModelHub", () => {
     renderHub();
 
     expect(await screen.findByText("gpt-4")).toBeInTheDocument();
+    expect(
+      within(screen.getByRole("button", { name: "gpt-4", exact: true })).queryByAltText(""),
+    ).not.toBeInTheDocument();
     expect(modelCalls()[0][0]).toBe(MODEL_HUB_PATH);
     expect(modelQueries()[0]).toEqual({ page: 1, page_size: 50, sort: "model_group" });
   });
@@ -323,6 +327,33 @@ describe("PublicModelHub", () => {
     expect(example).toHaveTextContent('model="gpt-4"');
   });
 
+  it("shows each deployment's full pricing in the model details", async () => {
+    respondWith([
+      model({
+        model_group: "gpt-4",
+        input_cost_per_token: 2.5e-6,
+        deployment_pricing: [
+          {
+            provider: "openai",
+            costs: { input_cost_per_token: 2.5e-6, cache_read_input_token_cost_above_272k_tokens_priority: 1e-6 },
+            tiered_pricing: [{ range: [0, 256_000], costs: { input_cost_per_token: 5e-8 } }],
+          },
+        ],
+      }),
+    ]);
+    renderHub();
+
+    fireEvent.click(await screen.findByRole("button", { name: "gpt-4" }));
+
+    const openai = await screen.findByRole("region", { name: "OpenAI pricing" });
+    const aboveThreshold = within(openai).getByRole("rowgroup", { name: "Above 272K tokens" });
+    expect(within(aboveThreshold).getByRole("row", { name: /Cache read/ })).toHaveTextContent(
+      "Cache read / 1M tokens$1.00",
+    );
+    expect(within(openai).getByText("0–256K tokens: $0.05 input")).toBeInTheDocument();
+    expect(within(screen.getByRole("dialog")).getByText("$2.5000")).toBeInTheDocument();
+  });
+
   it("filters by several providers at once, and returns to the first page", async () => {
     const user = userEvent.setup();
     respondWith(DEFAULT_MODELS, 300);
@@ -439,6 +470,83 @@ describe("PublicModelHub", () => {
       expect(screen.getByText("Model Hub")).toBeInTheDocument();
       expect(screen.getByText("No models available")).toBeInTheDocument();
     });
+  });
+});
+
+describe("PublicModelHub chat variant", () => {
+  it("should render published models without dashboard chrome or unrelated hub requests", async () => {
+    const networkingModule = await import("./networking");
+    renderHub({ isEmbedded: true, variant: "chat" });
+
+    expect(await screen.findByRole("button", { name: /^gpt-4(?: |$)/ })).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "Search models" })).toBeInTheDocument();
+    expect(screen.queryByTestId("navbar")).not.toBeInTheDocument();
+    expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Available Models" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "About" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Useful Links" })).not.toBeInTheDocument();
+    expect(screen.queryByText(/These are models, agents, and MCP servers/)).not.toBeInTheDocument();
+    expect(networkingModule.getPublicModelHubInfo).not.toHaveBeenCalled();
+    expect(networkingModule.agentHubPublicModelsCall).not.toHaveBeenCalled();
+    expect(networkingModule.mcpHubPublicServersCall).not.toHaveBeenCalled();
+    expect(networkingModule.skillHubPublicCall).not.toHaveBeenCalled();
+  });
+
+  it("should filter all published pages from the provider dropdown and clear the selection", async () => {
+    const user = userEvent.setup();
+    respondWith(DEFAULT_MODELS, 300);
+    renderHub({ isEmbedded: true, variant: "chat" });
+    const modelButton = await screen.findByRole("button", { name: /^gpt-4(?: |$)/ });
+    expect(within(modelButton).getByAltText("")).toBeInTheDocument();
+    expect(modelButton).toHaveTextContent("OpenAI");
+    expect(screen.getByRole("columnheader", { name: "Model" })).toBeInTheDocument();
+    expect(screen.queryByRole("columnheader", { name: "Providers" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("columnheader", { name: "Tags" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: "Select providers" })).not.toBeInTheDocument();
+    await user.click(screen.getByTestId("pagination-next"));
+    await waitFor(() => expect(lastModelQuery().page).toBe(2));
+
+    await user.click(screen.getByRole("combobox", { name: "Provider", exact: true }));
+    await user.click(await screen.findByRole("option", { name: "Anthropic", exact: true }));
+    await waitFor(() => expect(lastModelQuery()["filter[providers][in]"]).toBe("anthropic"));
+    expect(lastModelQuery().page).toBe(1);
+    expect(screen.getByRole("combobox", { name: "Provider", exact: true })).toHaveTextContent("Anthropic");
+    await user.click(screen.getByRole("combobox", { name: "Provider", exact: true }));
+    await user.click(await screen.findByRole("option", { name: "OpenAI", exact: true }));
+    await waitFor(() => expect(lastModelQuery()["filter[providers][in]"]).toBe("openai"));
+    expect(screen.getByRole("combobox", { name: "Provider", exact: true })).toHaveTextContent("OpenAI");
+    await user.click(screen.getByRole("combobox", { name: "Provider", exact: true }));
+    await user.click(await screen.findByRole("option", { name: "All providers", exact: true }));
+    await waitFor(() => expect(lastModelQuery()).not.toHaveProperty("filter[providers][in]"));
+  });
+
+  it("should preserve published model search and pagination in chat", async () => {
+    const user = userEvent.setup();
+    respondWith(DEFAULT_MODELS, 300);
+    renderHub({ isEmbedded: true, variant: "chat" });
+    await screen.findByRole("button", { name: /^gpt-4(?: |$)/ });
+
+    await user.type(screen.getByRole("textbox", { name: "Search models" }), "gpt");
+    await waitFor(() => expect(lastModelQuery().q).toBe("gpt"));
+    await user.click(screen.getByTestId("pagination-next"));
+    await waitFor(() => expect(lastModelQuery().page).toBe(2));
+    expect(lastModelQuery().q).toBe("gpt");
+  });
+
+  it("should retain costs and usage examples in a chat-themed model dialog", async () => {
+    const user = userEvent.setup();
+    respondWith([model({ model_group: "gpt-4", input_cost_per_token: 0.000001, output_cost_per_token: 0.000003 })]);
+    renderHub({ isEmbedded: true, variant: "chat" });
+    await user.click(await screen.findByRole("button", { name: /^gpt-4(?: |$)/ }));
+
+    const dialog = await screen.findByRole("dialog", { name: "gpt-4" });
+    expect(dialog).toHaveClass("chat-theme", "chat-model-hub-dialog");
+    expect(within(dialog).getByText("$1.0000")).toBeInTheDocument();
+    expect(within(dialog).getByText("$3.0000")).toBeInTheDocument();
+    expect(within(dialog).getByText("Usage Example")).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "Copy to clipboard" })).toBeInTheDocument();
+    await user.click(within(dialog).getByRole("button", { name: /close/i }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
   });
 });
 

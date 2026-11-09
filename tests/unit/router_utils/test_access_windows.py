@@ -2,7 +2,7 @@ from datetime import datetime, time, timezone
 from typing import Final
 
 
-from litellm.router_utils.access_windows import (
+from litellm.litellm_core_utils.access_windows import (
     access_windows_config_error,
     filter_reserved_deployments,
     is_window_active,

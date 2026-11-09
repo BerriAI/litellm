@@ -12,8 +12,11 @@ from typing import Final, Literal, cast
 from urllib.parse import urlencode
 
 import httpx
+from pydantic import TypeAdapter
 
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, decoded_json_object, iter_items
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.apiserpent.search.defaults import (
     DEEP_SEARCH_PATH,
     NUM_MAX,
@@ -32,6 +35,7 @@ from litellm.secret_managers.main import get_secret_str
 DEEP_SEARCH_PARAM: Final = "deep"
 APISERPENT_BASE: Final = "https://apiserpent.com"
 APISERPENT_PARAMS_KEY: Final = "_apiserpent_params"
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class APISerpentSearchConfig(BaseSearchConfig):
@@ -77,13 +81,11 @@ class APISerpentSearchConfig(BaseSearchConfig):
         Build the search URL. APISerpent uses GET, so the transformed request is
         serialized into the query string. The endpoint path (quick vs deep) is
         always applied; an ``api_base`` / ``APISERPENT_API_BASE`` override only
-        changes the host. The ``endswith`` guard keeps this idempotent, since the
+        changes the host. ``ensure_api_route`` keeps this idempotent, since the
         handler re-invokes this method with the already-resolved URL as api_base.
         """
-        base = (api_base or get_secret_str("APISERPENT_API_BASE") or APISERPENT_BASE).rstrip("/")
         path: Final = DEEP_SEARCH_PATH if self._is_deep_search(optional_params) else QUICK_SEARCH_PATH
-        if not base.endswith(path):
-            base = f"{base}{path}"
+        base: Final = ensure_api_route(api_base or get_secret_str("APISERPENT_API_BASE") or APISERPENT_BASE, path)
 
         if data and isinstance(data, dict) and APISERPENT_PARAMS_KEY in data:
             query_string: Final = urlencode(data[APISERPENT_PARAMS_KEY], doseq=True)
@@ -151,22 +153,24 @@ class APISerpentSearchConfig(BaseSearchConfig):
         Full format nests results under ``results.organic[]``; simple format
         returns a flat ``results[]`` array. Both expose title/url/snippet.
         """
-        response_json: Final = raw_response.json()
+        response_json: Final = decoded_json_object(_DECODED_JSON.validate_python(raw_response.json()))
 
         raw_results: Final = response_json.get("results") or {}
-        organic: Final = raw_results.get("organic", []) if isinstance(raw_results, dict) else raw_results
+        nested_results: Final = as_str_mapping(raw_results)
+        organic: Final = nested_results.get("organic", []) if nested_results is not None else raw_results
 
-        results: Final[list[SearchResult]] = []
-        for result in organic:
-            results.append(
-                SearchResult(
-                    title=result.get("title", ""),
-                    url=result.get("url", ""),
-                    snippet=result.get("snippet", ""),
-                    date=result.get("date"),
-                    last_updated=None,
-                )
+        results: Final = [
+            SearchResult.model_validate(
+                {
+                    "title": result.get("title", ""),
+                    "url": result.get("url", ""),
+                    "snippet": result.get("snippet", ""),
+                    "date": result.get("date"),
+                    "last_updated": None,
+                }
             )
+            for result in map(decoded_json_object, iter_items(organic))
+        ]
 
         return SearchResponse(
             results=results,

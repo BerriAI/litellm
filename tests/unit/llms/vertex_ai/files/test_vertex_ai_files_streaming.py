@@ -278,6 +278,46 @@ class TestGetObjectNameLazyParse:
         assert exc_info.value.message.startswith("Batch input file line 1 could not be converted")
 
 
+def _tts_batch_row(**body_extra: object) -> bytes:
+    body: Final = {
+        "model": "gemini-2.5-flash-preview-tts",
+        "messages": [{"role": "user", "content": "Say hi"}],
+        "audio": {"format": "pcm16", "speech_config": {"voice_name": "Kore", "style": "calm"}},
+        **body_extra,
+    }
+    return json.dumps({"custom_id": "r-0", "method": "POST", "url": "/v1/chat/completions", "body": body}).encode()
+
+
+def _upload_tts_batch_row(row: bytes, litellm_params: dict[str, object]) -> bytes:
+    request: Final[CreateFileRequest] = {"file": ("batch.jsonl", row + b"\n", "application/jsonl"), "purpose": "batch"}
+    return _join_upload_body(
+        VertexAIFilesConfig().transform_create_file_request(
+            model="", create_file_data=request, optional_params={}, litellm_params=litellm_params
+        )
+    )
+
+
+class TestBatchRowUnknownVoiceKeys:
+    def test_unknown_voice_keys_are_a_400_without_drop_params(self) -> None:
+        with pytest.raises(VertexAIError, match="voice keys style") as exc_info:
+            _upload_tts_batch_row(_tts_batch_row(), {})
+        assert exc_info.value.status_code == 400
+
+    @pytest.mark.parametrize(
+        "row, litellm_params",
+        [(_tts_batch_row(drop_params=True), {}), (_tts_batch_row(), {"drop_params": True})],
+        ids=["row", "deployment"],
+    )
+    def test_drop_params_on_the_row_or_deployment_drops_unknown_voice_keys(
+        self, row: bytes, litellm_params: dict[str, object]
+    ) -> None:
+        uploaded: Final = json.loads(_upload_tts_batch_row(row, litellm_params))
+
+        assert uploaded["request"]["generationConfig"]["speechConfig"] == {
+            "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Kore"}}
+        }
+
+
 class TestStreamingLaziness:
     def test_upload_stream_transforms_rows_only_as_they_are_pulled(self) -> None:
         cfg: Final = VertexAIFilesConfig()

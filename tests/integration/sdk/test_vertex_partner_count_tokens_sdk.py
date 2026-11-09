@@ -1,5 +1,5 @@
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Final
 
 import litellm
@@ -88,3 +88,77 @@ async def test_acount_tokens_falls_back_to_the_local_tokenizer_when_the_peer_rej
         assert len(_count_requests(wire.drain())) == 1
         assert counted.tokenizer_type == "local_tokenizer", counted
         assert counted.total_tokens > 0 and counted.total_tokens != _PEER_COUNT, counted
+
+
+_WEATHER_SCHEMA: Final[dict[str, JsonValue]] = {
+    "type": "object",
+    "properties": {"city": {"type": "string"}},
+    "required": ["city"],
+}
+_CHAT_TOOLS: Final[list[dict[str, JsonValue]]] = [
+    {
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "description": "Look up the current weather for a city",
+            "parameters": _WEATHER_SCHEMA,
+        },
+    }
+]
+_CHAT_TOOL_USE: Final[list[dict[str, JsonValue]]] = [
+    {"role": "user", "content": "What is the weather in Paris?"},
+    {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'}}
+        ],
+    },
+    {"role": "tool", "tool_call_id": "call_1", "content": "Sunny, 21C"},
+]
+_GENERATED: Final[dict[str, JsonValue]] = {
+    "id": "msg_sdk_count",
+    "type": "message",
+    "role": "assistant",
+    "model": _BACKEND,
+    "content": [{"type": "text", "text": "It is sunny."}],
+    "stop_reason": "end_turn",
+    "stop_sequence": None,
+    "usage": {"input_tokens": 12, "output_tokens": 3},
+}
+_COUNTED_FIELDS: Final = ("messages", "system", "tools")
+
+
+def _generating_peer(request: Request) -> Reply:
+    if request.target == "/_oauth/token":
+        token: Final = {"access_token": "scripted-token", "token_type": "Bearer", "expires_in": 3600}
+        return Reply(body=json.dumps(token).encode())
+    if "count-tokens" in request.target:
+        return Reply(body=json.dumps({"input_tokens": _PEER_COUNT}).encode())
+    if request.target.endswith(f"/{_BACKEND}:rawPredict"):
+        return Reply(body=json.dumps(_GENERATED).encode())
+    return Reply(status=404, body=json.dumps({"error": request.target}).encode())
+
+
+def _counted_fields(body: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
+    return {field: body[field] for field in _COUNTED_FIELDS if field in body}
+
+
+async def test_acount_tokens_sends_chat_tool_use_the_way_acompletion_sends_it(
+    vertex_environment: Callable[[str], None],
+) -> None:
+    with wire_server(_generating_peer) as wire:
+        vertex_environment(wire.url)
+        generated: Final = await litellm.acompletion(
+            model=f"vertex_ai/{_BACKEND}", messages=_CHAT_TOOL_USE, tools=_CHAT_TOOLS, max_tokens=16, api_base=wire.url
+        )
+        assert generated.choices[0].message.content == "It is sunny.", generated
+        counted: Final = await litellm.acount_tokens(
+            model=f"vertex_ai/{_BACKEND}", messages=_CHAT_TOOL_USE, tools=_CHAT_TOOLS, api_base=wire.url
+        )
+        assert (counted.total_tokens, counted.tokenizer_type) == (_PEER_COUNT, "vertex_ai_partner_models"), counted
+        requests: Final = wire.drain()
+        (inference,) = (request for request in requests if request.target.endswith(f"/{_BACKEND}:rawPredict"))
+        (count,) = _count_requests(requests)
+        expected: Final = _counted_fields(_JSON_OBJECT.validate_json(inference.body))
+        assert _counted_fields(_JSON_OBJECT.validate_json(count.body)) == expected, (count.body, expected)

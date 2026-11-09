@@ -4,7 +4,8 @@
  */
 
 import { useState } from "react";
-import { toast } from "@/lib/toast";
+import { useTranslation } from "react-i18next";
+import { copyToClipboard } from "@/utils/dataUtils";
 import { ParsedMessage } from "./prettyMessagesTypes";
 import { SectionHeader } from "./SectionHeader";
 import { CollapsibleMessage } from "./CollapsibleMessage";
@@ -19,6 +20,7 @@ interface InputCardProps {
 
 export function InputCard({ messages, promptTokens, inputCost }: InputCardProps) {
   const [isCollapsed, setIsCollapsed] = useState(false);
+  const { t } = useTranslation();
 
   if (messages.length === 0) {
     return null;
@@ -32,8 +34,7 @@ export function InputCard({ messages, promptTokens, inputCost }: InputCardProps)
 
   const handleCopy = () => {
     const content = lastMessage?.content || "";
-    navigator.clipboard.writeText(content);
-    toast.success("Input copied");
+    void copyToClipboard(content, t("logs.detail.inputCard.copied"));
   };
 
   return (

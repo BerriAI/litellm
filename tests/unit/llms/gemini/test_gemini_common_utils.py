@@ -1,4 +1,5 @@
 import contextlib
+import re
 from typing import Final
 from unittest.mock import AsyncMock, patch
 
@@ -16,6 +17,7 @@ from litellm.llms.gemini.common_utils import (
 )
 from litellm.llms.gemini.count_tokens import handler as gemini_count_tokens_handler
 from litellm.llms.gemini.count_tokens.handler import GoogleAIStudioTokenCounter as GeminiCountTokensHandler
+from tests.unit.conftest import in_operator_error
 
 _JSON_BODY: Final = TypeAdapter(dict[str, JsonValue])
 
@@ -355,6 +357,25 @@ class TestGeminiModelInfo:
         assert result == expected
 
 
+@pytest.mark.parametrize(
+    ("body", "error", "message"),
+    [
+        ([], TypeError, "list indices must be integers or slices, not str"),
+        ({"models": None}, TypeError, "'NoneType' object is not iterable"),
+        ({"models": [{"name": 1}]}, AttributeError, "'int' object has no attribute 'replace'"),
+    ],
+)
+def test_get_models_malformed_listing_raises_the_error_of_the_failing_lookup(
+    body: JsonValue, error: type[Exception], message: str, respx_mock: respx.MockRouter
+) -> None:
+    respx_mock.get("https://models.test/v1beta/models").respond(200, json=body)
+
+    with pytest.raises(error, match=message) as raised:
+        GeminiModelInfo().get_models(api_key="test-key", api_base="https://models.test")
+
+    assert raised.type is error
+
+
 class TestGoogleAIStudioTokenCounter:
     """Test suite for GoogleAIStudioTokenCounter class"""
 
@@ -479,6 +500,18 @@ class TestGoogleAIStudioTokenCounter:
         # Verify the contents are unchanged
         assert cleaned_contents == contents_without_function_response
 
+    @pytest.mark.parametrize(
+        ("part", "message"),
+        [
+            (7, in_operator_error(7)),
+            (frozenset({"functionResponse"}), "'frozenset' object is not subscriptable"),
+            ({"functionResponse": "done"}, "FunctionResponse() argument after ** must be a mapping, not str"),
+        ],
+    )
+    def test_clean_contents_for_gemini_api_rejects_a_malformed_part(self, part: object, message: str) -> None:
+        with pytest.raises(TypeError, match=re.escape(message)):
+            GeminiCountTokensHandler()._clean_contents_for_gemini_api([{"role": "user", "parts": [part]}])
+
 
 def _map_image_config(raw_image_config: str) -> dict[str, object]:
     return map_openai_image_params_to_gemini(
@@ -491,6 +524,40 @@ def _map_image_config(raw_image_config: str) -> dict[str, object]:
 
 def test_map_openai_image_params_to_gemini_forwards_a_json_object_image_config():
     assert _map_image_config('{"aspectRatio": "1:1"}') == {"imageConfig": {"aspectRatio": "1:1"}}
+
+
+@pytest.mark.parametrize("prefix", ("", "gemini/", "vertex_ai/"))
+@pytest.mark.parametrize(
+    "model, size, expected",
+    (
+        ("gemini-3-pro-image", "256x256", {"aspectRatio": "1:1", "imageSize": "1K"}),
+        ("gemini-3-pro-image", "512x512", {"aspectRatio": "1:1", "imageSize": "1K"}),
+        ("gemini-3-pro-image-preview", "512x512", {"aspectRatio": "1:1", "imageSize": "1K"}),
+        ("gemini-3-pro-image", "2048x2048", {"aspectRatio": "1:1", "imageSize": "2K"}),
+        ("gemini-3-pro-image", "4096x4096", {"aspectRatio": "1:1", "imageSize": "4K"}),
+        ("gemini-3.1-flash-image", "512x512", {"aspectRatio": "1:1", "imageSize": "512"}),
+        ("gemini-3.1-flash-image-preview", "512x512", {"aspectRatio": "1:1", "imageSize": "512"}),
+        ("gemini-3.1-flash-image", "2048x2048", {"aspectRatio": "1:1", "imageSize": "2K"}),
+        ("gemini-3.1-flash-image", "4096x4096", {"aspectRatio": "1:1", "imageSize": "4K"}),
+        ("gemini-3.1-flash-lite-image", "256x256", {"aspectRatio": "1:1", "imageSize": "1K"}),
+        ("gemini-3.1-flash-lite-image", "512x512", {"aspectRatio": "1:1", "imageSize": "1K"}),
+        ("gemini-3.1-flash-lite-image", "2048x2048", {"aspectRatio": "1:1", "imageSize": "1K"}),
+        ("gemini-3.1-flash-lite-image", "4096x4096", {"aspectRatio": "1:1", "imageSize": "1K"}),
+        ("gemini-2.5-flash-image", "512x512", {"aspectRatio": "1:1"}),
+        ("gemini-2.5-flash-image", "1024x256", {"aspectRatio": "21:9"}),
+        ("gemini-2.5-flash-image", "256x1024", {"aspectRatio": "9:16"}),
+        ("gemini-2.5-flash-image", "8000x1000", {"aspectRatio": "21:9"}),
+        ("gemini-2.5-flash-image", "1000x8000", {"aspectRatio": "9:16"}),
+        ("gemini-3.1-flash-image", "1024x256", {"aspectRatio": "4:1", "imageSize": "512"}),
+    ),
+)
+def test_size_mapping_respects_model_image_limits(
+    prefix: str, model: str, size: str, expected: dict[str, str]
+) -> None:
+    """Limits as of 2026-10-26, https://ai.google.dev/gemini-api/docs/image-generation#aspect_ratios_and_image_size."""
+    assert map_openai_image_params_to_gemini({"size": size}, prefix + model, ["size"]) == {
+        "imageConfig": expected
+    }
 
 
 @pytest.mark.parametrize("raw_image_config", ["[1, 2]", '"16:9"', "null"])

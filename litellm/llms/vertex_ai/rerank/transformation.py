@@ -6,10 +6,11 @@ Why separate file? Make it easy to see how transformation works
 
 import math
 import uuid
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Final
 
 import httpx
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -25,6 +26,17 @@ from litellm.types.rerank import (
     RerankResponseMeta,
     RerankResponseResult,
 )
+
+
+class _VertexRankedRecord(TypedDict):
+    id: ReadOnly[str]
+    score: NotRequired[ReadOnly[float]]
+    title: NotRequired[ReadOnly[str]]
+    content: NotRequired[ReadOnly[str]]
+
+
+class _VertexRankResponse(TypedDict, total=False):
+    records: ReadOnly[Sequence[_VertexRankedRecord]]
 
 
 class VertexAIRerankConfig(BaseRerankConfig, VertexBase):
@@ -172,7 +184,7 @@ class VertexAIRerankConfig(BaseRerankConfig, VertexBase):
         Transform Vertex AI Discovery Engine response to Cohere format
         """
         try:
-            raw_response_json: Final = raw_response.json()
+            raw_response_json: Final[_VertexRankResponse] = raw_response.json()
         except Exception as e:
             raise ValueError(f"Failed to parse response: {e}")
 

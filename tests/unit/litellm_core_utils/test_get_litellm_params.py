@@ -22,6 +22,7 @@ from litellm.litellm_core_utils.get_litellm_params import (
     stored_control_options,
 )
 from litellm.types.litellm_params import ControlOptions
+from litellm.utils import get_non_default_completion_params
 
 
 def _funnel_kwargs_completion_forwards(monkeypatch, wif_kwargs: dict[str, object]) -> dict[str, object]:
@@ -317,6 +318,10 @@ class TestGetLitellmParamsExplicitFields:
         result = get_litellm_params(no_log=True)
         assert result["no-log"] is True
 
+    def test_github_copilot_host_is_registered_as_a_litellm_param(self):
+        result: Final = get_litellm_params(github_copilot_host="octo.ghe.com")
+        assert result["github_copilot_host"] == "octo.ghe.com"
+
 
 class TestGetLitellmParamsDataResidency:
     """Verify that data_residency is inferred from OpenAI regional api_base."""
@@ -334,6 +339,13 @@ class TestGetLitellmParamsDataResidency:
             api_base="https://us.api.openai.com/v1",
         )
         assert result["data_residency"] == "us"
+
+    def test_fedramp_host_resolves_to_fedramp(self):
+        result = get_litellm_params(
+            custom_llm_provider="openai",
+            api_base="https://gov.api.openai.com/v1",
+        )
+        assert result["data_residency"] == "fedramp"
 
     def test_global_host_resolves_to_none(self):
         result = get_litellm_params(
@@ -406,6 +418,14 @@ class TestMetadataFallsBackToLitellmMetadata:
         assert result["metadata"] is not litellm_metadata
         result["metadata"].pop("trace_id")
         assert litellm_metadata == {"trace_id": "trace-1"}
+
+    def test_session_id_derived_from_trace_id_adds_no_provider_params(self):
+        from_trace_id: Final = get_litellm_params(metadata={"trace_id": "trace-1"})
+        from_session_id: Final = get_litellm_params(metadata={"session_id": "session-1"})
+        added_by_trace_id: Final = from_trace_id.keys() - from_session_id.keys()
+
+        assert added_by_trace_id
+        assert not added_by_trace_id & get_non_default_completion_params(from_trace_id).keys()
 
 
 @pytest.mark.parametrize(

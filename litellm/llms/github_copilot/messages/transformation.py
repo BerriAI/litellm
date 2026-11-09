@@ -1,14 +1,16 @@
-from typing import Any, Final, cast  # noqa: TID251  # narrows untyped request dicts at the session boundary
+from collections.abc import Sequence
+from typing import Final, cast  # noqa: TID251  # narrows untyped request dicts at the session boundary
 
 from litellm.exceptions import AuthenticationError
-from litellm.llms.anthropic.pass_through.messages.transformation import (
+from litellm.litellm_core_utils.url_utils import ensure_api_route
+from litellm.llms.anthropic.messages.native.transformation import (
     AnthropicMessagesConfig,
 )
 
 from ..authenticator import Authenticator
 from ..common_utils import (
     DEFAULT_GITHUB_COPILOT_API_BASE,
-    GetAPIKeyError,
+    GetAccessTokenError,
     get_copilot_default_headers,
     pin_session_authorization,
 )
@@ -53,7 +55,7 @@ class GithubCopilotAnthropicMessagesConfig(AnthropicMessagesConfig):
         self,
         headers: dict,
         model: str,
-        messages: list[Any],
+        messages: Sequence[object],
         optional_params: dict,
         litellm_params: dict,
         api_key: str | None = None,
@@ -82,7 +84,7 @@ class GithubCopilotAnthropicMessagesConfig(AnthropicMessagesConfig):
             dynamic_api_key: Final = (
                 user_session.token if user_session is not None else self.authenticator.get_api_key()
             )
-        except GetAPIKeyError as e:
+        except GetAccessTokenError as e:
             raise AuthenticationError(
                 model=model,
                 llm_provider="github_copilot",
@@ -140,5 +142,5 @@ class GithubCopilotAnthropicMessagesConfig(AnthropicMessagesConfig):
             or api_base
             or self.authenticator.get_api_base()
             or DEFAULT_GITHUB_COPILOT_API_BASE
-        ).rstrip("/")
-        return resolved if resolved.endswith("/v1/messages") else f"{resolved}/v1/messages"
+        )
+        return ensure_api_route(resolved, "v1/messages")

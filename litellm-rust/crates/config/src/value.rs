@@ -10,6 +10,10 @@ pub type AdditionalFields = BTreeMap<String, Value>;
 pub struct Object(BTreeMap<String, Value>);
 
 impl Object {
+    pub(crate) fn from_fields(fields: BTreeMap<String, Value>) -> Self {
+        Self(fields)
+    }
+
     pub fn get(&self, key: &str) -> Option<&Value> {
         self.0.get(key)
     }

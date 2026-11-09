@@ -51,6 +51,8 @@ class WireRequest(BaseModel):
     token_source: TokenSource | None = None
     stream: bool
     blocked: bool
+    send_at_s: float | None = None
+    """Seconds after the run starts to send this request, set when the case ramps; otherwise the users pace."""
 
 
 class WireRecord(BaseModel):
