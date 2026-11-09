@@ -573,7 +573,7 @@ describe("Settings", () => {
 
   it("should show the Ternary setup when its tab is opened", async () => {
     const user = userEvent.setup();
-    render(<Settings {...defaultProps} />);
+    renderWithProviders(<Settings {...defaultProps} />);
 
     await user.click(await screen.findByRole("tab", { name: "Ternary Cost Export" }));
 
