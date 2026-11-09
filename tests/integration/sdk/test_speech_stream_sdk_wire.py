@@ -266,10 +266,8 @@ async def test_aspeech_stream_cut_off_raises_a_mapped_error_and_logs_one_failure
         assert await _afirst_bytes(chunks, len(_FIRST)) == _FIRST
         with pytest.raises(litellm.APIConnectionError):
             await anext(chunks)
-        logged: Final = await asyncio.to_thread(_logged_exactly, probe, 2)
-    assert sorted(logged) == [
-        (kind, Logged(call_id, "500", "APIConnectionError")) for kind in ("async_failure", "sync_failure")
-    ]
+        logged: Final = await asyncio.to_thread(_logged_exactly, probe, 1)
+    assert logged == (("async_failure", Logged(call_id, "500", "APIConnectionError")),)
 
 
 def test_speech_stream_returns_at_the_first_audio_and_logs_success_once_after_the_clip() -> None:
