@@ -141,6 +141,45 @@ pub(crate) fn request_auth_access(py: Python<'_>, facts: &Bound<'_, PyAny>) -> P
 }
 
 #[pyfunction]
+pub(crate) fn request_auth_budget_lookup_soft(
+    py: Python<'_>,
+    facts: &Bound<'_, PyAny>,
+) -> PyResult<bool> {
+    let facts: core::budget_lookup::SoftFacts = from_py(facts)?;
+    Ok(py.detach(move || core::budget_lookup::read_soft_emails(&facts)))
+}
+
+#[pyfunction]
+pub(crate) fn request_auth_budget_lookup_organization(
+    py: Python<'_>,
+    facts: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    let facts: core::budget_lookup::OrganizationFacts = from_py(facts)?;
+    to_py(
+        py,
+        &py.detach(move || core::budget_lookup::organization(&facts)),
+    )
+}
+
+#[pyfunction]
+pub(crate) fn request_auth_budget_lookup_member(
+    py: Python<'_>,
+    facts: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    let facts: core::budget_lookup::MemberFacts = from_py(facts)?;
+    to_py(py, &py.detach(move || core::budget_lookup::member(&facts)))
+}
+
+#[pyfunction]
+pub(crate) fn request_auth_budget_lookup_emails(
+    py: Python<'_>,
+    facts: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    let facts: core::budget_lookup::EmailFacts = from_py(facts)?;
+    to_py(py, &py.detach(move || core::budget_lookup::emails(&facts)))
+}
+
+#[pyfunction]
 pub(crate) fn request_auth_budget_window_start(
     py: Python<'_>,
     facts: &Bound<'_, PyAny>,
