@@ -10214,6 +10214,60 @@ async def test_microsoft_login_asks_for_offline_access_only_while_an_id_jag_serv
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "client_id_kwarg, environment, upstream_redirect",
+    [
+        (
+            "google_client_id",
+            {"GOOGLE_CLIENT_ID": "google-cid", "GOOGLE_CLIENT_SECRET": "google-secret"},
+            "fastapi_sso.sso.google.GoogleSSO.get_login_redirect",
+        ),
+        (
+            "microsoft_client_id",
+            {"MICROSOFT_CLIENT_ID": "ms-cid", "MICROSOFT_CLIENT_SECRET": "ms-secret", "MICROSOFT_TENANT": "tenant"},
+            "fastapi_sso.sso.microsoft.MicrosoftSSO.get_login_redirect",
+        ),
+    ],
+)
+async def test_login_redirect_keeps_the_client_secret_read_with_its_client_id_when_a_sync_removes_both(
+    client_id_kwarg, environment, upstream_redirect
+):
+    """A config sync can remove an SSO client's environment variables while a sign-in that already read
+    the client id is waiting on the refresh-token check. The redirect must use the secret that belonged
+    to that client id instead of failing because the secret is gone by then."""
+    from fastapi.responses import RedirectResponse
+
+    from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
+
+    seen: dict[str, object] = {}
+
+    async def fake_redirect(self, *, redirect_uri=None, params=None, state=None):
+        seen["client_secret"] = self.client_secret
+        return RedirectResponse(url="https://idp.example/authorize")
+
+    async def sync_removes_the_client() -> bool:
+        for key in environment:
+            os.environ.pop(key, None)
+        return False
+
+    with (
+        patch.dict(os.environ, environment),
+        patch(  # test-quality-ok: stubs the upstream IdP authorization boundary, where the request leaves
+            upstream_redirect, autospec=True, side_effect=fake_redirect
+        ),
+    ):
+        client_id: Final = next(value for key, value in environment.items() if key.endswith("_CLIENT_ID"))
+        response = await SSOAuthenticationHandler.get_sso_login_redirect(
+            redirect_url="http://localhost:4000/sso/callback",
+            retention_enabled=sync_removes_the_client,
+            **{client_id_kwarg: client_id},
+        )
+
+    assert response is not None
+    assert seen["client_secret"] == next(value for key, value in environment.items() if key.endswith("_SECRET"))
+
+
+@pytest.mark.asyncio
 async def test_cli_completion_persists_assertion_under_db_user_id():
     """The CLI funnel persists the captured assertion under the DB-resolved user_id."""
     from litellm.proxy.management_endpoints.ui_sso import (
