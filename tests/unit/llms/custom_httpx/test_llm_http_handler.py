@@ -62,6 +62,7 @@ from litellm.responses.streaming_iterator import (
     BaseResponsesAPIStreamingIterator,
     MockResponsesAPIStreamingIterator,
 )
+from litellm.types.integrations.custom_logger import AgenticLoopToolChoiceError
 from litellm.types.llms.openai import HttpxBinaryResponseContent, ResponsesAPIResponse
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import ImageObject, ImageResponse, ModelResponse, TranscriptionResponse
@@ -527,6 +528,36 @@ def test_response_api_handler_runs_a_hook_call_the_allowed_tools_choice_lists():
     assert hook.runs == 1
     assert isinstance(response, ResponsesAPIResponse)
     assert len(response.output) == 1
+
+
+def test_response_api_handler_never_runs_a_hook_call_the_allowed_tools_choice_excludes():
+    hook: Final = _LookupLoop()
+
+    with pytest.raises(AgenticLoopToolChoiceError):
+        BaseLLMHTTPHandler().response_api_handler(
+            model="gpt-4o",
+            input="what time is it?",
+            responses_api_provider_config=AzureOpenAIResponsesAPIConfig(),
+            response_api_optional_request_params={
+                "tools": [
+                    {"type": "function", "name": "get_time", "parameters": {"type": "object", "properties": {}}},
+                    {"type": "function", "name": "lookup", "parameters": {"type": "object", "properties": {}}},
+                ],
+                "tool_choice": {
+                    "type": "allowed_tools",
+                    "mode": "auto",
+                    "tools": [{"type": "function", "name": "get_time"}],
+                },
+            },
+            custom_llm_provider="azure",
+            litellm_params=GenericLiteLLMParams(
+                api_key="sk-test", api_base="https://example.openai.azure.com", api_version="2025-04-01-preview"
+            ),
+            logging_obj=Mock(litellm_call_id="call-1", dynamic_success_callbacks=[hook], model_call_details={}),
+            client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_a_lookup_call))),
+        )
+
+    assert hook.runs == 0
 
 
 @pytest.mark.asyncio

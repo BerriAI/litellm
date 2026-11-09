@@ -6052,9 +6052,7 @@ class BaseLLMHTTPHandler:
             # Safety guards must run OUTSIDE the callback try/except — they are
             # bounded-loop / cycle-break rails, not callback bugs.
             try:
-                if self._can_replace_turn_with_terminal_response(stream, api_surface) and (
-                    holds_a_call_the_choice_excludes(called_tool_names(response), hook_kwargs, callbacks)
-                ):
+                if holds_a_call_the_choice_excludes(called_tool_names(response), hook_kwargs, callbacks):
                     raise AgenticLoopToolChoiceError(model)
                 fingerprint = self._check_agentic_loop_safety(
                     tool_calls=tool_calls,
