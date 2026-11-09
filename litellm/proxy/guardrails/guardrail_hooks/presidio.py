@@ -31,7 +31,7 @@ from litellm.constants import (
     PRESIDIO_ANALYZE_CHUNK_CONCURRENCY,
     PRESIDIO_ANALYZE_CHUNK_OVERLAP_CHARS,
 )
-from litellm.litellm_core_utils.core_helpers import attribute_items, attribute_or_none
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_items, attribute_or_none
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
@@ -104,6 +104,11 @@ async def _json_body(response: _JsonResponse) -> object:
 
 def _write_attribute(target: object, name: str, value: object) -> None:
     setattr(target, name, value)
+
+
+def _field_value(source: object, name: str) -> object:
+    mapping: Final = as_str_mapping(source)
+    return mapping.get(name) if mapping is not None else attribute_or_none(source, name)
 
 
 _LoopSemaphores = dict[asyncio.AbstractEventLoop, asyncio.Semaphore]
@@ -1818,24 +1823,35 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         metadata: Final = (request_data.get("metadata") or {}) if request_data else {}
         pii_tokens: Final = metadata.get("pii_tokens", {})
 
-        new_texts: Final = []
-        if input_type == "response" and (
-            self._callback_role == "restore"
-            or (self._callback_role is None and not self.apply_to_output and pii_tokens)
-        ):
-            for text in texts:
-                new_texts.append(self._unmask_pii_text(text, pii_tokens))
-        else:
-            for text in texts:
-                modified_text = await self.check_pii(
-                    text=text,
-                    output_parse_pii=self.output_parse_pii,
-                    presidio_config=None,
-                    request_data=request_data or {},
-                )
-                new_texts.append(modified_text)
-        inputs["texts"] = new_texts
+        async def guarded_text(text: str) -> str:
+            if input_type == "response" and (
+                self._callback_role == "restore"
+                or (self._callback_role is None and not self.apply_to_output and pii_tokens)
+            ):
+                return self._unmask_pii_text(text, pii_tokens)
+            return await self.check_pii(
+                text=text,
+                output_parse_pii=self.output_parse_pii,
+                presidio_config=None,
+                request_data=request_data or {},
+            )
+
+        inputs["texts"] = [await guarded_text(text) for text in texts]
+        for tool_call in inputs.get("tool_calls", []):
+            await self._guard_tool_call_arguments(tool_call, guarded_text)
         return inputs
+
+    @staticmethod
+    async def _guard_tool_call_arguments(tool_call: object, guarded_text: Callable[[str], Awaitable[str]]) -> None:
+        function: Final = _field_value(tool_call, "function")
+        arguments: Final = _field_value(function, "arguments")
+        if not isinstance(arguments, str):
+            return
+        guarded: Final = await guarded_text(arguments)
+        if isinstance(function, dict):
+            function["arguments"] = guarded
+        else:
+            _write_attribute(function, "arguments", guarded)
 
     def update_in_memory_litellm_params(self, litellm_params: LitellmParams) -> None:
         """
