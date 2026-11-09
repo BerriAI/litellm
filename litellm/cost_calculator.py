@@ -379,9 +379,6 @@ def _transcription_uses_token_pricing(
 
 
 def _transcription_duration_for_cost(completion_response: object) -> float:
-    # The seconds the provider says it billed come first, since that is what the provider charges (OpenAI rounds
-    # a 2.4 s clip up to 3 s). The length measured from the upload only fills in when the reply carries none,
-    # as with a `text` reply
     billed_duration: Final = _get_transcription_usage_duration(completion_response)
     if billed_duration is not None and billed_duration > 0:
         return billed_duration
