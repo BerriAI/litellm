@@ -64,7 +64,7 @@ def without_router_only_kwargs(kwargs: Mapping[str, _V]) -> dict[str, _V]:
     return {key: value for key, value in kwargs.items() if key not in ROUTER_ONLY_CALL_KWARGS}
 
 
-_ROUTER_OWNED_METADATA_KEYS: Final = frozenset({"caching_groups"})
+_ROUTER_OWNED_METADATA_KEYS: Final = frozenset({"caching_groups", "redis_namespace"})
 _MASKING_METADATA_KEYS: Final = frozenset({"mask_input", "mask_output"})
 
 
@@ -94,9 +94,9 @@ def _is_flag_on(value: object) -> bool:
 
 def _request_tags_then_default_tags(default: object, requested: object) -> object:
     default_tags: Final = as_object_list(default)
-    request_tags: Final = () if requested is None else as_object_list(requested)
-    if default_tags is None or request_tags is None:
+    if default_tags is None:
         return _request_value_over_default(default=default, requested=requested)
+    request_tags: Final = as_object_list(requested) or ()
     return [*request_tags, *(tag for tag in default_tags if tag not in request_tags)]
 
 
@@ -104,9 +104,11 @@ def _request_value_over_default(default: object, requested: object) -> object:
     if requested is None:
         return default
     default_mapping: Final = as_str_mapping(default)
-    requested_mapping: Final = as_str_mapping(requested)
-    if default_mapping is None or requested_mapping is None:
+    if default_mapping is None:
         return requested
+    requested_mapping: Final = as_str_mapping(requested)
+    if requested_mapping is None:
+        return default
     return {**default_mapping, **requested_mapping}
 
 

@@ -378,6 +378,7 @@ _PROXY_REQUESTER_METADATA: Final = {"metadata": {"requester_metadata": {"env": "
         ({"requester_metadata": {"env": "dev", "team": "t1"}}, {"env": "dev", "team": "t1"}),
         ({"requester_metadata": None}, {"env": "prod"}),
         ({"requester_metadata": {}}, {"env": "prod"}),
+        ({"requester_metadata": "x"}, {"env": "prod"}),
         ({}, {"env": "prod"}),
     ],
 )
@@ -451,6 +452,16 @@ async def test_default_metadata_masking_stays_on_once_either_side_turns_it_on(
     assert _metadata(host.calls[0].kwargs)["mask_input"] == sent_mask
 
 
+async def test_a_default_redis_namespace_beats_the_request_redis_namespace(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    core: Final = make_core(
+        model_list=[deployment("g", "d1")], default_litellm_params={"metadata": {"redis_namespace": "tenant-a"}}
+    )
+    await core.acompletion(model="g", messages=MESSAGES, metadata={"redis_namespace": "tenant-b"})  # pyright: ignore[reportAttributeAccessIssue]  # endpoint method
+    assert _metadata(host.calls[0].kwargs)["redis_namespace"] == "tenant-a"
+
+
 _PROXY_DEFAULT_TAGS: Final = {"metadata": {"tags": ["proxy-default"]}}
 
 
@@ -461,7 +472,7 @@ _PROXY_DEFAULT_TAGS: Final = {"metadata": {"tags": ["proxy-default"]}}
         ({"tags": ["proxy-default", "caller"]}, ["proxy-default", "caller"]),
         ({"tags": None}, ["proxy-default"]),
         ({}, ["proxy-default"]),
-        ({"tags": "caller"}, "caller"),
+        ({"tags": "caller"}, ["proxy-default"]),
     ],
 )
 async def test_default_metadata_tags_follow_the_request_tags(
