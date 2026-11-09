@@ -26,7 +26,7 @@ from typing import TYPE_CHECKING, Final, Literal, Optional, Protocol, TypeVar, c
 import fastapi
 import yaml
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
-from pydantic import TypeAdapter
+from pydantic import ConfigDict, TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
@@ -76,6 +76,7 @@ from litellm.proxy.common_utils.config_sync_pubsub import (
     coordination_redis_cache,
     publish_config_change,
 )
+from litellm.proxy.common_utils.db_model_utils import reencrypt_db_model_params
 from litellm.proxy.common_utils.openai_error_payload import openai_error_param, proxy_exception_for
 from litellm.proxy.common_utils.rbac_utils import check_org_admin_can_generate_keys
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
@@ -113,7 +114,7 @@ from litellm.proxy.management_endpoints.key_budget_change import (
 )
 from litellm.proxy.management_endpoints.model_management_endpoints import (  # noqa: F401  # legacy module exports
     _add_model_to_db,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
-    add_model_to_db,
+    add_model_to_db,  # pyright: ignore[reportUnusedImport]  # backwards-compatible package export
 )
 from litellm.proxy.management_endpoints.router_weights import validate_router_settings_weights
 from litellm.proxy.management_endpoints.team_admin_field_permissions import (
@@ -203,7 +204,6 @@ from litellm.types.proxy.management_endpoints.key_management_endpoints import (
     KeySearchWhere,
     SuccessfulKeyUpdate,
 )
-from litellm.types.router import Deployment
 from litellm.types.utils import (
     BudgetConfig,
     PersonalUIKeyGenerationConfig,
@@ -253,6 +253,16 @@ class _ModelParamsUpdate(TypedDict):
 
 class _ModelRowWhere(TypedDict):
     model_id: ReadOnly[str]
+
+
+class _StoredModelParams(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    model_id: str
+    litellm_params: Mapping[str, object]
+
+
+_STORED_MODEL_PARAMS: Final = TypeAdapter(tuple[_StoredModelParams, ...])
 
 
 class _KeyUpdateResult(TypedDict):
@@ -5953,22 +5963,9 @@ async def rotate_master_key(
         models = None
     # 2. process model table
     if models:
-        decrypted_models: Final = proxy_config.decrypt_model_list_from_db(new_models=models)
-        verbose_proxy_logger.debug("ABLE TO DECRYPT MODELS - len(decrypted_models): %s", len(decrypted_models))
         reencrypted_models: Final = tuple(
-            [
-                reencrypted
-                for model in decrypted_models
-                if (
-                    reencrypted := await add_model_to_db(
-                        model_params=Deployment(**model),
-                        user_api_key_dict=user_api_key_dict,
-                        prisma_client=prisma_client,
-                        new_encryption_key=new_master_key,
-                        should_create_model_in_db=False,
-                    )
-                )
-            ]
+            model.model_copy(update={"litellm_params": reencrypt_db_model_params(model.litellm_params, new_master_key)})
+            for model in _STORED_MODEL_PARAMS.validate_python(models, from_attributes=True)
         )
         verbose_proxy_logger.debug("Re-encrypting litellm_params on %s model rows", len(reencrypted_models))
         async with _model_reencrypt_transaction(prisma_client) as tx:

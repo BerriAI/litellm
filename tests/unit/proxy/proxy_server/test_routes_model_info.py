@@ -27,6 +27,9 @@ from litellm.caching.llm_caching_handler import LLMClientCache
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy import proxy_server
 from litellm.proxy._types import LiteLLM_ProxyModelTable, UserAPIKeyAuth
+from litellm.proxy.agent_endpoints import agent_registry
+from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
+from litellm.types.agents import AgentResponse
 from litellm.utils import _invalidate_model_cost_lowercase_map
 
 from .conftest import normalize, route_entry_points_to_stubs  # type: ignore[import-not-found]
@@ -281,6 +284,249 @@ def test_deleted_model_params_stay_absent_after_reload_and_another_save(
     )
     persisted: Final = json.loads(saved_again["litellm_params"])
     assert persisted == {**saved_params, "rpm": 10}
+
+
+@pytest.mark.parametrize("router_state", ("populated", "empty", "absent"))
+@pytest.mark.parametrize("view", ("lookup", "search", "list", "editor"))
+def test_saved_team_models_remain_editable_without_serving(
+    client: TestClient,
+    auth_as: Callable[[], AbstractContextManager[object]],
+    monkeypatch: pytest.MonkeyPatch,
+    mock_prisma: MagicMock,
+    router_state: str,
+    view: str,
+) -> None:
+    monkeypatch.setenv("LITELLM_SALT_KEY", "stored-model-settings-key")
+    monkeypatch.setenv("LITELLM_TEST_MODEL_ENDPOINT", "configured-endpoint")
+    reference: Final = "os.environ/LITELLM_TEST_MODEL_ENDPOINT"
+    plain: Final = {"model": "openai/gpt-4o-mini", "api_key": "literal-key", "api_base": reference, "custom_null": None}
+    row: Final = LiteLLM_ProxyModelTable(
+        model_id="saved-model",
+        model_name="saved-model",
+        model_info={"id": "saved-model", "team_id": "owner-team"},
+        litellm_params={
+            key: encrypt_value_helper(value=value) if isinstance(value, str) else value for key, value in plain.items()
+        },
+    )
+    config: Final = proxy_server.ProxyConfig()
+    assert config.decrypt_model_list_from_db([row]) == []
+    mock_prisma.db.litellm_proxymodeltable.find_unique.return_value = row
+    mock_prisma.db.litellm_proxymodeltable.find_many.return_value = [row]
+    mock_prisma.db.litellm_proxymodeltable.count.return_value = 1
+    models: Final = (
+        [
+            {
+                "model_name": "valid-model",
+                "model_info": {"id": "valid-model"},
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "literal-key"},
+            }
+        ]
+        if router_state == "populated"
+        else []
+    )
+    router: Final = None if router_state == "absent" else litellm.Router(model_list=models)
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "prisma_client", mock_prisma)
+    monkeypatch.setattr(proxy_server, "proxy_config", config)
+    params: Final = (
+        {"modelId": "saved-model", "use_stored_params": "true"}
+        if view == "editor"
+        else {"modelId": "saved-model"}
+        if view == "lookup"
+        else {"search": "saved-model"}
+        if view == "search"
+        else {}
+    )
+
+    with auth_as():
+        response: Final = client.get("/v2/model/info", params=params)
+
+    assert response.status_code == 200, response.text
+    saved: Final = [model for model in response.json()["data"] if model["model_info"]["id"] == "saved-model"]
+    assert len(saved) == 1, response.text
+    assert saved[0]["litellm_params"] == {"model": "openai/gpt-4o-mini", "api_base": reference, "custom_null": None}
+    assert "configured-endpoint" not in response.text
+    assert "literal-key" not in response.text
+    assert router is None or router.registry().deployment("saved-model") is None
+
+
+@pytest.mark.parametrize("search", ("", "saved"))
+@pytest.mark.parametrize("router_absent", (False, True))
+def test_saved_model_pages_preserve_database_totals(
+    client: TestClient,
+    auth_as: Callable[[], AbstractContextManager[object]],
+    monkeypatch: pytest.MonkeyPatch,
+    mock_prisma: MagicMock,
+    search: str,
+    router_absent: bool,
+) -> None:
+    rows: Final = [
+        LiteLLM_ProxyModelTable(
+            model_id=f"saved-{index:03}",
+            model_name=f"saved-{index:03}",
+            model_info={"id": f"saved-{index:03}", "team_id": "owner-team"},
+            litellm_params={"model": "openai/gpt-4o-mini", "api_base": "os.environ/SAVED_MODEL_ENDPOINT"},
+        )
+        for index in range(60)
+    ]
+    mock_prisma.db.litellm_proxymodeltable.count.return_value = 60
+
+    def stored_page(
+        where: Mapping[str, object], take: int, order: Mapping[str, object] | None = None
+    ) -> list[LiteLLM_ProxyModelTable]:
+        candidates: Final = rows if order == {"model_id": "asc"} or take > 50 else rows[10:] + rows[:10]
+        return candidates[:take]
+
+    mock_prisma.db.litellm_proxymodeltable.find_many.side_effect = stored_page
+    monkeypatch.setattr(proxy_server, "prisma_client", mock_prisma)
+    monkeypatch.setattr(proxy_server, "llm_router", None if router_absent else litellm.Router(model_list=[]))
+
+    with auth_as():
+        first: Final = client.get("/v2/model/info", params={"page": 1, "size": 50, "search": search})
+        second: Final = client.get("/v2/model/info", params={"page": 2, "size": 50, "search": search})
+
+    assert first.status_code == second.status_code == 200, (first.text, second.text)
+    assert first.json()["total_count"] == second.json()["total_count"] == 60
+    assert first.json()["total_pages"] == second.json()["total_pages"] == 2
+    assert [model["model_info"]["id"] for model in first.json()["data"]] == [row.model_id for row in rows[:50]]
+    assert [model["model_info"]["id"] for model in second.json()["data"]] == [row.model_id for row in rows[50:]]
+
+
+@pytest.mark.parametrize("access_group", (None, "sales-team", "missing"))
+@pytest.mark.parametrize("router_populated", (False, True))
+@pytest.mark.parametrize("search", ("", "saved"))
+def test_saved_model_access_group_filter_precedes_database_page(
+    client: TestClient,
+    auth_as: Callable[[], AbstractContextManager[object]],
+    monkeypatch: pytest.MonkeyPatch,
+    mock_prisma: MagicMock,
+    access_group: str | None,
+    router_populated: bool,
+    search: str,
+) -> None:
+    rows: Final = [
+        LiteLLM_ProxyModelTable(
+            model_id=f"saved-{index:03}",
+            model_name=f"saved-{index:03}",
+            model_info={
+                "id": f"saved-{index:03}",
+                "team_id": "owner-team",
+                "access_groups": ["sales-team"] if index >= 60 else ["other"],
+            },
+            litellm_params={"model": "openai/gpt-4o-mini", "api_base": "os.environ/SAVED_MODEL_ENDPOINT"},
+        )
+        for index in range(63)
+    ]
+
+    def stored_page(
+        *, where: Mapping[str, object], take: int, order: Mapping[str, object]
+    ) -> list[LiteLLM_ProxyModelTable]:
+        return rows[:take]
+
+    def query_raw(query: str, *args: object) -> list[dict[str, object]]:
+        selected: Final = [row for row in rows if args[5] is None or args[5] in row.model_info["access_groups"]]
+        return (
+            [{"total": len(selected)}]
+            if query.startswith("SELECT COUNT")
+            else [row.model_dump() for row in selected[: int(str(args[6]))]]
+        )
+
+    mock_prisma.db.litellm_proxymodeltable.find_many.side_effect = stored_page
+    mock_prisma.db.litellm_proxymodeltable.count.return_value = len(rows)
+    mock_prisma.db.query_raw = AsyncMock(side_effect=query_raw)
+    models: Final = (
+        [
+            {
+                "model_name": name,
+                "model_info": {"id": name, "access_groups": [group]},
+                "litellm_params": {"model": "openai/gpt-4o-mini"},
+            }
+            for name, group in (("saved-live-sales", "sales-team"), ("saved-live-other", "other"))
+        ]
+        if router_populated
+        else []
+    )
+    monkeypatch.setattr(proxy_server, "prisma_client", mock_prisma)
+    monkeypatch.setattr(proxy_server, "llm_router", litellm.Router(model_list=models))
+    params: Final = {
+        "size": "1",
+        "search": search,
+        **({"access_group": access_group} if access_group is not None else {}),
+    }
+    with auth_as():
+        first: Final = client.get("/v2/model/info", params={**params, "page": "1"})
+        second: Final = client.get("/v2/model/info", params={**params, "page": "2"})
+
+    expected: Final = [
+        model["model_info"]["id"]
+        for model in models
+        if access_group is None or access_group in model["model_info"]["access_groups"]
+    ] + [row.model_id for row in rows if access_group is None or access_group in row.model_info["access_groups"]]
+    assert first.status_code == second.status_code == 200, (first.text, second.text)
+    assert first.json()["total_count"] == second.json()["total_count"] == len(expected)
+    assert first.json()["total_pages"] == second.json()["total_pages"] == len(expected)
+    assert [model["model_info"]["id"] for model in first.json()["data"]] == expected[:1]
+    assert [model["model_info"]["id"] for model in second.json()["data"]] == expected[1:2]
+
+
+@pytest.mark.parametrize("blocked", (None, False, True))
+@pytest.mark.parametrize("agent_present", (False, True))
+def test_hidden_agents_do_not_inflate_saved_model_totals(
+    client: TestClient,
+    auth_as: Callable[..., AbstractContextManager[object]],
+    monkeypatch: pytest.MonkeyPatch,
+    mock_prisma: MagicMock,
+    blocked: bool | None,
+    agent_present: bool,
+) -> None:
+    registry: Final = agent_registry.AgentRegistry()
+    if agent_present:
+        registry.register_agent(
+            AgentResponse(
+                agent_id="saved-agent",
+                agent_name="saved-agent",
+                agent_card_params={"url": "https://agent.test"},
+                litellm_params=None,
+                created_at=None,
+                updated_at=None,
+                created_by=None,
+            )
+        )
+    monkeypatch.setattr(agent_registry, "global_agent_registry", registry)
+    monkeypatch.setattr(proxy_server, "llm_router", litellm.Router(model_list=[]))
+    monkeypatch.setattr(proxy_server, "prisma_client", mock_prisma)
+    mock_prisma.db.litellm_proxymodeltable.count.return_value = 0
+    mock_prisma.db.litellm_proxymodeltable.find_many.return_value = []
+    with auth_as(object_permission={"object_permission_id": "saved-permission", "agents": ["saved-agent"]}):
+        response: Final = client.get(
+            "/v2/model/info", params={} if blocked is None else {"blocked": str(blocked).lower()}
+        )
+    expected: Final = (
+        [
+            {
+                "model_name": "a2a/saved-agent",
+                "litellm_params": {"model": "a2a/saved-agent", "custom_llm_provider": "a2a"},
+                "model_info": {
+                    "id": "saved-agent",
+                    "mode": "chat",
+                    "db_model": True,
+                    "created_by": None,
+                    "created_at": None,
+                    "updated_at": None,
+                },
+            }
+        ]
+        if agent_present and blocked is not True
+        else []
+    )
+    assert response.status_code == 200, response.text
+    assert response.json() == {
+        "data": expected,
+        "total_count": len(expected),
+        "current_page": 1,
+        "total_pages": len(expected),
+        "size": 50,
+    }
 
 
 def test_v2_model_info_in_openapi_schema():
@@ -2219,7 +2465,12 @@ def test_fetch_db_models_for_search_pushes_blocked_into_the_where(monkeypatch):
             captured["count_where"] = where
             return 0
 
-        async def find_many(self, where=None, take=None):
+        async def find_many(
+            self,
+            where: Mapping[str, object] | None = None,
+            take: int | None = None,
+            order: Mapping[str, object] | None = None,
+        ) -> list[object]:
             captured["find_where"] = where
             return []
 
@@ -2338,7 +2589,7 @@ async def test_model_info_v2_query_sentinel_does_not_filter(monkeypatch, mixed_a
 
 
 @pytest.fixture
-def access_group_router(monkeypatch):
+def access_group_router(monkeypatch, mock_prisma):
     """Router with one sales-team deployment, one wildcard sales-team deployment and one ungrouped one."""
     model_list = [
         {
@@ -2357,25 +2608,16 @@ def access_group_router(monkeypatch):
             "model_info": {"id": "plain-1", "db_model": False},
         },
     ]
-    from unittest.mock import AsyncMock
-
-    router = route_entry_points_to_stubs(MagicMock())
-    router.model_list = model_list
+    router = litellm.Router(model_list=model_list)
     monkeypatch.setattr(proxy_server, "llm_router", router)
     monkeypatch.setattr(proxy_server, "llm_model_list", model_list)
-    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+    monkeypatch.setattr(proxy_server, "prisma_client", mock_prisma)
     monkeypatch.setattr(proxy_server, "user_model", None)
-    monkeypatch.setattr(proxy_server.proxy_config, "get_config", AsyncMock(return_value={}))
-    monkeypatch.setattr(
-        proxy_server,
-        "_apply_search_filter_to_models",
-        AsyncMock(side_effect=lambda all_models, **kw: (all_models, len(all_models))),
+    monkeypatch.setattr(proxy_server, "proxy_config", proxy_server.ProxyConfig())
+    monkeypatch.setattr(agent_registry, "global_agent_registry", agent_registry.AgentRegistry())
+    mock_prisma.db.query_raw = AsyncMock(
+        side_effect=lambda query, *args: [{"total": 0}] if query.startswith("SELECT COUNT") else []
     )
-    monkeypatch.setattr(proxy_server, "_enrich_model_info_with_litellm_data", lambda model, **kw: model)
-
-    import litellm.proxy.agent_endpoints.model_list_helpers as mlh
-
-    monkeypatch.setattr(mlh, "append_agents_to_model_info", AsyncMock(side_effect=lambda models, **kw: models))
     yield router
 
 

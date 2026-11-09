@@ -345,6 +345,64 @@ def _proxy_model_client(rows: list[prisma_models.LiteLLM_ProxyModelTable]) -> Si
 
 
 class TestModelRepository:
+    @pytest.mark.parametrize("total", (0, 60))
+    @pytest.mark.parametrize("access_group", (None, "", "sales' team"))
+    @pytest.mark.parametrize("allowed_team_ids", (None, frozenset({"owner-team"})))
+    async def test_scoped_model_page_preserves_count_and_bounds_rows(
+        self,
+        total: int,
+        access_group: str | None,
+        allowed_team_ids: frozenset[str] | None,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("LITELLM_SALT_KEY", "sk-test-salt")
+        row: Final = {
+            "model_id": "saved-model",
+            "model_name": "saved-model",
+            "model_info": {"team_id": "owner-team"},
+            "litellm_params": {"model": "openai/test-model", "api_key": encrypt_value_helper("literal-value")},
+        }
+        database: Final = SimpleNamespace(query_raw=AsyncMock(side_effect=[[{"total": total}], [row]]))
+        models, count = await ModelRepository(SimpleNamespace(db=database)).search_scoped_model_page(
+            search="saved",
+            model_name=None,
+            blocked=None,
+            excluded_ids=frozenset({"registered-model"}),
+            allowed_team_ids=allowed_team_ids,
+            take=50,
+            access_group=access_group,
+        )
+        assert count == total
+        assert [model.model_id for model in models] == (["saved-model"] if total else [])
+        assert [model.litellm_params for model in models] == ([row["litellm_params"]] if total else [])
+        assert database.query_raw.await_args_list[0].args[1:] == (
+            None,
+            "%saved%",
+            None,
+            '["registered-model"]',
+            '["owner-team"]' if allowed_team_ids is not None else None,
+            access_group,
+        )
+        assert database.query_raw.await_count == (2 if total else 1)
+        if total:
+            assert database.query_raw.await_args_list[1].args[1:] == (
+                *database.query_raw.await_args_list[0].args[1:],
+                50,
+            )
+
+    async def test_scoped_model_page_does_not_retry_query_errors(self) -> None:
+        database: Final = SimpleNamespace(query_raw=AsyncMock(side_effect=RuntimeError("database unavailable")))
+        with pytest.raises(RuntimeError, match="database unavailable"):
+            await ModelRepository(SimpleNamespace(db=database)).search_scoped_model_page(
+                search="",
+                model_name=None,
+                blocked=None,
+                excluded_ids=frozenset(),
+                allowed_team_ids=frozenset(),
+                take=50,
+            )
+        assert database.query_raw.await_count == 1
+
     @pytest.fixture
     def repo(self):
         client = MockPrismaClient()

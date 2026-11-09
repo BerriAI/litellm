@@ -38,7 +38,7 @@ from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.proxy._types import CommonProxyErrors, ConfigGeneralSettings
 from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
 from litellm.proxy.config_resolvers.settings_store import SettingsStore
-from litellm.router_api import ApplyResult, RouterSettings
+from litellm.router_api import ApplyResult, ChangeSet, RouterSettings
 from litellm.types.router import Deployment, LiteLLM_Params
 from litellm.proxy.proxy_server import (
     ProxyConfig,
@@ -3686,21 +3686,14 @@ def test_ProxyConfig__add_deployment_resolves_env_refs_after_db_decrypt(monkeypa
     assert deployment.litellm_params.api_base == "master-secret"
 
 
-def test_ProxyConfig__add_deployment_resolves_team_env_refs(monkeypatch):
-    """Team-scoped DB rows now resolve ``os.environ/`` refs the same way
-    admin rows do. The prior team-scoped short-circuit and the
-    field-by-field whitelist have both been removed; the write-side team
-    auth check in ``ModelManagementAuthChecks.can_user_make_model_call``
-    remains the single trust boundary. A literal (non-``os.environ/``)
-    value still passes through unchanged."""
-    monkeypatch.setenv("LITELLM_MASTER_KEY", "master-secret")
+def test_ProxyConfig__add_deployment_keeps_team_settings_scoped(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LITELLM_TEST_TEAM_SETTING", "configured-value")
     monkeypatch.setattr(
         "litellm.proxy.proxy_server.decrypt_value_helper",
         lambda value, key, return_original_value: value,
     )
-    fake_router = MagicMock()
-    fake_router.apply = MagicMock(return_value=ApplyResult(version=1, upserted=[True]))
-    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", fake_router)
+    router: Final = litellm.Router(model_list=[])
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
     pc = ProxyConfig()
     db_model = SimpleNamespace(
         model_id="model-1",
@@ -3708,18 +3701,15 @@ def test_ProxyConfig__add_deployment_resolves_team_env_refs(monkeypatch):
         model_info={"id": "model-1", "team_id": "team-1"},
         litellm_params={
             "model": "openai/gpt-4o-mini",
-            "api_key": "os.environ/LITELLM_MASTER_KEY",
-            "api_base": "https://team.example",
+            "api_key": "os.environ/LITELLM_TEST_TEAM_SETTING",
+            "api_base": "https://api.openai.com",
         },
         blocked=False,
     )
 
     added = pc._add_deployment(db_models=[db_model])
-    (deployment,) = fake_router.apply.call_args.args[0].upsert
-
-    assert added == 1
-    assert deployment.litellm_params.api_key == "master-secret"
-    assert deployment.litellm_params.api_base == "https://team.example"
+    assert added == 0
+    assert router.registry().deployment("model-1") is None
 
 
 def test_ProxyConfig__resolve_db_litellm_param_skips_non_string_values(monkeypatch):
@@ -4020,17 +4010,13 @@ def test_ProxyConfig_decrypt_model_list_from_db_resolves_env_refs_after_db_decry
     assert out[0]["litellm_params"]["api_base"] == "master-secret"
 
 
-def test_ProxyConfig_decrypt_model_list_from_db_resolves_team_env_refs_after_db_decrypt(
-    monkeypatch,
-):
-    """Team-scoped rows on path B resolve ``os.environ/`` refs just like
-    admin rows do. Pairs with
-    ``test_ProxyConfig__add_deployment_resolves_team_env_refs`` on path
-    A — both paths now agree on the trust model."""
-    monkeypatch.setenv("LITELLM_MASTER_KEY", "master-secret")
+def test_ProxyConfig_decrypt_model_list_from_db_keeps_decrypted_team_settings_scoped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LITELLM_TEST_TEAM_SETTING", "configured-value")
     monkeypatch.setattr(
         "litellm.proxy.proxy_server.decrypt_value_helper",
-        lambda value, key, return_original_value: "os.environ/LITELLM_MASTER_KEY" if key == "api_key" else value,
+        lambda value, key, return_original_value: "os.environ/LITELLM_TEST_TEAM_SETTING" if key == "api_key" else value,
     )
     pc = ProxyConfig()
     m = SimpleNamespace(
@@ -4039,7 +4025,7 @@ def test_ProxyConfig_decrypt_model_list_from_db_resolves_team_env_refs_after_db_
         model_info={"id": "model-1", "team_id": "team-1"},
         litellm_params={
             "api_key": "encrypted-env-ref",
-            "api_base": "https://team.example",
+            "api_base": "https://api.openai.com",
             "model": "openai/gpt-4o-mini",
         },
         blocked=False,
@@ -4047,14 +4033,102 @@ def test_ProxyConfig_decrypt_model_list_from_db_resolves_team_env_refs_after_db_
 
     out = pc.decrypt_model_list_from_db(new_models=[m])
 
-    assert out[0]["litellm_params"]["api_key"] == "master-secret"
-    assert out[0]["litellm_params"]["api_base"] == "https://team.example"
+    assert out == []
 
 
-def test_ProxyConfig_decrypt_model_list_from_db_invalid_params_skips():
+@pytest.mark.parametrize("initial_load", (False, True))
+@pytest.mark.parametrize("team_id", (None, "team-1"))
+@pytest.mark.parametrize("setting", ("api_key", "api_base", "dataSources"))
+def test_db_model_parameters_keep_scope_through_decryption_and_router_loading(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    initial_load: bool,
+    team_id: str | None,
+    setting: str,
+) -> None:
+    monkeypatch.setenv("LITELLM_SALT_KEY", "test-model-settings-salt")
+    monkeypatch.setenv("LITELLM_TEST_MODEL_ENDPOINT", "https://api.openai.com/v1")
+    reference: Final = "os.environ/LITELLM_TEST_MODEL_ENDPOINT"
+    db_model: Final = SimpleNamespace(
+        model_id="scoped-settings",
+        model_name="scoped-settings",
+        model_info={"id": "scoped-settings", "team_id": team_id},
+        litellm_params={
+            "model": "openai/gpt-4o-mini",
+            "api_key": "test-key",
+            "api_base": "https://api.openai.com/v1",
+            "max_tokens": 42,
+            **{
+                setting: [{"parameters": {"endpoint": reference}}]
+                if setting == "dataSources"
+                else encrypt_value_helper(value=reference)
+            },
+        },
+        blocked=False,
+    )
+    router: Final = litellm.Router(model_list=[])
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
+    config: Final = ProxyConfig()
+    siblings: Final = [
+        SimpleNamespace(
+            model_id=name,
+            model_name=name,
+            model_info={"id": name, "team_id": team_id},
+            litellm_params={"model": "openai/gpt-4o-mini", "api_key": "literal-key"},
+            blocked=False,
+        )
+        for name in ("valid-before", "valid-after")
+    ]
+    stored_params: Final = dict(db_model.litellm_params)
+    rows: Final = [siblings[0], db_model, siblings[1]]
+    expected_ids: Final = (
+        {"valid-before", "valid-after"} if team_id is not None else {"valid-before", "scoped-settings", "valid-after"}
+    )
+
+    if initial_load:
+        models: Final = config.decrypt_model_list_from_db(rows)
+        assert {model["model_info"]["id"] for model in models} == expected_ids
+        router.apply(ChangeSet(upsert=[Deployment.model_validate(model) for model in models]))
+    else:
+        router.apply(
+            ChangeSet(
+                upsert=[
+                    Deployment(
+                        model_name="scoped-settings",
+                        litellm_params={"model": "openai/gpt-4o-mini", "api_key": "old-key"},
+                        model_info={"id": "scoped-settings", "team_id": team_id},
+                    )
+                ]
+            )
+        )
+        assert config._add_deployment(rows) == len(expected_ids)
+
+    assert router.registry().deployment("valid-before") is not None
+    assert router.registry().deployment("valid-after") is not None
+    assert db_model.litellm_params == stored_params
+
+    deployment: Final = router.registry().deployment("scoped-settings")
+    if team_id is not None:
+        assert deployment is None
+        assert "Skipping deployment scoped-settings" in caplog.text
+    else:
+        assert deployment is not None
+        assert deployment.litellm_params.api_base == "https://api.openai.com/v1"
+        assert deployment.litellm_params.api_key == (
+            "https://api.openai.com/v1" if setting == "api_key" else "test-key"
+        )
+        assert deployment.litellm_params.max_tokens == 42
+        if setting == "dataSources":
+            assert deployment.litellm_params.model_extra is not None
+            assert deployment.litellm_params.model_extra["dataSources"] == [{"parameters": {"endpoint": reference}}]
+    assert reference not in caplog.text
+
+
+@pytest.mark.parametrize("management_read", (False, True))
+def test_ProxyConfig_decrypt_model_list_from_db_invalid_params_skips(management_read: bool) -> None:
     pc = ProxyConfig()
     bad = SimpleNamespace(model_id="m-1", model_name="x", model_info={}, litellm_params="not-a-dict")
-    out = pc.decrypt_model_list_from_db(new_models=[bad])
+    out = pc.decrypt_model_list_from_db(new_models=[bad], _for_management_read=management_read)
     # Invalid entries skipped — empty list returned.
     assert out == []
 

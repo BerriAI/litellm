@@ -129,6 +129,7 @@ from litellm.llms.bedrock.count_tokens.kimi_k3 import (
     kimi_k3_template_tokens,
     kimi_k3_tokens,
 )
+from litellm.models.model import LiteLLM_ProxyModelTable as StoredProxyModel
 from litellm.proxy._types import (
     UI_TEAM_ID,
     AwsErrorTypeProxyException,
@@ -174,6 +175,7 @@ from litellm.proxy.common_utils.callback_utils import (
     normalize_callback_names,
     process_callback,
 )
+from litellm.proxy.common_utils.db_model_utils import decrypt_db_model_params, team_model_params_are_allowed
 from litellm.proxy.common_utils.realtime_utils import (  # noqa: F401, RUF100  # legacy module exports
     _realtime_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     realtime_request_body,
@@ -5926,6 +5928,10 @@ def _configured_db_callbacks(litellm_settings: Mapping[str, object], setting_key
     return tuple((setting_key, callback) for callback in callbacks if isinstance(callback, str))
 
 
+_REJECTED_DB_MODEL_PARAM: Final = object()
+_DB_MODEL_PARAMS: Final = TypeAdapter(Mapping[str, object])
+
+
 class ProxyConfig:
     """
     Abstraction class on top of config loading/updating logic. Gives us one place to control all config updating logic.
@@ -7964,11 +7970,17 @@ class ProxyConfig:
                 llm_router.apply(ChangeSet(delete=[model_id]))
         return frozenset(combined_id_list) | kept_config_ids
 
-    def _resolve_db_litellm_param(self, key: str, value: object) -> object:
-        if not isinstance(value, str):
-            return value
-
-        decrypted_value: Final = decrypt_value_helper(value=value, key=key, return_original_value=True)
+    def _resolve_db_litellm_param(
+        self,
+        key: str,
+        value: object,
+        model_info: Mapping[str, object] | BaseModel | None = None,
+    ) -> object:
+        decrypted_value: Final = (
+            decrypt_value_helper(value=value, key=key, return_original_value=True) if isinstance(value, str) else value
+        )
+        if not team_model_params_are_allowed({key: decrypted_value}, model_info):
+            return _REJECTED_DB_MODEL_PARAM
         if (
             isinstance(decrypted_value, str)
             and decrypted_value.startswith("os.environ/")
@@ -7995,9 +8007,19 @@ class ProxyConfig:
         for m in db_models:
             _litellm_params = m.litellm_params
             if isinstance(_litellm_params, dict):
+                _model_info = self.get_model_info_with_id(model=m, db_model=True)
                 # decrypt values
-                for k, v in _litellm_params.items():
-                    _litellm_params[k] = self._resolve_db_litellm_param(key=k, value=v)
+                _litellm_params = {
+                    k: self._resolve_db_litellm_param(key=k, value=v, model_info=_model_info)
+                    for k, v in _DB_MODEL_PARAMS.validate_python(_litellm_params).items()
+                }
+                if any(value is _REJECTED_DB_MODEL_PARAM for value in _litellm_params.values()):
+                    verbose_proxy_logger.warning(
+                        "Skipping deployment %s: scoped parameters require explicit values", m.model_name
+                    )
+                    if _model_info.id is not None and llm_router.registry().deployment(_model_info.id) is not None:
+                        llm_router.apply(ChangeSet(delete=[_model_info.id]))
+                    continue
                 _litellm_params = LiteLLM_Params.model_validate(_litellm_params)
 
             else:
@@ -8005,7 +8027,6 @@ class ProxyConfig:
                     "Invalid model added to proxy db. Invalid litellm params. litellm_params=%s", _litellm_params
                 )
                 continue  # skip to next model
-            _model_info = self.get_model_info_with_id(model=m, db_model=True)  ## 👈 FLAG = True for db_models
 
             added = llm_router.apply(
                 ChangeSet(
@@ -8023,16 +8044,40 @@ class ProxyConfig:
                 added_models += 1
         return added_models
 
-    def decrypt_model_list_from_db(self, new_models: list) -> list:
-        _model_list: Final[list] = []
+    def decrypt_model_list_from_db(self, new_models: list, *, _for_management_read: bool = False) -> list:
+        if _for_management_read:
+            return [
+                {
+                    "model_name": _UNTYPED_VALUE.validate_python(getattr(m, "model_name", None)),
+                    "litellm_params": decrypt_db_model_params(
+                        _DB_MODEL_PARAMS.validate_python(
+                            params.model_dump() if isinstance(params, BaseModel) else params
+                        )
+                    ),
+                    "model_info": self.get_model_info_with_id(model=m).model_dump(exclude_none=True),
+                }
+                for m in new_models
+                if isinstance(
+                    params := _UNTYPED_VALUE.validate_python(getattr(m, "litellm_params", None)), (dict, BaseModel)
+                )
+            ]
+        _model_list: Final[list[Mapping[str, object]]] = []
         for m in new_models:
             _litellm_params = m.litellm_params
             if isinstance(_litellm_params, BaseModel):
                 _litellm_params = _litellm_params.model_dump()
             if isinstance(_litellm_params, dict):
+                _model_info = self.get_model_info_with_id(model=m)
                 # decrypt values
-                for k, v in _litellm_params.items():
-                    _litellm_params[k] = self._resolve_db_litellm_param(key=k, value=v)
+                _litellm_params = {
+                    k: self._resolve_db_litellm_param(key=k, value=v, model_info=_model_info)
+                    for k, v in _DB_MODEL_PARAMS.validate_python(_litellm_params).items()
+                }
+                if any(value is _REJECTED_DB_MODEL_PARAM for value in _litellm_params.values()):
+                    verbose_proxy_logger.warning(
+                        "Skipping deployment %s: scoped parameters require explicit values", m.model_name
+                    )
+                    continue
                 _litellm_params = LiteLLM_Params.model_validate(_litellm_params)
             else:
                 verbose_proxy_logger.error(
@@ -8040,7 +8085,6 @@ class ProxyConfig:
                 )
                 continue  # skip to next model
 
-            _model_info = self.get_model_info_with_id(model=m)
             _model_list.append(
                 Deployment(
                     model_name=m.model_name,
@@ -16990,14 +17034,16 @@ async def _fetch_db_models_for_search(
     page: int,
     size: int,
     sort_by: str | None,
-    is_byok_outside_caller_teams: Callable[[dict[str, JsonValue]], bool],
+    is_byok_outside_caller_teams: Callable[[object], bool],
     model_name: str | None = None,
     blocked: bool | None = None,
+    allowed_team_ids: AbstractSet[str] | None = None,
+    access_group: str | None = None,
 ) -> tuple[list[dict[str, object]], int]:
     """
     Run the bounded DB query that backs `/v2/model/info?search=`. Returns
     `(decrypted_models, total_count)` where `total_count` is the cheap
-    `count(...)` of rows matching `search` (not yet team-scoped) so the
+    count of rows matching `search` and the caller's team scope so the
     UI's pagination stays accurate without materializing every row.
 
     Earlier iterations also OR'd a JSON-path match on
@@ -17028,13 +17074,31 @@ async def _fetch_db_models_for_search(
     else:
         take_limit = max(0, page * size - router_models_count)
 
-    db_models_total_count: Final = await ModelRepository(prisma_client).table.count(where=db_where_condition)
+    scoped_page: Final = (
+        await ModelRepository(prisma_client).search_scoped_model_page(
+            search=search_lower,
+            model_name=model_name,
+            blocked=blocked,
+            excluded_ids=db_model_ids_in_router,
+            allowed_team_ids=allowed_team_ids,
+            take=take_limit,
+            access_group=access_group,
+        )
+        if allowed_team_ids is not None or access_group is not None
+        else None
+    )
+    db_models_total_count: Final = (
+        scoped_page[1]
+        if scoped_page is not None
+        else await ModelRepository(prisma_client).table.count(where=db_where_condition)
+    )
 
-    db_models_raw: Sequence[_ProxyModelRow] = []
-    if take_limit > 0:
+    db_models_raw: Sequence[_ProxyModelRow | StoredProxyModel] = scoped_page[0] if scoped_page is not None else ()
+    if scoped_page is None and take_limit > 0:
         db_models_raw = await ModelRepository(prisma_client).table.find_many(
             where=db_where_condition,
             take=take_limit,
+            order={"model_id": "asc"},
         )
 
     # Scope BYOK rows to the caller's allowed teams so non-admin callers
@@ -17042,12 +17106,14 @@ async def _fetch_db_models_for_search(
     matching_db_rows: Final = [
         m
         for m in db_models_raw
-        if not is_byok_outside_caller_teams(m.model_info if isinstance(m.model_info, dict) else {})
+        if not is_byok_outside_caller_teams(
+            as_str_mapping(_UNTYPED_VALUE.validate_python(getattr(m, "model_info", None))) or {}
+        )
     ]
 
     decrypted: Final[list[dict[str, object]]] = []
     for db_model in matching_db_rows:
-        decrypted_models = proxy_config.decrypt_model_list_from_db([db_model])
+        decrypted_models = proxy_config.decrypt_model_list_from_db([db_model], _for_management_read=True)
         if decrypted_models:
             decrypted.extend(decrypted_models)
 
@@ -17065,6 +17131,7 @@ async def _apply_search_filter_to_models(
     sort_by: str | None = None,
     model_name: str | None = None,
     blocked: bool | None = None,
+    access_group: str | None = None,
 ) -> tuple[list[dict[str, object]], int | None]:
     """
     Apply search filter to models, querying database for additional matching models.
@@ -17093,14 +17160,13 @@ async def _apply_search_filter_to_models(
             exactly instead of the substring, and is skipped when the
             substring cannot occur in it, otherwise rows from other model
             groups leak into the result and the count.
+        access_group: Match this group in router and database rows before
+            counting and limiting the saved-model page.
 
     Returns:
         Tuple of (filtered_models, total_count). total_count is None if not searching.
     """
-    if not search or not search.strip():
-        return all_models, None
-
-    search_lower: Final = search.lower().strip()
+    search_lower: Final = (search or "").lower().strip()
 
     allowed_team_ids: Final = await _get_caller_byok_team_scope(
         user_api_key_dict=user_api_key_dict,
@@ -17133,6 +17199,7 @@ async def _apply_search_filter_to_models(
         for m in all_models
         if _model_matches_search(m)
         and _matches_routing_status(m, blocked)
+        and (access_group is None or _model_in_access_group(m, access_group))
         and not _is_byok_outside_caller_teams(m.get("model_info") or {})
     ]
 
@@ -17171,6 +17238,8 @@ async def _apply_search_filter_to_models(
                 is_byok_outside_caller_teams=_is_byok_outside_caller_teams,
                 model_name=model_name,
                 blocked=blocked,
+                allowed_team_ids=allowed_team_ids,
+                access_group=access_group,
             )
             search_total_count = router_models_count + db_models_total_count
         except Exception as e:
@@ -17614,7 +17683,7 @@ async def _find_model_by_id(
             db_model: Final = await ModelRepository(prisma_client).table.find_unique(where={"model_id": model_id})
             if db_model:
                 # Convert database model to router format
-                decrypted_models: Final = proxy_config.decrypt_model_list_from_db([db_model])
+                decrypted_models: Final = proxy_config.decrypt_model_list_from_db([db_model], _for_management_read=True)
                 if decrypted_models:
                     found_model = decrypted_models[0]
         except Exception as e:
@@ -17777,7 +17846,7 @@ async def model_info_v2(
         raise HTTPException(status_code=400, detail="use_stored_params requires modelId")
 
     # Return empty data array when no models are configured (graceful handling for fresh installs)
-    if llm_router is None or not llm_router.registry().all():
+    if (llm_router is None or not llm_router.registry().all()) and prisma_client is None:
         return {
             "data": [],
             "total_count": 0,
@@ -17792,6 +17861,8 @@ async def model_info_v2(
             detail={"error": CommonProxyErrors.db_not_connected_error.value},
         )
 
+    model_info_router: Final = llm_router if llm_router is not None else litellm.Router(model_list=[])
+
     # Load existing config
     await proxy_config.get_config()
 
@@ -17802,7 +17873,7 @@ async def model_info_v2(
         matched_models: Final = await _find_model_by_id(
             model_id=modelId,
             search=search,
-            llm_router=llm_router,
+            llm_router=model_info_router,
             prisma_client=prisma_client,
             proxy_config=proxy_config,
         )
@@ -17818,7 +17889,7 @@ async def model_info_v2(
         # Normal flow when modelId is not provided
         all_models = [
             m
-            for m in copy.deepcopy(llm_router.registry().all())
+            for m in copy.deepcopy(model_info_router.registry().all())
             if not _byok_row_outside_caller_teams(m.get("model_info", {}), allowed_team_ids)
         ]
 
@@ -17841,12 +17912,13 @@ async def model_info_v2(
             sort_by=sortBy,
             model_name=model,
             blocked=blocked,
+            access_group=access_group if isinstance(access_group, str) else None,
         )
 
     if user_models_only:
         all_models = await non_admin_all_models(
             all_models=all_models,
-            llm_router=llm_router,
+            llm_router=model_info_router,
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
         )
@@ -17855,7 +17927,7 @@ async def model_info_v2(
         all_models = await get_all_team_and_direct_access_models(
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
-            llm_router=llm_router,
+            llm_router=model_info_router,
             all_models=all_models,
         )
 
@@ -17865,7 +17937,7 @@ async def model_info_v2(
         all_models[i] = _enrich_model_info_with_litellm_data(
             model=_model,
             debug=debug if debug is not None else False,
-            llm_router=llm_router,
+            llm_router=model_info_router,
         )
 
     # Apply teamId filter if provided
@@ -17874,7 +17946,7 @@ async def model_info_v2(
             all_models=all_models,
             team_id=teamId.strip(),
             prisma_client=prisma_client,
-            llm_router=llm_router,
+            llm_router=model_info_router,
             user_api_key_dict=user_api_key_dict,
         )
         # Update search_total_count after teamId filter is applied
@@ -17906,9 +17978,15 @@ async def model_info_v2(
         append_agents_to_model_info,
     )
 
+    before_agents_count: Final = len(all_models)
     all_models = await append_agents_to_model_info(
         models=all_models,
         user_api_key_dict=user_api_key_dict,
+    )
+
+    added_agents_count: Final = sum(
+        _matches_model_info_filters(m, exclude_auto_routers, access_group, wildcard_only, blocked)
+        for m in all_models[before_agents_count:]
     )
 
     # `is True` because direct-call tests bypass FastAPI, so the Query default arrives as a
@@ -17920,7 +17998,16 @@ async def model_info_v2(
     ]
 
     # Update total count to include agents
-    search_total_count = len(all_models)
+    search_total_count = (
+        len(all_models)
+        if search_total_count is None
+        or user_models_only
+        or include_team_models
+        or exclude_auto_routers is True
+        or wildcard_only is True
+        or (modelId is not None and isinstance(access_group, str))
+        else search_total_count + added_agents_count
+    )
 
     # Translate `model_name` to the public name for team-scoped rows.
     all_models = [_translate_model_name_for_response(m) for m in all_models]

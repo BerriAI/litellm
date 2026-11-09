@@ -82,6 +82,7 @@ from litellm.proxy.common_utils.credential_hydration import (
     submitted_litellm_params,
     write_touches_federation_surface,
 )
+from litellm.proxy.common_utils.db_model_utils import team_model_params_env_reference_field
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
@@ -567,6 +568,27 @@ def _decrypted_litellm_params(litellm_params: GenericLiteLLMParams) -> Mapping[s
             for name, value in dumped.items()
         }
     )
+
+
+def _raise_if_team_model_params_use_env_reference(
+    *,
+    incoming_params: GenericLiteLLMParams | None,
+    existing_params: GenericLiteLLMParams | None,
+    team_id: str | None,
+) -> None:
+    if team_id is None:
+        return
+    effective_params: Final = {
+        **(_decrypted_litellm_params(existing_params) if existing_params is not None else {}),
+        **(_dump_without_none(incoming_params) if incoming_params is not None else {}),
+        "complexity_router_config": _effective_complexity_router_config(incoming_params, existing_params),
+    }
+    field: Final = team_model_params_env_reference_field(effective_params, {"team_id": team_id})
+    if field is not None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"litellm_params.{field} cannot contain os.environ/ references for a team model.",
+        )
 
 
 def _effective_model(
@@ -1834,6 +1856,11 @@ async def patch_model(
         written_team_id: Final = (
             patch_data.model_info.team_id if patch_data.model_info else None
         ) or db_model.model_info.team_id
+        _raise_if_team_model_params_use_env_reference(
+            incoming_params=incoming_params,
+            existing_params=remaining_params,
+            team_id=written_team_id,
+        )
         written_name: Final = _get_public_model_name(effective_patch, db_model)
         _raise_if_model_update_adds_missing_rate_limits(
             existing=db_model,
@@ -3201,6 +3228,12 @@ async def add_new_model(
 
         _reject_non_admin_blocked_flag_on_create(model_params.blocked, user_api_key_dict)
 
+        _raise_if_team_model_params_use_env_reference(
+            incoming_params=model_params.litellm_params,
+            existing_params=None,
+            team_id=model_params.model_info.team_id,
+        )
+
         ModelManagementAuthChecks.can_user_attach_credential(
             litellm_params=model_params.litellm_params,
             user_api_key_dict=user_api_key_dict,
@@ -3405,6 +3438,12 @@ async def update_model(
             incoming_model_params=model_params,
         )
         member_write: Final = write_authorization if isinstance(write_authorization, MemberAutoRouterWrite) else None
+
+        _raise_if_team_model_params_use_env_reference(
+            incoming_params=model_params.litellm_params,
+            existing_params=deployment.litellm_params,
+            team_id=deployment.model_info.team_id,
+        )
 
         ModelManagementAuthChecks.can_user_attach_credential(
             litellm_params=model_params.litellm_params,

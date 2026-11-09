@@ -1,0 +1,52 @@
+from collections import deque
+from collections.abc import Mapping, Sequence
+from typing import Final
+
+from pydantic import BaseModel, TypeAdapter
+
+from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper, encrypt_value_helper
+
+_MAPPING: Final = TypeAdapter(Mapping[str, object])
+_SEQUENCE: Final = TypeAdapter(Sequence[object])
+
+
+def decrypt_db_model_params(litellm_params: Mapping[str, object]) -> Mapping[str, object]:
+    return {
+        key: decrypt_value_helper(value=value, key=key, return_original_value=True) if isinstance(value, str) else value
+        for key, value in litellm_params.items()
+    }
+
+
+def reencrypt_db_model_params(litellm_params: Mapping[str, object], new_key: str) -> Mapping[str, object]:
+    return {
+        key: encrypt_value_helper(value=value, new_encryption_key=new_key) if isinstance(value, str) else value
+        for key, value in decrypt_db_model_params(litellm_params).items()
+    }
+
+
+def team_model_params_are_allowed(
+    litellm_params: Mapping[str, object], model_info: Mapping[str, object] | BaseModel | None
+) -> bool:
+    return team_model_params_env_reference_field(litellm_params, model_info) is None
+
+
+def team_model_params_env_reference_field(
+    litellm_params: Mapping[str, object], model_info: Mapping[str, object] | BaseModel | None
+) -> str | None:
+    info: Final = model_info.model_dump() if isinstance(model_info, BaseModel) else model_info
+    if info is None or info.get("team_id") is None:
+        return None
+
+    pending: Final = deque[tuple[str, object]](_MAPPING.validate_python(litellm_params).items())
+    while pending:
+        field, candidate = pending.popleft()
+        match candidate:
+            case str() as value if value.startswith("os.environ/"):
+                return field
+            case Mapping() as value:
+                pending.extend((field, nested) for nested in _MAPPING.validate_python(value).values())
+            case list() as value:
+                pending.extend((field, nested) for nested in _SEQUENCE.validate_python(value))
+            case _:
+                pass
+    return None

@@ -42,6 +42,7 @@ from litellm.caching.redis_cluster_cache import RedisClusterCache
 from litellm.litellm_core_utils.get_model_cost_map import ModelCostMapReloaded
 from litellm.proxy._types import (
     AwsErrorTypeProxyException,
+    LiteLLM_ProxyModelTable,
     LitellmUserRoles,
     ModelAccessDeniedProxyException,
     ProxyErrorTypes,
@@ -2514,41 +2515,32 @@ async def test_apply_search_filter_scopes_byok_to_caller_teams():
     }
 
     # DB-only BYOK rows fetched by the over-broad JSON branch.
-    db_caller_row = MagicMock()
-    db_caller_row.model_id = "byok-db-mine"
-    db_caller_row.model_name = "model_name_team-mine_db"
-    db_caller_row.model_info = {
-        "id": "byok-db-mine",
-        "team_id": "team-mine",
-        "team_public_model_name": "Claude DB Mine",
-        "db_model": True,
-    }
-    db_other_row = MagicMock()
-    db_other_row.model_id = "byok-db-other"
-    db_other_row.model_name = "model_name_team-other_db"
-    db_other_row.model_info = {
-        "id": "byok-db-other",
-        "team_id": "team-other",
-        "team_public_model_name": "Claude DB Other",
-        "db_model": True,
-    }
+    db_caller_row = LiteLLM_ProxyModelTable(
+        model_id="byok-db-mine", model_name="model_name_team-mine_db",
+        litellm_params={"model": "claude-sonnet"},
+        model_info={
+            "id": "byok-db-mine", "team_id": "team-mine",
+            "team_public_model_name": "Claude DB Mine", "db_model": True,
+        },
+    )
+    db_other_row = LiteLLM_ProxyModelTable(
+        model_id="byok-db-other", model_name="model_name_team-other_db",
+        litellm_params={"model": "claude-sonnet"},
+        model_info={
+            "id": "byok-db-other", "team_id": "team-other",
+            "team_public_model_name": "Claude DB Other", "db_model": True,
+        },
+    )
 
     prisma_client = MagicMock()
     prisma_client.db.litellm_proxymodeltable.count = AsyncMock(return_value=2)
     prisma_client.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[db_caller_row, db_other_row])
+    prisma_client.db.query_raw = AsyncMock(side_effect=[[{"total": 1}], [db_caller_row.model_dump()]])
     caller_user_row = MagicMock()
     caller_user_row.teams = ["team-mine"]
     prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=caller_user_row)
 
-    proxy_config = MagicMock()
-    proxy_config.decrypt_model_list_from_db = lambda rows: [
-        {
-            "model_name": r.model_name,
-            "model_info": r.model_info,
-            "litellm_params": {"model": "claude-sonnet"},
-        }
-        for r in rows
-    ]
+    proxy_config = proxy_server_module.ProxyConfig()
 
     non_admin = MagicMock(spec=UserAPIKeyAuth)
     non_admin.user_role = LitellmUserRoles.INTERNAL_USER
@@ -2573,13 +2565,7 @@ async def test_apply_search_filter_scopes_byok_to_caller_teams():
     assert "byok-db-other" not in filtered_ids, (
         "DB-only BYOK from another team must be dropped from search when caller doesn't belong to that team"
     )
-    # total_count is router_models_count (2: caller_team_byok + public_model,
-    # other_team_byok dropped router-side) + DB count (2 from the mocked
-    # `count()`). The DB count is the *unscoped* match count; non-admin
-    # team scoping applies only to the returned page so the count can be
-    # over-reported, but it must never under-report (callers can paginate
-    # within the bound).
-    assert total_count == 4
+    assert total_count == 3
 
     # Admins keep the un-scoped view across teams.
     admin = MagicMock(spec=UserAPIKeyAuth)

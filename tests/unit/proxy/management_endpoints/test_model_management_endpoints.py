@@ -30,13 +30,15 @@ from litellm.proxy._types import (
     ReconcileOutcome,
     UserAPIKeyAuth,
 )
-from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
+from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper, encrypt_value_helper
 from litellm.proxy.management_endpoints.model_management_endpoints import (
     KubernetesPodsResponse,
     ModelManagementAuthChecks,
+    PatchModelRequest,
     _get_team_deployments,
     _raise_if_model_update_adds_missing_rate_limits,
     _raise_if_rate_limits_required_but_missing,
+    add_new_model,
     clear_cache,
     delete_team_models,
     get_kubernetes_pods,
@@ -59,6 +61,231 @@ from litellm.types.router import (
 
 async def _passthrough_row(update_data):
     return update_data
+
+
+@pytest.fixture
+def team_model_write_db(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "model-write-test-key")
+    monkeypatch.setenv("QA_CHAT_MODEL", "openai/test-model")
+    monkeypatch.setenv("QA_API_KEY", "test-key")
+    db: Final = MagicMock()
+    db.db = db
+    db.writer_db = db
+    team: Final = LiteLLM_TeamTable(team_id="test_team", members_with_roles=[Member(user_id="test_user", role="admin")])
+    row: Final = LiteLLM_ProxyModelTable(
+        model_id="env-model",
+        model_name="test-model",
+        litellm_params={"model": "openai/test-model"},
+        model_info={"id": "env-model", "team_id": "test_team"},
+    )
+    db.litellm_teamtable.find_unique = AsyncMock(return_value=team)
+    db.litellm_teamtable.update = AsyncMock(return_value=team)
+    db.litellm_uisettings.find_unique = AsyncMock(return_value=None)
+    db.litellm_config.find_many = AsyncMock(return_value=[])
+    db.litellm_config.find_unique = AsyncMock(return_value=None)
+    db.litellm_credentialstable.find_many = AsyncMock(return_value=[])
+    db.litellm_proxymodeltable.find_unique = AsyncMock(return_value=row)
+    db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
+
+    async def persist_model(*, data: Mapping[str, object], **kwargs: object) -> LiteLLM_ProxyModelTable:
+        values: Final = {
+            key: json.loads(value) if key in {"litellm_params", "model_info"} and isinstance(value, str) else value
+            for key, value in data.items()
+        }
+        saved: Final = db.litellm_proxymodeltable.find_unique.return_value.model_copy(update=values)
+        db.litellm_proxymodeltable.find_unique.return_value = saved
+        db.litellm_proxymodeltable.find_many.return_value = [saved]
+        return saved
+
+    db.litellm_proxymodeltable.create = AsyncMock(side_effect=persist_model)
+    db.litellm_proxymodeltable.update = AsyncMock(side_effect=persist_model)
+    db.execute_raw = AsyncMock(return_value=1)
+    monkeypatch.setattr(proxy_server, "prisma_client", db)
+    monkeypatch.setattr(proxy_server, "proxy_config", proxy_server.ProxyConfig())
+    monkeypatch.setattr(proxy_server, "premium_user", True)
+    monkeypatch.setattr(proxy_server, "general_settings", {"supported_db_objects": ["models"]})
+    monkeypatch.setattr(proxy_server, "store_model_in_db", True)
+    monkeypatch.setattr(proxy_server, "llm_router", Router(model_list=[]))
+    monkeypatch.setattr(proxy_server, "DB_RECONCILE_LOCK", asyncio.Lock())
+    return db
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "field,value", [("model", "os.environ/QA_CHAT_MODEL"), ("headers", {"x-option": ["os.environ/QA_OPTION"]})]
+)
+@pytest.mark.parametrize("role", [LitellmUserRoles.INTERNAL_USER, LitellmUserRoles.PROXY_ADMIN])
+async def test_team_model_create_rejects_env_reference_before_persistence(
+    team_model_write_db: MagicMock,
+    field: str,
+    value: object,
+    role: LitellmUserRoles,
+) -> None:
+    with pytest.raises(ProxyException) as error:
+        await add_new_model(
+            Deployment(
+                model_name="test-model",
+                litellm_params={"model": "openai/test-model", field: value},
+                model_info={"id": "env-model", "team_id": "test_team"},
+            ),
+            UserAPIKeyAuth(user_id="test_user", team_id="test_team", user_role=role),
+        )
+    assert (error.value.code, team_model_write_db.litellm_proxymodeltable.create.await_count) == ("400", 0)
+    assert f"litellm_params.{field}" in error.value.message
+    team_model_write_db.execute_raw.assert_not_awaited()
+    team_model_write_db.litellm_teamtable.update.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["legacy", "patch"])
+async def test_team_model_update_rejects_env_reference_before_persistence(
+    team_model_write_db: MagicMock,
+    operation: str,
+) -> None:
+    auth: Final = UserAPIKeyAuth(user_id="test_user", team_id="test_team", user_role=LitellmUserRoles.INTERNAL_USER)
+    incoming: Final = {"litellm_params": {"model": "os.environ/QA_CHAT_MODEL"}, "model_info": {"id": "env-model"}}
+    operation_call: Final = (
+        update_model(updateDeployment.model_validate(incoming), auth)
+        if operation == "legacy"
+        else patch_model("env-model", PatchModelRequest.model_validate(incoming), auth)
+    )
+    with pytest.raises((HTTPException, ProxyException)) as error:
+        await operation_call
+    assert str(error.value.status_code if isinstance(error.value, HTTPException) else error.value.code) == "400"
+    assert "litellm_params.model" in str(error.value)
+    team_model_write_db.litellm_proxymodeltable.update.assert_not_awaited()
+    team_model_write_db.execute_raw.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "team_id,params",
+    [
+        (None, {"model": "os.environ/QA_CHAT_MODEL", "api_key": "os.environ/QA_API_KEY"}),
+        ("test_team", {"model": "openai/test-model", "headers": {}}),
+    ],
+)
+async def test_model_create_preserves_allowed_parameters(
+    team_model_write_db: MagicMock,
+    team_id: str | None,
+    params: Mapping[str, object],
+) -> None:
+    await add_new_model(
+        Deployment(
+            model_name="test-model", litellm_params=dict(params), model_info={"id": "env-model", "team_id": team_id}
+        ),
+        UserAPIKeyAuth(user_id="test_user", user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+    team_model_write_db.litellm_proxymodeltable.create.assert_awaited_once()
+    written: Final = json.loads(
+        team_model_write_db.litellm_proxymodeltable.create.call_args.kwargs["data"]["litellm_params"]
+    )
+    assert {
+        name: decrypt_value_helper(value=written[name], key=name, return_original_value=True)
+        if isinstance(written[name], str)
+        else written[name]
+        for name in params
+    } == params
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation,team_assignment", [("legacy", False), ("patch", False), ("patch", True)])
+async def test_model_update_checks_retained_encrypted_parameters_and_team_assignment(
+    team_model_write_db: MagicMock,
+    operation: str,
+    team_assignment: bool,
+) -> None:
+    row: Final = team_model_write_db.litellm_proxymodeltable.find_unique.return_value
+    team_model_write_db.litellm_proxymodeltable.find_unique.return_value = row.model_copy(
+        update={
+            "litellm_params": {"model": encrypt_value_helper(value="os.environ/QA_CHAT_MODEL")},
+            "model_info": {"id": "env-model", "team_id": None if team_assignment else "test_team"},
+        }
+    )
+    incoming: Final = {
+        "litellm_params": {},
+        "model_info": {"id": "env-model", **({"team_id": "test_team"} if team_assignment else {})},
+    }
+    auth: Final = UserAPIKeyAuth(user_id="test_user", user_role=LitellmUserRoles.PROXY_ADMIN)
+    operation_call: Final = (
+        update_model(updateDeployment.model_validate(incoming), auth)
+        if operation == "legacy"
+        else patch_model("env-model", PatchModelRequest.model_validate(incoming), auth)
+    )
+    with pytest.raises((HTTPException, ProxyException)) as error:
+        await operation_call
+    assert str(error.value.status_code if isinstance(error.value, HTTPException) else error.value.code) == "400"
+    assert "litellm_params.model" in str(error.value)
+    team_model_write_db.litellm_proxymodeltable.update.assert_not_awaited()
+    team_model_write_db.execute_raw.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["legacy", "patch"])
+@pytest.mark.parametrize(
+    "team_id,stored_model,incoming",
+    [
+        (None, "os.environ/QA_CHAT_MODEL", {"api_key": "os.environ/QA_API_KEY"}),
+        ("test_team", "openai/test-model", {}),
+        ("test_team", "os.environ/QA_CHAT_MODEL", {"model": "openai/test-model"}),
+    ],
+)
+async def test_model_update_preserves_allowed_parameters_and_can_repair_a_rejected_row(
+    team_model_write_db: MagicMock,
+    operation: str,
+    team_id: str | None,
+    stored_model: str,
+    incoming: Mapping[str, object],
+) -> None:
+    row: Final = team_model_write_db.litellm_proxymodeltable.find_unique.return_value
+    team_model_write_db.litellm_proxymodeltable.find_unique.return_value = row.model_copy(
+        update={
+            "litellm_params": {"model": encrypt_value_helper(value=stored_model)},
+            "model_info": {"id": "env-model", "team_id": team_id},
+        }
+    )
+    auth: Final = UserAPIKeyAuth(user_id="test_user", user_role=LitellmUserRoles.PROXY_ADMIN)
+    body: Final = {"litellm_params": dict(incoming), "model_info": {"id": "env-model"}}
+    if operation == "legacy":
+        await update_model(updateDeployment.model_validate(body), auth)
+    else:
+        await patch_model("env-model", PatchModelRequest.model_validate(body), auth)
+    team_model_write_db.litellm_proxymodeltable.update.assert_awaited_once()
+    written: Final = json.loads(
+        team_model_write_db.litellm_proxymodeltable.update.call_args.kwargs["data"]["litellm_params"]
+    )
+    assert decrypt_value_helper(value=written["model"], key="model", return_original_value=True) == incoming.get(
+        "model", stored_model
+    )
+    if "api_key" in incoming:
+        assert (
+            decrypt_value_helper(value=written["api_key"], key="api_key", return_original_value=True)
+            == incoming["api_key"]
+        )
+
+
+@pytest.mark.asyncio
+async def test_team_model_patch_can_remove_an_existing_env_reference(
+    team_model_write_db: MagicMock,
+) -> None:
+    row: Final = team_model_write_db.litellm_proxymodeltable.find_unique.return_value
+    team_model_write_db.litellm_proxymodeltable.find_unique.return_value = row.model_copy(
+        update={
+            "litellm_params": {"model": "openai/test-model", "headers": {"x-option": "os.environ/QA_OPTION"}},
+        }
+    )
+    await patch_model(
+        "env-model",
+        PatchModelRequest.model_validate({"litellm_params_to_remove": ["headers"]}),
+        UserAPIKeyAuth(user_id="test_user", user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+    team_model_write_db.litellm_proxymodeltable.update.assert_awaited_once()
+    written: Final = json.loads(
+        team_model_write_db.litellm_proxymodeltable.update.call_args.kwargs["data"]["litellm_params"]
+    )
+    assert "headers" not in written
 
 
 def _kubernetes_pod_router(
@@ -9115,7 +9342,7 @@ class TestTeamMemberAutoRouterWrites:
     @pytest.mark.asyncio
     @pytest.mark.parametrize("endpoint", ["patch", "legacy"])
     @pytest.mark.parametrize("change_config", [False, True])
-    async def test_team_admin_unrelated_updates_preserve_stored_environment_references(
+    async def test_team_admin_updates_reject_retained_environment_references(
         self, endpoint: str, change_config: bool
     ) -> None:
         connection: Final = {"api_key": "os.environ/SAVED_JEV_KEY", "api_base": "os.environ/SAVED_JEV_BASE"}
@@ -9133,13 +9360,15 @@ class TestTeamMemberAutoRouterWrites:
         request: Final = updateDeployment(
             litellm_params=updateLiteLLMParams.model_validate(params), model_info=ModelInfo(id=row.model_id),
         )
-        with self._environment(database, row):
-            await (patch_model(row.model_id, request, actor) if endpoint == "patch" else update_model(request, actor))
-        written: Final = database.db.litellm_proxymodeltable.update.await_args.kwargs["data"]
-        saved: Final = json.loads(written["litellm_params"])["complexity_router_config"]
-        assert saved == (
-            self._classifier_config({**connection, "timeout_ms": 8100}, False) if change_config else stored_config
+        operation: Final = (
+            patch_model(row.model_id, request, actor) if endpoint == "patch" else update_model(request, actor)
         )
+        with self._environment(database, row), pytest.raises((HTTPException, ProxyException)) as denied:
+            await operation
+        assert str(denied.value.status_code if isinstance(denied.value, HTTPException) else denied.value.code) == "400"
+        assert "litellm_params.complexity_router_config" in str(denied.value)
+        database.db.litellm_proxymodeltable.update.assert_not_awaited()
+        assert row.litellm_params["complexity_router_config"] == stored_config
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
