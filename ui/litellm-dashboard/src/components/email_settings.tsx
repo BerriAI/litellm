@@ -8,6 +8,8 @@ import { toast } from "@/lib/toast";
 import { serviceHealthCheck, setCallbacksCall } from "./networking";
 import { EmailEventSettings } from "./email_events";
 
+const EMAIL_SERVICE = "email";
+
 interface EmailSettingsProps {
   accessToken: string | null;
   premiumUser: boolean;
@@ -197,7 +199,7 @@ const EmailSettings: React.FC<EmailSettingsProps> = ({ accessToken, premiumUser,
               onClick={async () => {
                 if (!accessToken) return;
                 try {
-                  await serviceHealthCheck(accessToken, "email");
+                  await serviceHealthCheck(accessToken, EMAIL_SERVICE);
                   toast.success(t("loggingAndAlerts.emailSettings.toasts.testTriggered"));
                 } catch (error) {
                   toast.fromError(error);

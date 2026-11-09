@@ -1438,7 +1438,47 @@ def test_reset_budget_for_keys_invalidates_redis_counter(reset_budget_job, mock_
 
     asyncio.run(reset_budget_job.reset_budget_for_litellm_keys())
 
-    assert "spend:key:sk-abc" in counter_cache.deleted()
+    assert {"spend:key:sk-abc", "spend:committed:key:sk-abc"} <= counter_cache.deleted()
+
+
+def _expired_key_row() -> object:
+    return type(
+        "Key",
+        (),
+        {
+            "spend": 100.0,
+            "budget_duration": "30d",
+            "budget_reset_at": datetime.now(timezone.utc),
+            "id": "key-1",
+            "token": "sk-abc",
+        },
+    )
+
+
+def test_reset_budget_for_keys_without_redis_clears_the_counter_and_its_committed_twin(
+    reset_budget_job, mock_prisma_client, monkeypatch
+):
+    counter_cache: Final = _make_counter_invalidation_job(monkeypatch)
+    counter_cache.redis = None
+    counter_cache.memory.update({"spend:key:sk-abc": 100.0, "spend:committed:key:sk-abc": 100.0})
+    mock_prisma_client.data["key"] = [_expired_key_row()]
+
+    asyncio.run(reset_budget_job.reset_budget_for_litellm_keys())
+
+    assert counter_cache.memory == {}
+
+
+def test_a_redis_failure_on_the_key_reset_still_drops_its_committed_twin_locally(
+    reset_budget_job, mock_prisma_client, monkeypatch
+):
+    counter_cache: Final = _make_counter_invalidation_job(monkeypatch)
+    counter_cache.failing = frozenset({"delete"})
+    counter_cache.memory.update({"spend:key:sk-abc": 100.0, "spend:committed:key:sk-abc": 100.0})
+    mock_prisma_client.data["key"] = [_expired_key_row()]
+
+    asyncio.run(reset_budget_job.reset_budget_for_litellm_keys())
+
+    assert counter_cache.memory == {}
 
 
 def test_reset_budget_for_users_invalidates_redis_counter(reset_budget_job, mock_prisma_client, monkeypatch):
@@ -1790,7 +1830,9 @@ def test_enduser_invalidation_is_paged_and_batched(reset_budget_job, mock_prisma
     assert counter_cache.user_api_key_cache.async_delete_cache_keys.await_count == 6
 
     invalidated: Final = counter_cache.deleted()
-    assert invalidated == {f"spend:end_user:cust-{i:06d}" for i in range(population)}
+    assert invalidated == {f"spend:end_user:cust-{i:06d}" for i in range(population)} | {
+        f"spend:committed:end_user:cust-{i:06d}" for i in range(population)
+    }
     evicted: Final = {
         key for call in counter_cache.user_api_key_cache.async_delete_cache_keys.await_args_list for key in call.args[0]
     }

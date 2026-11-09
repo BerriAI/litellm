@@ -51,8 +51,10 @@ def call(**kwargs: object) -> NativeCall:
         ("openai/gpt-luna-latest", None, True),
         ("gpt-luna-latest", "openai", True),
         ("gemini/gemini-pro-latest", None, False),
-        ("gpt-luna-latest", None, False),
+        ("gpt-luna-latest", None, True),
         ("anthropic/claude-opus-latest", None, True),
+        ("moonshot/kimi-latest", None, True),
+        ("kimi-latest", None, False),
         ("claude-opus-latest", "anthropic", True),
         ("", None, False),
     ),
@@ -348,6 +350,14 @@ def test_global_settings_are_detected(
 def test_stream_cost_injection_needs_a_stream(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "include_cost_in_streaming_usage", True)
     assert not messages_detectors.stream_cost_injection(call())
+
+
+def test_stream_cost_injection_reads_the_request_header_the_proxy_reads(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "include_cost_in_streaming_usage", False)
+    opted_in: Final = {"proxy_server_request": {"headers": {"x-litellm-include-cost-in-streaming-usage": "true"}}}
+    assert messages_detectors.stream_cost_injection(call(stream=True, **opted_in))
+    assert not messages_detectors.stream_cost_injection(call(**opted_in))
+    assert not messages_detectors.stream_cost_injection(call(stream=True, proxy_server_request={"headers": {}}))
 
 
 def test_foundry_beta_row_reads_the_api_base_the_anthropic_handler_reads(monkeypatch: pytest.MonkeyPatch) -> None:

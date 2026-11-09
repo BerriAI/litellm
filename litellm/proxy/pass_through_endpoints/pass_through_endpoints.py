@@ -119,6 +119,7 @@ from litellm.proxy.common_utils.error_body_call_id import JSON_OBJECT, error_bod
 from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
     _read_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _safe_get_request_headers,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    is_opaque_pass_through_request,
     read_request_body,
     safe_get_request_headers,
 )
@@ -164,6 +165,8 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     WebSocketSessionUsage,
     WebsocketUpstreamFrameKind,
 )
+from litellm.types.proxy.auth.user_api_key_auth import COMMITTED_BUDGET_SPEND_PARAM
+from litellm.types.proxy.carried_budget_state import CommittedBudgetSpend
 from litellm.types.utils import TRUSTED_CALLBACK_VARS_FIELD, CallTypes, Usage
 
 from .llm_provider_handlers.tinyfish_passthrough_logging_handler import (
@@ -421,6 +424,10 @@ async def chat_completion_pass_through_endpoint(
             headers=litellm_call_id_headers(litellm_call_id),
             code=error_status_code(e, 500),
         )
+
+
+def _is_provider_payload(request: Request) -> bool:
+    return is_opaque_pass_through_request(get_request_route(request), request.headers.get("content-type", ""))
 
 
 class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
@@ -774,6 +781,7 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
             "litellm_params": {
                 **litellm_params_in_body,
                 "metadata": _metadata,
+                COMMITTED_BUDGET_SPEND_PARAM: user_api_key_dict.committed_budget_spend or CommittedBudgetSpend(),
                 "proxy_server_request": {
                     "url": str(request.url),
                     "method": request.method,
@@ -1209,6 +1217,14 @@ def _unfiltered_headers(headers: Mapping[str, str]) -> Mapping[str, str]:
     return headers
 
 
+def _caller_query_source(
+    keep_target_query: bool, query_params: Mapping[str, object] | None, request: Request
+) -> Mapping[str, object]:
+    if keep_target_query:
+        return MappingProxyType({})
+    return query_params or request.query_params
+
+
 def _json_object(value: object) -> Mapping[str, object]:
     return cast("Mapping[str, object]", value) if isinstance(value, Mapping) else MappingProxyType({})  # cast-ok: json
 
@@ -1266,6 +1282,7 @@ async def pass_through_request(
     timeout: float | None = None,
     upstream_headers_filter: Callable[[Mapping[str, str]], Mapping[str, str]] = _unfiltered_headers,
     operation: GenAIOperation | None = None,
+    keep_target_query: bool = False,
 ):
     """
     Pass through endpoint handler, makes the httpx request for pass-through endpoints and ensures logging hooks are called
@@ -1288,6 +1305,7 @@ async def pass_through_request(
             general_settings.pass_through_request_timeout, then 600s.
         upstream_headers_filter: Optional last rewrite of the headers sent upstream, after x-pass- expansion
         operation: Optional GenAI operation the route reports, unless the upstream names its own
+        keep_target_query: Send the target URL's query exactly as given, adding none of the caller's query params
     """
     from litellm.exceptions import ModifyResponseException
     from litellm.litellm_core_utils.litellm_logging import Logging
@@ -1326,7 +1344,10 @@ async def pass_through_request(
             parent_span=user_api_key_dict.parent_otel_span,
         )
 
-        requested_query_params: dict | None = query_params or dict(request.query_params) or None
+        requested_query_params: dict | None = (
+            dict(_caller_query_source(keep_target_query, query_params, request))  # pyright: ignore[reportUnknownArgumentType]  # query_params keeps its legacy untyped dict annotation
+            or None
+        )
 
         endpoint_type: Final[EndpointType] = HttpPassThroughEndpointHelpers.get_endpoint_type(
             str(url), custom_llm_provider
@@ -2263,6 +2284,8 @@ async def _parse_request_data_by_content_type(
     Returns:
         Tuple of (query_params_data, custom_body_data, file_data, stream)
     """
+    if _is_provider_payload(request):
+        return None, None, None, None
     content_type: Final = request.headers.get("content-type", "")
 
     query_params_data = None
@@ -2333,6 +2356,7 @@ def create_pass_through_route(
     timeout: float | None = None,
     upstream_headers_filter: Callable[[Mapping[str, str]], Mapping[str, str]] = _unfiltered_headers,
     operation: GenAIOperation | None = None,
+    keep_target_query: bool = False,
 ):
     # check if target is an adapter.py or a url
     from litellm._uuid import uuid
@@ -2482,6 +2506,7 @@ def create_pass_through_route(
                         timeout=cast(float | None, param_timeout),
                         upstream_headers_filter=upstream_headers_filter,
                         operation=operation,
+                        keep_target_query=keep_target_query,
                     )
                 finally:
                     if hasattr(request.state, LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY):

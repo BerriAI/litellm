@@ -35,8 +35,21 @@ def _is_number(value: object) -> bool:
     return value is None or (isinstance(value, (int, float)) and not isinstance(value, bool))
 
 
+_TWIN_SCOPES: Final = frozenset({"key", "team", "user", "org", "end_user"})
+_WINDOWED_SCOPES: Final = frozenset({"key", "team"})
+
+
+def _native_store_takes_twin(twin: str) -> bool:
+    scope, _, counter_id = twin.partition(":")
+    _, separator, window = counter_id.rpartition(":window:")
+    return scope in _TWIN_SCOPES and not (scope in _WINDOWED_SCOPES and separator and window)
+
+
 def _check(counter: str) -> None:
     if not counter.startswith("spend:"):
+        raise ValueError(f"{counter!r} is not a spend counter")
+    twin: Final = counter.removeprefix("spend:committed:")
+    if twin != counter and not _native_store_takes_twin(twin):
         raise ValueError(f"{counter!r} is not a spend counter")
 
 
@@ -51,6 +64,11 @@ class DeclaredRead:
         if events is not None and "flush_pre" not in events:
             raise ConnectionError("resolved before its batch was flushed")
         return self.owner.mget(self.counters)
+
+
+@dataclass
+class FakeSettlement:
+    settled: bool = False
 
 
 @dataclass
@@ -72,11 +90,12 @@ class FakeSpendCounters:
     counter_ttl: float = 3600
     ttls: dict[str, float | None] = field(default_factory=dict)
     memory_ttls: dict[str, float | None] = field(default_factory=dict)
+    committed_ttl: float | None = None
     batch_reads: bool = True
     read_hook: Callable[[str], Awaitable[None]] | None = None
     on_delete: Callable[[tuple[str, ...]], None] | None = None
     deletes: list[tuple[str, ...]] = field(default_factory=list)
-    post_call: list[tuple[object, tuple[SpendIncrement, ...]]] = field(default_factory=list)
+    post_call: list[tuple[object, tuple[SpendIncrement, ...], FakeSettlement]] = field(default_factory=list)
     declared: list[DeclaredRead] = field(default_factory=list)
 
     def store(self) -> SpendCounterStore:
@@ -89,6 +108,9 @@ class FakeSpendCounters:
     @property
     def redis_ttl_seconds(self) -> float | None:
         return None if self.redis is None else self.redis_ttl
+
+    def set_committed_ttl(self, ttl_seconds: float, /) -> None:
+        self.committed_ttl = ttl_seconds
 
     def attach(self, client: NativeRedisClient, /) -> bool:
         if self.redis is not None:
@@ -149,18 +171,20 @@ class FakeSpendCounters:
 
     def increment_many_post_call(
         self, request: object, increments: Sequence[SpendIncrement], ttl_seconds: float | None = None
-    ) -> bool:
+    ) -> FakeSettlement | None:
         if self.redis is None:
-            return False
+            return None
         self.ttls.update(dict.fromkeys((counter for counter, _ in increments), ttl_seconds))
-        self.post_call.append((request, tuple(increments)))
-        return True
+        settlement: Final = FakeSettlement()
+        self.post_call.append((request, tuple(increments), settlement))
+        return settlement
 
     def settle_post_call(self) -> None:
         """What the native task does once the post-call batch goes out."""
         pending: Final = tuple(self.post_call)
         self.post_call.clear()
-        for _, increments in pending:
+        for _, increments, settlement in pending:
+            settlement.settled = True
             if self.fail:
                 for counter, _ in increments:
                     self.memory.pop(counter, None)

@@ -66,7 +66,9 @@ from litellm.proxy.management_helpers.utils import (
     get_new_internal_user_defaults,
     management_endpoint_wrapper,
 )
+from litellm.proxy.spend_tracking.committed_spend import drop_committed_spend
 from litellm.proxy.utils import PrismaClient, ProxyLogging
+from litellm.redis.stores.spend_counters import org_counter, team_counter
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.chunked_in import find_many_in
 from litellm.repositories.object_permission_repository import ObjectPermissionRepository
@@ -93,6 +95,7 @@ if TYPE_CHECKING:
         LiteLLM_OrganizationMembership as PrismaOrganizationMembership,
     )
     from prisma.models import LiteLLM_OrganizationTable as PrismaOrganizationTable
+    from prisma.models import LiteLLM_TeamTable as PrismaTeamTable
     from prisma.models import LiteLLM_UserTable as PrismaUserTable
     from prisma.models import LiteLLM_VerificationToken as PrismaVerificationToken
 
@@ -180,6 +183,8 @@ class _OrganizationMembershipTableClient(Protocol):
 
 
 class _TeamTableClient(Protocol):
+    async def find_many(self, *, where: Mapping[str, object]) -> "Sequence[PrismaTeamTable]": ...
+
     async def delete_many(self, where: Mapping[str, object]) -> int: ...
 
 
@@ -823,11 +828,13 @@ async def update_organization(
         from litellm.proxy.proxy_server import (
             raise_if_spend_counters_unwritten,
             set_spend_counters_with_floor_and_broadcast,
+            spend_counter_store,
         )
 
         lost: Final = await set_spend_counters_with_floor_and_broadcast(
             counter_keys=(f"spend:org:{data.organization_id}",), value=data.spend
         )
+        await drop_committed_spend(spend_counter_store, (org_counter(data.organization_id),))
         raise_if_spend_counters_unwritten(lost, saved="The organization spend was saved")
 
     return response
@@ -1056,7 +1063,8 @@ async def delete_organization(
     teams_in_deleted_orgs: Final = await find_many_in(
         _table(TeamRepository(prisma_client)), "organization_id", data.organization_ids
     )
-    raise_if_teams_hold_ptu_shares(tuple(team.team_id for team in teams_in_deleted_orgs), llm_router)
+    team_ids_in_deleted_orgs: Final = tuple(team.team_id for team in teams_in_deleted_orgs)
+    raise_if_teams_hold_ptu_shares(team_ids_in_deleted_orgs, llm_router)
 
     deleted_orgs: Final = []
     for organization_id in data.organization_ids:
@@ -1084,6 +1092,15 @@ async def delete_organization(
             )
         deleted_orgs.append(deleted_org)
 
+    from litellm.proxy.proxy_server import spend_counter_store
+
+    await drop_committed_spend(
+        spend_counter_store,
+        (
+            *(org_counter(organization_id) for organization_id in data.organization_ids),
+            *(team_counter(team_id) for team_id in team_ids_in_deleted_orgs),
+        ),
+    )
     return deleted_orgs
 
 

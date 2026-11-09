@@ -1,13 +1,19 @@
 mod keys;
 mod types;
 
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+    },
+    time::Duration,
+};
 
 use litellm_python_compat::repr::to_str;
 use litellm_redis_client::{Declared, Expiry, RedisBatch, commands};
 
 pub use self::keys::{NotASpendCounter, SpendCounter};
-pub use self::types::{LostSeed, Reading};
+pub use self::types::{LostSeed, PostCallSettlement, Reading};
 use crate::{
     Error, Number, Pending, RequestRedis, Send,
     dual_cache::{DualCache, MemorySettings},
@@ -32,6 +38,7 @@ const SET_MAX: &str = concat!(
 /// `DualCache` to its Redis and its memory.
 pub struct SpendCounters {
     cache: DualCache<Number>,
+    committed_ttl_millis: AtomicU64,
 }
 
 impl SpendCounters {
@@ -46,6 +53,33 @@ impl SpendCounters {
                 MemorySettings::default(),
                 now,
             ),
+            committed_ttl_millis: AtomicU64::new(0),
+        }
+    }
+
+    /// The least TTL a Redis write gives a [`SpendCounter::Committed`] twin, so it outlives the DB
+    /// write that holds its charges and its next seed never reads a total still missing them.
+    pub fn set_committed_ttl(&self, ttl: Duration) {
+        let millis = u64::try_from(ttl.as_millis()).unwrap_or(u64::MAX);
+        self.committed_ttl_millis.store(millis, Ordering::Relaxed);
+    }
+
+    fn ttl(&self, counter: &SpendCounter, default_ttl: Duration) -> Duration {
+        match counter {
+            SpendCounter::Committed(_) => default_ttl.max(Duration::from_millis(
+                self.committed_ttl_millis.load(Ordering::Relaxed),
+            )),
+            _ => default_ttl,
+        }
+    }
+
+    /// A committed twin's expiry moves out on every charge, on a cluster too, so it never expires
+    /// while a charge it holds is still on its way to the DB.
+    fn post_call_expiry(&self, counter: &SpendCounter, default_ttl: Duration) -> Expiry {
+        let ttl = self.ttl(counter, default_ttl);
+        match counter {
+            SpendCounter::Committed(_) => Expiry::Refresh(ttl),
+            _ => Expiry::KeepExisting(ttl),
         }
     }
 
@@ -133,7 +167,9 @@ impl SpendCounters {
         let increment = commands::incr_by_float(
             &key,
             amount.into(),
-            Some(Expiry::Refresh(ttl.unwrap_or(remote.default_ttl))),
+            Some(Expiry::Refresh(
+                self.ttl(counter, ttl.unwrap_or(remote.default_ttl)),
+            )),
         );
         match remote.client.send(increment).await {
             Ok(total) => {
@@ -167,7 +203,7 @@ impl SpendCounters {
             pipeline.add(commands::incr_by_float(
                 &counter.key(),
                 (*amount).into(),
-                Some(Expiry::Refresh(ttl)),
+                Some(Expiry::Refresh(self.ttl(counter, ttl))),
             ))
         });
         let totals = Declared::all(totals.collect::<Vec<_>>()).await;
@@ -183,16 +219,15 @@ impl SpendCounters {
     }
 
     /// `increment_many` on the request's post-call batch. Each total reaches memory once the batch
-    /// goes out, and a counter whose increment failed is dropped everywhere. `false` without Redis.
+    /// goes out, and a counter whose increment failed is dropped everywhere. `None` without Redis,
+    /// else a settlement that reports when every reply is back, whoever flushed the batch.
     pub fn increment_many_post_call(
         self: &Arc<Self>,
         request: &RequestRedis,
         increments: &[(SpendCounter, Number)],
         ttl: Option<Duration>,
-    ) -> bool {
-        let Some(remote) = self.cache.redis().get() else {
-            return false;
-        };
+    ) -> Option<PostCallSettlement> {
+        let remote = self.cache.redis().get()?;
         let ttl = ttl.unwrap_or(remote.default_ttl);
         let batch = Send::PostCall(request).batch(&remote.client);
         let declared = increments
@@ -201,12 +236,14 @@ impl SpendCounters {
                 let total = batch.add(commands::incr_by_float(
                     &counter.key(),
                     (*amount).into(),
-                    Some(Expiry::KeepExisting(ttl)),
+                    Some(self.post_call_expiry(counter, ttl)),
                 ));
                 (counter.clone(), total)
             })
             .collect::<Vec<_>>();
         let store = Arc::clone(self);
+        let settled = Arc::new(AtomicBool::new(false));
+        let settlement = PostCallSettlement(Arc::clone(&settled));
         request.spawn(async move {
             for (counter, total) in declared {
                 match total.settled().await {
@@ -225,8 +262,9 @@ impl SpendCounters {
                     }
                 }
             }
+            settled.store(true, Ordering::Release);
         });
-        true
+        Some(settlement)
     }
 
     /// `_repair_stale_spend_counter`: raise memory and Redis to `spend`, never lowering either.
@@ -254,7 +292,9 @@ impl SpendCounters {
         };
         let args = (
             to_str(&spend.to_value()),
-            ttl.unwrap_or(remote.default_ttl).as_secs().to_string(),
+            self.ttl(counter, ttl.unwrap_or(remote.default_ttl))
+                .as_secs()
+                .to_string(),
         );
         let fence = counter.reset_fence_key(remote.client.namespace());
         let stored: Option<f64> = remote
@@ -289,7 +329,7 @@ impl SpendCounters {
                 })
             })?);
         };
-        let ttl = ttl.unwrap_or(*default_ttl);
+        let ttl = self.ttl(counter, ttl.unwrap_or(*default_ttl));
         let current = if client
             .send(commands::set_nx(&key, spend.to_json(), ttl))
             .await?
@@ -328,7 +368,7 @@ impl SpendCounters {
         let Some(remote) = self.cache.redis().get() else {
             return Ok(());
         };
-        let ttl = redis_ttl.unwrap_or(remote.default_ttl);
+        let ttl = self.ttl(counter, redis_ttl.unwrap_or(remote.default_ttl));
         remote
             .client
             .send(commands::set(&key, spend.to_json(), ttl))
@@ -355,7 +395,7 @@ impl SpendCounters {
             .client
             .send(commands::expire(
                 &counter.key(),
-                ttl.unwrap_or(remote.default_ttl),
+                self.ttl(counter, ttl.unwrap_or(remote.default_ttl)),
             ))
             .await?)
     }

@@ -486,9 +486,18 @@ class BaseResponsesAPIStreamingIterator:
             if _is_json_object(parsed_chunk):
                 if self.responses_api_provider_config is None:
                     raise ValueError("responses_api_provider_config is required to process live streaming chunks")
+                typed_chunk: Final = (
+                    parsed_chunk
+                    if parsed_chunk.get("type") is not None or "error" not in parsed_chunk
+                    else {
+                        "sequence_number": SEQUENCE_NUMBER_STAMPED_ON_EMISSION,
+                        **parsed_chunk,
+                        "type": ResponsesAPIStreamEvents.ERROR.value,
+                    }
+                )
                 openai_responses_api_chunk: Final = self.responses_api_provider_config.transform_streaming_response(
                     model=self.model,
-                    parsed_chunk=parsed_chunk,
+                    parsed_chunk=typed_chunk,
                     logging_obj=self.logging_obj,
                 )
 

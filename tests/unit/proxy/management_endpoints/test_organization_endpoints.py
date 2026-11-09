@@ -1192,6 +1192,27 @@ async def _run_legacy_update_organization(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    ("body", "twin_after"),
+    [
+        ({"organization_id": "org-1", "spend": 0.0}, None),
+        ({"organization_id": "org-1", "organization_alias": "renamed"}, 7.0),
+    ],
+)
+async def test_legacy_update_drops_the_committed_org_spend_only_when_it_writes_the_stored_spend(
+    monkeypatch, body, twin_after
+):
+    from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
+
+    spend: Final = FakeSpendCounters(redis=None, memory={"spend:committed:org:org-1": 7.0})
+    monkeypatch.setattr("litellm.proxy.proxy_server.spend_counter_store", spend.store())
+
+    await _run_legacy_update_organization(monkeypatch, body=body, existing_budget_id="budget-1")
+
+    assert spend.memory.get("spend:committed:org:org-1") == twin_after
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     "body",
     [
         {"organization_id": "org-1", "tpm_limit": None},
@@ -1617,7 +1638,7 @@ async def test_legacy_update_with_spend_sets_the_org_counter_and_its_floor_on_ev
     spend_counter_cache.redis_cache.async_set_cache_pipeline_with_ttls.assert_awaited_once_with(
         (("{spend:org:org-1}:reset_fence", 1, proxy_server.SPEND_RESET_FENCE_TTL_SECONDS),)
     )
-    assert spend.commands == [f"SET spend:org:org-1 1.5 {spend.counter_ttl}"]
+    assert spend.commands == [f"SET spend:org:org-1 1.5 {spend.counter_ttl}", "DEL spend:committed:org:org-1"]
     assert proxy_server.spend_counter_store.get_local("spend:org:org-1") == 1.5
     assert spend_counter_cache.in_memory_cache.get_cache(key="spend_db_floor:spend:org:org-1") == 1.5
     assert proxy_server.publish_auth_cache_invalidations.await_args_list == [
@@ -1668,6 +1689,49 @@ async def test_legacy_update_without_spend_keeps_the_org_spend_counter(monkeypat
     spend_counter_cache.redis_cache.async_set_cache_pipeline_with_ttls.assert_not_awaited()
     assert spend.commands == []
     assert proxy_server.spend_counter_store.get_local("spend:org:org-1") == 4.2
+
+
+@pytest.mark.asyncio
+async def test_delete_organization_drops_the_committed_spend_of_the_org_and_its_teams(monkeypatch):
+    from litellm.proxy._types import DeleteOrganizationRequest, LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.management_endpoints.organization_endpoints import delete_organization
+    from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
+
+    spend: Final = FakeSpendCounters(
+        redis=None,
+        memory={
+            "spend:committed:org:org-doomed": 7.0,
+            "spend:committed:team:team-in-org": 5.0,
+            "spend:committed:org:org-kept": 3.0,
+            "spend:committed:team:team-elsewhere": 2.0,
+        },
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.spend_counter_store", spend.store())
+    prisma_client: Final = AsyncMock()
+    prisma_client.db.litellm_teamtable.find_many = AsyncMock(
+        return_value=[SimpleNamespace(team_id="team-in-org", organization_id="org-doomed")]
+    )
+    prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    prisma_client.db.litellm_jwtkeymapping.find_many = AsyncMock(return_value=[])
+    prisma_client.db.litellm_organizationtable.delete = AsyncMock(return_value=MagicMock())
+
+    @asynccontextmanager
+    async def transaction():
+        yield prisma_client.db
+
+    prisma_client.tx = transaction
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True, raising=False)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", UserApiKeyCache())
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", None)
+
+    await delete_organization(
+        data=DeleteOrganizationRequest(organization_ids=["org-doomed"]),
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+
+    assert spend.memory == {"spend:committed:org:org-kept": 3.0, "spend:committed:team:team-elsewhere": 2.0}
 
 
 @pytest.mark.asyncio

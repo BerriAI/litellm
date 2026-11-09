@@ -1,5 +1,6 @@
 import asyncio
 import collections
+import contextlib
 import datetime
 import hashlib
 import json
@@ -8,6 +9,7 @@ import sqlite3
 from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from datetime import timezone
+from types import SimpleNamespace
 from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
@@ -18,15 +20,17 @@ from fastapi.testclient import TestClient
 
 import litellm
 import litellm.proxy.proxy_server as ps
+from litellm.integrations.prometheus import PrometheusLogger
 from litellm.proxy.auth.authorization import OwnedRows
 from litellm.proxy.auth.authorization_dependencies import get_log_team_lookup, load_permitted_log_team_ids
 from litellm.proxy.auth.route_checks import RouteChecks
-from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
+from litellm.proxy.spend_tracking.spend_management_endpoints import global_spend_reset
 from tests.unit.proxy.db.fake_prisma_engine import (
     ReadTargetOf,
     statement_timeout_error,
     statement_timeout_reads,
 )
+from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
 
 
 def _default_date_range():
@@ -8517,6 +8521,109 @@ async def test_global_spend_reset_answers_500_while_the_spend_counter_store_refu
     assert spend_counter_cache.redis_cache.async_set_cache_pipeline_with_ttls.await_count == 2
     assert ps.spend_counter_store.get_local("spend:key:aaa") == 0.0
     assert ps.spend_counter_store.get_local("spend:team:t1") == 0.0
+
+
+class _ResetTableRows:
+    def __init__(self) -> None:
+        self.update_many: Final = AsyncMock()
+
+
+class _ResetDb:
+    def __init__(self) -> None:
+        self.litellm_verificationtoken: Final = _ResetTableRows()
+        self.litellm_teamtable: Final = _ResetTableRows()
+
+    async def query_raw(self, sql_query: str, after_id: str, limit: int) -> list[dict[str, str]]:
+        rows: Final = ["hashed"] if "VerificationToken" in sql_query else ["t1"]
+        return [{"id": row} for row in rows if row > after_id][:limit]
+
+
+class _ResetTransaction:
+    def __init__(self, db: _ResetDb) -> None:
+        self.litellm_verificationtoken: Final = db.litellm_verificationtoken
+        self.litellm_teamtable: Final = db.litellm_teamtable
+
+    async def query_raw(self, sql_query: str) -> list[dict[str, str]]:
+        return []
+
+
+def _reset_prisma(db: _ResetDb) -> SimpleNamespace:
+    @contextlib.asynccontextmanager
+    async def tx() -> AsyncIterator[_ResetTransaction]:
+        yield _ResetTransaction(db)
+
+    return SimpleNamespace(db=db, tx=tx)
+
+
+def _committed_spend(monkeypatch: pytest.MonkeyPatch, twins: Sequence[str]) -> FakeSpendCounters:
+    spend: Final = FakeSpendCounters(redis=None, memory=dict.fromkeys(twins, 7.0))
+    monkeypatch.setattr("litellm.proxy.proxy_server.spend_counter_store", spend.store())
+    return spend
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("registered_callbacks", "twin_after"),
+    [
+        ([MagicMock(spec=PrometheusLogger)], None),
+        ([], 7.0),
+    ],
+)
+async def test_global_spend_reset_drops_the_committed_key_and_team_spend_the_gauges_read(
+    monkeypatch, registered_callbacks, twin_after
+):
+    twins: Final = ("spend:committed:key:hashed", "spend:committed:team:t1")
+    spend: Final = _committed_spend(monkeypatch, twins)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", _reset_prisma(_ResetDb()))
+    monkeypatch.setattr(litellm, "callbacks", registered_callbacks)
+
+    response: Final = await global_spend_reset()
+
+    assert response["status"] == "success"
+    assert [spend.memory.get(twin) for twin in twins] == [twin_after, twin_after]
+
+
+class _PagedResetDb(_ResetDb):
+    def __init__(self, token_count: int) -> None:
+        super().__init__()
+        self._tokens: Final = sorted(f"token-{index}" for index in range(token_count))
+        self.largest_page = 0
+
+    async def query_raw(self, sql_query: str, after_id: str, limit: int) -> list[dict[str, str]]:
+        rows: Final = self._tokens if "VerificationToken" in sql_query else []
+        page: Final = [{"id": row} for row in rows if row > after_id][:limit]
+        self.largest_page = max(self.largest_page, len(page))
+        return page
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("token_count", [999, 1000, 1001, 2500])
+async def test_global_spend_reset_drops_every_key_twin_reading_the_keys_in_bounded_pages(monkeypatch, token_count):
+    db: Final = _PagedResetDb(token_count)
+    twins: Final = tuple(f"spend:committed:key:token-{index}" for index in range(token_count))
+    spend: Final = _committed_spend(monkeypatch, twins)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", _reset_prisma(db))
+    monkeypatch.setattr(litellm, "callbacks", [MagicMock(spec=PrometheusLogger)])
+
+    response: Final = await global_spend_reset()
+
+    assert response["status"] == "success"
+    assert spend.memory == {}
+    assert db.largest_page <= 1000
+
+
+@pytest.mark.asyncio
+async def test_global_spend_reset_still_succeeds_when_listing_the_committed_counters_fails(monkeypatch):
+    db: Final = _ResetDb()
+    db.query_raw = AsyncMock(side_effect=ConnectionError("db unreachable"))
+    _committed_spend(monkeypatch, ("spend:committed:team:t1",))
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", _reset_prisma(db))
+    monkeypatch.setattr(litellm, "callbacks", [MagicMock(spec=PrometheusLogger)])
+
+    response: Final = await global_spend_reset()
+
+    assert response["status"] == "success"
+    db.litellm_teamtable.update_many.assert_awaited_once()
 
 
 def test_spend_calculate_rejection_body_is_openai_shaped(client):

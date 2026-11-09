@@ -919,6 +919,49 @@ async def test_initialize_scheduled_jobs_loads_credentials_only_through_add_depl
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("proxy_batch_write_at", [10, 60])
+async def test_committed_spend_twins_outlive_the_slowest_spend_write_to_the_db(
+    monkeypatch: pytest.MonkeyPatch, proxy_batch_write_at: int
+) -> None:
+    """A twin that expires before its charges reach the DB seeds again from a total still missing them."""
+    monkeypatch.delenv("DISABLE_PRISMA_SCHEMA_UPDATE", raising=False)
+    monkeypatch.delenv("STORE_MODEL_IN_DB", raising=False)
+    from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
+    from litellm.constants import SPEND_LOG_QUEUE_MAX_BACKOFF_SECONDS
+    from litellm.proxy.proxy_server import _BATCH_WRITE_JITTER_MAX_SECONDS, ProxyStartupEvent
+    from litellm.proxy.utils import ProxyLogging
+    from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
+
+    spend: Final = FakeSpendCounters()
+    mock_proxy_logging: Final = MagicMock(spec=ProxyLogging)
+    mock_proxy_logging.slack_alerting_instance = MagicMock()
+    mock_proxy_logging.db_spend_update_writer = MagicMock()
+    scheduler: Final = AsyncIOScheduler()
+    try:
+        with (
+            patch("litellm.proxy.proxy_server.proxy_config", _mock_scheduled_proxy_config()),
+            patch("litellm.proxy.proxy_server.store_model_in_db", False),
+            patch("litellm.proxy.proxy_server.AsyncIOScheduler", return_value=scheduler),
+            patch("litellm.proxy.proxy_server.spend_counter_store", spend.store()),
+        ):
+            await ProxyStartupEvent.initialize_scheduled_background_jobs(
+                general_settings={},
+                prisma_client=MagicMock(),
+                proxy_budget_rescheduler_min_time=1,
+                proxy_budget_rescheduler_max_time=2,
+                proxy_batch_write_at=proxy_batch_write_at,
+                proxy_logging_obj=mock_proxy_logging,
+            )
+    finally:
+        scheduler.shutdown(wait=False)
+
+    slowest_db_write: Final = SPEND_LOG_QUEUE_MAX_BACKOFF_SECONDS + proxy_batch_write_at + _BATCH_WRITE_JITTER_MAX_SECONDS
+    assert spend.committed_ttl is not None
+    assert spend.committed_ttl >= slowest_db_write
+
+
+@pytest.mark.asyncio
 async def test_periodic_reload_job_scheduled_without_store_model_in_db(monkeypatch):
     """
     Regression (LIT-4882): reload schedules configured from the Admin UI live in the DB and

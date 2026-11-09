@@ -11,6 +11,7 @@ import { PasswordInput } from "@/components/shared/PasswordInput";
 import i18n from "@/i18n/i18n";
 import { AgentFormField, AgentFormValues, labelWithHint } from "./AgentFormKit";
 import { KILL_SWITCH_AUTH_TYPES, KILL_SWITCH_METHODS, validateKillSwitchBody } from "./kill_switch_config";
+import { codeSamples } from "@/i18n/untranslated/codeSamples";
 
 const KeyValueFieldArray = ({
   name,
@@ -135,7 +136,7 @@ const KillSwitchAuthFields = () => {
           <TextField
             name="kill_switch.auth_header_name"
             label={t("agents.killSwitchFields.auth.headerName")}
-            placeholder="X-API-Key"
+            placeholder={codeSamples.agents.killSwitchAuthHeader}
           />
           <TextField
             name="kill_switch.auth_api_key"
@@ -224,7 +225,7 @@ const KillSwitchFormFields = () => (
           {...control}
           ref={ref}
           rows={4}
-          placeholder='{"reason": "manual kill switch"}'
+          placeholder={codeSamples.agents.killSwitchPayloadJson}
           value={typeof value === "string" ? value : ""}
           onChange={onChange}
         />

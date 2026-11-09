@@ -1,30 +1,26 @@
 import asyncio
 import contextlib
 import gc
+import json
 import threading
 import weakref
-import httpx
-import json
-import litellm
-import pytest
-import redis
-import respx
-
-
 from collections.abc import Awaitable, Callable, Coroutine, Iterator, Mapping
 from datetime import datetime
 from types import SimpleNamespace
-from uuid import uuid4
 from typing import Final
 from unittest.mock import MagicMock
+from uuid import uuid4
 
-from litellm.router_api import RouterSettings
-from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
-
+import httpx
+import pytest
+import redis
+import respx
 from fakeredis import TcpFakeServer
 from fastapi import HTTPException
 
+import litellm
 from litellm.caching.caching import DualCache
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.route_llm_request import (
@@ -36,11 +32,13 @@ from litellm.proxy.route_llm_request import (
     user_config_routers,
 )
 from litellm.proxy.utils import ProxyLogging
+from litellm.router_api import RouterSettings
 from litellm.router_strategy.adaptive_router.config import (
     ADAPTIVE_ROUTER_CHOSEN_MODEL_KEY,
     ADAPTIVE_ROUTER_RESPONSE_HEADER,
 )
 from litellm.types.router import RouterErrors, RouterGeneralSettings, RouterRateLimitError
+from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 
 
 @pytest.mark.parametrize(
@@ -78,7 +76,6 @@ async def test_route_request_dynamic_credentials(route_type, required_body_param
 @pytest.mark.asyncio
 async def test_route_request_proxy_admin_can_call_all_team_scoped_deployments_without_team_id():
     import litellm
-
     from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 
     router = litellm.Router(
@@ -670,7 +667,6 @@ async def test_route_request_forwards_mock_params_when_opted_in(monkeypatch):
     """End-to-end through ``route_request``: with the opt-in set the param
     reaches the router, which is what makes a fallback drill possible."""
     import litellm.proxy.proxy_server as proxy_server
-
     from litellm.proxy.route_llm_request import MOCK_TESTING_CONFIG_KEY
 
     monkeypatch.setattr(
@@ -775,9 +771,11 @@ async def test_route_request_realtime_wildcard_model_resolves_credentials(
     POST /realtime/client_secrets with a request model like openai/gpt-realtime
     must match an openai/* deployment and forward its api_key upstream.
     """
-    import httpx
-    import litellm
     from unittest.mock import AsyncMock, patch
+
+    import httpx
+
+    import litellm
 
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
@@ -813,9 +811,11 @@ async def test_route_request_realtime_team_scoped_model_resolves_credentials(
     Team-scoped deployments (team_public_model_name) must be selected when
     user_api_key_team_id is present, same as /chat/completions.
     """
-    import httpx
-    import litellm
     from unittest.mock import AsyncMock, patch
+
+    import httpx
+
+    import litellm
 
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
@@ -859,9 +859,11 @@ async def test_route_request_realtime_litellm_credential_name_resolves_api_key(
     litellm_credential_name on a wildcard deployment must resolve to the stored
     api_key when routing acreate_realtime_client_secret through the router.
     """
-    import httpx
-    import litellm
     from unittest.mock import AsyncMock, patch
+
+    import httpx
+
+    import litellm
 
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
@@ -894,9 +896,9 @@ async def test_route_request_realtime_unresolvable_model_raises_not_found(
     An unknown model must not silently fall through to litellm with an empty
     OPENAI_API_KEY env var.
     """
-    import litellm
     from unittest.mock import AsyncMock, patch
 
+    import litellm
     from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
@@ -926,9 +928,11 @@ async def test_route_request_realtime_calls_resolves_api_base(monkeypatch):
     non-default (self-hosted / proxied) OpenAI endpoint is honored, instead of
     defaulting to https://api.openai.com.
     """
-    import httpx
-    import litellm
     from unittest.mock import AsyncMock, patch
+
+    import httpx
+
+    import litellm
 
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_BASE", raising=False)
@@ -969,9 +973,11 @@ async def test_route_request_realtime_transcription_session_resolves_credentials
     /realtime/transcription_sessions must resolve credentials through the router
     (wildcard deployment) rather than falling back to an empty OPENAI_API_KEY.
     """
-    import httpx
-    import litellm
     from unittest.mock import AsyncMock, patch
+
+    import httpx
+
+    import litellm
 
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
@@ -1399,7 +1405,9 @@ async def test_route_request_applies_override_fallbacks_when_request_carries_cre
 @pytest.mark.parametrize(
     "router_only_setting",
     [
-        pytest.param({"model_group_retry_policy": {"gpt-4": {"TimeoutErrorRetries": 1}}}, id="model-group-retry-policy"),
+        pytest.param(
+            {"model_group_retry_policy": {"gpt-4": {"TimeoutErrorRetries": 1}}}, id="model-group-retry-policy"
+        ),
         pytest.param({"context_window_fallbacks": [{"gpt-4": ["gpt-3.5-turbo"]}]}, id="context-window-fallbacks"),
         pytest.param({"content_policy_fallbacks": [{"gpt-4": ["gpt-3.5-turbo"]}]}, id="content-policy-fallbacks"),
     ],
@@ -2102,10 +2110,11 @@ async def test_route_request_read_through_disabled_without_store_model_in_db(mon
 
 @pytest.mark.asyncio
 async def test_route_request_read_through_supplies_db_model_default_for_missing_param(monkeypatch):
-    import litellm
-    import litellm.proxy.proxy_server as proxy_server
     from types import SimpleNamespace
     from unittest.mock import AsyncMock, patch
+
+    import litellm
+    import litellm.proxy.proxy_server as proxy_server
 
     model_name = "e2e-db-only-max-tokens-default"
     router = litellm.Router(
@@ -2545,7 +2554,34 @@ def _mock_deployment(model_name: str, **deployment_limits: int) -> dict[str, obj
     }
 
 
+async def _settle_router_accounting() -> None:
+    try:
+        await GLOBAL_LOGGING_WORKER.flush()
+    finally:
+        await GLOBAL_LOGGING_WORKER.stop()
+    while pending := {task for task in asyncio.all_tasks() - {asyncio.current_task()} if not _is_periodic_sync(task)}:
+        _, still_running = await asyncio.wait(pending, timeout=5)
+        assert not still_running, still_running
+
+
+def _is_periodic_sync(task: asyncio.Task[object]) -> bool:
+    return task.get_coro().__qualname__.endswith(".periodic_sync_in_memory_spend_with_redis")
+
+
 async def _user_config_request_outcome(
+    redis_port: int | None,
+    routing_settings: Mapping[str, object],
+    deployment_limits: Mapping[str, int],
+    logging_obj: LiteLLMLoggingObj | None,
+) -> str:
+    outcome: Final = await _unsettled_user_config_request_outcome(
+        redis_port, routing_settings, deployment_limits, logging_obj
+    )
+    await _settle_router_accounting()
+    return outcome
+
+
+async def _unsettled_user_config_request_outcome(
     redis_port: int | None,
     routing_settings: Mapping[str, object],
     deployment_limits: Mapping[str, int],
@@ -2566,8 +2602,6 @@ async def _user_config_request_outcome(
         await (await route_request(data, None, None, "acompletion"))
     except (litellm.RateLimitError, RouterRateLimitError):
         return "429"
-    finally:
-        await asyncio.sleep(0.3)
     return "200"
 
 
@@ -2606,7 +2640,7 @@ async def _proxy_router_outcomes(
         except (litellm.RateLimitError, RouterRateLimitError):
             return "429"
         finally:
-            await asyncio.sleep(0.3)
+            await _settle_router_accounting()
         return "200"
 
     try:
@@ -2636,7 +2670,9 @@ async def test_a_user_config_adaptive_request_answers_with_the_model_it_picked()
                 },
                 {
                     **_mock_deployment("smart"),
-                    "model_info": {"adaptive_router_preferences": {"quality_tier": 3, "strengths": ["code_generation"]}},
+                    "model_info": {
+                        "adaptive_router_preferences": {"quality_tier": 3, "strengths": ["code_generation"]}
+                    },
                 },
             ]
         },
@@ -2700,16 +2736,21 @@ async def test_concurrent_user_config_requests_each_count_once_against_the_tpm_l
     tpm_for_three_requests: Final = await _tpm_for_three_requests()
 
     def request() -> Coroutine[None, None, str]:
-        return _user_config_request_outcome(
+        return _unsettled_user_config_request_outcome(
             fake_redis_port,
             {"routing_strategy": "usage-based-routing-v2"},
             {"tpm": tpm_for_three_requests},
             _proxy_logging_obj() if arrives_with_logging_obj else None,
         )
 
+    async def settled(*requests: Coroutine[None, None, str]) -> list[str]:
+        outcomes: Final = await asyncio.gather(*requests)
+        await _settle_router_accounting()
+        return outcomes
+
     await _wait_out_a_rate_limit_minute_rollover()
-    concurrent_outcomes: Final = await asyncio.gather(request(), request())
-    later_outcomes: Final = [await request() for _ in range(2)]
+    concurrent_outcomes: Final = await settled(request(), request())
+    later_outcomes: Final = [*(await settled(request())), *(await settled(request()))]
 
     assert [*concurrent_outcomes, *later_outcomes] == ["200", "200", "200", "429"]
 
@@ -2717,12 +2758,13 @@ async def test_concurrent_user_config_requests_each_count_once_against_the_tpm_l
 @pytest.mark.asyncio
 async def test_overlapping_user_config_requests_share_one_rpm_limit(fake_redis_port: int) -> None:
     def request() -> Coroutine[None, None, str]:
-        return _user_config_request_outcome(
+        return _unsettled_user_config_request_outcome(
             fake_redis_port, {"routing_strategy": "usage-based-routing-v2"}, {"rpm": 2}, _proxy_logging_obj()
         )
 
     await _wait_out_a_rate_limit_minute_rollover()
     outcomes: Final = await asyncio.gather(*(request() for _ in range(4)))
+    await _settle_router_accounting()
 
     assert outcomes.count("200") <= 2, outcomes
     assert "429" in outcomes, outcomes
@@ -2747,13 +2789,14 @@ async def test_a_proxy_router_on_the_same_strategy_leaves_the_user_config_limit_
     async def outcomes() -> list[str]:
         first_instance: Final = [await request() for _ in range(2)]
         user_config_routers.clear()
+        await _settle_router_accounting()
         second_instance: Final = [await request() for _ in range(3)]
         return [*first_instance, *second_instance]
 
     await _wait_out_a_rate_limit_minute_rollover()
     alone: Final = await outcomes()
     user_config_routers.clear()
-    await asyncio.sleep(0.3)
+    await _settle_router_accounting()
     redis.Redis(host="127.0.0.1", port=fake_redis_port).flushall()
     proxy_router: Final = litellm.Router(
         routing_strategy=routing_strategy,
@@ -2781,7 +2824,7 @@ async def test_user_config_requests_stay_under_the_proxy_provider_budget(
     )
     try:
         await proxy_router.acompletion(model="proxy-model", messages=[{"role": "user", "content": "hi"}])
-        await asyncio.sleep(0.3)
+        await _settle_router_accounting()
         with pytest.raises(ValueError, match=RouterErrors.no_deployments_with_provider_budget_routing.value):
             await _user_config_request_outcome(None, user_config_settings, {}, _proxy_logging_obj())
     finally:
@@ -3092,3 +3135,47 @@ def test_fallback_probe_skips_only_a_loaded_model_that_refuses_the_route() -> No
     assert skipped("embed-only") is True
     assert skipped("chat-fallback") is False
     assert skipped("added-on-another-worker") is False
+
+
+def _router_answering_hi() -> "litellm.Router":
+    import litellm
+
+    return litellm.Router(
+        model_list=[{"model_name": "g", "litellm_params": {"model": "openai/gpt-5.4-nano", "mock_response": "hi"}}]
+    )
+
+
+@pytest.mark.parametrize("flag", ["stream", "background"])
+@pytest.mark.asyncio
+async def test_a_request_a_hook_made_stream_or_run_in_the_background_is_refused_under_a_body_total_timeout(
+    flag: str,
+) -> None:
+    from litellm.litellm_core_utils.total_deadline import TotalTimeoutNotApplicable, total_deadline
+
+    async with total_deadline(60, from_body=True):
+        with pytest.raises(TotalTimeoutNotApplicable):
+            await route_request(
+                data={"model": "g", "messages": [{"role": "user", "content": "hi"}], flag: True},
+                llm_router=_router_answering_hi(),
+                user_model=None,
+                route_type="acompletion",
+            )
+
+
+@pytest.mark.asyncio
+async def test_a_request_a_hook_turned_streaming_runs_unbounded_under_a_header_total_timeout() -> None:
+    from litellm.litellm_core_utils.total_deadline import current_total_deadline, total_deadline
+
+    async with total_deadline(60, from_body=False):
+        llm_call: Final = await route_request(
+            data={"model": "g", "messages": [{"role": "user", "content": "hi"}], "stream": True},
+            llm_router=_router_answering_hi(),
+            user_model=None,
+            route_type="acompletion",
+        )
+        stream: Final = await llm_call
+        chunks: Final = [chunk async for chunk in stream]
+        deadline: Final = current_total_deadline()
+
+    assert chunks
+    assert deadline is not None and deadline.allows_wait(10**9)

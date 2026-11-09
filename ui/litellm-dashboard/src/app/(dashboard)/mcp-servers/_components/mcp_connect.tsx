@@ -23,6 +23,8 @@ import {
 } from "lucide-react";
 import { getGatewayBaseUrl, getProxyBaseUrl } from "@/components/networking";
 import { copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
+import { productNames } from "@/i18n/untranslated/productNames";
+import { codeSamples } from "@/i18n/untranslated/codeSamples";
 
 interface CodeBlockProps {
   code: string;
@@ -354,7 +356,7 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
           icon={<Code className="text-info" size={16} />}
           titleKey="mcpServers.connect.implementationExampleCard.title"
           description={t("mcpServers.connect.openaiTab.exampleDescription")}
-          serverName="Zapier Gmail"
+          serverName={codeSamples.mcpServers.exampleServerName}
           accessGroups={["dev-group"]}
         >
           <CodeBlock
@@ -427,7 +429,7 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
                 icon={<Code className="text-purple-600 dark:text-purple-400" size={16} />}
                 titleKey="mcpServers.connect.cursorTab.configurationCard.title"
                 description={t("mcpServers.connect.cursorTab.configurationCard.description")}
-                serverName="Zapier Gmail"
+                serverName={codeSamples.mcpServers.exampleServerName}
                 accessGroups={["dev-group"]}
               >
                 <CodeBlock
@@ -524,25 +526,25 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
               <TabsTrigger value="openai" className="flex-none px-6 py-3">
                 <span className="flex items-center gap-2 font-medium">
                   <Code size={18} />
-                  OpenAI API
+                  {productNames.openAIApi}
                 </span>
               </TabsTrigger>
               <TabsTrigger value="litellm" className="flex-none px-6 py-3">
                 <span className="flex items-center gap-2 font-medium">
                   <Zap size={18} />
-                  LiteLLM Proxy
+                  {productNames.liteLLMProxy}
                 </span>
               </TabsTrigger>
               <TabsTrigger value="cursor" className="flex-none px-6 py-3">
                 <span className="flex items-center gap-2 font-medium">
                   <Terminal size={18} />
-                  Cursor
+                  {productNames.cursor}
                 </span>
               </TabsTrigger>
               <TabsTrigger value="http" className="flex-none px-6 py-3">
                 <span className="flex items-center gap-2 font-medium">
                   <Globe size={18} />
-                  Streamable HTTP
+                  {productNames.streamableHttp}
                 </span>
               </TabsTrigger>
             </div>
