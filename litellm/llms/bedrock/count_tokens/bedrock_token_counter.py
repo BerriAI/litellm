@@ -87,6 +87,8 @@ def _mantle_retry_outcome(
     match runtime, mantle:
         case CountTokensFailure(status_code=400), CountTokensFailure(status_code=404) if carried_edits:
             return runtime
+        case CountTokensFailure(), CountTokensFailure(status_code=mantle_status) if mantle_status >= 500:
+            return runtime
         case _:
             return mantle
 
