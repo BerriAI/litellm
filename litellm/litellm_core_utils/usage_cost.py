@@ -19,7 +19,7 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging
 
 _CHAT_USAGE: Final[TypeAdapter[Usage | None]] = TypeAdapter(Usage | None)
-_WIRE_BODY: Final = TypeAdapter(Mapping[str, object])
+_USAGE_MAPPING: Final = TypeAdapter(Mapping[str, object])
 _WIRE_TARGET: Final[TypeAdapter[dict[str, object]]] = TypeAdapter(InstanceOf[dict[str, object]])
 _COST: Final[TypeAdapter[float | None]] = TypeAdapter(float | None, config=ConfigDict(strict=True))
 
@@ -91,14 +91,41 @@ class ResponsesUsageCostStamper(UsageCostStamper):
 
 
 class MessagesUsageCostStamper(UsageCostStamper):
-    def __init__(self, response: object) -> None:
-        self.response = _WIRE_TARGET.validate_python(response)
+    def __init__(self, response: dict[str, object]) -> None:  # mutable-ok: wire body is stamped in place [LIT001]
+        self.response = response
+
+    @classmethod
+    def for_response(cls, response: object) -> MessagesUsageCostStamper | None:
+        if not isinstance(response, dict):
+            return None
+        return cls(_WIRE_TARGET.validate_python(response))
 
     def stamp(self, cost: float) -> None:
-        body: Final = _WIRE_BODY.validate_python(self.response)
-        usage: Final = body.get("usage")
+        usage: Final = self.response.get("usage")
         if isinstance(usage, Mapping):
-            self.response["usage"] = {**usage, "cost": cost}
+            self.response["usage"] = {**_USAGE_MAPPING.validate_python(usage), "cost": cost}
+
+    def stamp_calculated(
+        self,
+        logging_obj: Logging,
+        cache_hit: bool | None = None,
+        *,
+        billing_body: Mapping[str, object] | None = None,
+    ) -> bool:
+        try:
+            body: Final = self.response if billing_body is None else billing_body
+            if body.get("type") != "message" or not isinstance(body.get("usage"), Mapping):
+                return False
+            priced: Final = logging_obj.normalize_endpoint_logging_result(body)
+            cost: Final = validated_usage_cost(logging_obj.response_cost_calculator(result=priced, cache_hit=cache_hit))
+            stamp_usage_cost(priced, cost)
+            if cost is not None:
+                self.stamp(cost)
+            if isinstance(priced, ModelResponse):
+                logging_obj.record_bridged_model_response(priced)
+        except Exception:  # noqa: BLE001  # optional billing metadata must not fail a completed response or stream
+            return False
+        return cost is not None
 
 
 def stamp_usage_cost(response: object, cost: float | None) -> None:
@@ -110,11 +137,9 @@ def stamp_usage_cost(response: object, cost: float | None) -> None:
     if isinstance(response, ResponsesAPIResponse):
         ResponsesUsageCostStamper(response).stamp(float(cost))
         return
-    if not isinstance(response, dict):
-        return
-    wire_body: Final = _WIRE_BODY.validate_python(response)
-    if wire_body.get("type") in ("message", "message_delta"):
-        MessagesUsageCostStamper(_WIRE_TARGET.validate_python(response)).stamp(float(cost))
+    stamper: Final = MessagesUsageCostStamper.for_response(response)
+    if stamper is not None and stamper.response.get("type") in ("message", "message_delta"):
+        stamper.stamp(float(cost))
 
 
 def stamp_responses_usage_cost(response_obj: ResponsesAPIResponse | None, logging_obj: Logging | None) -> None:

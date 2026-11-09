@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final, Protocol, runtime_checkable
 
 import httpx
-from pydantic import ConfigDict, TypeAdapter, ValidationError
+from pydantic import TypeAdapter, ValidationError
 from typing_extensions import TypedDict
 
 from litellm.constants import (
@@ -17,7 +17,7 @@ from litellm.constants import (
 from litellm.litellm_core_utils.core_helpers import process_response_headers
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-from litellm.litellm_core_utils.usage_cost import stamp_usage_cost, validated_usage_cost
+from litellm.litellm_core_utils.usage_cost import MessagesUsageCostStamper
 from litellm.llms.anthropic.common_utils import ANTHROPIC_ERROR_STATUS_CODE_MAP
 from litellm.llms.anthropic.messages.native.utils import (
     INCOMPLETE_STREAM_ERROR_MESSAGE,
@@ -31,7 +31,7 @@ from litellm.proxy.pass_through_endpoints.success_handler import (
 )
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
 from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
-from litellm.types.utils import GenericStreamingChunk, ModelResponse, ModelResponseStream
+from litellm.types.utils import GenericStreamingChunk, ModelResponseStream
 
 if TYPE_CHECKING:
     from litellm.llms.anthropic.messages.safeguards import SafeguardsEvaluator
@@ -453,12 +453,6 @@ def _usage_cost_sse_bytes(chunk: object) -> bytes:
     return anthropic_sse_frame(_SSE_EVENT.validate_python(chunk))
 
 
-_MESSAGES_STREAM: Final[TypeAdapter[Iterator[object] | AsyncIterator[object]]] = TypeAdapter(
-    Iterator[object] | AsyncIterator[object], config=ConfigDict(arbitrary_types_allowed=True)
-)
-_MESSAGES_LOGGING: Final = TypeAdapter(LiteLLMLoggingObj, config=ConfigDict(arbitrary_types_allowed=True))
-
-
 class UsageCostMessagesStream:
     def __init__(self, stream: Iterator[object] | AsyncIterator[object], logging_obj: LiteLLMLoggingObj) -> None:
         self.stream = stream
@@ -467,10 +461,6 @@ class UsageCostMessagesStream:
         self.pending = b""
         self.frames = self._iterate()
         self.sync_frames = self._iterate_sync()
-
-    @classmethod
-    def for_request(cls, stream: object, logging_obj: object) -> "UsageCostMessagesStream":
-        return cls(_MESSAGES_STREAM.validate_python(stream), _MESSAGES_LOGGING.validate_python(logging_obj))
 
     def __iter__(self) -> "UsageCostMessagesStream":
         return self
@@ -485,7 +475,7 @@ class UsageCostMessagesStream:
             close()
 
     def __getattr__(self, name: str) -> object:
-        return _DECODED_SSE_DATA.validate_python(getattr(self.stream, name))
+        return getattr(self.stream, name)
 
     def __aiter__(self) -> "UsageCostMessagesStream":
         return self
@@ -520,17 +510,9 @@ class UsageCostMessagesStream:
                 **_SSE_EVENT.validate_python(usage),
             },
         }
-        try:
-            priced: Final = self.logging_obj.normalize_endpoint_logging_result(body)
-            cost: Final = validated_usage_cost(self.logging_obj.response_cost_calculator(result=priced))
-        except Exception:  # noqa: BLE001  # optional billing metadata must not interrupt a completed stream
-            return frame
-        stamp_usage_cost(priced, cost)
-        if isinstance(priced, ModelResponse):
-            self.logging_obj.record_bridged_model_response(priced)
         stamped: Final = dict(event)
-        stamp_usage_cost(stamped, cost)
-        return anthropic_sse_frame(stamped)
+        billed: Final = MessagesUsageCostStamper(stamped).stamp_calculated(self.logging_obj, billing_body=body)
+        return anthropic_sse_frame(stamped) if billed else frame
 
     def _frames(self, chunk: object) -> Iterator[bytes]:
         self.pending += _usage_cost_sse_bytes(chunk)

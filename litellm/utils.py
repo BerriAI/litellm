@@ -2527,15 +2527,6 @@ def client(original_function):
 
             streaming_requested: Final = _returns_requested_stream(kwargs, call_type, result)
             if streaming_requested or _is_converted_stream_result(result):
-                if call_type == CallTypes.anthropic_messages.value:
-                    from litellm.llms.anthropic.messages.native.streaming_iterator import UsageCostMessagesStream
-
-                    result = (  # rebind-ok: decorate the returned Messages stream without changing its public contract
-                        UsageCostMessagesStream.for_request(
-                            TypeAdapter(object).validate_python(result),
-                            TypeAdapter(object).validate_python(logging_obj),
-                        )
-                    )
                 logging_obj.stream = True
                 logging_obj.model_call_details["stream"] = True
                 if not streaming_requested:
