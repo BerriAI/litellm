@@ -4,7 +4,7 @@ use litellm_db::{AuthRead, AuthSpend, DatabasePools, DatabaseSettings};
 use litellm_host_python::{Pythonized, ready_future, run_async_value};
 use litellm_secret_value::SecretValue;
 use pyo3::{
-    exceptions::{PyRuntimeError, PyValueError},
+    exceptions::{PyOSError, PyRuntimeError, PyValueError},
     prelude::*,
     types::PyNone,
 };
@@ -15,6 +15,9 @@ pub(crate) struct NativeDatabase {
 }
 
 fn db_error(error: litellm_db::Error) -> PyErr {
+    if error.is_database_failure() {
+        return PyOSError::new_err(litellm_error::Report::new(&error).to_string());
+    }
     match error {
         litellm_db::Error::InvalidSetting(_) | litellm_db::Error::InvalidAuthArguments => {
             PyValueError::new_err(litellm_error::Report::new(&error).to_string())
@@ -138,9 +141,10 @@ impl NativeDatabase {
             .ok_or_else(|| db_error(litellm_db::Error::NotConfigured))?;
         run_async_value(py, async move {
             let mut connection = pools.acquire(writer).await.map_err(db_error)?;
-            let rows = litellm_db::auth_read(&mut *connection, kind, &ids)
-                .await
-                .map_err(db_error)?;
+            let rows =
+                litellm_db::auth_read(&mut *connection, kind, &ids, pools.persistent(writer))
+                    .await
+                    .map_err(db_error)?;
             Ok(Pythonized(
                 rows.into_iter().map(|row| row.data).collect::<Vec<_>>(),
             ))
@@ -162,7 +166,7 @@ impl NativeDatabase {
             .ok_or_else(|| db_error(litellm_db::Error::NotConfigured))?;
         run_async_value(py, async move {
             let mut connection = pools.acquire(false).await.map_err(db_error)?;
-            litellm_db::auth_spend(&mut *connection, kind, &id)
+            litellm_db::auth_spend(&mut *connection, kind, &id, pools.persistent(false))
                 .await
                 .map_err(db_error)
         })

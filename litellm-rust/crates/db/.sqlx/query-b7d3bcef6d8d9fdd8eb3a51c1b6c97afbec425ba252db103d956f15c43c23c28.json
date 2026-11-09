@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT jsonb_build_object('agent_id', a.agent_id) AS \"data!: AuthData\"\nFROM \"LiteLLM_AgentsTable\" a\nWHERE a.agent_access_groups && $1::text[]\nORDER BY a.agent_id\n",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "data!: AuthData",
+        "type_info": "Jsonb",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "TextArray"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "b7d3bcef6d8d9fdd8eb3a51c1b6c97afbec425ba252db103d956f15c43c23c28"
+}

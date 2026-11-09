@@ -1,4 +1,4 @@
-use crate::Error;
+use crate::{Error, executor::StatementPersistence};
 use sqlx::{Executor, Postgres};
 
 #[derive(Clone, PartialEq, serde::Serialize, sqlx::Type, veil::Redact)]
@@ -29,12 +29,18 @@ pub enum AuthRead {
     ObjectPermission,
     #[strum(serialize = "access_group")]
     AccessGroup,
+    #[strum(serialize = "managed_vector_store")]
+    ManagedVectorStore,
     #[strum(serialize = "tag")]
     Tag,
     #[strum(serialize = "model_access_group")]
     ModelAccessGroup,
     #[strum(serialize = "agent")]
     Agent,
+    #[strum(serialize = "agent_name")]
+    AgentName,
+    #[strum(serialize = "agent_access_group")]
+    AgentAccessGroup,
     #[strum(serialize = "retired_agent")]
     RetiredAgent,
     #[strum(serialize = "key")]
@@ -119,7 +125,12 @@ pub async fn auth_read<'e>(
     executor: impl Executor<'e, Database = Postgres>,
     kind: AuthRead,
     ids: &[String],
+    persistent: bool,
 ) -> Result<Vec<AuthRow>, Error> {
+    let executor = StatementPersistence {
+        executor,
+        persistent,
+    };
     if ids.len() > 1000 || ids.iter().any(|id| id.len() > 65536) {
         return Err(Error::InvalidAuthArguments);
     }
@@ -164,6 +175,11 @@ pub async fn auth_read<'e>(
                 .fetch_all(executor)
                 .await?
         }
+        AuthRead::ManagedVectorStore => {
+            sqlx::query_file_as!(AuthRow, "queries/auth/managed_vector_store.sql", ids)
+                .fetch_all(executor)
+                .await?
+        }
         AuthRead::Tag => {
             sqlx::query_file_as!(AuthRow, "queries/auth/tag.sql", ids)
                 .fetch_all(executor)
@@ -176,6 +192,16 @@ pub async fn auth_read<'e>(
         }
         AuthRead::Agent => {
             sqlx::query_file_as!(AuthRow, "queries/auth/agent.sql", ids)
+                .fetch_all(executor)
+                .await?
+        }
+        AuthRead::AgentName => {
+            sqlx::query_file_as!(AuthRow, "queries/auth/agent_name.sql", ids)
+                .fetch_all(executor)
+                .await?
+        }
+        AuthRead::AgentAccessGroup => {
+            sqlx::query_file_as!(AuthRow, "queries/auth/agent_access_group.sql", ids)
                 .fetch_all(executor)
                 .await?
         }
@@ -333,9 +359,8 @@ pub async fn auth_read<'e>(
             exact(ids, 3)?;
             let start = chrono::DateTime::parse_from_rfc3339(&ids[2])
                 .map(|value| value.naive_utc())
-                .or_else(|_| {
-                    chrono::NaiveDateTime::parse_from_str(&ids[2], "%Y-%m-%dT%H:%M:%S%.f")
-                })?;
+                .or_else(|_| chrono::NaiveDateTime::parse_from_str(&ids[2], "%Y-%m-%dT%H:%M:%S%.f"))
+                .map_err(|_| Error::InvalidAuthArguments)?;
             match entity(&ids[0])? {
                 "key" => {
                     hashed_key(&ids[1])?;
@@ -368,7 +393,12 @@ pub async fn auth_spend<'e>(
     executor: impl Executor<'e, Database = Postgres>,
     kind: AuthSpend,
     id: &str,
+    persistent: bool,
 ) -> Result<Option<f64>, Error> {
+    let executor = StatementPersistence {
+        executor,
+        persistent,
+    };
     if id.len() > 65536 {
         return Err(Error::InvalidAuthArguments);
     }
@@ -447,6 +477,8 @@ mod tests {
     }
 
     #[rstest]
+    #[case::vector_store(AuthRead::ManagedVectorStore, &["auth-vector"], "/litellm_params", json!({"api_base":"https://example.com"}))]
+    #[case::vector_store_nullable(AuthRead::ManagedVectorStore, &["auth-vector"], "/vector_store_metadata", json!(null))]
     #[case::user(AuthRead::User, &["auth-u"], "/organization_memberships/0/user_role", json!("org_admin"))]
     #[case::team(AuthRead::Team, &["auth-team"], "/litellm_model_table/model_aliases/alias", json!("actual"))]
     #[case::team_null_lists(AuthRead::Team, &["auth-team-empty"], "/models", json!([]))]
@@ -461,6 +493,8 @@ mod tests {
     #[case::model_access_group(AuthRead::ModelAccessGroup, &["auth-model-group"], "/litellm_budget_table/max_budget", json!(0.0))]
     #[case::member(AuthRead::Member, &["auth-u","auth-team"], "/litellm_budget_table/rpm_limit", json!(33))]
     #[case::agent(AuthRead::Agent, &["auth-agent"], "/identity/active", json!(false))]
+    #[case::agent_name(AuthRead::AgentName, &["Auth Agent"], "/identity/active", json!(false))]
+    #[case::agent_group(AuthRead::AgentAccessGroup, &["other-group", "auth-group"], "", json!({"agent_id":"auth-agent"}))]
     #[case::retired_agent(AuthRead::RetiredAgent, &["auth-retired-agent"], "/original_agent_id", json!("auth-retired-agent"))]
     #[case::agent_identity(AuthRead::AgentIdentity, &["microsoft_entra","auth-tenant","auth-client"], "/required_roles", json!([]))]
     #[case::retired_agent_identity(AuthRead::RetiredAgentIdentity, &["microsoft_entra","auth-tenant","auth-retired-client"], "/binding_id", json!("auth-retired-binding"))]
@@ -487,7 +521,7 @@ mod tests {
     ) -> Result<(), Box<dyn StdError>> {
         let pool = database_pool?;
         let mut tx = seeded(&pool).await?;
-        let rows = auth_read(&mut *tx, kind, &strings(ids)).await?;
+        let rows = auth_read(&mut *tx, kind, &strings(ids), false).await?;
         assert_eq!(rows.len(), 1);
         let actual = rows[0].data.0.pointer(pointer).expect("projected field");
         if expected.is_number() {
@@ -513,7 +547,13 @@ mod tests {
     ) -> Result<(), Box<dyn StdError>> {
         let pool = database_pool?;
         let mut tx = seeded(&pool).await?;
-        let rows = auth_read(&mut *tx, AuthRead::Key, &[token.to_string().repeat(64)]).await?;
+        let rows = auth_read(
+            &mut *tx,
+            AuthRead::Key,
+            &[token.to_string().repeat(64)],
+            false,
+        )
+        .await?;
         assert_eq!(rows.len(), usize::from(found));
         if !found {
             return Ok(());
@@ -541,7 +581,7 @@ mod tests {
     ) -> Result<(), Box<dyn StdError>> {
         let pool = database_pool?;
         let mut tx = seeded(&pool).await?;
-        let rows = auth_read(&mut *tx, AuthRead::Key, &["e".repeat(64)]).await?;
+        let rows = auth_read(&mut *tx, AuthRead::Key, &["e".repeat(64)], false).await?;
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].data.0["team_models"], Value::Null);
         assert_eq!(rows[0].data.0["team_blocked"], Value::Null);
@@ -559,17 +599,24 @@ mod tests {
         let pool = database_pool?;
         let mut tx = seeded(&pool).await?;
         let refs = json!(["auth-u", "auth-team", "auth-u", "auth-org", "auth-project"]).to_string();
-        let rows = auth_read(&mut *tx, AuthRead::Prefetch, &[refs]).await?;
-        let user = auth_read(&mut *tx, AuthRead::User, &strings(&["auth-u"])).await?;
-        let team = auth_read(&mut *tx, AuthRead::Team, &strings(&["auth-team"])).await?;
+        let rows = auth_read(&mut *tx, AuthRead::Prefetch, &[refs], false).await?;
+        let user = auth_read(&mut *tx, AuthRead::User, &strings(&["auth-u"]), false).await?;
+        let team = auth_read(&mut *tx, AuthRead::Team, &strings(&["auth-team"]), false).await?;
         let member = auth_read(
             &mut *tx,
             AuthRead::Member,
             &strings(&["auth-u", "auth-team"]),
+            false,
         )
         .await?;
-        let org = auth_read(&mut *tx, AuthRead::Org, &strings(&["auth-org"])).await?;
-        let project = auth_read(&mut *tx, AuthRead::Project, &strings(&["auth-project"])).await?;
+        let org = auth_read(&mut *tx, AuthRead::Org, &strings(&["auth-org"]), false).await?;
+        let project = auth_read(
+            &mut *tx,
+            AuthRead::Project,
+            &strings(&["auth-project"]),
+            false,
+        )
+        .await?;
         assert_eq!(rows.len(), 1);
         assert_eq!(
             rows[0].data.0,
@@ -583,6 +630,7 @@ mod tests {
             &mut *tx,
             AuthRead::Prefetch,
             &[json!([null, null, null, null, null]).to_string()],
+            false,
         )
         .await?;
         assert_eq!(
@@ -604,16 +652,22 @@ mod tests {
             &mut *tx,
             AuthRead::User,
             &strings(&["auth-u", "missing", "auth-u"]),
+            false,
         )
         .await?;
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].data.0["user_id"], "auth-u");
-        assert!(auth_read(&mut *tx, AuthRead::User, &[]).await?.is_empty());
+        assert!(
+            auth_read(&mut *tx, AuthRead::User, &[], false)
+                .await?
+                .is_empty()
+        );
         assert!(
             auth_read(
                 &mut *tx,
                 AuthRead::Member,
-                &strings(&["auth-other", "auth-team"])
+                &strings(&["auth-other", "auth-team"]),
+                false
             )
             .await?
             .is_empty()
@@ -622,7 +676,8 @@ mod tests {
             auth_read(
                 &mut *tx,
                 AuthRead::AgentIdentity,
-                &strings(&["microsoft_entra", "other-tenant", "auth-client"])
+                &strings(&["microsoft_entra", "other-tenant", "auth-client"]),
+                false
             )
             .await?
             .is_empty()
@@ -631,15 +686,26 @@ mod tests {
             auth_read(
                 &mut *tx,
                 AuthRead::UserEmail,
-                &strings(&["test%@example.com"])
+                &strings(&["test%@example.com"]),
+                false
             )
             .await?
             .is_empty()
         );
         assert!(
-            auth_read(&mut *tx, AuthRead::User, &strings(&["' OR 1=1 --"]))
+            auth_read(&mut *tx, AuthRead::User, &strings(&["' OR 1=1 --"]), false)
                 .await?
                 .is_empty()
+        );
+        assert!(
+            auth_read(
+                &mut *tx,
+                AuthRead::AgentAccessGroup,
+                &strings(&["other-group"]),
+                false
+            )
+            .await?
+            .is_empty()
         );
         Ok(())
     }
@@ -665,13 +731,16 @@ mod tests {
     ) -> Result<(), Box<dyn StdError>> {
         let pool = database_pool?;
         let mut tx = seeded(&pool).await?;
-        assert_eq!(auth_spend(&mut *tx, kind, &id).await?, Some(expected));
+        assert_eq!(
+            auth_spend(&mut *tx, kind, &id, false).await?,
+            Some(expected)
+        );
         let absent = match kind {
             AuthSpend::Key => "f".repeat(64),
             AuthSpend::Member => "missing:missing".into(),
             _ => "missing".into(),
         };
-        assert_eq!(auth_spend(&mut *tx, kind, &absent).await?, None);
+        assert_eq!(auth_spend(&mut *tx, kind, &absent, false).await?, None);
         Ok(())
     }
 
@@ -688,7 +757,7 @@ mod tests {
     ) -> Result<(), Box<dyn StdError>> {
         let pool = database_pool?;
         let mut tx = seeded(&pool).await?;
-        let rows = auth_read(&mut *tx, kind, &ids).await?;
+        let rows = auth_read(&mut *tx, kind, &ids, false).await?;
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].data.0["spend"], expected);
         Ok(())
@@ -711,7 +780,7 @@ mod tests {
             .unwrap();
         pool.close().await;
         assert!(matches!(
-            auth_read(&pool, kind, &ids).await,
+            auth_read(&pool, kind, &ids, false).await,
             Err(crate::Error::InvalidAuthArguments)
         ));
     }
@@ -724,11 +793,11 @@ mod tests {
             .unwrap();
         pool.close().await;
         assert!(matches!(
-            auth_read(&pool, AuthRead::User, &strings(&["id"])).await,
+            auth_read(&pool, AuthRead::User, &strings(&["id"]), false).await,
             Err(crate::Error::Query(sqlx::Error::PoolClosed))
         ));
         assert!(matches!(
-            auth_spend(&pool, AuthSpend::User, "id").await,
+            auth_spend(&pool, AuthSpend::User, "id", false).await,
             Err(crate::Error::Query(sqlx::Error::PoolClosed))
         ));
     }
