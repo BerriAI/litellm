@@ -1,7 +1,6 @@
-import { useTranslation } from "@/i18n/useTranslation";
 import { useTerminology } from "@/contexts/TerminologyContext";
 import React from "react";
-import Image from "next/image";
+import { useTranslation } from "react-i18next";
 import { usePathname } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import {
@@ -10,17 +9,18 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Check, ChevronsUpDown, LayoutGrid, MessageCircle } from "lucide-react";
+import { Check, ChevronDown, ChevronsUpDown } from "lucide-react";
+import { useSidebar } from "@/components/shared/Sidebar";
 import { usePluginMode } from "@/contexts/PluginModeContext";
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import { uiHref } from "@/utils/uiHref";
 import { cn } from "@/lib/cva.config";
-import moyaiHead from "../../../public/assets/moyai/moyai-head.svg";
+import i18n from "@/i18n/i18n";
+import { productNames } from "@/i18n/untranslated/productNames";
 
 const GATEWAY = "ai-gateway";
 const CHAT = "chat";
 const MOYAI = "moyai";
-type WorkspaceIconName = typeof GATEWAY | typeof CHAT | typeof MOYAI;
 
 function isWorkspaceRoute(pathname: string, workspace: string): boolean {
   const routes = [uiHref(workspace)];
@@ -28,45 +28,15 @@ function isWorkspaceRoute(pathname: string, workspace: string): boolean {
   return routes.some((route) => pathname === route || pathname.startsWith(`${route}/`));
 }
 
-function activeWorkspaceFor(
+function activeWorkspaceLabel(
   isChatRoute: boolean,
   isMoyaiRoute: boolean,
   pluginLabel: string | undefined,
-  labels: { gateway: string; chat: string },
-): { label: string; icon: WorkspaceIconName } {
-  if (isChatRoute) return { label: labels.chat, icon: CHAT };
-  if (isMoyaiRoute) return { label: "Moyai", icon: MOYAI };
-  return { label: pluginLabel ?? labels.gateway, icon: GATEWAY };
-}
-
-function WorkspaceIcon({ workspace }: { workspace: WorkspaceIconName }) {
-  if (workspace === CHAT) {
-    return (
-      <span
-        data-slot="workspace-icon"
-        aria-hidden="true"
-        className="flex size-6 flex-none items-center justify-center rounded-md bg-primary/10 text-primary ring-1 ring-inset ring-primary/15"
-      >
-        <MessageCircle className="size-4" />
-      </span>
-    );
-  }
-  if (workspace === MOYAI) {
-    return (
-      <span data-slot="workspace-icon" aria-hidden="true" className="flex size-6 flex-none items-center justify-center">
-        <Image src={moyaiHead.src} alt="" width={20} height={20} unoptimized className="size-5 object-contain" />
-      </span>
-    );
-  }
-  return (
-    <span
-      data-slot="workspace-icon"
-      aria-hidden="true"
-      className="flex size-6 flex-none items-center justify-center rounded-md bg-muted text-muted-foreground"
-    >
-      <LayoutGrid className="size-4" />
-    </span>
-  );
+  gatewayLabel: string,
+): string {
+  if (isChatRoute) return i18n.t("shell.viewSwitcher.chat");
+  if (isMoyaiRoute) return "Moyai";
+  return pluginLabel ?? gatewayLabel;
 }
 
 interface ViewSwitcherItem {
@@ -84,6 +54,7 @@ interface ViewSwitcherProps {
 export default function ViewSwitcher({ className, contentClassName }: ViewSwitcherProps) {
   const { t } = useTranslation();
   const term = useTerminology();
+  const { collapsed } = useSidebar();
   const { mode, setMode, plugins } = usePluginMode();
   const { data: uiSettings } = useUISettings();
   const pathname = usePathname();
@@ -96,12 +67,12 @@ export default function ViewSwitcher({ className, contentClassName }: ViewSwitch
   const isMoyaiRoute = isWorkspaceRoute(normalizedPathname, MOYAI);
   const isStandaloneRoute = isChatRoute || isMoyaiRoute;
 
-  const gatewayLabel = term(t("AI Gateway"));
-  const { label: activeLabel, icon: activeIcon } = activeWorkspaceFor(
+  const gatewayLabel = term(t("shell.viewSwitcher.aiGateway"));
+  const activeLabel = activeWorkspaceLabel(
     isChatRoute,
     isMoyaiRoute,
     plugins.find((p) => p.name === mode)?.display_name,
-    { gateway: gatewayLabel, chat: t("Chat") },
+    gatewayLabel,
   );
 
   const modeEntries = [
@@ -121,19 +92,14 @@ export default function ViewSwitcher({ className, contentClassName }: ViewSwitch
     disabled: !chatEnabled,
     label: (
       <div className="flex w-full items-center justify-between gap-6 py-0.5">
-        <span className="flex items-center gap-2">
-          <WorkspaceIcon workspace={CHAT} />
-          <span className="flex max-w-[220px] flex-col">
-            <span className="font-medium">{t("Chat")}</span>{" "}
-            <span className="text-xs leading-snug text-muted-foreground">
-              {t("Chat UI for using LLMs, MCPs, Agents")}
-            </span>{" "}
-            {!chatEnabled && (
-              <span className="whitespace-normal text-xs leading-snug text-muted-foreground">
-                {t("Admins can enable in Settings")}
-              </span>
-            )}
-          </span>
+        <span className="flex max-w-[220px] flex-col">
+          <span className="font-medium">{t("shell.viewSwitcher.chat")}</span>{" "}
+          <span className="text-xs leading-snug text-muted-foreground">{t("shell.viewSwitcher.chatDescription")}</span>{" "}
+          {!chatEnabled && (
+            <span className="whitespace-normal text-xs leading-snug text-muted-foreground">
+              {t("shell.viewSwitcher.chatDisabled")}
+            </span>
+          )}
         </span>
         {isChatRoute && <Check className="size-4 text-info" />}
       </div>
@@ -146,10 +112,7 @@ export default function ViewSwitcher({ className, contentClassName }: ViewSwitch
       key: e.key,
       label: (
         <div className="flex w-full items-center justify-between gap-6 py-0.5">
-          <span className="flex items-center gap-2">
-            <WorkspaceIcon workspace={GATEWAY} />
-            <span className="font-medium">{e.label}</span>
-          </span>
+          <span className="font-medium">{e.label}</span>
           {!isStandaloneRoute && e.key === mode && <Check className="size-4 text-info" />}
         </div>
       ),
@@ -160,11 +123,10 @@ export default function ViewSwitcher({ className, contentClassName }: ViewSwitch
       key: MOYAI,
       label: (
         <div className="flex w-full items-center justify-between gap-6 py-0.5">
-          <span className="flex items-center gap-2">
-            <WorkspaceIcon workspace={MOYAI} />
-            <span className="flex flex-col">
-              <span className="font-medium">Moyai</span>{" "}
-              <span className="text-xs leading-snug text-muted-foreground">{t("Cloud Coding Agent")}</span>
+          <span className="flex flex-col">
+            <span className="font-medium">{productNames.moyai}</span>{" "}
+            <span className="text-xs leading-snug text-muted-foreground">
+              {t("shell.viewSwitcher.moyaiDescription")}
             </span>
           </span>
           {isMoyaiRoute && <Check className="size-4 text-info" />}
@@ -177,21 +139,32 @@ export default function ViewSwitcher({ className, contentClassName }: ViewSwitch
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
-        aria-label={t("Switch workspace, current: {{workspace}}", { workspace: activeLabel })}
+        aria-label={t("shell.viewSwitcher.trigger", { workspace: activeLabel })}
         render={
           <Button
             type="button"
             variant="outline"
             size="sm"
-            className={cn("max-w-[220px] gap-1.5 pl-1.5 pr-2", className)}
+            title={collapsed ? t("shell.viewSwitcher.trigger", { workspace: activeLabel }) : undefined}
+            className={cn(
+              "max-w-[220px] gap-1.5 px-3 dark:bg-transparent",
+              className,
+              collapsed &&
+                "mx-auto flex size-9 justify-center gap-0 border-sidebar-border p-0 text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
+            )}
           />
         }
       >
-        <WorkspaceIcon workspace={activeIcon} />
-        <span data-slot="workspace-label" className="truncate">
-          {activeLabel}
-        </span>
-        <ChevronsUpDown data-slot="workspace-chevron" className="size-3.5 flex-none text-muted-foreground" />
+        {collapsed ? (
+          <ChevronDown className="size-4 text-muted-foreground" />
+        ) : (
+          <>
+            <span data-slot="workspace-label" className="truncate">
+              {activeLabel}
+            </span>
+            <ChevronsUpDown data-slot="workspace-chevron" className="size-3.5 flex-none text-muted-foreground" />
+          </>
+        )}
       </DropdownMenuTrigger>
       <DropdownMenuContent className={cn("w-auto", contentClassName)}>
         {items.map((item) => (

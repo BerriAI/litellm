@@ -1,7 +1,6 @@
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { I18nextProvider } from "react-i18next";
-import { createDashboardI18n } from "@/i18n";
 import { renderWithProviders } from "../../tests/test-utils";
 import { TerminologyProvider } from "@/contexts/TerminologyContext";
 import Sidebar, { menuGroups, getBreadcrumb } from "./leftnav";
@@ -168,21 +167,6 @@ describe("Sidebar (leftnav)", () => {
     expect(screen.getByText("SI GATEWAY")).toBeInTheDocument();
     expect(screen.getByText("SI Hub")).toBeInTheDocument();
     expect(screen.queryByText("AI Hub")).not.toBeInTheDocument();
-  });
-
-  it("preserves SI terminology in Chinese labels and collapsed navigation titles", () => {
-    uiConfig.data = { admin_ui_disabled: false, use_si_terminology: true };
-    renderWithProviders(
-      <I18nextProvider i18n={createDashboardI18n("zh-CN")}>
-        <TerminologyProvider>
-          <Sidebar collapsed />
-        </TerminologyProvider>
-      </I18nextProvider>,
-    );
-
-    expect(screen.getByText("SI 网关")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "SI 资源中心" })).toHaveAttribute("title", "SI 资源中心");
-    expect(screen.getByRole("link", { name: "SI 资源中心" })).toHaveAttribute("href", "/ui/model-hub-table");
   });
 
   it("should link the logo to the UI home route rather than the proxy origin", () => {
@@ -636,6 +620,14 @@ describe("Sidebar (leftnav)", () => {
     expect(screen.queryByRole("link", { name: /Projects/ })).not.toBeInTheDocument();
   });
 
+  it.each([false, true])("links internal users to Skills with read-only=%s", (isViewOnly) => {
+    mockUseAuthorized.mockReturnValue({ ...teamMemberAuthorization, isViewOnly });
+
+    renderWithProviders(<Sidebar {...defaultProps} />);
+
+    expect(screen.getByRole("link", { name: "Skills Hub" })).toHaveAttribute("href", "/ui/skills");
+  });
+
   it.each([
     { allowlist: ["teams"], visible: false },
     { allowlist: ["teams", "projects"], visible: true },
@@ -664,6 +656,13 @@ describe("Sidebar (leftnav)", () => {
     expect(screen.getByRole("link", { name: /Projects/ })).toHaveAttribute("href", "/ui/projects");
   });
 
+  it.each([false, true])("keeps workspace and Chat discovery available with collapsed=%s", async (collapsed) => {
+    const user = userEvent.setup();
+    renderWithProviders(<Sidebar collapsed={collapsed} />);
+    await user.click(screen.getByRole("button", { name: "Switch workspace, current: AI Gateway" }));
+    expect(await screen.findByRole("menuitem", { name: /^Chat / })).toBeVisible();
+  });
+
   it("marks the nav item for the current route active", () => {
     navState.pathname = "/ui/logs";
     renderWithProviders(<Sidebar {...defaultProps} />);
@@ -675,6 +674,12 @@ describe("Sidebar (leftnav)", () => {
     navState.pathname = "/ui/";
     renderWithProviders(<Sidebar {...defaultProps} />);
     expect(screen.getByRole("link", { name: "Home" })).toHaveAttribute("data-active", "true");
+  });
+
+  it("does not highlight Home when the Aria workspace is active", () => {
+    navState.pathname = "/ui/aria";
+    renderWithProviders(<Sidebar {...defaultProps} />);
+    expect(screen.getByRole("link", { name: "Home" })).not.toHaveAttribute("data-active");
   });
 
   it("expands the parent group of the current nested route and marks the child active", () => {
@@ -696,6 +701,7 @@ describe("Sidebar (leftnav)", () => {
     expectHref("Playground", "/ui/playground");
     expectHref("Models + Endpoints", "/ui/models-and-endpoints");
     expectHref("Usage", "/ui/usage");
+    expectHref("Alerts", "/ui/alerts");
     expectHref("API Reference", "/ui/api-reference");
   });
 
@@ -768,59 +774,5 @@ describe("getBreadcrumb", () => {
 
   it("falls back to a prettified title with no section for unknown routes", () => {
     expect(getBreadcrumb("/ui/some-unknown-page")).toEqual({ section: null, title: "Some Unknown Page" });
-  });
-});
-
-describe("localized navigation", () => {
-  it("translates new navigation labels while preserving their routes and Beta badges", async () => {
-    mockUseAuthorized.mockReset();
-    const instance = createDashboardI18n("zh-CN");
-    renderWithProviders(
-      <I18nextProvider i18n={instance}>
-        <Sidebar collapsed />
-      </I18nextProvider>,
-    );
-
-    const leaderboard = screen.getByRole("link", { name: /模型排行榜/ });
-    expect(leaderboard).toHaveAttribute("href", "/ui/model-insights");
-    expect(leaderboard).toHaveAttribute("title", "模型排行榜");
-    expect(within(leaderboard).getByText("Beta")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "成本优化", exact: true })).not.toHaveTextContent("Beta");
-
-    await act(async () => {
-      await instance.changeLanguage("en");
-    });
-    expect(screen.getByRole("link", { name: /Model Leaderboard/ })).toHaveAttribute("title", "Model Leaderboard");
-  });
-
-  it("changes visible and collapsed labels while retaining routes and permission filtering", async () => {
-    const internalUser = {
-      userId: "test-user-id",
-      accessToken: "test-access-token",
-      userRole: "internal",
-      isViewOnly: false,
-      token: "test-token",
-      userEmail: "test@example.com",
-      premiumUser: false,
-      disabledPersonalKeyCreation: false,
-      showSSOBanner: false,
-    };
-    mockUseAuthorized.mockReturnValue(internalUser);
-    const instance = createDashboardI18n("zh-CN");
-    renderWithProviders(
-      <I18nextProvider i18n={instance}>
-        <Sidebar collapsed />
-      </I18nextProvider>,
-    );
-    expect(screen.getByRole("link", { name: "虚拟密钥" })).toHaveAttribute("href", "/ui/api-keys");
-    expect(screen.getByRole("link", { name: "虚拟密钥" })).toHaveAttribute("title", "虚拟密钥");
-    expect(screen.getByRole("link", { name: "模型与端点" })).toHaveAttribute("href", "/ui/models-and-endpoints");
-    expect(screen.queryByRole("link", { name: "内部用户" })).not.toBeInTheDocument();
-    await act(async () => {
-      await instance.changeLanguage("en");
-    });
-    expect(screen.getByRole("link", { name: "Virtual Keys" })).toHaveAttribute("href", "/ui/api-keys");
-    expect(screen.getByRole("link", { name: "Virtual Keys" })).toHaveAttribute("title", "Virtual Keys");
-    expect(screen.queryByRole("link", { name: "Internal Users" })).not.toBeInTheDocument();
   });
 });

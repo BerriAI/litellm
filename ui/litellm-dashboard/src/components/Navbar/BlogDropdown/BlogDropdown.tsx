@@ -1,4 +1,3 @@
-import { useTranslation } from "@/i18n/useTranslation";
 import { useDisableBlogPosts } from "@/app/(dashboard)/hooks/useDisableBlogPosts";
 import { useBlogPosts, type BlogPost } from "@/app/(dashboard)/hooks/blogPosts/useBlogPosts";
 import { NAV_PRODUCT_LINK_CLASS } from "@/components/Navbar/navProductLinkClass";
@@ -12,10 +11,11 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { ChevronDown, LoaderCircle } from "lucide-react";
 import React from "react";
+import { useTranslation } from "react-i18next";
 
-function formatDate(dateStr: string, language: string): string {
+function formatDate(dateStr: string): string {
   const date = new Date(dateStr + "T00:00:00");
-  return date.toLocaleDateString(language === "zh-CN" ? "zh-CN" : "en-US", {
+  return date.toLocaleDateString("en-US", {
     month: "short",
     day: "numeric",
     year: "numeric",
@@ -23,7 +23,7 @@ function formatDate(dateStr: string, language: string): string {
 }
 
 export const BlogDropdown: React.FC = () => {
-  const { t, i18n } = useTranslation();
+  const { t } = useTranslation();
   const disableBlogPosts = useDisableBlogPosts();
 
   const { data, isLoading, isError, refetch } = useBlogPosts();
@@ -36,7 +36,7 @@ export const BlogDropdown: React.FC = () => {
     if (isLoading) {
       return (
         <div className="flex items-center px-2 py-1.5 text-sm">
-          <LoaderCircle role="img" aria-label={t("loading")} className="size-4 animate-spin" />
+          <LoaderCircle role="img" aria-label={t("shell.blogDropdown.loading")} className="size-4 animate-spin" />
         </div>
       );
     }
@@ -44,16 +44,16 @@ export const BlogDropdown: React.FC = () => {
     if (isError) {
       return (
         <div className="flex items-center gap-2 px-2 py-1.5 text-sm">
-          <span className="text-destructive">{t("Failed to load posts")}</span>
+          <span className="text-destructive">{t("shell.blogDropdown.failed")}</span>
           <Button variant="outline" size="sm" onClick={() => refetch()}>
-            {t("Retry")}
+            {t("shell.blogDropdown.retry")}
           </Button>
         </div>
       );
     }
 
     if (!data || data.posts.length === 0) {
-      return <div className="px-2 py-1.5 text-sm text-muted-foreground">{t("No posts available")}</div>;
+      return <div className="px-2 py-1.5 text-sm text-muted-foreground">{t("shell.blogDropdown.empty")}</div>;
     }
 
     return (
@@ -65,7 +65,7 @@ export const BlogDropdown: React.FC = () => {
                 {post.title}
               </h5>
               <span className="text-muted-foreground" style={{ fontSize: 11 }}>
-                {formatDate(post.date, i18n.language)}
+                {formatDate(post.date)}
               </span>
               <p className="line-clamp-2">{post.description}</p>
             </a>
@@ -74,7 +74,7 @@ export const BlogDropdown: React.FC = () => {
         <DropdownMenuSeparator />
         <DropdownMenuItem>
           <a href="https://docs.litellm.ai/blog" target="_blank" rel="noopener noreferrer">
-            {t("View all posts")}
+            {t("shell.blogDropdown.viewAll")}
           </a>
         </DropdownMenuItem>
       </>
@@ -89,7 +89,8 @@ export const BlogDropdown: React.FC = () => {
         closeDelay={100}
         render={<Button variant="ghost" className={`${NAV_PRODUCT_LINK_CLASS} border-0!`} />}
       >
-        {t("Blog")} <ChevronDown className="size-2.5 text-muted-foreground" aria-hidden />
+        {t("shell.blogDropdown.trigger")}
+        <ChevronDown className="size-2.5 text-muted-foreground" aria-hidden />
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" side="bottom" className="w-auto">
         {renderMenuContent()}

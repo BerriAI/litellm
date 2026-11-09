@@ -155,6 +155,7 @@ from litellm.proxy.management.teams.dependencies import get_team_access
 from litellm.proxy.management_endpoints.common_daily_activity import (
     InvalidDateRange,
     parse_canonical_date_range,
+    unless_database_fails,
 )
 from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401  # legacy module exports
     _check_disable_global_guardrails_caller_permission,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -224,7 +225,12 @@ from litellm.proxy.management_helpers.utils import (
     add_new_member,
     management_endpoint_wrapper,
 )
-from litellm.proxy.utils import PrismaClient, ProxyLogging, handle_exception_on_proxy
+from litellm.proxy.utils import (
+    PrismaClient,
+    ProxyLogging,
+    handle_exception_on_proxy,
+    query_raw_within_statement_timeout,
+)
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.chunked_in import delete_many_in, find_many_in
 from litellm.repositories.daily_activity_buckets import api_key_from_bucket
@@ -1822,6 +1828,7 @@ async def new_team(
             "tpm_limit",
             "rpm_limit",
             "team_member_permissions",
+            "access_group_ids",
         ):
             if getattr(data, field, None) is None and (
                 field != "budget_duration" or field not in data.model_fields_set
@@ -7297,7 +7304,12 @@ async def resolve_team_daily_activity_scope(
     where_condition: Final[_TeamIdInFilter] = {}
     if team_ids_list:
         where_condition["team_id"] = {"in": list(team_ids_list)}
-    team_aliases: Final = await _team_db(prisma_client).find_many(where=where_condition)
+    team_alias_lookup: Final = _team_db(prisma_client).find_many(where=where_condition)
+    team_aliases: Final = (
+        await unless_database_fails(team_alias_lookup, [], "its team aliases")
+        if user_api_key_has_admin_view(user_api_key_dict)
+        else await team_alias_lookup
+    )
     team_alias_metadata: Final = {t.team_id: {"team_alias": _as_object(t.team_alias)} for t in team_aliases}
 
     # Check if user is team admin or has /team/daily/activity permission
@@ -7473,6 +7485,9 @@ class _TeamUserSpendDbRow(TypedDict):
     failed_requests: ReadOnly[int]
 
 
+_TEAM_USER_SPEND_ROWS: Final = TypeAdapter(tuple[_TeamUserSpendDbRow, ...])
+
+
 @router.get(
     "/team/spend/by_user",
     response_model=TeamUserSpendResponse,
@@ -7523,12 +7538,16 @@ async def get_team_spend_by_user(
     own_user_only: Final = scope.api_key_filter is not None
     user_param: Final = (user_api_key_dict.user_id or "",) if own_user_only else ()
     async with db_span("team_user_spend", "LiteLLM_SpendLogs"):
-        rows: Final[Sequence[_TeamUserSpendDbRow]] = await prisma_client.db.query_raw(
-            _team_user_spend_sql(team_count=len(scoped_team_ids), restrict_to_user=own_user_only),
-            start_date,
-            end_date,
-            *scoped_team_ids,
-            *user_param,
+        rows: Final = _TEAM_USER_SPEND_ROWS.validate_python(
+            await query_raw_within_statement_timeout(
+                prisma_client,
+                _team_user_spend_sql(team_count=len(scoped_team_ids), restrict_to_user=own_user_only),
+                start_date,
+                end_date,
+                *scoped_team_ids,
+                *user_param,
+                what="Spend per user",
+            )
         )
     results: Final = tuple(
         TeamUserSpendRow(

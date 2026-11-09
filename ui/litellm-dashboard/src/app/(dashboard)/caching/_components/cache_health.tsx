@@ -5,6 +5,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { CheckCircle2, XCircle, ClipboardCopy } from "lucide-react";
 import { ResponseTimeIndicator } from "./response_time_indicator";
 
+const UNHEALTHY_STATUS = "unhealthy";
+
 // Helper function to deep-parse a JSON string if possible
 const deepParse = (input: any) => {
   let parsed = input;
@@ -179,7 +181,7 @@ const HealthCheckDetails: React.FC<{ response: any }> = ({ response }) => {
                 className={`text-sm font-medium ${response?.status === "healthy" ? "text-success" : "text-destructive"}`}
               >
                 {t("caching.health.cacheStatus")}
-                {response?.status || "unhealthy"}
+                {response?.status || UNHEALTHY_STATUS}
               </p>
             </div>
 
