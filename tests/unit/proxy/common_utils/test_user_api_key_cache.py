@@ -1,6 +1,6 @@
 import datetime
 import hashlib
-from typing import Any, Final
+from typing import Final
 from unittest.mock import MagicMock
 
 import pytest
@@ -17,24 +17,11 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     get_management_object_ttl,
     is_user_key_cache_key,
 )
-from litellm.proxy.proxy_server import UserAPIKeyCacheTTLEnum
 from litellm.redis.stores.auth_cache import AuthCacheStore
 from litellm.rust_bridge._native import NativeAuthCache
 from tests.unit.redis.stores.auth_cache_double import FakeAuthCache, shared_cache
 
 HASHED_TOKEN = hashlib.sha256(b"sk-lit7563-hot-key").hexdigest()
-
-
-class CapturingInMemoryCache(InMemoryCache):
-    """Records ``ttl`` passed into ``set_cache`` (what DualCache injects)."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.last_ttl: Any = None
-
-    def set_cache(self, key, value, **kwargs):  # type: ignore[override]
-        self.last_ttl = kwargs.get("ttl")
-        super().set_cache(key, value, **kwargs)
 
 
 class _ManualClock:
@@ -54,39 +41,55 @@ def _make_key_obj(token: str = "tok") -> UserAPIKeyAuth:
 
 
 class TestUserApiKeyCache:
+    def test_native_fill_fence_and_request_local_projection_without_redis(self):
+        cache: Final = UserApiKeyCache()
+        stale: Final = cache.begin_fill(HASHED_TOKEN)
+        cache.delete_local(HASHED_TOKEN)
+        assert not cache.set_if_generation(HASHED_TOKEN, _make_key_obj(HASHED_TOKEN), stale)
+        assert cache.set_if_generation(
+            HASHED_TOKEN, UserAPIKeyAuth(token=HASHED_TOKEN, models=["original"]), cache.begin_fill(HASHED_TOKEN)
+        )
+        first: Final = cache.get_cache(HASHED_TOKEN, model_type=UserAPIKeyAuth)
+        assert first is not None
+        first.models.append("request-only")
+        second: Final = cache.get_cache(HASHED_TOKEN, model_type=UserAPIKeyAuth)
+        assert second is not None and second is not first
+        assert second.models == ["original"]
+        cache.flush_cache()
+        assert cache.get_local(HASHED_TOKEN) is None
+
     @pytest.mark.asyncio
-    async def test_async_set_in_memory_gets_enum_default_when_user_api_key_cache_ttl_omitted(
+    async def test_async_set_with_zero_default_ttl_expires_without_a_python_copy(
         self,
     ):
-        """
-        If ``general_settings.user_api_key_cache_ttl`` is absent, the proxy never
-        calls ``update_cache_ttl``; ``user_api_key_cache`` keeps
-        ``default_in_memory_ttl=UserAPIKeyCacheTTLEnum.in_memory_cache_ttl``.
-        DualCache must forward that as the in-memory ``ttl`` kwarg on each set.
-        """
-        mem = CapturingInMemoryCache()
+        mem = InMemoryCache()
         cache = UserApiKeyCache(
             in_memory_cache=mem,
-            default_in_memory_ttl=UserAPIKeyCacheTTLEnum.in_memory_cache_ttl.value,
+            default_in_memory_ttl=0,
         )
+        cache.update_cache_ttl(default_in_memory_ttl=0, default_redis_ttl=None)
         await cache.async_set_cache(
             "k",
             _make_key_obj("t"),
             model_type=UserAPIKeyAuth,
         )
-        expected = UserAPIKeyCacheTTLEnum.in_memory_cache_ttl.value
-        assert mem.last_ttl == expected
+        assert cache.get_local("k") is None
+        assert mem.get_cache("k") is None
+        cache.set_cache("k", {"token": "t"}, ttl=60)
+        assert cache.get_local("k") == {"token": "t"}
 
-    def test_sync_set_in_memory_gets_enum_default_when_user_api_key_cache_ttl_omitted(
+    def test_sync_set_with_zero_default_ttl_expires_without_a_python_copy(
         self,
     ):
-        mem = CapturingInMemoryCache()
+        mem = InMemoryCache()
         cache = UserApiKeyCache(
             in_memory_cache=mem,
-            default_in_memory_ttl=UserAPIKeyCacheTTLEnum.in_memory_cache_ttl.value,
+            default_in_memory_ttl=0,
         )
+        cache.update_cache_ttl(default_in_memory_ttl=0, default_redis_ttl=None)
         cache.set_cache("sk", _make_key_obj("s"), model_type=UserAPIKeyAuth)
-        assert mem.last_ttl == UserAPIKeyCacheTTLEnum.in_memory_cache_ttl.value
+        assert cache.get_local("sk") is None
+        assert mem.get_cache("sk") is None
 
     @pytest.mark.asyncio
     async def test_the_shared_store_gets_default_in_memory_ttl_and_writes_without_a_ttl(self):
@@ -173,7 +176,9 @@ class TestUserApiKeyCache:
     async def test_a_model_holding_a_datetime_is_cached_as_its_json_dump(self):
         cache = UserApiKeyCache(
             redis_cache=MagicMock(spec=RedisCache),
-            auth_cache=lambda _redis, settings: AuthCacheStore(NativeAuthCache(None, memory_entries=settings.memory_entries)),
+            auth_cache=lambda _redis, settings: AuthCacheStore(
+                NativeAuthCache(None, memory_entries=settings.memory_entries)
+            ),
         )
         key_obj = UserAPIKeyAuth(token="abc", expires=datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc))
 
@@ -273,13 +278,14 @@ class TestUserKeyObjectPartition:
 
     @pytest.mark.asyncio
     async def test_update_cache_ttl_applies_to_key_object_partition(self):
-        key_partition = CapturingInMemoryCache()
+        key_partition = InMemoryCache()
         cache = UserApiKeyCache(default_in_memory_ttl=60, key_object_in_memory_cache=key_partition)
-        cache.update_cache_ttl(default_in_memory_ttl=7, default_redis_ttl=7)
+        cache.update_cache_ttl(default_in_memory_ttl=0, default_redis_ttl=7)
 
         await cache.async_set_cache(HASHED_TOKEN, _make_key_obj(HASHED_TOKEN), model_type=UserAPIKeyAuth)
 
-        assert key_partition.last_ttl == 7
+        assert cache.get_local(HASHED_TOKEN) is None
+        assert key_partition.get_cache(HASHED_TOKEN) is None
 
     @pytest.mark.asyncio
     async def test_attach_redis_cache_moves_both_partitions_onto_the_shared_store(self):
@@ -372,8 +378,10 @@ class TestUserKeyObjectPartition:
         cache.set_local(HASHED_TOKEN, {"token": HASHED_TOKEN}, None)
         cache.set_local(end_user_cache_key("u1"), {"user_id": "u1"}, 5)
 
-        assert cache.key_object_cache.in_memory_cache.get_cache(HASHED_TOKEN) == {"token": HASHED_TOKEN}
-        assert cache.in_memory_cache.get_cache(end_user_cache_key("u1")) == {"user_id": "u1"}
+        assert cache.get_local(HASHED_TOKEN) == {"token": HASHED_TOKEN}
+        assert cache.get_local(end_user_cache_key("u1")) == {"user_id": "u1"}
+        assert cache.key_object_cache.in_memory_cache.get_cache(HASHED_TOKEN) is None
+        assert cache.in_memory_cache.get_cache(end_user_cache_key("u1")) is None
         cache.delete_local(HASHED_TOKEN)
         assert cache.get_local(HASHED_TOKEN) is None
 
@@ -461,11 +469,7 @@ class TestManagementObjectTTL:
 
     @pytest.mark.asyncio
     async def test_management_write_uses_configured_ttl_over_constant(self):
-        mem = CapturingInMemoryCache()
-        cache = UserApiKeyCache(
-            in_memory_cache=mem,
-            default_in_memory_ttl=300,
-        )
+        cache, fake = shared_cache(default_in_memory_ttl=300)
         assert get_management_object_ttl(cache) != (DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL)
 
         await cache.async_set_cache(
@@ -475,4 +479,4 @@ class TestManagementObjectTTL:
             ttl=get_management_object_ttl(cache),
         )
 
-        assert mem.last_ttl == 300
+        assert fake.commands == [("SET", "team_id:abc", 300)]

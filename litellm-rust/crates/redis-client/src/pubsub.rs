@@ -1,7 +1,10 @@
 use std::{sync::Arc, time::Duration};
 
 use futures_util::{StreamExt, stream::BoxStream};
-use redis::{ConnectionInfo, RedisResult, aio::PubSubStream};
+use redis::{
+    ConnectionInfo, RedisResult,
+    aio::{PubSubSink, PubSubStream},
+};
 
 use crate::{
     ConnectError, Credentials, Standalone, Target, Timeouts, config,
@@ -11,6 +14,18 @@ use crate::{
 // litellm/proxy/common_utils/auth_cache_invalidation_pubsub.py: _BACKOFF_INITIAL_SECONDS, _BACKOFF_MAX_SECONDS
 const BACKOFF_INITIAL: Duration = Duration::from_secs(5);
 const BACKOFF_MAX: Duration = Duration::from_secs(60);
+const IDLE_PROBE: Duration = Duration::from_secs(15);
+
+pub enum SubscriptionEvent {
+    Connected,
+    Disconnected,
+    Message(Vec<u8>),
+}
+
+struct Live {
+    sink: PubSubSink,
+    stream: PubSubStream,
+}
 
 /// A subscription the way redis-py's `PubSub` holds one: a dedicated RESP2 connection that sends
 /// `SUBSCRIBE`, authenticated once when it connects.
@@ -66,43 +81,76 @@ impl Subscriber {
     }
 
     pub(crate) fn messages(self, channel: String) -> BoxStream<'static, Vec<u8>> {
+        self.events(channel)
+            .filter_map(|event| async move {
+                match event {
+                    SubscriptionEvent::Message(payload) => Some(payload),
+                    _ => None,
+                }
+            })
+            .boxed()
+    }
+
+    pub(crate) fn events(self, channel: String) -> BoxStream<'static, SubscriptionEvent> {
         futures_util::stream::unfold(
-            (self, channel, None::<PubSubStream>, BACKOFF_INITIAL),
-            |(subscriber, channel, live, backoff)| async move {
+            (self, channel, None::<Live>, BACKOFF_INITIAL, false),
+            |(subscriber, channel, live, backoff, retry)| async move {
                 let mut live = live;
                 let mut backoff = backoff;
+                if retry {
+                    tokio::time::sleep(backoff).await;
+                }
                 loop {
                     let Some(current) = live.as_mut() else {
-                        match subscriber.subscribe(&channel).await {
+                        let event = match subscriber.subscribe(&channel).await {
                             Ok(subscribed) => {
                                 live = Some(subscribed);
                                 backoff = BACKOFF_INITIAL;
+                                SubscriptionEvent::Connected
                             }
-                            Err(error) => {
-                                tracing::warn!(%error, ?backoff, "Redis subscribe failed, retrying");
-                                tokio::time::sleep(backoff).await;
-                                backoff = (backoff * 2).min(BACKOFF_MAX);
+                            Err(_) => {
+                                if retry {
+                                    backoff = (backoff * 2).min(BACKOFF_MAX);
+                                }
+                                SubscriptionEvent::Disconnected
                             }
-                        }
-                        continue;
+                        };
+                        let retry = live.is_none();
+                        return Some((event, (subscriber, channel, live, backoff, retry)));
                     };
-                    match current.next().await {
-                        Some(message) => {
+                    match tokio::time::timeout(IDLE_PROBE, current.stream.next()).await {
+                        Ok(Some(message)) => {
                             let payload = message.get_payload_bytes().to_vec();
-                            return Some((payload, (subscriber, channel, live, backoff)));
+                            return Some((
+                                SubscriptionEvent::Message(payload),
+                                (subscriber, channel, live, backoff, false),
+                            ));
                         }
-                        None => live = None,
+                        Err(_) => {
+                            if matches!(
+                                tokio::time::timeout(
+                                    subscriber.connect_timeout,
+                                    current.sink.ping::<String>()
+                                )
+                                .await,
+                                Ok(Ok(_))
+                            ) {
+                                continue;
+                            }
+                        }
+                        Ok(None) => {}
                     }
-                    tracing::warn!(?backoff, "Redis subscription connection lost, resubscribing");
-                    tokio::time::sleep(backoff).await;
-                    backoff = (backoff * 2).min(BACKOFF_MAX);
+                    return Some((
+                        SubscriptionEvent::Disconnected,
+                        (subscriber, channel, None, backoff, true),
+                    ));
                 }
             },
         )
         .boxed()
     }
 
-    async fn subscribe(&self, channel: &str) -> RedisResult<PubSubStream> {
+    async fn subscribe(&self, channel: &str) -> RedisResult<Live> {
         match &self.source {
             Source::Sentinel(sentinel) => {
                 let master = sentinel.master().await?;
@@ -122,7 +170,7 @@ impl Subscriber {
         }
     }
 
-    async fn subscribe_on(&self, info: ConnectionInfo, channel: &str) -> RedisResult<PubSubStream> {
+    async fn subscribe_on(&self, info: ConnectionInfo, channel: &str) -> RedisResult<Live> {
         let settings =
             config::authenticated(info.redis_settings().clone(), &self.credentials).await?;
         let client = redis::Client::open(info.set_redis_settings(settings))?;
@@ -135,7 +183,8 @@ impl Subscriber {
                 ))
             })??;
         subscribe_connected(&mut pubsub, channel, self.connect_timeout).await?;
-        Ok(pubsub.into_on_message())
+        let (sink, stream) = pubsub.split();
+        Ok(Live { sink, stream })
     }
 }
 

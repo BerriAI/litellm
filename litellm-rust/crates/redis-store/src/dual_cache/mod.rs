@@ -88,6 +88,7 @@ impl<V: Clone, R> DualCache<V, R> {
 
     /// `DualCache.update_cache_ttl` and `update_in_memory_max_size` together: both apply in place,
     /// and the entries memory already holds stay.
+    #[cfg(test)]
     pub(crate) fn reconfigure(&self, memory: MemorySettings) {
         *lock(&self.default_in_memory_ttl) = memory.ttl;
         self.memory.update_max_size(memory.entries);
