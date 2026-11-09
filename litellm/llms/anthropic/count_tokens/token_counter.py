@@ -132,6 +132,7 @@ class AnthropicTokenCounter(BaseTokenCounter):
                 tools=tools,
                 system=system,
                 optional_params=count_options,
+                context_management=context_management.spec if context_management is not None else None,
                 drop_params=drops_unsupported_params(litellm_params.get("drop_params")),
             )
 

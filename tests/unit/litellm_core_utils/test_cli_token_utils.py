@@ -31,11 +31,13 @@ from litellm.litellm_core_utils.cli_token_utils import (
     CredentialNotCleared,
     CredentialNotRecorded,
     CredentialNotSaved,
+    LoginRecordNotMoved,
     clear_cli_token,
     get_cli_token_file_path,
     get_litellm_gateway_api_key,
     is_cli_token_fresh,
     load_cli_token,
+    load_cli_token_left_in_keychain,
     save_cli_token,
 )
 
@@ -52,6 +54,10 @@ def isolated_home(monkeypatch, tmp_path):
 
 def _token_file(home):
     return home / ".litellm" / "token.json"
+
+
+def _everything_on_disk(home):
+    return "".join(path.read_text() for path in (home / ".litellm").rglob("*") if path.is_file())
 
 
 def _write_legacy_file(home, **overrides):
@@ -121,6 +127,10 @@ class _MkstempThatNeedsTheOldFileGone:
         if self.path.exists():
             raise OSError(errno.ENOSPC, "No space left on device")
         return _REAL_MKSTEMP(*args, **kwargs)
+
+
+def _full_disk_mkstemp(*args, **kwargs):
+    raise OSError(errno.ENOSPC, "No space left on device")
 
 
 _REAL_REPLACE = os.replace
@@ -777,6 +787,17 @@ class TestClearCliToken:
         assert clear_cli_token(vault=vault) == SecretStranded()
         assert load_cli_token(vault=vault) is None
 
+    def test_a_keychain_that_kept_the_secret_is_still_warned_about_once_it_is_out_of_reach(
+        self, isolated_home, secret_vault_factory
+    ):
+        _write_metadata_only_file(isolated_home)
+        vault = secret_vault_factory(blob=_blob(), erasable=False)
+        assert clear_cli_token(vault=vault) == SecretStranded()
+
+        vault.available = False
+
+        assert clear_cli_token(vault=vault) == KeyringUnreachable()
+
     @pytest.mark.parametrize(
         "failure", [KeyringDisabled(), KeyringUnreachable(), KeyringNotInstalled()]
     )
@@ -794,7 +815,8 @@ class TestClearCliToken:
         vault = secret_vault_factory(available=False, failure=failure)
 
         assert clear_cli_token(vault=vault) == failure
-        assert json.loads(_token_file(isolated_home).read_text()).get("key") is None
+        assert not _token_file(isolated_home).exists()
+        assert "sk-legacy" not in _everything_on_disk(isolated_home)
 
     def test_a_second_logout_still_reports_the_keychain_it_could_not_clear(
         self, isolated_home, secret_vault_factory
@@ -817,20 +839,20 @@ class TestClearCliToken:
         vault = secret_vault_factory(available=False, failure=KeyringNotInstalled())
 
         assert clear_cli_token(vault=vault) == KeyringNotInstalled()
-        assert json.loads(_token_file(isolated_home).read_text()).get("key") is None
+        assert load_cli_token(vault=vault) is None
 
-    def test_a_logout_that_cannot_clear_the_keychain_keeps_the_record_that_it_has_to(
-        self, isolated_home, secret_vault_factory
+    @pytest.mark.parametrize("failure", [KeyringDisabled(), KeyringUnreachable(), KeyringNotInstalled()])
+    def test_a_logout_that_cannot_check_the_keychain_still_ends_the_local_login(
+        self, isolated_home, secret_vault_factory, failure
     ):
-        """The file left behind holds no secret. It is what a later run reads to tell a machine with
-        a credential it cannot reach apart from one that never had a login, which is the difference
-        between warning the user and inventing a credential for them to worry about."""
-        _write_metadata_only_file(isolated_home)
-        vault = secret_vault_factory(available=False, failure=KeyringUnreachable())
+        vault = secret_vault_factory(available=False, failure=failure)
+        save_cli_token(CliTokenRecord(base_url=SERVER, key="sk-in-file", user_id="u-1"), vault=vault)
 
-        clear_cli_token(vault=vault)
+        assert clear_cli_token(vault=vault) == failure
 
-        assert json.loads(_token_file(isolated_home).read_text()).get("key") is None
+        assert load_cli_token(vault=vault) is None
+        assert get_litellm_gateway_api_key(vault=vault) is None
+        assert not _token_file(isolated_home).exists()
 
     def test_a_logout_that_cannot_clear_the_keychain_still_takes_the_file_secret_away(
         self, isolated_home, secret_vault_factory
@@ -842,7 +864,7 @@ class TestClearCliToken:
 
         clear_cli_token(vault=vault)
 
-        left_on_disk = _token_file(isolated_home).read_text()
+        left_on_disk = _everything_on_disk(isolated_home)
         assert "sk-legacy" not in left_on_disk
         assert "rt-legacy" not in left_on_disk
 
@@ -862,7 +884,91 @@ class TestClearCliToken:
         assert clear_cli_token(vault=vault) == KeyringUnreachable()
         assert clear_cli_token(vault=vault) == KeyringUnreachable()
         assert vault.blob is not None
-        assert "sk-second" not in _token_file(isolated_home).read_text()
+        assert load_cli_token(vault=vault) is None
+        assert "sk-second" not in _everything_on_disk(isolated_home)
+
+    def test_a_keychain_that_answers_again_never_signs_an_ended_login_back_in(
+        self, isolated_home, secret_vault_factory
+    ):
+        vault = secret_vault_factory()
+        save_cli_token(CliTokenRecord(base_url=SERVER, key="sk-first"), vault=vault)
+        vault.available = False
+        save_cli_token(CliTokenRecord(base_url=SERVER, key="sk-second"), vault=vault)
+        assert clear_cli_token(vault=vault) == KeyringUnreachable()
+
+        vault.available = True
+
+        assert load_cli_token(vault=vault) is None
+        assert get_litellm_gateway_api_key(vault=vault) is None
+        assert clear_cli_token(vault=vault) == SecretErased()
+        assert vault.blob is None
+
+    def test_a_keychain_confirmed_clean_is_not_warned_about_again(self, isolated_home, secret_vault_factory):
+        vault = secret_vault_factory()
+        save_cli_token(CliTokenRecord(base_url=SERVER, key="sk-first"), vault=vault)
+        vault.available = False
+        save_cli_token(CliTokenRecord(base_url=SERVER, key="sk-second"), vault=vault)
+        assert clear_cli_token(vault=vault) == KeyringUnreachable()
+        vault.available = True
+        assert clear_cli_token(vault=vault) == SecretErased()
+
+        vault.available = False
+
+        assert clear_cli_token(vault=vault) == SecretErased()
+
+    def test_a_second_logout_that_misses_the_keychain_keeps_the_first_login_revocable(
+        self, isolated_home, secret_vault_factory
+    ):
+        vault = secret_vault_factory()
+        save_cli_token(
+            CliTokenRecord(base_url=SERVER, key="sk-first", refresh_token="rt-first", timestamp=1000.0), vault=vault
+        )
+        vault.available = False
+        assert clear_cli_token(vault=vault) == KeyringUnreachable()
+        save_cli_token(
+            CliTokenRecord(base_url=SERVER, key="sk-second", refresh_token="rt-second", timestamp=2000.0), vault=vault
+        )
+        assert clear_cli_token(vault=vault) == KeyringUnreachable()
+
+        vault.available = True
+        left = load_cli_token_left_in_keychain(vault=vault)
+
+        assert left is not None
+        assert (left.key, left.refresh_token) == ("sk-first", "rt-first")
+
+    def test_a_locked_login_over_a_keychain_login_keeps_the_keychain_login_revocable(
+        self, isolated_home, secret_vault_factory
+    ):
+        vault = secret_vault_factory()
+        save_cli_token(
+            CliTokenRecord(base_url=SERVER, key="sk-first", refresh_token="rt-first", timestamp=1000.0), vault=vault
+        )
+        vault.available = False
+        save_cli_token(
+            CliTokenRecord(base_url=SERVER, key="sk-second", refresh_token="rt-second", timestamp=2000.0), vault=vault
+        )
+
+        vault.available = True
+        left = load_cli_token_left_in_keychain(vault=vault)
+
+        assert left is not None
+        assert (left.key, left.refresh_token) == ("sk-first", "rt-first")
+
+    def test_the_note_never_pairs_with_a_keychain_entry_a_later_login_wrote(
+        self, isolated_home, secret_vault_factory
+    ):
+        vault = secret_vault_factory()
+        save_cli_token(
+            CliTokenRecord(base_url=SERVER, key="sk-first", refresh_token="rt-first", timestamp=1000.0), vault=vault
+        )
+        vault.available = False
+        assert clear_cli_token(vault=vault) == KeyringUnreachable()
+        vault.available = True
+        save_cli_token(
+            CliTokenRecord(base_url=SERVER, key="sk-second", refresh_token="rt-second", timestamp=2000.0), vault=vault
+        )
+
+        assert load_cli_token_left_in_keychain(vault=vault) is None
 
     @pytest.mark.parametrize("failure", [KeyringNotInstalled(), KeyringDisabled(), KeyringUnreachable()])
     def test_logging_out_of_a_machine_that_never_logged_in_invents_nothing_to_warn_about(
@@ -873,6 +979,7 @@ class TestClearCliToken:
         and `pip install keyring` will not make it appear."""
         vault = secret_vault_factory(available=False, failure=failure)
 
+        assert clear_cli_token(vault=vault) == SecretErased()
         assert clear_cli_token(vault=vault) == SecretErased()
 
     def test_a_file_backed_login_cannot_vouch_for_a_keychain_no_package_can_reach(
@@ -890,7 +997,8 @@ class TestClearCliToken:
 
         assert clear_cli_token(vault=vault) == KeyringNotInstalled()
         assert vault.blob is not None
-        assert "sk-in-file" not in _token_file(isolated_home).read_text()
+        assert not _token_file(isolated_home).exists()
+        assert "sk-in-file" not in _everything_on_disk(isolated_home)
 
     @pytest.mark.skipif(os.geteuid() == 0, reason="root ignores file permissions")
     def test_a_file_that_gives_up_neither_its_secret_nor_itself_is_reported_not_raised(
@@ -917,10 +1025,10 @@ class TestClearCliToken:
     def test_a_directory_that_takes_no_new_file_still_gives_up_the_secret_in_the_old_one(
         self, isolated_home, secret_vault_factory
     ):
-        """A read-only `~/.litellm` accepts no replacement token file and no removal of the one it
-        has, and still lets that one be shortened. The secret goes, the file stays as the note that
-        the keychain went unchecked, and the logout after it warns again instead of reading the gap
-        the removal would have left as a clean keychain.
+        """A read-only `~/.litellm` accepts no removal of the token file and no new file beside it,
+        and still lets the one it has be shortened. The secret goes, the file stays because nothing
+        else can, and the logout after it says the file is still there, since a keychain that answers
+        again would sign it back in, rather than calling the machine logged out.
 
         The key is a realistic length so the file genuinely shrinks: a rewrite in place that leaves
         the tail of the old contents behind hands the next run a file it cannot parse."""
@@ -929,25 +1037,16 @@ class TestClearCliToken:
         path.parent.chmod(0o500)
         try:
             assert clear_cli_token(vault=vault) == KeyringUnreachable()
-            assert clear_cli_token(vault=vault) == KeyringUnreachable()
+            assert isinstance(clear_cli_token(vault=vault), LoginRecordNotMoved)
         finally:
             path.parent.chmod(0o700)
 
         assert json.loads(path.read_text()).get("key") is None
 
-    @pytest.mark.skipif(os.geteuid() == 0, reason="root ignores file permissions")
-    def test_a_note_the_logout_had_to_remove_is_written_again_for_the_next_one(
+    def test_a_full_disk_still_keeps_the_unchecked_keychain_on_record(
         self, isolated_home, secret_vault_factory, monkeypatch
     ):
-        """A full disk refuses the replacement file and a read-only token file refuses the rewrite
-        in place, so the only way left to get the secret off disk is to remove the file carrying it.
-        That file was also the note saying the keychain went unchecked, and its absence is what the
-        next logout would read as a keychain already known to be clean.
-
-        Removing it is what frees the room the replacement was refused for, so the note is written
-        again on the way out and the logout after this one still warns."""
         path = _write_legacy_file(isolated_home)
-        path.chmod(0o400)
         monkeypatch.setattr(
             "litellm.litellm_core_utils.private_json.tempfile.mkstemp",
             _MkstempThatNeedsTheOldFileGone(path),
@@ -957,7 +1056,26 @@ class TestClearCliToken:
         assert clear_cli_token(vault=vault) == KeyringUnreachable()
         assert clear_cli_token(vault=vault) == KeyringUnreachable()
 
-        assert json.loads(path.read_text()).get("key") is None
+        assert not path.exists()
+        assert "sk-legacy" not in _everything_on_disk(isolated_home)
+
+    def test_a_full_disk_keeps_a_locked_keychain_login_revocable_without_signing_it_back_in(
+        self, isolated_home, secret_vault_factory, monkeypatch
+    ):
+        vault = secret_vault_factory()
+        save_cli_token(
+            CliTokenRecord(base_url=SERVER, key="sk-first", refresh_token="rt-first", timestamp=1000.0), vault=vault
+        )
+        monkeypatch.setattr("litellm.litellm_core_utils.private_json.tempfile.mkstemp", _full_disk_mkstemp)
+        vault.available = False
+
+        assert clear_cli_token(vault=vault) == KeyringUnreachable()
+
+        vault.available = True
+        left = load_cli_token_left_in_keychain(vault=vault)
+        assert left is not None
+        assert left.refresh_token == "rt-first"
+        assert load_cli_token(vault=vault) is None
 
     @pytest.mark.skipif(os.geteuid() == 0, reason="root ignores directory permissions")
     def test_a_metadata_file_that_will_not_go_is_not_worth_alarming_the_user_over(

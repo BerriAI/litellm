@@ -8,7 +8,29 @@ from typing import Final
 import pytest
 from setup.run import run_until
 from setup.wire import WireRecord
-from test_upgrade import record
+
+
+def record(seq: int = 0, *, started_at: float = 100) -> WireRecord:
+    return WireRecord(
+        seq=seq,
+        marker=f"request-{seq}",
+        caller="key",
+        endpoint="chat_completions",
+        stream=False,
+        blocked=False,
+        started_at=started_at,
+        status=200,
+        header_s=1,
+        first_byte_s=1,
+        first_token_s=None,
+        total_s=1,
+        text="answer",
+        ok=True,
+        mock_delay_s=1,
+        call_id=f"call-{seq}",
+        error=None,
+        response_id=f"response-{seq}",
+    )
 
 
 class StopAfterRecord:

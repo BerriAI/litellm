@@ -33,6 +33,7 @@ from litellm.proxy.pass_through_endpoints.llm_provider_handlers.base_passthrough
 from litellm.proxy.pass_through_endpoints.success_handler import (
     PassThroughEndpointLogging,
 )
+from litellm.types.decisions import OpenAIDecisionResponse
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     SETTLES_BACKGROUND_RESPONSE_KWARG,
@@ -130,6 +131,7 @@ def _responses_sub_route(path: str) -> tuple[str, ...] | None:
 
 
 _STR_MAPPING: Final = TypeAdapter(Mapping[str, object])
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class _AgentConfig(BaseModel):
@@ -276,6 +278,22 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
     @staticmethod
     def is_openai_agents_route(url_route: str) -> bool:
         return is_openai_compatible_url(url_route) and is_openai_agents_api_path(urlparse(url_route).path)
+
+    @staticmethod
+    def is_openai_decisions_route(url_route: str) -> bool:
+        return is_openai_compatible_url(url_route) and urlparse(url_route).path.rstrip("/").endswith("/v1/decisions")
+
+    @staticmethod
+    def handles_route(url_route: str) -> bool:
+        return (
+            OpenAIPassthroughLoggingHandler.is_openai_chat_completions_route(url_route)
+            or OpenAIPassthroughLoggingHandler.is_openai_embeddings_route(url_route)
+            or OpenAIPassthroughLoggingHandler.is_openai_image_generation_route(url_route)
+            or OpenAIPassthroughLoggingHandler.is_openai_image_editing_route(url_route)
+            or OpenAIPassthroughLoggingHandler.is_openai_responses_route(url_route)
+            or OpenAIPassthroughLoggingHandler.is_openai_agents_route(url_route)
+            or OpenAIPassthroughLoggingHandler.is_openai_decisions_route(url_route)
+        )
 
     @staticmethod
     def _unbilled_call_model(
@@ -479,8 +497,19 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
             httpx_response.request.method, url_route, response_body
         )
         is_responses: Final = responses_billing != "unbilled"
+        is_decisions: Final = (
+            httpx_response.request.method == "POST"
+            and OpenAIPassthroughLoggingHandler.is_openai_decisions_route(url_route)
+        )
 
-        if not (is_chat_completions or is_embeddings or is_image_generation or is_image_editing or is_responses):
+        if not (
+            is_chat_completions
+            or is_embeddings
+            or is_image_generation
+            or is_image_editing
+            or is_responses
+            or is_decisions
+        ):
             OpenAIPassthroughLoggingHandler._label_unbilled_call(
                 logging_obj,
                 url_route,
@@ -512,12 +541,21 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
         try:
             response_cost = 0.0
             litellm_model_response: (
-                ModelResponse | TextCompletionResponse | EmbeddingResponse | ImageResponse | ResponsesAPIResponse | None
+                ModelResponse
+                | TextCompletionResponse
+                | EmbeddingResponse
+                | ImageResponse
+                | ResponsesAPIResponse
+                | OpenAIDecisionResponse
+                | None
             ) = None
             handler_instance: Final = OpenAIPassthroughLoggingHandler()
 
+            logged_custom_llm_provider: Final = _DECODED_JSON.validate_python(
+                logging_obj.model_call_details.get("custom_llm_provider", "openai")
+            )
             custom_llm_provider: Final = TypeAdapter(str).validate_python(
-                kwargs.get("custom_llm_provider", logging_obj.model_call_details.get("custom_llm_provider", "openai"))
+                kwargs.get("custom_llm_provider", logged_custom_llm_provider)
             )
 
             if is_chat_completions:
@@ -564,11 +602,7 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
                     response_body=response_body,
                     request_body=request_body,
                 )
-                # Mark call type for downstream image-aware logic/metrics
-                try:
-                    logging_obj.call_type = PassthroughCallTypes.passthrough_image_generation.value
-                except Exception:
-                    pass
+                logging_obj.call_type = PassthroughCallTypes.passthrough_image_generation.value
                 # Create a simple response object for logging
                 litellm_model_response = ImageResponse(
                     data=response_body.get("data", []),
@@ -583,11 +617,7 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
                     response_body=response_body,
                     request_body=request_body,
                 )
-                # Mark call type for downstream image-aware logic/metrics
-                try:
-                    logging_obj.call_type = PassthroughCallTypes.passthrough_image_generation.value
-                except Exception:
-                    pass
+                logging_obj.call_type = PassthroughCallTypes.passthrough_image_generation.value
                 # Create a simple response object for logging
                 litellm_model_response = ImageResponse(
                     data=response_body.get("data", []),
@@ -608,6 +638,14 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
                     httpx_response=httpx_response,
                     logging_obj=logging_obj,
                     custom_llm_provider=custom_llm_provider,
+                )
+            elif is_decisions:
+                litellm_model_response = OpenAIDecisionResponse.model_validate(response_body)  # rebind-ok: elif-chain
+                response_cost = litellm.completion_cost(  # rebind-ok: elif-chain
+                    completion_response=litellm_model_response,
+                    model=model,
+                    custom_llm_provider=custom_llm_provider,
+                    call_type="decisions",
                 )
 
             # Update kwargs with cost information
@@ -656,6 +694,8 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
                 if is_image_generation
                 else "image_editing"
                 if is_image_editing
+                else "decisions"
+                if is_decisions
                 else "responses"
             )
             verbose_proxy_logger.debug(

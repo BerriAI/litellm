@@ -30,7 +30,7 @@ class _FakeRouter:
     def get_model_group_info(self, model_group: str, team_id: str | None = None) -> ModelGroupInfo | None:
         return self.infos.get(model_group)
 
-    def get_model_list_of_routed_group(self, model_group: str) -> list[DeploymentTypedDict]:
+    def get_model_list_of_routed_group(self, model_group: str, team_id: str | None = None) -> list[DeploymentTypedDict]:
         return []
 
 
