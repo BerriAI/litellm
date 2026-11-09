@@ -325,11 +325,24 @@ class UserApiKeyCache(DualCache):
             return self.key_object_cache.set_cache(key=key, value=payload, local_only=local_only, **kwargs)
         return super().set_cache(key=key, value=payload, local_only=local_only, **kwargs)
 
-    async def async_set_cache(self, key: str | None, value: CacheValue, local_only: bool = False, **kwargs: object):
+    async def async_set_cache(
+        self,
+        key: str | None,
+        value: CacheValue,
+        local_only: bool = False,
+        *,
+        fill_generation: int | None = None,
+        **kwargs: object,
+    ):
         """Inside a request the Redis SET rides the request's pipeline (memory is written at once); anywhere
         else, or with options the pipeline does not carry, it goes to Redis directly as before."""
         model_type: Final = cast(type[BaseModel] | None, kwargs.pop("model_type", None))
         payload: Final[object] = CacheCodec.serialize(value, model_type=model_type)
+        if fill_generation is not None:
+            if key is not None:
+                assert self._shared is not None
+                self._shared.set_if_generation(key, payload, fill_generation, _ttl(kwargs))
+            return None
         ttl: Final = kwargs.get("ttl")
         pipelined: Final = (
             key is not None

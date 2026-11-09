@@ -44,6 +44,16 @@ class FakeAuthCache:
     commands: list[tuple[object, ...]] = field(default_factory=list)
     settings: list[AuthCacheSettings] = field(default_factory=list)
     fail: BaseException | None = None
+    generation: int = 0
+
+    def current_generation(self) -> int:
+        return self.generation
+
+    def set_if_generation(self, key: str, value: object, generation: int, ttl_seconds: float | None = None) -> bool:
+        if generation != self.generation:
+            return False
+        self.set_local(key, value, ttl_seconds)
+        return True
 
     def _round_trip(self, *command: object) -> None:
         self.commands.append(command)
@@ -147,9 +157,11 @@ class FakeAuthCache:
         self.memory[key] = (value, ttl_seconds)
 
     def delete_local(self, key: str) -> None:
+        self.generation += 1
         self.memory.pop(key, None)
 
     def flush_local(self) -> None:
+        self.generation += 1
         self.memory.clear()
 
     def len_local(self) -> LocalSizes:

@@ -3,6 +3,7 @@ per-object getters still enforce on their own when the prefetch cannot help."""
 
 import json
 from types import SimpleNamespace
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -29,6 +30,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     UserApiKeyCache,
     end_user_cache_key,
     end_user_restricted_registry_cache_key,
+    team_membership_reservation_cache_key,
 )
 from tests.unit.redis.stores.auth_cache_double import FakeAuthCache, shared_cache
 
@@ -100,6 +102,35 @@ async def test_native_prefetch_fills_all_getters_with_one_read_and_preserves_opt
 
     await prefetch_auth_objects(refs=_refs(), prisma_client=prisma, user_api_key_cache=cache)
     assert native.auth_read.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_native_owner_getters_do_not_cache_rows_invalidated_during_their_read():
+    cache: Final = _cache(None)
+
+    async def read(kind: str, ids: list[str], writer: bool = False) -> list[object]:
+        cache.delete_local(
+            {
+                "user": USER_ID,
+                "team": f"team_id:{TEAM_ID}",
+                "member": team_membership_reservation_cache_key(USER_ID, TEAM_ID),
+                "org": f"org_id:{ORG_ID}:with_budget",
+            }[kind]
+        )
+        return [{"user": USER_ROW, "team": TEAM_ROW, "member": MEMBERSHIP_ROW, "org": ORG_ROW}[kind]]
+
+    native: Final = SimpleNamespace(auth_read=AsyncMock(side_effect=read))
+    prisma: Final = _prisma()
+    prisma.native_auth_database = native
+    user, team, member, org = await _read_all_through_getters(cache, prisma)
+
+    assert user is not None and team is not None and member is not None and org is not None
+    assert cache.get_local(USER_ID) is None
+    assert cache.get_local(f"team_id:{TEAM_ID}") is None
+    assert cache.get_local(team_membership_reservation_cache_key(USER_ID, TEAM_ID)) is None
+    assert cache.get_local(f"org_id:{ORG_ID}:with_budget") is None
+    assert native.auth_read.await_count == 4
+    assert prisma.db.mock_calls == []
 
 
 @pytest.mark.asyncio

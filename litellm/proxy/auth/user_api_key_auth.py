@@ -2360,6 +2360,7 @@ class _BuilderEffects:
         if self._prisma_client is None:
             return None
         native: Final = native_auth_repository(self._prisma_client)
+        fill_generation: Final = self._user_api_key_cache.current_generation() if native is not None else None
         row: Final = (
             await native.one("member", [user_id, team_id], LiteLLM_TeamMembership)
             if native is not None
@@ -2372,6 +2373,7 @@ class _BuilderEffects:
             return None
         membership: Final = LiteLLM_TeamMembership.model_validate(row.model_dump())
         await self._user_api_key_cache.async_set_cache(
+            fill_generation=fill_generation,
             key=team_membership_auth_cache_key(team_id=team_id, user_id=user_id),
             value=membership,
             model_type=LiteLLM_TeamMembership,

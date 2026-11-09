@@ -41,6 +41,25 @@ def _make_key_obj(token: str = "tok") -> UserAPIKeyAuth:
 
 
 class TestUserApiKeyCache:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("invalidate", (True, False))
+    async def test_native_db_fill_is_local_and_generation_fenced(self, invalidate: bool) -> None:
+        cache, fake = shared_cache()
+        generation: Final = cache.current_generation()
+        if invalidate:
+            cache.delete_local(HASHED_TOKEN)
+        await cache.async_set_cache(
+            HASHED_TOKEN,
+            _make_key_obj(HASHED_TOKEN),
+            model_type=UserAPIKeyAuth,
+            fill_generation=generation,
+        )
+        assert fake.redis == {}
+        assert fake.commands == []
+        assert cache.get_cache(HASHED_TOKEN, local_only=True, model_type=UserAPIKeyAuth) == (
+            None if invalidate else _make_key_obj(HASHED_TOKEN)
+        )
+
     def test_native_fill_fence_and_request_local_projection_without_redis(self):
         cache: Final = UserApiKeyCache()
         stale: Final = cache.begin_fill(HASHED_TOKEN)

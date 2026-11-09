@@ -31,6 +31,7 @@ async def read_default_budget(budget_id: str, io: EndUserIO) -> LiteLLM_BudgetTa
         return cached
     try:
         native: Final = native_auth_repository(io.prisma)
+        fill_generation: Final = io.cache.current_generation() if native is not None else None
         record: Final = (
             await native.one("budget", [budget_id], LiteLLM_BudgetTable)
             if native is not None
@@ -47,7 +48,11 @@ async def read_default_budget(budget_id: str, io: EndUserIO) -> LiteLLM_BudgetTa
             record.model_dump() if isinstance(record, LiteLLM_BudgetTable) else record.dict()
         )
         await io.cache.async_set_cache(
-            key=key, value=row, model_type=LiteLLM_BudgetTable, ttl=get_management_object_ttl(io.cache)
+            fill_generation=fill_generation,
+            key=key,
+            value=row,
+            model_type=LiteLLM_BudgetTable,
+            ttl=get_management_object_ttl(io.cache),
         )
     except NativeAuthFailure:
         raise

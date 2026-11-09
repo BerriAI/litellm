@@ -1487,6 +1487,9 @@ async def get_team_member_default_budget(
     Returns:
         LiteLLM_BudgetTable if found, None otherwise
     """
+    fill_generation: Final = (
+        user_api_key_cache.current_generation() if native_auth_repository(prisma_client) is not None else None
+    )
     if prisma_client is None:
         return None
 
@@ -1524,6 +1527,7 @@ async def get_team_member_default_budget(
         budget_record.model_dump() if isinstance(budget_record, BaseModel) else budget_record.dict()
     )
     await user_api_key_cache.async_set_cache(
+        fill_generation=fill_generation,
         key=cache_key,
         value=budget,
         model_type=LiteLLM_BudgetTable,
@@ -1637,10 +1641,11 @@ async def _cache_registry_answer(
     value: tuple[str, ...] | str,
     ttl: float,
     user_api_key_cache: UserApiKeyCache,
+    fill_generation: int | None = None,
 ) -> None:
     """Best-effort: a cache backend failure must not turn a registry load into a failed request."""
     try:
-        await user_api_key_cache.async_set_cache(key=cache_key, value=value, ttl=ttl)
+        await user_api_key_cache.async_set_cache(key=cache_key, value=value, ttl=ttl, fill_generation=fill_generation)
     except NativeAuthFailure:
         raise
     except Exception as e:  # noqa: BLE001  # best-effort cache write: auth must survive a cache backend error
@@ -1653,8 +1658,10 @@ async def _fetch_and_cache_registry(
     max_size: int,
     fetch_ids: Callable[[], Awaitable[tuple[str, ...]]],
     user_api_key_cache: UserApiKeyCache,
+    native: bool = False,
 ) -> frozenset[str] | None:
     """The registry as the database has it, cached whole, or ``None`` when it is unusable."""
+    fill_generation: Final = user_api_key_cache.current_generation() if native else None
     try:
         registry_ids: Final = await fetch_ids()
     except NativeAuthFailure:
@@ -1668,6 +1675,7 @@ async def _fetch_and_cache_registry(
             e,
         )
         await _cache_registry_answer(
+            fill_generation=fill_generation,
             cache_key=cache_key,
             value=overflow_sentinel,
             ttl=REGISTRY_ERROR_NEGATIVE_CACHE_TTL,
@@ -1677,6 +1685,7 @@ async def _fetch_and_cache_registry(
 
     if len(registry_ids) > max_size:
         await _cache_registry_answer(
+            fill_generation=fill_generation,
             cache_key=cache_key,
             value=overflow_sentinel,
             ttl=get_management_object_ttl(user_api_key_cache),
@@ -1685,6 +1694,7 @@ async def _fetch_and_cache_registry(
         return None
 
     await _cache_registry_answer(
+        fill_generation=fill_generation,
         cache_key=cache_key,
         value=registry_ids,
         ttl=get_management_object_ttl(user_api_key_cache),
@@ -1700,6 +1710,7 @@ async def _load_bounded_registry(
     load_lock: asyncio.Lock,
     fetch_ids: Callable[[], Awaitable[tuple[str, ...]]],
     user_api_key_cache: UserApiKeyCache,
+    native: bool = False,
 ) -> frozenset[str] | None:
     """
     A bounded id set under one cache key, so an id outside it costs no DB read.
@@ -1719,6 +1730,7 @@ async def _load_bounded_registry(
                 return cached_after_wait
 
         return await _fetch_and_cache_registry(
+            native=native,
             cache_key=cache_key,
             overflow_sentinel=overflow_sentinel,
             max_size=max_size,
@@ -1748,6 +1760,7 @@ async def load_end_user_restricted_registry(
         return tuple(row.user_id for row in restricted_rows)
 
     return await _load_bounded_registry(
+        native=native_auth_repository(prisma_client) is not None,
         cache_key=end_user_restricted_registry_cache_key(),
         overflow_sentinel=END_USER_RESTRICTED_REGISTRY_OVERFLOW_SENTINEL,
         max_size=END_USER_RESTRICTED_REGISTRY_MAX_SIZE,
@@ -1807,6 +1820,9 @@ async def get_end_user_object(
     Returns:
         LiteLLM_EndUserTable if found, None otherwise
     """
+    fill_generation: Final = (
+        user_api_key_cache.current_generation() if native_auth_repository(prisma_client) is not None else None
+    )
     if prisma_client is None:
         raise Exception("No db connected")
 
@@ -1863,6 +1879,7 @@ async def get_end_user_object(
         )
 
         await user_api_key_cache.async_set_cache(
+            fill_generation=fill_generation,
             key=_key,
             value=end_user_row,
             model_type=LiteLLM_EndUserTable,
@@ -1949,6 +1966,7 @@ async def _load_tag_registry(
         return tuple(row.tag_name for row in registry_rows)
 
     return await _load_bounded_registry(
+        native=native_auth_repository(prisma_client) is not None,
         cache_key=tag_registry_cache_key(),
         overflow_sentinel=TAG_REGISTRY_OVERFLOW_SENTINEL,
         max_size=TAG_REGISTRY_MAX_SIZE,
@@ -1978,6 +1996,7 @@ async def load_model_access_group_registry(
         return tuple(row.access_group_name for row in registry_rows)
 
     return await _load_bounded_registry(
+        native=native_auth_repository(prisma_client) is not None,
         cache_key=model_access_group_registry_cache_key(),
         overflow_sentinel=MODEL_ACCESS_GROUP_REGISTRY_OVERFLOW_SENTINEL,
         max_size=MODEL_ACCESS_GROUP_REGISTRY_MAX_SIZE,
@@ -2002,6 +2021,9 @@ async def _fetch_uncached_model_access_group_budgets(
     ``matched_model_access_groups``, which :func:`collect_matched_model_access_groups` already
     intersected with the registry, so a name that has no row cannot reach this.
     """
+    fill_generation: Final = (
+        user_api_key_cache.current_generation() if native_auth_repository(prisma_client) is not None else None
+    )
     if not uncached_groups:
         return ()
 
@@ -2018,6 +2040,7 @@ async def _fetch_uncached_model_access_group_budgets(
         fetched: Final = tuple((row.access_group_name, _model_access_group_budget(row)) for row in db_rows)
         for fetched_name, fetched_obj in fetched:
             await user_api_key_cache.async_set_cache(
+                fill_generation=fill_generation,
                 key=model_access_group_cache_key(fetched_name),
                 value=fetched_obj,
                 model_type=ModelAccessGroupBudget,
@@ -2081,6 +2104,9 @@ async def _fetch_uncached_tags(
     user_api_key_cache: UserApiKeyCache,
 ) -> tuple[tuple[str, LiteLLM_TagTable], ...] | Exception:
     """Rows for the tags a cache probe missed; names absent from the registry never reach the DB."""
+    fill_generation: Final = (
+        user_api_key_cache.current_generation() if native_auth_repository(prisma_client) is not None else None
+    )
     if not uncached_tags:
         return ()
 
@@ -2115,6 +2141,7 @@ async def _fetch_uncached_tags(
         )
         for fetched_name, fetched_obj in fetched:
             await user_api_key_cache.async_set_cache(
+                fill_generation=fill_generation,
                 key=tag_cache_key(fetched_name),
                 value=fetched_obj,
                 model_type=LiteLLM_TagTable,
@@ -2263,6 +2290,9 @@ async def _fetch_team_membership_from_db(
     *,
     use_writer: bool = False,
 ) -> LiteLLM_TeamMembership | None:
+    fill_generation: Final = (
+        user_api_key_cache.current_generation() if native_auth_repository(prisma_client) is not None else None
+    )
     _ = parent_otel_span, proxy_logging_obj
     native: Final = native_auth_repository(prisma_client)
     response: Final = (
@@ -2285,12 +2315,14 @@ async def _fetch_team_membership_from_db(
     _key: Final = team_membership_reservation_cache_key(user_id=user_id, team_id=team_id)
     if membership is None:
         await user_api_key_cache.async_set_cache(
+            fill_generation=fill_generation,
             key=_key,
             value=NO_TEAM_MEMBERSHIP_SENTINEL,
             ttl=get_management_object_ttl(user_api_key_cache),
         )
     else:
         await user_api_key_cache.async_set_cache(
+            fill_generation=fill_generation,
             key=_key,
             value=membership,
             model_type=LiteLLM_TeamMembership,
@@ -2534,6 +2566,9 @@ async def _backfill_null_user_email(
     user_row: LiteLLM_UserTable,
     user_email: str | None,
 ) -> LiteLLM_UserTable:
+    fill_generation: Final = (
+        user_api_key_cache.current_generation() if native_auth_repository(prisma_client) is not None else None
+    )
     if user_email is None or user_row.user_email is not None or prisma_client is None:
         return user_row
 
@@ -2553,6 +2588,7 @@ async def _backfill_null_user_email(
     email_update: Final = {"user_email": db_row.user_email}
     updated_row: Final = user_row.model_copy(update=email_update)
     await user_api_key_cache.async_set_cache(
+        fill_generation=fill_generation,
         key=user_row.user_id,
         value=updated_row,
         model_type=LiteLLM_UserTable,
@@ -2580,6 +2616,9 @@ async def get_user_object(
     - if not, then raise an error
     """
 
+    fill_generation: Final = (
+        user_api_key_cache.current_generation() if native_auth_repository(prisma_client) is not None else None
+    )
     if user_id is None:
         return None
 
@@ -2694,6 +2733,7 @@ async def get_user_object(
 
         # save the user object to cache
         await user_api_key_cache.async_set_cache(
+            fill_generation=fill_generation,
             key=user_id,
             value=_response,
             model_type=LiteLLM_UserTable,
@@ -2733,6 +2773,7 @@ async def _cache_management_object(
     proxy_logging_obj: ProxyLogging | None,
     *,
     model_type: type[BaseModel],
+    fill_generation: int | None = None,
 ):
     """
     Persist management objects via ``UserApiKeyCache`` (in-memory + optional Redis).
@@ -2740,6 +2781,7 @@ async def _cache_management_object(
     ``UserApiKeyCache`` serializes with ``model_type`` so Redis and in-memory stay aligned.
     """
     await user_api_key_cache.async_set_cache(
+        fill_generation=fill_generation,
         key=key,
         value=value,
         model_type=model_type,
@@ -2753,6 +2795,8 @@ async def cache_team_object(
     team_table: LiteLLM_TeamTableCachedObj,
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging | None,
+    *,
+    fill_generation: int | None = None,
 ) -> None:
     ## CACHE REFRESH TIME!
     team_table.last_refreshed_at = time.time()
@@ -2767,6 +2811,7 @@ async def cache_team_object(
 
     # team_id is the table primary key — guaranteed unique, safe to write.
     await _cache_management_object(
+        fill_generation=fill_generation,
         key=key,
         value=team_table,
         user_api_key_cache=user_api_key_cache,
@@ -3196,6 +3241,9 @@ async def _get_team_object_from_user_api_key_cache(
     team_id_upsert: bool | None = None,
     use_writer: bool = False,
 ) -> LiteLLM_TeamTableCachedObj:
+    fill_generation: Final = (
+        user_api_key_cache.current_generation() if native_auth_repository(prisma_client) is not None else None
+    )
     db_access_time_key: Final = key
     should_check_db: Final = _should_check_db(
         key=db_access_time_key,
@@ -3243,6 +3291,7 @@ async def _get_team_object_from_user_api_key_cache(
 
     # save the team object to cache
     await cache_team_object(
+        fill_generation=fill_generation,
         team_id=team_id,
         team_table=_response,
         user_api_key_cache=user_api_key_cache,
@@ -3346,9 +3395,12 @@ async def cache_access_object(
     access_group_table: LiteLLM_AccessGroupTable,
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging | None = None,
+    *,
+    fill_generation: int | None = None,
 ) -> None:
     key: Final = f"access_group_id:{access_group_id}"
     await user_api_key_cache.async_set_cache(
+        fill_generation=fill_generation,
         key=key,
         value=access_group_table,
         model_type=LiteLLM_AccessGroupTable,
@@ -3396,6 +3448,9 @@ async def get_access_object(
     Raises:
         - HTTPException: If access group doesn't exist in db or cache (status_code=404)
     """
+    fill_generation: Final = (
+        user_api_key_cache.current_generation() if native_auth_repository(prisma_client) is not None else None
+    )
     if prisma_client is None:
         raise Exception("No DB Connected. See - https://docs.litellm.ai/docs/proxy/virtual_keys")
 
@@ -3429,6 +3484,7 @@ async def get_access_object(
 
         # Save to cache
         await cache_access_object(
+            fill_generation=fill_generation,
             access_group_id=access_group_id,
             access_group_table=_response,
             user_api_key_cache=user_api_key_cache,
@@ -3480,6 +3536,9 @@ async def get_team_object_by_alias(
     Raises:
         HTTPException: If team doesn't exist or multiple teams have the same alias
     """
+    fill_generation: Final = (
+        user_api_key_cache.current_generation() if native_auth_repository(prisma_client) is not None else None
+    )
     if prisma_client is None:
         raise Exception("No DB Connected. See - https://docs.litellm.ai/docs/proxy/virtual_keys")
 
@@ -3547,6 +3606,7 @@ async def get_team_object_by_alias(
 
         # Cache the result by both alias and team_id
         await user_api_key_cache.async_set_cache(
+            fill_generation=fill_generation,
             key=cache_key,
             value=team_obj,
             model_type=LiteLLM_TeamTableCachedObj,
@@ -3555,6 +3615,7 @@ async def get_team_object_by_alias(
         # Also cache by team_id for consistency
         team_id_cache_key: Final = f"team_id:{team_obj.team_id}"
         await user_api_key_cache.async_set_cache(
+            fill_generation=fill_generation,
             key=team_id_cache_key,
             value=team_obj,
             model_type=LiteLLM_TeamTableCachedObj,
@@ -3600,6 +3661,9 @@ async def get_org_object_by_alias(
     Raises:
         HTTPException: If organization not found or multiple orgs have the same alias
     """
+    fill_generation: Final = (
+        user_api_key_cache.current_generation() if native_auth_repository(prisma_client) is not None else None
+    )
     if prisma_client is None:
         raise Exception("No DB Connected. See - https://docs.litellm.ai/docs/proxy/virtual_keys")
 
@@ -3644,6 +3708,7 @@ async def get_org_object_by_alias(
 
         # Cache the result
         await user_api_key_cache.async_set_cache(
+            fill_generation=fill_generation,
             key=cache_key,
             value=org_obj,
             model_type=LiteLLM_OrganizationTable,
@@ -3651,6 +3716,7 @@ async def get_org_object_by_alias(
         )
         # Also cache by org_id for consistency
         await user_api_key_cache.async_set_cache(
+            fill_generation=fill_generation,
             key=f"org_id:{org_obj.organization_id}",
             value=org_obj,
             model_type=LiteLLM_OrganizationTable,
@@ -4070,6 +4136,9 @@ async def get_object_permission(
     - if valid, return LiteLLM_ObjectPermissionTable object
     - if not, then raise an error
     """
+    fill_generation: Final = (
+        user_api_key_cache.current_generation() if native_auth_repository(prisma_client) is not None else None
+    )
     if prisma_client is None:
         raise Exception("No DB Connected. See - https://docs.litellm.ai/docs/proxy/virtual_keys")
 
@@ -4108,6 +4177,7 @@ async def get_object_permission(
             response.model_dump() if isinstance(response, BaseModel) else response.dict()
         )
         await user_api_key_cache.async_set_cache(
+            fill_generation=fill_generation,
             key=key,
             value=_perm_obj,
             model_type=LiteLLM_ObjectPermissionTable,
@@ -4140,6 +4210,9 @@ async def get_managed_vector_store_rows_by_uuids(
     Critical-path DB access must go through this helper to avoid raw Prisma
     calls on the hot request path.
     """
+    fill_generation: Final = (
+        user_api_key_cache.current_generation() if native_auth_repository(prisma_client) is not None else None
+    )
     if not uuids or prisma_client is None:
         return []
 
@@ -4183,6 +4256,7 @@ async def get_managed_vector_store_rows_by_uuids(
         cached_obj = LiteLLM_ManagedVectorStoresTable.model_validate(row_dict)
         key = f"managed_vector_store_id:{cached_obj.vector_store_id}"
         await user_api_key_cache.async_set_cache(
+            fill_generation=fill_generation,
             key=key,
             value=cached_obj,
             model_type=LiteLLM_ManagedVectorStoresTable,
@@ -4225,6 +4299,9 @@ async def get_org_object(
         proxy_logging_obj: Optional proxy logging object
         include_budget_table: If True, includes litellm_budget_table in the query
     """
+    fill_generation: Final = (
+        user_api_key_cache.current_generation() if native_auth_repository(prisma_client) is not None else None
+    )
     if prisma_client is None:
         raise Exception("No DB Connected. See - https://docs.litellm.ai/docs/proxy/virtual_keys")
     if not isinstance(org_id, str):
@@ -4262,6 +4339,7 @@ async def get_org_object(
     _org_obj: Final = LiteLLM_OrganizationTable.model_validate(response.model_dump())
     # Cache the result
     await user_api_key_cache.async_set_cache(
+        fill_generation=fill_generation,
         key=cache_key,
         value=_org_obj,
         model_type=LiteLLM_OrganizationTable,
@@ -4277,7 +4355,10 @@ def _last_known_org_cache_key(org_id: str) -> str:
 
 @with_service_target(AUTH_OBJECTS_TARGET)
 async def _keep_last_known_org(
-    org: LiteLLM_OrganizationTable, org_id: str, user_api_key_cache: UserApiKeyCache
+    org: LiteLLM_OrganizationTable,
+    org_id: str,
+    user_api_key_cache: UserApiKeyCache,
+    fill_generation: int | None = None,
 ) -> None:
     cache_key: Final = _last_known_org_cache_key(org_id)
     held_locally: Final = await user_api_key_cache.async_get_cache(
@@ -4286,6 +4367,7 @@ async def _keep_last_known_org(
     if held_locally is not None:
         return
     await user_api_key_cache.async_set_cache(
+        fill_generation=fill_generation,
         key=cache_key,
         value=org,
         model_type=LiteLLM_OrganizationTable,
@@ -4301,6 +4383,9 @@ async def get_org_object_for_request(
     parent_otel_span: Span | None,
     proxy_logging_obj: ProxyLogging | None,
 ) -> LiteLLM_OrganizationTable | None:
+    fill_generation: Final = (
+        user_api_key_cache.current_generation() if native_auth_repository(prisma_client) is not None else None
+    )
     try:
         org: Final = await get_org_object(
             org_id=org_id,
@@ -4329,7 +4414,7 @@ async def get_org_object_for_request(
         raise
     if org is None:
         return None
-    await _keep_last_known_org(org, org_id, user_api_key_cache)
+    await _keep_last_known_org(org, org_id, user_api_key_cache, fill_generation)
     return org
 
 
@@ -5574,6 +5659,9 @@ async def get_project_object(
 
     Returns LiteLLM_ProjectTableCachedObj or None if not found.
     """
+    fill_generation: Final = (
+        user_api_key_cache.current_generation() if native_auth_repository(prisma_client) is not None else None
+    )
     if prisma_client is None:
         return None
 
@@ -5604,6 +5692,7 @@ async def get_project_object(
     # Cache with TTL following _cache_management_object pattern
     project_obj.last_refreshed_at = time.time()
     await _cache_management_object(
+        fill_generation=fill_generation,
         key=cache_key,
         value=project_obj,
         user_api_key_cache=user_api_key_cache,
