@@ -262,8 +262,8 @@
         "supports_vision": true,
         "reasoning_effort_levels": [
             "low",
-            "medium",
-            "high"
+            "high",
+            "max"
         ]
     },
     "abliteratedllm/deepseek-v4.1-flash": {
@@ -290,8 +290,8 @@
         "reasoning_effort_levels": [
             "none",
             "low",
-            "medium",
-            "high"
+            "high",
+            "max"
         ]
     },
     "abliteratedllm/deepseek-v4-pro": {
@@ -318,8 +318,8 @@
         "reasoning_effort_levels": [
             "none",
             "low",
-            "medium",
-            "high"
+            "high",
+            "max"
         ]
     },
     "abliteratedllm/deepseek-v4.1-flash-1017": {
@@ -348,9 +348,10 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "reasoning_effort_levels": [
+            "none",
             "low",
-            "medium",
-            "high"
+            "high",
+            "max"
         ]
     },
     "abliteratedllm/deepseek-v4.1-flash-1017-ultrafast": {
@@ -375,9 +376,10 @@
         "supports_tool_choice": true,
         "supports_vision": false,
         "reasoning_effort_levels": [
+            "none",
             "low",
-            "medium",
-            "high"
+            "high",
+            "max"
         ]
     },
     "abliteratedllm/deepseek-v4.1-flash-original": {
@@ -406,9 +408,10 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "reasoning_effort_levels": [
+            "none",
             "low",
-            "medium",
-            "high"
+            "high",
+            "max"
         ]
     },
     "abliteratedllm/glm-5.3-flash": {
@@ -440,8 +443,8 @@
         "supports_vision": true,
         "reasoning_effort_levels": [
             "low",
-            "medium",
-            "high"
+            "high",
+            "max"
         ]
     },
     "abliteratedllm/glm-5.3": {
@@ -470,8 +473,8 @@
         "supports_vision": false,
         "reasoning_effort_levels": [
             "low",
-            "medium",
-            "high"
+            "high",
+            "max"
         ]
     },
     "abliteratedllm/glm-5.3-fast": {
@@ -497,8 +500,8 @@
         "supports_vision": false,
         "reasoning_effort_levels": [
             "low",
-            "medium",
-            "high"
+            "high",
+            "max"
         ]
     },
     "abliteratedllm/kimi-k3": {
@@ -527,9 +530,11 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "reasoning_effort_levels": [
+            "none",
             "low",
             "medium",
-            "high"
+            "high",
+            "max"
         ]
     },
     "abliteratedllm/kimi-k3.1-pro": {
@@ -558,9 +563,11 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "reasoning_effort_levels": [
+            "none",
             "low",
             "medium",
-            "high"
+            "high",
+            "max"
         ]
     },
     "abliteratedllm/kimi-k3-fast": {
@@ -586,9 +593,11 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "reasoning_effort_levels": [
+            "none",
             "low",
             "medium",
-            "high"
+            "high",
+            "max"
         ]
     },
     "abliteratedllm/ember-1": {
@@ -614,9 +623,11 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "reasoning_effort_levels": [
+            "none",
             "low",
             "medium",
-            "high"
+            "high",
+            "max"
         ]
     },
     "abliteratedllm/muse-spark-open": {
@@ -647,7 +658,8 @@
         "reasoning_effort_levels": [
             "low",
             "medium",
-            "high"
+            "high",
+            "xhigh"
         ]
     },
     "abliteratedllm/qwen3.8-max": {
@@ -676,9 +688,10 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "reasoning_effort_levels": [
+            "none",
             "low",
             "medium",
-            "high"
+            "xhigh"
         ]
     },
     "abliteratedllm/qwen3.8-2.4t-a95b": {
@@ -704,9 +717,10 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "reasoning_effort_levels": [
+            "none",
             "low",
             "medium",
-            "high"
+            "xhigh"
         ]
     },
     "abliteratedllm/minimax-m3": {
