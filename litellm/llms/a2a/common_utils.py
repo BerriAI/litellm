@@ -2,9 +2,11 @@
 Common utilities for A2A (Agent-to-Agent) Protocol
 """
 
+import time
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any, Final
 
+import httpx
 from pydantic import BaseModel
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -13,6 +15,12 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 from litellm.llms.azure_ai.common_utils import has_azure_entra_params, resolve_azure_ai_agent_auth_header
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.openai import AllMessageValues
+
+
+A2A_TASK_STATE_COMPLETED: Final = "completed"
+A2A_TASK_FAILURE_STATES: Final = frozenset({"failed", "canceled", "rejected"})
+A2A_TASK_RECOVERABLE_STATES: Final = frozenset({"submitted", "working"})
+A2A_TASK_INTERRUPTED_STATES: Final = frozenset({"input-required", "auth-required"})
 
 
 class A2AError(BaseLLMException):
@@ -97,6 +105,16 @@ def extract_text_from_a2a_message(message: dict[str, Any], depth: int = 0, max_d
     return " ".join(text_parts)
 
 
+def a2a_task_state(result: Mapping[str, object]) -> str | None:
+    if result.get("kind") != "task":
+        return None
+    status: Final = result.get("status")
+    if not isinstance(status, dict):
+        return None
+    state: Final = status.get("state")
+    return state if isinstance(state, str) else None
+
+
 def extract_text_from_a2a_response(response_dict: Mapping[str, object], max_depth: int = 10) -> str:
     """
     Extract text content from A2A response result.
@@ -110,6 +128,15 @@ def extract_text_from_a2a_response(response_dict: Mapping[str, object], max_dept
     """
     result: Final = response_dict.get("result", {})
     if not isinstance(result, dict):
+        return ""
+
+    task_state: Final[str | None] = a2a_task_state(result)
+    if task_state is not None and task_state != A2A_TASK_STATE_COMPLETED:
+        artifacts: Final = result.get("artifacts", [])
+        if isinstance(artifacts, list) and artifacts:
+            first_artifact: Final = artifacts[0]
+            if isinstance(first_artifact, dict):
+                return extract_text_from_a2a_message(first_artifact, depth=0, max_depth=max_depth)
         return ""
 
     # A2A response can have different formats:
@@ -147,6 +174,58 @@ def extract_text_from_a2a_response(response_dict: Mapping[str, object], max_dept
         return extract_text_from_a2a_message(first_artifact, depth=0, max_depth=max_depth)
 
     return ""
+
+
+def poll_a2a_task_completion(
+    *,
+    api_base: str,
+    task_id: str,
+    request_id: str,
+    headers: Mapping[str, str] | None = None,
+    timeout: float = 60.0,
+    poll_interval: float = 0.5,
+) -> Mapping[str, object]:
+    """Poll ``tasks/get`` until the task reaches a terminal state."""
+    endpoint: Final = api_base.rstrip("/")
+    max_attempts: Final = max(1, int(timeout / poll_interval))
+    request_headers: Final = {"Content-Type": "application/json", **(dict(headers) if headers else {})}
+
+    with httpx.Client(timeout=timeout) as client:
+        for attempt in range(max_attempts):
+            poll_request: Final = {
+                "jsonrpc": "2.0",
+                "id": f"{request_id}-poll-{attempt}",
+                "method": "tasks/get",
+                "params": {"id": task_id},
+            }
+            response: Final = client.post(endpoint, json=poll_request, headers=request_headers)
+            response.raise_for_status()
+            poll_data: Final = response.json()
+            if not isinstance(poll_data, dict):
+                raise A2AError(status_code=response.status_code, message="Invalid tasks/get response")
+
+            if "error" in poll_data:
+                error: Final = poll_data.get("error")
+                message: Final = error.get("message", "Unknown error") if isinstance(error, dict) else "Unknown error"
+                raise A2AError(status_code=response.status_code, message=f"A2A error: {message}")
+
+            result: Final = poll_data.get("result", {})
+            state: Final = a2a_task_state(result) if isinstance(result, dict) else None
+            if state == A2A_TASK_STATE_COMPLETED:
+                return poll_data
+            if state in A2A_TASK_FAILURE_STATES:
+                raise A2AError(status_code=response.status_code, message=f"A2A task ended with state: {state}")
+            if state in A2A_TASK_INTERRUPTED_STATES:
+                raise A2AError(
+                    status_code=response.status_code,
+                    message=f"A2A task requires further action (state: {state})",
+                )
+            time.sleep(poll_interval)
+
+    raise A2AError(
+        status_code=504,
+        message=f"A2A task {task_id} did not complete within {timeout} seconds",
+    )
 
 
 AgentAuthHeaderResolver = Callable[[Mapping[str, object]], Awaitable[Mapping[str, str]]]

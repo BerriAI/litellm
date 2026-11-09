@@ -7,7 +7,14 @@ from typing import Final
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.types.utils import GenericStreamingChunk, ModelResponseStream
 
-from ..common_utils import A2AError, extract_text_from_a2a_response
+from ..common_utils import (
+    A2A_TASK_FAILURE_STATES,
+    A2A_TASK_INTERRUPTED_STATES,
+    A2A_TASK_STATE_COMPLETED,
+    A2AError,
+    a2a_task_state,
+    extract_text_from_a2a_response,
+)
 
 
 class A2AModelResponseIterator(BaseModelResponseIterator):
@@ -30,6 +37,39 @@ class A2AModelResponseIterator(BaseModelResponseIterator):
             json_mode=json_mode,
         )
         self.model = model
+        self._last_task_state: str | None = None
+
+    def _ensure_task_terminal_before_close(self) -> None:
+        if self._last_task_state is None or self._last_task_state == A2A_TASK_STATE_COMPLETED:
+            return
+        if self._last_task_state in A2A_TASK_FAILURE_STATES:
+            raise A2AError(
+                status_code=500,
+                message=f"A2A task ended with state: {self._last_task_state}",
+            )
+        if self._last_task_state in A2A_TASK_INTERRUPTED_STATES:
+            raise A2AError(
+                status_code=500,
+                message=f"A2A task requires further action (state: {self._last_task_state})",
+            )
+        raise A2AError(
+            status_code=500,
+            message=f"A2A stream ended before task completed (state: {self._last_task_state})",
+        )
+
+    def __next__(self):
+        try:
+            return super().__next__()
+        except StopIteration:
+            self._ensure_task_terminal_before_close()
+            raise
+
+    async def __anext__(self):
+        try:
+            return await super().__anext__()
+        except StopAsyncIteration:
+            self._ensure_task_terminal_before_close()
+            raise
 
     def chunk_parser(self, chunk: dict) -> GenericStreamingChunk | ModelResponseStream:
         """
@@ -76,6 +116,8 @@ class A2AModelResponseIterator(BaseModelResponseIterator):
                 index=0,
                 tool_use=None,
             )
+        except A2AError:
+            raise
         except Exception:
             # Return empty chunk on parse error
             return GenericStreamingChunk(
@@ -91,18 +133,20 @@ class A2AModelResponseIterator(BaseModelResponseIterator):
         """Extract finish reason from A2A chunk"""
         result: Final = chunk.get("result", {})
 
-        # Check for task completion
         if isinstance(result, dict):
-            status: Final = result.get("status", {})
-            if isinstance(status, dict):
-                state: Final = status.get("state")
-                if state == "completed":
-                    return "stop"
-                elif state == "failed":
-                    return "stop"  # Map failed state to 'stop' (valid finish_reason)
+            state: Final[str | None] = a2a_task_state(result)
+            if state is not None:
+                self._last_task_state = state
+            if state == A2A_TASK_STATE_COMPLETED:
+                return "stop"
+            if state in A2A_TASK_FAILURE_STATES:
+                raise A2AError(status_code=500, message=f"A2A task ended with state: {state}")
+            if state in A2A_TASK_INTERRUPTED_STATES:
+                raise A2AError(status_code=500, message=f"A2A task requires further action (state: {state})")
 
-        # Check for [DONE] marker
         if chunk.get("done") is True:
+            if self._last_task_state not in (None, A2A_TASK_STATE_COMPLETED):
+                self._ensure_task_terminal_before_close()
             return "stop"
 
         return None

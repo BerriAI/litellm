@@ -16,10 +16,16 @@ from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import Choices, Message, ModelResponse, Usage
 
 from ..common_utils import (
+    A2A_TASK_FAILURE_STATES,
+    A2A_TASK_INTERRUPTED_STATES,
+    A2A_TASK_RECOVERABLE_STATES,
+    A2A_TASK_STATE_COMPLETED,
     A2AError,
     a2a_hop_uses_entra,
+    a2a_task_state,
     convert_messages_to_prompt,
     extract_text_from_a2a_response,
+    poll_a2a_task_completion,
 )
 from .streaming_iterator import A2AModelResponseIterator
 
@@ -334,8 +340,57 @@ class A2AConfig(BaseConfig):
                 headers=dict(raw_response.headers),
             )
 
+        validated: Final = _JSON_OBJECT.validate_python(response_json)
+        result: Final = validated.get("result")
+        if isinstance(result, dict):
+            state: Final[str | None] = a2a_task_state(result)
+            if state in A2A_TASK_FAILURE_STATES:
+                raise A2AError(
+                    status_code=raw_response.status_code,
+                    message=f"A2A task ended with state: {state}",
+                    headers=dict(raw_response.headers),
+                )
+            if state in A2A_TASK_INTERRUPTED_STATES:
+                raise A2AError(
+                    status_code=raw_response.status_code,
+                    message=f"A2A task requires further action (state: {state})",
+                    headers=dict(raw_response.headers),
+                )
+            if state in A2A_TASK_RECOVERABLE_STATES:
+                task_id: Final = result.get("id")
+                api_base: Final = litellm_params.get("api_base")
+                if isinstance(task_id, str) and isinstance(api_base, str):
+                    poll_headers: Final = litellm_params.get("headers")
+                    timeout: Final = float(litellm_params.get("timeout") or litellm_params.get("request_timeout") or 60)
+                    request_id: Final = str(validated.get("id") or request_data.get("id") or uuid.uuid4())
+                    polled: Final = poll_a2a_task_completion(
+                        api_base=api_base,
+                        task_id=task_id,
+                        request_id=request_id,
+                        headers=(
+                            {str(k): str(v) for k, v in poll_headers.items()}
+                            if isinstance(poll_headers, Mapping)
+                            else None
+                        ),
+                        timeout=timeout,
+                    )
+                    response_json = dict(polled)
+                    validated = _JSON_OBJECT.validate_python(response_json)
+                else:
+                    raise A2AError(
+                        status_code=raw_response.status_code,
+                        message=f"A2A task is not complete (state: {state})",
+                        headers=dict(raw_response.headers),
+                    )
+            elif state is not None and state != A2A_TASK_STATE_COMPLETED:
+                raise A2AError(
+                    status_code=raw_response.status_code,
+                    message=f"A2A task is not complete (state: {state})",
+                    headers=dict(raw_response.headers),
+                )
+
         # Extract text from A2A response
-        text: Final = extract_text_from_a2a_response(_JSON_OBJECT.validate_python(response_json))
+        text: Final = extract_text_from_a2a_response(validated)
 
         # Populate model response
         model_response.choices = [
