@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from typing import Final, Literal, TypeAlias
 
 from pydantic import TypeAdapter
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._auth import common_budgets
@@ -54,18 +55,34 @@ class CounterRead:
     window_start: datetime | None = None
 
 
+class _CounterOptions(TypedDict, total=False):
+    fallback_authoritative: ReadOnly[bool]
+    window_entity_type: ReadOnly[str | None]
+    window_entity_id: ReadOnly[str | None]
+    window_duration: ReadOnly[str | None]
+    window_start: ReadOnly[datetime | None]
+
+
 async def read_counter(counter: CounterRead) -> float:
     from litellm.proxy.proxy_server import get_current_spend
 
+    authoritative: Final[_CounterOptions] = {"fallback_authoritative": True} if counter.authoritative else {}
+    window: Final[_CounterOptions] = (
+        {
+            "window_entity_type": counter.window_entity_type,
+            "window_entity_id": counter.window_entity_id,
+            "window_duration": counter.window_duration,
+            "window_start": counter.window_start,
+        }
+        if counter.window_entity_type is not None
+        else {}
+    )
+    options: Final[_CounterOptions] = {**authoritative, **window}
     return await get_current_spend(
         counter_key=counter.key,
         fallback_spend=counter.fallback,
         max_budget=counter.max_budget,
-        fallback_authoritative=counter.authoritative,
-        window_entity_type=counter.window_entity_type,
-        window_entity_id=counter.window_entity_id,
-        window_duration=counter.window_duration,
-        window_start=counter.window_start,
+        **options,
     )
 
 
