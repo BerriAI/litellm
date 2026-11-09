@@ -156,10 +156,10 @@ def test_prefix_adapter_preserves_client_model_and_rewrites_request(
     request: Final = Request({"type": "http", "path": _NATIVE_ROUTE, "headers": [], "method": "POST"})
     if requested_scope is not None:
         request.scope[CLIENT_REQUESTED_MODEL_SCOPE_KEY] = requested_scope
-    data: Final[dict[str, object]] = {
+    data: Final[dict[str, object]] = {  # mutable-ok: production mutates request-local body
         "model": "model",
         "input": "hello",
-    }  # mutable-ok: production mutates request-local body
+    }
     resolve_codex_native_chatgpt_model(data, token, request, _NATIVE_ROUTE)
     assert data == {"model": "chatgpt/model", "input": "hello"}
     assert request.scope[CLIENT_REQUESTED_MODEL_SCOPE_KEY] == (requested_scope or "model")

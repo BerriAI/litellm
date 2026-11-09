@@ -41,11 +41,9 @@ async def read_key_and_fallback_model_access_facts(
     llm_model_list: Sequence[object] | None,
     llm_router: Router | None,
 ) -> KeyAndFallbackModelAccessFacts:
-    from litellm.proxy.auth.user_api_key_auth import (
-        _normalize_claude_model,  # pyright: ignore[reportPrivateUsage, reportUnknownVariableType]  # legacy helper takes the mutable request body
-    )
+    from litellm.proxy.auth.claude_normalization_adapter import normalize_claude_model
 
-    await _normalize_claude_model(request_data, valid_token, request, route)
+    await normalize_claude_model(request_data, valid_token, request, route)
     await resolve_router_settings_model_group_alias(request_data, valid_token, request, route)
     resolve_codex_native_chatgpt_model(request_data, valid_token, request, route)
     facts: Final = KeyAndFallbackModelAccessFacts(

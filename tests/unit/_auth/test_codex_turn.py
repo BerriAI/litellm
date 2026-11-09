@@ -1,4 +1,4 @@
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import replace
 from typing import Final
 
@@ -210,7 +210,9 @@ async def test_jwt_wrapper_never_turns_a_native_fault_into_subscription_fallback
 ) -> None:
     class Validator:
         @staticmethod
-        async def auth_builder(**_kwargs: object) -> bool:
+        async def auth_builder(
+            *, api_key: str, request_data: Mapping[str, object], general_settings: Mapping[str, object], route: str
+        ) -> bool:
             if failure is not None:
                 raise failure
             return False

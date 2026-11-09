@@ -328,6 +328,30 @@ pub(crate) fn request_auth_codex_normalization(
 }
 
 #[pyfunction]
+pub(crate) fn request_auth_claude_membership(
+    py: Python<'_>,
+    facts: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    let facts: core::claude_membership::Facts = from_py(facts)?;
+    to_py(
+        py,
+        &py.detach(move || core::claude_membership::decide(&facts)),
+    )
+}
+
+#[pyfunction]
+pub(crate) fn request_auth_claude_normalization(
+    py: Python<'_>,
+    facts: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    let facts: core::claude_normalization::Facts = from_py(facts)?;
+    to_py(
+        py,
+        &py.detach(move || core::claude_normalization::decide(&facts)),
+    )
+}
+
+#[pyfunction]
 pub(crate) fn request_auth_codex_turn(
     py: Python<'_>,
     facts: &Bound<'_, PyAny>,
