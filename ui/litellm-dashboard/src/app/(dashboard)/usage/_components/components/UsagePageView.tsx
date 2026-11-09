@@ -6,27 +6,29 @@
  * Works at 1m+ spend logs, by querying an aggregate table instead.
  */
 
-import { Download, Link2, Search, Sparkles, X } from "lucide-react";
+import { Download, Link2, Search, X } from "lucide-react";
 import { useQueryStates } from "nuqs";
 import type { DateRangePickerValue } from "@/components/shared/date_picker_types";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Trans, useTranslation } from "react-i18next";
 
 import { StackedUsageChart } from "@/components/shared/charts";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/shared/Alert";
+import { ErrorState } from "@/components/shared/ErrorState";
 import { Button } from "@/components/ui/button";
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 import { useAgents } from "@/app/(dashboard)/hooks/agents/useAgents";
-import { useCustomers } from "@/app/(dashboard)/hooks/customers/useCustomers";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import useIsOrgAdmin from "@/app/(dashboard)/hooks/useIsOrgAdmin";
 import { useCurrentUser } from "@/app/(dashboard)/hooks/users/useCurrentUser";
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
+import i18n from "@/i18n/i18n";
 import { toast } from "@/lib/toast";
 import { hasCapability } from "@/utils/capabilities";
 import { copyToClipboard } from "@/utils/dataUtils";
-import { all_admin_roles, internalUserRoles } from "@/utils/roles";
+import { hasProxyWideSpendView, internalUserRoles, isProxyAdminRole } from "@/utils/roles";
 import { ActivityMetrics, processActivityData } from "@/components/activity_metrics";
 import CloudZeroExportModal from "@/components/cloudzero_export_modal";
 import UserDropdown from "@/components/common_components/UserDropdown";
@@ -71,12 +73,17 @@ import EntityUsage, { EntityList } from "./EntityUsage/EntityUsage";
 import ModelViewToggle, { ModelViewType } from "./ModelViewToggle";
 import TopKeyView, { type TopKeyItem } from "@/components/UsagePage/components/EntityUsage/TopKeyView";
 import { getGlobalTopKeys } from "./EntityUsage/entityUsageAggregations";
-import UsageAIChatPanel from "./UsageAIChatPanel";
+import { AriaUsageTrigger } from "@/components/liteadmin/LiteAdmin";
 import { allowedUsageOptions, UsageViewSelect } from "./UsageViewSelect/UsageViewSelect";
 import UserRecordLink from "./UserRecordLink";
 import {
+  CLIENT_USAGE_VIEWS,
   cleanUsageUrl,
+  clientDateRangeFromParams,
+  clientDateRangePatch,
+  clientPanelPatch,
   dateRangeFromParams,
+  defaultUsageDateRange,
   dateRangePatch,
   entitySelectionPatch,
   selectedEntitiesFromParams,
@@ -87,41 +94,58 @@ import {
   usageViewFromParams,
   usageViewPatch,
 } from "../usageUrlState";
-import { overviewTotals, rollUpBreakdown } from "./overview/overviewData";
+import { overviewTotals, providerSpendRows } from "./overview/overviewData";
 import TopAgents from "./overview/TopAgents";
-import type { AgentRow } from "./overview/agentCatalog";
+import { parseUsageClient, topAgents, type AgentRow } from "./overview/agentCatalog";
+import ClientUsagePanel from "./ClientUsagePanel";
+import { resolveClientUsageScope } from "../hooks/clientUsageScope";
+import { useUsagePanelContext } from "../hooks/useUsagePanelContext";
+import ClientUsageSelect from "./ClientUsageSelect";
 import SpendByProvider from "./EntityUsage/SpendByProvider";
+import SubscriptionCosts from "./SubscriptionCost/SubscriptionCosts";
 import { useTagSummary } from "@/app/(dashboard)/hooks/tags/useTagSummary";
 import { Panel } from "./overview/Primitives";
 import UsageOverview from "./overview/UsageOverview";
 
+const GATEWAY_ENDPOINT_COLORS = ["#2b3fd6", "#ef4444"];
+
 interface UsagePageProps {
   teams: Team[];
   organizations: Organization[];
+  teamsLoading?: boolean;
+  defaultTimeRange?: string;
 }
 
-const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
-  const { accessToken, userRole, userId: userID, premiumUser } = useAuthorized();
+const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoading = false, defaultTimeRange }) => {
+  const { t } = useTranslation();
+  const { accessToken, userRole, userId: userID, premiumUser, isViewOnly, isLoading: authLoading } = useAuthorized();
   const [gatewayActivityData, setGatewayActivityData] = useState<FetchedGatewayActivity | null>(null);
 
-  // Create initial dates outside of state to prevent recreation
-  const initialFromDate = useMemo(() => new Date(Date.now() - 7 * 24 * 60 * 60 * 1000), []);
-  const initialToDate = useMemo(() => new Date(), []);
+  const defaultRange = useMemo(() => defaultUsageDateRange(defaultTimeRange), [defaultTimeRange]);
 
   const [urlParams, setUrlParams] = useQueryStates(usageUrlParsers);
   const { range, from, to } = urlParams;
   const dateValue = useMemo<DateRangePickerValue>(
-    () => dateRangeFromParams({ range, from, to }) ?? { from: initialFromDate, to: initialToDate },
-    [range, from, to, initialFromDate, initialToDate],
+    () => dateRangeFromParams({ range, from, to }) ?? defaultRange.value,
+    [range, from, to, defaultRange],
   );
 
+  const presetShortLabel = range ?? (from === null && to === null ? defaultRange.preset : null);
+
+  const { client_range, client_from, client_to } = urlParams;
+  const clientDateValue = useMemo<DateRangePickerValue>(
+    () => clientDateRangeFromParams({ client_range, client_from, client_to }) ?? dateValue,
+    [client_range, client_from, client_to, dateValue],
+  );
+  const clientStartTime = clientDateValue.from ?? null;
+  const clientEndTime = clientDateValue.to ?? null;
+  const clientInheritsRange =
+    clientStartTime?.getTime() === dateValue.from?.getTime() && clientEndTime?.getTime() === dateValue.to?.getTime();
+
   const [fetchedTags, setFetchedTags] = useState<FetchedForRange<EntityList[]> | null>(null);
-  // No [] default: an unresolved query must stay undefined so the customer
-  // filter reads as loading rather than as a range with no customers.
-  const { data: customers } = useCustomers();
   const { data: agentsResponse } = useAgents();
   const { data: currentUser } = useCurrentUser();
-  const isAdmin = all_admin_roles.includes(userRole || "");
+  const isAdmin = hasProxyWideSpendView(userRole);
   const canViewTagUsage = isAdmin || internalUserRoles.includes(userRole || "");
   const isOrgAdmin = useIsOrgAdmin();
   const canViewAgentUsage = hasCapability(userRole, "viewAgentUsage");
@@ -134,26 +158,50 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   const [modelQuery, setModelQuery] = useState("");
   const [isCloudZeroModalOpen, setIsCloudZeroModalOpen] = useState(false);
   const [isGlobalExportModalOpen, setIsGlobalExportModalOpen] = useState(false);
-  const [isAiChatOpen, setIsAiChatOpen] = useState(false);
   const selectedUsageView = usageViewFromParams(urlParams);
   const selectedTab = usageTabFromParams(urlParams, isAdmin);
   const usageView = allowedViews.includes(selectedUsageView) ? selectedUsageView : DEFAULT_USAGE_VIEW;
+
+  const selectedClient = CLIENT_USAGE_VIEWS.includes(usageView) ? urlParams.client : null;
+
+  const { pageRef, remember: rememberUsageContext } = useUsagePanelContext(selectedClient !== null);
 
   const [showCredentialBanner, setShowCredentialBanner] = useState(true);
   const [topKeysLimit, setTopKeysLimit] = useState<number>(5);
   // For non-admins or "my-usage" view, always pass their own user_id
   const effectiveUserId = usageView === "my-usage" || !isAdmin ? userID || null : urlParams.user;
 
+  const clientScopeInput = {
+    userId: userID,
+    userRole,
+    teams,
+    requestedTeamId: urlParams.client_team,
+    requestedUserId: urlParams.client_user ?? (urlParams.client_team ? null : effectiveUserId),
+    ownUsage: usageView === "my-usage",
+  };
+  const clientScope = resolveClientUsageScope(clientScopeInput);
+  const clientTeamId = usageView === "my-usage" ? null : urlParams.client_team || null;
+  const clientUserId = clientScope.scope?.userId ?? (clientTeamId ? urlParams.client_user || null : null);
+  const canViewTeamClients = clientScope.administeredTeams.length > 0;
+  const openClientPanel = (client: typeof selectedClient) => {
+    rememberUsageContext();
+    const initialTeam = usageView === "team" ? urlParams.team[0] ?? clientScope.administeredTeams[0]?.value : null;
+    void setUrlParams(
+      { ...clientPanelPatch(client), client_team: client ? initialTeam ?? null : null },
+      { scroll: false },
+    );
+  };
+
   const { isLoading: organizationsLoading } = useOrganizations();
-  const accessSettled = userRole !== null && !organizationsLoading;
+  const authorizationSettled = !authLoading && userRole !== null;
+  const accessSettled = authorizationSettled && !organizationsLoading && !teamsLoading;
   useEffect(() => {
     if (!accessSettled) return;
-    const cleanup = cleanUsageUrl(urlParams, { allowedViews, isAdmin });
+    const cleanup = cleanUsageUrl(urlParams, { allowedViews, isAdmin, canViewTeamClients });
     if (!cleanup) return;
-    if (cleanup.deniedAccess)
-      toast.warning("You don't have access to that usage view", { id: "usage-url-access-denied" });
+    if (cleanup.deniedAccess) toast.warning(i18n.t("usage.pageView.accessDenied"), { id: "usage-url-access-denied" });
     void setUrlParams(cleanup.patch);
-  }, [accessSettled, urlParams, allowedViews, isAdmin, setUrlParams]);
+  }, [accessSettled, urlParams, allowedViews, isAdmin, canViewTeamClients, setUrlParams]);
 
   const entitySelection = (entityType: EntityType) => ({
     selectedEntities: selectedEntitiesFromParams(urlParams, entityType),
@@ -218,6 +266,8 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
     data: aggregatedRaw,
     loading: aggregatedLoading,
     failed: aggregatedFailed,
+    errorMessage: aggregatedError,
+    reload: reloadAggregated,
   } = useAggregatedDailyActivity({
     fetch: () => ENTITY_API.user.aggregated(dailyActivityRequest as DailyActivityRequest),
     enabled: dailyActivityRequest !== null,
@@ -226,24 +276,33 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   // Tag data is deployment-wide with no per-user dimension, so Top agents only appears where the
   // rest of the page is deployment-wide too: an admin's global view with no user selected.
   const showTopAgents = isAdmin && usageView === "global" && effectiveUserId === null;
+  const globalClientScope = clientUserId === null && clientTeamId === null && !clientScope.error;
+  const globalClientSelected = isAdmin && selectedClient !== null && globalClientScope;
+  const needsAgentSummary = showTopAgents || globalClientSelected;
   const tagDailyRequest = useMemo<DailyActivityRequest | null>(
     () => (accessToken && startTime && endTime ? { accessToken, startTime, endTime, entityIds: null } : null),
     [accessToken, startTime, endTime],
   );
   const { data: tagDailyRaw, loading: tagDailyLoading } = useAggregatedDailyActivity({
     fetch: () => ENTITY_API.tag.aggregated(tagDailyRequest as DailyActivityRequest),
-    enabled: tagDailyRequest !== null && showTopAgents,
-    deps: [accessToken, startTime, endTime, showTopAgents],
+    enabled: tagDailyRequest !== null && needsAgentSummary,
+    deps: [accessToken, startTime, endTime, needsAgentSummary],
   });
   const tagDaily = useMemo(() => toDailyData(tagDailyRaw), [tagDailyRaw]);
   const openAgentActivity = useCallback(
     (agent: AgentRow) => {
+      const client = parseUsageClient(agent.id);
+      if (client) {
+        rememberUsageContext();
+        void setUrlParams(clientPanelPatch(client), { scroll: false });
+        return;
+      }
       void setUrlParams({
         ...usageViewPatch("user-agent-activity"),
         ...entitySelectionPatch("tag", agent.tags),
       });
     },
-    [setUrlParams],
+    [setUrlParams, rememberUsageContext],
   );
 
   // Gateway request counts (SGR). Admin-only: the source table is
@@ -267,7 +326,11 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
       });
   }, [isAdmin, gatewayRequest, currentGatewayRangeKey]);
 
-  const gatewayActivity = selectGatewayActivity(isAdmin, gatewayActivityData, currentGatewayRangeKey);
+  const gatewayActivity = selectGatewayActivity(
+    isAdmin && effectiveUserId === null,
+    gatewayActivityData,
+    currentGatewayRangeKey,
+  );
 
   const [requestErrorData, setRequestErrorData] = useState<FetchedForRange<RequestErrorActivity | null> | null>(null);
   const requestErrorFetchIdRef = useRef(0);
@@ -316,11 +379,18 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
     () => overviewTotals(userSpendData.metadata, gatewayActivity),
     [userSpendData.metadata, gatewayActivity],
   );
-  const providerSpend = useMemo(
-    () => rollUpBreakdown(userSpendData.results, "providers").map(({ key, ...row }) => ({ provider: key, ...row })),
-    [userSpendData.results],
+  const providerSpend = useMemo(() => providerSpendRows(userSpendData.results), [userSpendData.results]);
+  const {
+    data: tagSummary,
+    isLoading: tagSummaryLoading,
+    isError: tagSummaryFailed,
+    refetch: reloadTagSummary,
+  } = useTagSummary(startTime, endTime, needsAgentSummary);
+
+  const clientAgent = useMemo(
+    () => topAgents(tagSummary ?? []).find((agent) => agent.id === selectedClient) ?? null,
+    [tagSummary, selectedClient],
   );
-  const { data: tagSummary, isLoading: tagSummaryLoading } = useTagSummary(startTime, endTime, showTopAgents);
 
   // Calculate top API keys from the breakdown data
   const topKeys = useMemo<TopKeyItem[]>(
@@ -387,7 +457,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   );
 
   return (
-    <div className="relative w-full px-4 pt-3 pb-8 sm:px-6">
+    <div ref={pageRef} className="relative w-full px-4 pt-3 pb-8 sm:px-6">
       <header className="mb-3 flex w-full flex-wrap items-center justify-between gap-3 border-b pb-3">
         <UsageViewSelect
           value={usageView}
@@ -405,22 +475,29 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
               {urlParams.user && <UserRecordLink userId={urlParams.user} />}
             </div>
           )}
+          {CLIENT_USAGE_VIEWS.includes(usageView) && (
+            <div className="w-44">
+              <ClientUsageSelect value={selectedClient} onChange={openClientPanel} />
+            </div>
+          )}
           <div className="flex items-center gap-2">
-            <AdvancedDatePicker value={dateValue} onValueChange={handleDateChange} presetShortLabel={urlParams.range} />
-            <Button variant="outline" onClick={() => void copyToClipboard(window.location.href, "Link copied")}>
+            <AdvancedDatePicker
+              value={dateValue}
+              onValueChange={handleDateChange}
+              presetShortLabel={presetShortLabel}
+            />
+            <Button
+              variant="outline"
+              onClick={() => void copyToClipboard(window.location.href, t("usage.pageView.linkCopied"))}
+            >
               <Link2 />
-              Copy Share Link
+              {t("usage.pageView.copyShareLink")}
             </Button>
           </div>
         </div>
       </header>
       {aggregatedFailed && (
-        <Alert variant="error" className="mb-3">
-          <AlertDescription className="text-inherit">
-            Fetching spend data failed, so the totals below may be empty rather than final. Reload the page to try
-            again.
-          </AlertDescription>
-        </Alert>
+        <ErrorState title={t("usage.pageView.spendLoadFailed")} message={aggregatedError} onRetry={reloadAggregated} />
       )}
       <div>
         <div>
@@ -435,37 +512,34 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <TabsList variant="line">
                     <TabsTrigger value="cost" className="flex-none px-3">
-                      Overview
+                      {t("usage.pageView.tabs.overview")}
                     </TabsTrigger>
                     <TabsTrigger value="models" className="flex-none px-3">
-                      Model Activity
+                      {t("usage.pageView.tabs.modelActivity")}
                     </TabsTrigger>
                     <TabsTrigger value="keys" className="flex-none px-3">
-                      Key Activity
+                      {t("usage.pageView.tabs.keyActivity")}
                     </TabsTrigger>
                     <TabsTrigger value="users" className="flex-none px-3">
-                      User Activity
+                      {t("usage.pageView.tabs.userActivity")}
                     </TabsTrigger>
                     <TabsTrigger value="mcp" className="flex-none px-3">
-                      MCP Server Activity
+                      {t("usage.pageView.tabs.mcpServerActivity")}
                     </TabsTrigger>
                     <TabsTrigger value="endpoints" className="flex-none px-3">
-                      Endpoint Activity
+                      {t("usage.pageView.tabs.endpointActivity")}
                     </TabsTrigger>
                     {isAdmin && (
                       <TabsTrigger value="errors" className="flex-none px-3">
-                        Errors
+                        {t("usage.pageView.tabs.errors")}
                       </TabsTrigger>
                     )}
                   </TabsList>
                   <div className="flex items-center gap-2">
-                    <Button variant="outline" size="sm" onClick={() => setIsAiChatOpen(true)}>
-                      <Sparkles />
-                      Ask AI
-                    </Button>
+                    <AriaUsageTrigger />
                     <Button variant="outline" size="sm" onClick={() => setIsGlobalExportModalOpen(true)}>
                       <Download />
-                      Export Data
+                      {t("usage.pageView.exportData")}
                     </Button>
                   </div>
                 </div>
@@ -476,6 +550,16 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                     loading={loading}
                     requestCountsPending={requestCountsPending}
                     budget={currentUser?.max_budget ?? null}
+                    subscriptionCosts={
+                      <SubscriptionCosts
+                        accessToken={accessToken}
+                        startTime={startTime}
+                        endTime={endTime}
+                        enabled={isAdmin && effectiveUserId === null}
+                        meteredSpend={totals.spend}
+                        canEdit={!isViewOnly && isProxyAdminRole(userRole || "")}
+                      />
+                    }
                     topKeys={
                       <TopKeyView
                         topKeys={topKeys}
@@ -489,18 +573,21 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                       gatewayActivity && gatewayActivity.by_route.length > 0 ? (
                         <Panel
                           testId="gateway-requests-by-endpoint"
-                          title="Gateway Requests by Endpoint"
-                          subtitle="Successful and failed requests per route"
+                          title={t("usage.pageView.gatewayByEndpoint.title")}
+                          subtitle={t("usage.pageView.gatewayByEndpoint.subtitle")}
                           bodyClassName="px-2 pt-4"
                         >
                           <StackedUsageChart
                             data={gatewayRequestsByRoute.map((row) => ({
                               route: row.route,
-                              Successful: row.successful_requests,
-                              Failed: row.failed_requests,
+                              [t("usage.pageView.gatewayByEndpoint.successful")]: row.successful_requests,
+                              [t("usage.pageView.gatewayByEndpoint.failed")]: row.failed_requests,
                             }))}
-                            series={["Successful", "Failed"]}
-                            colors={["#2b3fd6", "#ef4444"]}
+                            series={[
+                              t("usage.pageView.gatewayByEndpoint.successful"),
+                              t("usage.pageView.gatewayByEndpoint.failed"),
+                            ]}
+                            colors={GATEWAY_ENDPOINT_COLORS}
                             xKey="route"
                             format={(value) => value.toLocaleString()}
                             className="h-64"
@@ -533,8 +620,8 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                         <Search className="size-4 text-muted-foreground" />
                       </InputGroupAddon>
                       <InputGroupInput
-                        aria-label="Search models"
-                        placeholder="Search by model name"
+                        aria-label={t("usage.pageView.modelSearch.label")}
+                        placeholder={t("usage.pageView.modelSearch.placeholder")}
                         value={modelQuery}
                         onChange={(event) => setModelQuery(event.target.value)}
                       />
@@ -542,7 +629,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                         <InputGroupAddon align="inline-end">
                           <InputGroupButton
                             size="icon-xs"
-                            aria-label="Clear model search"
+                            aria-label={t("usage.pageView.modelSearch.clear")}
                             onClick={() => setModelQuery("")}
                           >
                             <X />
@@ -556,7 +643,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                   Object.keys(modelMetrics).length > 0 &&
                   Object.keys(filteredModelMetrics).length === 0 ? (
                     <p className="rounded-lg border p-6 text-center text-sm text-muted-foreground">
-                      No models match &quot;{trimmedModelQuery}&quot; in this date range
+                      {t("usage.pageView.modelSearch.noMatch", { query: trimmedModelQuery })}
                     </p>
                   ) : (
                     <ActivityMetrics
@@ -645,12 +732,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
               {...entitySelection("customer")}
               userID={userID}
               userRole={userRole}
-              entityList={
-                customers?.map((customer) => ({
-                  label: customer.alias || customer.user_id,
-                  value: customer.user_id,
-                })) || null
-              }
+              entityList={null}
               premiumUser={premiumUser}
               dateValue={dateValue}
             />
@@ -660,17 +742,20 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
             <>
               {showCredentialBanner && (
                 <Alert variant="info" className="mb-5">
-                  <AlertTitle>Reusable credentials are automatically tracked as tags</AlertTitle>
+                  <AlertTitle>{t("usage.pageView.credentialBanner.title")}</AlertTitle>
                   <AlertDescription className="text-inherit">
-                    When a reusable credential is used, it will appear as a tag prefixed with{" "}
-                    <code className="rounded bg-black/5 px-1 py-0.5 font-mono text-xs">Credential: </code>
-                    in this view.
+                    <Trans
+                      i18nKey="usage.pageView.credentialBanner.description"
+                      components={{
+                        prefix: <code className="rounded bg-black/5 px-1 py-0.5 font-mono text-xs">Credential: </code>,
+                      }}
+                    />
                   </AlertDescription>
                   <AlertAction>
                     <Button
                       variant="ghost"
                       size="icon-xs"
-                      aria-label="Close"
+                      aria-label={t("usage.pageView.credentialBanner.close")}
                       onClick={() => setShowCredentialBanner(false)}
                     >
                       <X />
@@ -730,6 +815,36 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
         </div>
       </div>
 
+      {selectedClient && accessSettled && (
+        <ClientUsagePanel
+          client={selectedClient}
+          userId={clientUserId}
+          canChooseUser={clientScope.canChooseGlobalUser && clientTeamId === null}
+          teamId={clientTeamId}
+          scopeError={clientScope.error}
+          teams={usageView === "my-usage" ? [] : clientScope.administeredTeams}
+          members={clientScope.members}
+          defaultScopeLabel={
+            isAdmin ? t("usage.pageView.clientScope.allUsers") : t("usage.pageView.clientScope.myUsage")
+          }
+          onTeamChange={(teamId) => void setUrlParams({ client_team: teamId, client_user: "" }, { scroll: false })}
+          onUserChange={(userId) => void setUrlParams({ client_user: userId ?? "" }, { scroll: false })}
+          onClose={() => void setUrlParams(clientPanelPatch(null), { scroll: false })}
+          accessToken={accessToken}
+          startTime={clientStartTime}
+          endTime={clientEndTime}
+          dateValue={clientDateValue}
+          presetShortLabel={client_range ?? (clientInheritsRange ? presetShortLabel : null)}
+          onDateChange={(value, preset) => void setUrlParams(clientDateRangePatch(value, preset), { scroll: false })}
+          agent={clientInheritsRange ? clientAgent : null}
+          daily={clientInheritsRange ? tagDaily : []}
+          colorSource={userSpendData.results}
+          loading={!accessSettled || tagSummaryLoading || tagDailyLoading}
+          summaryFailed={clientInheritsRange && tagSummaryFailed}
+          onRetry={() => void reloadTagSummary()}
+        />
+      )}
+
       {/* CloudZero Export Modal */}
       <CloudZeroExportModal
         isOpen={isCloudZeroModalOpen}
@@ -749,11 +864,8 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
         }
         dateRange={dateValue}
         selectedFilters={[]}
-        customTitle="Export Usage Data"
+        customTitle={t("usage.pageView.exportTitle")}
       />
-
-      {/* AI Chat Panel */}
-      <UsageAIChatPanel open={isAiChatOpen} onClose={() => setIsAiChatOpen(false)} accessToken={accessToken} />
     </div>
   );
 };

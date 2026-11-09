@@ -323,10 +323,16 @@ def pytest_runtest_teardown(item: pytest.Item, nextitem: pytest.Item | None) -> 
         return (yield)
 
 
+@pytest.fixture(autouse=True)
+def _reset_upstream_observations() -> None:
+    upstream: Final = os.environ.get("INTEGRATION_UPSTREAM_URL")
+    if upstream is not None:
+        httpx.delete(f"{upstream}/__observations", timeout=5, trust_env=False).raise_for_status()
+
+
 @pytest.fixture
 def gateway() -> Iterator[Gateway]:
     with gateway_from_environment() as value:
-        httpx.get(f"{value.upstream_url}/__observations", timeout=5, trust_env=False).raise_for_status()
         yield value
 
 

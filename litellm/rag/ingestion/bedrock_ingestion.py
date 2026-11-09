@@ -14,11 +14,15 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, ClassVar, Final
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.aws_partition import get_aws_arn_prefix
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+from litellm.llms.bedrock.web_identity_session_policy import (
+    BEDROCK_KNOWLEDGE_BASE_INGESTION_SESSION_POLICY,
+    WebIdentitySessionPolicy,
+)
 from litellm.rag.ingestion.base_ingestion import BaseRAGIngestion, RAGIngestBadRequestError
 
 if TYPE_CHECKING:
@@ -85,6 +89,8 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
     - aws_web_identity_token, aws_sts_endpoint, aws_external_id
     """
 
+    _web_identity_session_policy: ClassVar[WebIdentitySessionPolicy] = BEDROCK_KNOWLEDGE_BASE_INGESTION_SESSION_POLICY
+
     def __init__(
         self,
         ingest_options: RAGIngestOptions,
@@ -106,11 +112,11 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
         )
         self.embedding_model = self.vector_store_config.get("embedding_model") or "amazon.titan-embed-text-v2:0"
 
-        self.wait_for_ingestion = self.vector_store_config.get("wait_for_ingestion", False)
+        self.wait_for_ingestion: object = self.vector_store_config.get("wait_for_ingestion", False)
         self.ingestion_timeout: int = _get_int(self.vector_store_config.get("ingestion_timeout"), 300)
 
         # Get AWS region using BaseAWSLLM method
-        _aws_region: Final = self.vector_store_config.get("aws_region_name")
+        _aws_region: Final[object] = self.vector_store_config.get("aws_region_name")
         self.aws_region_name = self.get_aws_region_name_for_non_llm_api_calls(
             aws_region_name=str(_aws_region) if _aws_region else None
         )

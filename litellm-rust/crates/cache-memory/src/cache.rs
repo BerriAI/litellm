@@ -2,7 +2,10 @@ use std::{
     cmp::Reverse,
     collections::{BinaryHeap, HashMap, HashSet},
     hash::Hash,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex, MutexGuard,
+        atomic::{AtomicUsize, Ordering},
+    },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -31,7 +34,7 @@ struct CacheState<V> {
 
 pub struct InMemoryCache<V: Clone> {
     state: Mutex<CacheState<V>>,
-    max_size_in_memory: usize,
+    max_size_in_memory: AtomicUsize,
     default_ttl: Duration,
     max_entry_bytes: Option<usize>,
     measure_value: Option<ValueMeasure<V>>,
@@ -74,7 +77,9 @@ impl<V: Clone> InMemoryCache<V> {
                 expirations: HashMap::new(),
                 expiration_heap: BinaryHeap::new(),
             }),
-            max_size_in_memory: max_size_in_memory.unwrap_or(DEFAULT_MAX_SIZE_IN_MEMORY),
+            max_size_in_memory: AtomicUsize::new(
+                max_size_in_memory.unwrap_or(DEFAULT_MAX_SIZE_IN_MEMORY),
+            ),
             default_ttl: default_ttl
                 .filter(|ttl| !ttl.is_zero())
                 .unwrap_or(DEFAULT_TTL),
@@ -84,23 +89,27 @@ impl<V: Clone> InMemoryCache<V> {
         }
     }
 
+    fn lock(&self) -> Result<MutexGuard<'_, CacheState<V>>, Error> {
+        Ok(self.state.lock()?)
+    }
+
     pub fn set_cache(
         &self,
         key: impl Into<String>,
         value: V,
         ttl: Option<Duration>,
     ) -> Result<CacheWrite, Error> {
-        if self.max_size_in_memory == 0 {
+        if self.max_size_in_memory() == 0 {
             return Ok(CacheWrite::Disabled);
         }
         let now = (self.now)();
-        let mut state = self.state.lock().map_err(|_| Error::Unavailable)?;
+        let mut state = self.lock()?;
         self.store(&mut state, key.into(), value, ttl, now)
     }
 
     pub fn get_cache(&self, key: &str) -> Result<Option<V>, Error> {
         let now = (self.now)();
-        let mut state = self.state.lock().map_err(|_| Error::Unavailable)?;
+        let mut state = self.lock()?;
         if state
             .expirations
             .get(key)
@@ -124,15 +133,15 @@ impl<V: Clone> InMemoryCache<V> {
     /// fits.
     pub fn evict_cache(&self) -> Result<(), Error> {
         let now = (self.now)();
-        let mut state = self.state.lock().map_err(|_| Error::Unavailable)?;
-        Self::evict(&mut state, self.max_size_in_memory, now, None);
+        let mut state = self.lock()?;
+        Self::evict(&mut state, self.max_size_in_memory(), now, None);
         Ok(())
     }
 
     /// `evict_element_if_expired`: `true` when `key` had expired and was removed.
     pub fn evict_element_if_expired(&self, key: &str) -> Result<bool, Error> {
         let now = (self.now)();
-        let mut state = self.state.lock().map_err(|_| Error::Unavailable)?;
+        let mut state = self.lock()?;
         let expired = state
             .expirations
             .get(key)
@@ -153,12 +162,7 @@ impl<V: Clone> InMemoryCache<V> {
 
     /// The number of stored entries, expired ones included until they are evicted.
     pub fn len(&self) -> Result<usize, Error> {
-        Ok(self
-            .state
-            .lock()
-            .map_err(|_| Error::Unavailable)?
-            .values
-            .len())
+        Ok(self.lock()?.values.len())
     }
 
     pub fn is_empty(&self) -> Result<bool, Error> {
@@ -167,16 +171,20 @@ impl<V: Clone> InMemoryCache<V> {
 
     /// Entries in the expiration heap, stale ones included; bounded by eviction.
     pub fn expiration_heap_len(&self) -> Result<usize, Error> {
-        Ok(self
-            .state
-            .lock()
-            .map_err(|_| Error::Unavailable)?
-            .expiration_heap
-            .len())
+        Ok(self.lock()?.expiration_heap.len())
     }
 
     pub fn max_size_in_memory(&self) -> usize {
-        self.max_size_in_memory
+        self.max_size_in_memory.load(Ordering::Relaxed)
+    }
+
+    /// `DualCache.update_in_memory_max_size`: `None` restores the default. Entries already held stay
+    /// until the next write evicts down to the new size.
+    pub fn update_max_size_in_memory(&self, max_size_in_memory: Option<usize>) {
+        self.max_size_in_memory.store(
+            max_size_in_memory.unwrap_or(DEFAULT_MAX_SIZE_IN_MEMORY),
+            Ordering::Relaxed,
+        );
     }
 
     pub fn max_entry_bytes(&self) -> Option<usize> {
@@ -184,13 +192,7 @@ impl<V: Clone> InMemoryCache<V> {
     }
 
     pub fn expires_at(&self, key: &str) -> Result<Option<Duration>, Error> {
-        Ok(self
-            .state
-            .lock()
-            .map_err(|_| Error::Unavailable)?
-            .expirations
-            .get(key)
-            .copied())
+        Ok(self.lock()?.expirations.get(key).copied())
     }
 
     pub async fn async_get_ttl(&self, key: &str) -> Result<Option<Duration>, Error> {
@@ -198,7 +200,7 @@ impl<V: Clone> InMemoryCache<V> {
     }
 
     pub async fn async_get_oldest_n_keys(&self, count: usize) -> Result<Vec<String>, Error> {
-        let state = self.state.lock().map_err(|_| Error::Unavailable)?;
+        let state = self.lock()?;
         let mut expirations = state
             .expirations
             .iter()
@@ -212,14 +214,31 @@ impl<V: Clone> InMemoryCache<V> {
             .collect())
     }
 
+    /// Every live entry, for callers that inspect the whole tier.
+    pub fn entries(&self) -> Result<Vec<(String, V)>, Error> {
+        let now = (self.now)();
+        let state = self.lock()?;
+        Ok(state
+            .values
+            .iter()
+            .filter(|(key, _)| {
+                state
+                    .expirations
+                    .get(*key)
+                    .is_none_or(|expiration| *expiration >= now)
+            })
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect())
+    }
+
     pub fn delete_cache(&self, key: &str) -> Result<(), Error> {
-        let mut state = self.state.lock().map_err(|_| Error::Unavailable)?;
+        let mut state = self.lock()?;
         Self::remove(&mut state, key);
         Ok(())
     }
 
     pub fn flush_cache(&self) -> Result<(), Error> {
-        let mut state = self.state.lock().map_err(|_| Error::Unavailable)?;
+        let mut state = self.lock()?;
         state.values.clear();
         state.expirations.clear();
         state.expiration_heap.clear();
@@ -288,7 +307,7 @@ impl<V: Clone> InMemoryCache<V> {
         ttl: Option<Duration>,
         now: Duration,
     ) -> Result<CacheWrite, Error> {
-        Self::evict(state, self.max_size_in_memory, now, None);
+        Self::evict(state, self.max_size_in_memory(), now, None);
         if !self.check_value_size(&value)? {
             return Ok(CacheWrite::TooLarge);
         }
@@ -312,12 +331,12 @@ where
         eligible: &[V],
         context: ExactCacheContext,
     ) -> Result<V, Error> {
-        if self.max_size_in_memory == 0 {
+        if self.max_size_in_memory() == 0 {
             return Ok(candidate);
         }
         let now = (self.now)();
-        let mut state = self.state.lock().map_err(|_| Error::Unavailable)?;
-        Self::evict(&mut state, self.max_size_in_memory, now, Some(key));
+        let mut state = self.lock()?;
+        Self::evict(&mut state, self.max_size_in_memory(), now, Some(key));
         let existing = state
             .values
             .get(key)
@@ -347,11 +366,11 @@ impl CounterCache for InMemoryCache<f64> {
         amount: f64,
         context: ExactCacheContext,
     ) -> Result<f64, Error> {
-        if self.max_size_in_memory == 0 {
+        if self.max_size_in_memory() == 0 {
             return Ok(amount);
         }
         let now = (self.now)();
-        let mut state = self.state.lock().map_err(|_| Error::Unavailable)?;
+        let mut state = self.lock()?;
         let value = Self::live(&mut state, key, now).unwrap_or_default() + amount;
         self.store(&mut state, key.into(), value, self.get_ttl(&context), now)?;
         Ok(value)
@@ -420,11 +439,11 @@ where
         values: Vec<Self::SetValue>,
         ttl: Option<Duration>,
     ) -> Result<Self::SetResult, Error> {
-        if self.max_size_in_memory == 0 {
+        if self.max_size_in_memory() == 0 {
             return Ok(values);
         }
         let now = (self.now)();
-        let mut state = self.state.lock().map_err(|_| Error::Unavailable)?;
+        let mut state = self.lock()?;
         let mut stored = Self::live(&mut state, key, now).unwrap_or_default();
         stored.extend(values.iter().cloned());
         self.store(&mut state, key.into(), stored, ttl, now)?;

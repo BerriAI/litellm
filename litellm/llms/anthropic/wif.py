@@ -15,6 +15,7 @@ from typing_extensions import assert_never
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.auth.client_credentials import keycloak_assertion_source
 from litellm.llms.base_llm.auth.identity_source import (
     AnthropicIdentitySourceKind,
@@ -324,7 +325,7 @@ def anthropic_internal_issuer_jwks(credential_values: Mapping[str, object]) -> A
 
 def build_anthropic_wif_spec(params: AnthropicWifParams, api_base: str) -> TokenExchangeSpec:
     return TokenExchangeSpec(
-        token_url=api_base.rstrip("/") + ANTHROPIC_TOKEN_EXCHANGE_PATH,
+        token_url=join_api_base(api_base, ANTHROPIC_TOKEN_EXCHANGE_PATH),
         assertion_ref=params.assertion_ref,
         assertion_field="assertion",
         static_body=MappingProxyType(
@@ -551,9 +552,12 @@ def _resolve_assertion_ref(litellm_params: Mapping[str, object] | None) -> str |
     file_env: Final = _env_str("ANTHROPIC_IDENTITY_TOKEN_FILE")
     if file_env is not None:
         return f"oidc/file/{file_env}"
-    if _env_str(_INLINE_ENV_VAR) is not None:
-        return f"oidc/env/{_INLINE_ENV_VAR}"
-    return None
+    inline_env: Final = _env_str(_INLINE_ENV_VAR)
+    if inline_env is None:
+        return None
+    if inline_env.startswith(_ACCEPTED_REF_PREFIX):
+        return _validated_inline_ref(inline_env)
+    return f"oidc/env/{_INLINE_ENV_VAR}"
 
 
 def _validated_inline_ref(value: str) -> str:

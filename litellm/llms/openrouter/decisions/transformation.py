@@ -13,7 +13,7 @@ class OpenRouterDecisionsConfig(BaseDecisionsConfig):
         return "https://openrouter.ai/api"
 
     def provider_reported_cost(self, response: DecisionsIRResponse) -> float | None:
-        cost: Final = response.usage.extra.get("cost")
+        cost: Final = response.usage.extra.get("cost") if response.usage is not None else None
         if not isinstance(cost, (int, float)):
             return None
         return float(cost)

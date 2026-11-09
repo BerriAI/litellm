@@ -3,6 +3,7 @@ from collections import deque
 from pathlib import Path
 from typing import Final
 
+import httpx
 import pytest
 from starlette.types import Message, Scope
 from starlette.websockets import WebSocket
@@ -50,11 +51,34 @@ async def test_realtime_disconnect_after_session_creation_keeps_unexpected_error
     else:
         await provider.realtime(socket)
     assert [item["type"] for item in outgoing] == ["websocket.accept", "websocket.send"]
-    observed: Final = tuple(provider.observations.get_nowait() for _ in range(provider.observations.qsize()))
+    observed: Final = provider.observations.snapshot()
     assert [(item.method, item.body) for item in observed] == [
         ("WEBSOCKET", {"query": [["model", "synthetic"]]}),
         ("WEBSOCKET_FRAME", {"type": "response.create"}),
     ]
+
+
+@pytest.mark.asyncio
+async def test_observations_read_without_draining_until_explicitly_reset(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[2]))
+    from integration._support.upstream import Provider
+
+    transport: Final = httpx.ASGITransport(app=Provider().app())
+    async with httpx.AsyncClient(transport=transport, base_url="http://upstream") as client:
+        sent: Final = await client.post(
+            "/v1/chat/completions",
+            json={"model": "synthetic", "messages": [{"role": "user", "content": "observed-marker"}]},
+        )
+        assert sent.status_code == 200, sent.text
+        first: Final = (await client.get("/__observations")).json()["requests"]
+        second: Final = (await client.get("/__observations")).json()["requests"]
+        assert [(item["path"], item["body"]["messages"][0]["content"]) for item in first] == [
+            ("/v1/chat/completions", "observed-marker")
+        ]
+        assert second == first
+        reset: Final = await client.delete("/__observations")
+        assert reset.status_code == 204
+        assert (await client.get("/__observations")).json()["requests"] == []
 
 
 @pytest.mark.asyncio
@@ -86,6 +110,39 @@ async def test_mcp_notification_ordering_preserves_other_responses(
 
     await _acknowledge_notifications_after_dispatch(app)({"type": "http", "method": method}, receive, send)
     assert outgoing == list(messages)
+
+
+@pytest.mark.asyncio
+async def test_mcp_http_disconnect_cancels_an_in_flight_handler(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[2]))
+    from integration._support.mcp import _cancel_on_disconnect
+    from starlette.types import Receive, Send
+
+    started: Final = asyncio.Event()
+    stopped: Final = asyncio.Event()
+    body: Final[Message] = {"type": "http.request", "body": b"tool-call", "more_body": False}
+    pending: Final = iter((body,))
+
+    async def receive() -> Message:
+        message: Final = next(pending, None)
+        if message is not None:
+            return message
+        await started.wait()
+        return {"type": "http.disconnect"}
+
+    async def send(message: Message) -> None:
+        pytest.fail(f"Disconnected handler sent a response: {message}")
+
+    async def app(scope: Scope, receive: Receive, send: Send) -> None:
+        assert await receive() == body
+        started.set()
+        try:
+            await asyncio.Future[None]()
+        finally:
+            stopped.set()
+
+    await asyncio.wait_for(_cancel_on_disconnect(app)({"type": "http"}, receive, send), 2)
+    assert stopped.is_set(), "The disconnected HTTP handler was left running"
 
 
 @pytest.mark.asyncio

@@ -893,7 +893,7 @@ def owned_proxy_process(
                 limits=GATEWAY_LIMITS,
             ) as client:
                 yield OwnedProxy(
-                    Gateway(client, gateway.key, gateway.upstream_url, owned.database_url),
+                    Gateway(client, gateway.key, gateway.upstream_url, owned.database_url, workers),
                     process,
                     launch.log,
                     healthcheck,
@@ -987,6 +987,7 @@ def refused_boot_log(
     overrides: Mapping[str, str],
     *,
     config: Path | None = None,
+    extra_arguments: tuple[str, ...] = (),
 ) -> str:
     """Start the proxy and return its log once it exits non-zero instead of becoming ready."""
     root: Final = _proxy_root()
@@ -1004,6 +1005,7 @@ def refused_boot_log(
         "--num_workers",
         "1",
         *DB_PUSH,
+        *extra_arguments,
     )
     launch: Final = _launch(command, root, environment, output)
     try:

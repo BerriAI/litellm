@@ -1,6 +1,6 @@
 from typing import TYPE_CHECKING, Any, Final
 
-from litellm.litellm_core_utils.url_utils import encode_url_path_segment
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
 from litellm.llms.openai.vector_stores.transformation import OpenAIVectorStoreConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.router import GenericLiteLLMParams
@@ -66,10 +66,7 @@ class PGVectorStoreConfig(OpenAIVectorStoreConfig):
                 "PG Vector API base URL is required. Set PG_VECTOR_API_BASE environment variable or pass api_base in litellm_params."
             )
 
-        # Remove trailing slashes
-        api_base = api_base.rstrip("/")
-
-        return f"{api_base}/v1/vector_stores"
+        return join_api_base(api_base, "v1/vector_stores")
 
     def transform_search_vector_store_request(
         self,
@@ -79,10 +76,10 @@ class PGVectorStoreConfig(OpenAIVectorStoreConfig):
         api_base: str,
         litellm_logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
-        extra_body: dict[str, Any] | None = None,
+        extra_body: dict[str, object] | None = None,
     ) -> tuple[str, dict]:
         encoded_vector_store_id: Final = encode_url_path_segment(vector_store_id, field_name="vector_store_id")
-        url: Final = f"{api_base}/{encoded_vector_store_id}/search"
+        url: Final = join_api_base(api_base, f"{encoded_vector_store_id}/search")
         _, request_body = super().transform_search_vector_store_request(
             vector_store_id=vector_store_id,
             query=query,

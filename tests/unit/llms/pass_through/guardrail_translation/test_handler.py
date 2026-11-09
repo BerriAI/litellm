@@ -19,6 +19,22 @@ def test_full_payload_guardrail_text_excludes_the_server_streaming_marker():
     assert json.loads(text) == body, text
 
 
+def test_full_payload_guardrail_text_excludes_the_injected_litellm_metadata():
+    body: Final = {"model": "m", "messages": [{"role": "user", "content": "hi"}], "guardrails": ["g"]}
+    litellm_metadata: Final = {
+        "user_api_key_token": "hashed-key",
+        "user_api_key_user_email": "someone@example.com",
+        "user_api_key_user_role": "proxy_admin",
+    }
+
+    text: Final = PassThroughEndpointHandler()._extract_text_for_guardrail(
+        {**body, "litellm_metadata": litellm_metadata},
+        None,
+    )
+
+    assert json.loads(text) == body, text
+
+
 @pytest.mark.parametrize(
     "marker",
     [

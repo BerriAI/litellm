@@ -5,10 +5,12 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Final
 
+import httpx
 import pytest
 from pydantic import TypeAdapter
 
 from litellm._internal_context import is_internal_call
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.rust_bridge.host import callbacks_legacy_python as legacy
 from litellm.rust_bridge.host.callbacks_legacy_python import failure_handler, setup
@@ -167,6 +169,75 @@ def test_failure_handler_of_an_internal_call_leaves_the_outer_budget_reservation
     pending.close()
 
 
+class _Hooks(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.hooks: list[str] = []
+
+    def log_success_event(self, kwargs: object, response_obj: object, start_time: object, end_time: object) -> None:
+        self.hooks.append("sync_success")
+
+    async def async_log_success_event(
+        self, kwargs: object, response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self.hooks.append("async_success")
+
+    def log_failure_event(self, kwargs: object, response_obj: object, start_time: object, end_time: object) -> None:
+        self.hooks.append("sync_failure")
+
+    async def async_log_failure_event(
+        self, kwargs: object, response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self.hooks.append("async_failure")
+
+
+def _logger_with_hooks(hooks: _Hooks) -> Logging:
+    logger: Final = Logging(
+        model="mistral/mistral-ocr-latest",
+        messages=[],
+        stream=False,
+        call_type="aocr",
+        start_time=datetime.datetime.now(),
+        litellm_call_id="hooks",
+        function_id="hooks",
+        dynamic_success_callbacks=[hooks],
+        dynamic_async_success_callbacks=[hooks],
+        dynamic_failure_callbacks=[hooks],
+        dynamic_async_failure_callbacks=[hooks],
+    )
+    logger.update_environment_variables(litellm_params={"metadata": {}}, optional_params={})
+    return logger
+
+
+@pytest.mark.asyncio
+async def test_failure_of_an_async_call_gives_a_logger_with_both_failure_hooks_only_the_async_one() -> None:
+    hooks: Final = _Hooks()
+    now: Final = datetime.datetime.now()
+    kwargs: Final = {**_OCR_KWARGS, "litellm_logging_obj": _logger_with_hooks(hooks)}
+    result: Final = setup("aocr", (), kwargs, now, asynchronous=True)
+
+    assert failure_handler(result.logger, RuntimeError("upstream refused"), now, now, asynchronous=False) is None
+    pending: Final = failure_handler(result.logger, RuntimeError("upstream refused"), now, now, asynchronous=True)
+    assert pending is not None
+    await pending
+
+    assert hooks.hooks == ["async_failure"]
+
+
+@pytest.mark.parametrize("earlier_async_call", [False, True])
+def test_failure_of_a_sync_call_keeps_the_sync_failure_hook(earlier_async_call: bool) -> None:
+    hooks: Final = _Hooks()
+    now: Final = datetime.datetime.now()
+    kwargs: Final = {**_OCR_KWARGS, "litellm_logging_obj": _logger_with_hooks(hooks)}
+    if earlier_async_call:
+        setup("aocr", (), kwargs, now, asynchronous=True)
+    result: Final = setup("ocr", (), kwargs, now, asynchronous=False)
+
+    assert failure_handler(result.logger, RuntimeError("upstream refused"), now, now, asynchronous=False) is None
+
+    assert hooks.hooks == ["sync_failure"]
+
+
 CONTRACT_PATH: Final = Path(__file__).parents[4] / "litellm-rust/crates/callbacks-legacy-python/python_contract.json"
 
 
@@ -174,3 +245,56 @@ def test_the_rust_contract_matches_the_shim_signatures() -> None:
     contract: Final = TypeAdapter(dict[str, list[str]]).validate_json(CONTRACT_PATH.read_text())
 
     assert contract == {name: list(inspect.signature(getattr(legacy, name)).parameters) for name in contract}
+
+
+def _messages_logger() -> Logging:
+    return Logging(
+        model="claude-sonnet-4-5",
+        messages=[],
+        stream=False,
+        call_type="anthropic_messages",
+        start_time=datetime.datetime.now(),
+        litellm_call_id="messages",
+        function_id="messages",
+    )
+
+
+def test_native_provider_response_is_recorded_for_logging_replay() -> None:
+    logger: Final = _messages_logger()
+
+    legacy.record_response(logger, 200, (("request-id", "req_native"),), '{"id": "msg_native"}')
+
+    recorded: Final[object] = logger.model_call_details["httpx_response"]
+    assert isinstance(recorded, httpx.Response)
+    assert recorded.status_code == 200
+    assert recorded.content == b'{"id": "msg_native"}'
+    assert logger.model_call_details["response_headers"]["request-id"] == "req_native"
+
+
+def test_native_provider_exchange_window_is_recorded_like_the_timed_post() -> None:
+    logger: Final = _messages_logger()
+    logger.model_call_details["litellm_params"] = {"litellm_metadata": {"user_api_key": "hashed"}}
+
+    legacy.record_api_window(logger, 1_700_000_000.0, 1_700_000_000.25)
+
+    assert logger.model_call_details["llm_api_duration_ms"] == 250.0
+    metadata: Final = logger.model_call_details["litellm_params"]["litellm_metadata"]
+    assert metadata["llm_api_timing_windows"] == ((1_700_000_000.0, 1_700_000_000.25),)
+
+
+def test_stream_head_is_stamped_in_place_with_the_call_hidden_params() -> None:
+    logger: Final = _messages_logger()
+    head: Final[dict[str, object]] = {"additional_headers": {"request-id": "req_native"}}
+    started: Final = datetime.datetime.now()
+
+    legacy.stamp_stream_head(
+        head,
+        logger,
+        {"model": "anthropic/claude-sonnet-4-5", "litellm_call_id": "messages"},
+        started,
+        started + datetime.timedelta(milliseconds=5),
+    )
+
+    assert head["additional_headers"] == {"request-id": "req_native", "llm_provider-request-id": "req_native"}
+    assert head["litellm_call_id"] == "messages"
+    assert "_response_ms" in head

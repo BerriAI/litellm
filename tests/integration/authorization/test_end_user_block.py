@@ -36,6 +36,10 @@ def _observed(upstream: httpx.Client) -> list[dict[str, JsonValue]]:
     return requests
 
 
+def _reset_observations(upstream: httpx.Client) -> None:
+    upstream.delete("/__observations").raise_for_status()
+
+
 def _chat(gateway: Gateway, model: str, key: str, end_user: str) -> httpx.Response:
     return gateway.request(
         "POST",
@@ -215,7 +219,7 @@ def test_blocked_end_user_is_refused_on_every_proxy_and_unblock_restores(
     ):
         rig: Final = _two_callback_proxies(gateway, tmp_path, stack)
         with rig.first.scenario() as scenario:
-            _observed(upstream)
+            _reset_observations(upstream)
             end_user: Final = f"integration-end-user-{uuid.uuid4().hex}"
             created: Final = rig.first.request("POST", "/customer/new", {"user_id": end_user, "max_budget": 100.0})
             assert created.status_code == 200, created.text
@@ -224,7 +228,7 @@ def test_blocked_end_user_is_refused_on_every_proxy_and_unblock_restores(
             key: Final = scenario.key(models=[model])
             served: Final = _chat(rig.first, model, key, end_user)
             assert served.status_code == 200, served.text
-            _observed(upstream)
+            _reset_observations(upstream)
 
             rig.first.request("POST", block_route, {"user_ids": [end_user]})
             assert eventually(

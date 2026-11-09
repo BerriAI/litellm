@@ -79,6 +79,18 @@ describe("GithubCopilotConnectModal", () => {
     expect(props.onDisconnect).toHaveBeenCalledTimes(1);
   });
 
+  it("uses the GHE verification URI returned by the start response", async () => {
+    const verificationUri = "https://octo.ghe.com/login/device";
+    networking.userConnectionStartCall.mockResolvedValue({
+      ...START_RESPONSE,
+      verification_uri: verificationUri,
+    });
+    renderModal();
+    await advance(0);
+
+    expect(screen.getByRole("link", { name: verificationUri })).toHaveAttribute("href", verificationUri);
+  });
+
   it("stops polling and offers a restart when the device code expires", async () => {
     networking.userConnectionStartCall.mockResolvedValue({ ...START_RESPONSE, expires_in: 12 });
     networking.userConnectionPollCall.mockResolvedValue({ status: "pending" });

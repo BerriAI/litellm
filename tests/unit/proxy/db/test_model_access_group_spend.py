@@ -20,7 +20,10 @@ class _FakeRouter:
     def __init__(self, deployments: Mapping[str, Sequence[str] | None]) -> None:
         self._deployments = deployments
 
-    def get_model_info(self, id: str) -> dict | None:
+    def registry(self) -> "_FakeRouter":
+        return self
+
+    def deployment_dict(self, id: str) -> dict | None:
         if id not in self._deployments:
             return None
         declared = self._deployments[id]

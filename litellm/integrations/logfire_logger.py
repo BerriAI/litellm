@@ -3,8 +3,9 @@
 
 import os
 import traceback
+from collections.abc import Mapping
 from enum import Enum
-from typing import Any, Final, NamedTuple
+from typing import Final, NamedTuple
 
 from typing_extensions import LiteralString
 
@@ -15,7 +16,7 @@ from litellm.litellm_core_utils.redact_messages import redact_user_api_key_info
 
 class SpanConfig(NamedTuple):
     message_template: LiteralString
-    span_data: dict[str, Any]
+    span_data: Mapping[str, object]
 
 
 class LogfireLevel(str, Enum):
