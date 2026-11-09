@@ -35,6 +35,7 @@ from litellm.types.videos.utils import (
     decode_video_id_with_provider,
     encode_video_id_with_provider,
     extract_original_video_id,
+    id_safe_name,
 )
 from litellm.utils import get_model_info
 
@@ -599,15 +600,11 @@ def _stamped_poll_models(metadata: object) -> tuple[str, str | None] | None:
         fields: Final = _PARAMETERS_ADAPTER.validate_python(metadata)
     except ValidationError:
         return None
-    requested: Final = _id_safe_name(fields.get("model_group"))
-    served: Final = _id_safe_name(fields.get("deployment_model_name"))
+    requested: Final = id_safe_name(fields.get("model_group"))
+    served: Final = id_safe_name(fields.get("deployment_model_name"))
     if requested is None:
         return None
     return requested, None if served is None or served == requested or "*" in served else served
-
-
-def _id_safe_name(name: object) -> str | None:
-    return name if isinstance(name, str) and name and ";" not in name else None
 
 
 class DashScopeVideoConfig(BaseVideoConfig):
