@@ -1799,8 +1799,8 @@ async def _proxy_lifespan(app: FastAPI, resources: AsyncExitStack) -> AsyncGener
         await resources.enter_async_context(
             database_runtime.background_task(
                 warn_about_legacy_empty_models(
-                    keys=VerificationTokenRepository(prisma_client).table,
-                    teams=TeamRepository(prisma_client).table,
+                    keys=VerificationTokenRepository(prisma_client),
+                    teams=TeamRepository(prisma_client),
                 )
             )
         )

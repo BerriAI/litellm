@@ -1,6 +1,6 @@
 import asyncio
 from dataclasses import dataclass
-from typing import Final
+from typing import Final, Protocol
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
@@ -8,6 +8,11 @@ from litellm.proxy._types import SpecialModelNames
 from litellm.repositories.prisma_protocols import CountTable
 
 DEPRECATION_DISCUSSION_URL: Final = "https://github.com/BerriAI/litellm/discussions/32090"
+
+
+class CountTableRepository(Protocol):
+    @property
+    def table(self) -> CountTable: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,9 +91,9 @@ def legacy_empty_models_warning(counts: LegacyEmptyModelsCounts) -> str | None:
     )
 
 
-async def warn_about_legacy_empty_models(keys: CountTable, teams: CountTable) -> None:
+async def warn_about_legacy_empty_models(keys: CountTableRepository, teams: CountTableRepository) -> None:
     try:
-        counts: Final = await count_legacy_empty_models_rows(keys=keys, teams=teams)
+        counts: Final = await count_legacy_empty_models_rows(keys=keys.table, teams=teams.table)
     except Exception as e:  # noqa: BLE001  # a startup check must never take the proxy down on a DB error
         verbose_proxy_logger.warning("Skipped the deprecated model access defaults check: %s", e)
         return

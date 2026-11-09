@@ -1,5 +1,6 @@
 import logging
 from collections.abc import Iterator, Mapping
+from dataclasses import dataclass
 from typing import Final
 
 import pytest
@@ -7,6 +8,7 @@ import pytest
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.auth.legacy_empty_models_check import (
     DEPRECATION_DISCUSSION_URL,
+    CountTableRepository,
     LegacyEmptyModelsCounts,
     legacy_empty_models_warning,
     warn_about_legacy_empty_models,
@@ -102,9 +104,24 @@ class _UnreachableTable:
         raise ConnectionError("database is down")
 
 
+@dataclass(frozen=True, slots=True)
+class _Repository:
+    table: _FixedCountTable | _UnreachableTable
+
+
+class _UnconnectedRepository:
+    @property
+    def table(self) -> _FixedCountTable:
+        raise RuntimeError("No DB Connected")
+
+
+def _repository(table: _FixedCountTable | _UnreachableTable) -> CountTableRepository:
+    return _Repository(table=table)
+
+
 @pytest.mark.asyncio
 async def test_boot_check_logs_the_warning_when_rows_rely_on_the_defaults(proxy_warnings: list[str]) -> None:
-    await warn_about_legacy_empty_models(keys=_FixedCountTable(2), teams=_FixedCountTable(1))
+    await warn_about_legacy_empty_models(keys=_repository(_FixedCountTable(2)), teams=_repository(_FixedCountTable(1)))
 
     assert len(proxy_warnings) == 1
     assert proxy_warnings[0].startswith("Deprecated model access defaults are still in use.")
@@ -113,13 +130,22 @@ async def test_boot_check_logs_the_warning_when_rows_rely_on_the_defaults(proxy_
 
 @pytest.mark.asyncio
 async def test_boot_check_logs_nothing_when_no_rows_rely_on_the_defaults(proxy_warnings: list[str]) -> None:
-    await warn_about_legacy_empty_models(keys=_FixedCountTable(0), teams=_FixedCountTable(0))
+    await warn_about_legacy_empty_models(keys=_repository(_FixedCountTable(0)), teams=_repository(_FixedCountTable(0)))
 
     assert proxy_warnings == []
 
 
 @pytest.mark.asyncio
 async def test_a_database_error_skips_the_boot_check_with_a_warning(proxy_warnings: list[str]) -> None:
-    await warn_about_legacy_empty_models(keys=_UnreachableTable(), teams=_UnreachableTable())
+    await warn_about_legacy_empty_models(keys=_repository(_UnreachableTable()), teams=_repository(_UnreachableTable()))
 
     assert proxy_warnings == ["Skipped the deprecated model access defaults check: database is down"]
+
+
+@pytest.mark.asyncio
+async def test_a_repository_without_a_connected_client_skips_the_boot_check_with_a_warning(
+    proxy_warnings: list[str],
+) -> None:
+    await warn_about_legacy_empty_models(keys=_UnconnectedRepository(), teams=_repository(_FixedCountTable(1)))
+
+    assert proxy_warnings == ["Skipped the deprecated model access defaults check: No DB Connected"]
