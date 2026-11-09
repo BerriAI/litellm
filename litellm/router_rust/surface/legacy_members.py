@@ -38,6 +38,7 @@ from litellm.router_api import RoutingContext
 from litellm.router_rust.invoke.websocket import admit_deployment_turn
 from litellm.router_rust.steps.callbacks import RustOptionalChecks
 from litellm.router_rust.steps.prerouting import TIER_PARAMS_NEVER_DROPPED as _TIER_PARAMS_NEVER_DROPPED
+from litellm.router_rust.steps.selection import routing_pre_call_checks_sync
 from litellm.router_rust.surface.members import RustRegistryMembers
 from litellm.router_strategy.auto_router.auto_router_model_naming import (
     GatedAutoRouterCapability,
@@ -45,9 +46,11 @@ from litellm.router_strategy.auto_router.auto_router_model_naming import (
     count_capability_routers,
 )
 from litellm.router_utils.cooldown_handlers import set_cooldown_deployments
+from litellm.router_utils.deployment_usage_counter import end_attempt
 from litellm.router_utils.endpoint_eligibility import endpoint_selection
 from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import async_io_token_refund_failure
 from litellm.router_utils.router_callbacks.track_deployment_metrics import find_deployment_metadata
+from litellm.types.router import RouterCacheEnum
 from litellm.utils import get_utc_datetime
 
 if TYPE_CHECKING:
@@ -332,10 +335,9 @@ class RustLegacyMembers(RustRegistryMembers, RustOptionalChecks):
         self,
         deployment: dict[str, object],  # mutable-ok: CustomLogger takes the deployment dict
     ) -> None:
-        """``routing_strategy_pre_call_checks``: the sync check of each ``CustomLogger`` callback."""
-        for callback in self._opt.routing_callbacks():
-            if isinstance(callback, CustomLogger):
-                callback.pre_call_check(deployment)  # pyright: ignore[reportUnknownMemberType]  # CustomLogger takes an untyped deployment dict
+        """``routing_strategy_pre_call_checks``: the request counted once, then the sync check of each
+        ``CustomLogger`` callback."""
+        routing_pre_call_checks_sync(self._opt.routing_callbacks(), deployment, self._opt.usage_counter)
 
     @with_service_target(ROUTER_COOLDOWNS_TARGET)
     async def async_routing_strategy_pre_call_checks(
@@ -348,11 +350,14 @@ class RustLegacyMembers(RustRegistryMembers, RustOptionalChecks):
         under the Python rules (``set_cooldown_deployments``, cooldown event included)."""
         from litellm import exceptions as litellm_exceptions
 
+        counter: Final = self._opt.usage_counter
+        charge: Final = await counter.charge_request(deployment, parent_otel_span)
         for callback in self._opt.routing_callbacks():
             if isinstance(callback, CustomLogger):
                 try:
                     await callback.async_pre_call_check(deployment, parent_otel_span)  # pyright: ignore[reportUnknownMemberType]  # see above
                 except litellm_exceptions.RateLimitError as e:
+                    await counter.refund_request(charge, parent_otel_span)
                     _dispatch_failure(logging_obj, e)
                     _ = set_cooldown_deployments(
                         ctx=RoutingContext(self),  # pyright: ignore[reportArgumentType]  # the core's RoutingContext
@@ -363,8 +368,10 @@ class RustLegacyMembers(RustRegistryMembers, RustOptionalChecks):
                     )
                     raise
                 except Exception as e:
+                    await counter.refund_request(charge, parent_otel_span)
                     _dispatch_failure(logging_obj, e)
                     raise
+        end_attempt(charge)
 
     async def async_callback_filter_deployments(
         self,
@@ -474,10 +481,21 @@ class RustLegacyMembers(RustRegistryMembers, RustOptionalChecks):
         parent_otel_span: "Span | None",
     ) -> None:
         """``_increment_deployment_usage`` with its one request."""
-        if not self._registry_state.cached_deployment_tracks_usage(deployment_id, model_group):
+        from litellm.types.caching import RedisPipelineIncrementOperation
+
+        counted: Final = self._opt.counts_deployment_usage()
+        if not counted and not self._registry_state.cached_deployment_tracks_usage(deployment_id, model_group):
             return
         current_minute: Final = get_utc_datetime().strftime("%H-%M")
         await self._usage.increment_deployment(deployment_id, deployment_name, current_minute, total_tokens, 1)
+        tpm_key: Final = RouterCacheEnum.TPM.value.format(
+            id=deployment_id, current_minute=current_minute, model=deployment_name
+        )
+        await self._opt.usage_counter.charge_tokens(
+            (RedisPipelineIncrementOperation(key=tpm_key, increment_value=total_tokens, ttl=_USAGE_TTL),),
+            counted,
+            parent_otel_span,
+        )
 
     @with_service_target(ROUTER_USAGE_TARGET)
     async def async_deployment_callback_on_failure(

@@ -14,7 +14,7 @@ is logged the first time such a deployment is seen.
 import contextlib
 from collections.abc import Callable, Mapping
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, Any, Final, Literal
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal
 
 import httpx
 from pydantic import BaseModel, ConfigDict
@@ -26,6 +26,7 @@ from litellm.caching.dual_cache import DualCache
 from litellm.caching.redis_cache import RedisCircuitBreakerOpenError
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.redis.stores.router_usage import ROUTER_USAGE_TARGET
+from litellm.router_utils.deployment_usage_counter import charged_rpm
 from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import (
     async_io_token_pre_call_check,
     async_io_token_reconcile_success,
@@ -133,6 +134,8 @@ class ModelRateLimitingCheck(CustomLogger):
     Unlike the usage-based-routing strategy which uses limits for routing decisions,
     this check actively enforces those limits across ALL routing strategies.
     """
+
+    reads_deployment_usage: ClassVar[bool] = True
 
     def __init__(self, dual_cache: DualCache, clock: Callable[[], datetime] = get_utc_datetime) -> None:
         self.dual_cache = dual_cache
@@ -316,10 +319,10 @@ class ModelRateLimitingCheck(CustomLogger):
                 io_reservation_made = True
 
             dt: Final = self.clock()
+            current_minute: Final = dt.strftime("%H-%M")
             daily: Final = _DailyLimitDeployment.model_validate(deployment)
             tpm_limit, rpm_limit = self._get_deployment_limits(deployment)
 
-            current_minute: Final = dt.strftime("%H-%M")
             tpm_key, rpm_key = self._get_cache_keys(deployment, current_minute)
 
             model_id: Final = deployment.get("model_info", {}).get("id")
@@ -345,11 +348,12 @@ class ModelRateLimitingCheck(CustomLogger):
                         ),
                     )
 
-            # Check RPM limit (atomic increment-first to avoid race conditions)
             if rpm_limit is not None:
-                current_rpm: Final = self._increment(rpm_key, 1, RoutingArgs.ttl)
+                admitted: Final = charged_rpm(rpm_key)
+                current_rpm: Final[int | None] = (
+                    admitted if admitted is not None else self.dual_cache.get_cache(key=rpm_key)
+                )
                 if current_rpm is not None and current_rpm > rpm_limit:
-                    self._increment(rpm_key, -1, RoutingArgs.ttl)
                     raise litellm.RateLimitError(
                         message=f"Model rate limit exceeded. RPM limit={rpm_limit}, current usage={current_rpm}",
                         llm_provider="",
@@ -365,12 +369,7 @@ class ModelRateLimitingCheck(CustomLogger):
                         ),
                     )
 
-            try:
-                self._check_daily_limits(daily, dt)
-            except litellm.RateLimitError:
-                if rpm_limit is not None:
-                    self._increment(rpm_key, -1, RoutingArgs.ttl)
-                raise
+            self._check_daily_limits(daily, dt)
             return deployment
 
         except litellm.RateLimitError:
@@ -401,11 +400,11 @@ class ModelRateLimitingCheck(CustomLogger):
                 io_reservation_made = True
 
             dt: Final = self.clock()
+            current_minute: Final = dt.strftime("%H-%M")
             daily: Final = _DailyLimitDeployment.model_validate(deployment)
             tpd_limit, rpd_limit = daily.limits()
             tpm_limit, rpm_limit = self._get_deployment_limits(deployment)
 
-            current_minute: Final = dt.strftime("%H-%M")
             tpm_key, rpm_key = self._get_cache_keys(deployment, current_minute)
             tpd_key, rpd_key = daily.cache_keys(dt)
 
@@ -438,32 +437,35 @@ class ModelRateLimitingCheck(CustomLogger):
                 if current_tpd is not None and current_tpd >= tpd_limit:
                     raise daily.limit_error("tpd", tpd_limit, current_tpd, dt)
 
-            charged_rpm_key: Final = rpm_key if rpm_limit is not None else None
-            charged_rpd_key: Final = rpd_key if rpd_limit is not None else None
-            current_rpm, current_rpd = await self._async_increment_request_counts(
-                charged_rpm_key, charged_rpd_key, parent_otel_span
-            )
-            if rpm_limit is not None and current_rpm is not None and current_rpm > rpm_limit:
-                await self._async_refund_request_counts(charged_rpm_key, charged_rpd_key, parent_otel_span)
-                raise litellm.RateLimitError(
-                    message=f"Model rate limit exceeded. RPM limit={rpm_limit}, current usage={current_rpm}",
-                    llm_provider="",
-                    model=model_name,
-                    response=httpx.Response(
-                        status_code=429,
-                        content=f"{RouterErrors.user_defined_ratelimit_error.value} rpm limit={rpm_limit}. current usage={current_rpm}. id={model_id}, model_group={model_group}",
-                        headers={"retry-after": str(60)},
-                        request=httpx.Request(
-                            method="model_rate_limit_check",
-                            url="https://github.com/BerriAI/litellm",
-                        ),
-                    ),
-                    num_retries=0,  # Don't retry - return 429 immediately
+            if rpm_limit is not None:
+                admitted: Final = charged_rpm(rpm_key)
+                current_rpm: Final = (
+                    admitted
+                    if admitted is not None
+                    else await self._async_get_current_tpm(rpm_key, rpm_limit, parent_otel_span)
                 )
+                if current_rpm is not None and current_rpm > rpm_limit:
+                    raise litellm.RateLimitError(
+                        message=f"Model rate limit exceeded. RPM limit={rpm_limit}, current usage={current_rpm}",
+                        llm_provider="",
+                        model=model_name,
+                        response=httpx.Response(
+                            status_code=429,
+                            content=f"{RouterErrors.user_defined_ratelimit_error.value} rpm limit={rpm_limit}. current usage={current_rpm}. id={model_id}, model_group={model_group}",
+                            headers={"retry-after": str(60)},
+                            request=httpx.Request(
+                                method="model_rate_limit_check",
+                                url="https://github.com/BerriAI/litellm",
+                            ),
+                        ),
+                        num_retries=0,  # Don't retry - return 429 immediately
+                    )
 
-            if rpd_limit is not None and current_rpd is not None and current_rpd > rpd_limit:
-                await self._async_refund_request_counts(charged_rpm_key, charged_rpd_key, parent_otel_span)
-                raise daily.limit_error("rpd", rpd_limit, current_rpd, dt)
+            if rpd_limit is not None:
+                _, current_rpd = await self._async_increment_request_counts(None, rpd_key, parent_otel_span)
+                if current_rpd is not None and current_rpd > rpd_limit:
+                    await self._async_refund_request_counts(None, rpd_key, parent_otel_span)
+                    raise daily.limit_error("rpd", rpd_limit, current_rpd, dt)
 
             return deployment
 
@@ -509,15 +511,10 @@ class ModelRateLimitingCheck(CustomLogger):
                 return
 
             dt: Final = self.clock()
-            current_minute: Final = dt.strftime("%H-%M")
-            tpm_key: Final = f"{model_id}:{model}:tpm:{current_minute}"
             reset_offset: Final = _reset_offset_from_kwargs(kwargs)  # pyright: ignore[reportUnknownArgumentType]  # CustomLogger passes an untyped kwargs dict
             tpd_key: Final = f"{model_id}:{model}:tpd:{daily_window_day(dt, reset_offset)}"
 
-            verbose_router_logger.debug("[TPM TRACKING] Incrementing %s by %s", tpm_key, total_tokens)
-
             tokens: Final = int(total_tokens)
-            await self._async_increment(tpm_key, tokens, RoutingArgs.ttl)
             await self._async_increment(tpd_key, tokens, RoutingArgs.daily_ttl)
 
         except Exception as e:
@@ -560,13 +557,10 @@ class ModelRateLimitingCheck(CustomLogger):
                 return
 
             dt: Final = self.clock()
-            current_minute: Final = dt.strftime("%H-%M")
-            tpm_key: Final = f"{model_id}:{model}:tpm:{current_minute}"
             reset_offset: Final = _reset_offset_from_kwargs(kwargs)  # pyright: ignore[reportUnknownArgumentType]  # CustomLogger passes an untyped kwargs dict
             tpd_key: Final = f"{model_id}:{model}:tpd:{daily_window_day(dt, reset_offset)}"
 
             tokens: Final = int(total_tokens)
-            self._increment(tpm_key, tokens, RoutingArgs.ttl)
             self._increment(tpd_key, tokens, RoutingArgs.daily_ttl)
 
         except Exception as e:

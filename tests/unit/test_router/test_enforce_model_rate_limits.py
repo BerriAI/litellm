@@ -17,9 +17,14 @@ import litellm
 from litellm import Router
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.redis_cache import RedisCircuitBreakerOpenError
+from litellm.router_rust.steps.selection import routing_pre_call_checks, routing_pre_call_checks_sync
+from litellm.router_utils.deployment_usage_counter import DeploymentUsageCounter, enforcement_tpm_operation
 from litellm.router_utils.pre_call_checks.model_rate_limit_check import (
     ModelRateLimitingCheck,
 )
+from litellm.types.caching import RedisPipelineIncrementOperation
+from litellm.types.router import RouterCacheEnum
+from tests.unit.caching.test_redis_batch import FakeClient, FakeRedisCache
 
 TPM_DEPLOYMENT = {
     "tpm": 1000,
@@ -37,6 +42,53 @@ def _dual_cache_with_local_tpm(local_tpm: int, redis_cache: MagicMock | None) ->
         tpm_key, _ = check._get_cache_keys(TPM_DEPLOYMENT, minute.strftime("%H-%M"))
         dual_cache.set_cache(key=tpm_key, value=local_tpm, local_only=True)
     return dual_cache
+
+
+def _counter(check: ModelRateLimitingCheck) -> DeploymentUsageCounter:
+    return DeploymentUsageCounter(check.dual_cache, clock=check.clock)
+
+
+def _pre_call(check: ModelRateLimitingCheck, deployment: dict[str, object]) -> object:
+    """The router's pre-call step: the request counted once, then the check."""
+    routing_pre_call_checks_sync((check,), deployment, _counter(check))
+    return deployment
+
+
+async def _async_pre_call(check: ModelRateLimitingCheck, deployment: dict[str, object]) -> object:
+    await routing_pre_call_checks((check,), deployment, _counter(check))
+    return deployment
+
+
+
+def _count_tokens(cache: DualCache, model_id: str, model: str, tokens: int, now: datetime) -> None:
+    """A served call's tokens as the router's usage write counts them: the enforcement twin of its
+    ``global_router:`` tpm increment."""
+    minute: Final = now.strftime("%H-%M")
+    twin: Final = enforcement_tpm_operation(
+        RedisPipelineIncrementOperation(
+            key=RouterCacheEnum.TPM.value.format(id=model_id, model=model, current_minute=minute), increment_value=tokens, ttl=60
+        )
+    )
+    assert twin is not None
+    cache.increment_cache(key=twin["key"], value=twin["increment_value"], ttl=twin["ttl"])
+
+
+def _count_logged_tokens(check: ModelRateLimitingCheck, kwargs: dict[str, object]) -> None:
+    logged: Final = kwargs["standard_logging_object"]
+    assert isinstance(logged, dict)
+    _count_tokens(
+        check.dual_cache, logged["model_id"], logged["hidden_params"]["litellm_model_name"], logged["total_tokens"], check.clock()
+    )
+
+def _log_success(check: ModelRateLimitingCheck, kwargs: dict[str, object]) -> None:
+    """A logged success as the router fans it out: the counter's tokens, then the check's daily tokens."""
+    _count_logged_tokens(check, kwargs)
+    check.log_success_event(kwargs, None, None, None)
+
+
+async def _async_log_success(check: ModelRateLimitingCheck, kwargs: dict[str, object]) -> None:
+    _count_logged_tokens(check, kwargs)
+    await check.async_log_success_event(kwargs, None, None, None)
 
 
 class TestModelRateLimitingCheck:
@@ -105,16 +157,12 @@ class TestModelRateLimitingCheck:
             "model_info": {"id": "test-id"},
         }
 
-        result = check.pre_call_check(deployment)
+        result = _pre_call(check, deployment)
         assert result == deployment
 
     def test_pre_call_check_raises_rate_limit_error_when_over_rpm(self):
-        """Test that RateLimitError is raised when RPM limit is exceeded."""
-        mock_cache = MagicMock()
-        mock_cache.increment_cache.return_value = 11  # Over limit after increment
-
-        check = ModelRateLimitingCheck(dual_cache=mock_cache)
-
+        """The eleventh request of the minute is the first one over rpm 10."""
+        check = ModelRateLimitingCheck(dual_cache=DualCache(), clock=Clock(DAY_ONE))
         deployment = {
             "rpm": 10,
             "litellm_params": {"model": "gpt-4"},
@@ -122,8 +170,10 @@ class TestModelRateLimitingCheck:
             "model_name": "test-model",
         }
 
+        for _ in range(10):
+            assert _pre_call(check, deployment) == deployment
         with pytest.raises(litellm.RateLimitError) as exc_info:
-            check.pre_call_check(deployment)
+            _pre_call(check, deployment)
 
         assert "RPM limit=10" in str(exc_info.value)
         assert "current usage=11" in str(exc_info.value)
@@ -142,7 +192,7 @@ class TestModelRateLimitingCheck:
             "model_name": "test-model",
         }
 
-        result = check.pre_call_check(deployment)
+        result = _pre_call(check, deployment)
         assert result == deployment
 
     def test_pre_call_check_raises_rate_limit_error_when_over_tpm(self):
@@ -160,7 +210,7 @@ class TestModelRateLimitingCheck:
         }
 
         with pytest.raises(litellm.RateLimitError) as exc_info:
-            check.pre_call_check(deployment)
+            _pre_call(check, deployment)
 
         assert "TPM limit=1000" in str(exc_info.value)
         assert "current usage=1000" in str(exc_info.value)
@@ -171,7 +221,7 @@ class TestModelRateLimitingCheck:
         check = ModelRateLimitingCheck(dual_cache=_dual_cache_with_local_tpm(5, redis_cache))
 
         with pytest.raises(litellm.RateLimitError) as exc_info:
-            check.pre_call_check(TPM_DEPLOYMENT)
+            _pre_call(check, TPM_DEPLOYMENT)
 
         assert "current usage=1000" in str(exc_info.value)
 
@@ -184,7 +234,7 @@ class TestModelRateLimitingCheck:
         check = ModelRateLimitingCheck(dual_cache=_dual_cache_with_local_tpm(1000, redis_cache))
 
         with pytest.raises(litellm.RateLimitError) as exc_info:
-            check.pre_call_check(TPM_DEPLOYMENT)
+            _pre_call(check, TPM_DEPLOYMENT)
 
         assert "current usage=1000" in str(exc_info.value)
 
@@ -195,7 +245,7 @@ class TestModelRateLimitingCheck:
         check = ModelRateLimitingCheck(dual_cache=_dual_cache_with_local_tpm(5, redis_cache))
 
         with pytest.raises(litellm.RateLimitError) as exc_info:
-            check.pre_call_check({**TPM_DEPLOYMENT, "rpm": 1})
+            _pre_call(check, {**TPM_DEPLOYMENT, "rpm": 1})
 
         assert "RPM limit=1" in str(exc_info.value)
 
@@ -203,16 +253,16 @@ class TestModelRateLimitingCheck:
         check = ModelRateLimitingCheck(dual_cache=_dual_cache_with_local_tpm(5, None))
         deployment = {**TPM_DEPLOYMENT, "rpm": 1}
 
-        assert check.pre_call_check(deployment) == deployment
+        assert _pre_call(check, deployment) == deployment
         with pytest.raises(litellm.RateLimitError) as exc_info:
-            check.pre_call_check(deployment)
+            _pre_call(check, deployment)
 
         assert "RPM limit=1" in str(exc_info.value)
 
-    def test_log_success_event_increments_cache(self):
-        """Test that log_success_event correctly increments the cache."""
-        mock_cache = MagicMock()
-        check = ModelRateLimitingCheck(dual_cache=mock_cache)
+    def test_log_success_event_counts_the_tokens_once(self):
+        """A logged success adds its tokens to the minute once, although the counter and the check both see it."""
+        dual_cache = DualCache()
+        check = ModelRateLimitingCheck(dual_cache=dual_cache, clock=Clock(DAY_ONE))
 
         kwargs = {
             "standard_logging_object": {
@@ -222,11 +272,9 @@ class TestModelRateLimitingCheck:
             }
         }
 
-        check.log_success_event(kwargs, None, None, None)
+        _log_success(check, kwargs)
 
-        keys = tuple(call.kwargs["key"] for call in mock_cache.increment_cache.call_args_list)
-        assert any(key.startswith("test-id:gpt-4:tpm:") for key in keys), keys
-        assert all(call.kwargs["value"] == 50 for call in mock_cache.increment_cache.call_args_list)
+        assert dual_cache.get_cache("test-id:gpt-4:tpm:23-59") == 50
 
 
 class TestModelRateLimitingCheckAsync:
@@ -237,6 +285,7 @@ class TestModelRateLimitingCheckAsync:
         """Test that requests are allowed when no limits are set (async)."""
         mock_cache = MagicMock()
         mock_cache.async_get_cache = AsyncMock(return_value=None)
+        mock_cache.async_set_cache = AsyncMock()
 
         check = ModelRateLimitingCheck(dual_cache=mock_cache)
 
@@ -245,18 +294,13 @@ class TestModelRateLimitingCheckAsync:
             "model_info": {"id": "test-id"},
         }
 
-        result = await check.async_pre_call_check(deployment)
+        result = await _async_pre_call(check, deployment)
         assert result == deployment
 
     @pytest.mark.asyncio
     async def test_async_pre_call_check_raises_rate_limit_error_when_over_rpm(self):
-        """Test that RateLimitError is raised when RPM limit is exceeded (async)."""
-        mock_cache = MagicMock()
-        mock_cache.async_get_cache = AsyncMock(return_value=None)
-        mock_cache.async_increment_cache_pipeline = AsyncMock(return_value=[11.0])  # Over limit
-
-        check = ModelRateLimitingCheck(dual_cache=mock_cache)
-
+        """The eleventh request of the minute is the first one over rpm 10 (async)."""
+        check = ModelRateLimitingCheck(dual_cache=DualCache(), clock=Clock(DAY_ONE))
         deployment = {
             "rpm": 10,
             "litellm_params": {"model": "gpt-4"},
@@ -264,20 +308,18 @@ class TestModelRateLimitingCheckAsync:
             "model_name": "test-model",
         }
 
+        for _ in range(10):
+            assert await _async_pre_call(check, deployment) == deployment
         with pytest.raises(litellm.RateLimitError) as exc_info:
-            await check.async_pre_call_check(deployment)
+            await _async_pre_call(check, deployment)
 
         assert "RPM limit=10" in str(exc_info.value)
+        assert "current usage=11" in str(exc_info.value)
 
     @pytest.mark.asyncio
     async def test_async_pre_call_check_allows_request_under_limit(self):
-        """Test that requests are allowed when under the limit (async)."""
-        mock_cache = MagicMock()
-        mock_cache.async_get_cache = AsyncMock(return_value=None)
-        mock_cache.async_increment_cache_pipeline = AsyncMock(return_value=[6.0])
-
-        check = ModelRateLimitingCheck(dual_cache=mock_cache)
-
+        """Every request up to rpm 10 is allowed (async)."""
+        check = ModelRateLimitingCheck(dual_cache=DualCache(), clock=Clock(DAY_ONE))
         deployment = {
             "rpm": 10,
             "litellm_params": {"model": "gpt-4"},
@@ -285,8 +327,8 @@ class TestModelRateLimitingCheckAsync:
             "model_name": "test-model",
         }
 
-        result = await check.async_pre_call_check(deployment)
-        assert result == deployment
+        for _ in range(10):
+            assert await _async_pre_call(check, deployment) == deployment
 
     @pytest.mark.asyncio
     async def test_async_pre_call_check_raises_rate_limit_error_when_over_tpm(self):
@@ -304,7 +346,7 @@ class TestModelRateLimitingCheckAsync:
         }
 
         with pytest.raises(litellm.RateLimitError) as exc_info:
-            await check.async_pre_call_check(deployment)
+            await _async_pre_call(check, deployment)
 
         assert "TPM limit=1000" in str(exc_info.value)
 
@@ -315,7 +357,7 @@ class TestModelRateLimitingCheckAsync:
         check = ModelRateLimitingCheck(dual_cache=_dual_cache_with_local_tpm(5, redis_cache))
 
         with pytest.raises(litellm.RateLimitError) as exc_info:
-            await check.async_pre_call_check(TPM_DEPLOYMENT)
+            await _async_pre_call(check, TPM_DEPLOYMENT)
 
         assert "current usage=1000" in str(exc_info.value)
 
@@ -329,7 +371,7 @@ class TestModelRateLimitingCheckAsync:
         check = ModelRateLimitingCheck(dual_cache=_dual_cache_with_local_tpm(1000, redis_cache))
 
         with pytest.raises(litellm.RateLimitError) as exc_info:
-            await check.async_pre_call_check(TPM_DEPLOYMENT)
+            await _async_pre_call(check, TPM_DEPLOYMENT)
 
         assert "current usage=1000" in str(exc_info.value)
 
@@ -343,7 +385,7 @@ class TestModelRateLimitingCheckAsync:
         check = ModelRateLimitingCheck(dual_cache=_dual_cache_with_local_tpm(5, redis_cache))
 
         with pytest.raises(litellm.RateLimitError) as exc_info:
-            await check.async_pre_call_check({**TPM_DEPLOYMENT, "rpm": 1})
+            await _async_pre_call(check, {**TPM_DEPLOYMENT, "rpm": 1})
 
         assert "RPM limit=1" in str(exc_info.value)
 
@@ -352,18 +394,17 @@ class TestModelRateLimitingCheckAsync:
         check = ModelRateLimitingCheck(dual_cache=_dual_cache_with_local_tpm(5, None))
         deployment = {**TPM_DEPLOYMENT, "rpm": 1}
 
-        assert await check.async_pre_call_check(deployment) == deployment
+        assert await _async_pre_call(check, deployment) == deployment
         with pytest.raises(litellm.RateLimitError) as exc_info:
-            await check.async_pre_call_check(deployment)
+            await _async_pre_call(check, deployment)
 
         assert "RPM limit=1" in str(exc_info.value)
 
     @pytest.mark.asyncio
-    async def test_async_log_success_event_increments_cache(self):
-        """Test that async_log_success_event correctly increments the cache."""
-        mock_cache = MagicMock()
-        mock_cache.async_increment_cache = AsyncMock()
-        check = ModelRateLimitingCheck(dual_cache=mock_cache)
+    async def test_async_log_success_event_counts_the_tokens_once(self):
+        """A logged success adds its tokens to the minute once, although the counter and the check both see it."""
+        dual_cache = DualCache()
+        check = ModelRateLimitingCheck(dual_cache=dual_cache, clock=Clock(DAY_ONE))
 
         kwargs = {
             "standard_logging_object": {
@@ -373,11 +414,9 @@ class TestModelRateLimitingCheckAsync:
             }
         }
 
-        await check.async_log_success_event(kwargs, None, None, None)
+        await _async_log_success(check, kwargs)
 
-        keys = tuple(call.kwargs["key"] for call in mock_cache.async_increment_cache.call_args_list)
-        assert any(key.startswith("test-id:gpt-4:tpm:") for key in keys), keys
-        assert all(call.kwargs["value"] == 50 for call in mock_cache.async_increment_cache.call_args_list)
+        assert await dual_cache.async_get_cache("test-id:gpt-4:tpm:23-59") == 50
 
 
 class TestRouterWithEnforceModelRateLimits:
@@ -400,8 +439,7 @@ class TestRouterWithEnforceModelRateLimits:
 
         # Check that the callback was added
         assert router.optional_callbacks is not None
-        assert len(router.optional_callbacks) == 1
-        assert isinstance(router.optional_callbacks[0], ModelRateLimitingCheck)
+        assert any(isinstance(callback, ModelRateLimitingCheck) for callback in router.optional_callbacks)
 
     def test_router_optional_callbacks_contains_model_rate_limiting(self):
         """Test that ModelRateLimitingCheck is in the callbacks list."""
@@ -452,7 +490,7 @@ class TestModelRateLimitConcurrency:
         }
 
         async def attempt_request():
-            return await check.async_pre_call_check(deployment)
+            return await _async_pre_call(check, deployment)
 
         results = await asyncio.gather(
             *[attempt_request() for _ in range(4)],
@@ -483,16 +521,6 @@ class Clock:
         return self.now
 
 
-def _pre_call(check: ModelRateLimitingCheck, deployment: dict[str, object]) -> object:
-    return check.pre_call_check(deployment)
-
-
-async def _async_pre_call(check: ModelRateLimitingCheck, deployment: dict[str, object]) -> object:
-    return await check.async_pre_call_check(deployment)
-
-
-async def _async_log_success(check: ModelRateLimitingCheck, kwargs: dict[str, object]) -> None:
-    await check.async_log_success_event(kwargs, None, None, None)
 
 
 class TestDailyLimits:
@@ -606,36 +634,40 @@ class TestDailyLimits:
             await _async_pre_call(check, RPM_AND_RPD_DEPLOYMENT)
 
     @pytest.mark.asyncio
-    async def test_async_pre_call_check_refunds_rpm_and_rpd_in_one_cache_trip(self):
+    async def test_async_pre_call_check_rejected_over_rpd_hands_back_rpd_then_rpm(self):
         mock_cache = MagicMock()
         mock_cache.async_get_cache = AsyncMock(return_value=None)
-        mock_cache.async_increment_cache_pipeline = AsyncMock(side_effect=[[1.0, 3.0], [0.0, 2.0]])
+        mock_cache.async_set_cache = AsyncMock()
+        mock_cache.async_increment_cache_pipeline = AsyncMock(side_effect=[[1.0], [3.0], [2.0], [0.0]])
+        mock_cache.redis_cache = None
         check = ModelRateLimitingCheck(dual_cache=mock_cache, clock=Clock(DAY_ONE))
 
         with pytest.raises(litellm.RateLimitError, match="RPD limit=2, current usage=3"):
             await _async_pre_call(check, RPM_AND_RPD_DEPLOYMENT)
 
-        assert mock_cache.async_increment_cache_pipeline.await_count == 2
-        refund = mock_cache.async_increment_cache_pipeline.call_args_list[1].kwargs["increment_list"]
-        assert [(op["key"], op["increment_value"], op["ttl"]) for op in refund] == [
-            ("daily-test-id:gpt-4.1-mini:rpm:23-59", -1, 60),
-            ("daily-test-id:gpt-4.1-mini:rpd:2026-10-28", -1, 86400),
+        trips = [call.kwargs["increment_list"] for call in mock_cache.async_increment_cache_pipeline.call_args_list]
+        assert [[(op["key"], op["increment_value"], op["ttl"]) for op in trip] for trip in trips] == [
+            [("daily-test-id:gpt-4.1-mini:rpm:23-59", 1, 60)],
+            [("daily-test-id:gpt-4.1-mini:rpd:2026-10-28", 1, 86400)],
+            [("daily-test-id:gpt-4.1-mini:rpd:2026-10-28", -1, 86400)],
+            [("daily-test-id:gpt-4.1-mini:rpm:23-59", -1, 60)],
         ]
 
     @pytest.mark.asyncio
-    async def test_async_pre_call_check_increments_rpm_and_rpd_in_one_cache_trip(self):
+    async def test_async_pre_call_check_charges_rpm_then_rpd(self):
         mock_cache = MagicMock()
         mock_cache.async_get_cache = AsyncMock(return_value=None)
-        mock_cache.async_increment_cache_pipeline = AsyncMock(return_value=[1.0, 1.0])
+        mock_cache.async_set_cache = AsyncMock()
+        mock_cache.async_increment_cache_pipeline = AsyncMock(return_value=[1.0])
+        mock_cache.redis_cache = None
         check = ModelRateLimitingCheck(dual_cache=mock_cache, clock=Clock(DAY_ONE))
 
         assert await _async_pre_call(check, RPM_AND_RPD_DEPLOYMENT) == RPM_AND_RPD_DEPLOYMENT
 
-        assert mock_cache.async_increment_cache_pipeline.await_count == 1
-        operations = mock_cache.async_increment_cache_pipeline.call_args.kwargs["increment_list"]
-        assert [(op["key"], op["ttl"]) for op in operations] == [
-            ("daily-test-id:gpt-4.1-mini:rpm:23-59", 60),
-            ("daily-test-id:gpt-4.1-mini:rpd:2026-10-28", 86400),
+        trips = [call.kwargs["increment_list"] for call in mock_cache.async_increment_cache_pipeline.call_args_list]
+        assert [[(op["key"], op["ttl"]) for op in trip] for trip in trips] == [
+            [("daily-test-id:gpt-4.1-mini:rpm:23-59", 60)],
+            [("daily-test-id:gpt-4.1-mini:rpd:2026-10-28", 86400)],
         ]
         assert not mock_cache.async_increment_cache.called
 
@@ -882,3 +914,54 @@ class TestDailyResetTime:
             router.cache.in_memory_cache.get_cache("daily-test-id:openai/gpt-4.1-mini:tpd:2026-10-27")  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # InMemoryCache.get_cache is untyped
         )
         assert day_before is None
+
+
+class _RepliesAfterBothCharged(FakeRedisCache):
+    """Redis that answers the first increment only once the second was sent, and the second only once
+    the first attempt has checked its limit: the first attempt's local write-back lands on a count the
+    second attempt already raised."""
+
+    def __init__(self) -> None:
+        super().__init__(FakeClient(lambda command: None))
+        self.total = 0
+        self.sent = 0
+        self.both_sent = asyncio.Event()
+        self.first_checked = asyncio.Event()
+
+    async def async_increment_pipeline(  # pyright: ignore[reportIncompatibleMethodOverride]  # fake, no server
+        self, increment_list: list[RedisPipelineIncrementOperation], **kwargs: object
+    ) -> list[float]:
+        self.total += int(increment_list[0]["increment_value"])
+        answered: Final = float(self.total)
+        self.sent += 1
+        order: Final = self.sent
+        if order == 1:
+            await self.both_sent.wait()
+        if order == 2:
+            self.both_sent.set()
+            await self.first_checked.wait()
+        return [answered]
+
+
+@pytest.mark.asyncio
+async def test_two_attempts_charged_before_either_reply_lands_admit_exactly_the_rpm():
+    redis_cache = _RepliesAfterBothCharged()
+    dual_cache = DualCache()
+    dual_cache.attach_redis_cache(redis_cache)
+    check = ModelRateLimitingCheck(dual_cache=dual_cache, clock=Clock(DAY_ONE))
+    deployment = {"rpm": 1, "litellm_params": {"model": "gpt-4"}, "model_info": {"id": "race-id"}}
+
+    async def attempt() -> int:
+        try:
+            await _async_pre_call(check, deployment)
+        except litellm.RateLimitError:
+            return 429
+        return 200
+
+    attempts = {asyncio.ensure_future(attempt()) for _ in range(2)}
+    checked_first, still_charged = await asyncio.wait(attempts, return_when=asyncio.FIRST_COMPLETED)
+    redis_cache.first_checked.set()
+
+    assert [task.result() for task in checked_first] == [200]
+    assert await asyncio.gather(*still_charged) == [429]
+    assert redis_cache.total == 1

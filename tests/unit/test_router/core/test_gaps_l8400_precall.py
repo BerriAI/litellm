@@ -163,16 +163,15 @@ class TestResponsesWebsocketTurnAdmission:
     async def test_usage_based_routing_admits_turns_until_the_deployment_rpm_is_used_up(
         self, make_core: MakeCore, host: EndpointHost
     ) -> None:
-        """Opening the socket already counts two requests (its pre-call check and its success), so an
-        rpm of 5 leaves room for three turns."""
+        """Opening the socket counts one request, so an rpm of 5 leaves room for four turns."""
         core: Final = make_core(model_list=[deployment("g", "a", rpm=5)], routing_strategy="usage-based-routing-v2")
         admit: Final = await self.open_socket(core, host)
 
-        admitted: Final = [dict(await admit()) for _ in range(3)]  # pyright: ignore[reportGeneralTypeIssues]
+        admitted: Final = [dict(await admit()) for _ in range(4)]  # pyright: ignore[reportGeneralTypeIssues]
         with pytest.raises(litellm.RateLimitError) as refused:
             await admit()  # pyright: ignore[reportGeneralTypeIssues]
 
-        assert admitted == [{}, {}, {}]
+        assert admitted == [{}, {}, {}, {}]
         assert str(refused.value).startswith(
             "litellm.RateLimitError: No deployments available for selected model. Passed model=g. Deployments="
         )
