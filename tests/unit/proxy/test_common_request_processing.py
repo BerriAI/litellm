@@ -3360,6 +3360,23 @@ class TestOverrideOpenAIResponseModel:
     def test_raw_model_name_toggle_metadata(self, request_data, expected):
         assert should_return_raw_model_name(request_data) is expected
 
+    @pytest.mark.parametrize("global_opt_out", [False, True])
+    @pytest.mark.parametrize("request_opt_out", [False, True])
+    def test_global_raw_model_name_preserves_upstream_response(
+        self, global_opt_out: bool, request_opt_out: bool
+    ) -> None:
+        response_obj: Final = {"model": "provider-model"}
+        _override_openai_response_model(
+            response_obj=response_obj,
+            requested_model="public-alias",
+            log_context="test_context",
+            return_raw_model_name=should_return_raw_model_name(
+                {"litellm_metadata": {RETURN_RAW_MODEL_NAME_METADATA_KEY: request_opt_out}},
+                {"return_raw_model_name": global_opt_out},
+            ),
+        )
+        assert response_obj["model"] == ("provider-model" if global_opt_out or request_opt_out else "public-alias")
+
     def test_override_model_preserves_fallback_model_when_fallback_occurred_object(
         self,
     ):
