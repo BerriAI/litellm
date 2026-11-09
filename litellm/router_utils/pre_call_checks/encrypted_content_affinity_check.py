@@ -442,9 +442,9 @@ class EncryptedContentAffinityCheck(CustomLogger):
 
     def _find_deployments_on_same_encryption_boundary(
         self,
-        healthy_deployments: list[dict],
+        healthy_deployments: list[dict[str, object]],
         model_id: str,
-    ) -> tuple[list[dict], Deployment | None]:
+    ) -> tuple[list[dict[str, object]], Deployment | None]:
         """
         Deployments in ``healthy_deployments`` sharing the originating
         deployment's encryption boundary, alongside the originating
