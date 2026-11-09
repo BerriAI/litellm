@@ -1160,7 +1160,7 @@ class ThirdlawGuardrail(CustomGuardrail):
                 yield item
             return
         async for item in self._emit_modified_stream(
-            assembled=assembled, replacement=decision.response_body, surface=surface
+            assembled=assembled, replacement=decision.response_body, surface=surface, collected=collected
         ):
             yield item
 
@@ -1213,13 +1213,16 @@ class ThirdlawGuardrail(CustomGuardrail):
         assembled: _AssembledStream,
         replacement: Mapping[str, object],
         surface: StreamSurface,
+        collected: Sequence[object],
     ) -> AsyncGenerator[object, None]:
         if surface is StreamSurface.RESPONSES:
             async for event in self._emit_modified_responses_stream(assembled=assembled, replacement=replacement):
                 yield event
             return
         if surface is StreamSurface.ANTHROPIC_MESSAGES:
-            for frame in self._modified_anthropic_frames(assembled=assembled, replacement=replacement):
+            for frame in self._modified_anthropic_frames(
+                assembled=assembled, replacement=replacement, collected=collected
+            ):
                 yield frame
             return
         modified: Final = self._modified_response(response=assembled, replacement=replacement)
@@ -1231,7 +1234,7 @@ class ThirdlawGuardrail(CustomGuardrail):
             yield chunk
 
     def _modified_anthropic_frames(
-        self, *, assembled: _AssembledStream, replacement: Mapping[str, object]
+        self, *, assembled: _AssembledStream, replacement: Mapping[str, object], collected: Sequence[object]
     ) -> Sequence[bytes]:
         """Re-emit a rewritten Messages body as the SSE frames its client expects.
 
@@ -1248,7 +1251,7 @@ class ThirdlawGuardrail(CustomGuardrail):
         body: Final = _dict_of(modified)
         if body is None:
             raise self._streaming_block_error(f"{self.guardrail_name}: modified streamed response failed validation")
-        return anthropic_sse_chunks_from_body(body)
+        return anthropic_sse_chunks_from_body(body, collected)
 
     async def _emit_modified_responses_stream(
         self,

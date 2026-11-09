@@ -227,6 +227,12 @@ def _rebuilt_sse_chunks(
         response=_without_empty_text(anthropic_response) if error_events else anthropic_response,
         message_delta_fields=_rewritten_message_delta_fields(source_chunks, unchanged_tool_use_ids, keep_explanations),
     ).chunks
+    return _ended_as_the_upstream_ended(rewritten_chunks, source_chunks, error_events)
+
+
+def _ended_as_the_upstream_ended(
+    rewritten_chunks: Sequence[bytes], source_chunks: Sequence[object], error_events: Sequence[str]
+) -> tuple[bytes, ...]:
     if not error_events:
         return tuple(rewritten_chunks)
     block_left_open: Final = _text_block_left_open(rewritten_chunks, source_chunks)
@@ -386,11 +392,21 @@ def assemble_anthropic_sse_body(all_chunks: Sequence[object]) -> Mapping[str, ob
     }
 
 
-def anthropic_sse_chunks_from_body(body: Mapping[str, object]) -> tuple[bytes, ...]:
-    """Re-emit a native Anthropic Messages body as the SSE frames its client expects."""
+def anthropic_sse_chunks_from_body(
+    body: Mapping[str, object], source_chunks: Sequence[object] = ()
+) -> tuple[bytes, ...]:
+    """Re-emit a native Anthropic Messages body as the SSE frames of the ``source_chunks`` stream it replaces.
+
+    A source stream that ended in an upstream ``error`` event ends with that event again, the same
+    way ``anthropic_sse_chunks_from_response`` re-emits one.
+    """
     from litellm.llms.anthropic.messages.native.fake_stream_iterator import (
         FakeAnthropicMessagesStreamIterator,
     )
 
-    typed: Final = cast("AnthropicMessagesResponse", dict(body))  # cast-ok: validating drops provider-only fields
-    return tuple(FakeAnthropicMessagesStreamIterator(response=typed).chunks)
+    error_events: Final = anthropic_sse_error_events(source_chunks)
+    typed: Final = cast(AnthropicMessagesResponse, dict(body))  # cast-ok: validating drops provider-only fields
+    rewritten_chunks: Final = FakeAnthropicMessagesStreamIterator(
+        response=_without_empty_text(typed) if error_events else typed
+    ).chunks
+    return _ended_as_the_upstream_ended(rewritten_chunks, source_chunks, error_events)

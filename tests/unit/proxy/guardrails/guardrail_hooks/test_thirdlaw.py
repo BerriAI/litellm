@@ -1832,6 +1832,35 @@ async def test_a_messages_stream_rewrite_is_re_emitted_as_anthropic_frames():
     assert b"hello there" not in joined
 
 
+async def test_a_messages_stream_rewrite_still_ends_in_the_upstream_error():
+    """A rewrite re-emitted a stream the upstream ended in an error as one that completed, hiding
+    the error and stopping Claude Code from retrying."""
+    upstream_error = {"type": "error", "error": {"type": "overloaded_error", "message": "Overloaded"}}
+    delivered = _anthropic_sse_frames()[:4]
+    g = _make_guardrail(
+        decisions=[
+            _decision_response(
+                {
+                    "action": "modify_response",
+                    "response_body": {"content": [{"type": "text", "text": "hello [REDACTED]"}]},
+                }
+            )
+        ]
+    )
+    out = await _collect(
+        g.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            response=_aiter([*delivered, f"event: error\ndata: {json.dumps(upstream_error)}\n\n".encode()]),
+            request_data=_request_data(),
+        )
+    )
+    events = [item.decode().split("\n")[0].removeprefix("event: ") for item in out if isinstance(item, bytes)]
+    assert events[-1] == "error"
+    assert "message_delta" not in events
+    assert "message_stop" not in events
+    assert b"hello [REDACTED]" in b"".join(item for item in out if isinstance(item, bytes))
+
+
 async def test_a_messages_stream_rewrite_keeps_the_citations_thirdlaw_returned():
     from litellm.proxy.guardrails.anthropic_sse import assemble_anthropic_sse_body
 
