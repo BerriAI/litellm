@@ -1860,3 +1860,88 @@ async def test_safeguarded_sse_stream_reports_upstream_buffering_and_closes_the_
     assert SafeguardedAnthropicSSEStream(
         _chunked(b"", 1), _safeguards_evaluator(_OneVerdictClassifier("{}"))
     ).has_buffered_provider_output is False
+
+
+def _finite_stream(chunks: int):
+    async def _stream():
+        yield {"type": "message_start", "message": {"id": "m", "usage": {"input_tokens": 5, "output_tokens": 1}}}
+        for i in range(chunks):
+            yield {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": f"t{i}"}}
+        yield {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 42}}
+        yield {"type": "message_stop"}
+
+    return _stream()
+
+
+async def _wait_until_no_live_pumps() -> None:
+    for _ in range(300):
+        if not any(not task.done() for task in streaming_iterator_module._UPSTREAM_PUMP_TASKS):
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError("pump task is still alive")
+
+
+@pytest.mark.asyncio
+async def test_pump_exits_when_relay_generator_is_never_closed_and_queue_is_full(monkeypatch):
+    """
+    Regression: a client that resets its connection while the relay queue is full
+    can leave the relay generator unfinalized, so client_detached is never set.
+    The pump must give up on the stalled client after the stall timeout instead of
+    waiting forever, then bill what it drained.
+    """
+    monkeypatch.setattr(streaming_iterator_module, "ANTHROPIC_MESSAGES_STREAM_RELAY_QUEUE_MAXSIZE", 2)
+    monkeypatch.setattr(streaming_iterator_module, "ANTHROPIC_MESSAGES_STREAM_CLIENT_STALL_TIMEOUT_SECONDS", 0.05)
+
+    iterator = _RecordingLoggingIterator(litellm_logging_obj=_make_logging_obj("pump_stall_full_queue"), request_body={})
+    gen = iterator.async_sse_wrapper(_finite_stream(50))
+    await gen.__anext__()
+
+    await _wait_until_no_live_pumps()
+
+    assert iterator.logging_call_count == 1
+    assert any(c.startswith(b"event: message_stop\n") for c in iterator.logged_chunks)
+
+
+@pytest.mark.asyncio
+async def test_pump_keeps_streaming_to_slow_client_that_stays_within_stall_timeout(monkeypatch):
+    monkeypatch.setattr(streaming_iterator_module, "ANTHROPIC_MESSAGES_STREAM_RELAY_QUEUE_MAXSIZE", 2)
+    monkeypatch.setattr(streaming_iterator_module, "ANTHROPIC_MESSAGES_STREAM_CLIENT_STALL_TIMEOUT_SECONDS", 5)
+
+    iterator = _RecordingLoggingIterator(litellm_logging_obj=_make_logging_obj("pump_slow_client"), request_body={})
+    received = []
+    async for chunk in iterator.async_sse_wrapper(_finite_stream(20)):
+        received.append(chunk)
+        await asyncio.sleep(0.01)
+
+    assert any(c.startswith(b"event: message_stop\n") for c in received)
+    assert len(received) == 23
+
+
+@pytest.mark.asyncio
+async def test_pump_exits_when_queued_upstream_error_is_never_consumed_and_relay_is_never_closed(monkeypatch):
+    """
+    Regression: the pump waits for the relay to consume a queued upstream error.
+    If the relay generator is never finalized, that wait must time out and fire
+    the detached failure hook instead of hanging forever.
+    """
+    monkeypatch.setattr(streaming_iterator_module, "ANTHROPIC_MESSAGES_STREAM_CLIENT_STALL_TIMEOUT_SECONDS", 0.05)
+    upstream_errored = asyncio.Event()
+
+    async def _failing_stream():
+        yield {"type": "message_start", "message": {"id": "msg_1", "usage": {"input_tokens": 52, "output_tokens": 1}}}
+        upstream_errored.set()
+        raise _ProviderStreamError("mid-stream failure", status_code=500)
+
+    iterator = _RecordingLoggingIterator(
+        litellm_logging_obj=_make_logging_obj("pump_stall_queued_error", _FailureRecorder()), request_body={}
+    )
+    detached_hook = _DetachedFailureRecorder()
+    iterator.litellm_logging_obj.on_detached_stream_failure = detached_hook
+
+    gen = iterator.async_sse_wrapper(_failing_stream())
+    await gen.__anext__()
+    await upstream_errored.wait()
+
+    await _wait_until_no_live_pumps()
+
+    assert len(detached_hook.exceptions) == 1

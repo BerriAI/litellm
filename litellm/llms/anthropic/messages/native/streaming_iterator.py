@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import json
 import re
 from collections.abc import AsyncGenerator, AsyncIterator, Mapping, Sequence
@@ -12,6 +13,7 @@ from typing_extensions import TypedDict
 
 from litellm.constants import (
     ANTHROPIC_MESSAGES_MAX_DETACHED_STREAM_DRAINS,
+    ANTHROPIC_MESSAGES_STREAM_CLIENT_STALL_TIMEOUT_SECONDS,
     ANTHROPIC_MESSAGES_STREAM_RELAY_QUEUE_MAXSIZE,
 )
 from litellm.litellm_core_utils.core_helpers import process_response_headers
@@ -712,13 +714,18 @@ class BaseAnthropicMessagesStreamingIterator:
         put_task: Final = asyncio.ensure_future(queue.put(item))
         detached_task: Final = asyncio.ensure_future(client_detached.wait())
         try:
-            await asyncio.wait(frozenset((put_task, detached_task)), return_when=asyncio.FIRST_COMPLETED)
+            await asyncio.wait(
+                frozenset((put_task, detached_task)),
+                timeout=ANTHROPIC_MESSAGES_STREAM_CLIENT_STALL_TIMEOUT_SECONDS,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
         finally:
             if not detached_task.done():
                 detached_task.cancel()
         if put_task.done() and not put_task.cancelled():
             return True
         put_task.cancel()
+        client_detached.set()
         return False
 
     async def _pump_upstream_to_queue(
@@ -805,7 +812,10 @@ class BaseAnthropicMessagesStreamingIterator:
             exception=exc,
         )
         if not client_detached.is_set() and await self._enqueue_for_client(queue, client_detached, exc):
-            await client_detached.wait()
+            with contextlib.suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(
+                    client_detached.wait(), timeout=ANTHROPIC_MESSAGES_STREAM_CLIENT_STALL_TIMEOUT_SECONDS
+                )
             if not _exception_left_unconsumed(queue, exc):
                 return
         await self._fire_detached_failure_hook(exc)
