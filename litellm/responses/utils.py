@@ -320,7 +320,10 @@ class ResponsesAPIRequestUtils:
         filtered_response_api_optional_params: Final = (
             response_api_optional_params
             if responses_api_provider_config.supports_cache_salt()
-            else {key: value for key, value in response_api_optional_params.items() if key != "cache_salt"}
+            else cast(  # cast-ok: dropping one optional key keeps the TypedDict shape
+                ResponsesAPIOptionalRequestParams,
+                {key: value for key, value in response_api_optional_params.items() if key != "cache_salt"},
+            )
         )
 
         non_default_params: Final = cast(dict, filtered_response_api_optional_params)

@@ -419,7 +419,7 @@ class AnthropicCompaction(TypedDict, total=False):
 
 
 class AnthropicMessagesRequestOptionalParams(TypedDict, total=False):
-    cache_salt: str | None
+    cache_salt: ReadOnly[str | None]
     max_tokens: int | None
     metadata: AnthropicMetadata | dict | None
     stop_sequences: list[str] | None
