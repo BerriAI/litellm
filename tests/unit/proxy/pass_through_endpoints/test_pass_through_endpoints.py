@@ -44,6 +44,7 @@ from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitErro
 from litellm.proxy.hooks.parallel_request_limiter import PROXY_MaxParallelRequestsHandler
 from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+from litellm.types.proxy.auth.user_api_key_auth import COMMITTED_BUDGET_SPEND_PARAM
 from litellm.types.proxy.carried_budget_state import CommittedBudgetSpend, EntitySpendCounterKeys
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import router as llm_passthrough_router
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.vertex_passthrough_logging_handler import (
@@ -9695,7 +9696,7 @@ async def _track_cost_for_passthrough_kwargs(kwargs: dict) -> AsyncMock:
 
 @pytest.mark.asyncio
 async def test_passthrough_charge_moves_the_committed_spend_of_the_entities_auth_named_budgeted():
-    """A forged body value stays out, and the row's auth keeps no callback credentials for its loggers."""
+    """A forged body value stays out, and loggers that dump the row's metadata never get the auth object."""
     counter_keys: Final = EntitySpendCounterKeys.of(
         token="hashed-token", team_id="t1", user_id="u1", org_id=None, end_user_id=None
     )
@@ -9710,12 +9711,11 @@ async def test_passthrough_charge_moves_the_committed_spend_of_the_entities_auth
         user_api_key_dict,
         parsed_body={"litellm_metadata": {"user_api_key_auth": {"committed_budget_spend": None}}},
     )
-    carried: Final = kwargs["litellm_params"]["metadata"]["user_api_key_auth"]
     increment_spend_counters: Final = await _track_cost_for_passthrough_kwargs(kwargs)
 
     assert increment_spend_counters.await_args.kwargs["committed_spend_scope"] == counter_keys
-    assert carried.metadata == {"kept": "yes"}
-    assert user_api_key_dict.metadata["logging"] == [{"callback_name": "langfuse"}]
+    assert "user_api_key_auth" not in kwargs["litellm_params"]["metadata"]
+    assert "committed_budget_spend" not in repr(kwargs["litellm_params"]["metadata"])
 
 
 @pytest.mark.asyncio
@@ -11160,6 +11160,9 @@ def _split_pass_through_body(
 GEMINI_BODY: Final = '{"contents": [{"parts": [{"text": "hi"}]}], "generationConfig": {"temperature": 0}}'
 
 
+PROXY_SET_PARAMS: Final = ("metadata", "proxy_server_request", COMMITTED_BUDGET_SPEND_PARAM)
+
+
 def _metadata_of(split: _PassThroughSplit) -> Mapping[str, object]:
     return MappingProxyType(_LITELLM_PARAMS.validate_python(split.litellm_params["metadata"]))
 
@@ -11171,7 +11174,7 @@ def test_passthrough_moves_every_litellm_owned_key_from_the_forwarded_body_into_
     )
 
     assert frozenset(split.litellm_params) == frozenset(
-        ("ttl", "num_retries", "litellm_trace_id", "metadata", "proxy_server_request")
+        ("ttl", "num_retries", "litellm_trace_id", *PROXY_SET_PARAMS)
     )
     assert tuple(split.litellm_params[k] for k in ("ttl", "num_retries", "litellm_trace_id")) == (30, 2, "trace-a")
     assert split.forwarded_body == json.loads(GEMINI_BODY)
@@ -11205,7 +11208,7 @@ PROXY_STAMPED_NAMES: Final = frozenset(
 def test_passthrough_keeps_each_registered_litellm_owned_name_out_of_the_forwarded_body(name: str) -> None:
     split: Final = _split_pass_through_body(json.dumps({name: "owned", **json.loads(GEMINI_BODY)}))
 
-    assert frozenset(split.litellm_params) == frozenset((name, "metadata", "proxy_server_request"))
+    assert frozenset(split.litellm_params) == frozenset((name, *PROXY_SET_PARAMS))
     assert split.litellm_params[name] == "owned"
     assert split.forwarded_body == json.loads(GEMINI_BODY)
 
@@ -11249,7 +11252,7 @@ def test_passthrough_keeps_a_client_model_info_object_for_keys_that_allow_client
 def test_passthrough_drops_a_client_supplied_proxy_stamped_name(name: str) -> None:
     split: Final = _split_pass_through_body(json.dumps({name: {"forged": "by-client"}, **json.loads(GEMINI_BODY)}))
 
-    assert frozenset(split.litellm_params) == frozenset(("metadata", "proxy_server_request"))
+    assert frozenset(split.litellm_params) == frozenset(PROXY_SET_PARAMS)
     assert split.litellm_params["proxy_server_request"] != {"forged": "by-client"}, split.litellm_params
     assert split.forwarded_body == json.loads(GEMINI_BODY)
 
@@ -11260,7 +11263,7 @@ def test_passthrough_merges_both_metadata_carriers_from_the_body_into_one_metada
         ' "litellm_metadata": {"lm": "b"}, "generationConfig": {"temperature": 0}}'
     )
 
-    assert frozenset(split.litellm_params) == frozenset(("ttl", "metadata", "proxy_server_request"))
+    assert frozenset(split.litellm_params) == frozenset(("ttl", *PROXY_SET_PARAMS))
     assert _metadata_of(split) == {**_metadata_of(_split_pass_through_body(GEMINI_BODY)), "client_tag": "a", "lm": "b"}
     assert split.forwarded_body == json.loads(GEMINI_BODY)
 
@@ -11299,7 +11302,7 @@ def test_passthrough_sees_a_name_appended_to_the_public_list_after_import() -> N
     finally:
         litellm.all_litellm_params.remove("registered_later")
 
-    assert frozenset(split.litellm_params) == frozenset(("registered_later", "metadata", "proxy_server_request"))
+    assert frozenset(split.litellm_params) == frozenset(("registered_later", *PROXY_SET_PARAMS))
     assert split.forwarded_body == {"contents": [{"parts": [{"text": "hi"}]}]}
 
 
@@ -11308,7 +11311,7 @@ def test_passthrough_sees_the_public_list_rebound_after_import(monkeypatch: pyte
 
     split: Final = _split_pass_through_body(LATE_REGISTERED_BODY)
 
-    assert frozenset(split.litellm_params) == frozenset(("registered_later", "metadata", "proxy_server_request"))
+    assert frozenset(split.litellm_params) == frozenset(("registered_later", *PROXY_SET_PARAMS))
     assert split.forwarded_body == {"contents": [{"parts": [{"text": "hi"}]}]}
 
 

@@ -244,28 +244,6 @@ async def test_custom_metadata_filters_internal_fields():
 
 
 @pytest.mark.asyncio
-async def test_custom_metadata_never_sends_the_auth_object_or_its_key_hash():
-    from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
-    from litellm.proxy._types import UserAPIKeyAuth
-
-    hashed_key: Final = "f0e1d2c3b4a5968778695a4b3c2d1e0f0e1d2c3b4a5968778695a4b3c2d1e0f"
-    kwargs: Final = {
-        "standard_logging_object": create_standard_logging_payload(),
-        "litellm_params": {
-            "metadata": {
-                "custom_field": "should_appear",
-                "user_api_key_auth": UserAPIKeyAuth(token=hashed_key, team_id="team-1", key_alias="alias-1"),
-            }
-        },
-    }
-
-    event_payload: Final = PostHogLogger().create_posthog_event_payload(kwargs)
-
-    assert event_payload["properties"]["custom_field"] == "should_appear"
-    assert hashed_key not in safe_dumps(event_payload)
-
-
-@pytest.mark.asyncio
 async def test_custom_metadata_with_no_metadata():
     """Test that logger handles cases with no metadata gracefully"""
     posthog_logger = PostHogLogger()

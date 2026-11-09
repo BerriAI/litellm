@@ -164,6 +164,8 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     WebSocketSessionUsage,
     WebsocketUpstreamFrameKind,
 )
+from litellm.types.proxy.auth.user_api_key_auth import COMMITTED_BUDGET_SPEND_PARAM
+from litellm.types.proxy.carried_budget_state import CommittedBudgetSpend
 from litellm.types.utils import TRUSTED_CALLBACK_VARS_FIELD, CallTypes, Usage
 
 from .llm_provider_handlers.tinyfish_passthrough_logging_handler import (
@@ -729,7 +731,6 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         _metadata.pop(SESSION_ID_OMITTED_METADATA_KEY, None)
         _metadata["user_api_key"] = LiteLLMProxyRequestSetup.get_logged_api_key(user_api_key_dict)
         _metadata["litellm_parent_otel_span"] = user_api_key_dict.parent_otel_span
-        _metadata["user_api_key_auth"] = LiteLLMProxyRequestSetup.auth_for_request_metadata(user_api_key_dict)
         _metadata["user_api_key_budget_reservation"] = user_api_key_dict.budget_reservation
         _metadata[MODEL_ACCESS_GROUP_METADATA_KEY] = user_api_key_dict.matched_model_access_groups
         _metadata["user_api_key_metadata"] = _metadata["user_api_key_auth_metadata"]
@@ -775,6 +776,7 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
             "litellm_params": {
                 **litellm_params_in_body,
                 "metadata": _metadata,
+                COMMITTED_BUDGET_SPEND_PARAM: user_api_key_dict.committed_budget_spend or CommittedBudgetSpend(),
                 "proxy_server_request": {
                     "url": str(request.url),
                     "method": request.method,

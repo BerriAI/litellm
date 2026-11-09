@@ -280,7 +280,6 @@ class PostHogLogger(CustomBatchLogger):
             "user_api_key_max_budget",
             "user_api_key_model_max_budget",
             "user_api_key_metadata",
-            "user_api_key_auth",
             "headers",
             "litellm_parent_otel_span",
             "requester_ip_address",

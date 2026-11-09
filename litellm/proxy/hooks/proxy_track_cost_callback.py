@@ -76,7 +76,7 @@ from litellm.proxy.utils import (
     BilledFailedAttempt,
     ProxyUpdateSpend,
 )
-from litellm.types.proxy.auth.user_api_key_auth import committed_budget_spend_from_metadata
+from litellm.types.proxy.auth.user_api_key_auth import committed_budget_spend_of_row
 from litellm.types.proxy.carried_budget_state import EntitySpendCounterKeys
 from litellm.types.router import Deployment
 from litellm.types.utils import (
@@ -1294,8 +1294,11 @@ async def _committed_spend_scope_of_row(
     end_user_id: str | None,
 ) -> EntitySpendCounterKeys:
     metadata: Final = _OBJECT_MAPPING.validate_python(get_litellm_metadata_from_kwargs(kwargs=dict(kwargs)))
-    if "user_api_key_auth" in metadata:
-        return committed_budget_spend_from_metadata(metadata).counter_keys
+    carried: Final = committed_budget_spend_of_row(
+        metadata, _OBJECT_MAPPING.validate_python(kwargs.get("litellm_params") or {})
+    )
+    if carried is not None:
+        return carried.counter_keys
     if response_cost <= 0 or not committed_spend_tracked():
         return EntitySpendCounterKeys()
     from litellm.proxy.proxy_server import spend_counter_store

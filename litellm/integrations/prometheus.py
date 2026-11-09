@@ -76,7 +76,7 @@ from litellm.types.integrations.prometheus import (
     sanitize_prometheus_label_value,
     validate_prometheus_deployment_and_latency_caller_identity,
 )
-from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth, committed_budget_spend_from_metadata
+from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth, committed_budget_spend_of_row
 from litellm.types.proxy.carried_budget_state import (
     CommittedBudgetSpend,
     EntitySpendCounterKeys,
@@ -2333,8 +2333,9 @@ class PrometheusLogger(CustomLogger):
         _user_email: Final = _metadata.get("user_api_key_user_email", None)
         _org_alias: Final = _metadata.get("user_api_key_org_alias", None)
         _carried_metadata: Final = _REQUEST_METADATA_ADAPTER.validate_python(_metadata)
-        _committed_at_auth: Final = committed_budget_spend_from_metadata(_carried_metadata)
-        _row_carries_auth: Final = "user_api_key_auth" in _carried_metadata
+        _committed_at_auth: Final = committed_budget_spend_of_row(
+            _carried_metadata, _REQUEST_METADATA_ADAPTER.validate_python(litellm_params)
+        )
 
         # Bound the per-request budget-metric emission so that slow Redis/DB
         # lookups under load cannot consume the whole LoggingWorker watchdog
@@ -2348,7 +2349,7 @@ class PrometheusLogger(CustomLogger):
         async def emit_budget_metrics() -> tuple[object, ...]:
             committed: Final = await _committed_spend_without_own_charge(
                 counter_keys=_committed_at_auth.counter_keys
-                if _row_carries_auth
+                if _committed_at_auth is not None
                 else EntitySpendCounterKeys.of(
                     token=user_api_key,
                     team_id=user_api_team,
@@ -2356,7 +2357,7 @@ class PrometheusLogger(CustomLogger):
                     org_id=user_api_key_org_id,
                     end_user_id=end_user_id,
                 ),
-                at_auth=_committed_at_auth if _row_carries_auth else None,
+                at_auth=_committed_at_auth,
                 response_cost=response_cost,
             )
             return await asyncio.gather(
@@ -2869,7 +2870,7 @@ class PrometheusLogger(CustomLogger):
                 _labels,
             )
 
-    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time) -> None:
         verbose_logger.debug(
             "prometheus Logging - Enters failure logging function (kwargs keys: %s)",
             list(kwargs.keys()) if isinstance(kwargs, dict) else type(kwargs).__name__,
@@ -2931,7 +2932,10 @@ class PrometheusLogger(CustomLogger):
             failure_cost: Final = _response_cost_of(_LOGGED_FIELDS.validate_python(standard_logging_payload))
             failure_committed: Final = await _committed_spend_without_own_charge(
                 counter_keys=_budgeted_org_counter(user_api_key_org_id, failure_org),
-                at_auth=committed_budget_spend_from_metadata(failure_metadata),
+                at_auth=committed_budget_spend_of_row(
+                    failure_metadata, _REQUEST_METADATA_ADAPTER.validate_python(litellm_params)
+                )
+                or CommittedBudgetSpend(),
                 response_cost=failure_cost,
             )
             await self._set_org_budget_metrics_after_api_request(
