@@ -315,17 +315,19 @@ def _prepare_request_data_and_content(
 
 
 # Cache for SSL contexts to avoid creating duplicate contexts with the same configuration
-_ssl_context_cache: Final[dict[tuple[str | None, str | None, str | None, bool], ssl.SSLContext]] = {}
+_ssl_context_cache: Final[dict[tuple[str | None, str | None, str | None, bool, bool], ssl.SSLContext]] = {}
 
 
 def _create_ssl_context(
     cafile: str | None,
     ssl_security_level: str | None,
     ssl_ecdh_curve: str | None,
+    fips_mode: bool,
 ) -> ssl.SSLContext:
     """
     Create an SSL context with the given configuration.
     This is separated from get_ssl_configuration to enable caching.
+    In FIPS mode the cipher list also excludes RSA key exchange.
     """
     custom_ssl_context: Final = ssl.create_default_context(cafile=cafile)
 
@@ -333,14 +335,11 @@ def _create_ssl_context(
     # Set minimum TLS version to 1.2 for better performance
     custom_ssl_context.minimum_version = ssl.TLSVersion.TLSv1_2
 
-    # Configure cipher suites for optimal performance
-    if ssl_security_level and isinstance(ssl_security_level, str):
-        # User provided custom cipher configuration (e.g., via SSL_SECURITY_LEVEL env var)
-        custom_ssl_context.set_ciphers(ssl_security_level)
-    else:
-        # Use optimized cipher list that strongly prefers fast ciphers
-        # but falls back to widely compatible ones
-        custom_ssl_context.set_ciphers(DEFAULT_SSL_CIPHERS)
+    # SSL_SECURITY_LEVEL holds a user-provided cipher string, otherwise use the optimized default list
+    ciphers: Final = (
+        ssl_security_level if ssl_security_level and isinstance(ssl_security_level, str) else DEFAULT_SSL_CIPHERS
+    )
+    custom_ssl_context.set_ciphers(f"{ciphers}:!kRSA" if fips_mode else ciphers)
 
     # Configure ECDH curve for key exchange (e.g., to disable PQC and improve performance)
     # Set SSL_ECDH_CURVE env var or litellm.ssl_ecdh_curve to 'X25519' to disable PQC
@@ -458,8 +457,11 @@ def get_ssl_configuration(
             cafile = certifi.where()
 
     if ssl_verify is not False:
+        from litellm.proxy.common_utils.fips import fips_mode_active
+
+        fips_mode: Final = fips_mode_active()
         # Create cache key from configuration parameters
-        cache_key: Final = (cafile, ssl_security_level, ssl_ecdh_curve, http2)
+        cache_key: Final = (cafile, ssl_security_level, ssl_ecdh_curve, http2, fips_mode)
 
         # Check if we have a cached SSL context for this configuration
         if cache_key not in _ssl_context_cache:
@@ -467,6 +469,7 @@ def get_ssl_configuration(
                 cafile=cafile,
                 ssl_security_level=ssl_security_level,
                 ssl_ecdh_curve=ssl_ecdh_curve,
+                fips_mode=fips_mode,
             )
 
         # Return the cached SSL context

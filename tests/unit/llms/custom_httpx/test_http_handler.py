@@ -339,6 +339,51 @@ def test_get_ssl_configuration_integration():
     assert ssl_context.verify_mode is not None
 
 
+def _offered_ciphers(context: bool | str | ssl.SSLContext) -> tuple[tuple[str, str], ...]:
+    assert isinstance(context, ssl.SSLContext)
+    return tuple((cipher["name"], cipher["kea"]) for cipher in context.get_ciphers())
+
+
+@pytest.mark.parametrize(
+    "ssl_security_level",
+    [None, "AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384"],
+    ids=["default-cipher-list", "ssl-security-level"],
+)
+def test_fips_mode_drops_rsa_key_exchange_from_the_outbound_cipher_list(
+    monkeypatch: pytest.MonkeyPatch, ssl_security_level: str | None
+) -> None:
+    import _hashlib
+
+    from cryptography.hazmat.bindings._rust import openssl as rust_openssl
+
+    from litellm.constants import DEFAULT_SSL_CIPHERS
+    from litellm.llms.custom_httpx.http_handler import _ssl_context_cache
+    from litellm.proxy.common_utils.fips import enforce_fips_mode
+
+    _ssl_context_cache.clear()
+    for name in ("SSL_SECURITY_LEVEL", "SSL_ECDH_CURVE", "SSL_CERT_FILE", "SSL_VERIFY"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(litellm, "ssl_security_level", ssl_security_level)
+    configured: Final = ssl.create_default_context()
+    configured.set_ciphers(ssl_security_level or DEFAULT_SSL_CIPHERS)
+
+    standard: Final = _offered_ciphers(get_ssl_configuration())
+    monkeypatch.setattr(_hashlib, "get_fips_mode", lambda: 1)
+    monkeypatch.setattr(
+        _hashlib, "scrypt", MagicMock(side_effect=ValueError("[digital envelope routines] unsupported"))
+    )
+    monkeypatch.setattr(rust_openssl, "is_fips_enabled", lambda: True)
+    enforce_fips_mode({"fips_mode": True})
+    try:
+        fips: Final = _offered_ciphers(get_ssl_configuration())
+    finally:
+        enforce_fips_mode({})
+        _ssl_context_cache.clear()
+
+    assert standard == _offered_ciphers(configured)
+    assert fips == tuple(cipher for cipher in standard if cipher[1] != "kx-rsa")
+
+
 # Session Reuse Tests
 class MockClientSession:
     """Mock ClientSession that is not callable"""
