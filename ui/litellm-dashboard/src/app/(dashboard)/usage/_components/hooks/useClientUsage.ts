@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { uiSpendLogsCall } from "@/components/networking";
+import i18n from "@/i18n/i18n";
 import {
   CLIENT_REQUEST_LIMIT,
   clientUsageFromLogs,
@@ -24,9 +25,10 @@ export function useClientUsage({ accessToken, startTime, endTime, userId, teamId
   const end = endTime?.getTime() ?? Number.NaN;
   const scopeError = (() => {
     if (client === null) return null;
-    if (!userId && !teamId) return "Select a user or team to view client usage";
-    if (!Number.isFinite(start) || !Number.isFinite(end) || start > end) return "Select a valid date range";
-    if (!accessToken) return "Sign in to view client usage";
+    if (!userId && !teamId) return i18n.t("usage.clientUsage.errors.selectUserOrTeam");
+    if (!Number.isFinite(start) || !Number.isFinite(end) || start > end)
+      return i18n.t("usage.clientUsage.errors.invalidRange");
+    if (!accessToken) return i18n.t("usage.clientUsage.errors.signIn");
     return null;
   })();
   const enabled = client !== null && scopeError === null;
@@ -63,7 +65,9 @@ export function useClientUsage({ accessToken, startTime, endTime, userId, teamId
         if (!cancelled) {
           setSettled({
             key,
-            result: emptyClientUsage(error instanceof Error ? error.message : "Could not load client usage"),
+            result: emptyClientUsage(
+              error instanceof Error ? error.message : i18n.t("usage.clientUsage.errors.loadFailed"),
+            ),
           });
         }
       });

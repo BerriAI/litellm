@@ -32,6 +32,7 @@ GEMINI: Final = "gemini-3-pro-preview"
 ZAI_GLM: Final = "glm-5"
 ECHOED_KEY_MODEL: Final = f"{KIMI}-echoed-key"
 BEDROCK_CLAUDE: Final = f"us.anthropic.{CLAUDE}"
+DATABRICKS_CLAUDE: Final = f"databricks-{CLAUDE}"
 AZURE_API_VERSION: Final = "2025-04-01-preview"
 SYNTHETIC_KEY: Final = "synthetic-provider-key"
 _MARKER: Final = re.compile(r"marker-([0-9a-f]{32})")
@@ -214,6 +215,10 @@ def backend(kind: str, wire_url: str) -> Backend:
             return Backend(
                 f"bedrock/invoke/{BEDROCK_CLAUDE}",
                 MappingProxyType({"api_base": wire_url, "api_key": SYNTHETIC_KEY, "aws_region_name": "us-east-1"}),
+            )
+        case "databricks_claude":
+            return Backend(
+                f"databricks/{DATABRICKS_CLAUDE}", MappingProxyType({"api_base": wire_url, "api_key": SYNTHETIC_KEY})
             )
         case _:
             raise AssertionError(f"unknown backend kind {kind}")

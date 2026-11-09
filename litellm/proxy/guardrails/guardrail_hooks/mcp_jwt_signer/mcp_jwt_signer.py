@@ -81,6 +81,7 @@ import jwt
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey, RSAPublicKey
+from pydantic import TypeAdapter
 from typing_extensions import NotRequired, ReadOnly, TypedDict, Unpack
 
 from litellm._logging import verbose_proxy_logger
@@ -89,12 +90,15 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
+from litellm.litellm_core_utils.core_helpers import decoded_json_object
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import CallTypesLiteral
 
 if TYPE_CHECKING:
     from jwt.types import Options
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class _CustomGuardrailOptions(TypedDict, total=False, extra_items=object):
@@ -496,7 +500,7 @@ class MCPJWTSigner(CustomGuardrail):
         payload: Final[dict[str, object]] = jwt.decode(raw_token, signing_jwk.key, **decode_kwargs)
         return payload
 
-    async def _introspect_opaque_token(self, token: str) -> dict[str, object]:
+    async def _introspect_opaque_token(self, token: str) -> Mapping[str, object]:
         """
         Perform RFC 7662 token introspection for opaque (non-JWT) tokens.
 
@@ -522,7 +526,7 @@ class MCPJWTSigner(CustomGuardrail):
             timeout=self.timeout,
         )
         resp.raise_for_status()
-        result: Final[dict[str, object]] = resp.json()
+        result: Final = decoded_json_object(_DECODED_JSON.validate_python(resp.json()))
         if not result.get("active", False):
             raise jwt.exceptions.ExpiredSignatureError(
                 "MCPJWTSigner: incoming token is inactive (introspection returned active=false)"
@@ -821,7 +825,7 @@ class MCPJWTSigner(CustomGuardrail):
         # ------------------------------------------------------------------
         # FR-5: Verify incoming token before re-signing
         # ------------------------------------------------------------------
-        jwt_claims: dict[str, object] | None = None
+        jwt_claims: Mapping[str, object] | None = None
         raw_token: Final[str | None] = hook_data.get("incoming_bearer_token")
 
         if self.access_token_discovery_uri and raw_token:
