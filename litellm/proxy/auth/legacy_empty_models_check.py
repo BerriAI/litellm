@@ -47,28 +47,6 @@ def _finding(count: int, singular: str, plural: str, meaning: str) -> str:
     return f"{count} {singular if count == 1 else plural}, which means {meaning}."
 
 
-def _upgrade_outcomes(counts: LegacyEmptyModelsCounts) -> tuple[str, ...]:
-    empty_lists: Final = (
-        counts.teamless_keys_with_empty_models + counts.team_keys_with_empty_models + counts.teams_with_empty_models
-    )
-    return tuple(
-        outcome
-        for count, outcome in (
-            (
-                empty_lists,
-                "The upgrade to LiteLLM 2.0.0 rewrites empty models lists to all-proxy-models or all-team-models, "
-                "so their access stays the same.",
-            ),
-            (
-                counts.teamless_keys_with_all_team_models,
-                "In LiteLLM 2.0.0, keys without a team that list all-team-models get no models, "
-                "so attach each one to a team or give it All Proxy Models.",
-            ),
-        )
-        if count > 0
-    )
-
-
 def legacy_empty_models_warning(counts: LegacyEmptyModelsCounts) -> str | None:
     findings: Final = tuple(
         _finding(count, singular, plural, meaning)
@@ -102,14 +80,23 @@ def legacy_empty_models_warning(counts: LegacyEmptyModelsCounts) -> str | None:
     )
     if not findings:
         return None
+    teamless_all_team_models_advice: Final = (
+        (
+            "Keys without a team that list all-team-models have no team to inherit from, "
+            "so give each one All Proxy Models or attach it to a team.",
+        )
+        if counts.teamless_keys_with_all_team_models > 0
+        else ()
+    )
     return " ".join(
         (
             "Deprecated model access defaults are still in use.",
             *findings,
             "These counts include blocked and expired keys and blocked teams.",
-            *_upgrade_outcomes(counts),
-            "To choose access yourself before the upgrade, pick All Proxy Models, All Team Models, or a list of "
-            f"models on each one. See {DEPRECATION_DISCUSSION_URL}",
+            "LiteLLM 2.0.0 removes these defaults. To keep today's access, pick All Proxy Models, All Team Models, "
+            "or a list of models on each one before you upgrade.",
+            *teamless_all_team_models_advice,
+            f"See {DEPRECATION_DISCUSSION_URL}",
         )
     )
 

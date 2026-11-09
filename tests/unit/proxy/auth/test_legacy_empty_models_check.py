@@ -62,27 +62,25 @@ def test_warning_reports_only_the_categories_in_use(
     assert DEPRECATION_DISCUSSION_URL in message
 
 
-REWRITE_OUTCOME: Final = "rewrites empty models lists to all-proxy-models or all-team-models"
-NO_MODELS_OUTCOME: Final = "keys without a team that list all-team-models get no models"
+TEAMLESS_ALL_TEAM_MODELS_ADVICE: Final = "Keys without a team that list all-team-models have no team to inherit from"
 
 
 @pytest.mark.parametrize(
-    ("counts", "named_outcome", "left_out_outcome"),
+    ("counts", "advised"),
     [
-        (LegacyEmptyModelsCounts(3, 0, 0, 0), REWRITE_OUTCOME, NO_MODELS_OUTCOME),
-        (LegacyEmptyModelsCounts(0, 0, 4, 0), REWRITE_OUTCOME, NO_MODELS_OUTCOME),
-        (LegacyEmptyModelsCounts(0, 0, 0, 1), REWRITE_OUTCOME, NO_MODELS_OUTCOME),
-        (LegacyEmptyModelsCounts(0, 1, 0, 0), NO_MODELS_OUTCOME, REWRITE_OUTCOME),
+        (LegacyEmptyModelsCounts(3, 0, 0, 0), False),
+        (LegacyEmptyModelsCounts(0, 0, 4, 0), False),
+        (LegacyEmptyModelsCounts(0, 0, 0, 1), False),
+        (LegacyEmptyModelsCounts(0, 1, 0, 0), True),
     ],
 )
-def test_warning_names_only_the_upgrade_outcomes_that_apply(
-    counts: LegacyEmptyModelsCounts, named_outcome: str, left_out_outcome: str
+def test_warning_advises_teamless_all_team_models_keys_only_when_some_exist(
+    counts: LegacyEmptyModelsCounts, advised: bool
 ) -> None:
     message: Final = legacy_empty_models_warning(counts)
 
     assert message is not None
-    assert named_outcome in message
-    assert left_out_outcome not in message
+    assert (TEAMLESS_ALL_TEAM_MODELS_ADVICE in message) is advised
 
 
 def test_warning_reports_every_category_in_use_at_once() -> None:
@@ -93,8 +91,7 @@ def test_warning_reports_every_category_in_use_at_once() -> None:
     assert "5 keys without a team list all-team-models" in message
     assert "7 team keys have an empty models list" in message
     assert "11 teams have an empty models list" in message
-    assert REWRITE_OUTCOME in message
-    assert NO_MODELS_OUTCOME in message
+    assert TEAMLESS_ALL_TEAM_MODELS_ADVICE in message
 
 
 class _RecordingHandler(logging.Handler):

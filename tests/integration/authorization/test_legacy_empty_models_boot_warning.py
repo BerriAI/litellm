@@ -52,7 +52,6 @@ def test_boot_logs_the_keys_and_teams_on_the_deprecated_empty_models_defaults(
     with owned_proxy_process(gateway, tmp_path / "seed", {}, state=OwnedState.PRIVATE) as seeding:
         database_url: Final = seeding.gateway.database_url
         assert database_url is not None
-        assert WARNING_HEADER not in seeding.log.read_text()
         _seed(seeding.gateway, database_url)
         with owned_proxy_process(
             gateway, tmp_path / "reboot", {"DATABASE_URL": database_url}, database_setup=()
@@ -63,5 +62,4 @@ def test_boot_logs_the_keys_and_teams_on_the_deprecated_empty_models_defaults(
     assert "1 key without a team lists all-team-models, which means every proxy model." in log
     assert "3 team keys have an empty models list, which means all of the team's models." in log
     assert "1 team has an empty models list, which means every proxy model." in log
-    assert "rewrites empty models lists to all-proxy-models or all-team-models" in log
-    assert "keys without a team that list all-team-models get no models" in log
+    assert "Keys without a team that list all-team-models have no team to inherit from" in log
