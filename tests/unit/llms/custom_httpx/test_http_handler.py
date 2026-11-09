@@ -344,6 +344,27 @@ def _offered_ciphers(context: bool | str | ssl.SSLContext) -> tuple[tuple[str, s
     return tuple((cipher["name"], cipher["kea"]) for cipher in context.get_ciphers())
 
 
+def _use_ssl_security_level(monkeypatch: pytest.MonkeyPatch, ssl_security_level: str | None) -> None:
+    from litellm.llms.custom_httpx.http_handler import _ssl_context_cache
+
+    _ssl_context_cache.clear()
+    for name in ("SSL_SECURITY_LEVEL", "SSL_ECDH_CURVE", "SSL_CERT_FILE", "SSL_VERIFY"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(litellm, "ssl_security_level", ssl_security_level)
+
+
+def _fake_fips_openssl(monkeypatch: pytest.MonkeyPatch) -> None:
+    import _hashlib
+
+    from cryptography.hazmat.bindings._rust import openssl as rust_openssl
+
+    monkeypatch.setattr(_hashlib, "get_fips_mode", lambda: 1)
+    monkeypatch.setattr(
+        _hashlib, "scrypt", MagicMock(side_effect=ValueError("[digital envelope routines] unsupported"))
+    )
+    monkeypatch.setattr(rust_openssl, "is_fips_enabled", lambda: True)
+
+
 @pytest.mark.parametrize(
     "ssl_security_level",
     [None, "AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384"],
@@ -352,29 +373,18 @@ def _offered_ciphers(context: bool | str | ssl.SSLContext) -> tuple[tuple[str, s
 def test_fips_mode_drops_rsa_key_exchange_from_the_outbound_cipher_list(
     monkeypatch: pytest.MonkeyPatch, ssl_security_level: str | None
 ) -> None:
-    import _hashlib
-
-    from cryptography.hazmat.bindings._rust import openssl as rust_openssl
-
     from litellm.constants import DEFAULT_SSL_CIPHERS
     from litellm.llms.custom_httpx.http_handler import _ssl_context_cache
     from litellm.proxy.common_utils.fips import enforce_fips_mode
 
-    _ssl_context_cache.clear()
-    for name in ("SSL_SECURITY_LEVEL", "SSL_ECDH_CURVE", "SSL_CERT_FILE", "SSL_VERIFY"):
-        monkeypatch.delenv(name, raising=False)
-    monkeypatch.setattr(litellm, "ssl_security_level", ssl_security_level)
+    _use_ssl_security_level(monkeypatch, ssl_security_level)
     configured: Final = ssl.create_default_context()
     configured.set_ciphers(ssl_security_level or DEFAULT_SSL_CIPHERS)
 
     # A client built while the config loads holds its context from before FIPS mode is enforced
     held: Final = get_ssl_configuration()
     standard: Final = _offered_ciphers(held)
-    monkeypatch.setattr(_hashlib, "get_fips_mode", lambda: 1)
-    monkeypatch.setattr(
-        _hashlib, "scrypt", MagicMock(side_effect=ValueError("[digital envelope routines] unsupported"))
-    )
-    monkeypatch.setattr(rust_openssl, "is_fips_enabled", lambda: True)
+    _fake_fips_openssl(monkeypatch)
     enforce_fips_mode({"fips_mode": True})
     try:
         held_in_fips: Final = _offered_ciphers(held)
@@ -389,6 +399,40 @@ def test_fips_mode_drops_rsa_key_exchange_from_the_outbound_cipher_list(
     assert held_in_fips == without_rsa_key_exchange
     assert new_in_fips == without_rsa_key_exchange
     assert held_after_fips == standard
+
+
+def test_fips_mode_offers_only_tls_1_3_when_the_cipher_list_has_only_rsa_key_exchange(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.llms.custom_httpx.http_handler import _ssl_context_cache
+    from litellm.proxy.common_utils.fips import enforce_fips_mode, fips_mode_active
+
+    rsa_key_exchange: Final = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    try:
+        rsa_key_exchange.set_ciphers("kRSA")
+    except ssl.SSLError:
+        pytest.skip("this OpenSSL has no RSA key exchange suites")
+    _use_ssl_security_level(
+        monkeypatch,
+        ":".join(cipher["name"] for cipher in rsa_key_exchange.get_ciphers() if cipher["kea"] == "kx-rsa"),
+    )
+    held: Final = get_ssl_configuration()
+    assert isinstance(held, ssl.SSLContext)
+    _fake_fips_openssl(monkeypatch)
+    enforce_fips_mode({"fips_mode": True})
+    try:
+        started_in_fips: Final = fips_mode_active()
+        new: Final = get_ssl_configuration(http2=True)
+        assert isinstance(new, ssl.SSLContext)
+        in_fips: Final = (held.minimum_version, new.minimum_version)
+    finally:
+        enforce_fips_mode({})
+    after_fips: Final = held.minimum_version
+    _ssl_context_cache.clear()
+
+    assert started_in_fips is True
+    assert in_fips == (ssl.TLSVersion.TLSv1_3, ssl.TLSVersion.TLSv1_3)
+    assert after_fips == ssl.TLSVersion.TLSv1_2
 
 
 # Session Reuse Tests

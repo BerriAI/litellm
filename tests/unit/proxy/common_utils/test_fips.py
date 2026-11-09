@@ -1,8 +1,6 @@
 import _hashlib
-import ssl
 from collections.abc import Iterator, Mapping
 from contextlib import nullcontext
-from typing import Final
 from unittest.mock import Mock
 
 import pytest
@@ -147,26 +145,6 @@ def test_fips_mode_active_follows_the_setting_the_gate_accepted(
 def test_fips_mode_stays_inactive_on_a_refused_boot(monkeypatch: pytest.MonkeyPatch) -> None:
     _fake_openssl(monkeypatch, fips_flag=0, scrypt_refused=False)
     with pytest.raises(FipsModeError):
-        enforce_fips_mode({"fips_mode": True})
-    assert fips_mode_active() is False
-
-
-def test_fips_mode_refuses_to_start_when_the_cipher_override_has_only_rsa_key_exchange(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    rsa_key_exchange: Final = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-    try:
-        rsa_key_exchange.set_ciphers("kRSA")
-    except ssl.SSLError:
-        pytest.skip("this OpenSSL has no RSA key exchange suites")
-    monkeypatch.setenv(
-        "SSL_SECURITY_LEVEL",
-        ":".join(cipher["name"] for cipher in rsa_key_exchange.get_ciphers() if cipher["kea"] == "kx-rsa"),
-    )
-    _fake_openssl(monkeypatch, fips_flag=1, scrypt_refused=True)
-    monkeypatch.setattr(rust_openssl, "is_fips_enabled", lambda: True)
-
-    with pytest.raises(FipsModeError, match="the SSL_SECURITY_LEVEL cipher list has no other suite"):
         enforce_fips_mode({"fips_mode": True})
     assert fips_mode_active() is False
 

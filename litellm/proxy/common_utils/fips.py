@@ -1,4 +1,3 @@
-import ssl
 import threading
 from collections.abc import Mapping
 from typing import Final
@@ -92,14 +91,7 @@ def enforce_fips_mode(general_settings: Mapping[str, object]) -> None:
     if refusal is not None:
         raise FipsModeError(refusal)
     active: Final = _fips_mode_setting(general_settings) is True
-    try:
-        exclude_rsa_key_exchange(active)
-    except ssl.SSLError as error:
-        raise FipsModeError(
-            f"{_SETTING} drops RSA key exchange from outbound TLS 1.2, and the SSL_SECURITY_LEVEL cipher list has no "
-            f"other suite ({error}). Add an ECDHE suite such as ECDHE-RSA-AES256-GCM-SHA384, or unset it to use the "
-            "default list."
-        ) from error
+    exclude_rsa_key_exchange(active)
     if active:
         _FIPS_MODE_ACTIVE.set()
     else:
