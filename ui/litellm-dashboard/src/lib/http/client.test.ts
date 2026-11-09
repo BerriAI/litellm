@@ -205,6 +205,19 @@ describe("unwrapProxyErrorMessage", () => {
     );
   });
 
+  it("should decode the escapes the python dict string puts in the message", () => {
+    const envelope = JSON.stringify({
+      error: {
+        message: `{'error': "Callback param 'arize_api_key' is rejected.\\nTo resolve:\\n  1. Remove it.\\tDone"}`,
+        code: "400",
+      },
+    });
+    expect(unwrapProxyErrorMessage(envelope)).toBe(
+      "Callback param 'arize_api_key' is rejected.\nTo resolve:\n  1. Remove it.\tDone",
+    );
+    expect(unwrapProxyErrorMessage("{'error': 'it\\'s a C:\\\\new path'}")).toBe("it's a C:\\new path");
+  });
+
   it("should return plain messages and unparseable input unchanged", () => {
     expect(unwrapProxyErrorMessage("Failed to fetch")).toBe("Failed to fetch");
     expect(unwrapProxyErrorMessage("{}")).toBe("{}");
