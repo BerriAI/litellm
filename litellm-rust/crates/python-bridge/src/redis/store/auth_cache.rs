@@ -1,5 +1,9 @@
 use std::sync::Arc;
 
+use futures_util::{StreamExt, stream::BoxStream};
+use litellm_redis_client::SubscriptionEvent;
+use tokio::sync::Mutex;
+
 use litellm_python_compat::Value;
 use litellm_redis_store::auth_cache::{AuthCache, Settings};
 use pyo3::prelude::*;
@@ -42,6 +46,35 @@ impl NativeAuthCache {
     #[getter]
     fn has_redis(&self) -> bool {
         self.0.has_redis()
+    }
+
+    fn attach(&self, client: &NativeRedisClient) -> bool {
+        self.0.attach(remote(client))
+    }
+
+    fn current_generation(&self) -> u64 {
+        self.0.current_generation()
+    }
+
+    #[pyo3(signature = (key, value, generation, ttl_seconds = None))]
+    fn set_if_generation(
+        &self,
+        key: &str,
+        value: PyValue,
+        generation: u64,
+        ttl_seconds: Option<f64>,
+    ) -> PyResult<bool> {
+        Ok(self
+            .0
+            .set_if_generation(key, value.0, generation, ttl(ttl_seconds)?))
+    }
+
+    fn subscribe(&self, client: &NativeRedisClient, channel: &str) -> NativeAuthSubscription {
+        self.0.subscriber_connected(false);
+        NativeAuthSubscription {
+            cache: self.0.clone(),
+            stream: Arc::new(Mutex::new(Some(client.client.subscribe_events(channel)))),
+        }
     }
 
     /// `request` answers a key its pre-call reads already found absent without another `GET`.
@@ -242,6 +275,65 @@ impl NativeAuthCache {
             objects,
             key_objects,
         })
+    }
+}
+
+#[pyclass(frozen)]
+pub(crate) struct NativeAuthSubscription {
+    cache: Arc<AuthCache>,
+    stream: Arc<Mutex<Option<BoxStream<'static, SubscriptionEvent>>>>,
+}
+
+#[pymethods]
+impl NativeAuthSubscription {
+    fn is_connected(&self) -> bool {
+        self.cache.local_ready()
+    }
+
+    fn next<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let cache = self.cache.clone();
+        let stream = self.stream.clone();
+        litellm_host_python::run_async_value(py, async move {
+            let mut guard = stream.lock().await;
+            let Some(stream) = guard.as_mut() else {
+                return Ok(None::<Py<pyo3::types::PyBytes>>);
+            };
+            match stream.next().await {
+                Some(SubscriptionEvent::Connected) => cache.subscriber_connected(true),
+                Some(SubscriptionEvent::Message(payload)) => {
+                    if let Ok(message) = serde_json::from_slice::<serde_json::Value>(&payload)
+                        && let Some(key) =
+                            message.get("cache_key").and_then(serde_json::Value::as_str)
+                        && message
+                            .get("new_value")
+                            .and_then(serde_json::Value::as_f64)
+                            .is_none()
+                    {
+                        cache.delete_local(key).map_err(kind_error)?;
+                    }
+                    return Ok(Some(Python::attach(|py| {
+                        pyo3::types::PyBytes::new(py, &payload).unbind()
+                    })));
+                }
+                _ => cache.subscriber_connected(false),
+            }
+            Ok(None)
+        })
+    }
+
+    fn close<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        self.cache.subscriber_connected(false);
+        let stream = self.stream.clone();
+        litellm_host_python::run_async_value(py, async move {
+            stream.lock().await.take();
+            Ok(())
+        })
+    }
+}
+
+impl Drop for NativeAuthSubscription {
+    fn drop(&mut self) {
+        self.cache.subscriber_connected(false);
     }
 }
 

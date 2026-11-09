@@ -4538,6 +4538,7 @@ dependencies = [
  "litellm-redis-testing",
  "litellm-secret-value",
  "litellm-tracing",
+ "moka",
  "rstest",
  "strum",
  "thiserror 2.0.19",

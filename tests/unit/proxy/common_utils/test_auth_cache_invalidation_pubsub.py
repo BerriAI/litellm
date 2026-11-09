@@ -145,6 +145,8 @@ class _ScriptedPubSubRedisClient(Redis):
 
 
 class _FakeRedisCache:
+    store_settings = None
+
     def __init__(self, client: object, namespace: str | None = None) -> None:
         self._client = client
         self.namespace = namespace
@@ -207,8 +209,8 @@ async def test_subscriber_deletes_local_cache_entry_on_message() -> None:
     instead of serving the stale object until the TTL expires.
     """
     cache = UserApiKeyCache()
-    cache.in_memory_cache.set_cache("project_id:p-1", {"models": []})
-    assert cache.in_memory_cache.get_cache("project_id:p-1") is not None
+    cache.set_local("project_id:p-1", {"models": []}, None)
+    assert cache.get_local("project_id:p-1") is not None
 
     pubsub = _QueuePubSub(initial_messages=[_invalidation_message("project_id:p-1")])
     subscriber = AuthCacheInvalidationSubscriber(
@@ -221,7 +223,7 @@ async def test_subscriber_deletes_local_cache_entry_on_message() -> None:
     finally:
         await subscriber.stop()
 
-    assert cache.in_memory_cache.get_cache("project_id:p-1") is None
+    assert cache.get_local("project_id:p-1") is None
     assert pubsub.subscribed_channels == [AUTH_CACHE_INVALIDATION_CHANNEL]
 
 
@@ -357,7 +359,7 @@ async def test_subscriber_writes_and_drops_the_native_spend_counter_copies_a_bro
 @pytest.mark.asyncio
 async def test_subscriber_ignores_malformed_messages() -> None:
     cache = UserApiKeyCache()
-    cache.in_memory_cache.set_cache("project_id:p-1", {"models": []})
+    cache.set_local("project_id:p-1", {"models": []}, None)
 
     subscriber = AuthCacheInvalidationSubscriber(
         redis_cache=_FakeRedisCache(client=_ScriptedPubSubRedisClient(pubsubs=[_QueuePubSub()])),
@@ -368,7 +370,7 @@ async def test_subscriber_ignores_malformed_messages() -> None:
     subscriber._apply_message("raw string")
     subscriber._apply_message(None)
 
-    assert cache.in_memory_cache.get_cache("project_id:p-1") is not None
+    assert cache.get_local("project_id:p-1") is not None
 
 
 @pytest.mark.asyncio

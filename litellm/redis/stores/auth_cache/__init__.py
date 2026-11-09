@@ -10,7 +10,7 @@ from litellm.caching.redis_batch import Batch, active_request_redis_batches
 from litellm.redis.stores._route import route
 from litellm.redis.stores.auth_cache.handle import AuthCacheHandle
 from litellm.redis.stores.auth_cache.types import AUTH_CACHE_TARGET, AuthCacheSettings, WriteBack
-from litellm.rust_bridge._native import LocalSizes
+from litellm.rust_bridge._native import LocalSizes, NativeAuthSubscription, NativeRedisClient
 
 __all__ = [
     "AUTH_CACHE_TARGET",
@@ -35,6 +35,22 @@ class AuthCacheStore:
 
     def __init__(self, handle: AuthCacheHandle) -> None:
         self._handle: Final = handle
+
+    def attach(self, client: NativeRedisClient) -> bool:
+        return self._handle.attach(client)
+
+    def begin_fill(self, key: str) -> int:
+        return self._handle.current_generation()
+
+    def current_generation(self) -> int:
+        return self._handle.current_generation()
+
+    def set_if_generation(self, key: str, value: object, generation: int, ttl: float | None = None) -> bool:
+        self._forget_miss(key)
+        return self._handle.set_if_generation(key, value, generation, _redis_ttl(ttl))
+
+    def subscribe(self, client: NativeRedisClient, channel: str) -> NativeAuthSubscription:
+        return self._handle.subscribe(client, channel)
 
     def reconfigure(self, settings: AuthCacheSettings) -> None:
         """Both memory partitions keep what they hold, as ``update_cache_ttl`` and ``update_in_memory_max_size`` do."""
