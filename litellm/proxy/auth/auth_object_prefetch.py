@@ -297,8 +297,9 @@ async def _write_back(
     )
     shared: Final = cache.shared
     if generation is not None:
+        assert shared is not None
         for cache_key, payload, ttl in payloads:
-            cache.set_if_generation(cache_key, payload, generation, ttl)
+            shared.set_if_generation(cache_key, payload, generation, ttl)
         return
     if shared is not None:
         with service_target(AUTH_OBJECTS_TARGET):
