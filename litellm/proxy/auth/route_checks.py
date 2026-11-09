@@ -4,11 +4,9 @@ from typing import Final, cast
 from fastapi import HTTPException, Request, status
 
 from litellm._auth import routes
-from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import (
     MODEL_LIST_ROUTES,
     UI_TEAM_ID,
-    CommonProxyErrors,
     KeyManagementRoutes,
     LiteLLM_UserTable,
     LiteLLMRoutes,
@@ -208,33 +206,15 @@ class RouteChecks:
 
     @staticmethod
     def custom_admin_only_route_check(route: str):
-        from litellm.proxy.proxy_server import general_settings, premium_user
+        from litellm.proxy.auth.route_scope_adapter import custom_admin_only_route_check
 
-        if "admin_only_routes" in general_settings:
-            if premium_user is not True:
-                verbose_proxy_logger.error(
-                    "Trying to use 'admin_only_routes' this is an Enterprise only feature. %s",
-                    CommonProxyErrors.not_premium_user.value,
-                )
-                return
-            if route in general_settings["admin_only_routes"]:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail=f"user not allowed to access this route. Route={route} is an admin only route",
-                )
+        return custom_admin_only_route_check(route)
 
     @staticmethod
     def is_allowed_on_proxy(route: str) -> bool:
-        from litellm.proxy.proxy_server import general_settings, premium_user
+        from litellm.proxy.auth.route_scope_adapter import is_allowed_on_proxy
 
-        if "allowed_routes" not in general_settings:
-            return True
-        if premium_user is not True:
-            verbose_proxy_logger.error(
-                "Trying to set allowed_routes. This is an Enterprise feature. %s",
-                CommonProxyErrors.not_premium_user.value,
-            )
-        return route in general_settings["allowed_routes"]
+        return is_allowed_on_proxy(route)
 
     @staticmethod
     def is_unbilled_route(route: str) -> bool:

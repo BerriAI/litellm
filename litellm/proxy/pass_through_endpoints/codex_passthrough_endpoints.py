@@ -4,7 +4,6 @@ import hmac
 import json
 import re
 from collections.abc import Iterator, Mapping
-from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Final, Literal, Protocol
 
@@ -14,7 +13,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import TypeAdapter, ValidationError
 from starlette.types import Message
 
-import litellm
+from litellm._auth.failure import NativeAuthFailure
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.exceptions import BadRequestError
@@ -24,14 +23,12 @@ from litellm.llms.chatgpt.common_utils import CHATGPT_API_BASE
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]  # shared client factory has untyped params
 )
-from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
-from litellm.proxy.auth.auth_checks import check_model_access_helper, check_tools_allowlist
-from litellm.proxy.auth.handle_jwt import JWTAuthManager
-from litellm.proxy.auth.route_checks import RouteChecks
+from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.auth.auth_checks import check_tools_allowlist
+from litellm.proxy.auth.codex_turn_adapter import CodexAccess as _LitellmResponsesAccess
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.codex_model_catalog import (
     CodexCatalogRow,
-    bundled_codex_models,
     codex_catalog_etag,
     codex_entry_names_default_reasoning_level,
     merged_codex_catalog,
@@ -69,7 +66,6 @@ _JSON_OBJECT: Final = TypeAdapter(dict[str, object])
 _INPUT_ITEMS: Final = TypeAdapter(tuple[object, ...])
 _CACHED_SLUGS: Final = TypeAdapter(frozenset[str])
 _CACHED_MODELS_ETAG: Final = TypeAdapter(dict[Literal["etag"], str])
-_MODEL_NAMES: Final = TypeAdapter(list[str])
 _HEADER_DERIVED_STATE: Final = frozenset({"_cached_headers"})
 _ACCOUNT_CATALOG_HEADERS: Final = frozenset({"authorization", "chatgpt-account-id", "originator", "user-agent"})
 _CODEX_USER_AGENT_PRODUCT: Final = re.compile(r"([^/]+)/(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.+-]+)?)")
@@ -108,19 +104,6 @@ _HEADERS: Final = frozenset(
 )
 
 
-def _is_chatgpt(deployment: Deployment) -> bool:
-    return (
-        deployment.litellm_params.custom_llm_provider == _CHATGPT_PROVIDER
-        or deployment.litellm_params.model.partition("/")[0] == _CHATGPT_PROVIDER
-    )
-
-
-def _serves_by_name(deployment: Deployment, names: frozenset[str]) -> bool:
-    return not _is_chatgpt(deployment) and (
-        deployment.model_name in names or deployment.model_info.team_public_model_name in names
-    )
-
-
 def _candidate_deployments(model: str, llm_router: "Router", team_id: str | None) -> tuple[Deployment, ...]:
     registry: Final = llm_router.registry()
     candidates: Final = tuple(
@@ -130,37 +113,15 @@ def _candidate_deployments(model: str, llm_router: "Router", team_id: str | None
 
 
 def routes_to_litellm(model: object, llm_router: "Router | None", team_id: str | None) -> bool:
-    if (
-        not isinstance(model, str)
-        or llm_router is None
-        or model in bundled_codex_models()
-        or f"{_CHATGPT_PROVIDER}/{model}" in litellm.model_cost  # pyright: ignore[reportUnknownMemberType]  # registry is dynamically typed
-    ):
-        return False
-    deployments: Final = _candidate_deployments(model, llm_router, team_id)
-    names: Final = frozenset({model, llm_router.registry().resolve(model, kind="alias") or model})
-    return bool(deployments) and all(_serves_by_name(deployment, names) for deployment in deployments)
+    from litellm.proxy.auth.codex_model_adapter import routes_to_litellm as native
 
-
-def _key_and_team_allow(model: str, llm_router: "Router", user_api_key_dict: UserAPIKeyAuth) -> bool:
-    allowed_lists: Final = (
-        _MODEL_NAMES.validate_python(user_api_key_dict.models),
-        _MODEL_NAMES.validate_python(user_api_key_dict.team_models),
-    )
-    return all(
-        check_model_access_helper(model, llm_router, allowed, team_id=user_api_key_dict.team_id)
-        for allowed in allowed_lists
-    )
+    return native(model, llm_router, team_id)
 
 
 def native_chatgpt_model(model: str, llm_router: "Router", user_api_key_dict: UserAPIKeyAuth) -> str | None:
-    if model.startswith(f"{_CHATGPT_PROVIDER}/") or _key_and_team_allow(model, llm_router, user_api_key_dict):
-        return None
-    chatgpt_model: Final = f"{_CHATGPT_PROVIDER}/{model}"
-    deployments: Final = _candidate_deployments(chatgpt_model, llm_router, user_api_key_dict.team_id)
-    if not deployments or not all(_is_chatgpt(deployment) for deployment in deployments):
-        return None
-    return chatgpt_model if _key_and_team_allow(chatgpt_model, llm_router, user_api_key_dict) else None
+    from litellm.proxy.auth.codex_model_adapter import native_chatgpt_model as native
+
+    return native(model, llm_router, user_api_key_dict)
 
 
 class _SharedCache(Protocol):
@@ -177,69 +138,10 @@ def codex_shared_cache() -> _SharedCache:
     return proxy_logging_obj.internal_usage_cache.dual_cache
 
 
-def _key_may_call_litellm_responses(user_api_key_dict: UserAPIKeyAuth) -> bool:
-    if not RouteChecks.is_allowed_on_proxy(_LITELLM_RESPONSES_PATH):
-        return False
-    try:
-        _ = RouteChecks.should_call_route(route=_LITELLM_RESPONSES_PATH, valid_token=user_api_key_dict)
-        if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
-            RouteChecks.custom_admin_only_route_check(route=_LITELLM_RESPONSES_PATH)
-    except HTTPException:
-        return False
-    return True
-
-
-async def _jwt_policy_admits_litellm_responses(
-    gateway_token: str, model: str, request_headers: Mapping[str, str]
-) -> bool:
-    from litellm.proxy.proxy_server import (
-        general_settings_view,
-        jwt_handler,
-        prisma_client,
-        proxy_logging_obj,
-        user_api_key_cache,
-    )
-
-    try:
-        _ = await JWTAuthManager.auth_builder(
-            api_key=gateway_token,
-            jwt_handler=jwt_handler,
-            request_data={"model": model},
-            general_settings=dict(general_settings_view()),
-            route=_LITELLM_RESPONSES_PATH,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            parent_otel_span=None,
-            proxy_logging_obj=proxy_logging_obj,
-            request_headers=request_headers,
-            request_method="POST",
-        )
-    except Exception:  # noqa: BLE001  # any JWT policy refusal keeps the caller on ChatGPT's models
-        return False
-    return True
-
-
-@dataclass(frozen=True, slots=True)
-class _LitellmResponsesAccess:
-    key_admits: bool
-    jwt_token: str | None
-    request_headers: Mapping[str, str]
-
-    async def admits(self, model: str) -> bool:
-        if not self.key_admits:
-            return False
-        if self.jwt_token is None:
-            return True
-        return await _jwt_policy_admits_litellm_responses(self.jwt_token, model, self.request_headers)
-
-
 def _litellm_responses_access(user_api_key_dict: UserAPIKeyAuth, request: Request) -> _LitellmResponsesAccess:
-    standard_jwt: Final = bool(user_api_key_dict.jwt_claims) and not user_api_key_dict.token
-    return _LitellmResponsesAccess(
-        key_admits=_key_may_call_litellm_responses(user_api_key_dict),
-        jwt_token=_gateway_token(request) if standard_jwt else None,
-        request_headers=request.headers,
-    )
+    from litellm.proxy.auth.codex_turn_adapter import read_codex_access
+
+    return read_codex_access(user_api_key_dict, request)
 
 
 def _account_slugs_cache_key(headers: Mapping[str, str]) -> str | None:
@@ -324,12 +226,9 @@ async def _serves_through_litellm(
     headers: Mapping[str, str],
     cache: _SharedCache,
 ) -> bool:
-    if not isinstance(model, str) or not routes_to_litellm(model, llm_router, user_api_key_dict.team_id):
-        return False
-    if not await access.admits(model):
-        return False
-    account_slugs: Final = await _account_slugs(headers, caller, cache)
-    return account_slugs is not None and model not in account_slugs
+    from litellm.proxy.auth.codex_turn_adapter import serves_through_litellm
+
+    return await serves_through_litellm(model, llm_router, user_api_key_dict, access, caller, headers, cache)
 
 
 def _gateway_token(request: Request) -> str:
@@ -353,19 +252,9 @@ def _forwarded_headers(request: Request) -> Mapping[str, str]:
 async def native_turn_serves_through_litellm(
     model: str, llm_router: "Router", request: Request, user_api_key_dict: UserAPIKeyAuth
 ) -> bool:
-    chatgpt_bearer: Final = _chatgpt_bearer(request)
-    gateway_token: Final = _gateway_token(request)
-    if not chatgpt_bearer or not gateway_token or hmac.compare_digest(chatgpt_bearer.encode(), gateway_token.encode()):
-        return False
-    return await _serves_through_litellm(
-        model,
-        llm_router,
-        user_api_key_dict,
-        _litellm_responses_access(user_api_key_dict, request),
-        _models_etag_caller(user_api_key_dict, gateway_token),
-        _forwarded_headers(request),
-        codex_shared_cache(),
-    )
+    from litellm.proxy.auth.codex_turn_adapter import native_turn_serves_through_litellm as native
+
+    return await native(model, llm_router, request, user_api_key_dict)
 
 
 def _json_object(value: object) -> Mapping[str, object]:
@@ -588,6 +477,8 @@ async def _litellm_catalog_rows(
         return ()
     try:
         rows: Final = await codex_catalog_rows_for_key(user_api_key_dict)
+    except NativeAuthFailure:
+        raise
     except Exception as error:  # noqa: BLE001  # a failed listing must never fail the ChatGPT answer it extends
         verbose_proxy_logger.warning(
             "Codex catalog keeps only ChatGPT's models: listing the key's LiteLLM models raised %s",

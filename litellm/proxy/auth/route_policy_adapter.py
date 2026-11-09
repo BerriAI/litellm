@@ -143,17 +143,20 @@ def raise_route_denial(
             )
 
 
-def check_virtual_route(route: str, token: UserAPIKeyAuth, request: Request | None) -> bool:
+def read_virtual_route_facts(route: str, token: UserAPIKeyAuth, request: Request | None) -> routes.VirtualRouteFacts:
     from litellm.proxy.auth.route_checks import RouteChecks
 
     fields: Final = _TokenFields.model_validate(token, from_attributes=True)
-    facts: Final = routes.VirtualRouteFacts(
+    return routes.VirtualRouteFacts(
         context=route_context(route, RouteChecks.get_request_method(request), registration=True),
         allowed_routes=_allowed_routes(fields.allowed_routes),
         passthrough=passthrough_facts(route, token),
         password_reset_required=(fields.metadata or {}).get("password_reset_required") is True,
     )
-    raise_route_denial(routes.virtual_route(facts), route, token=token)
+
+
+def check_virtual_route(route: str, token: UserAPIKeyAuth, request: Request | None) -> bool:
+    raise_route_denial(routes.virtual_route(read_virtual_route_facts(route, token, request)), route, token=token)
     return True
 
 

@@ -36,12 +36,18 @@ pub struct Evaluation {
 #[derive(Serialize)]
 #[serde(tag = "kind")]
 pub enum Decision {
-    Complete { decision: ModelDecision },
-    Read { read: ReadKind, model: String },
+    Complete {
+        decision: ModelDecision,
+    },
+    Read {
+        read: ReadKind,
+        model: String,
+        team_id: Option<String>,
+    },
 }
 
 enum Pending {
-    Read(ReadKind, String),
+    Read(ReadKind, String, Option<String>),
     Invalid(Error),
 }
 impl From<Error> for Pending {
@@ -53,11 +59,12 @@ impl From<Error> for Pending {
 struct Reader<'a> {
     reads: &'a [Reading],
     index: usize,
+    team_id: Option<String>,
 }
 impl<'a> Reader<'a> {
     fn read(&mut self, kind: ReadKind, model: &str) -> Result<&'a Reading, Pending> {
         let Some(value) = self.reads.get(self.index) else {
-            return Err(Pending::Read(kind, model.to_owned()));
+            return Err(Pending::Read(kind, model.to_owned(), self.team_id.clone()));
         };
         if value.kind != kind || value.model != model {
             return Err(Pending::Invalid(Error::InvalidAnswer));
@@ -200,12 +207,67 @@ fn check(facts: &Facts, reader: &mut Reader<'_>) -> Result<ModelDecision, Pendin
     Ok(ModelDecision::Allow)
 }
 
+fn customer(facts: &Facts, reader: &mut Reader<'_>) -> Result<ModelDecision, Pending> {
+    for model in &facts.requested {
+        let target = facts.aliases.team.get(model).unwrap_or(model);
+        let target = if facts.registry.present
+            && target.starts_with(&format!(
+                "model_name_{}_",
+                facts.team_id.as_deref().unwrap_or("None")
+            ))
+            && facts.aliases.team.contains_key(model)
+            && !reader.read(ReadKind::Names, model)?.values.contains(target)
+        {
+            model
+        } else {
+            target
+        };
+        if target != model && facts.grants.contains(model) {
+            continue;
+        }
+        let scope = Facts {
+            requested: vec![target.clone()],
+            team_id: None,
+            is_list: false,
+            aliases: model_access::Aliases {
+                key: facts.aliases.key.clone(),
+                global: facts.aliases.global.clone(),
+                ..Default::default()
+            },
+            ..facts.clone()
+        };
+        let decision = check(&scope, reader)?;
+        if !decision.allowed() {
+            return Ok(decision);
+        }
+    }
+    Ok(ModelDecision::Allow)
+}
+
 pub fn decide(facts: &Facts, reads: &[Reading]) -> Result<Decision, Error> {
-    let mut reader = Reader { reads, index: 0 };
-    match check(facts, &mut reader) {
+    let is_customer = facts.object_type == model_access::ObjectType::Customer;
+    let mut reader = Reader {
+        reads,
+        index: 0,
+        team_id: if is_customer {
+            None
+        } else {
+            facts.team_id.clone()
+        },
+    };
+    let decision = if is_customer {
+        customer(facts, &mut reader)
+    } else {
+        check(facts, &mut reader)
+    };
+    match decision {
         Ok(decision) if reader.index == reads.len() => Ok(Decision::Complete { decision }),
         Ok(_) => Err(Error::InvalidAnswer),
-        Err(Pending::Read(read, model)) => Ok(Decision::Read { read, model }),
+        Err(Pending::Read(read, model, team_id)) => Ok(Decision::Read {
+            read,
+            model,
+            team_id,
+        }),
         Err(Pending::Invalid(error)) => Err(error),
     }
 }

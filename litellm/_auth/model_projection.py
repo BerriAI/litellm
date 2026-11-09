@@ -13,6 +13,7 @@ class ModelProjectionDecision:
     kind: Literal["Complete", "Read"]
     read: ModelReadKind | None = None
     model: str | None = None
+    team_id: str | None = None
     decision: ModelAccessDecision | None = None
 
 

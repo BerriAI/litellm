@@ -311,7 +311,7 @@ fn managed(context: &RouteContext) -> Result<bool, Error> {
         || catalog.access(route, "agent_inference_routes")?)
 }
 
-fn virtual_route(facts: &VirtualRouteFacts) -> Result<Decision, Error> {
+pub(crate) fn virtual_route(facts: &VirtualRouteFacts) -> Result<Decision, Error> {
     let Some(allowed) = &facts.allowed_routes else {
         return Ok(Decision::allow());
     };
