@@ -69,11 +69,9 @@ from litellm._internal_context import service_target, set_request_parent_otel_sp
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm._service_logger import ServiceLogging
 from litellm.constants import (
-    CLIENT_REQUESTED_MODEL_SCOPE_KEY,
     GLOBAL_PROXY_SPEND_CACHE_KEY,
     LITELLM_PROXY_BUDGET_NAME,
     LITELLM_PROXY_MASTER_KEY_ALIAS,
-    MODEL_GROUP_ALIAS_RESOLVED_SCOPE_KEY,
 )
 from litellm.integrations.otel.model.config import is_otel_v2_enabled
 from litellm.integrations.otel.runtime import phase_event, phase_span, seed_request_identity
@@ -144,8 +142,6 @@ from litellm.proxy.auth.auth_utils import (
     log_model_access_denial,
     normalize_request_route,
     pre_db_read_auth_checks,
-    request_dispatched_to_pass_through_endpoint,
-    request_dispatched_to_provider_pass_through,
     route_in_additonal_public_routes,
 )
 from litellm.proxy.auth.budget_throttle import budget_throttle_percentage, should_throttle_budget_exceeded
@@ -344,15 +340,10 @@ async def _normalize_claude_model(
     rewrite_request_model(request_data, request, source)
 
 
-_CODEX_NATIVE_RESPONSES_ROUTE: Final = "/backend-api/codex/responses"
-
-
 def _is_codex_native_litellm_turn(route: str, model: object, llm_router: litellm.Router, team_id: str | None) -> bool:
-    if route != _CODEX_NATIVE_RESPONSES_ROUTE:
-        return False
-    from litellm.proxy.pass_through_endpoints.codex_passthrough_endpoints import routes_to_litellm
+    from litellm.proxy.auth.codex_model_adapter import is_codex_native_litellm_turn
 
-    return routes_to_litellm(model, llm_router, team_id)
+    return is_codex_native_litellm_turn(route, model, llm_router, team_id)
 
 
 async def _resolve_router_settings_model_group_alias(
@@ -361,44 +352,9 @@ async def _resolve_router_settings_model_group_alias(
     request: Request | None,
     route: str,
 ) -> None:
-    """Rewrite the requested model through the key's or team's ``router_settings.model_group_alias``
-    before the allowlist checks, so they authorize the model group the request is routed to.
-    """
-    from litellm.proxy.proxy_server import llm_router, prisma_client, proxy_config, proxy_logging_obj
+    from litellm.proxy.auth.codex_normalization_adapter import resolve_router_settings_model_group_alias
 
-    if request is None or llm_router is None or not RouteChecks.is_llm_api_route(route=route):
-        return
-    if request.scope.get(MODEL_GROUP_ALIAS_RESOLVED_SCOPE_KEY) is True:
-        return
-    request.scope[MODEL_GROUP_ALIAS_RESOLVED_SCOPE_KEY] = True
-    requested: Final = request_data.get("model")
-    if request_dispatched_to_pass_through_endpoint(request) or (
-        request_dispatched_to_provider_pass_through(request)
-        and not _is_codex_native_litellm_turn(route, requested, llm_router, valid_token.team_id)
-    ):
-        return
-    if not isinstance(requested, str) or await read_raw_json_body(request=request) is None:
-        return
-    settings: Final = await proxy_config.get_hierarchical_router_settings(
-        user_api_key_dict=valid_token, prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj
-    )
-    if not isinstance(settings, Mapping):
-        return
-    target: Final = resolve_model_group_alias(settings.get("model_group_alias"), requested)
-    if target is None or target == requested:
-        return
-    if request_dispatched_to_provider_pass_through(request):
-        from litellm.proxy.pass_through_endpoints.codex_passthrough_endpoints import native_turn_serves_through_litellm
-
-        if not await native_turn_serves_through_litellm(requested, llm_router, request, valid_token):
-            return
-    verbose_proxy_logger.debug(
-        "router_settings.model_group_alias resolved %s -> %s before auth",
-        requested.replace("\r", "").replace("\n", ""),
-        target.replace("\r", "").replace("\n", ""),
-    )
-    request.scope.setdefault(CLIENT_REQUESTED_MODEL_SCOPE_KEY, requested)
-    rewrite_request_model(request_data, request, target)
+    await resolve_router_settings_model_group_alias(request_data, valid_token, request, route)
 
 
 def _resolve_codex_native_chatgpt_model(
@@ -407,19 +363,9 @@ def _resolve_codex_native_chatgpt_model(
     request: Request | None,
     route: str,
 ) -> None:
-    requested: Final = request_data.get("model")
-    if route != _CODEX_NATIVE_RESPONSES_ROUTE or request is None or not isinstance(requested, str):
-        return
-    from litellm.proxy.pass_through_endpoints.codex_passthrough_endpoints import native_chatgpt_model
-    from litellm.proxy.proxy_server import llm_router
+    from litellm.proxy.auth.codex_normalization_adapter import resolve_codex_native_chatgpt_model
 
-    if llm_router is None:
-        return
-    target: Final = native_chatgpt_model(requested, llm_router, valid_token)
-    if target is None:
-        return
-    request.scope.setdefault(CLIENT_REQUESTED_MODEL_SCOPE_KEY, requested)
-    rewrite_request_model(request_data, request, target)
+    resolve_codex_native_chatgpt_model(request_data, valid_token, request, route)
 
 
 def _get_model_names_for_budget_checks(
