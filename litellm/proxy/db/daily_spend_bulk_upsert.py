@@ -16,7 +16,7 @@ from typing import Final, Literal
 
 from pydantic import TypeAdapter
 
-DailySpendEntity = Literal["user", "team", "org", "tag", "end_user", "agent"]
+DailySpendEntity = Literal["user", "team", "team_user", "org", "tag", "end_user", "agent"]
 
 SqlValue = str | int | float | None
 
@@ -32,12 +32,24 @@ class DailySpendTable:
     name: str
     entity_id_column: str
     carries_request_id: bool = False
+    parent_id_column: str | None = None
+
+    @property
+    def id_columns(self) -> tuple[str, ...]:
+        return (
+            (self.entity_id_column,)
+            if self.parent_id_column is None
+            else (self.parent_id_column, self.entity_id_column)
+        )
 
 
 DAILY_SPEND_TABLES: Final[Mapping[DailySpendEntity, DailySpendTable]] = MappingProxyType(
     {
         "user": DailySpendTable(name="LiteLLM_DailyUserSpend", entity_id_column="user_id"),
         "team": DailySpendTable(name="LiteLLM_DailyTeamSpend", entity_id_column="team_id"),
+        "team_user": DailySpendTable(
+            name="LiteLLM_DailyTeamUserSpend", entity_id_column="user_id", parent_id_column="team_id"
+        ),
         "org": DailySpendTable(name="LiteLLM_DailyOrganizationSpend", entity_id_column="organization_id"),
         "end_user": DailySpendTable(name="LiteLLM_DailyEndUserSpend", entity_id_column="end_user_id"),
         "agent": DailySpendTable(name="LiteLLM_DailyAgentSpend", entity_id_column="agent_id"),
@@ -49,6 +61,7 @@ _ENTITY_INPUT_KEYS: Final[Mapping[DailySpendEntity, str]] = MappingProxyType(
     {
         "user": "user",
         "team": "team_id",
+        "team_user": "user",
         "org": "organization_id",
         "end_user": "end_user",
         "agent": "agent_id",
@@ -58,9 +71,16 @@ _ENTITY_INPUT_KEYS: Final[Mapping[DailySpendEntity, str]] = MappingProxyType(
 _TAGS: Final = TypeAdapter(tuple[object, ...])
 
 
+def daily_spend_parent_id(payload: Mapping[str, object], table: DailySpendTable) -> str | None:
+    value: Final = None if table.parent_id_column is None else payload.get(table.parent_id_column)
+    return value if isinstance(value, str) and value else None
+
+
 def daily_spend_entity_ids(payload: Mapping[str, object], entity: DailySpendEntity) -> tuple[str | None, ...]:
     key: Final = _ENTITY_INPUT_KEYS[entity]
     if key not in payload:
+        return ()
+    if entity == "team_user" and daily_spend_parent_id(payload, DAILY_SPEND_TABLES[entity]) is None:
         return ()
     value: Final = payload[key]
     if entity == "tag":
@@ -69,7 +89,7 @@ def daily_spend_entity_ids(payload: Mapping[str, object], entity: DailySpendEnti
         tags: Final = _TAGS.validate_json(value) if isinstance(value, str) else _TAGS.validate_python(value)
         return tuple(dict.fromkeys(tag for tag in tags if isinstance(tag, str)))
     if value is None:
-        return (None,) if entity == "user" else ()
+        return (None,) if entity in ("user", "team_user") else ()
     if not isinstance(value, str) or (entity == "end_user" and not value):
         return ()
     return (value,)
@@ -126,7 +146,7 @@ def _as_float(value: object) -> float:
 
 def conflict_key(table: DailySpendTable, transaction: SpendRow) -> tuple[str, ...]:
     """The tuple the database arbitrates the upsert on, normalized free of NULLs."""
-    return tuple(_as_text(transaction.get(column)) for column in (table.entity_id_column, *_KEY_COLUMNS))
+    return tuple(_as_text(transaction.get(column)) for column in (*table.id_columns, *_KEY_COLUMNS))
 
 
 def _merge(group: Sequence[SpendRow]) -> SpendRow:
@@ -174,7 +194,7 @@ def _row_params(
 def _insert_columns(table: DailySpendTable) -> tuple[str, ...]:
     return (
         "id",
-        table.entity_id_column,
+        *table.id_columns,
         *_KEY_COLUMNS,
         "model_group",
         *_COUNTER_COLUMNS,
@@ -213,7 +233,7 @@ def build_bulk_upsert(
     sql: Final = (
         f'INSERT INTO {quoted_table} ({_quoted(columns)}, "updated_at")\n'
         f"VALUES {rows}\n"
-        f"ON CONFLICT ({_quoted((table.entity_id_column, *_KEY_COLUMNS))}) DO UPDATE SET\n"
+        f"ON CONFLICT ({_quoted((*table.id_columns, *_KEY_COLUMNS))}) DO UPDATE SET\n"
         f"  {increments}{request_id_update},\n"
         f"  \"updated_at\" = (NOW() AT TIME ZONE 'UTC')"
     )

@@ -14,7 +14,12 @@ from litellm.constants import (
     MODEL_INSIGHTS_TASK_TAG_PREFIX,
 )
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import GuardrailCostByUnitEntry
-from litellm.proxy.db.daily_spend_bulk_upsert import DAILY_SPEND_TABLES, daily_spend_entity_ids
+from litellm.proxy.db.daily_spend_bulk_upsert import (
+    DAILY_SPEND_TABLES,
+    DailySpendTable,
+    daily_spend_entity_ids,
+    daily_spend_parent_id,
+)
 from litellm.proxy.db.model_insights_tasks import load_model_insight_tasks
 from litellm.proxy.db.model_usage_rollup import date_from_start_time
 from litellm.proxy.route_llm_request import ROUTE_ENDPOINT_MAPPING
@@ -171,13 +176,19 @@ def _daily_rows(
         for identity in daily_spend_entity_ids(row, entity):
             yield Contribution(
                 table.name,
-                ((table.entity_id_column, _text(identity)), *shared_key),
+                (*_parent_key(row, table), (table.entity_id_column, _text(identity)), *shared_key),
                 counters,
                 (
                     ("model_group", None if row.get("model_group") is None else _text(row.get("model_group"))),
                     *((("request_id", _text(row.get("request_id"))),) if table.carries_request_id else ()),
                 ),
             )
+
+
+def _parent_key(row: Mapping[str, object], table: DailySpendTable) -> tuple[tuple[str, str], ...]:
+    if table.parent_id_column is None:
+        return ()
+    return ((table.parent_id_column, _text(daily_spend_parent_id(row, table))),)
 
 
 def _window_contributions(row: Mapping[str, object], metadata: Mapping[str, object]) -> tuple[Contribution, ...]:

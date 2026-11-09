@@ -61,6 +61,7 @@ from litellm.proxy.db.daily_spend_bulk_upsert import (
     DAILY_SPEND_TABLES,
     build_bulk_upsert,
     daily_spend_entity_ids,
+    daily_spend_parent_id,
     merge_by_conflict_key,
 )
 from litellm.proxy.db.db_span import db_span
@@ -1194,7 +1195,11 @@ class DBSpendUpdateWriter:
             endpoint=base.get("endpoint"),
             mcp_namespaced_tool_name=base.get("mcp_namespaced_tool_name"),
             targets=tuple(
-                DailyBaselineTarget(entity=entity, entity_id=identity)
+                DailyBaselineTarget(
+                    entity=entity,
+                    entity_id=identity,
+                    parent_id=daily_spend_parent_id(payload, DAILY_SPEND_TABLES[entity]),
+                )
                 for entity, values in bases
                 if values is not None
                 for identity in daily_spend_entity_ids(payload, entity)
@@ -3061,7 +3066,7 @@ class DBSpendUpdateWriter:
         self,
         payload: dict | SpendLogsPayload,
         prisma_client: PrismaClient,
-        type: Literal["user", "team", "org", "request_tags", "end_user", "agent"] = "user",
+        type: Literal["user", "team", "team_user", "org", "request_tags", "end_user", "agent"] = "user",
     ) -> BaseDailySpendTransaction | None:
         entity: Final = "tag" if type == "request_tags" else type
         identity_payload: Final = (
