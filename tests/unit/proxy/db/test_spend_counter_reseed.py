@@ -72,8 +72,6 @@ class _FakePrismaClient:
         end_user_row: SimpleNamespace | None = None,
         end_user_error: Exception | None = None,
         project_row: SimpleNamespace | None = None,
-        team_membership_row: SimpleNamespace | None = None,
-        team_membership_error: Exception | None = None,
     ) -> None:
         self.db = SimpleNamespace(
             litellm_budgetwindowspend=_FakeFindUniqueTable(row=row, error=error),
@@ -81,7 +79,6 @@ class _FakePrismaClient:
             litellm_endusertable=_FakeFindUniqueTable(row=end_user_row, error=end_user_error),
             litellm_verificationtoken=_InFlightCountingTable(),
             litellm_projecttable=_FakeFindUniqueTable(row=project_row),
-            litellm_teammembership=_FakeFindUniqueTable(row=team_membership_row, error=team_membership_error),
         )
 
 
@@ -450,38 +447,6 @@ async def test_from_db_returns_none_for_a_missing_project_row():
     prisma: Final = _FakePrismaClient(project_row=None)
 
     assert await SpendCounterReseed.from_db(prisma_client=prisma, counter_key="spend:project:proj-1") is None
-
-
-@pytest.mark.asyncio
-async def test_from_db_reads_a_missing_team_membership_row_as_zero_spend():
-    prisma: Final = _FakePrismaClient(team_membership_row=None)
-
-    assert await SpendCounterReseed.from_db(prisma_client=prisma, counter_key="spend:team_member:u1:t1") == 0.0
-    assert prisma.db.litellm_teammembership.where_clauses == [{"user_id_team_id": {"user_id": "u1", "team_id": "t1"}}]
-
-
-@pytest.mark.asyncio
-async def test_from_db_keeps_none_for_a_missing_row_when_the_team_member_key_is_ambiguous():
-    prisma: Final = _FakePrismaClient(team_membership_row=None)
-
-    assert await SpendCounterReseed.from_db(prisma_client=prisma, counter_key="spend:team_member:u1:team:prod") is None
-    assert prisma.db.litellm_teammembership.where_clauses == [
-        {"user_id_team_id": {"user_id": "u1:team", "team_id": "prod"}}
-    ]
-
-
-@pytest.mark.asyncio
-async def test_from_db_reads_an_existing_team_membership_row():
-    prisma: Final = _FakePrismaClient(team_membership_row=SimpleNamespace(spend=4.5))
-
-    assert await SpendCounterReseed.from_db(prisma_client=prisma, counter_key="spend:team_member:u1:t1") == 4.5
-
-
-@pytest.mark.asyncio
-async def test_from_db_returns_none_when_the_team_membership_read_fails():
-    prisma: Final = _FakePrismaClient(team_membership_error=RuntimeError("db down"))
-
-    assert await SpendCounterReseed.from_db(prisma_client=prisma, counter_key="spend:team_member:u1:t1") is None
 
 
 @pytest.mark.asyncio

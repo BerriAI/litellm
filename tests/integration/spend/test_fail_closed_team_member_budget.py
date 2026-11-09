@@ -6,11 +6,8 @@ from typing import Final
 
 import pytest
 import yaml
-from integration._support.client import JSON_OBJECT, Gateway, gateway_from_environment, object_value
-from integration._support.database import read_rows
+from integration._support.client import JSON_OBJECT, Gateway, gateway_from_environment, object_value, string_value
 from integration._support.process import owned_proxy_process
-
-_MEMBERSHIP_ROWS: Final = 'SELECT spend FROM "LiteLLM_TeamMembership" WHERE user_id = %s AND team_id = %s'
 
 
 def _fail_closed_config(directory: Path) -> Path:
@@ -35,22 +32,34 @@ def fail_closed_gateway(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Ga
         yield owned.gateway
 
 
-def test_team_member_without_membership_row_is_admitted_under_default_member_budget(
-    fail_closed_gateway: Gateway,
-) -> None:
+def _chat(gateway: Gateway, model: str, key: str) -> tuple[int, dict[str, object]]:
+    response: Final = gateway.request(
+        "POST",
+        "/v1/chat/completions",
+        {"model": model, "messages": [{"role": "user", "content": "integration control"}]},
+        key=key,
+    )
+    return response.status_code, JSON_OBJECT.validate_json(response.content)
+
+
+def test_team_member_without_membership_row_is_told_to_be_added_then_admitted(fail_closed_gateway: Gateway) -> None:
     with fail_closed_gateway.scenario() as scenario:
         model: Final = scenario.model()
         team_id: Final = scenario.team(models=[model], team_member_budget=100.0)
         user_id: Final = scenario.user(max_budget=100.0)
         key: Final = scenario.key(team_id=team_id, user_id=user_id, models=[model])
-        assert read_rows(_MEMBERSHIP_ROWS, (user_id, team_id)) == []
 
-        response: Final = fail_closed_gateway.request(
-            "POST",
-            "/v1/chat/completions",
-            {"model": model, "messages": [{"role": "user", "content": "integration control"}]},
-            key=key,
+        status, body = _chat(fail_closed_gateway, model, key)
+
+        assert status == 403, body
+        message: Final = string_value(object_value(body["error"])["message"])
+        assert user_id in message and team_id in message and "/team/member_add" in message
+
+        fail_closed_gateway.post(
+            "/team/member_add", {"team_id": team_id, "member": {"role": "user", "user_id": user_id}}
         )
 
-        assert response.status_code == 200, response.text
-        assert object_value(JSON_OBJECT.validate_json(response.content)["usage"])["total_tokens"]
+        admitted_status, admitted = _chat(fail_closed_gateway, model, key)
+
+        assert admitted_status == 200, admitted
+        assert object_value(admitted["usage"])["total_tokens"]

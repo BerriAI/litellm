@@ -29,12 +29,7 @@ from litellm.proxy.spend_tracking.spend_counter_batch import (
     read_batched_spend_counter,
     record_spend_counter_value,
 )
-from litellm.redis.stores.spend_counters import (
-    END_USER_COUNTER_PREFIX,
-    SPEND_COUNTERS_TARGET,
-    TEAM_MEMBER_COUNTER_PREFIX,
-    SpendCounterStore,
-)
+from litellm.redis.stores.spend_counters import END_USER_COUNTER_PREFIX, SPEND_COUNTERS_TARGET, SpendCounterStore
 from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.project_repository import ProjectRepository
 from litellm.repositories.table_repositories import (
@@ -132,9 +127,7 @@ class SpendCounterReseed:
         Read the authoritative spend for a counter from the DB.
 
         Returns the spend value (including 0.0) when the DB is reachable
-        and the row exists. A team-member counter whose membership row is
-        absent reads as 0.0, since the DB answered and the member has no
-        recorded spend. Returns None when prisma is unavailable, any other
+        and the row exists. Returns None when prisma is unavailable, the
         row is missing, the key format is unrecognized, or the query
         raises. Callers use None to fall back to a caller-supplied source.
         """
@@ -153,7 +146,7 @@ class SpendCounterReseed:
             verbose_proxy_logger.exception("SpendCounterReseed.from_db: failed for %s", counter_key)
             return None
         if row is None:
-            return 0.0 if SpendCounterReseed._is_unambiguous_team_member_counter(counter_key) else None
+            return None
         return float(getattr(row, "spend", 0.0) or 0.0)
 
     @staticmethod
@@ -162,8 +155,8 @@ class SpendCounterReseed:
             if counter_key.startswith("spend:key:"):
                 token: Final = counter_key[len("spend:key:") :]
                 return await VerificationTokenRepository(prisma_client).table.find_unique(where={"token": token})
-            if counter_key.startswith(TEAM_MEMBER_COUNTER_PREFIX):
-                suffix: Final = counter_key[len(TEAM_MEMBER_COUNTER_PREFIX) :]
+            if counter_key.startswith("spend:team_member:"):
+                suffix: Final = counter_key[len("spend:team_member:") :]
                 if ":" not in suffix:
                     return None
                 user_id, team_id = suffix.rsplit(":", 1)
@@ -203,13 +196,6 @@ class SpendCounterReseed:
         if row is None:
             return None
         return float(row.spend or 0.0)
-
-    @staticmethod
-    def _is_unambiguous_team_member_counter(counter_key: str) -> bool:
-        return (
-            counter_key.startswith(TEAM_MEMBER_COUNTER_PREFIX)
-            and counter_key[len(TEAM_MEMBER_COUNTER_PREFIX) :].count(":") == 1
-        )
 
     @staticmethod
     def _is_key_or_team_window_counter(counter_key: str) -> bool:

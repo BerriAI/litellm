@@ -6080,6 +6080,65 @@ class TestGuardrailModificationCheck:
         self._call({"metadata": '"just a string"'})
 
 
+def _default_member_budget_prisma(max_budget: float) -> MagicMock:
+    budget_row: Final = MagicMock()
+    budget_row.max_budget = max_budget
+    budget_row.dict = MagicMock(return_value={"budget_id": "budget-default", "max_budget": max_budget})
+    prisma_client: Final = MagicMock()
+    prisma_client.db.litellm_budgettable.find_unique = AsyncMock(return_value=budget_row)
+    return prisma_client
+
+
+async def _check_member_without_membership_row(fail_closed: bool, spend_reads: list[tuple[str, float]]) -> None:
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy.utils import ProxyLogging
+
+    async def record_spend(counter_key: str, fallback_spend: float, max_budget: float | None = None, **_: object):
+        spend_reads.append((counter_key, fallback_spend))
+        return fallback_spend
+
+    with (
+        patch("litellm.proxy.proxy_server.general_settings", {"fail_closed_budget_enforcement": fail_closed}),
+        patch("litellm.proxy.proxy_server.get_current_spend", record_spend),
+        patch("litellm.proxy.auth.auth_checks.get_team_membership", new_callable=AsyncMock, return_value=None),
+    ):
+        await _check_team_member_budget(
+            team_object=LiteLLM_TeamTable(team_id="team-1", metadata={"team_member_budget_id": "budget-default"}),
+            user_object=LiteLLM_UserTable(user_id="user-1"),
+            valid_token=UserAPIKeyAuth(token="tok-1", user_id="user-1", team_id="team-1"),
+            prisma_client=_default_member_budget_prisma(100.0),
+            user_api_key_cache=DualCache(),
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=None),
+        )
+
+
+@pytest.mark.asyncio
+async def test_fail_closed_rejects_member_without_membership_row_with_a_403_naming_member_add() -> None:
+    """A key for a team user who was never added with /team/member_add has no
+    LiteLLM_TeamMembership row, so nothing durable records their spend. With
+    fail-closed on, say so and how to fix it instead of a retry-forever 503."""
+    from fastapi import HTTPException
+
+    spend_reads: Final[list[tuple[str, float]]] = []
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _check_member_without_membership_row(fail_closed=True, spend_reads=spend_reads)
+
+    assert exc_info.value.status_code == 403
+    message: Final = str(exc_info.value.detail)
+    assert "user-1" in message and "team-1" in message and "/team/member_add" in message
+    assert spend_reads == []
+
+
+@pytest.mark.asyncio
+async def test_fail_closed_off_still_admits_member_without_membership_row() -> None:
+    spend_reads: Final[list[tuple[str, float]]] = []
+
+    await _check_member_without_membership_row(fail_closed=False, spend_reads=spend_reads)
+
+    assert spend_reads == [("spend:team_member:user-1:team-1", 0.0)]
+
+
 @pytest.mark.asyncio
 async def test_team_member_budget_check_falls_back_to_team_default_budget_id():
     """When a member's TeamMembership has no linked budget row, the check
