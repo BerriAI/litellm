@@ -19,6 +19,8 @@ NOTHING_ON_THE_DEFAULTS: Final = LegacyEmptyModelsCounts(
     teamless_keys_with_all_team_models=0,
     team_keys_with_empty_models=0,
     teams_with_empty_models=0,
+    keys_with_access_groups_and_empty_models=0,
+    teams_with_access_groups_and_empty_models=0,
 )
 
 
@@ -30,24 +32,40 @@ def test_no_warning_when_nothing_relies_on_the_deprecated_defaults() -> None:
     ("counts", "reported", "left_out"),
     [
         (
-            LegacyEmptyModelsCounts(3, 0, 0, 0),
+            LegacyEmptyModelsCounts(3, 0, 0, 0, 0, 0),
             "3 keys without a team have an empty models list, which means every proxy model.",
-            ("all-team-models, which", "team key", "team has", "teams have"),
+            ("all-team-models, which", "team key", "team has", "teams have", "access groups"),
         ),
         (
-            LegacyEmptyModelsCounts(0, 1, 0, 0),
+            LegacyEmptyModelsCounts(0, 1, 0, 0, 0, 0),
             "1 key without a team lists all-team-models, which means every proxy model.",
-            ("empty models list", "team key"),
+            ("empty models list", "team key", "access groups"),
         ),
         (
-            LegacyEmptyModelsCounts(0, 0, 4, 0),
+            LegacyEmptyModelsCounts(0, 0, 4, 0, 0, 0),
             "4 team keys have an empty models list, which means all of the team's models.",
-            ("without a team", "teams have"),
+            ("without a team", "teams have", "access groups"),
         ),
         (
-            LegacyEmptyModelsCounts(0, 0, 0, 1),
+            LegacyEmptyModelsCounts(0, 0, 0, 1, 0, 0),
             "1 team has an empty models list, which means every proxy model.",
-            ("without a team", "team key"),
+            ("without a team", "team key", "access groups"),
+        ),
+        (
+            LegacyEmptyModelsCounts(0, 0, 0, 0, 2, 0),
+            "2 keys with access groups have an empty models list.",
+            (
+                "which means",
+                "without a team",
+                "team key",
+                "teams with access groups have",
+                "team with access groups has",
+            ),
+        ),
+        (
+            LegacyEmptyModelsCounts(0, 0, 0, 0, 0, 1),
+            "1 team with access groups has an empty models list.",
+            ("which means", "without a team", "team key", "keys with access groups have", "key with access groups has"),
         ),
     ],
 )
@@ -62,36 +80,48 @@ def test_warning_reports_only_the_categories_in_use(
     assert DEPRECATION_DISCUSSION_URL in message
 
 
+KEEP_ACCESS_ADVICE: Final = "To keep today's access, set models to all-proxy-models"
 TEAMLESS_ALL_TEAM_MODELS_ADVICE: Final = "Keys without a team that list all-team-models have no team to inherit from"
+ACCESS_GROUP_ADVICE: Final = "Check which models each key and team with access groups should reach"
 
 
 @pytest.mark.parametrize(
-    ("counts", "advised"),
+    ("counts", "advice"),
     [
-        (LegacyEmptyModelsCounts(3, 0, 0, 0), False),
-        (LegacyEmptyModelsCounts(0, 0, 4, 0), False),
-        (LegacyEmptyModelsCounts(0, 0, 0, 1), False),
-        (LegacyEmptyModelsCounts(0, 1, 0, 0), True),
+        (LegacyEmptyModelsCounts(3, 0, 0, 0, 0, 0), (KEEP_ACCESS_ADVICE,)),
+        (LegacyEmptyModelsCounts(0, 0, 4, 0, 0, 0), (KEEP_ACCESS_ADVICE,)),
+        (LegacyEmptyModelsCounts(0, 0, 0, 1, 0, 0), (KEEP_ACCESS_ADVICE,)),
+        (LegacyEmptyModelsCounts(0, 1, 0, 0, 0, 0), (KEEP_ACCESS_ADVICE, TEAMLESS_ALL_TEAM_MODELS_ADVICE)),
+        (LegacyEmptyModelsCounts(0, 0, 0, 0, 2, 0), (ACCESS_GROUP_ADVICE,)),
+        (LegacyEmptyModelsCounts(0, 0, 0, 0, 0, 1), (ACCESS_GROUP_ADVICE,)),
     ],
 )
-def test_warning_advises_teamless_all_team_models_keys_only_when_some_exist(
-    counts: LegacyEmptyModelsCounts, advised: bool
+def test_warning_gives_only_the_advice_for_the_categories_in_use(
+    counts: LegacyEmptyModelsCounts, advice: tuple[str, ...]
 ) -> None:
     message: Final = legacy_empty_models_warning(counts)
 
     assert message is not None
-    assert (TEAMLESS_ALL_TEAM_MODELS_ADVICE in message) is advised
+    assert {
+        phrase
+        for phrase in (KEEP_ACCESS_ADVICE, TEAMLESS_ALL_TEAM_MODELS_ADVICE, ACCESS_GROUP_ADVICE)
+        if phrase in message
+    } == set(advice)
 
 
 def test_warning_reports_every_category_in_use_at_once() -> None:
-    message: Final = legacy_empty_models_warning(LegacyEmptyModelsCounts(2, 5, 7, 11))
+    message: Final = legacy_empty_models_warning(LegacyEmptyModelsCounts(2, 5, 7, 11, 13, 17))
 
     assert message is not None
     assert "2 keys without a team have an empty models list" in message
     assert "5 keys without a team list all-team-models" in message
     assert "7 team keys have an empty models list" in message
     assert "11 teams have an empty models list" in message
-    assert TEAMLESS_ALL_TEAM_MODELS_ADVICE in message
+    assert "13 keys with access groups have an empty models list" in message
+    assert "17 teams with access groups have an empty models list" in message
+    assert all(
+        phrase in message for phrase in (KEEP_ACCESS_ADVICE, TEAMLESS_ALL_TEAM_MODELS_ADVICE, ACCESS_GROUP_ADVICE)
+    )
 
 
 class _RecordingHandler(logging.Handler):

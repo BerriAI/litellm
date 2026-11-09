@@ -58,6 +58,9 @@ def _seed(gateway: Gateway, database_url: str) -> None:
         {"models": [], "access_group_ids": [access_group]},
         {"models": ["all-team-models"], "access_group_ids": [access_group]},
         {"models": [], "team_id": listed_team, "access_group_ids": [access_group]},
+        {"models": [], "key_type": "management"},
+        {"models": [], "key_type": "read_only"},
+        {"models": [], "team_id": listed_team, "key_type": "management"},
     )
     for body in keys:
         gateway.post("/key/generate", body)
@@ -84,4 +87,6 @@ def test_boot_logs_the_keys_and_teams_on_the_deprecated_empty_models_defaults(
     assert "1 key without a team lists all-team-models, which means every proxy model." in log
     assert "3 team keys have an empty models list, which means all of the team's models." in log
     assert "1 team has an empty models list, which means every proxy model." in log
+    assert "2 keys with access groups have an empty models list." in log
+    assert "1 team with access groups has an empty models list." in log
     assert "Keys without a team that list all-team-models have no team to inherit from" in log
