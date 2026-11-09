@@ -2827,6 +2827,50 @@ class TestResponsesWSFirstFrameModelAuth:
         )
 
     @pytest.mark.asyncio
+    async def test_frame_guard_bills_a_refused_turn_under_the_socket_client_but_with_its_own_request(self):
+        from unittest.mock import create_autospec
+
+        from litellm.exceptions import RateLimitError
+        from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
+        from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
+        from litellm.proxy.response_api_endpoints.endpoints import _responses_ws_frame_guard
+        from litellm.responses.streaming_iterator import drain_logging_tasks
+
+        refusal = RateLimitError(message="crossed budget", llm_provider="", model="")
+        proxy_logging_obj = MagicMock(during_call_hook=AsyncMock())
+        proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=lambda **kwargs: kwargs["data"])
+        spend_writer = create_autospec(DBSpendUpdateWriter, instance=True)
+        guard = _responses_ws_frame_guard(
+            {
+                "model": "gpt-4o-mini",
+                "litellm_metadata": {"tags": ["ws-tag"]},
+                "proxy_server_request": {
+                    "url": "http://proxy/v1/responses",
+                    "method": "GET",
+                    "headers": {"user-agent": "codex-tui/0.167.0"},
+                    "body": {"input": "first turn"},
+                },
+            },
+            UserAPIKeyAuth(api_key="sk-socket", request_route="/v1/responses"),
+            proxy_logging_obj,
+            MagicMock(),
+        )
+
+        with (
+            patch.object(litellm, "callbacks", [ProxyDBLogger(spend_writer=lambda: spend_writer)]),
+            patch(  # test-quality-ok: stored prompts are off by default and the stored request is under test
+                "litellm.proxy.proxy_server.general_settings", {"store_prompts_in_spend_logs": True}
+            ),
+        ):
+            await (await guard(json.dumps({"type": "response.create", "input": "second turn"}))).bill_refusal(refusal)
+            await drain_logging_tasks(timeout=1)
+            spend_writer.update_database.assert_awaited_once()
+            row = _spend_log_row(spend_writer.update_database.await_args.kwargs)
+
+        assert json.loads(row["request_tags"]) == ["ws-tag", "User-Agent: codex-tui", "User-Agent: codex-tui/0.167.0"]
+        assert json.loads(row["proxy_server_request"])["input"] == "second turn"
+
+    @pytest.mark.asyncio
     async def test_a_refused_turn_row_is_written_even_when_the_socket_is_cancelled_while_billing_it(self):
         from unittest.mock import create_autospec
 

@@ -2258,7 +2258,7 @@ def _responses_ws_frame_guard(
     # a blocked or refused turn is billed as its own failed request; the socket settles the admission reservation
     rejected_frame_auth: Final = user_api_key_dict.model_copy(update={"budget_reservation": None})
 
-    failure_row: Final = partial(_turn_failure_row, metadata_key, admitted_bucket)
+    failure_row: Final = partial(_turn_failure_row, metadata_key, admitted_bucket, admitted.get("proxy_server_request"))
 
     async def bill_refusal(turn: Mapping[str, object], started_at: datetime, refusal: Exception) -> None:
         record_refused_turn(refusal)
@@ -2346,19 +2346,30 @@ def _responses_ws_frame_guard(
 
 
 def _turn_failure_row(
-    metadata_key: str, socket_bucket: object, turn: Mapping[str, object], started_at: datetime
+    metadata_key: str,
+    socket_bucket: object,
+    socket_request: object,
+    turn: Mapping[str, object],
+    started_at: datetime,
 ) -> dict[str, object]:  # mutable-ok: the spend logger stamps the failure row on the request dict
     """A turn bills like an HTTP ``/v1/responses`` request: its own call id, start time, guardrail records and stored
-    request, under the socket's call type and the model group the router resolved for the socket."""
+    request, under the socket's call type, client request tags and the model group the router resolved for the socket.
+    """
     trusted_turn: Final = {key: value for key, value in turn.items() if key not in _UNTRUSTED_TURN_FIELDS}
     turn_bucket: Final = turn.get(metadata_key)
+    turn_metadata: Final = _WS_FRAME.validate_python(turn_bucket) if isinstance(turn_bucket, dict) else {}
+    request_tags: Final = StandardLoggingPayloadSetup.get_request_tags(
+        {metadata_key: turn_metadata},
+        _PROXY_SERVER_REQUEST_ADAPTER.validate_python(socket_request) if isinstance(socket_request, dict) else {},
+    )
     model_group: Final = (
         _WS_FRAME.validate_python(socket_bucket).get("model_group") if isinstance(socket_bucket, dict) else None
     )
     return {
         **trusted_turn,
         metadata_key: {
-            **(_WS_FRAME.validate_python(turn_bucket) if isinstance(turn_bucket, dict) else {}),
+            **turn_metadata,
+            **({"tags": request_tags} if request_tags else {}),
             **({"model_group": model_group} if isinstance(model_group, str) else {}),
         },
         "call_type": CallTypes.aresponses_websocket.value,
