@@ -7568,8 +7568,6 @@ def _per_second_transcription(
 def test_transcription_cost_bills_the_seconds_the_provider_billed(
     monkeypatch: pytest.MonkeyPatch, provider: str, model: str, measured: Mapping[str, float]
 ) -> None:
-    # OpenAI rounds a 2.4 s clip up and reports `"usage": {"type": "duration", "seconds": 3}` (live whisper-1 call,
-    # 2026-11-09), so the reported seconds win over the length measured from the upload
     transcription: Final = _per_second_transcription(
         monkeypatch, provider, model, {"usage": {"type": "duration", "seconds": 3}, **measured}
     )
