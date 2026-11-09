@@ -1,6 +1,86 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize)]
+#[serde(tag = "kind")]
+pub enum ReadFacts {
+    BudgetSkip {
+        skip: bool,
+        exempt: Option<bool>,
+    },
+    Pricing {
+        enabled: bool,
+        llm_route: Option<bool>,
+    },
+    Unpriced {
+        count: usize,
+    },
+    MemberFallback {
+        router: bool,
+        multipart: Option<bool>,
+        resource_bound: Option<bool>,
+    },
+}
+
+#[derive(Debug, PartialEq, Eq, Serialize, strum::VariantArray)]
+pub enum ReadPlan {
+    ReadExemption,
+    SkipBudgets,
+    CheckBudgets,
+    ReadRoute,
+    ReadUnpriced,
+    RejectUnpriced,
+    ReadContentType,
+    ReadResourceBinding,
+    ReadFallbackSettings,
+    Continue,
+}
+
+pub fn read(facts: ReadFacts) -> ReadPlan {
+    match facts {
+        ReadFacts::BudgetSkip { skip: true, .. }
+        | ReadFacts::BudgetSkip {
+            exempt: Some(true), ..
+        } => ReadPlan::SkipBudgets,
+        ReadFacts::BudgetSkip {
+            exempt: Some(false),
+            ..
+        } => ReadPlan::CheckBudgets,
+        ReadFacts::BudgetSkip { exempt: None, .. } => ReadPlan::ReadExemption,
+        ReadFacts::Pricing { enabled: false, .. }
+        | ReadFacts::Pricing {
+            llm_route: Some(false),
+            ..
+        } => ReadPlan::Continue,
+        ReadFacts::Pricing {
+            llm_route: None, ..
+        } => ReadPlan::ReadRoute,
+        ReadFacts::Pricing {
+            llm_route: Some(true),
+            ..
+        } => ReadPlan::ReadUnpriced,
+        ReadFacts::Unpriced { count: 0 } => ReadPlan::Continue,
+        ReadFacts::Unpriced { .. } => ReadPlan::RejectUnpriced,
+        ReadFacts::MemberFallback { router: false, .. }
+        | ReadFacts::MemberFallback {
+            multipart: Some(true),
+            ..
+        }
+        | ReadFacts::MemberFallback {
+            resource_bound: Some(true),
+            ..
+        } => ReadPlan::Continue,
+        ReadFacts::MemberFallback {
+            multipart: None, ..
+        } => ReadPlan::ReadContentType,
+        ReadFacts::MemberFallback {
+            resource_bound: None,
+            ..
+        } => ReadPlan::ReadResourceBinding,
+        ReadFacts::MemberFallback { .. } => ReadPlan::ReadFallbackSettings,
+    }
+}
+
+#[derive(Deserialize)]
 pub struct Facts {
     pub model_present: bool,
     pub skip_budgets: bool,
@@ -111,6 +191,27 @@ pub fn custom(facts: CustomFacts) -> CustomPlan {
 mod tests {
     use super::*;
     use rstest::rstest;
+
+    #[rstest]
+    #[case::explicit_skip(ReadFacts::BudgetSkip {skip:true, exempt:None}, ReadPlan::SkipBudgets)]
+    #[case::exempt(ReadFacts::BudgetSkip {skip:false, exempt:Some(true)}, ReadPlan::SkipBudgets)]
+    #[case::check(ReadFacts::BudgetSkip {skip:false, exempt:Some(false)}, ReadPlan::CheckBudgets)]
+    #[case::read_exemption(ReadFacts::BudgetSkip {skip:false, exempt:None}, ReadPlan::ReadExemption)]
+    #[case::pricing_disabled(ReadFacts::Pricing {enabled:false, llm_route:None}, ReadPlan::Continue)]
+    #[case::pricing_route(ReadFacts::Pricing {enabled:true, llm_route:None}, ReadPlan::ReadRoute)]
+    #[case::pricing_skip(ReadFacts::Pricing {enabled:true, llm_route:Some(false)}, ReadPlan::Continue)]
+    #[case::pricing_check(ReadFacts::Pricing {enabled:true, llm_route:Some(true)}, ReadPlan::ReadUnpriced)]
+    #[case::priced(ReadFacts::Unpriced {count:0}, ReadPlan::Continue)]
+    #[case::unpriced(ReadFacts::Unpriced {count:1}, ReadPlan::RejectUnpriced)]
+    #[case::no_router(ReadFacts::MemberFallback {router:false, multipart:None, resource_bound:None}, ReadPlan::Continue)]
+    #[case::content_type(ReadFacts::MemberFallback {router:true, multipart:None, resource_bound:None}, ReadPlan::ReadContentType)]
+    #[case::multipart(ReadFacts::MemberFallback {router:true, multipart:Some(true), resource_bound:None}, ReadPlan::Continue)]
+    #[case::resource_read(ReadFacts::MemberFallback {router:true, multipart:Some(false), resource_bound:None}, ReadPlan::ReadResourceBinding)]
+    #[case::bound_resource(ReadFacts::MemberFallback {router:true, multipart:Some(false), resource_bound:Some(true)}, ReadPlan::Continue)]
+    #[case::settings(ReadFacts::MemberFallback {router:true, multipart:Some(false), resource_bound:Some(false)}, ReadPlan::ReadFallbackSettings)]
+    fn selected_reads(#[case] facts: ReadFacts, #[case] expected: ReadPlan) {
+        assert_eq!(read(facts), expected);
+    }
 
     #[rstest]
     #[case::absent(None, false, false)]

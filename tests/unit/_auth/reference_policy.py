@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from typing import Final
 
 from litellm._auth import access, admission, managed
@@ -14,6 +15,14 @@ def access_decision(facts: access.AccessFacts) -> access.AccessDecision:
             )
         case access.UserParamRequest(enabled=enabled):
             return access.AccessDecision(read="UserParam" if enabled else None)
+        case access.ClientTagRequest(enabled=enabled, llm_route=llm_route):
+            return access.AccessDecision(
+                read=None
+                if not enabled or llm_route is False
+                else "ClientTagRoute"
+                if llm_route is None
+                else "ClientTags"
+            )
         case access.GuardrailRequest(requested_keys=keys):
             modifies: Final = any(
                 key in keys
@@ -158,3 +167,20 @@ def actor(facts: managed.Actor) -> managed.ManagedDecision:
     if context.mode == "delegated" and not context.user_id:
         return managed.ManagedDecision("Deny", "MissingHuman", None)
     return managed.ManagedDecision("Allow", None, None)
+
+
+def _is_positive_cost(value: object) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0
+
+
+def _entry_has_priced_metric(entry: Mapping[str, object]) -> bool:
+    if entry.get("tiered_pricing") is not None:
+        return True
+    for key, value in entry.items():
+        if "cost_per" not in key:
+            continue
+        if _is_positive_cost(value):
+            return True
+        if isinstance(value, dict) and any(_is_positive_cost(nested) for nested in value.values()):
+            return True
+    return False

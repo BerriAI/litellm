@@ -5,8 +5,8 @@ from typing import Final
 import pytest
 
 from litellm._auth.unpriced_models import DeploymentPricing, PriceEntry, UnpricedModelFacts, unpriced_model
-from litellm.proxy.auth.auth_checks import (
-    _entry_has_priced_metric,  # pyright: ignore[reportPrivateUsage]  # compare the preserved pricing policy with native facts
+from tests.unit._auth.reference_policy import (
+    _entry_has_priced_metric,  # pyright: ignore[reportPrivateUsage]  # test-only pricing reference
 )
 from litellm.proxy.auth.unpriced_model_adapter import price_entry
 

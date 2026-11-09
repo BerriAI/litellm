@@ -10,6 +10,15 @@ use pyo3::{
 type ProjectedStep = (Py<PyAny>, Option<NativeAuthContinuation>);
 
 #[pyfunction]
+pub(crate) fn request_auth_common_read(
+    py: Python<'_>,
+    facts: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    let facts: core::common_flow::ReadFacts = from_py(facts)?;
+    to_py(py, &py.detach(move || core::common_flow::read(facts)))
+}
+
+#[pyfunction]
 pub(crate) fn request_auth_reservation(
     py: Python<'_>,
     facts: &Bound<'_, PyAny>,

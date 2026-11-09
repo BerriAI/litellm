@@ -4,7 +4,52 @@ from typing import Final, Literal, TypeAlias
 from pydantic import TypeAdapter
 
 from litellm._auth.failure import native_boundary
+from litellm._auth.rust_core import encode_facts
 from litellm.rust_bridge import _native
+
+
+@dataclass(frozen=True, slots=True)
+class BudgetSkip:
+    skip: bool
+    exempt: bool | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class Pricing:
+    enabled: bool
+    llm_route: bool | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class Unpriced:
+    count: int
+
+
+@dataclass(frozen=True, slots=True)
+class MemberFallback:
+    router: bool
+    multipart: bool | None = None
+    resource_bound: bool | None = None
+
+
+ReadPlan: TypeAlias = Literal[
+    "ReadExemption",
+    "SkipBudgets",
+    "CheckBudgets",
+    "ReadRoute",
+    "ReadUnpriced",
+    "RejectUnpriced",
+    "ReadContentType",
+    "ReadResourceBinding",
+    "ReadFallbackSettings",
+    "Continue",
+]
+_READ: Final = TypeAdapter(ReadPlan)
+
+
+@native_boundary
+def read(facts: BudgetSkip | Pricing | Unpriced | MemberFallback) -> ReadPlan:
+    return _READ.validate_python(_native.request_auth_common_read(encode_facts(facts)))
 
 
 @dataclass(frozen=True, slots=True)

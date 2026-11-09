@@ -295,7 +295,7 @@ pub enum Node {
 #[derive(Deserialize)]
 #[serde(tag = "kind", content = "value")]
 pub enum Answer {
-    ModelAccess(crate::key_model_access::Facts),
+    ModelAccess(Box<crate::key_model_access::Facts>),
     FallbackAccess(Box<crate::fallback_access::Facts>),
     Candidate(Box<crate::fallback_candidate::Facts>),
     Unit,
@@ -331,7 +331,6 @@ macro_rules! answer {
     };
 }
 answer!(bool, Bool);
-answer!(crate::key_model_access::Facts, ModelAccess);
 answer!(crate::budget_pricing::ExemptionFacts, Exemption);
 answer!(Option<PresentedKey>, Presented);
 answer!(KeyFacts, Key);
@@ -349,6 +348,15 @@ impl FromAnswer for crate::fallback_candidate::Facts {
     fn from_answer(answer: Answer) -> Result<Self, Error> {
         match answer {
             Answer::Candidate(value) => Ok(*value),
+            _ => Err(Error::InvalidAnswer),
+        }
+    }
+}
+
+impl FromAnswer for crate::key_model_access::Facts {
+    fn from_answer(answer: Answer) -> Result<Self, Error> {
+        match answer {
+            Answer::ModelAccess(value) => Ok(*value),
             _ => Err(Error::InvalidAnswer),
         }
     }

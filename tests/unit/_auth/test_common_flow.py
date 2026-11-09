@@ -70,3 +70,36 @@ def test_custom_flow_matches_reference(facts: common_flow.CustomFacts) -> None:
         facts.common_checks,
         facts.model_present and facts.router_present,
     )
+
+
+@pytest.mark.parametrize("skip", (False, True))
+@pytest.mark.parametrize("exempt", (None, False, True))
+def test_budget_reads_preserve_short_circuit(skip: bool, exempt: bool | None) -> None:
+    expected: Final = "SkipBudgets" if skip or exempt else "ReadExemption" if exempt is None else "CheckBudgets"
+    assert common_flow.read(common_flow.BudgetSkip(skip, exempt)) == expected
+
+
+@pytest.mark.parametrize("enabled", (False, True))
+@pytest.mark.parametrize("route", (None, False, True))
+def test_pricing_read_order(enabled: bool, route: bool | None) -> None:
+    expected: Final = "Continue" if not enabled or route is False else "ReadRoute" if route is None else "ReadUnpriced"
+    assert common_flow.read(common_flow.Pricing(enabled, route)) == expected
+
+
+@pytest.mark.parametrize("count", (0, 1, 2))
+def test_unpriced_denial(count: int) -> None:
+    assert common_flow.read(common_flow.Unpriced(count)) == ("RejectUnpriced" if count else "Continue")
+
+
+@pytest.mark.parametrize("router", (False, True))
+@pytest.mark.parametrize("multipart", (None, False, True))
+@pytest.mark.parametrize("resource", (None, False, True))
+def test_fallback_reads_preserve_body_binding_guards(
+    router: bool, multipart: bool | None, resource: bool | None
+) -> None:
+    expected: Final = (
+        "Continue" if not router or multipart or resource else
+        "ReadContentType" if multipart is None else
+        "ReadResourceBinding" if resource is None else "ReadFallbackSettings"
+    )
+    assert common_flow.read(common_flow.MemberFallback(router, multipart, resource)) == expected

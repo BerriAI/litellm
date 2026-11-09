@@ -11,7 +11,7 @@ from litellm._auth.failure import NativeAuthFailure
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.decisions_pricing import decisions_pricing_fields, decisions_request_price
 from litellm.proxy.auth.route_checks import RouteChecks
-from litellm.router import Router
+from litellm.router_api import RegistryReader
 from litellm.types.router import DeploymentTypedDict
 
 _MAPPING: Final = TypeAdapter(Mapping[str, object])
@@ -43,7 +43,7 @@ def _deployment_price(deployment: DeploymentTypedDict) -> DeploymentPrice:
     )
 
 
-def read_model_price_facts(model: str, router: Router, cached: bool | None = None) -> ModelPriceFacts:
+def read_model_price_facts(model: str, router: RegistryReader, cached: bool | None = None) -> ModelPriceFacts:
     from litellm.proxy.auth.auth_checks import (
         _deployments_served_for,  # pyright: ignore[reportPrivateUsage]  # shared registry projection
     )
@@ -74,7 +74,7 @@ def read_model_price_facts(model: str, router: Router, cached: bool | None = Non
     return replace(facts, deployments=deployments)
 
 
-def _read_cached_model_price(model: str, router: Router, cache: Mapping[str, bool] | None) -> ModelPriceFacts:
+def _read_cached_model_price(model: str, router: RegistryReader, cache: Mapping[str, bool] | None) -> ModelPriceFacts:
     cached: Final = cache.get(model) if isinstance(cache, dict) else None
     facts: Final = read_model_price_facts(model, router, cached)
     decision: Final = budget_pricing.price(facts)
@@ -83,11 +83,11 @@ def _read_cached_model_price(model: str, router: Router, cache: Mapping[str, boo
     return facts
 
 
-def read_model_cost_facts(model: str, router: Router) -> ModelPriceFacts:
+def read_model_cost_facts(model: str, router: RegistryReader) -> ModelPriceFacts:
     return _read_cached_model_price(model, router, router.registry().zero_cost())
 
 
-def is_model_cost_zero(model: str | Sequence[str] | None, llm_router: Router | None) -> bool:
+def is_model_cost_zero(model: str | Sequence[str] | None, llm_router: RegistryReader | None) -> bool:
     if model is None or llm_router is None:
         return budget_pricing.price(ModelPriceFacts()).zero_cost
     names: Final = (model,) if isinstance(model, str) else tuple(model)
@@ -127,7 +127,7 @@ def route_skips_budget_checks(route: str) -> bool:
 def read_budget_exemption_facts(
     route: str,
     model: str | Sequence[str] | None,
-    llm_router: Router | None,
+    llm_router: RegistryReader | None,
     *,
     request_body: Mapping[str, object] | None = None,
 ) -> budget_pricing.ExemptionFacts:
@@ -144,7 +144,7 @@ def read_budget_exemption_facts(
 def _read_exemption(
     facts: budget_pricing.ExemptionFacts,
     models: tuple[str, ...],
-    router: Router | None,
+    router: RegistryReader | None,
     cache: Mapping[str, bool] | None,
 ) -> budget_pricing.ExemptionFacts:
     current = facts  # rebind-ok: native-selected IO driver state
@@ -172,7 +172,7 @@ def _read_exemption(
 def request_skips_budget_checks(
     route: str,
     model: str | Sequence[str] | None,
-    llm_router: Router | None,
+    llm_router: RegistryReader | None,
     *,
     request_body: Mapping[str, object] | None = None,
 ) -> bool:

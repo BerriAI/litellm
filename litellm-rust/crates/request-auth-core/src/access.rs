@@ -10,6 +10,10 @@ pub enum AccessFacts {
     UserParamRequest {
         enabled: bool,
     },
+    ClientTagRequest {
+        enabled: bool,
+        llm_route: Option<bool>,
+    },
     GuardrailRequest {
         requested_keys: Vec<String>,
     },
@@ -138,6 +142,8 @@ pub struct AccessDecision {
 #[derive(Debug, PartialEq, Serialize, strum::VariantArray)]
 pub enum AccessRead {
     UserParam,
+    ClientTagRoute,
+    ClientTags,
     GuardrailPermission,
     UnavailablePolicy,
 }
@@ -176,6 +182,14 @@ pub fn decide(facts: AccessFacts) -> AccessDecision {
         },
         AccessFacts::UserParamRequest { enabled } => AccessDecision {
             read: enabled.then_some(AccessRead::UserParam),
+            ..AccessDecision::default()
+        },
+        AccessFacts::ClientTagRequest { enabled, llm_route } => AccessDecision {
+            read: match (enabled, llm_route) {
+                (false, _) | (_, Some(false)) => None,
+                (_, None) => Some(AccessRead::ClientTagRoute),
+                (_, Some(true)) => Some(AccessRead::ClientTags),
+            },
             ..AccessDecision::default()
         },
         AccessFacts::GuardrailRequest { requested_keys } => AccessDecision {
@@ -391,6 +405,22 @@ pub fn decide(facts: AccessFacts) -> AccessDecision {
 mod tests {
     use super::*;
     use rstest::rstest;
+
+    #[rstest]
+    #[case::disabled(false, None, None)]
+    #[case::read_route(true, None, Some(AccessRead::ClientTagRoute))]
+    #[case::non_llm(true, Some(false), None)]
+    #[case::read_tags(true, Some(true), Some(AccessRead::ClientTags))]
+    fn client_tag_reads(
+        #[case] enabled: bool,
+        #[case] llm_route: Option<bool>,
+        #[case] read: Option<AccessRead>,
+    ) {
+        assert_eq!(
+            decide(AccessFacts::ClientTagRequest { enabled, llm_route }).read,
+            read
+        );
+    }
 
     #[rstest]
     #[case::allow(vec![false, false], vec![false, false], None)]

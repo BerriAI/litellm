@@ -812,7 +812,7 @@ async def _get_team_member_budget_counter(
         return None
     assert team_member_budget is not None
 
-    team_member_spend = cast(LiteLLM_TeamMembership, team_membership).spend if team_membership is not None else 0.0
+    team_member_spend = team_membership.spend if team_membership is not None else 0.0
     return _BudgetCounter(
         counter_key=f"spend:team_member:{valid_token.user_id}:{team_object.team_id}",
         source_cache_key=membership_cache_key,

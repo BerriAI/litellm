@@ -98,3 +98,13 @@ def test_guardrail_permission_requires_literal_false(
 ) -> None:
     facts: Final = access.Guardrails((key,), modify)
     assert decide(facts) == access_decision(facts)
+
+
+@pytest.mark.parametrize(
+    "enabled,route,read",
+    ((False, None, None), (True, None, "ClientTagRoute"), (True, False, None), (True, True, "ClientTags")),
+)
+def test_client_tags_only_read_route_and_request_state_when_enabled(
+    decide: Callable[[access.AccessFacts], access.AccessDecision], enabled: bool, route: bool | None, read: str | None
+) -> None:
+    assert decide(access.ClientTagRequest(enabled, route)).read == read

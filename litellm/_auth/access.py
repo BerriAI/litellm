@@ -19,6 +19,12 @@ class UserParamRequest:
 
 
 @dataclass(frozen=True, slots=True)
+class ClientTagRequest:
+    enabled: bool
+    llm_route: bool | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class GuardrailRequest:
     requested_keys: tuple[str, ...]
 
@@ -142,6 +148,7 @@ class TeamLookup:
 AccessFacts: TypeAlias = (
     ConcurrentFailures
     | UserParamRequest
+    | ClientTagRequest
     | GuardrailRequest
     | TraceRequest
     | Search
@@ -176,7 +183,7 @@ GrantLayer: TypeAlias = Literal["key", "team", "user"]
 
 @dataclass(frozen=True, slots=True)
 class AccessDecision:
-    read: Literal["UserParam", "GuardrailPermission", "UnavailablePolicy"] | None = None
+    read: Literal["UserParam", "ClientTagRoute", "ClientTags", "GuardrailPermission", "UnavailablePolicy"] | None = None
     denial: AccessDenial | None = None
     rejected: tuple[str, ...] = ()
     layers: tuple[GrantLayer, ...] = ()
