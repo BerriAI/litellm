@@ -7272,6 +7272,7 @@ class ProxyConfig:
                         "claude_code_marketplace_auth_required",
                         "vertex_ai_pass_through_drop_anthropic_betas",
                         "request_tag_mappings",
+                        "access_group_rules",
                     )
                     if name in typed_general_settings
                 }
