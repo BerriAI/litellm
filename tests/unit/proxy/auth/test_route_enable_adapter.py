@@ -10,6 +10,32 @@ from litellm.proxy._types import CommonProxyErrors
 from litellm.proxy.auth.route_enable_adapter import RouteEnableReaders, check_route_enabled
 
 
+@pytest.mark.parametrize("route", ("/models", "/chat/completions"))
+def test_enterprise_class_exemptions_preserve_enabled_route_policy(route: str) -> None:
+    class EnterpriseRoutes:
+        LLM_API_EXEMPT_ROUTES: Final = ("/models",)
+
+    readers: Final = RouteEnableReaders(
+        enterprise=lambda: EnterpriseRoutes,
+        setting=lambda _: RouteSetting(True, True),
+        secret=lambda _: True,
+    )
+    if route == "/models":
+        assert check_route_enabled(route, readers=readers) is None
+    else:
+        with pytest.raises(HTTPException) as error:
+            check_route_enabled(route, readers=readers)
+        assert (error.value.status_code, error.value.detail) == (
+            403,
+            "LLM API routes are disabled for this instance.",
+        )
+
+
+def test_missing_optional_class_exemptions_preserve_ignored_read_failure() -> None:
+    readers: Final = RouteEnableReaders(enterprise=lambda: object())
+    assert check_route_enabled("/chat/completions", readers=readers) is None
+
+
 @pytest.mark.parametrize(
     ("route", "expected"),
     (

@@ -46,6 +46,44 @@ def test_common_model_plan_matches_reference(facts: common_flow.Facts) -> None:
     )
 
 
+@pytest.mark.parametrize("entity", (False, True))
+@pytest.mark.parametrize("budget", (False, True))
+@pytest.mark.parametrize("mapping", (False, True))
+@pytest.mark.parametrize("team", (False, True))
+def test_model_budget_scope_matches_reference(entity: bool, budget: bool, mapping: bool, team: bool) -> None:
+    expected: Final = "CheckModelBudgets" if entity and budget and mapping and team else "Continue"
+    assert common_flow.read(common_flow.ModelBudgets("Member", entity, budget, mapping, team)) == expected
+
+
+@pytest.mark.parametrize("router", (False, True))
+@pytest.mark.parametrize("disabled", (False, True))
+def test_fallback_eligibility_matches_reference(router: bool, disabled: bool) -> None:
+    expected: Final = "AllowFallback" if router and not disabled else "Continue"
+    assert common_flow.read(common_flow.FallbackAllowed(router, disabled)) == expected
+
+
+@pytest.mark.parametrize(
+    "facts, expected",
+    (
+        (common_flow.ModelBudgets("Key"), "ReadModelBudgetPresence"),
+        (common_flow.ModelBudgets("Key", budget_present=False), "Continue"),
+        (common_flow.ModelBudgets("Key", budget_present=True), "ReadModelBudgetToken"),
+        (common_flow.ModelBudgets("User"), "ReadModelBudgetUser"),
+        (common_flow.ModelBudgets("User", entity_present=False), "Continue"),
+        (common_flow.ModelBudgets("User", entity_present=True), "ReadModelBudgetShape"),
+        (common_flow.ModelBudgets("User", entity_present=True, mapping=False), "Continue"),
+        (common_flow.ModelBudgets("Member", entity_present=True), "ReadModelBudgetTeam"),
+        (common_flow.ModelBudgets("Member", entity_present=True, team_present=False), "Continue"),
+        (common_flow.FallbackAllowed(False), "Continue"),
+        (common_flow.FallbackAllowed(True), "ReadFallbackDisabled"),
+    ),
+)
+def test_scope_reads_preserve_reference_short_circuit(
+    facts: common_flow.ModelBudgets | common_flow.FallbackAllowed, expected: common_flow.ReadPlan
+) -> None:
+    assert common_flow.read(facts) == expected
+
+
 @pytest.mark.parametrize("facts", _BUDGETS)
 def test_budget_scopes_preserve_reference_priority(facts: common_flow.BudgetFacts) -> None:
     assert common_flow.budgets(facts) == (

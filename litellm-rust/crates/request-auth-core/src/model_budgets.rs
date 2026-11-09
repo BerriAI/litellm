@@ -275,6 +275,7 @@ mod tests {
                 team: None,
                 embedded_team: None,
                 assigned_models: None,
+                assigned_scope: None,
                 member: None,
                 project: None,
                 team_present: false,

@@ -4,9 +4,9 @@ from dataclasses import dataclass, replace
 from typing import Final, assert_never
 
 from fastapi import HTTPException
-from pydantic import BaseModel
+from pydantic import TypeAdapter
 
-from litellm._auth.failure import NativeAuthFailure, NativeAuthRuntimeError, native_boundary
+from litellm._auth.failure import NativeAuthFailure, NativeAuthRuntimeError
 from litellm._auth.route_enable import RouteEnableDecision, RouteEnableFacts, RouteFeature, RouteSetting, route_enable
 from litellm.proxy._types import CommonProxyErrors
 from litellm.proxy.auth.route_policy_adapter import route_context
@@ -14,8 +14,7 @@ from litellm.proxy.auth.route_policy_adapter import route_context
 _KEYS: Final = {"Admin": "DISABLE_ADMIN_ENDPOINTS", "Llm": "DISABLE_LLM_API_ENDPOINTS"}
 
 
-class _Exemptions(BaseModel, frozen=True):
-    LLM_API_EXEMPT_ROUTES: tuple[str, ...]
+_EXEMPTIONS: Final = TypeAdapter(tuple[str, ...])
 
 
 def read_enterprise() -> object:
@@ -39,9 +38,10 @@ def read_secret(feature: RouteFeature) -> bool:
     return get_secret_bool(_KEYS[feature]) is True
 
 
-@native_boundary
 def read_exemptions(enterprise: object) -> tuple[str, ...]:
-    return _Exemptions.model_validate(enterprise, from_attributes=True).LLM_API_EXEMPT_ROUTES
+    return _EXEMPTIONS.validate_python(
+        getattr(enterprise, "LLM_API_EXEMPT_ROUTES")  # noqa: B009  # optional class attributes are validated at this boundary
+    )
 
 
 @dataclass(frozen=True, slots=True)

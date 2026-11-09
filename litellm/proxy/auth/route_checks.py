@@ -114,14 +114,9 @@ _TOKEN_COUNTING_ACTION: Final = "countTokens"
 class RouteChecks:
     @staticmethod
     def check_route_enabled(route: str) -> None:
-        try:
-            from litellm_enterprise.proxy.auth.route_checks import EnterpriseRouteChecks
+        from litellm.proxy.auth.route_enable_adapter import check_route_enabled
 
-            EnterpriseRouteChecks.should_call_route(route=route)
-        except HTTPException as e:
-            raise e
-        except Exception:
-            pass
+        check_route_enabled(route)
 
     @staticmethod
     def should_call_route(

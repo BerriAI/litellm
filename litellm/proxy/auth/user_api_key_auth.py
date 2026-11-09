@@ -14,7 +14,7 @@ from dataclasses import replace
 from datetime import datetime, timezone
 from enum import Enum
 from types import MappingProxyType
-from typing import Final, NamedTuple, Protocol, Union, assert_never, cast
+from typing import Final, Literal, NamedTuple, Protocol, Union, assert_never, cast
 
 import fastapi
 from fastapi import HTTPException, Request, WebSocket, status
@@ -58,7 +58,7 @@ from litellm._auth.decision import (
     WithinModelBudgets,
 )
 from litellm._auth.driver import drive, drive_model_budgets, drive_team_member_model_budgets
-from litellm._auth.failure import NativeAuthFailure
+from litellm._auth.failure import NativeAuthFailure, NativeAuthRuntimeError
 from litellm._auth.fallback_access import FallbackAuthorizationFacts
 from litellm._auth.fallback_candidate import FallbackCandidateFacts
 from litellm._auth.key_model_access import KeyAndFallbackModelAccessFacts, key_and_fallback_model_access
@@ -574,6 +574,38 @@ def _model_budget_read(
     )
 
 
+def _model_budget_scope_enabled(scope: Literal["Key", "User", "Member"], token: UserAPIKeyAuth, budget: object) -> bool:
+    facts = common_flow.ModelBudgets(scope)  # rebind-ok: native-selected raw field read stages
+    while True:
+        match common_flow.read(facts):
+            case "ReadModelBudgetPresence":
+                facts = replace(facts, budget_present=bool(budget))
+            case "ReadModelBudgetShape":
+                facts = replace(facts, mapping=isinstance(budget, Mapping))
+            case "ReadModelBudgetToken":
+                facts = replace(facts, entity_present=token.token is not None)
+            case "ReadModelBudgetUser":
+                facts = replace(facts, entity_present=token.user_id is not None)
+            case "ReadModelBudgetTeam":
+                facts = replace(facts, team_present=token.team_id is not None)
+            case "CheckModelBudgets":
+                return True
+            case "Continue":
+                return False
+            case _:
+                raise NativeAuthRuntimeError("Unexpected model-budget scope read")
+
+
+def _model_budget_fallback_enabled(router_present: bool, data: Mapping[str, object]) -> bool:
+    initial: Final = common_flow.FallbackAllowed(router_present)
+    facts: Final = (
+        replace(initial, disabled=fallbacks_disabled(data))
+        if common_flow.read(initial) == "ReadFallbackDisabled"
+        else initial
+    )
+    return common_flow.read(facts) == "AllowFallback"
+
+
 class _ModelBudgetEffects:
     def __init__(
         self,
@@ -619,11 +651,11 @@ class _ModelBudgetEffects:
                 )
             ),
             rewritable_model=requested if isinstance(requested, str) else None,
-            key_has_model_budgets=bool(self._valid_token.model_max_budget) and self._valid_token.token is not None,
+            key_has_model_budgets=_model_budget_scope_enabled(
+                "Key", self._valid_token, self._valid_token.model_max_budget
+            ),
             key_budget_fallbacks=MappingProxyType({model: tuple(chain) for model, chain in budget_fallbacks.items()}),
-            user_has_model_budgets=self._valid_token.user_id is not None
-            and isinstance(user_model_max_budget, Mapping)
-            and bool(user_model_max_budget),
+            user_has_model_budgets=_model_budget_scope_enabled("User", self._valid_token, user_model_max_budget),
         )
 
     async def check_key_model_budget(self, model: str) -> ModelBudgetRead:
@@ -738,11 +770,8 @@ class _TeamMemberModelBudgetEffects:
         return TeamMemberModelBudgetScope(
             models=self._models,
             rewritable_model=requested if isinstance(requested, str) else None,
-            has_model_budgets=self._valid_token.user_id is not None
-            and self._valid_token.team_id is not None
-            and isinstance(budget, Mapping)
-            and bool(budget),
-            can_fall_back=self._llm_router is not None and not fallbacks_disabled(self._request_data),
+            has_model_budgets=_model_budget_scope_enabled("Member", self._valid_token, budget),
+            can_fall_back=_model_budget_fallback_enabled(self._llm_router is not None, self._request_data),
         )
 
     async def check_team_member_model_budget(self, model: str) -> ModelBudgetRead:

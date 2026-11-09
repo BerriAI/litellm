@@ -32,6 +32,21 @@ class MemberFallback:
     resource_bound: bool | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class ModelBudgets:
+    scope: Literal["Key", "User", "Member"]
+    entity_present: bool | None = None
+    budget_present: bool | None = None
+    mapping: bool | None = None
+    team_present: bool | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class FallbackAllowed:
+    router: bool
+    disabled: bool | None = None
+
+
 ReadPlan: TypeAlias = Literal[
     "ReadExemption",
     "SkipBudgets",
@@ -42,13 +57,21 @@ ReadPlan: TypeAlias = Literal[
     "ReadContentType",
     "ReadResourceBinding",
     "ReadFallbackSettings",
+    "CheckModelBudgets",
+    "ReadModelBudgetPresence",
+    "ReadModelBudgetShape",
+    "ReadModelBudgetToken",
+    "ReadModelBudgetUser",
+    "ReadModelBudgetTeam",
+    "AllowFallback",
+    "ReadFallbackDisabled",
     "Continue",
 ]
 _READ: Final = TypeAdapter(ReadPlan)
 
 
 @native_boundary
-def read(facts: BudgetSkip | Pricing | Unpriced | MemberFallback) -> ReadPlan:
+def read(facts: BudgetSkip | Pricing | Unpriced | MemberFallback | ModelBudgets | FallbackAllowed) -> ReadPlan:
     return _READ.validate_python(_native.request_auth_common_read(encode_facts(facts)))
 
 

@@ -1,8 +1,26 @@
 use serde::{Deserialize, Serialize};
 
+#[derive(Deserialize, strum::VariantArray)]
+pub enum ModelBudgetScope {
+    Key,
+    User,
+    Member,
+}
+
 #[derive(Deserialize)]
 #[serde(tag = "kind")]
 pub enum ReadFacts {
+    ModelBudgets {
+        scope: ModelBudgetScope,
+        entity_present: Option<bool>,
+        budget_present: Option<bool>,
+        mapping: Option<bool>,
+        team_present: Option<bool>,
+    },
+    FallbackAllowed {
+        router: bool,
+        disabled: Option<bool>,
+    },
     BudgetSkip {
         skip: bool,
         exempt: Option<bool>,
@@ -23,6 +41,14 @@ pub enum ReadFacts {
 
 #[derive(Debug, PartialEq, Eq, Serialize, strum::VariantArray)]
 pub enum ReadPlan {
+    CheckModelBudgets,
+    ReadModelBudgetPresence,
+    ReadModelBudgetShape,
+    ReadModelBudgetToken,
+    ReadModelBudgetUser,
+    ReadModelBudgetTeam,
+    AllowFallback,
+    ReadFallbackDisabled,
     ReadExemption,
     SkipBudgets,
     CheckBudgets,
@@ -37,6 +63,22 @@ pub enum ReadPlan {
 
 pub fn read(facts: ReadFacts) -> ReadPlan {
     match facts {
+        ReadFacts::ModelBudgets {
+            scope,
+            entity_present,
+            budget_present,
+            mapping,
+            team_present,
+        } => model_budgets(scope, entity_present, budget_present, mapping, team_present),
+        ReadFacts::FallbackAllowed {
+            router: true,
+            disabled: Some(false),
+        } => ReadPlan::AllowFallback,
+        ReadFacts::FallbackAllowed {
+            router: true,
+            disabled: None,
+        } => ReadPlan::ReadFallbackDisabled,
+        ReadFacts::FallbackAllowed { .. } => ReadPlan::Continue,
         ReadFacts::BudgetSkip { skip: true, .. }
         | ReadFacts::BudgetSkip {
             exempt: Some(true), ..
@@ -78,6 +120,41 @@ pub fn read(facts: ReadFacts) -> ReadPlan {
         } => ReadPlan::ReadResourceBinding,
         ReadFacts::MemberFallback { .. } => ReadPlan::ReadFallbackSettings,
     }
+}
+
+fn model_budgets(
+    scope: ModelBudgetScope,
+    entity: Option<bool>,
+    budget: Option<bool>,
+    mapping: Option<bool>,
+    team: Option<bool>,
+) -> ReadPlan {
+    use ReadPlan as P;
+    let stages = match scope {
+        ModelBudgetScope::Key => vec![
+            (budget, P::ReadModelBudgetPresence),
+            (entity, P::ReadModelBudgetToken),
+        ],
+        ModelBudgetScope::User => vec![
+            (entity, P::ReadModelBudgetUser),
+            (mapping, P::ReadModelBudgetShape),
+            (budget, P::ReadModelBudgetPresence),
+        ],
+        ModelBudgetScope::Member => vec![
+            (entity, P::ReadModelBudgetUser),
+            (team, P::ReadModelBudgetTeam),
+            (mapping, P::ReadModelBudgetShape),
+            (budget, P::ReadModelBudgetPresence),
+        ],
+    };
+    for (present, missing) in stages {
+        match present {
+            None => return missing,
+            Some(false) => return P::Continue,
+            Some(true) => {}
+        }
+    }
+    P::CheckModelBudgets
 }
 
 #[derive(Deserialize)]
@@ -191,6 +268,31 @@ pub fn custom(facts: CustomFacts) -> CustomPlan {
 mod tests {
     use super::*;
     use rstest::rstest;
+
+    #[rstest]
+    #[case::available(true, true, true, true, ReadPlan::CheckModelBudgets)]
+    #[case::missing_identity(false, true, true, true, ReadPlan::Continue)]
+    #[case::empty_budget(true, false, true, true, ReadPlan::Continue)]
+    #[case::malformed_member_budget(true, true, false, true, ReadPlan::Continue)]
+    #[case::no_team(true, true, true, false, ReadPlan::Continue)]
+    fn model_budget_availability(
+        #[case] entity_present: bool,
+        #[case] budget_present: bool,
+        #[case] mapping: bool,
+        #[case] team_present: bool,
+        #[case] expected: ReadPlan,
+    ) {
+        assert_eq!(
+            read(ReadFacts::ModelBudgets {
+                scope: ModelBudgetScope::Member,
+                entity_present: Some(entity_present),
+                budget_present: Some(budget_present),
+                mapping: Some(mapping),
+                team_present: Some(team_present)
+            }),
+            expected
+        );
+    }
 
     #[rstest]
     #[case::explicit_skip(ReadFacts::BudgetSkip {skip:true, exempt:None}, ReadPlan::SkipBudgets)]
