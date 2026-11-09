@@ -111,6 +111,8 @@ _PASSTHROUGH_PREFIXES: Final[tuple[str, ...]] = tuple(
     if prefix not in _NON_BILLABLE_PASSTHROUGH_PREFIXES
 )
 
+_OPENSEARCH_INDEX_SEARCH: Final = re.compile(rf"{re.escape(OPENSEARCH_PASS_THROUGH_ROUTE_PREFIX)}/[^/]+/_search")
+
 
 def _classify_llm_route(path: str) -> str | None:
     exact_match: Final = next((route for route in _LLM_ROUTE_EXACT if path == route), None)
@@ -121,7 +123,7 @@ def _classify_llm_route(path: str) -> str | None:
         return suffix_match
     if RouteChecks.is_builtin_eu_jev_decision_route(route=path):
         return path
-    if path.startswith(f"{OPENSEARCH_PASS_THROUGH_ROUTE_PREFIX}/") and path.endswith("/_search"):
+    if _OPENSEARCH_INDEX_SEARCH.fullmatch(path):
         return OPENSEARCH_PASS_THROUGH_ROUTE_PREFIX
     # Deep passthrough paths only: the bare prefix itself is not an inference call.
     return next((prefix for prefix in _PASSTHROUGH_PREFIXES if path.startswith(f"{prefix}/")), None)

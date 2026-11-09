@@ -165,8 +165,8 @@ def test_classify_billable(path: str, expected: Tuple[BillableCategory, str]):
         "/v1beta/interactions/int_123/cancel",
         # observability passthrough writes no SpendLogs row
         "/langfuse/api/public/ingestion",
-        # OpenSearch document writes and lookups are not searches
         "/opensearch/docs/_doc",
+        "/opensearch/docs/_doc/_search",
         "/opensearch/docs/_doc/1",
         "/opensearch/docs/_bulk",
         "/opensearch/docs/_update/1",
