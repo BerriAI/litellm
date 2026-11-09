@@ -2042,7 +2042,7 @@ def _bedrock_invoke_recording(bodies: list[dict[str, object]]) -> AsyncHTTPHandl
             request=request,
         )
 
-    upstream = AsyncHTTPHandler()
+    upstream: Final = AsyncHTTPHandler()
     upstream.client = httpx.AsyncClient(transport=httpx.MockTransport(record_and_answer))
     return upstream
 
@@ -2066,9 +2066,9 @@ async def test_bedrock_invoke_messages_drops_top_k_the_deployment_lists_on_a_mod
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(litellm, "drop_params", False)
-    bodies: list[dict[str, object]] = []
+    bodies: Final[list[dict[str, object]]] = []
 
-    response = await _opus_4_8_messages_with_top_k(bodies, additional_drop_params=["top_k"])
+    response: Final = await _opus_4_8_messages_with_top_k(bodies, additional_drop_params=["top_k"])
 
     assert response["content"] == [{"type": "text", "text": "ok"}]
     (body,) = bodies
@@ -2081,7 +2081,7 @@ async def test_bedrock_invoke_messages_still_rejects_top_k_the_deployment_does_n
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(litellm, "drop_params", False)
-    bodies: list[dict[str, object]] = []
+    bodies: Final[list[dict[str, object]]] = []
 
     with pytest.raises(litellm.UnsupportedParamsError, match="does not support top_k=5") as raised:
         await _opus_4_8_messages_with_top_k(bodies, additional_drop_params=["top_p"])
@@ -2095,7 +2095,7 @@ async def test_bedrock_invoke_messages_answers_the_top_k_400_for_a_drop_list_tha
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(litellm, "drop_params", False)
-    bodies: list[dict[str, object]] = []
+    bodies: Final[list[dict[str, object]]] = []
 
     with pytest.raises(litellm.UnsupportedParamsError, match="does not support top_k=5") as raised:
         await _opus_4_8_messages_with_top_k(bodies, additional_drop_params="top_k")

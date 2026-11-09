@@ -6,6 +6,8 @@ Regression tests for the /v1/messages request-parse fast paths:
   while resolving the (static) type hints only once per process.
 """
 
+from typing import Final
+
 import pytest
 
 import litellm
@@ -146,7 +148,7 @@ def test_sampling_param_raises_clean_400_without_drop_params(monkeypatch):
 )
 def test_deployment_listed_param_is_dropped_before_the_unsupported_param_gate(monkeypatch, model, param, value):
     monkeypatch.setattr(litellm, "drop_params", False)
-    result = AnthropicMessagesRequestUtils.get_requested_anthropic_messages_optional_param(
+    result: Final = AnthropicMessagesRequestUtils.get_requested_anthropic_messages_optional_param(
         params={param: value, "stream": True},
         model=model,
         drop_params=False,
