@@ -777,6 +777,39 @@ def test_unlimited_body_keeps_every_entry():
     assert CODEX_CATALOG_BYTE_LIMIT == 1024 * 1024
 
 
+_LIMITED_CODEX: Final = "a codex that drops a catalog over 1 MiB gets one cut to fit"
+_UNLIMITED_CODEX: Final = "a codex that reads any size gets every model"
+
+
+@pytest.mark.parametrize(
+    ("client_version", "cut"),
+    [
+        pytest.param("0.166.0-alpha.1", False, id=f"0.166.0-alpha.1, {_UNLIMITED_CODEX}"),
+        pytest.param("0.166.0", False, id=f"0.166.0, {_UNLIMITED_CODEX}"),
+        pytest.param("0.169.0-alpha.7", False, id=f"0.169.0-alpha.7, {_UNLIMITED_CODEX}"),
+        pytest.param("0.165.0", True, id=f"0.165.0, {_LIMITED_CODEX}"),
+        pytest.param("0.165.0-alpha.1.2", True, id=f"0.165.0-alpha.1.2, {_LIMITED_CODEX}"),
+        pytest.param("0.164.0", True, id=f"0.164.0, {_LIMITED_CODEX}"),
+        pytest.param(None, True, id=f"no version, {_LIMITED_CODEX}"),
+        pytest.param("not-a-version", True, id=f"unparseable version, {_LIMITED_CODEX}"),
+    ],
+)
+def test_model_list_body_is_cut_to_1_mib_only_for_a_codex_that_drops_a_larger_catalog(client_version, cut):
+    names = tuple(f"model-{index}" for index in range(60))
+    listing = tuple(
+        {"id": name, "object": "model", "created": 0, "owned_by": "openai", "mode": "chat"} for name in names
+    )
+
+    body = codex_model_list_body(
+        listing, tuple((name, name) for name in names), None, client_version=client_version, instructions="x" * 20_000
+    )
+    slugs = [entry["slug"] for entry in json.loads(body)["models"]]
+
+    assert slugs == list(names[: len(slugs)])
+    assert (len(slugs) < len(names)) is cut
+    assert (len(body.encode()) <= CODEX_CATALOG_BYTE_LIMIT) is cut
+
+
 def test_vendored_codex_catalog_entries_decode_on_codex():
     """Every stock entry served keeps the `model_messages` Codex's `ModelsResponse` decoder
     needs in place of `base_instructions`, and the catalog is read from the vendored file."""

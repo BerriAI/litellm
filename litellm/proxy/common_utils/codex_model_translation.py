@@ -184,9 +184,10 @@ def combined_capabilities(
     )
 
 
-def _parses_custom_efforts(client_version: str | None) -> bool:
+def codex_release_at_least(client_version: str | None, first: Version) -> bool:
+    """Whether the requesting Codex is `first` or newer. A missing or unparseable version counts as older."""
     try:
-        return client_version is not None and Version(client_version) >= _FIRST_CODEX_WITH_CUSTOM_EFFORTS
+        return client_version is not None and Version(client_version) >= first
     except ValueError:
         return False
 
@@ -202,7 +203,7 @@ def codex_reasoning_levels(
     group accepts it, so a user who picks no level sends what Codex sent before, else medium, else the
     nearest weaker declared level, so picking no level never costs more reasoning than Codex's usual medium,
     else the weakest declared level, else the first one."""
-    parses_any: Final = _parses_custom_efforts(client_version)
+    parses_any: Final = codex_release_at_least(client_version, _FIRST_CODEX_WITH_CUSTOM_EFFORTS)
     offered: Final = tuple(effort for effort in efforts if parses_any or effort in _EFFORTS_EVERY_CODEX_PARSES)
     if not offered:
         return (), None
