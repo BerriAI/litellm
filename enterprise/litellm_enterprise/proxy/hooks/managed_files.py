@@ -97,6 +97,7 @@ from litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attributio
     request_tags_from_metadata,
 )
 from litellm.repositories.managed_file_repository import ManagedFileRepository
+from litellm.repositories.table_repositories import ManagedObjectRepository
 from litellm.responses.streaming_iterator import spawn_logging_task
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import (  # pyright: ignore[reportAttributeAccessIssue]
@@ -119,6 +120,7 @@ from litellm.types.utils import (
     LLMResponseTypes,
     SpecialEnums,
 )
+from litellm.types.videos.main import VideoObject
 from litellm.utils import get_utc_datetime
 
 
@@ -639,17 +641,17 @@ def postgres_storable_json(file_object: BaseModel) -> str:
 
 
 def _without_model_output(
-    file_object: LiteLLMBatch | LiteLLMFineTuningJob | ResponsesAPIResponse,
-) -> LiteLLMBatch | LiteLLMFineTuningJob | ResponsesAPIResponse:
+    file_object: LiteLLMBatch | LiteLLMFineTuningJob | ResponsesAPIResponse | VideoObject,
+) -> LiteLLMBatch | LiteLLMFineTuningJob | ResponsesAPIResponse | VideoObject:
     return (
         file_object.model_copy(update={"output": []}) if isinstance(file_object, ResponsesAPIResponse) else file_object
     )
 
 
 def _with_model_id(
-    file_object: LiteLLMBatch | LiteLLMFineTuningJob | ResponsesAPIResponse,
+    file_object: LiteLLMBatch | LiteLLMFineTuningJob | ResponsesAPIResponse | VideoObject,
     model_id: str | None,
-) -> LiteLLMBatch | LiteLLMFineTuningJob | ResponsesAPIResponse:
+) -> LiteLLMBatch | LiteLLMFineTuningJob | ResponsesAPIResponse | VideoObject:
     return file_object if model_id is None else file_object.model_copy(update={"model_id": model_id})
 
 
@@ -841,10 +843,10 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
     async def store_unified_object_id(
         self,
         unified_object_id: str,
-        file_object: Union[LiteLLMBatch, LiteLLMFineTuningJob, "ResponsesAPIResponse"],
+        file_object: Union[LiteLLMBatch, LiteLLMFineTuningJob, "ResponsesAPIResponse", VideoObject],
         litellm_parent_otel_span: Optional[Span],
         model_object_id: str,
-        file_purpose: Literal["batch", "fine-tune", "response"],
+        file_purpose: Literal["batch", "fine-tune", "response", "video"],
         user_api_key_dict: UserAPIKeyAuth,
         request_tags: Sequence[str] | None = None,
         persist_attribution: bool = False,
@@ -1036,6 +1038,13 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         raise HTTPException(
             status_code=404,
             detail=f"File not found: {unified_file_id}",
+        )
+
+    async def owned_fine_tuning_job_ids(
+        self, ids: Sequence[str], user_api_key_dict: UserAPIKeyAuth
+    ) -> Mapping[str, str]:
+        return await ManagedObjectRepository(self.prisma_client).owned_provider_object_ids(
+            ids, user_api_key_dict, "fine-tune"
         )
 
     async def can_user_call_unified_object_id(self, unified_object_id: str, user_api_key_dict: UserAPIKeyAuth) -> bool:
@@ -1931,19 +1940,18 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 continue
 
             # Check for direct input_file type
-            if item.get("type") == "input_file":
+            if item.get("type") in ("input_file", "input_image"):
                 file_id = item.get("file_id")
                 if isinstance(file_id, str) and file_id:
                     file_ids.append(file_id)
 
-            # Check for input_file in content array
+            # Check for file references in content
             content = item.get("content")
-            if isinstance(content, list):
-                for content_item in content:
-                    if isinstance(content_item, dict) and content_item.get("type") == "input_file":
-                        file_id = content_item.get("file_id")
-                        if isinstance(file_id, str) and file_id:
-                            file_ids.append(file_id)
+            for content_item in (content if isinstance(content, list) else (content,)):
+                if isinstance(content_item, dict) and content_item.get("type") in ("input_file", "input_image"):
+                    file_id = content_item.get("file_id")
+                    if isinstance(file_id, str) and file_id:
+                        file_ids.append(file_id)
 
         return file_ids
 

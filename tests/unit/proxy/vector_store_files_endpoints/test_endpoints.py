@@ -9,6 +9,7 @@ A raw or forged managed-looking file id has no ownership row, so without the gua
 is attached to a vector store or read back under shared provider credentials.
 """
 
+import asyncio
 import base64
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
@@ -22,7 +23,8 @@ import pytest
 from fastapi import HTTPException
 
 import litellm
-from litellm.proxy._types import UserAPIKeyAuth
+import litellm.proxy.vector_store_files_endpoints.endpoints as endpoints
+from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.vector_store_files_endpoints.endpoints import (
     _update_request_data_with_managed_file_id,
     _with_managed_file_list_ids,
@@ -122,13 +124,12 @@ async def _resolve(
     ],
 )
 @pytest.mark.asyncio
-async def test_vector_store_file_list_maps_owned_ids_and_preserves_raw_ids(
+async def test_vector_store_file_list_only_returns_owned_ids(
     provider_ids: tuple[str, str],
 ) -> None:
     managed_file_id: Final = _unified_file_id()
     expected_provider_ids: Final = tuple(
-        managed_file_id if provider_file_id == RAW_FILE_ID else provider_file_id
-        for provider_file_id in provider_ids
+        managed_file_id for provider_file_id in provider_ids if provider_file_id == RAW_FILE_ID
     )
     provider_response: Final[VectorStoreFileListResponse] = {
         "object": "list",
@@ -157,7 +158,7 @@ async def test_vector_store_file_list_maps_owned_ids_and_preserves_raw_ids(
             for provider_file_id in expected_provider_ids
         ],
         "first_id": expected_provider_ids[0],
-        "last_id": expected_provider_ids[1],
+        "last_id": expected_provider_ids[-1],
         "has_more": True,
     }
     assert response == expected_response
@@ -199,10 +200,9 @@ async def test_vector_store_file_list_only_maps_round_trippable_ids() -> None:
         "object": "list",
         "data": [
             _vector_store_file_row(managed_file_id),
-            _vector_store_file_row("file-model-b"),
         ],
         "first_id": managed_file_id,
-        "last_id": "file-model-b",
+        "last_id": managed_file_id,
         "has_more": False,
     }
     assert response == expected_response
@@ -261,8 +261,131 @@ async def test_forged_unified_file_id_rejected_without_ownership_record():
                 llm_router=None,
             )
 
-    assert exc.value.status_code == 404
+    assert exc.value.status_code == 403
     assert data["file_id"] == forged_id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("before", [False, True])
+async def test_file_listing_advances_to_a_populated_page(before: bool) -> None:
+    first: Final[VectorStoreFileListResponse] = {
+        "data": [_vector_store_file_row("file-first"), _vector_store_file_row("file-last")],
+        "first_id": "file-first",
+        "last_id": "file-last",
+        "has_more": True,
+    }
+    following: Final[VectorStoreFileListResponse] = {
+        "data": [_vector_store_file_row(RAW_FILE_ID)],
+        "first_id": RAW_FILE_ID,
+        "last_id": RAW_FILE_ID,
+        "has_more": False,
+    }
+    fetch: Final = AsyncMock(return_value=following)
+    resolver: Final = ManagedFileIdResolverStub(AsyncMock(side_effect=[{}, {RAW_FILE_ID: _unified_file_id()}]))
+    result: Final = await endpoints._with_managed_file_list_pages(first, fetch, resolver, CALLER, before)
+    assert result == {
+        **following,
+        "data": [_vector_store_file_row(_unified_file_id())],
+        "first_id": _unified_file_id(),
+        "last_id": _unified_file_id(),
+    }
+    fetch.assert_awaited_once_with("file-first" if before else "file-last")
+
+
+@pytest.mark.asyncio
+async def test_file_listing_without_a_resolver_is_complete() -> None:
+    page: Final[VectorStoreFileListResponse] = {
+        "data": [_vector_store_file_row(RAW_FILE_ID)], "has_more": True
+    }
+    fetch: Final = AsyncMock()
+    assert await endpoints._with_managed_file_list_pages(page, fetch, None, CALLER) == {
+        "data": [], "has_more": False, "first_id": None, "last_id": None
+    }
+    fetch.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_admin_file_listing_preserves_a_provider_page() -> None:
+    page: Final[VectorStoreFileListResponse] = {
+        "data": [_vector_store_file_row(RAW_FILE_ID)], "has_more": True
+    }
+    fetch: Final = AsyncMock()
+    assert await endpoints._with_managed_file_list_pages(
+        page, fetch, None, UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+    ) == page
+    fetch.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("before", [False, True])
+async def test_file_listing_resumes_after_its_page_budget(before: bool) -> None:
+    async def next_page(cursor: str) -> VectorStoreFileListResponse:
+        if cursor.count("-next") == endpoints._FILE_LIST_MAX_PAGES - 1:
+            return {"data": [_vector_store_file_row(RAW_FILE_ID)], "has_more": False}
+        return {"data": [_vector_store_file_row(cursor + "-next")], "has_more": True}
+
+    fetch: Final = AsyncMock(side_effect=next_page)
+    resolver: Final = ManagedFileIdResolverStub(AsyncMock(return_value={}))
+    page: Final = await endpoints._with_managed_file_list_pages(
+        {"data": [_vector_store_file_row("file-first")], "has_more": True}, fetch, resolver, CALLER, before
+    )
+    cursor: Final = "file-first" + "-next" * (endpoints._FILE_LIST_MAX_PAGES - 1)
+    assert page == {
+        "data": [],
+        "has_more": True,
+        "first_id": cursor if before else None,
+        "last_id": None if before else cursor,
+    }
+    assert fetch.await_count == endpoints._FILE_LIST_MAX_PAGES - 1
+    query: Final = _with_provider_file_id_cursors({"before" if before else "after": cursor})
+    assert query == {"before" if before else "after": cursor}
+    following: Final = await fetch(query["before" if before else "after"])
+    owned_resolver: Final = ManagedFileIdResolverStub(AsyncMock(return_value={RAW_FILE_ID: _unified_file_id()}))
+    assert await endpoints._with_managed_file_list_pages(following, fetch, owned_resolver, CALLER, before) == {
+        "data": [_vector_store_file_row(_unified_file_id())],
+        "has_more": False,
+        "first_id": _unified_file_id(),
+        "last_id": _unified_file_id(),
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("before", [False, True])
+async def test_file_listing_returns_a_resumable_page_at_its_deadline(
+    monkeypatch: pytest.MonkeyPatch, before: bool
+) -> None:
+    monkeypatch.setattr(endpoints, "_FILE_LIST_SCAN_TIMEOUT", 0)
+    fetch: Final = AsyncMock()
+    resolver: Final = ManagedFileIdResolverStub(AsyncMock(return_value={}))
+    assert await endpoints._with_managed_file_list_pages(
+        {"data": [_vector_store_file_row("file-first")], "has_more": True}, fetch, resolver, CALLER, before
+    ) == {
+        "data": [],
+        "has_more": True,
+        "first_id": "file-first" if before else None,
+        "last_id": None if before else "file-first",
+    }
+    fetch.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_file_scan_timeout_keeps_the_last_completed_page() -> None:
+    resolver: Final = ManagedFileIdResolverStub(AsyncMock(return_value={}))
+    fetch: Final = AsyncMock(side_effect=asyncio.TimeoutError)
+    assert await endpoints._with_managed_file_list_pages(
+        {"data": [_vector_store_file_row("file-first")], "has_more": True}, fetch, resolver, CALLER
+    ) == {"data": [], "has_more": True, "first_id": None, "last_id": "file-first"}
+
+
+@pytest.mark.asyncio
+async def test_file_scan_preserves_an_upstream_error() -> None:
+    resolver: Final = ManagedFileIdResolverStub(AsyncMock(return_value={}))
+    fetch: Final = AsyncMock(side_effect=HTTPException(status_code=502, detail="upstream unavailable"))
+    with pytest.raises(HTTPException) as exc:
+        await endpoints._with_managed_file_list_pages(
+            {"data": [_vector_store_file_row("file-first")], "has_more": True}, fetch, resolver, CALLER
+        )
+    assert exc.value.status_code == 502
 
 
 @pytest.mark.asyncio
@@ -284,9 +407,9 @@ async def test_owned_unified_file_id_allowed_when_managed_files_required():
 
 
 @pytest.mark.asyncio
-async def test_raw_file_id_allowed_when_managed_files_not_required():
+async def test_raw_file_id_rejected_in_default_mode():
     with patch.object(litellm, "require_managed_files", False):
-        data, original = await _resolve(RAW_FILE_ID)
+        with pytest.raises(HTTPException) as exc:
+            await _resolve(RAW_FILE_ID)
 
-    assert original is None
-    assert data["file_id"] == RAW_FILE_ID
+    assert exc.value.status_code == 403

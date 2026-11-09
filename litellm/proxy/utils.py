@@ -173,6 +173,7 @@ from litellm.litellm_core_utils.core_helpers import (
 from litellm.litellm_core_utils.deployment_pricing import pricing_models
 from litellm.litellm_core_utils.duration_parser import get_budget_window_start
 from litellm.litellm_core_utils.env_utils import get_env_float, get_env_int
+from litellm.litellm_core_utils.get_llm_provider_logic import resolve_model_and_provider_for_metadata
 from litellm.litellm_core_utils.litellm_logging import (
     BilledRoundsDispatch,
     Logging,
@@ -196,6 +197,7 @@ from litellm.proxy._types import (
     AlertType,
     CallInfo,
     LiteLLM_VerificationTokenView,
+    LitellmUserRoles,
     Member,
     SpecialModelNames,
     UserAPIKeyAuth,
@@ -309,6 +311,7 @@ from litellm.types.mcp import (
 )
 from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
 from litellm.types.proxy.policy_engine.pipeline_types import PipelineExecutionResult
+from litellm.types.router import DeploymentModelListingInfo
 from litellm.types.utils import LLMResponseTypes, LoggedLiteLLMParams
 from litellm.utils import (
     add_configured_callback_to_specific_event,
@@ -10393,6 +10396,30 @@ def _group_token_limit(candidate_sets: tuple[tuple[ModelInfo, ...], ...], field:
     return max(limits) if limits else None
 
 
+class _ScopedListingDeployment(BaseModel, frozen=True):
+    litellm_params: Mapping[str, object]
+    model_info: Mapping[str, object] | None = None
+
+
+def _scoped_listing_info(deployments: Sequence[_ScopedListingDeployment]) -> DeploymentModelListingInfo:
+    def configured_limit(field: str) -> int | None:
+        values: Final = tuple(
+            value for row in deployments if (value := coerce_token_limit((row.model_info or {}).get(field))) is not None
+        )
+        return max(values) if values else None
+
+    return DeploymentModelListingInfo(
+        cost_map_keys=tuple(
+            dict.fromkeys(
+                str((row.model_info or {}).get("base_model") or row.litellm_params.get("model") or "")
+                for row in deployments
+            )
+        ),
+        max_input_tokens=configured_limit("max_input_tokens"),
+        max_output_tokens=configured_limit("max_output_tokens"),
+    )
+
+
 def create_model_info_response(
     model_id: str,
     provider: str,
@@ -10400,6 +10427,7 @@ def create_model_info_response(
     fallback_type: str | None = None,
     llm_router: Optional["Router"] = None,
     get_model_info: Callable[[str], ModelInfo] = litellm.get_model_info,
+    user_api_key_dict: UserAPIKeyAuth | None = None,
 ) -> ModelInfoResponse:
     """
     Create a standardized OpenAI-compatible model object.
@@ -10422,8 +10450,30 @@ def create_model_info_response(
     )
     lookup_model: Final = alias_target if alias_target is not None else model_id
 
+    scoped: Final = (
+        TypeAdapter(tuple[_ScopedListingDeployment, ...]).validate_python(
+            llm_router.registry().deployments(
+                lookup_model,
+                source="for_request",
+                request={
+                    "metadata": {
+                        "user_api_key_team_id": user_api_key_dict.team_id,
+                        "user_api_key_auth": user_api_key_dict,
+                    }
+                },
+            )
+        )
+        if llm_router is not None
+        and user_api_key_dict is not None
+        and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN
+        else None
+    )
     listing_info: Final = (
-        llm_router.registry().group(lookup_model, field="listing_info") if llm_router is not None else None
+        _scoped_listing_info(scoped)
+        if scoped is not None
+        else llm_router.registry().group(lookup_model, field="listing_info")
+        if llm_router is not None
+        else None
     )
 
     # One entry per distinct model behind the listed name; (None,) when the router knows
@@ -10431,7 +10481,11 @@ def create_model_info_response(
     deployment_models: Final[tuple[str | None, ...]] = (
         listing_info.cost_map_keys if listing_info is not None and listing_info.cost_map_keys else (None,)
     )
-    listed_info: Final = _safe_get_model_info(lookup_model, get_model_info)
+    listed_info: Final = (
+        _safe_get_model_info(lookup_model, get_model_info)
+        if scoped is None or lookup_model in deployment_models
+        else None
+    )
     candidate_sets: Final = tuple(
         _resolve_listing_model_info(
             deployment_model=deployment_model,
@@ -10465,7 +10519,25 @@ def create_model_info_response(
         if listing_info.max_output_tokens is not None:
             max_output_tokens = listing_info.max_output_tokens
 
-    if llm_router is not None:
+    if scoped:
+        _, scoped_provider = resolve_model_and_provider_for_metadata(
+            model=str(scoped[0].litellm_params.get("model") or lookup_model),
+            custom_llm_provider=TypeAdapter[str | None](str | None).validate_python(
+                scoped[0].litellm_params.get("custom_llm_provider")
+            ),
+        )
+        base["owned_by"] = scoped_provider
+        scoped_mode: Final = next(
+            (
+                value
+                for row in scoped
+                if isinstance(value := (row.model_info or {}).get("mode") or row.litellm_params.get("mode"), str)
+            ),
+            None,
+        )
+        if scoped_mode is not None:
+            base["mode"] = scoped_mode
+    elif llm_router is not None and scoped is None:
         configured_mode: Final = llm_router.registry().group(lookup_model, field="mode")
         if isinstance(configured_mode, str):
             base["mode"] = configured_mode

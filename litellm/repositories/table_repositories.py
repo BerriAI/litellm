@@ -10,14 +10,18 @@ methods; richer repositories live in their own modules.
 from collections.abc import Mapping, Sequence
 from datetime import timedelta
 from itertools import groupby
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Generic, Protocol
 
 from pydantic import TypeAdapter
 
 from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.llms.base_llm.managed_resources.isolation import build_owner_filter
 from litellm.repositories.accounting_delivery_repository import LedgerDatabase, LedgerTransaction
+from litellm.repositories.chunked_in import find_many_in
 from litellm.repositories.prisma_protocols import RowT_co, TableActions
+from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
 if TYPE_CHECKING:
     from prisma import models as prisma_models  # noqa: F401  # used by quoted base-class subscripts
@@ -99,6 +103,17 @@ class MCPServerRepository(PrismaTableRepository["prisma_models.LiteLLM_MCPServer
 
 class ManagedObjectRepository(PrismaTableRepository["prisma_models.LiteLLM_ManagedObjectTable"]):
     table_name = "litellm_managedobjecttable"
+
+    async def owned_provider_object_ids(
+        self, ids: Sequence[str], user_api_key_dict: UserAPIKeyAuth, file_purpose: str
+    ) -> Mapping[str, str]:
+        owner: Final = build_owner_filter(user_api_key_dict)
+        if owner is None or not ids:
+            return MappingProxyType({})
+        rows: Final = await find_many_in(
+            self.table, "model_object_id", ids, where={"file_purpose": file_purpose, **owner}
+        )
+        return MappingProxyType({row.model_object_id: row.unified_object_id for row in rows})
 
 
 class OrganizationMembershipRepository(PrismaTableRepository["prisma_models.LiteLLM_OrganizationMembership"]):

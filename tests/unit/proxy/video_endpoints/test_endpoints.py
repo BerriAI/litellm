@@ -38,10 +38,12 @@ import pytest
 
 import litellm.proxy.proxy_server as proxy_server
 import litellm.proxy.video_endpoints.endpoints as endpoints
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.caching.caching import DualCache
+from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
+from litellm_enterprise.proxy.hooks.managed_files import _PROXY_LiteLLMManagedFiles
 from litellm.types.videos.main import VideoObject
 from litellm.types.videos.utils import (
     decode_video_id_with_provider,
@@ -225,8 +227,8 @@ def harness():
         )
 
 
-def _user() -> UserAPIKeyAuth:
-    return UserAPIKeyAuth(api_key="sk-test")
+def _user(user_role: LitellmUserRoles | None = LitellmUserRoles.PROXY_ADMIN) -> UserAPIKeyAuth:
+    return UserAPIKeyAuth(api_key="sk-test", user_role=user_role)
 
 
 # =========================================================================== #
@@ -609,14 +611,22 @@ async def test_edit__uploaded_video_restamps_new_id_with_requested_model(harness
     upload: Final = StarletteUploadFile(file=io.BytesIO(b"rawmp4"), filename="clip.mp4")
     harness.read_body.return_value = {"model": VIDEO_MODEL_ID, "prompt": "make it nighttime", "video": upload}
     harness.respond_with(_video_with_empty_model_id())
+    prisma: Final = MagicMock()
+    table: Final = prisma.db.litellm_managedobjecttable
+    table.find_first = AsyncMock(return_value=None)
+    table.upsert = AsyncMock()
+    proxy_server.proxy_logging_obj.get_proxy_hook.return_value = _PROXY_LiteLLMManagedFiles(
+        internal_usage_cache=DualCache(), prisma_client=prisma
+    )
 
     resp: Final = await endpoints.video_edit(
         request=FakeRequest(raw_body=b"multipart"),
         fastapi_response=Response(),
-        user_api_key_dict=_user(),
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", user_id="creator"),
     )
 
     _assert_id_resolves_to_deployment(resp)
+    assert table.upsert.await_args.kwargs["data"]["create"]["created_by"] == "creator"
 
 
 @pytest.mark.asyncio
@@ -653,7 +663,7 @@ async def call_list(harness: Harness, *, headers=None, query=None):
     return await endpoints.video_list(
         request=FakeRequest(headers=headers, query=query),
         fastapi_response=Response(),
-        user_api_key_dict=_user(),
+        user_api_key_dict=_user(user_role=None),
     )
 
 
@@ -759,7 +769,7 @@ async def call_create_character(harness: Harness, *, body, video=None, name="my_
         fastapi_response=Response(),
         video=video if video is not None else MagicMock(name="video_upload"),
         name=name,
-        user_api_key_dict=_user(),
+        user_api_key_dict=_user(user_role=None),
     )
 
 
@@ -810,7 +820,7 @@ async def call_get_character(
         character_id=character_id,
         request=FakeRequest(headers=headers, query=query),
         fastapi_response=Response(),
-        user_api_key_dict=_user(),
+        user_api_key_dict=_user(user_role=None),
     )
 
 

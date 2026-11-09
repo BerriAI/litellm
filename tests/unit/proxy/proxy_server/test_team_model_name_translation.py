@@ -10,6 +10,7 @@ rows instead of the internal routing key `model_name_{team_id}_{uuid}`.
 from __future__ import annotations
 
 import json
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, call
 
 import pytest
@@ -1121,6 +1122,7 @@ async def test_v1_models_team_alias_inherits_token_limits_and_chat_mode(monkeypa
     router.get_configured_mode.return_value = "chat"
     router.model_list = [team_dep]
     router.get_model_list.return_value = [team_dep]
+    router.deployments_for_request.return_value = [team_dep]
     router.get_model_group_info.return_value = None
 
     monkeypatch.setattr(ps, "llm_router", router)
@@ -1135,7 +1137,7 @@ async def test_v1_models_team_alias_inherits_token_limits_and_chat_mode(monkeypa
             "id": "GPT Terra",
             "object": "model",
             "created": 1677610602,
-            "owned_by": "openai",
+            "owned_by": "azure",
             "mode": "chat",
             "max_input_tokens": 876000,
             "max_output_tokens": 128000,
@@ -1169,6 +1171,7 @@ async def test_v1_models_team_image_alias_inherits_image_generation_mode(monkeyp
     router.get_configured_mode.return_value = "image_generation"
     router.model_list = [team_dep]
     router.get_model_list.return_value = [team_dep]
+    router.deployments_for_request.return_value = [team_dep]
     router.get_model_group_info.return_value = None
 
     monkeypatch.setattr(ps, "llm_router", router)
@@ -1535,6 +1538,12 @@ async def test_retrieve_model_by_public_name_returns_200(monkeypatch):
         max_input_tokens=16384,
         max_output_tokens=4096,
     )
+    scoped_row: Final = {
+        **team_row,
+        "litellm_params": {"model": "azure/gpt-4.1"},
+        "model_info": {**team_row["model_info"], "max_input_tokens": 16384, "max_output_tokens": 4096},
+    }
+    router.deployments_for_request.return_value = [scoped_row]
 
     monkeypatch.setattr(ps, "llm_router", router)
     monkeypatch.setattr(ps, "general_settings", {})

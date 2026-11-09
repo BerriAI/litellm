@@ -6,6 +6,8 @@ An alias the caller can complete on is listed next to its target and resolves by
 
 import json
 from collections.abc import Sequence
+from pathlib import Path
+from typing import Final
 
 import pytest
 from fastapi import HTTPException
@@ -112,6 +114,35 @@ async def test_v1_models_lists_team_alias_next_to_its_target_in_both_shapes(rout
 
     assert await _v1_models(caller) == ["gpt-4.1-mini", "team-chat", "claude-sonnet-4-5"]
     assert await _v1_models(caller, request=_anthropic_request()) == ["gpt-4.1-mini", "team-chat", "claude-sonnet-4-5"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("private_first", [False, True])
+async def test_shared_group_alias_metadata_matches_its_routable_deployment(
+    monkeypatch: pytest.MonkeyPatch, router: Router, private_first: bool
+) -> None:
+    shared = {
+        "model_name": "shared-group", "litellm_params": {"model": "openai/gpt-4o", "api_key": "test"},
+        "model_info": {"id": "shared", "max_input_tokens": 4096, "max_output_tokens": 512, "mode": "chat"},
+    }
+    private = {
+        "model_name": "shared-group", "litellm_params": {"model": "openai/gpt-4o", "api_key": "test"},
+        "model_info": {"id": "private", "team_id": "team-private", "max_input_tokens": 32768, "max_output_tokens": 8192},
+    }
+    scoped_router = Router(model_list=[private, shared] if private_first else [shared, private])
+    monkeypatch.setattr(proxy_server, "llm_router", scoped_router)
+    monkeypatch.setattr(proxy_server, "llm_model_list", scoped_router.model_list)
+    caller = UserAPIKeyAuth(
+        api_key="test", models=["shared-group"], team_id="team-shared",
+        team_model_aliases={"team-alias": "shared-group"},
+    )
+
+    listing = await proxy_server.model_list(user_api_key_dict=caller, request=None)
+    described = await proxy_server.model_info(model_id="team-alias", user_api_key_dict=caller)
+    listed = next(row for row in listing["data"] if row["id"] == "team-alias")
+
+    assert (listed["max_input_tokens"], listed["max_output_tokens"], listed["mode"]) == (4096, 512, "chat")
+    assert described == listed
 
 
 @pytest.mark.asyncio
@@ -350,3 +381,34 @@ async def test_hidden_router_settings_alias_the_key_does_not_list_is_not_retriev
     with pytest.raises(HTTPException) as retrieval:
         await proxy_server.model_info(model_id="quiet", user_api_key_dict=caller)
     assert retrieval.value.status_code == 404
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model", "provider", "owned_by"),
+    [("github_copilot/example-model", None, "github_copilot"), ("deployment-name", "openai", "openai")],
+)
+async def test_model_listing_describes_a_provider_without_saved_login(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, model: str, provider: str | None, owned_by: str
+) -> None:
+    monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(tmp_path))
+    metadata_router: Final = Router(
+        model_list=[
+            {
+                **_deployment("assistant", model=model),
+                "litellm_params": {
+                    "model": model,
+                    "api_key": "sk-fake",
+                    **({"custom_llm_provider": provider} if provider is not None else {}),
+                },
+            }
+        ]
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", metadata_router)
+    monkeypatch.setattr(proxy_server, "llm_model_list", metadata_router.model_list)
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setattr(proxy_server, "user_model", None)
+    caller: Final = UserAPIKeyAuth(api_key="test", user_id="user", models=["assistant"], team_models=[])
+    listing: Final = await proxy_server.model_list(user_api_key_dict=caller, request=None)
+    assert [(row["id"], row["owned_by"]) for row in listing["data"]] == [("assistant", owned_by)]

@@ -8,6 +8,7 @@ from typing import Final, cast  # noqa: TID251  # Existing casts retained unchan
 
 from litellm import verbose_logger
 from litellm.litellm_core_utils.batch_utils import InMemoryFile
+from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionFileObject,
@@ -124,7 +125,6 @@ def update_responses_input_with_model_file_ids(
 ) -> object:
     """
     Updates responses API input with provider-specific file IDs.
-    File IDs are always inside the content array, not as direct input_file items.
 
     For managed files (unified file IDs), uses model_file_id_mapping if provided,
     otherwise decodes the base64-encoded unified file ID and extracts the llm_output_file_id directly.
@@ -142,63 +142,44 @@ def update_responses_input_with_model_file_ids(
         is_model_embedded_id,
     )
 
-    if isinstance(input, str):
+    input_items: Final = as_object_list(input)
+    if input_items is None:
         return input
 
-    if not isinstance(input, list):
-        return input
+    def mapped_part(part: Mapping[str, object]) -> Mapping[str, object]:
+        file_id: Final = part.get("file_id")
+        if part.get("type") not in ("input_file", "input_image") or not isinstance(file_id, str) or not file_id:
+            return part
+        if model_file_id_mapping and model_id and file_id in model_file_id_mapping:
+            return {**part, "file_id": model_file_id_mapping.get(file_id, {}).get(model_id) or file_id}
+        if is_base64_encoded_unified_file_id(file_id):
+            unified_file_id: Final = convert_b64_uid_to_unified_uid(file_id)
+            provider_file_id: Final = (
+                unified_file_id.split("llm_output_file_id,")[1].split(";")[0]
+                if "llm_output_file_id," in unified_file_id
+                else file_id
+            )
+            return {**part, "file_id": provider_file_id}
+        if is_model_embedded_id(file_id):
+            return {**part, "file_id": get_original_file_id(file_id)}
+        return part
 
-    updated_input: Final = []
-    for item in input:
-        if not isinstance(item, dict):
-            updated_input.append(item)
-            continue
+    def mapped_item(item: object) -> object:
+        fields: Final = as_str_mapping(item)
+        if fields is None:
+            return item
+        updated_item: Final = dict(mapped_part(fields))
+        content: Final = fields.get("content")
+        content_items: Final = as_object_list(content)
+        if content_items is not None:
+            updated_item["content"] = [
+                mapped_part(part) if (part := as_str_mapping(value)) is not None else value for value in content_items
+            ]
+        elif (singleton := as_str_mapping(content)) is not None:
+            updated_item["content"] = mapped_part(singleton)
+        return updated_item
 
-        updated_item = item.copy()
-        content = item.get("content")
-        if isinstance(content, list):
-            updated_content = []
-            for content_item in content:
-                if isinstance(content_item, dict) and content_item.get("type") == "input_file":
-                    file_id = content_item.get("file_id")
-                    if isinstance(file_id, str) and file_id:
-                        provider_file_id = file_id  # Default to original
-
-                        # Check if we have a mapping for this file ID
-                        if model_file_id_mapping and model_id and file_id in model_file_id_mapping:
-                            # Use the model-specific file ID from mapping
-                            provider_file_id = model_file_id_mapping.get(file_id, {}).get(model_id) or file_id
-                            updated_content_item = content_item.copy()
-                            updated_content_item["file_id"] = provider_file_id
-                            updated_content.append(updated_content_item)
-                        else:
-                            # Check if this is a base64-encoded unified file ID without mapping
-                            is_unified_file_id = is_base64_encoded_unified_file_id(file_id)
-                            if is_unified_file_id:
-                                # Fallback: decode unified file ID
-                                unified_file_id = convert_b64_uid_to_unified_uid(file_id)
-                                if "llm_output_file_id," in unified_file_id:
-                                    provider_file_id = unified_file_id.split("llm_output_file_id,")[1].split(";")[0]
-
-                                updated_content_item = content_item.copy()
-                                updated_content_item["file_id"] = provider_file_id
-                                updated_content.append(updated_content_item)
-                            elif is_model_embedded_id(file_id):
-                                updated_content_item = content_item.copy()
-                                updated_content_item["file_id"] = get_original_file_id(file_id)
-                                updated_content.append(updated_content_item)
-                            else:
-                                # Not a managed file, keep as-is
-                                updated_content.append(content_item)
-                    else:
-                        updated_content.append(content_item)
-                else:
-                    updated_content.append(content_item)
-            updated_item["content"] = updated_content
-
-        updated_input.append(updated_item)
-
-    return updated_input
+    return [mapped_item(item) for item in input_items]
 
 
 def _decode_vector_store_ids_in_tools(

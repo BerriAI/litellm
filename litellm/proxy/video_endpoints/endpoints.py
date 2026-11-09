@@ -22,13 +22,16 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
 from litellm.proxy.image_endpoints.endpoints import batch_to_bytesio
 from litellm.proxy.video_endpoints.utils import (
     VideoRequestRoute,
+    authorize_video_reference,
     authorized_video_model,
     encode_character_id_in_response,
     encode_video_id_in_response,
     extract_model_from_target_model_names,
     fallback_requested_model,
     get_custom_provider_from_data,
+    record_video_ownership,
     routable_model_name,
+    video_ownership_store,
     video_reference_to_id,
 )
 from litellm.types.videos.utils import (
@@ -97,6 +100,7 @@ async def video_generation(
         if input_reference_file:
             data["input_reference"] = input_reference_file[0]
 
+    video_ownership_store(proxy_logging_obj.get_proxy_hook("managed_files"), user_api_key_dict)
     # Process request using ProxyBaseLLMRequestProcessing
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
@@ -127,11 +131,15 @@ async def video_generation(
         )
     else:
         requested_model: Final = routable_model_name(requested.model, llm_router, requested.custom_llm_provider)
-        return encode_video_id_in_response(
-            response=generated,
-            fallback_provider=requested.custom_llm_provider,
-            fallback_model_id=requested_model,
-            requested_model=fallback_requested_model(requested_model, generated, llm_router),
+        return await record_video_ownership(
+            encode_video_id_in_response(
+                response=generated,
+                fallback_provider=requested.custom_llm_provider,
+                fallback_model_id=requested_model,
+                requested_model=fallback_requested_model(requested_model, generated, llm_router),
+            ),
+            proxy_logging_obj.get_proxy_hook("managed_files"),
+            user_api_key_dict,
         )
 
 
@@ -283,6 +291,14 @@ async def video_status(
     if custom_llm_provider:
         data["custom_llm_provider"] = custom_llm_provider
 
+    await authorize_video_reference(
+        video_id,
+        decoded,
+        custom_llm_provider,
+        llm_router,
+        proxy_logging_obj.get_proxy_hook("managed_files"),
+        user_api_key_dict,
+    )
     resolved_model: Final = await authorized_video_model(decoded, llm_router, user_api_key_dict)
     if resolved_model:
         data["model"] = resolved_model
@@ -384,6 +400,14 @@ async def video_content(
     if custom_llm_provider:
         data["custom_llm_provider"] = custom_llm_provider
 
+    await authorize_video_reference(
+        video_id,
+        decoded,
+        custom_llm_provider,
+        llm_router,
+        proxy_logging_obj.get_proxy_hook("managed_files"),
+        user_api_key_dict,
+    )
     resolved_model: Final = await authorized_video_model(decoded, llm_router, user_api_key_dict)
     if resolved_model:
         data["model"] = resolved_model
@@ -490,6 +514,14 @@ async def video_remix(
     if custom_llm_provider:
         data["custom_llm_provider"] = custom_llm_provider
 
+    await authorize_video_reference(
+        video_id,
+        decoded,
+        custom_llm_provider,
+        llm_router,
+        proxy_logging_obj.get_proxy_hook("managed_files"),
+        user_api_key_dict,
+    )
     resolved_model: Final = await authorized_video_model(decoded, llm_router, user_api_key_dict)
     if resolved_model:
         data["model"] = resolved_model
@@ -523,12 +555,16 @@ async def video_remix(
             version=version,
         )
     else:
-        return encode_video_id_in_response(
-            response=remixed,
-            fallback_provider=custom_llm_provider,
-            fallback_model_id=model_id_from_decoded
-            or routable_model_name(requested.model, llm_router, custom_llm_provider),
-            requested_model=decoded.get("requested_model"),
+        return await record_video_ownership(
+            encode_video_id_in_response(
+                response=remixed,
+                fallback_provider=custom_llm_provider,
+                fallback_model_id=model_id_from_decoded
+                or routable_model_name(requested.model, llm_router, custom_llm_provider),
+                requested_model=decoded.get("requested_model"),
+            ),
+            proxy_logging_obj.get_proxy_hook("managed_files"),
+            user_api_key_dict,
         )
 
 
@@ -814,6 +850,17 @@ async def video_edit(
     )
     data["custom_llm_provider"] = custom_llm_provider
 
+    if isinstance(uploaded_video, StarletteUploadFile):
+        video_ownership_store(proxy_logging_obj.get_proxy_hook("managed_files"), user_api_key_dict)
+    else:
+        await authorize_video_reference(
+            data["video_id"],
+            decoded,
+            custom_llm_provider,
+            llm_router,
+            proxy_logging_obj.get_proxy_hook("managed_files"),
+            user_api_key_dict,
+        )
     resolved_model: Final = await authorized_video_model(decoded, llm_router, user_api_key_dict)
     if resolved_model:
         data["model"] = resolved_model
@@ -846,12 +893,16 @@ async def video_edit(
             version=version,
         )
     else:
-        return encode_video_id_in_response(
-            response=edited,
-            fallback_provider=custom_llm_provider,
-            fallback_model_id=model_id_from_decoded
-            or routable_model_name(requested.model, llm_router, custom_llm_provider),
-            requested_model=decoded.get("requested_model"),
+        return await record_video_ownership(
+            encode_video_id_in_response(
+                response=edited,
+                fallback_provider=custom_llm_provider,
+                fallback_model_id=model_id_from_decoded
+                or routable_model_name(requested.model, llm_router, custom_llm_provider),
+                requested_model=decoded.get("requested_model"),
+            ),
+            proxy_logging_obj.get_proxy_hook("managed_files"),
+            user_api_key_dict,
         )
 
 
@@ -917,6 +968,14 @@ async def video_extension(
     )
     data["custom_llm_provider"] = custom_llm_provider
 
+    await authorize_video_reference(
+        data["video_id"],
+        decoded,
+        custom_llm_provider,
+        llm_router,
+        proxy_logging_obj.get_proxy_hook("managed_files"),
+        user_api_key_dict,
+    )
     resolved_model: Final = await authorized_video_model(decoded, llm_router, user_api_key_dict)
     if resolved_model:
         data["model"] = resolved_model
@@ -949,10 +1008,14 @@ async def video_extension(
             version=version,
         )
     else:
-        return encode_video_id_in_response(
-            response=extended,
-            fallback_provider=custom_llm_provider,
-            fallback_model_id=model_id_from_decoded
-            or routable_model_name(requested.model, llm_router, custom_llm_provider),
-            requested_model=decoded.get("requested_model"),
+        return await record_video_ownership(
+            encode_video_id_in_response(
+                response=extended,
+                fallback_provider=custom_llm_provider,
+                fallback_model_id=model_id_from_decoded
+                or routable_model_name(requested.model, llm_router, custom_llm_provider),
+                requested_model=decoded.get("requested_model"),
+            ),
+            proxy_logging_obj.get_proxy_hook("managed_files"),
+            user_api_key_dict,
         )

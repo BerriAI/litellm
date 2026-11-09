@@ -3,6 +3,7 @@ Test for response_api_endpoints/endpoints.py
 """
 
 import asyncio
+import base64
 import contextlib
 import dataclasses
 import datetime
@@ -35,7 +36,7 @@ from litellm.responses.streaming_iterator import ResponsesAPIStreamingIterator
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
 from litellm.types.router import RouterErrors
-from litellm.types.utils import CallTypesLiteral
+from litellm.types.utils import CallTypesLiteral, SpecialEnums
 from tests._master_key import MASTER_KEY
 from tests._support.clock_loops import AutojumpClockLoop
 
@@ -1943,6 +1944,38 @@ async def test_background_create_the_provider_confirms_is_stored_under_its_provi
     store_kwargs = managed_files.store_unified_object_id.await_args.kwargs
     assert store_kwargs["unified_object_id"] == queued.id
     assert store_kwargs["model_object_id"] == "resp_provider_job"
+
+
+@pytest.mark.parametrize(
+    ("data", "expected"),
+    [
+        ({}, ()),
+        ({"input": "hello"}, ()),
+        ({"input": [{"type": "input_file", "file_id": "file-text"}]}, ("file-text",)),
+        ({"input": [{"type": "input_image", "file_id": "file-image"}]}, ("file-image",)),
+        (
+            {"input": [{"role": "user", "content": [{"type": "input_image", "file_id": "file-image"}]}]},
+            ("file-image",),
+        ),
+        (
+            {"input": [{"role": "user", "content": {"type": "input_image", "file_id": "file-image"}}]},
+            ("file-image",),
+        ),
+        ({"input": [{"role": "user", "content": "hello"}]}, ()),
+        ({"input": [{"type": "input_text", "file_id": "not-a-file-part"}]}, ()),
+        ({"input": [{"type": [], "file_id": "not-a-file-part"}]}, ()),
+        (
+            {"tools": [{"type": "code_interpreter", "container": {"file_ids": ["file-tool", None, 7]}}]},
+            ("file-tool",),
+        ),
+    ],
+)
+def test_response_file_references_include_all_content_shapes(
+    data: Mapping[str, object], expected: tuple[str, ...]
+) -> None:
+    from litellm.proxy.response_api_endpoints.endpoints import _responses_file_ids
+
+    assert _responses_file_ids(data) == expected
 
 
 class TestResponsesAPIEndpoints(unittest.TestCase):
@@ -5622,12 +5655,22 @@ class TestResponsesInputTokens:
             "resp_client_form",
         )
 
-    def test_managed_file_ids_reach_the_counter_with_the_mapping_inference_uses(self) -> None:
+    @pytest.mark.parametrize("file_location", ["input", "tools"])
+    def test_managed_file_ids_reach_the_counter_with_the_mapping_inference_uses(self, file_location: str) -> None:
         from litellm.integrations.custom_logger import CustomLogger
 
-        mapping: Final = {"litellm-managed-file": {"deployment-a": "file-on-a"}}
+        managed_id: Final = base64.urlsafe_b64encode(SpecialEnums.LITELLM_MANAGED_FILE_COMPLETE_STR.value.format(
+            "application/json", "example", "gpt-4o", "file-on-a", "deployment-a"
+        ).encode()).decode().rstrip("=")
+        mapping: Final = {managed_id: {"deployment-a": "file-on-a"}}
 
         class ManagedFiles(CustomLogger):
+            async def can_user_call_unified_file_id(self, unified_file_id, user_api_key_dict):
+                return unified_file_id == managed_id
+
+            async def can_user_call_unified_object_id(self, unified_object_id, user_api_key_dict):
+                return False
+
             async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
                 if call_type == "aresponses":
                     data["model_file_id_mapping"] = mapping
@@ -5636,13 +5679,27 @@ class TestResponsesInputTokens:
         response, counter = self._post_input_tokens(
             {
                 "model": "gpt-4o",
-                "input": [{"role": "user", "content": [{"type": "input_file", "file_id": "litellm-managed-file"}]}],
+                **(
+                    {"input": [{"role": "user", "content": [{"type": "input_file", "file_id": managed_id}]}]}
+                    if file_location == "input"
+                    else {"input": "hello", "tools": [{"type": "code_interpreter", "container": {"type": "auto", "file_ids": [managed_id]}}]}
+                ),
             },
             managed_files=ManagedFiles(),
         )
 
         assert response.status_code == 200, response.text
         assert counter.await_args.kwargs["responses_request"]["model_file_id_mapping"] == mapping
+
+    def test_tool_file_ids_require_managed_ownership(self) -> None:
+        response, counter = self._post_input_tokens(
+            {
+                "model": "gpt-4o", "input": "hello",
+                "tools": [{"type": "code_interpreter", "container": {"type": "auto", "file_ids": ["file-example"]}}],
+            }
+        )
+        assert response.status_code == 403, response.text
+        counter.assert_not_awaited()
 
     @pytest.mark.parametrize("caller_mapping", [5, "lots", [1], {"file-x": {"deployment-a": 7}}])
     def test_a_caller_sent_model_file_id_mapping_does_not_break_the_count(
@@ -5767,22 +5824,27 @@ class TestResponsesInputTokens:
     def test_a_managed_file_the_key_cannot_read_answers_403_without_a_count(self) -> None:
         from litellm.integrations.custom_logger import CustomLogger
 
-        denied: Final = "User u1 does not have access to the file litellm-managed-file"
+        managed_id: Final = base64.urlsafe_b64encode(SpecialEnums.LITELLM_MANAGED_FILE_COMPLETE_STR.value.format(
+            "application/json", "example", "gpt-4o", "file-on-a", "deployment-a"
+        ).encode()).decode().rstrip("=")
 
         class ManagedFiles(CustomLogger):
-            async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
-                raise HTTPException(status_code=403, detail=denied)
+            async def can_user_call_unified_file_id(self, unified_file_id, user_api_key_dict):
+                return False
+
+            async def can_user_call_unified_object_id(self, unified_object_id, user_api_key_dict):
+                return False
 
         response, counter = self._post_input_tokens(
             {
                 "model": "gpt-4o",
-                "input": [{"role": "user", "content": [{"type": "input_file", "file_id": "litellm-managed-file"}]}],
+                "input": [{"role": "user", "content": [{"type": "input_file", "file_id": managed_id}]}],
             },
             managed_files=ManagedFiles(),
         )
 
         assert response.status_code == 403, response.text
-        assert response.json()["error"]["message"] == denied
+        assert response.json()["error"]["type"] == "permission_error"
         counter.assert_not_awaited()
 
     def test_malformed_tools_follow_the_counted_deployment_even_when_fallbacks_are_configured(self) -> None:

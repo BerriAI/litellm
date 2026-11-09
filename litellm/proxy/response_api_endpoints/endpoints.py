@@ -91,6 +91,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     add_guardrails_from_policy_engine,
     is_chat_completions_body,
 )
+from litellm.proxy.openai_files_endpoints.common_utils import validate_managed_id_requirement
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attribution import (
     request_tags_from_request_data,
 )
@@ -1576,10 +1577,58 @@ def _proxy_managed_files_hook() -> _ManagedFileAccess | None:
 _managed_files_hook_dep: Final = Depends(_proxy_managed_files_hook)
 
 
+def _responses_file_ids(data: Mapping[str, object]) -> tuple[str, ...]:
+    input_items: Final = data.get("input")
+    messages: Final = (
+        tuple(as_str_mapping(item) or {} for item in TypeAdapter(tuple[object, ...]).validate_python(input_items))
+        if isinstance(input_items, list)
+        else ()
+    )
+    nested_content: Final = chain.from_iterable(
+        TypeAdapter(tuple[object, ...]).validate_python(content)
+        if isinstance(content := item.get("content"), list)
+        else (content,)
+        for item in messages
+    )
+    nested_parts: Final = tuple(as_str_mapping(part) or {} for part in nested_content)
+    parts: Final = messages + nested_parts
+    input_file_ids: Final = tuple(
+        input_file_id
+        for part in parts
+        if part.get("type") in ("input_file", "input_image") and isinstance(input_file_id := part.get("file_id"), str)
+    )
+    tools: Final = data.get("tools")
+    tool_rows: Final = (
+        tuple(as_str_mapping(tool) or {} for tool in TypeAdapter(tuple[object, ...]).validate_python(tools))
+        if isinstance(tools, list)
+        else ()
+    )
+    containers: Final = tuple(
+        as_str_mapping(tool.get("container")) or {} for tool in tool_rows if tool.get("type") == "code_interpreter"
+    )
+    container_files: Final = chain.from_iterable(
+        TypeAdapter(tuple[object, ...]).validate_python(files)
+        for container in containers
+        if isinstance(files := container.get("file_ids"), list)
+    )
+    return tuple(chain(input_file_ids, (reference for reference in container_files if isinstance(reference, str))))
+
+
 async def _with_managed_file_id_mapping(
     data: Mapping[str, object], managed_files: _ManagedFileAccess | None, user_api_key_dict: UserAPIKeyAuth
 ) -> Mapping[str, object]:
     caller_fields: Final = {name: value for name, value in data.items() if name != MODEL_FILE_ID_MAPPING_FIELD}
+    for file_id in _responses_file_ids(data):
+        try:
+            await validate_managed_id_requirement(
+                resource_id=file_id,
+                resource_kind="file",
+                user_api_key_dict=user_api_key_dict,
+                managed_files_obj=managed_files,
+                require_owned_resource=True,
+            )
+        except HTTPException as e:
+            raise ProxyException(message=str(e.detail), type="permission_error", param=None, code=e.status_code) from e
     if managed_files is None:
         return caller_fields
     from litellm.proxy.proxy_server import user_api_key_cache

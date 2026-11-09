@@ -1,4 +1,5 @@
 import os
+from copy import deepcopy
 
 import pytest
 
@@ -395,7 +396,8 @@ def test_update_responses_input_with_model_file_ids_decodes_xlitellm_encoded_id(
 
 
 @pytest.mark.parametrize("unusable_file_id", [[1], {"a": 1}])
-def test_update_responses_input_with_model_file_ids_keeps_a_non_string_file_id_as_sent(unusable_file_id):
+@pytest.mark.parametrize("input_type", ["input_file", "input_image"])
+def test_update_responses_input_with_model_file_ids_keeps_a_non_string_file_id_as_sent(unusable_file_id, input_type: str):
     from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
         update_responses_input_with_model_file_ids,
     )
@@ -405,8 +407,8 @@ def test_update_responses_input_with_model_file_ids_keeps_a_non_string_file_id_a
         {
             "role": "user",
             "content": [
-                {"type": "input_file", "file_id": encoded_id},
-                {"type": "input_file", "file_id": unusable_file_id},
+                {"type": input_type, "file_id": encoded_id},
+                {"type": input_type, "file_id": unusable_file_id},
             ],
         }
     ]
@@ -414,6 +416,42 @@ def test_update_responses_input_with_model_file_ids_keeps_a_non_string_file_id_a
     updated = update_responses_input_with_model_file_ids(input_items, "model-A", {encoded_id: {"model-A": "file-on-a"}})
 
     assert [item["file_id"] for item in updated[0]["content"]] == ["file-on-a", unusable_file_id]
+
+
+def _responses_file_layouts(file_id: object, input_type: str) -> list[dict[str, object]]:
+    return [
+        {"type": input_type, "file_id": file_id},
+        {"role": "user", "content": {"type": input_type, "file_id": file_id}},
+        {"role": "user", "content": [{"type": "input_text", "text": "hello"}, {"type": input_type, "file_id": file_id}]},
+    ]
+
+
+@pytest.mark.parametrize("input_type", ["input_file", "input_image"])
+@pytest.mark.parametrize(
+    ("file_id", "mapping", "expected_id"),
+    [
+        ("file-managed", {"file-managed": {"model-A": "file-selected"}}, "file-selected"),
+        (UNIFIED_FILE_ID_B64, None, "file-ECBPW7ML9g7XHdwGgUPZaM"),
+        (_xlitellm_encoded("file-example", "deployment-name"), None, "file-example"),
+        ("file-native", None, "file-native"),
+        ("file-managed", {"file-managed": {"another-model": "file-other"}}, "file-managed"),
+        (None, None, None),
+        ([], None, []),
+        ("", None, ""),
+    ],
+)
+def test_responses_file_mapping_preserves_layout_and_source(
+    file_id: object, mapping: dict[str, dict[str, str]] | None, expected_id: object, input_type: str
+) -> None:
+    from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
+        update_responses_input_with_model_file_ids,
+    )
+
+    input_items = _responses_file_layouts(file_id, input_type)
+    original = deepcopy(input_items)
+    updated = update_responses_input_with_model_file_ids(input_items, "model-A", mapping)
+    assert updated == _responses_file_layouts(expected_id, input_type)
+    assert input_items == original
 
 
 def test_update_messages_xlitellm_decode_does_not_override_mapping():

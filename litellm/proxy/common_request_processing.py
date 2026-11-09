@@ -101,7 +101,7 @@ from litellm.litellm_core_utils.streaming_handler import (
 )
 from litellm.litellm_core_utils.tool_fields import DropPolicy, MalformedField, drop_policy, resolve_tool_fields
 from litellm.llms.openai.responses.guardrail_translation.handler import OpenAIResponsesHandler
-from litellm.proxy._types import LiteLLMRoutes, ProxyErrorTypes, ProxyException, UserAPIKeyAuth
+from litellm.proxy._types import LiteLLMRoutes, LitellmUserRoles, ProxyErrorTypes, ProxyException, UserAPIKeyAuth
 from litellm.proxy.anthropic_endpoints.answered_status import is_provider_overload, with_openai_overload_status
 from litellm.proxy.auth.auth_checks import (
     can_key_call_resolved_model,
@@ -2744,6 +2744,39 @@ class ProxyBaseLLMRequestProcessing:
             )
 
         aliased_model: Final = self.data.get("model")
+        if (
+            user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN
+            and "custom_llm_provider" in request_fields
+            and route_type
+            in {
+                "acompletion",
+                "atext_completion",
+                "aembedding",
+                "aimage_generation",
+                "aimage_edit",
+                "aspeech",
+                "atranscription",
+                "aresponses",
+                "_aresponses_websocket",
+                "anthropic_messages",
+                "arerank",
+                "amoderation",
+                "avideo_generation",
+            }
+            and llm_router is not None
+            and isinstance(aliased_model, str)
+            and llm_router.registry().deployments(
+                aliased_model,
+                source="for_request",
+                request={
+                    "metadata": {
+                        "user_api_key_team_id": user_api_key_dict.team_id,
+                        "user_api_key_auth": user_api_key_dict,
+                    }
+                },
+            )
+        ):
+            raise HTTPException(status_code=403, detail="Provider selection follows the configured model.")
         if llm_router is not None and route_type in ROUTER_SCHEDULED_ROUTE_TYPES and isinstance(aliased_model, str):
             self.data.update(
                 llm_router.health().priority_header_fields(

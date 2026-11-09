@@ -1,10 +1,13 @@
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, runtime_checkable
 
 import orjson
+from fastapi import HTTPException
+from opentelemetry.trace import Span
 from pydantic import BaseModel, ConfigDict, TypeAdapter
 
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import video_access_group
+from litellm.proxy.common_utils.resource_ownership import is_proxy_admin
 from litellm.proxy.openai_files_endpoints.common_utils import authorize_model_for_key
 from litellm.types.videos.main import DecodedVideoId, VideoObject
 from litellm.types.videos.utils import (
@@ -18,6 +21,84 @@ if TYPE_CHECKING:
     from litellm.router import Router
 
 _DECODED_JSON: Final = TypeAdapter(object)
+
+
+@runtime_checkable
+class _VideoOwnershipStore(Protocol):
+    async def can_user_call_unified_object_id(
+        self, unified_object_id: str, user_api_key_dict: UserAPIKeyAuth
+    ) -> bool: ...
+
+    async def store_unified_object_id(
+        self,
+        unified_object_id: str,
+        file_object: VideoObject,
+        litellm_parent_otel_span: Span | None,
+        model_object_id: str,
+        file_purpose: Literal["video"],
+        user_api_key_dict: UserAPIKeyAuth,
+        persist_attribution: bool = False,
+    ) -> None: ...
+
+
+def video_ownership_store(store: object, user_api_key_dict: UserAPIKeyAuth) -> _VideoOwnershipStore | None:
+    if isinstance(store, _VideoOwnershipStore):
+        return store
+    if not is_proxy_admin(user_api_key_dict):
+        raise HTTPException(status_code=403, detail="Video ownership is not available.")
+    return None
+
+
+async def record_video_ownership(response: object, store: object, user_api_key_dict: UserAPIKeyAuth) -> object:
+    ownership: Final = video_ownership_store(store, user_api_key_dict)
+    if ownership is not None and isinstance(response, VideoObject):
+        await ownership.store_unified_object_id(
+            unified_object_id=response.id,
+            file_object=response,
+            litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
+            model_object_id=decode_video_id_with_provider(response.id).get("video_id") or response.id,
+            file_purpose="video",
+            user_api_key_dict=user_api_key_dict,
+            persist_attribution=True,
+        )
+    return response
+
+
+async def authorize_video_reference(
+    video_id: str,
+    decoded: DecodedVideoId,
+    provider: object,
+    llm_router: "Router | None",
+    store: object,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> None:
+    if is_proxy_admin(user_api_key_dict):
+        return
+    ownership: Final = video_ownership_store(store, user_api_key_dict)
+    try:
+        owned: Final = ownership is not None and await ownership.can_user_call_unified_object_id(
+            video_id, user_api_key_dict
+        )
+    except HTTPException as error:
+        if error.status_code != 404:
+            raise
+        raise HTTPException(status_code=403, detail="Video is not available to this caller.") from error
+    if not owned or provider != decoded.get("custom_llm_provider"):
+        raise HTTPException(status_code=403, detail="Video is not available to this caller.")
+    model: Final = video_model_group(decoded, llm_router)
+    if model is None or llm_router is None:
+        raise HTTPException(status_code=403, detail="Video model is not available to this caller.")
+    requested: Final = decoded.get("requested_model")
+    await authorize_model_for_key(requested or model, llm_router, user_api_key_dict)
+    deployments: Final = llm_router.registry().deployments(
+        model,
+        source="for_request",
+        request={
+            "metadata": {"user_api_key_team_id": user_api_key_dict.team_id, "user_api_key_auth": user_api_key_dict}
+        },
+    )
+    if not deployments:
+        raise HTTPException(status_code=403, detail="Video model is not available to this caller.")
 
 
 def extract_model_from_target_model_names(target_model_names: object) -> str | None:

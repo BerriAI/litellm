@@ -11,6 +11,7 @@ from typing import Literal
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
 from litellm.types.llms.openai import OpenAIFileObject, ResponsesAPIResponse
 from litellm.types.utils import LiteLLMBatch, LiteLLMFineTuningJob
+from litellm.types.videos.main import VideoObject
 
 
 class LiteLLM_ManagedFileTable(LiteLLMPydanticObjectBase):
@@ -28,8 +29,8 @@ class LiteLLM_ManagedFileTable(LiteLLMPydanticObjectBase):
 class LiteLLM_ManagedObjectTable(LiteLLMPydanticObjectBase):
     unified_object_id: str
     model_object_id: str
-    file_purpose: Literal["batch", "fine-tune", "response", "container"]
-    file_object: LiteLLMBatch | LiteLLMFineTuningJob | ResponsesAPIResponse
+    file_purpose: Literal["batch", "fine-tune", "response", "container", "video"]
+    file_object: LiteLLMBatch | LiteLLMFineTuningJob | ResponsesAPIResponse | VideoObject
     created_by: str | None = None
     team_id: str | None = None
     org_id: str | None = None

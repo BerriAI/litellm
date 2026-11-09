@@ -2,13 +2,14 @@ import json
 import re
 from collections.abc import Iterable, Mapping
 from types import MappingProxyType
-from typing import Final, Literal
+from typing import Final, Literal, Protocol, runtime_checkable
 
 from fastapi import HTTPException, Request
 from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.llms.base_llm.managed_resources.utils import is_base64_encoded_unified_id
 from litellm.proxy._types import (
     LiteLLM_ObjectPermissionTable,
     LitellmUserRoles,
@@ -343,6 +344,17 @@ async def assert_user_can_access_vector_store_id(
 
     Unknown ids are treated as provider-native ids and are not rejected here.
     """
+    if is_base64_encoded_unified_id(vector_store_id):
+        if _is_proxy_admin(user_api_key_dict):
+            return None
+        from litellm.proxy.proxy_server import proxy_logging_obj
+
+        store: Final = proxy_logging_obj.get_proxy_hook("managed_vector_stores")
+        if not isinstance(store, _ManagedVectorStoreAccess) or not await store.can_user_access_unified_resource_id(
+            vector_store_id, user_api_key_dict
+        ):
+            raise HTTPException(status_code=403, detail=detail)
+        return None
     vector_store: Final = await get_litellm_managed_vector_store(vector_store_id=vector_store_id)
     if vector_store is not None:
         await assert_user_can_access_vector_store(
@@ -351,6 +363,13 @@ async def assert_user_can_access_vector_store_id(
             detail=detail,
         )
     return vector_store
+
+
+@runtime_checkable
+class _ManagedVectorStoreAccess(Protocol):
+    async def can_user_access_unified_resource_id(
+        self, unified_resource_id: str, user_api_key_dict: UserAPIKeyAuth
+    ) -> bool: ...
 
 
 def _does_endpoint_match(endpoint_path: str, request_path: str) -> bool:
