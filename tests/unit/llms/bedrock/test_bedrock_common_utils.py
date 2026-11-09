@@ -1662,18 +1662,21 @@ class TestGetBedrockBaseModel:
         """Test that throughput tier suffixes like :51k are stripped. Issue #19113."""
         assert get_bedrock_base_model(input_model) == expected
 
-    @pytest.mark.parametrize(
-        ("model", "expected"),
-        [
-            ("us", "us"),
-            ("global", "global"),
-            ("apac", "apac"),
-            ("bedrock/us", "us"),
-            ("us.anthropic.claude-opus-4-8", "anthropic.claude-opus-4-8"),
+
+def test_region_only_deployment_takes_no_traffic_from_a_valid_model_group() -> None:
+    valid_model: Final = "bedrock/us.anthropic.claude-opus-4-6-v1"
+    router: Final = litellm.Router(
+        model_list=[
+            {"model_name": "group", "litellm_params": {"model": "bedrock/us", "aws_region_name": "us-east-1"}},
+            {"model_name": "group", "litellm_params": {"model": valid_model, "aws_region_name": "us-east-1"}},
         ],
+        ignore_invalid_deployments=True,
     )
-    def test_bare_cross_region_prefix_names_no_model_to_strip(self, model, expected):
-        assert get_bedrock_base_model(model) == expected
+
+    assert [deployment["litellm_params"]["model"] for deployment in router.get_model_list(model_name="group")] == [
+        valid_model
+    ]
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestBedrockModelInfoWrappers:

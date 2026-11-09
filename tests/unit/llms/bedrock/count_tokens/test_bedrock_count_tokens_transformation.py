@@ -326,3 +326,22 @@ def test_count_tokens_endpoint_encodes_model_id(monkeypatch):
 )
 def test_count_tokens_request_problem_leaves_bodies_bedrock_can_judge_to_bedrock(request_data):
     assert BedrockCountTokensConfig().count_tokens_request_problem(request_data) is None
+
+
+def test_count_tokens_request_problem_names_tool_calls_instead_of_asking_for_content():
+    problem = BedrockCountTokensConfig().count_tokens_request_problem(
+        {
+            "model": "us.amazon.nova-pro-v1:0",
+            "messages": [
+                {"role": "user", "content": "hi"},
+                {
+                    "role": "assistant",
+                    "tool_calls": [{"id": "1", "type": "function", "function": {"name": "t", "arguments": "{}"}}],
+                },
+            ],
+        }
+    )
+
+    assert problem is not None
+    assert "tool_calls" in problem
+    assert "must have a 'content' field" not in problem

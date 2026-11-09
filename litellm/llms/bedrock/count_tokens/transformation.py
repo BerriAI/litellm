@@ -14,7 +14,7 @@ from pydantic import JsonValue
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.anthropic.common_utils import tools_without_custom_field
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
-from litellm.llms.bedrock.common_utils import get_bedrock_base_model
+from litellm.llms.bedrock.common_utils import get_bedrock_base_model, get_bedrock_cross_region_inference_regions
 
 # Placeholder satisfying the Anthropic InvokeModel schema's required
 # max_tokens field; CountTokens only counts input, so it has no effect
@@ -51,6 +51,8 @@ def _converse_message_problem(index: int, message: JsonValue) -> str | None:
         return f"Message {index} must be a dictionary"
     if "role" not in message:
         return f"Message {index} must have a 'role' field"
+    if "content" not in message and "tool_calls" in message:
+        return f"Message {index} has tool_calls and no content, which token counting cannot convert for this model"
     if "content" not in message:
         return f"Message {index} must have a 'content' field"
     return None
@@ -232,6 +234,9 @@ class BedrockCountTokensConfig(BaseAWSLLM):
 
     @staticmethod
     def count_tokens_model_id(model: str) -> str:
+        model_id: Final = model.removeprefix("bedrock/")
+        if model_id in get_bedrock_cross_region_inference_regions():
+            return model_id
         return get_bedrock_base_model(model).removeprefix("bedrock/")
 
     def get_bedrock_count_tokens_endpoint(
