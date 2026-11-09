@@ -1,23 +1,31 @@
-import { z } from "zod/v4";
+import { z } from "zod";
+
+import i18n from "@/i18n/i18n";
 
 const isBlank = (value: string): boolean => value.trim() === "";
 
 const amountOrEmpty = z
   .string()
-  .refine(
-    (value) => isBlank(value) || (Number.isFinite(Number(value)) && Number(value) >= 0),
-    "Must be a non-negative number",
-  );
+  .refine((value) => isBlank(value) || (Number.isFinite(Number(value)) && Number(value) >= 0), {
+    error: () => i18n.t("users.defaultSettings.errors.nonNegative"),
+  });
 
 const defaultTeamRowSchema = z.object({
-  team_id: z.string().min(1, "Select a team"),
+  team_id: z
+    .string()
+    .nullable()
+    .pipe(
+      z
+        .string({ error: () => i18n.t("users.defaultSettings.errors.selectTeam") })
+        .min(1, { error: () => i18n.t("users.defaultSettings.errors.selectTeam") }),
+    ),
   max_budget_in_team: amountOrEmpty,
   user_role: z.enum(["user", "admin"]),
 });
 
-export type DefaultTeamRowValues = z.output<typeof defaultTeamRowSchema>;
+export type DefaultTeamRowValues = z.input<typeof defaultTeamRowSchema>;
 
-export const EMPTY_TEAM_ROW: DefaultTeamRowValues = { team_id: "", max_budget_in_team: "", user_role: "user" };
+export const EMPTY_TEAM_ROW: DefaultTeamRowValues = { team_id: null, max_budget_in_team: "", user_role: "user" };
 
 const defaultUserSettingsShape = {
   user_role: z.string(),
@@ -35,10 +43,11 @@ export const defaultUserSettingsSchema = z.object(defaultUserSettingsShape).supe
   repeatedRows.forEach((index) =>
     ctx.addIssue({
       code: "custom",
-      message: "This team is already listed",
+      message: i18n.t("users.defaultSettings.errors.duplicateTeam"),
       path: ["teams", index, "team_id"],
     }),
   );
 });
 
-export type DefaultUserSettingsFormValues = z.output<typeof defaultUserSettingsSchema>;
+export type DefaultUserSettingsFormValues = z.input<typeof defaultUserSettingsSchema>;
+export type DefaultUserSettingsSubmitValues = z.output<typeof defaultUserSettingsSchema>;

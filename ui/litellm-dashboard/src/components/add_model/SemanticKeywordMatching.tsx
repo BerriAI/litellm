@@ -1,9 +1,11 @@
-import { InfoCircleOutlined } from "@ant-design/icons";
-import { InputNumber, Select as AntdSelect, Switch, Tooltip, Typography } from "antd";
+import { Info } from "lucide-react";
+import { SimpleTooltip } from "@/components/ui/tooltip";
+import { SearchSelect } from "@/components/shared/SearchSelect";
+import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import React from "react";
+import { useTranslation } from "react-i18next";
 import { ModelGroup } from "@/components/llm_calls/fetch_models";
-
-const { Text } = Typography;
 
 const DEFAULT_MATCH_THRESHOLD = 0.5;
 
@@ -28,6 +30,7 @@ const SemanticKeywordMatching: React.FC<SemanticKeywordMatchingProps> = ({
   modelInfo,
   showValidationErrors = false,
 }) => {
+  const { t } = useTranslation();
   const embeddingModels = modelInfo.filter((model) => model.mode === "embedding");
   const modelOptions = Array.from(new Set(embeddingModels.map((model) => model.model_group))).map((model_group) => ({
     value: model_group,
@@ -40,49 +43,62 @@ const SemanticKeywordMatching: React.FC<SemanticKeywordMatchingProps> = ({
       <div className="flex items-center justify-between gap-4">
         <div>
           <div className="flex items-center gap-2">
-            <Text className="font-medium">Semantic keyword matching</Text>
-            <Tooltip title="Recognize related phrasing beyond exact keyword matches by comparing embeddings instead of plain text. Overrides direct keyword matching">
-              <InfoCircleOutlined className="text-gray-400" />
-            </Tooltip>
+            <span className="font-medium">{t("addModel.semanticKeywordMatching.title")}</span>
+            <SimpleTooltip content={t("addModel.semanticKeywordMatching.tooltip")}>
+              <Info className="size-4 text-muted-foreground" />
+            </SimpleTooltip>
           </div>
-          <Text className="text-gray-500 text-sm">
-            Uses same keyword-tier pairs as above and overrides direct keyword matching. Adds latency based on embedding
-            model network request.
-          </Text>
+          <span className="text-muted-foreground text-sm">{t("addModel.semanticKeywordMatching.help")}</span>
         </div>
-        <Switch checked={enabled} onChange={onEnabledChange} aria-label="Semantic keyword matching" />
+        <Switch
+          checked={enabled}
+          onCheckedChange={onEnabledChange}
+          aria-label={t("addModel.semanticKeywordMatching.title")}
+        />
       </div>
 
       {enabled && (
-        <div className="grid gap-4 md:grid-cols-2 mt-4 pt-4 border-t border-gray-200">
+        <div className="grid gap-4 md:grid-cols-2 mt-4 pt-4 border-t border-border">
           <div>
-            <Text className="text-sm font-medium mb-1 block">Embedding model</Text>
-            <AntdSelect
-              value={embeddingModel}
-              onChange={onEmbeddingModelChange}
-              placeholder="Select an embedding model"
-              showSearch
-              style={{ width: "100%" }}
+            <span className="mb-1 block text-sm font-medium">
+              {t("addModel.semanticKeywordMatching.embeddingModel.label")}
+            </span>
+            <SearchSelect
               options={modelOptions}
-              status={embeddingModelMissing ? "error" : undefined}
+              value={embeddingModel ?? ""}
+              onValueChange={(model) => {
+                if (model !== null) onEmbeddingModelChange(model);
+              }}
+              placeholder={t("addModel.semanticKeywordMatching.embeddingModel.placeholder")}
+              emptyText={t("addModel.semanticKeywordMatching.embeddingModel.empty")}
+              aria-label={t("addModel.semanticKeywordMatching.embeddingModel.label")}
+              allowClear={false}
+              className={embeddingModelMissing ? "border-destructive" : undefined}
             />
             {embeddingModelMissing && (
-              <Text type="danger" style={{ fontSize: 12 }}>
-                An embedding model is required
-              </Text>
+              <span className="text-xs text-destructive">
+                {t("addModel.semanticKeywordMatching.embeddingModel.required")}
+              </span>
             )}
           </div>
           <div>
-            <Text className="text-sm font-medium mb-1 block">Minimum match score</Text>
-            <InputNumber
+            <span className="mb-1 block text-sm font-medium">
+              {t("addModel.semanticKeywordMatching.matchScore.label")}
+            </span>
+            <Input
+              type="number"
               value={matchThreshold}
-              onChange={(value) => onMatchThresholdChange(value ?? DEFAULT_MATCH_THRESHOLD)}
+              onChange={(event) =>
+                onMatchThresholdChange(event.target.value === "" ? DEFAULT_MATCH_THRESHOLD : event.target.valueAsNumber)
+              }
               min={0}
               max={1}
               step={0.05}
-              style={{ width: "100%" }}
+              className="w-full"
             />
-            <Text className="text-gray-500 text-xs mt-1 block">Match only at or above this similarity score.</Text>
+            <span className="mt-1 block text-xs text-muted-foreground">
+              {t("addModel.semanticKeywordMatching.matchScore.help")}
+            </span>
           </div>
         </div>
       )}

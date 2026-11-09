@@ -69,6 +69,17 @@ describe("ImpactPreviewAlert", () => {
       expect(screen.getByText(/1 key\b/i)).toBeInTheDocument();
     });
 
+    it("should present the counts as an upper bound for a default attachment", () => {
+      renderWithProviders(<ImpactPreviewAlert impactResult={specificImpact} isDefault />);
+      expect(screen.getByText(/would affect up to/i)).toBeInTheDocument();
+      expect(screen.getByText(/no non-default attachment matches/i)).toBeInTheDocument();
+    });
+
+    it("should not qualify the counts for a non-default attachment", () => {
+      renderWithProviders(<ImpactPreviewAlert impactResult={specificImpact} />);
+      expect(screen.queryByText(/up to/i)).not.toBeInTheDocument();
+    });
+
     it("should not show a key section when there are no sample keys", () => {
       const noKeys = { affected_keys_count: 0, affected_teams_count: 2, sample_keys: [], sample_teams: ["t1", "t2"] };
       renderWithProviders(<ImpactPreviewAlert impactResult={noKeys} />);

@@ -1,29 +1,34 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 
 import UIThemeSettings from "./UIThemeSettings";
 
 const setLogoUrl = vi.fn();
+const setLogoUrlDark = vi.fn();
 const setFaviconUrl = vi.fn();
 
-vi.mock("@/contexts/ThemeContext", () => ({
-  useTheme: () => ({ logoUrl: null, setLogoUrl, faviconUrl: null, setFaviconUrl }),
+vi.mock("@/contexts/ThemeContext", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/contexts/ThemeContext")>()),
+  useTheme: () => ({
+    logoUrl: null,
+    setLogoUrl,
+    logoUrlDark: null,
+    setLogoUrlDark,
+    faviconUrl: null,
+    setFaviconUrl,
+  }),
 }));
 
 vi.mock("@/components/networking", () => ({
-  getProxyBaseUrl: () => "",
+  getProxyBaseUrl: () => "/gateway",
   getGlobalLitellmHeaderName: () => "Authorization",
 }));
 
-vi.mock("@/components/molecules/notifications_manager", () => ({
-  __esModule: true,
-  default: { success: vi.fn(), fromBackend: vi.fn() },
-}));
-
 const LOGO_PLACEHOLDER = "https://example.com/logo.png";
+const LOGO_DARK_PLACEHOLDER = "https://example.com/logo-dark.png";
 const FAVICON_PLACEHOLDER = "https://example.com/favicon.ico";
 
 const okResponse = (values: Record<string, string | null> = {}) =>
@@ -74,19 +79,66 @@ describe("UIThemeSettings", () => {
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalled());
 
-    await user.type(screen.getByPlaceholderText(LOGO_PLACEHOLDER), "https://a.test/logo.png");
-    await user.type(screen.getByPlaceholderText(FAVICON_PLACEHOLDER), "https://a.test/fav.ico");
+    fireEvent.change(screen.getByPlaceholderText(LOGO_PLACEHOLDER), { target: { value: "https://a.test/logo.png" } });
+    fireEvent.change(screen.getByPlaceholderText(FAVICON_PLACEHOLDER), { target: { value: "https://a.test/fav.ico" } });
     await user.click(screen.getByRole("button", { name: "Save Changes" }));
 
     await waitFor(() => expect(patchCalls()).toHaveLength(1));
     expect(bodyOf(patchCalls()[0])).toEqual({
       logo_url: "https://a.test/logo.png",
+      logo_url_dark: null,
       favicon_url: "https://a.test/fav.ico",
     });
-    await waitFor(() =>
-      expect(NotificationsManager.success).toHaveBeenCalledWith("Theme settings updated successfully!"),
-    );
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith("Theme settings updated successfully!"));
   });
+
+  it("should load and save a separate dark-mode logo url", async () => {
+    const user = userEvent.setup();
+    fetchMock.mockImplementation(() => okResponse({ logo_url_dark: "https://cdn.example.com/logo-dark.svg" }));
+
+    render(<UIThemeSettings userID="user-1" userRole="Admin" accessToken="sk-test" />);
+
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText(LOGO_DARK_PLACEHOLDER)).toHaveValue("https://cdn.example.com/logo-dark.svg");
+    });
+    expect(setLogoUrlDark).toHaveBeenCalledWith("https://cdn.example.com/logo-dark.svg");
+
+    fireEvent.change(screen.getByPlaceholderText(LOGO_DARK_PLACEHOLDER), {
+      target: { value: "https://a.test/logo-dark.png" },
+    });
+    await user.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() => expect(patchCalls()).toHaveLength(1));
+    expect(bodyOf(patchCalls()[0]).logo_url_dark).toBe("https://a.test/logo-dark.png");
+  });
+
+  it.each(["Save Changes", "Reset to Default"])(
+    "should keep local logo routes out of settings and clear preview overrides with %s",
+    async (action) => {
+      const user = userEvent.setup();
+      fetchMock.mockImplementation(async () =>
+        Response.json({
+          values: { logo_url: null, logo_url_dark: null },
+          logo_url_via_proxy: true,
+          logo_url_dark_via_proxy: true,
+        }),
+      );
+
+      render(<UIThemeSettings userID="user-1" userRole="Admin" accessToken="sk-test" />);
+
+      await waitFor(() => expect(setLogoUrlDark).toHaveBeenCalledWith("/gateway/get_image?theme=dark"));
+      expect(setLogoUrl).toHaveBeenCalledWith("/gateway/get_image");
+      expect(screen.getByPlaceholderText(LOGO_PLACEHOLDER)).toHaveValue("");
+      expect(screen.getByPlaceholderText(LOGO_DARK_PLACEHOLDER)).toHaveValue("");
+
+      await user.click(screen.getByRole("button", { name: action }));
+      await waitFor(() => expect(patchCalls()).toHaveLength(1));
+      expect(bodyOf(patchCalls()[0])).toEqual({ logo_url: null, logo_url_dark: null, favicon_url: null });
+
+      expect(setLogoUrl).toHaveBeenLastCalledWith(null);
+      expect(setLogoUrlDark).toHaveBeenLastCalledWith(null);
+    },
+  );
 
   it("should surface a backend failure when saving fails", async () => {
     const user = userEvent.setup();
@@ -97,10 +149,8 @@ describe("UIThemeSettings", () => {
 
     await user.click(screen.getByRole("button", { name: "Save Changes" }));
 
-    await waitFor(() =>
-      expect(NotificationsManager.fromBackend).toHaveBeenCalledWith("Failed to update theme settings"),
-    );
-    expect(NotificationsManager.success).not.toHaveBeenCalled();
+    await waitFor(() => expect(toast.fromError).toHaveBeenCalledWith("Failed to update theme settings"));
+    expect(toast.success).not.toHaveBeenCalled();
   });
 
   it("should clear both inputs and persist nulls when resetting to default", async () => {
@@ -118,11 +168,13 @@ describe("UIThemeSettings", () => {
     await user.click(screen.getByRole("button", { name: "Reset to Default" }));
 
     await waitFor(() => expect(patchCalls()).toHaveLength(1));
-    expect(bodyOf(patchCalls()[0])).toEqual({ logo_url: null, favicon_url: null });
+    expect(bodyOf(patchCalls()[0])).toEqual({ logo_url: null, logo_url_dark: null, favicon_url: null });
     expect(screen.getByPlaceholderText(LOGO_PLACEHOLDER)).toHaveValue("");
+    expect(screen.getByPlaceholderText(LOGO_DARK_PLACEHOLDER)).toHaveValue("");
     expect(screen.getByPlaceholderText(FAVICON_PLACEHOLDER)).toHaveValue("");
     expect(setLogoUrl).toHaveBeenLastCalledWith(null);
+    expect(setLogoUrlDark).toHaveBeenLastCalledWith(null);
     expect(setFaviconUrl).toHaveBeenLastCalledWith(null);
-    await waitFor(() => expect(NotificationsManager.success).toHaveBeenCalledWith("Theme settings reset to default!"));
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith("Theme settings reset to default!"));
   });
 });

@@ -1,0 +1,38 @@
+{
+    "name": "litellm-acompletion",
+    "parent_span_id": null,
+    "attributes": {
+        "langfuse.observation.cost_details": {
+            "total": 3.5e-05
+        },
+        "langfuse.observation.input": {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "Hello!"
+                }
+            ]
+        },
+        "langfuse.observation.level": "DEFAULT",
+        "langfuse.observation.model.name": "gpt-3.5-turbo",
+        "langfuse.observation.model.parameters": {
+            "extra_body": "{}"
+        },
+        "langfuse.observation.output": {
+            "content": "Hello! How can I assist you today?",
+            "role": "assistant",
+            "tool_calls": null,
+            "function_call": null,
+            "provider_specific_fields": null
+        },
+        "langfuse.observation.type": "generation",
+        "langfuse.observation.usage_details": {
+            "input": 10,
+            "output": 20,
+            "total": 30,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0
+        },
+        "langfuse.trace.name": "litellm-acompletion"
+    }
+}

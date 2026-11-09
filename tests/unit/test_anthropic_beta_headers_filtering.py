@@ -1,0 +1,777 @@
+"""
+Test suite for Anthropic beta headers filtering and mapping across all providers.
+
+This test validates:
+1. Headers with null values in the config are filtered out
+2. Headers with non-null values are correctly mapped to provider-specific names
+3. Unknown headers (not in config) are filtered out
+4. For Bedrock providers, beta headers appear in the request body (not just HTTP headers)
+"""
+
+import json
+import os
+from typing import Dict, Final, List, get_args
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+import respx
+from anthropic.types.anthropic_beta_param import AnthropicBetaParam
+
+import litellm
+from litellm import anthropic_beta_headers_manager
+from litellm.anthropic_beta_headers_manager import (
+    GetAnthropicBetaHeadersConfig,
+    filter_and_transform_beta_headers,
+    get_beta_headers_config,
+    resolve_beta_provider,
+    update_headers_with_filtered_beta,
+    update_request_with_filtered_beta,
+)
+
+
+def _literal_strings(annotation: object) -> frozenset[str]:
+    args: Final = get_args(annotation)
+    if not args:
+        return frozenset({annotation}) if isinstance(annotation, str) else frozenset()
+    return frozenset[str]().union(*(_literal_strings(arg) for arg in args))
+
+
+class TestAnthropicBetaHeadersFiltering:
+    """Test beta header filtering and mapping for all providers."""
+
+    @pytest.fixture(autouse=True)
+    def setup(self, monkeypatch):
+        """Load the beta headers config for testing."""
+        # Force use of local config file for tests
+        monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "True")
+
+        # Clear the cached config to ensure fresh load with local config
+        from litellm import anthropic_beta_headers_manager
+
+        anthropic_beta_headers_manager._BETA_HEADERS_CONFIG = None
+
+        config_path = os.path.join(
+            os.path.dirname(litellm.__file__),
+            "anthropic_beta_headers_config.json",
+        )
+        with open(config_path, "r") as f:
+            self.config = json.load(f)
+
+    def get_all_beta_headers(self) -> List[str]:
+        """Get all beta headers from the anthropic provider config."""
+        return list(self.config.get("anthropic", {}).keys())
+
+    def get_header_column(self, provider: str) -> Dict[str, str | None]:
+        return {**self.config.get(provider, {}), **self.config.get(f"{provider}_header_only", {})}
+
+    def get_supported_headers(self, provider: str) -> List[str]:
+        """Get headers with non-null values for a provider."""
+        provider_config = self.get_header_column(provider)
+        return [
+            header for header, value in provider_config.items() if value is not None
+        ]
+
+    def get_unsupported_headers(self, provider: str) -> List[str]:
+        """Get headers with null values for a provider."""
+        provider_config = self.get_header_column(provider)
+        return [header for header, value in provider_config.items() if value is None]
+
+    def get_mapped_headers(self, provider: str) -> Dict[str, str]:
+        """Get mapping of input headers to provider-specific headers."""
+        provider_config = self.get_header_column(provider)
+        return {
+            header: value
+            for header, value in provider_config.items()
+            if value is not None
+        }
+
+    @pytest.mark.parametrize(
+        "provider",
+        ["anthropic", "azure_ai", "bedrock_converse", "bedrock", "vertex_ai"],
+    )
+    def test_filter_and_transform_beta_headers_all_headers(self, provider):
+        """Test filtering with all possible beta headers."""
+        all_headers = self.get_all_beta_headers()
+        supported_headers = self.get_supported_headers(provider)
+        unsupported_headers = self.get_unsupported_headers(provider)
+        mapped_headers = self.get_mapped_headers(provider)
+
+        filtered = filter_and_transform_beta_headers(
+            beta_headers=all_headers, provider=provider
+        )
+        assert ("compact-2026-09-04" in filtered) is (provider in ("anthropic", "azure_ai", "vertex_ai"))
+        assert ("mid-conversation-tool-changes-2026-07-01" in filtered) is (provider != "bedrock_converse")
+
+        for header in unsupported_headers:
+            assert (
+                header not in filtered
+            ), f"Unsupported header '{header}' should be filtered out for {provider}"
+            assert (
+                mapped_headers.get(header) not in filtered
+            ), f"Mapped value of unsupported header '{header}' should not appear for {provider}"
+
+        for header in supported_headers:
+            expected_mapped = mapped_headers[header]
+            assert (
+                expected_mapped in filtered
+            ), f"Supported header '{header}' should be mapped to '{expected_mapped}' for {provider}"
+
+    @pytest.mark.parametrize(
+        "provider",
+        ["anthropic", "azure_ai", "bedrock_converse", "bedrock", "vertex_ai"],
+    )
+    def test_unknown_headers_filtered_out(self, provider):
+        """Test that headers not in the config are filtered out."""
+        unknown_headers = [
+            "unknown-header-1",
+            "unknown-header-2",
+            "fake-beta-2025-01-01",
+        ]
+        all_headers = self.get_all_beta_headers() + unknown_headers
+
+        filtered = filter_and_transform_beta_headers(
+            beta_headers=all_headers, provider=provider
+        )
+
+        for unknown in unknown_headers:
+            assert (
+                unknown not in filtered
+            ), f"Unknown header '{unknown}' should be filtered out for {provider}"
+
+    def test_update_request_with_filtered_beta_vertex_ai(self):
+        """Test combined filtering for both HTTP headers and request body betas."""
+        headers = {
+            "anthropic-beta": "files-api-2025-04-14,context-management-2025-06-27,code-execution-2025-05-22"
+        }
+        request_data = {
+            "anthropic_beta": [
+                "files-api-2025-04-14",
+                "context-management-2025-06-27",
+                "code-execution-2025-05-22",
+            ]
+        }
+
+        filtered_headers, filtered_request_data = update_request_with_filtered_beta(
+            headers=headers,
+            request_data=request_data,
+            provider="vertex_ai",
+        )
+
+        assert filtered_headers.get("anthropic-beta") == "context-management-2025-06-27"
+        assert filtered_request_data.get("anthropic_beta") == [
+            "context-management-2025-06-27"
+        ]
+
+    @pytest.mark.asyncio
+    async def test_anthropic_messages_http_headers_filtering(self):
+        """Test that Anthropic messages API filters HTTP headers correctly."""
+        all_headers = self.get_all_beta_headers()
+        unsupported = self.get_unsupported_headers("anthropic")
+
+        with patch(
+            "litellm.llms.custom_httpx.http_handler.get_async_httpx_client"
+        ) as mock_client_factory:
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_response.json.return_value = {
+                "id": "msg_123",
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "text", "text": "Hello"}],
+                "model": "claude-3-5-sonnet-20241022",
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 10, "output_tokens": 20},
+            }
+            mock_response.headers = {}
+
+            mock_client = AsyncMock()
+            mock_client.post = AsyncMock(return_value=mock_response)
+            mock_client_factory.return_value = mock_client
+
+            try:
+                await litellm.acompletion(
+                    model="anthropic/claude-3-5-sonnet-20241022",
+                    messages=[{"role": "user", "content": "Hi"}],
+                    extra_headers={"anthropic-beta": ",".join(all_headers)},
+                    mock_response="Hello",
+                )
+            except Exception:
+                pass
+
+            if mock_client.post.called:
+                call_kwargs = mock_client.post.call_args.kwargs
+                headers = call_kwargs.get("headers", {})
+                beta_header = headers.get("anthropic-beta", "")
+
+                if beta_header:
+                    beta_values = [b.strip() for b in beta_header.split(",")]
+                    for unsupported_header in unsupported:
+                        assert (
+                            unsupported_header not in beta_values
+                        ), f"Unsupported header '{unsupported_header}' should not be in HTTP headers for Anthropic"
+
+    @pytest.mark.asyncio
+    async def test_azure_ai_messages_http_headers_filtering(self):
+        """Test that Azure AI messages API filters HTTP headers correctly."""
+        all_headers = self.get_all_beta_headers()
+        unsupported = self.get_unsupported_headers("azure_ai")
+
+        with patch(
+            "litellm.llms.custom_httpx.http_handler.get_async_httpx_client"
+        ) as mock_client_factory:
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_response.json.return_value = {
+                "id": "msg_123",
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "text", "text": "Hello"}],
+                "model": "claude-3-5-sonnet-20241022",
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 10, "output_tokens": 20},
+            }
+            mock_response.headers = {}
+
+            mock_client = AsyncMock()
+            mock_client.post = AsyncMock(return_value=mock_response)
+            mock_client_factory.return_value = mock_client
+
+            try:
+                await litellm.acompletion(
+                    model="azure_ai/claude-3-5-sonnet-20241022",
+                    messages=[{"role": "user", "content": "Hi"}],
+                    api_key="test-key",
+                    api_base="https://test.azure.com",
+                    extra_headers={"anthropic-beta": ",".join(all_headers)},
+                    mock_response="Hello",
+                )
+            except Exception:
+                pass
+
+            if mock_client.post.called:
+                call_kwargs = mock_client.post.call_args.kwargs
+                headers = call_kwargs.get("headers", {})
+                beta_header = headers.get("anthropic-beta", "")
+
+                if beta_header:
+                    beta_values = [b.strip() for b in beta_header.split(",")]
+                    for unsupported_header in unsupported:
+                        assert (
+                            unsupported_header not in beta_values
+                        ), f"Unsupported header '{unsupported_header}' should not be in HTTP headers for Azure AI"
+
+    @pytest.mark.asyncio
+    async def test_bedrock_converse_headers_and_body_filtering(self):
+        """Test that Bedrock Converse filters both HTTP headers and request body correctly."""
+        all_headers = self.get_all_beta_headers()
+        unsupported = self.get_unsupported_headers("bedrock_converse")
+        mapped_headers = self.get_mapped_headers("bedrock_converse")
+
+        with patch("httpx.AsyncClient") as mock_client_class:
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_response.json.return_value = {
+                "output": {
+                    "message": {"role": "assistant", "content": [{"text": "Hello"}]}
+                },
+                "stopReason": "end_turn",
+                "usage": {"inputTokens": 10, "outputTokens": 20},
+            }
+            mock_response.headers = {}
+            mock_response.raise_for_status = MagicMock()
+
+            mock_client = AsyncMock()
+            mock_client.post = AsyncMock(return_value=mock_response)
+            mock_client_class.return_value.__aenter__.return_value = mock_client
+
+            try:
+                await litellm.acompletion(
+                    model="bedrock/converse/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+                    messages=[{"role": "user", "content": "Hi"}],
+                    aws_access_key_id="test",
+                    aws_secret_access_key="test",
+                    aws_region_name="us-east-1",
+                    extra_headers={"anthropic-beta": ",".join(all_headers)},
+                    mock_response="Hello",
+                )
+            except Exception:
+                pass
+
+            if mock_client.post.called:
+                call_kwargs = mock_client.post.call_args.kwargs
+                headers = call_kwargs.get("headers", {})
+                beta_header = headers.get("anthropic-beta", "")
+
+                if beta_header:
+                    beta_values = [b.strip() for b in beta_header.split(",")]
+                    for unsupported_header in unsupported:
+                        assert (
+                            unsupported_header not in beta_values
+                        ), f"Unsupported header '{unsupported_header}' should not be in HTTP headers for Bedrock Converse"
+
+                data = call_kwargs.get("data")
+                if data:
+                    body = json.loads(data)
+                    body_beta = body.get("additionalModelRequestFields", {}).get(
+                        "anthropic_beta", []
+                    )
+
+                    for unsupported_header in unsupported:
+                        assert (
+                            unsupported_header not in body_beta
+                        ), f"Unsupported header '{unsupported_header}' should not be in request body for Bedrock Converse"
+
+                    for header, mapped_value in mapped_headers.items():
+                        if header in all_headers and mapped_value in body_beta:
+                            assert (
+                                mapped_value in body_beta
+                            ), f"Supported header '{header}' should be mapped to '{mapped_value}' in request body for Bedrock Converse"
+
+    @pytest.mark.asyncio
+    async def test_vertex_ai_messages_http_headers_filtering(self):
+        """Test that Vertex AI messages API filters HTTP headers correctly."""
+        all_headers = self.get_all_beta_headers()
+        unsupported = self.get_unsupported_headers("vertex_ai")
+
+        with patch(
+            "litellm.llms.custom_httpx.http_handler.get_async_httpx_client"
+        ) as mock_client_factory:
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_response.json.return_value = {
+                "id": "msg_123",
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "text", "text": "Hello"}],
+                "model": "claude-3-5-sonnet-20241022",
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 10, "output_tokens": 20},
+            }
+            mock_response.headers = {}
+
+            mock_client = AsyncMock()
+            mock_client.post = AsyncMock(return_value=mock_response)
+            mock_client_factory.return_value = mock_client
+
+            with patch(
+                "litellm.llms.vertex_ai.vertex_llm_base.VertexBase._ensure_access_token"
+            ) as mock_token:
+                mock_token.return_value = ("test-token", "test-project")
+
+                try:
+                    await litellm.acompletion(
+                        model="vertex_ai/claude-3-5-sonnet-20241022",
+                        messages=[{"role": "user", "content": "Hi"}],
+                        vertex_project="test-project",
+                        vertex_location="us-central1",
+                        extra_headers={"anthropic-beta": ",".join(all_headers)},
+                        mock_response="Hello",
+                    )
+                except Exception:
+                    pass
+
+            if mock_client.post.called:
+                call_kwargs = mock_client.post.call_args.kwargs
+                headers = call_kwargs.get("headers", {})
+                beta_header = headers.get("anthropic-beta", "")
+
+                if beta_header:
+                    beta_values = [b.strip() for b in beta_header.split(",")]
+                    for unsupported_header in unsupported:
+                        assert (
+                            unsupported_header not in beta_values
+                        ), f"Unsupported header '{unsupported_header}' should not be in HTTP headers for Vertex AI"
+
+    def test_header_mapping_correctness(self):
+        """Test that headers are mapped correctly for providers with transformations."""
+        test_cases = [
+            {
+                "provider": "bedrock",
+                "input": "advanced-tool-use-2025-11-20",
+                "expected": "tool-search-tool-2025-10-19",
+            },
+            {
+                "provider": "vertex_ai",
+                "input": "advanced-tool-use-2025-11-20",
+                "expected": "tool-search-tool-2025-10-19",
+            },
+            {
+                "provider": "anthropic",
+                "input": "advanced-tool-use-2025-11-20",
+                "expected": "advanced-tool-use-2025-11-20",
+            },
+            {
+                "provider": "bedrock_converse",
+                "input": "computer-use-2025-01-24",
+                "expected": "computer-use-2025-01-24",
+            },
+            {
+                "provider": "azure_ai",
+                "input": "advanced-tool-use-2025-11-20",
+                "expected": "advanced-tool-use-2025-11-20",
+            },
+        ]
+
+        for test_case in test_cases:
+            filtered = filter_and_transform_beta_headers(
+                beta_headers=[test_case["input"]], provider=test_case["provider"]
+            )
+
+            assert (
+                test_case["expected"] in filtered
+            ), f"Header '{test_case['input']}' should be mapped to '{test_case['expected']}' for {test_case['provider']}, but got: {filtered}"
+
+    @pytest.mark.parametrize(
+        "beta",
+        [
+            "compact-2026-09-04",
+            "inline-tools-2026-09-15",
+            "prompt-caching-scope-2026-01-05",
+            "redact-thinking-2026-02-12",
+        ],
+    )
+    def test_vertex_ai_header_only_beta_is_forwarded_as_the_header_and_dropped_from_the_body(
+        self, beta: str
+    ) -> None:
+        headers, body = update_request_with_filtered_beta(
+            headers={"anthropic-beta": f"{beta},context-1m-2025-08-07"},
+            request_data={"anthropic_beta": [beta, "context-1m-2025-08-07"]},
+            provider="vertex_ai",
+        )
+
+        assert set(headers["anthropic-beta"].split(",")) == {beta, "context-1m-2025-08-07"}
+        assert body["anthropic_beta"] == ["context-1m-2025-08-07"]
+
+    def test_header_only_betas_stay_out_of_the_provider_columns_older_proxies_read(self) -> None:
+        """Proxies released before header-only columns existed fetch this map from main, read only the
+        provider column, and copy its betas into the body field too, where Vertex answers 400. So a
+        header-only beta may sit in its provider column only if older proxies already forwarded it."""
+        header_only_columns: Final = {
+            column.removesuffix("_header_only"): betas
+            for column, betas in self.config.items()
+            if column.endswith("_header_only")
+        }
+        forwarded_by_older_proxies: Final = {
+            provider: {beta for beta in betas if self.config[provider].get(beta) is not None}
+            for provider, betas in header_only_columns.items()
+        }
+
+        assert "vertex_ai" in header_only_columns
+        assert {provider: betas for provider, betas in forwarded_by_older_proxies.items() if betas} == {
+            "vertex_ai": {"inline-tools-2026-09-15"}
+        }
+
+    def test_filter_and_transform_beta_headers_vertex_ai_keeps_compact(self):
+        """Vertex AI serves both compaction betas (threshold compaction behind compact-2026-01-12
+        and on-demand compaction behind compact-2026-09-04, Google Cloud: beta on
+        https://platform.claude.com/docs/en/build-with-claude/compaction-on-demand, read 2026-10-05),
+        so the Vertex filter forwards both instead of stripping them: a dropped header makes
+        Vertex answer 400 "compaction: Extra inputs are not permitted"."""
+        filtered = filter_and_transform_beta_headers(
+            beta_headers=["compact-2026-01-12", "compact-2026-09-04"], provider="vertex_ai"
+        )
+
+        assert filtered == ["compact-2026-01-12", "compact-2026-09-04"]
+
+    @pytest.mark.parametrize("provider", ["bedrock_converse", "bedrock"])
+    def test_fine_grained_tool_streaming_forwarded_for_bedrock(self, provider):
+        """Bedrock honors fine-grained-tool-streaming-2025-05-14 via
+        additionalModelRequestFields.anthropic_beta. Stripping it (previously
+        mapped to null) silently re-enables Anthropic's server-side buffering of
+        tool-call argument deltas, so streamed tool args arrive in a single
+        end-of-stream burst instead of incrementally."""
+        filtered = filter_and_transform_beta_headers(
+            beta_headers=["fine-grained-tool-streaming-2025-05-14"],
+            provider=provider,
+        )
+
+        assert filtered == ["fine-grained-tool-streaming-2025-05-14"]
+
+    @pytest.mark.parametrize(
+        "provider", ["anthropic", "azure_ai", "bedrock", "bedrock_converse", "vertex_ai", "databricks"]
+    )
+    def test_thinking_binding_controls_forwarded(self, provider):
+        """`thinking.block_binding` (preserved thinking, Claude Fable 5.1) is only
+        accepted alongside thinking-binding-controls-2026-08-01. The body field is
+        forwarded untouched, so stripping the header (previously unknown, hence
+        dropped) makes Bedrock, Vertex and Azure AI Foundry reject the request with
+        "thinking.adaptive.block_binding: Extra inputs are not permitted"."""
+        filtered = filter_and_transform_beta_headers(
+            beta_headers=["thinking-binding-controls-2026-08-01"],
+            provider=provider,
+        )
+
+        assert filtered == ["thinking-binding-controls-2026-08-01"]
+
+    @pytest.mark.parametrize("provider", ["anthropic", "azure_ai", "bedrock", "bedrock_mantle", "vertex_ai"])
+    def test_dangerous_tool_use_forwarded(self, provider):
+        """Claude Code's server-side auto-mode classifier sends `safeguards` together with
+        dangerous-tool-use-2026-09-03. Bedrock Invoke, Bedrock Mantle, and Vertex rawPredict
+        all answer "safeguards: Extra inputs are not permitted" when the body field arrives
+        without the beta (probed 2026-09-21), so dropping the header turned every auto-mode
+        turn into a 400 on Vertex and silently disabled the classifier on Bedrock."""
+        filtered = filter_and_transform_beta_headers(
+            beta_headers=["dangerous-tool-use-2026-09-03"],
+            provider=provider,
+        )
+
+        assert filtered == ["dangerous-tool-use-2026-09-03"]
+
+    @pytest.mark.parametrize("provider", ["anthropic", "vertex_ai"])
+    def test_inline_tools_forwarded(self, provider: str) -> None:
+        """inline-tools-2026-09-15 lets a `tool_addition` system message carry a new tool mid-conversation.
+        Anthropic documents it for the Claude API
+        (https://platform.claude.com/docs/en/build-with-claude/mid-conversation-system-messages, fetched 2026-10-07),
+        and a live Vertex rawPredict call on claude-opus-5-5 honored it on 2026-10-07 while answering 400 on the
+        `tool_addition` block without it."""
+        filtered: Final = filter_and_transform_beta_headers(
+            beta_headers=["inline-tools-2026-09-15"],
+            provider=provider,
+        )
+
+        assert filtered == ["inline-tools-2026-09-15"]
+
+    @pytest.mark.parametrize("provider", ["anthropic", "azure_ai", "vertex_ai"])
+    def test_task_budgets_and_computer_use_betas_reach_every_platform(self, provider: str) -> None:
+        """Live probes on 2026-10-28 found all three platforms accept task-budgets-2026-03-13. On 2026-10-31 Vertex
+        ran the computer tool only with the beta each model takes (computer-use-2025-01-24 on Claude Sonnet 4.5 and
+        Haiku 4.5, computer-use-2025-11-24 on Claude Opus 4.5 and the 4.6 models) and answered 400 to the other, so
+        both reach Vertex and the model decides, the same as calling Vertex directly."""
+        sent: Final = frozenset(("computer-use-2025-01-24", "computer-use-2025-11-24", "task-budgets-2026-03-13"))
+
+        headers: Final = update_headers_with_filtered_beta({"anthropic-beta": ",".join(sorted(sent))}, provider)
+
+        assert frozenset(headers["anthropic-beta"].split(",")) == sent
+
+    @pytest.mark.parametrize("provider", ["anthropic", "azure_ai", "vertex_ai"])
+    def test_claude_code_betas_reach_the_probed_platforms(self, provider: str) -> None:
+        """Claude Code 2.1.299 sends these betas outside the anthropic SDK's list, and live probes on
+        2026-10-28 found Anthropic, Vertex, and Azure AI Foundry accept each of them as the anthropic-beta header."""
+        claude_code_betas: Final = frozenset(
+            ("afk-mode-2026-01-31", "redact-thinking-2026-02-12", "structured-outputs-2025-12-15")
+        )
+
+        headers: Final = update_headers_with_filtered_beta({"anthropic-beta": ",".join(claude_code_betas)}, provider)
+
+        assert frozenset(headers["anthropic-beta"].split(",")) == claude_code_betas
+
+    @pytest.mark.parametrize("provider", ["anthropic", "azure_ai", "vertex_ai"])
+    def test_every_anthropic_sdk_beta_has_a_decision_for_the_probed_platforms(self, provider: str) -> None:
+        sdk_betas: Final = _literal_strings(AnthropicBetaParam)
+        provider_column: Final = GetAnthropicBetaHeadersConfig.load_local_beta_headers_config()[provider]
+
+        assert sdk_betas
+        assert sdk_betas - provider_column.keys() == frozenset()
+
+    @pytest.mark.parametrize("provider", ["azure_ai", "vertex_ai"])
+    def test_every_anthropic_beta_has_a_decision_for_vertex_ai_and_azure_ai(self, provider: str) -> None:
+        config: Final = GetAnthropicBetaHeadersConfig.load_local_beta_headers_config()
+
+        assert config["anthropic"].keys() - config[provider].keys() == set()
+
+    def test_null_value_headers_filtered(self):
+        """Test that headers with null values are always filtered out."""
+        for provider in [
+            "anthropic",
+            "azure_ai",
+            "bedrock_converse",
+            "bedrock",
+            "vertex_ai",
+        ]:
+            unsupported = self.get_unsupported_headers(provider)
+
+            if unsupported:
+                filtered = filter_and_transform_beta_headers(
+                    beta_headers=unsupported, provider=provider
+                )
+
+                assert (
+                    len(filtered) == 0
+                ), f"All null-value headers should be filtered out for {provider}, but got: {filtered}"
+
+    def test_empty_headers_list(self):
+        """Test that empty headers list returns empty result."""
+        for provider in [
+            "anthropic",
+            "azure_ai",
+            "bedrock_converse",
+            "bedrock",
+            "vertex_ai",
+        ]:
+            filtered = filter_and_transform_beta_headers(
+                beta_headers=[], provider=provider
+            )
+
+            assert (
+                len(filtered) == 0
+            ), f"Empty headers list should return empty result for {provider}"
+
+    def test_mixed_supported_and_unsupported_headers(self):
+        """Test filtering with a mix of supported, unsupported, and unknown headers."""
+        for provider in [
+            "anthropic",
+            "azure_ai",
+            "bedrock_converse",
+            "bedrock",
+            "vertex_ai",
+        ]:
+            supported = self.get_supported_headers(provider)
+            unsupported = self.get_unsupported_headers(provider)
+            mapped_headers = self.get_mapped_headers(provider)
+
+            if not supported or not unsupported:
+                continue
+
+            test_headers = [supported[0]] + [unsupported[0]] + ["unknown-header-123"]
+
+            filtered = filter_and_transform_beta_headers(
+                beta_headers=test_headers, provider=provider
+            )
+
+            expected_mapped = mapped_headers[supported[0]]
+            assert (
+                expected_mapped in filtered
+            ), f"Supported header should be in result for {provider}"
+            assert (
+                unsupported[0] not in filtered
+            ), f"Unsupported header should not be in result for {provider}"
+            assert (
+                "unknown-header-123" not in filtered
+            ), f"Unknown header should not be in result for {provider}"
+
+    @pytest.mark.parametrize("provider", ["anthropic", "bedrock", "bedrock_mantle", "vertex_ai"])
+    def test_blank_anthropic_beta_header_is_removed(self, provider):
+        headers = {"anthropic-beta": "", "anthropic-version": "2023-06-01"}
+
+        assert update_headers_with_filtered_beta(headers, provider) == {"anthropic-version": "2023-06-01"}
+
+    @pytest.mark.parametrize("provider", ["anthropic", "bedrock", "bedrock_mantle", "vertex_ai"])
+    def test_whitespace_only_anthropic_beta_header_is_removed(self, provider):
+        headers = {"anthropic-beta": " , ", "anthropic-version": "2023-06-01"}
+
+        assert update_headers_with_filtered_beta(headers, provider) == {"anthropic-version": "2023-06-01"}
+
+    def test_absent_anthropic_beta_header_is_left_alone(self):
+        headers = {"anthropic-version": "2023-06-01"}
+
+        assert update_headers_with_filtered_beta(headers, "bedrock_mantle") == {"anthropic-version": "2023-06-01"}
+
+
+@pytest.mark.parametrize("flag", ["LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "LITELLM_OFFLINE_MODE"])
+def test_local_flags_load_bundled_beta_headers_without_fetching(monkeypatch, flag):
+    monkeypatch.delenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", raising=False)
+    monkeypatch.setenv(flag, "True")
+    with patch("litellm.anthropic_beta_headers_manager.httpx.get") as remote_get:
+        config = get_beta_headers_config(url="https://example.test/anthropic_beta_headers_config.json")
+    remote_get.assert_not_called()
+    assert config == GetAnthropicBetaHeadersConfig.load_local_beta_headers_config()
+
+
+FOUNDRY_API_BASE: Final = "https://my-resource.services.ai.azure.com/anthropic"
+DIRECT_API_BASE: Final = "https://api.anthropic.com"
+DIRECT_ONLY_BETA: Final = "advisor-tool-2026-03-01"
+PRESERVED_THINKING_BETAS: Final = (
+    "thinking-binding-controls-2026-08-01",
+    "mid-conversation-system-clear-at-2026-08-21",
+    "mid-conversation-tool-changes-2026-07-01",
+    "mid-conversation-output-config-2026-07-01",
+    "thinking-display-updates-2026-08-18",
+)
+
+
+@pytest.fixture
+def bundled_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "True")
+    anthropic_beta_headers_manager._BETA_HEADERS_CONFIG = None
+
+
+def test_requests_without_betas_never_fetch_the_beta_table(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", raising=False)
+    monkeypatch.delenv("LITELLM_OFFLINE_MODE", raising=False)
+    anthropic_beta_headers_manager._BETA_HEADERS_CONFIG = None
+    with respx.mock(assert_all_called=False) as router:
+        remote_table: Final = router.get(litellm.anthropic_beta_headers_url).respond(
+            json=GetAnthropicBetaHeadersConfig.load_local_beta_headers_config()
+        )
+        for api_base in (None, DIRECT_API_BASE, FOUNDRY_API_BASE):
+            update_request_with_filtered_beta(
+                headers={"anthropic-version": "2023-06-01"},
+                request_data={"max_tokens": 8},
+                provider="anthropic",
+                api_base=api_base,
+            )
+        for provider, deployment_api_base in (
+            ("anthropic", DIRECT_API_BASE),
+            ("anthropic", FOUNDRY_API_BASE),
+            ("openai", FOUNDRY_API_BASE),
+        ):
+            resolve_beta_provider(provider, deployment_api_base)
+    assert remote_table.call_count == 0
+
+
+def test_foundry_deployment_headers_follow_the_azure_ai_row(bundled_config: None) -> None:
+    headers: Final = {"anthropic-beta": f"{DIRECT_ONLY_BETA},thinking-binding-controls-2026-08-01"}
+    result: Final[dict[str, str]] = update_headers_with_filtered_beta(
+        headers=headers, provider="anthropic", api_base=FOUNDRY_API_BASE
+    )
+    assert result == {"anthropic-beta": "thinking-binding-controls-2026-08-01"}
+
+
+def test_direct_deployment_headers_keep_every_anthropic_row_beta(bundled_config: None) -> None:
+    headers: Final = {"anthropic-beta": f"{DIRECT_ONLY_BETA},thinking-binding-controls-2026-08-01"}
+    result: Final[dict[str, str]] = update_headers_with_filtered_beta(
+        headers=headers, provider="anthropic", api_base=DIRECT_API_BASE
+    )
+    assert result == {"anthropic-beta": f"{DIRECT_ONLY_BETA},thinking-binding-controls-2026-08-01"}
+
+
+# Foundry's /anthropic/v1/messages answered 200 to each of these on claude-sonnet-5-5, 2026-10-31
+FOUNDRY_ACCEPTED_ANTHROPIC_ROW_BETAS: Final = (
+    "compact-2026-01-12",
+    "fast-mode-2026-02-01",
+    "fine-grained-tool-streaming-2025-05-14",
+    "inline-tools-2026-09-15",
+    "oauth-2025-04-20",
+    "output-128k-2025-02-19",
+    "token-efficient-tools-2025-02-19",
+)
+
+
+def test_foundry_deployment_keeps_the_anthropic_row_betas_foundry_accepts(bundled_config: None) -> None:
+    result: Final[dict[str, str]] = update_headers_with_filtered_beta(
+        headers={"anthropic-beta": ",".join((DIRECT_ONLY_BETA, *FOUNDRY_ACCEPTED_ANTHROPIC_ROW_BETAS))},
+        provider="anthropic",
+        api_base=FOUNDRY_API_BASE,
+    )
+    assert sorted(result["anthropic-beta"].split(",")) == sorted(FOUNDRY_ACCEPTED_ANTHROPIC_ROW_BETAS)
+
+
+def test_foundry_deployment_request_filters_header_and_body_betas_together(bundled_config: None) -> None:
+    headers: dict[str, str]
+    data: dict[str, object]
+    headers, data = update_request_with_filtered_beta(
+        headers={"anthropic-beta": DIRECT_ONLY_BETA},
+        request_data={"anthropic_beta": [DIRECT_ONLY_BETA, "thinking-binding-controls-2026-08-01"], "max_tokens": 8},
+        provider="anthropic",
+        api_base=FOUNDRY_API_BASE,
+    )
+    assert headers == {}
+    assert data == {"anthropic_beta": ["thinking-binding-controls-2026-08-01"], "max_tokens": 8}
+
+
+@pytest.mark.parametrize("provider", ["anthropic", "azure_ai", "vertex_ai"])
+def test_live_verified_platforms_forward_every_preserved_thinking_beta(bundled_config: None, provider: str) -> None:
+    result: Final[dict[str, str]] = update_headers_with_filtered_beta(
+        headers={"anthropic-beta": ",".join(PRESERVED_THINKING_BETAS)}, provider=provider
+    )
+    assert sorted(result["anthropic-beta"].split(",")) == sorted(PRESERVED_THINKING_BETAS), result
+
+
+@pytest.mark.parametrize("provider", ["anthropic", "azure_ai", "vertex_ai", "bedrock", "bedrock_converse"])
+def test_each_row_forwards_exactly_its_verified_preserved_thinking_cells(bundled_config: None, provider: str) -> None:
+    row: Final[dict[str, str | None]] = GetAnthropicBetaHeadersConfig.load_local_beta_headers_config()[provider]
+    forwarded: Final = tuple(beta for beta in PRESERVED_THINKING_BETAS if row.get(beta) is not None)
+    result: Final[dict[str, str]] = update_headers_with_filtered_beta(
+        headers={"anthropic-beta": ",".join(PRESERVED_THINKING_BETAS)}, provider=provider
+    )
+    assert sorted(result["anthropic-beta"].split(",")) == sorted(forwarded), (provider, result)

@@ -24,9 +24,22 @@ module "litellm" {
   env    = var.env
   azs    = var.azs
 
+  vpc_id                             = var.vpc_id
+  public_subnet_ids                  = var.public_subnet_ids
+  private_subnet_ids                 = var.private_subnet_ids
+  additional_task_security_group_ids = var.additional_task_security_group_ids
+
+  create_database = var.create_database
+  database_url    = var.database_url
+  create_redis    = var.create_redis
+  redis_url       = var.redis_url
+
   litellm_master_key = var.litellm_master_key
   litellm_license    = var.litellm_license
   ui_password        = var.ui_password
+
+  image_registry = var.image_registry
+  image_tag      = var.image_tag != "" ? var.image_tag : null
 
   acm_certificate_arn = var.acm_certificate_arn
   allow_plaintext_alb = var.allow_plaintext_alb
@@ -38,4 +51,7 @@ module "litellm" {
   backend_extra_env     = var.backend_extra_env
   gateway_extra_secrets = var.gateway_extra_secrets
   backend_extra_secrets = var.backend_extra_secrets
+
+  gateway_metrics_port         = var.gateway_metrics_port
+  gateway_metrics_scrape_cidrs = var.gateway_metrics_scrape_cidrs
 }

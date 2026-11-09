@@ -1,0 +1,4 @@
+{"type": "thread.started", "thread_id": "01a0f344-5b83-7d40-a964-7d56c9e4ec9a"}
+{"type": "turn.started"}
+{"type": "error", "message": "{\"error\":{\"message\":\"litellm.BadRequestError: You passed in model=no-such-model-xyz. There are no healthy deployments for this model\",\"type\":\"invalid_request_error\",\"param\":null,\"code\":\"400\"}}"}
+{"type": "turn.failed", "error": {"message": "{\"error\":{\"message\":\"litellm.BadRequestError: You passed in model=no-such-model-xyz. There are no healthy deployments for this model\",\"type\":\"invalid_request_error\",\"param\":null,\"code\":\"400\"}}"}}
