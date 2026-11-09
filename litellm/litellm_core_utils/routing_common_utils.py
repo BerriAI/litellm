@@ -13,6 +13,7 @@ import litellm
 from litellm._logging import verbose_logger, verbose_router_logger
 from litellm.constants import ROUTER_FALLBACK_ERROR_DETAIL_MAX_CHARS
 from litellm.exceptions import BadRequestError
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_structure
@@ -622,5 +623,5 @@ def warn_on_provider_credential_mismatch(model_name: str, litellm_params: Mappin
 
 def _owner_team(deployment: Mapping[str, object]) -> object:
     """The team a deployment belongs to (``model_info.team_id``), or None."""
-    model_info: Final = deployment.get("model_info")
-    return model_info.get("team_id") if isinstance(model_info, Mapping) else None  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # a deployment dict's model_info
+    model_info: Final = as_str_mapping(deployment.get("model_info"))
+    return model_info.get("team_id") if model_info is not None else None

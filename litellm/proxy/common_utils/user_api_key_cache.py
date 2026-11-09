@@ -290,7 +290,7 @@ class UserApiKeyCache(DualCache):
             verbose_proxy_logger.error("UserApiKeyCache.async_get_cache failed for key=%r: %s", key, e)
             return None
 
-    def set_cache(self, key: str | None, value: CacheValue, local_only: bool = False, **kwargs: object):
+    def set_cache(self, key: str | None, value: CacheValue, local_only: bool = False, **kwargs: object) -> None:
         model_type: Final = cast(type[BaseModel] | None, kwargs.pop("model_type", None))
         payload: Final[object] = CacheCodec.serialize(value, model_type=model_type)
         shared: Final = self._shared
@@ -309,7 +309,9 @@ class UserApiKeyCache(DualCache):
             return self.key_object_cache.set_cache(key=key, value=payload, local_only=local_only, **kwargs)
         return super().set_cache(key=key, value=payload, local_only=local_only, **kwargs)
 
-    async def async_set_cache(self, key: str | None, value: CacheValue, local_only: bool = False, **kwargs: object):
+    async def async_set_cache(
+        self, key: str | None, value: CacheValue, local_only: bool = False, **kwargs: object
+    ) -> None:
         """Inside a request the Redis SET rides the request's pipeline (memory is written at once); anywhere
         else, or with options the pipeline does not carry, it goes to Redis directly as before."""
         model_type: Final = cast(type[BaseModel] | None, kwargs.pop("model_type", None))
