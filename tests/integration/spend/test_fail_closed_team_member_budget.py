@@ -8,6 +8,7 @@ import pytest
 import yaml
 from integration._support.client import JSON_OBJECT, Gateway, gateway_from_environment, object_value, string_value
 from integration._support.process import owned_proxy_process
+from pydantic import JsonValue
 
 
 def _fail_closed_config(directory: Path) -> Path:
@@ -32,7 +33,7 @@ def fail_closed_gateway(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Ga
         yield owned.gateway
 
 
-def _chat(gateway: Gateway, model: str, key: str) -> tuple[int, dict[str, object]]:
+def _chat(gateway: Gateway, model: str, key: str) -> tuple[int, dict[str, JsonValue]]:
     response: Final = gateway.request(
         "POST",
         "/v1/chat/completions",

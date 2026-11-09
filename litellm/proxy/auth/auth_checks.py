@@ -7146,9 +7146,9 @@ async def _check_team_member_budget(
         )
 
         if team_member_budget is not None:
-            from litellm.proxy.proxy_server import _fail_closed_budget_enforcement, get_current_spend
+            from litellm.proxy.proxy_server import general_settings, get_current_spend
 
-            if loaded_membership is None and _fail_closed_budget_enforcement():
+            if loaded_membership is None and general_settings.get("fail_closed_budget_enforcement") is True:
                 _raise_team_member_without_membership(user_id=valid_token.user_id, team_id=team_object.team_id)
 
             team_member_spend = (loaded_membership.spend if loaded_membership is not None else 0.0) or 0.0
