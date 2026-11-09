@@ -284,9 +284,7 @@ def _tool_call_cache_scope(*requests: Mapping[str, object] | None) -> str | None
         for key in ("metadata", "litellm_metadata"):
             metadata = request.get(key)
             if isinstance(metadata, Mapping):
-                session_id = cast(Mapping[str, object], metadata).get(
-                    "session_id"
-                )  # cast-ok: metadata maps string keys to values
+                session_id = cast(Mapping[str, object], metadata).get("session_id")  # cast-ok: string-keyed metadata
                 if isinstance(session_id, str) and session_id:
                     return session_id
     return None
@@ -298,12 +296,12 @@ def _scoped_tool_call_cache_key(call_id: str, scope: str) -> str:
 
 def _cached_tool_call_definition(call_id: object, scope: str | None) -> object:
     if scope is not None and isinstance(call_id, str):
-        scoped_definition: object = cast(  # cast-ok: cache stores untyped tool call definitions
+        scoped_definition: Final = cast(  # cast-ok: cache stores untyped tool call definitions
             object, TOOL_CALLS_CACHE.get_cache(key=_scoped_tool_call_cache_key(call_id, scope))
         )
         if scoped_definition is not None:
             return scoped_definition
-    cached_definition: object = cast(  # cast-ok: cache stores untyped tool call definitions
+    cached_definition: Final = cast(  # cast-ok: cache stores untyped tool call definitions
         object, TOOL_CALLS_CACHE.get_cache(key=call_id)
     )
     return cached_definition
