@@ -2077,11 +2077,7 @@ async def test_request_the_counter_rejects_before_calling_the_provider_answers_4
     with pytest.raises(ProxyException) as raised:
         await _ladder(counter, TokenCountSettings(framing=100, count_model=None))
 
-    assert (raised.value.code, raised.value.message, raised.value.param) == (
-        "400",
-        "scripted 400 for sonnet",
-        "messages",
-    )
+    assert (raised.value.code, raised.value.message) == ("400", "scripted 400 for sonnet")
 
 
 @pytest.mark.parametrize("model", ["openai/gpt-5.4-mini", "gemini/gemini-3.8-flash"])

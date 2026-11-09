@@ -97,7 +97,7 @@ class ProviderCountFailure:
         return ProxyException(
             message=self.message,
             type="token_counting_error",
-            param="messages" if self.rejected_before_provider_call else "model",
+            param="model",
             code=self.status_code,
         )
 

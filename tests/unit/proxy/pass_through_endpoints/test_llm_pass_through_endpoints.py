@@ -7782,7 +7782,18 @@ async def test_bedrock_native_count_tokens_answers_400_for_a_malformed_body_with
     assert len(respx_mock.calls) == 0
 
 
-@pytest.mark.parametrize(("model", "model_id"), [("us", "us"), ("global", "global"), ("apac", "apac"), ("bedrock/us", "us")])
+@pytest.mark.parametrize(
+    ("model", "model_id"),
+    [
+        ("us", "us"),
+        ("global", "global"),
+        ("apac", "apac"),
+        ("bedrock/us", "us"),
+        ("converse/us", "us"),
+        ("invoke/us", "us"),
+        ("bedrock/converse/global", "global"),
+    ],
+)
 @pytest.mark.asyncio
 async def test_bedrock_native_count_tokens_for_a_bare_region_prefix_answers_bedrocks_own_400(
     monkeypatch: pytest.MonkeyPatch,

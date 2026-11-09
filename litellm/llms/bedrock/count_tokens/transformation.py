@@ -14,7 +14,11 @@ from pydantic import JsonValue
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.anthropic.common_utils import tools_without_custom_field
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
-from litellm.llms.bedrock.common_utils import get_bedrock_base_model, get_bedrock_cross_region_inference_regions
+from litellm.llms.bedrock.common_utils import (
+    get_bedrock_base_model,
+    get_bedrock_cross_region_inference_regions,
+    strip_bedrock_routing_prefix,
+)
 
 # Placeholder satisfying the Anthropic InvokeModel schema's required
 # max_tokens field; CountTokens only counts input, so it has no effect
@@ -234,7 +238,7 @@ class BedrockCountTokensConfig(BaseAWSLLM):
 
     @staticmethod
     def count_tokens_model_id(model: str) -> str:
-        model_id: Final = model.removeprefix("bedrock/")
+        model_id: Final = strip_bedrock_routing_prefix(model)
         if model_id in get_bedrock_cross_region_inference_regions():
             return model_id
         return get_bedrock_base_model(model).removeprefix("bedrock/")
