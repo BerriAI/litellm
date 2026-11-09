@@ -544,7 +544,9 @@ def test_credential_reference_rejection_names_undefined_credentials_only_to_admi
 
 
 @pytest.mark.parametrize("is_proxy_admin", [True, False], ids=["admin", "non-admin"])
-def test_credential_reference_rejection_lets_a_stored_reference_to_a_deleted_credential_stay(is_proxy_admin: bool) -> None:
+def test_credential_reference_rejection_lets_a_stored_reference_to_a_deleted_credential_stay(
+    is_proxy_admin: bool,
+) -> None:
     stale: Final = {**_REFERENCE, "litellm_credential_name": "deleted"}
 
     kept: Final = credential_reference_rejection(
@@ -563,3 +565,13 @@ def test_credential_reference_rejection_lets_a_stored_reference_to_a_deleted_cre
     assert kept is None
     assert added is not None and added.status_code == 400
     assert "also-missing" in added.message and "deleted" not in added.message
+
+
+@pytest.mark.parametrize("name", [5, ["space-a"], None], ids=["int", "list", "null"])
+def test_a_non_string_credential_name_is_not_a_reference(name: object) -> None:
+    entry: Final = {**_REFERENCE, "litellm_credential_name": name}
+
+    assert (
+        credential_reference_rejection({"logging": [entry]}, None, is_proxy_admin=False, is_defined=lambda _: False)
+        is None
+    )

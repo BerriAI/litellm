@@ -3,20 +3,25 @@ from __future__ import annotations
 import operator
 import time
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from itertools import accumulate
 from pathlib import Path
 from typing import Final
 
 import httpx
+import pytest
 from _openinference_support import (
+    _anthropic_response,
     _chat_request_marker,
     _chat_response,
+    _chat_stream_response,
+    _chat_tool_call,
     _matching_marker_spans,
+    _responses_response,
     _rig,
 )
-from integration._support.client import Gateway
-from integration._support.wire import Reply, Request, Wire
+from integration._support.client import Gateway, eventually
+from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue
 
 CREDENTIAL_NAME: Final = "arize-space-a"
@@ -32,7 +37,12 @@ CREDENTIAL_CONFIG: Final[dict[str, JsonValue]] = {
                 "arize_space_id": "os.environ/SPACE_A_ARIZE_SPACE_ID",
             },
             "credential_info": {},
-        }
+        },
+        {
+            "credential_name": "model-only",
+            "credential_values": {"api_key": "sk-not-a-logging-value"},
+            "credential_info": {},
+        },
     ]
 }
 SECRET_ENVIRONMENT: Final = {"SPACE_A_ARIZE_API_KEY": SECRET_API_KEY, "SPACE_A_ARIZE_SPACE_ID": SECRET_SPACE_ID}
@@ -51,8 +61,8 @@ def _echo_marker(request: Request) -> Reply:
     return _chat_response(_chat_request_marker(request))
 
 
-def _chat(proxy: Gateway, model: str, key: str, marker: str) -> None:
-    response: Final = proxy.request(
+def _send_chat(proxy: Gateway, model: str, key: str, marker: str) -> httpx.Response:
+    return proxy.request(
         "POST",
         "/v1/chat/completions",
         {
@@ -63,6 +73,10 @@ def _chat(proxy: Gateway, model: str, key: str, marker: str) -> None:
         },
         key=key,
     )
+
+
+def _chat(proxy: Gateway, model: str, key: str, marker: str) -> None:
+    response: Final = _send_chat(proxy, model, key, marker)
     assert response.status_code == 200, response.text
 
 
@@ -237,3 +251,178 @@ def test_only_proxy_admins_create_a_user_whose_key_references_a_credential(gatew
         assert bulk.status_code == 200, bulk.text
         assert [row["success"] for row in bulk.json()["data"]] == [False], bulk.text
         assert "litellm_credential_name" in bulk.json()["data"][0]["error"], bulk.text
+
+
+def _carries_credential(request: Request) -> bool:
+    headers: Final = {name.lower(): value for name, value in request.headers.items()}
+    return headers.get("api_key") == SECRET_API_KEY and headers.get("arize-space-id") == SECRET_SPACE_ID
+
+
+def _credential_exports(destination: Wire, seconds: float = 30) -> tuple[Request, ...]:
+    return eventually(
+        lambda: tuple(request for request in destination.drain() if _carries_credential(request)),
+        bool,
+        seconds=seconds,
+    )
+
+
+def _surface_reply(marker: str) -> Callable[[Request], Reply]:
+    def reply(request: Request) -> Reply:
+        if request.target.endswith("/responses"):
+            return _responses_response(marker)
+        if request.target.endswith("/messages"):
+            return _anthropic_response(marker)
+        return _chat_stream_response(marker, (_chat_tool_call(marker),))
+
+    return reply
+
+
+_SURFACES: Final[dict[str, tuple[str, str, dict[str, JsonValue]]]] = {
+    "responses": ("/v1/responses", "openai/gpt-4o-mini", {"input": "weather in Paris?"}),
+    "messages": (
+        "/v1/messages",
+        "anthropic/claude-opus-5-5",
+        {"max_tokens": 64, "messages": [{"role": "user", "content": "weather in Paris?"}]},
+    ),
+    "chat-stream": (
+        "/v1/chat/completions",
+        "openai/gpt-4o-mini",
+        {"stream": True, "messages": [{"role": "user", "content": "weather in Paris?"}]},
+    ),
+}
+
+
+@pytest.mark.parametrize("surface", sorted(_SURFACES))
+def test_referencing_key_exports_on_each_surface(surface: str, gateway: Gateway, tmp_path: Path) -> None:
+    marker: Final = f"{surface}-" + uuid.uuid4().hex
+    path, model_name, body = _SURFACES[surface]
+    with (
+        _rig(
+            gateway,
+            tmp_path,
+            _surface_reply(marker),
+            extra_config=CREDENTIAL_CONFIG,
+            environment=SECRET_ENVIRONMENT,
+            remove_environment=AMBIENT_ARIZE_ENVIRONMENT,
+            disabled_environment=AMBIENT_ARIZE_ENVIRONMENT,
+            model_name=model_name,
+            api_base_suffix="" if surface == "messages" else "/v1",
+        ) as rig,
+        rig.proxy.scenario() as scenario,
+    ):
+        key: Final = scenario.key(metadata={"logging": [_reference_entry()]})
+        response: Final = rig.proxy.request(
+            "POST",
+            path,
+            {"model": rig.model, **body, "metadata": {"trace_marker": marker}, "cache": {"no-cache": True}},
+            key=key,
+        )
+        assert response.status_code == 200, response.text
+        received: Final = _received_until(rig.destination, marker)
+        exports: Final = tuple(request for request in received if _carries(request, marker))
+        assert exports and all(_carries_credential(request) for request in exports), [
+            dict(request.headers) for request in exports
+        ]
+
+
+def test_referencing_key_exports_through_anthropic_pass_through(gateway: Gateway, tmp_path: Path) -> None:
+    marker: Final = "passthrough-" + uuid.uuid4().hex
+    with wire_server(lambda _request: _anthropic_response(marker)) as anthropic:
+        with (
+            _rig(
+                gateway,
+                tmp_path,
+                _echo_marker,
+                extra_config=CREDENTIAL_CONFIG,
+                environment={
+                    **SECRET_ENVIRONMENT,
+                    "ANTHROPIC_API_BASE": anthropic.url,
+                    "ANTHROPIC_API_KEY": "sk-ant-synthetic",
+                },
+                remove_environment=AMBIENT_ARIZE_ENVIRONMENT,
+                disabled_environment=AMBIENT_ARIZE_ENVIRONMENT,
+            ) as rig,
+            rig.proxy.scenario() as scenario,
+        ):
+            key: Final = scenario.key(metadata={"logging": [_reference_entry()]})
+            response: Final = rig.proxy.request(
+                "POST",
+                "/anthropic/v1/messages",
+                {"model": "claude-opus-5-5", "max_tokens": 16, "messages": [{"role": "user", "content": marker}]},
+                key=key,
+                headers={"anthropic-version": "2023-06-01"},
+            )
+            assert response.status_code == 200, response.text
+            assert response.json()["id"] == marker, response.text
+            assert anthropic.drain(), "the pass-through never reached the scripted Anthropic upstream"
+            assert _credential_exports(rig.destination)
+
+
+def test_referencing_key_exports_on_otel_v1(gateway: Gateway, tmp_path: Path) -> None:
+    marker: Final = "otel-v1-" + uuid.uuid4().hex
+    with (
+        _rig(
+            gateway,
+            tmp_path,
+            _echo_marker,
+            extra_config=CREDENTIAL_CONFIG,
+            environment={**SECRET_ENVIRONMENT, "LITELLM_OTEL_V2": "false"},
+            remove_environment=AMBIENT_ARIZE_ENVIRONMENT,
+            disabled_environment=AMBIENT_ARIZE_ENVIRONMENT,
+        ) as rig,
+        rig.proxy.scenario() as scenario,
+    ):
+        key: Final = scenario.key(metadata={"logging": [_reference_entry()]})
+        _chat(rig.proxy, rig.model, key, marker)
+        assert _credential_exports(rig.destination)
+
+
+def test_reference_to_a_credential_without_logging_values_exports_nothing_and_is_unhealthy(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    dropped_marker: Final = "model-only-" + uuid.uuid4().hex
+    sentinel_marker: Final = "sentinel-" + uuid.uuid4().hex
+    with (
+        _rig(
+            gateway,
+            tmp_path,
+            _echo_marker,
+            extra_config=CREDENTIAL_CONFIG,
+            environment=SECRET_ENVIRONMENT,
+            remove_environment=AMBIENT_ARIZE_ENVIRONMENT,
+            disabled_environment=AMBIENT_ARIZE_ENVIRONMENT,
+        ) as rig,
+        rig.proxy.scenario() as scenario,
+    ):
+        dropped_key: Final = scenario.key(metadata={"logging": [_reference_entry("model-only")]})
+        sentinel_key: Final = scenario.key(metadata={"logging": [_reference_entry()]})
+
+        _chat(rig.proxy, rig.model, dropped_key, dropped_marker)
+        _chat(rig.proxy, rig.model, sentinel_key, sentinel_marker)
+        received: Final = _received_until(rig.destination, sentinel_marker)
+        assert not any(_carries(request, dropped_marker) for request in received)
+
+        health: Final = rig.proxy.request("POST", "/key/health", {}, key=dropped_key)
+        assert health.status_code == 200, health.text
+        assert health.json()["key"] == "unhealthy", health.text
+
+
+def test_malformed_key_logging_fails_requests_like_main(gateway: Gateway, tmp_path: Path) -> None:
+    stored_logging: Final[dict[str, JsonValue]] = {
+        "string": "abc",
+        "list-with-string": ["x"],
+        "object": {"callback_name": "arize"},
+        "empty-list": [],
+    }
+    with (
+        _rig(gateway, tmp_path, _echo_marker, extra_config=CREDENTIAL_CONFIG) as rig,
+        rig.proxy.scenario() as scenario,
+    ):
+        statuses: Final = {
+            label: _send_chat(
+                rig.proxy, rig.model, scenario.key(metadata={"logging": value}), "malformed-" + uuid.uuid4().hex
+            ).status_code
+            for label, value in stored_logging.items()
+        }
+
+    assert statuses == {"string": 500, "list-with-string": 500, "object": 500, "empty-list": 200}, statuses

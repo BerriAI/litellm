@@ -880,3 +880,12 @@ def test_key_logging_entries_passes_empty_and_object_entries_through(
     logging_value: object, expected: tuple[dict[str, object], ...]
 ) -> None:
     assert key_logging_entries({"logging": logging_value}) == expected
+
+
+def test_key_logging_entries_leaves_an_entry_with_a_non_string_credential_name_as_written(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "credential_list", [_credential("5", {"arize_api_key": "k"})])
+    entry: Final = {"callback_name": "arize", "litellm_credential_name": 5, "callback_vars": {}}
+
+    assert key_logging_entries({"logging": [entry]}) == (entry,)
