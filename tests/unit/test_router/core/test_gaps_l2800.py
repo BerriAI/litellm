@@ -512,6 +512,25 @@ async def test_default_metadata_tags_do_not_carry_one_request_tags_into_the_next
     assert _metadata(host.calls[1].kwargs)["tags"] == ["proxy-default"]
 
 
+@pytest.mark.parametrize(
+    ("request_metadata", "sent_guardrails"),
+    [
+        ({"guardrails": []}, ["admin-guard"]),
+        ({"guardrails": ["caller-guard"]}, ["caller-guard", "admin-guard"]),
+        ({"guardrails": "caller-guard"}, ["admin-guard"]),
+        ({}, ["admin-guard"]),
+    ],
+)
+async def test_a_default_guardrail_stays_on_whatever_guardrails_the_request_lists(
+    make_core: MakeCore, host: ScriptedHost, request_metadata: Mapping[str, object], sent_guardrails: list[str]
+) -> None:
+    core: Final = make_core(
+        model_list=[deployment("g", "d1")], default_litellm_params={"metadata": {"guardrails": ["admin-guard"]}}
+    )
+    await core.acompletion(model="g", messages=MESSAGES, metadata=dict(request_metadata))  # pyright: ignore[reportAttributeAccessIssue]  # endpoint method
+    assert _metadata(host.calls[0].kwargs)["guardrails"] == sent_guardrails
+
+
 @pytest.mark.parametrize("router_caching_groups", [[("g", "other")], None])
 async def test_the_router_caching_groups_replace_the_request_caching_groups(
     make_core: MakeCore, host: ScriptedHost, router_caching_groups: list[tuple[str, str]] | None

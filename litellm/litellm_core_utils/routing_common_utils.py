@@ -66,6 +66,7 @@ def without_router_only_kwargs(kwargs: Mapping[str, _V]) -> dict[str, _V]:
 
 _ROUTER_OWNED_METADATA_KEYS: Final = frozenset({"caching_groups", "redis_namespace"})
 _MASKING_METADATA_KEYS: Final = frozenset({"mask_input", "mask_output"})
+_JOINED_LIST_METADATA_KEYS: Final = frozenset({"tags", "guardrails"})
 
 
 def metadata_defaults_under_request(
@@ -82,8 +83,8 @@ def _default_under_request(key: str, default: object, requested: object) -> obje
         return default
     if key in _MASKING_METADATA_KEYS and _is_flag_on(default):
         return default
-    if key == "tags":
-        return _request_tags_then_default_tags(default=default, requested=requested)
+    if key in _JOINED_LIST_METADATA_KEYS:
+        return _request_items_then_default_items(default=default, requested=requested)
     return _request_value_over_default(default=default, requested=requested)
 
 
@@ -92,12 +93,12 @@ def _is_flag_on(value: object) -> bool:
     return bool(value) if parsed is None else parsed
 
 
-def _request_tags_then_default_tags(default: object, requested: object) -> object:
-    default_tags: Final = as_object_list(default)
-    if default_tags is None:
+def _request_items_then_default_items(default: object, requested: object) -> object:
+    default_items: Final = as_object_list(default)
+    if default_items is None:
         return _request_value_over_default(default=default, requested=requested)
-    request_tags: Final = as_object_list(requested) or ()
-    return [*request_tags, *(tag for tag in default_tags if tag not in request_tags)]
+    request_items: Final = as_object_list(requested) or ()
+    return [*request_items, *(item for item in default_items if item not in request_items)]
 
 
 def _request_value_over_default(default: object, requested: object) -> object:
