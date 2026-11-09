@@ -6081,7 +6081,6 @@ class TestGuardrailModificationCheck:
 
 
 def _member_without_row_prisma(max_budget: float) -> MagicMock:
-    """Postgres answers: the team's default member budget row exists, the membership row does not."""
     budget_row: Final = MagicMock()
     budget_row.max_budget = max_budget
     budget_row.dict = MagicMock(return_value={"budget_id": "budget-default", "max_budget": max_budget})
@@ -6109,9 +6108,6 @@ async def _check_member_without_membership_row(prisma_client: MagicMock) -> None
 async def test_fail_closed_rejects_member_without_membership_row_with_a_403_naming_member_add(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A key for a team user who was never added with /team/member_add has no
-    LiteLLM_TeamMembership row, so nothing durable records their spend. With
-    fail-closed on, say so and how to fix it instead of a retry-forever 503."""
     from fastapi import HTTPException
 
     import litellm.proxy.proxy_server as ps
