@@ -121,6 +121,7 @@ from litellm.types.router import (
 )
 from litellm.types.utils import (
     DEPLOYMENT_SCOPED_TOKEN_LIMIT_FIELDS,
+    SHARED_ONLY_WHEN_TRUE_CAPABILITY_FIELDS,
     CustomPricingLiteLLMParams,
     LlmProviders,
     LlmProvidersSet,
@@ -541,6 +542,69 @@ def register_deployment_pricing(host: "PythonHost", deployment: Deployment) -> N
         custom_llm_provider=deployment.litellm_params.custom_llm_provider,
         pricing_provider=deployment.model_info.pricing_provider,
     )
+
+
+def _entry_section(entry: Mapping[str, object], section: str) -> Mapping[str, object]:
+    value: Final = entry.get(section)
+    return _MODEL_INFO_ADAPTER.validate_python(value) if isinstance(value, Mapping) else {}
+
+
+def _entry_backend(entry: Mapping[str, object]) -> tuple[str, str | None] | None:
+    params: Final = _entry_section(entry, "litellm_params")
+    model: Final = params.get("model")
+    provider: Final = params.get("custom_llm_provider")
+    return (model, provider if isinstance(provider, str) else None) if isinstance(model, str) else None
+
+
+def _entry_backend_keys(entry: Mapping[str, object]) -> frozenset[str]:
+    backend: Final = _entry_backend(entry)
+    return frozenset() if backend is None else frozenset(_backend_cost_map_keys(*backend))
+
+
+def _shared_capabilities_set_true(entry: Mapping[str, object]) -> frozenset[str]:
+    model_info: Final = _entry_section(entry, "model_info")
+    return frozenset(field for field in SHARED_ONLY_WHEN_TRUE_CAPABILITY_FIELDS if model_info.get(field) is True)
+
+
+def _catalog_sets_true(catalog: Mapping[str, Mapping[str, object]], catalog_keys: tuple[str, ...], field: str) -> bool:
+    entry: Final = next((catalog[key] for key in catalog_keys if key in catalog), None)
+    return entry is not None and entry.get(field) is True
+
+
+def withdraw_shared_capabilities(
+    host: "PythonHost",
+    removed: Mapping[str, object],
+    replacement: Mapping[str, object] | None,
+    served: Iterable[Mapping[str, object]],
+) -> None:
+    """Put the catalog's value back on ``removed``'s backend model key(s) for each
+    ``SHARED_ONLY_WHEN_TRUE_CAPABILITY_FIELDS`` flag it set ``True``, unless ``replacement`` or another
+    ``served`` deployment of that backend model still sets it."""
+    backend: Final = _entry_backend(removed)
+    backend_keys: Final = _entry_backend_keys(removed)
+    kept: Final = (
+        _shared_capabilities_set_true(replacement)
+        if replacement is not None and _entry_backend_keys(replacement) == backend_keys
+        else frozenset[str]()
+    )
+    withdrawn: Final = _shared_capabilities_set_true(removed) - kept
+    if backend is None or not withdrawn:
+        return
+    removed_id: Final = _entry_section(removed, "model_info").get("id")
+    siblings: Final = tuple(
+        entry
+        for entry in served
+        if _entry_section(entry, "model_info").get("id") != removed_id
+        and not _entry_backend_keys(entry).isdisjoint(backend_keys)
+    )
+    catalog: Final = catalog_with_runtime_registrations()
+    catalog_keys: Final = _catalog_backend_keys(*backend, _backend_cost_map_keys(*backend))
+    restored: Final = {
+        field: any(field in _shared_capabilities_set_true(entry) for entry in siblings)
+        or _catalog_sets_true(catalog, catalog_keys, field)
+        for field in withdrawn
+    }
+    host.invoke("register_model")(model_cost={key: restored for key in backend_keys}, persist_across_reloads=False)
 
 
 # -- the registry --------------------------------------------------------------------------------
@@ -1304,8 +1368,11 @@ class HostRegistry(HostModelInfo):
                 with self._deployment_index_lock:
                     removal_idx: Final = self.model_id_to_deployment_index_map.get(model_id)
                     if removal_idx is not None:
-                        _ = self._core_model_list[removal_idx]  # pyright: ignore[reportArgumentType]  # raises IndexError for a position past the list, as the pop does
+                        removed: Final = self._core_model_list[removal_idx]  # pyright: ignore[reportArgumentType]  # raises IndexError for a position past the list, as the pop does
                         self._remove(model_id)
+                        withdraw_shared_capabilities(
+                            self._host, removed, deployment.to_json(exclude_none=True), tuple(self._core_model_list)
+                        )
                 if self.strategies is not None:
                     self.strategies.release(on_router)
                 self._on_change()
@@ -1491,6 +1558,7 @@ class HostRegistry(HostModelInfo):
                     return None
                 item: Final = self._core_model_list[deployment_idx]  # pyright: ignore[reportArgumentType]  # raises IndexError for a position past the list, as the pop does
                 self._remove(id)
+                withdraw_shared_capabilities(self._host, item, None, tuple(self._core_model_list))
             if self.checks is not None:
                 self.checks.unregister_deployment_budget(id)
             if self.strategies is not None:
