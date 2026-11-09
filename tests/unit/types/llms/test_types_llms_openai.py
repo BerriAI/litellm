@@ -16,8 +16,10 @@ from litellm.types.llms.openai import (
     OpenAIChatCompletionLogprobsContent,
     OpenAIModerationResponse,
     OpenAIVideoObject,
+    OutputTextDeltaEvent,
     ResponseCompletedEvent,
     ResponsesAPIResponse,
+    ResponsesAPIStreamEvents,
 )
 
 
@@ -607,6 +609,23 @@ def test_openai_file_object_accepts_pending_status():
     assert file_obj.status == "pending"
 
 
+@pytest.mark.parametrize("object_type", ({}, {"object": None}), ids=["missing", "null"])
+def test_openai_file_object_without_an_object_type_validates_as_a_file(object_type: dict[str, None]) -> None:
+    from litellm.types.llms.openai import OpenAIFileObject
+
+    server_file: Final = {
+        "id": "file-b73f4c",
+        "bytes": 156,
+        "created_at": 1793238707,
+        "filename": "batch_requests.jsonl",
+        "purpose": "batch",
+    }
+
+    file_obj: Final = OpenAIFileObject.model_validate({**server_file, **object_type})
+
+    assert file_obj.model_dump(exclude_none=True) == {**server_file, "object": "file"}
+
+
 class TestOpenAIFileObjectBatchGuardrailSerialization:
     """The proxy-only `litellm_batch_guardrail` key must reach the wire only when something set it."""
 
@@ -799,3 +818,32 @@ def test_rebuilding_a_dumped_responses_answer_keeps_the_tool_search_call_keys(ex
     rebuilt: Final = ResponsesAPIResponse(**answer.model_dump())
 
     assert rebuilt.model_dump()["output"] == [search_call]
+
+
+def _text_delta() -> OutputTextDeltaEvent:
+    return OutputTextDeltaEvent(
+        type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA, item_id="msg_1", output_index=0, content_index=0, delta="hi"
+    )
+
+
+def test_stream_event_dict_reads_see_a_field_set_after_construction():
+    event: Final = _text_delta().model_copy(update={"sequence_number": 3})
+
+    assert event["sequence_number"] == 3
+    assert event.get("sequence_number") == 3
+    assert "sequence_number" in event
+    assert dict(event.items())["sequence_number"] == 3
+    assert event["delta"] == "hi"
+
+
+def test_stream_event_dict_reads_see_an_undeclared_field_named_keys():
+    assert _text_delta().model_copy(update={"keys": "value"})["keys"] == "value"
+
+
+def test_stream_event_dict_reads_still_miss_absent_keys():
+    event: Final = _text_delta()
+
+    assert event.get("sequence_number", "fallback") == "fallback"
+    assert "sequence_number" not in event
+    with pytest.raises(KeyError):
+        event["sequence_number"]

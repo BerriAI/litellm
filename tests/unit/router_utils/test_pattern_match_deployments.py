@@ -1,4 +1,4 @@
-"""Behavior pins for ``litellm/router_utils/pattern_match_deployments.py``."""
+"""Behavior pins for ``litellm/litellm_core_utils/pattern_match_deployments.py``."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ import litellm
 from litellm import Router
 from litellm.litellm_core_utils import get_llm_provider_logic
 from litellm.router import Deployment, LiteLLM_Params
-from litellm.router_utils.pattern_match_deployments import PatternMatchRouter, PatternUtils
+from litellm.litellm_core_utils.pattern_match_deployments import PatternMatchRouter, PatternUtils
 from litellm.types.router import ModelInfo
 import json
 from unittest.mock import MagicMock
@@ -406,7 +406,7 @@ def test_sorted_patterns():
     """
     Tests that the pattern specificity is calculated correctly
     """
-    from litellm.router_utils.pattern_match_deployments import PatternUtils
+    from litellm.litellm_core_utils.pattern_match_deployments import PatternUtils
 
     sorted_patterns = PatternUtils.sorted_patterns(
         {
@@ -418,7 +418,7 @@ def test_sorted_patterns():
 
 
 def test_calculate_pattern_specificity():
-    from litellm.router_utils.pattern_match_deployments import PatternUtils
+    from litellm.litellm_core_utils.pattern_match_deployments import PatternUtils
 
     assert PatternUtils.calculate_pattern_specificity("llmengine/*") == (11, 1)
     assert PatternUtils.calculate_pattern_specificity("*") == (1, 1)

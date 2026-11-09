@@ -9,5 +9,6 @@ general_settings:
   coordination_redis:
     host: os.environ/REDIS_HOST
     port: os.environ/REDIS_PORT
+    socket_timeout: os.environ/COORDINATION_REDIS_SOCKET_TIMEOUT
 router_settings:
   disable_cooldowns: true

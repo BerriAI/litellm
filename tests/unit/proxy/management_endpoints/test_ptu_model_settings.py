@@ -11,6 +11,8 @@ from unittest.mock import patch as patch_ctx
 import pytest
 from fastapi import HTTPException
 
+import litellm
+
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
 from litellm.litellm_core_utils.ptu_pricing import ptu_terms
 from litellm.llms.gemini.cost_calculator import cost_per_web_search_request
@@ -683,7 +685,7 @@ class TestAddNewModelPtuGate:
         )
 
         mock_router = MagicMock()
-        mock_router.get_model_ids.return_value = [model_id]
+        mock_router.registry.return_value.names.return_value = [model_id]
 
         proxy_server = "litellm.proxy.proxy_server"
         endpoints = "litellm.proxy.management_endpoints.model_management_endpoints"
@@ -1047,9 +1049,9 @@ class TestPtuDeploymentsAreNotBilledPerToken:
     def test_the_cost_map_contributes_no_price_to_a_priced_ptu_deployment(self, backend):
         """The acceptance criterion, read off the entry the router registers for the deployment.
 
-        Zeroing only the per-token pair leaves the cache-tier fields unset, which is exactly what
-        Router._inherit_builtin_cache_pricing back-fills from the public cost map, so a cached
-        prompt would still be billed at the public rate."""
+        Zeroing only the per-token pair leaves the cache-tier fields unset, which the router
+        back-fills from the public cost map, so a cached prompt would still be billed at the
+        public rate."""
         priced = _ptu_priced_deployment(
             Deployment(
                 model_name="ptu-deployment",
@@ -1062,7 +1064,8 @@ class TestPtuDeploymentsAreNotBilledPerToken:
                 ),
             )
         )
-        registered = Router._deployment_model_cost_payload(priced)
+        Router(model_list=[priced.to_json(exclude_none=True)])
+        registered = litellm.model_cost["dep-ptu"]
         charged = {
             k: v
             for k, v in registered.items()

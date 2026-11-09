@@ -11,7 +11,7 @@ import litellm
 from litellm.integrations.custom_secret_manager import CustomSecretManager
 from litellm.llms.anthropic.messages.native.handler import anthropic_messages
 from litellm.rust_bridge.host import settings
-from litellm.rust_bridge.messages.entrypoints import NATIVE_AMESSAGES, NATIVE_MESSAGES
+from litellm.rust_bridge.messages.entrypoints import NATIVE_AMESSAGES
 from litellm.rust_bridge.public_call import NativeCall
 from litellm.types.secret_managers.main import KeyManagementSettings, KeyManagementSystem
 from tests.test_litellm_rust.messages.data import MESSAGES, MESSAGES_MODEL, MESSAGES_RESPONSE
@@ -72,21 +72,13 @@ async def _python_messages() -> object:
     return await anthropic_messages(**_public_kwargs())
 
 
-async def _rust_messages() -> object:
-    route: Final = NATIVE_MESSAGES.load()
-    assert route is not None
-    return route(_native_request())
-
-
 async def _rust_amessages() -> object:
     route: Final = NATIVE_AMESSAGES.load()
     assert route is not None
     return await route(_native_request())
 
 
-@pytest.fixture(
-    params=(_python_messages, _rust_messages, _rust_amessages), ids=("python-async", "rust-sync", "rust-async")
-)
+@pytest.fixture(params=(_python_messages, _rust_amessages), ids=("python-async", "rust-async"))
 def messages(request: pytest.FixtureRequest) -> Messages:
     return cast(Messages, request.param)
 

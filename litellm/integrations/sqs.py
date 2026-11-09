@@ -11,7 +11,7 @@ import base64
 import json
 import re
 import traceback
-from typing import Final
+from typing import ClassVar, Final
 
 from pydantic import TypeAdapter
 
@@ -25,6 +25,7 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, run_aws_signing
+from litellm.llms.bedrock.web_identity_session_policy import SQS_LOGGING_SESSION_POLICY, WebIdentitySessionPolicy
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -43,6 +44,8 @@ _BASE64_INLINE_PATTERN: Final = re.compile(
 
 class SQSLogger(CustomBatchLogger, BaseAWSLLM):
     """Batching logger that writes logs to an AWS SQS queue, optionally encrypting the payload."""
+
+    _web_identity_session_policy: ClassVar[WebIdentitySessionPolicy] = SQS_LOGGING_SESSION_POLICY
 
     def __init__(
         self,

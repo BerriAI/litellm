@@ -176,11 +176,16 @@ class Status1(Enum):
     incomplete = "incomplete"
     budget_exceeded = "budget_exceeded"
     queued = "queued"
+    requires_continuation = "requires_continuation"
 
 
 class InteractionStatusUpdate(LiteLLMBaseModel):
     interaction_id: str | None = None
     status: Status1 | None = None
+    continuation_token: str | None = Field(
+        None,
+        description="Opaque token to resume a long decode. Output: set when status is\nREQUIRES_CONTINUATION and decoding can be resumed. Input: pass the latest\ntoken back unchanged in CreateInteraction to continue decoding.",
+    )
     event_type: Literal["interaction.status_update"] = "interaction.status_update"
     event_id: str | None = Field(
         None,
@@ -343,6 +348,7 @@ class Status3(Enum):
     INCOMPLETE = "incomplete"
     BUDGET_EXCEEDED = "budget_exceeded"
     QUEUED = "queued"
+    REQUIRES_CONTINUATION = "requires_continuation"
 
 
 class ModelOption(RootModel[str]):
@@ -604,6 +610,9 @@ class ToolChoice(RootModel[ToolChoiceType | ToolChoiceConfig]):
 
 class Usage(LiteLLMBaseModel):
     total_input_tokens: int | None = Field(None, description="Number of tokens in the prompt (context).")
+    initial_input_tokens: int | None = Field(
+        None, description="Number of tokens in the prompt of the first hop of a long decode."
+    )
     input_tokens_by_modality: list[ModalityTokens] | None = Field(
         None, description="A breakdown of input token usage by modality."
     )
@@ -625,6 +634,7 @@ class Usage(LiteLLMBaseModel):
         None, description="A breakdown of tool-use token usage by modality."
     )
     total_reasoning_tokens: int | None = Field(None, description="Number of tokens of thoughts for thinking models.")
+    total_thought_tokens: int | None = Field(None, description="Number of tokens of thoughts for thinking models.")
     total_tokens: int | None = Field(
         None,
         description="Total token count for the interaction request (prompt + responses + other\ninternal tokens).",
@@ -787,6 +797,10 @@ class Interaction(LiteLLMBaseModel):
         description="The mime type of the response. This is required if response_format is set.",
     )
     previous_interaction_id: str | None = Field(None, description="The ID of the previous interaction, if any.")
+    continuation_token: str | None = Field(
+        None,
+        description="Opaque token to resume a long decode. Output: set when status is\nREQUIRES_CONTINUATION and decoding can be resumed. Input: pass the latest\ntoken back unchanged in CreateInteraction to continue decoding.",
+    )
     input: str | list[Content] | list[Turn] | Content | None = Field(
         None, description="The inputs for the interaction."
     )
@@ -843,6 +857,10 @@ class CreateModelInteractionParams(LiteLLMBaseModel):
         description="The mime type of the response. This is required if response_format is set.",
     )
     previous_interaction_id: str | None = Field(None, description="The ID of the previous interaction, if any.")
+    continuation_token: str | None = Field(
+        None,
+        description="Opaque token to resume a long decode. Output: set when status is\nREQUIRES_CONTINUATION and decoding can be resumed. Input: pass the latest\ntoken back unchanged in CreateInteraction to continue decoding.",
+    )
     input: str | list[Content] | list[Turn] | Content = Field(..., description="The inputs for the interaction.")
     generation_config: GenerationConfig | None = Field(
         None,
@@ -894,6 +912,10 @@ class CreateAgentInteractionParams(LiteLLMBaseModel):
         description="The mime type of the response. This is required if response_format is set.",
     )
     previous_interaction_id: str | None = Field(None, description="The ID of the previous interaction, if any.")
+    continuation_token: str | None = Field(
+        None,
+        description="Opaque token to resume a long decode. Output: set when status is\nREQUIRES_CONTINUATION and decoding can be resumed. Input: pass the latest\ntoken back unchanged in CreateInteraction to continue decoding.",
+    )
     input: str | list[Content] | list[Turn] | Content = Field(..., description="The inputs for the interaction.")
     agent_config: DynamicAgentConfig | DeepResearchAgentConfig | None = Field(
         None, description="Configuration for the agent.", discriminator="type"
@@ -1080,6 +1102,7 @@ class InteractionsAPIResponse(BaseLiteLLMOpenAIResponseObject):
     # New schema field (Api-Revision: 2026-05-20).
     steps: list[dict[str, Any]] | None = None
     usage: dict[str, Any] | None = None
+    continuation_token: str | None = None
 
     _hidden_params: dict = PrivateAttr(default_factory=dict)
 
@@ -1126,6 +1149,7 @@ class InteractionsAPIStreamingResponse(BaseLiteLLMOpenAIResponseObject):
     step: dict[str, Any] | None = None
     interaction_id: str | None = None
     interaction: dict[str, Any] | None = None
+    continuation_token: str | None = None
 
     _hidden_params: dict = PrivateAttr(default_factory=dict)
 
