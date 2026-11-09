@@ -1,17 +1,19 @@
 """Live e2e: a few hundred requests that fail before any provider answers must not
-grow the proxy's resident memory past a loose ceiling once the proxy is warm.
+grow the proxy's resident memory past a loose ceiling once the proxy is warm. It reads
+the proxy's own RSS, so it runs in the perf lane, where nothing else is hitting the stack.
 
 The regression this guards shipped in v1.100.0: every retry breadcrumb copied the
 whole request and the copies nested into one router-global list, so a proxy under
 retry-heavy failing traffic grew until it was OOM-killed. The traffic here has that
 shape: a model group whose deployments refuse at the socket (an unreachable base
-URL) with cooldown_time 0 so the router keeps retrying them, per-request retries,
-and a fallback group that refuses the same way, each request carrying a long chat
+URL, with a literal key since the perf stack carries no provider keys) with
+cooldown_time 0 so the router keeps retrying them, per-request retries, and a
+fallback group that refuses the same way, each request carrying a long chat
 transcript so every whole-request copy costs hundreds of containers instead of a
-handful. Under the stack's cooldown policy a
-deployment that fails a handful of times in a row is benched (a bad-credential 401
-included), the router answers "No deployments available" without retrying, and the
-retry loop that leaks stops running; cooldown_time 0 keeps it running.
+handful. Under the stack's cooldown policy a deployment that fails a handful of
+times in a row is benched (a bad-credential 401 included), the router answers "No
+deployments available" without retrying, and the retry loop that leaks stops running;
+cooldown_time 0 keeps it running.
 
 Four identical batches run back to back. The first two are the warmup that grows
 the proxy's caches and allocator arenas, the last two are the measured window, and
@@ -35,19 +37,11 @@ single load-balanced address reaches the workers behind it one answer at a time,
 a worker that answered only one checkpoint would otherwise drop out of the
 comparison, which is where a leaking worker could hide.
 
-RSS alone is a coarse gauge: on the release stack (spend logs storing prompts,
-json logs, prometheus and otel callbacks) the same v1.100.0 breadcrumbs grew RSS
-by only about 15 MB per 300 failing requests, while every failing request's stored
-request snapshot carried a copy of the request per failed attempt, over 100 KB on
-the first call and a couple of MB once the copies nested, against tens of KB with
-the fix. So the first check sends one failing request before the phases, reads its
-spend log back through /spend/logs, and holds the stored request body to a fixed
-size budget: the deterministic catch for a breadcrumb that copies the whole
-request. It runs before the phases because the leaking writer drops its own rows
-under the phases' traffic (a queue budget hit, a recursion limit on the nested
-copies), which would turn the size check into a missing-row check.
+The stored-request half of that regression (every failing request's spend log carrying a
+copy of the request per failed attempt) is a deterministic size check, so it lives in
+tests/integration/spend/test_failing_request_stored_snapshot.py.
 
-A second, cheaper check holds the idle footprint: every worker's RSS as the harness
+A cheaper check holds the idle footprint: every worker's RSS as the harness
 read it at collection time, before this pytest process sent any traffic (see
 conftest.pytest_collection_finish), must sit under a fixed budget. On the
 release gate that is a fresh stack right after its readiness gate, one worker per
@@ -74,7 +68,6 @@ from typing import Final
 
 import pytest
 
-from complexity_router_client import ComplexityRouterClient
 from e2e_config import (
     MEMORY_CONCURRENCY,
     MEMORY_IDLE_RSS_BUDGET_MB,
@@ -83,7 +76,6 @@ from e2e_config import (
     MEMORY_RSS_CEILING_MB,
     MEMORY_RSS_SAMPLE_INTERVAL_SECONDS,
     MEMORY_RSS_SETTLE_SAMPLES,
-    MEMORY_STORED_REQUEST_BUDGET_KB,
     MEMORY_TRANSCRIPT_TURNS,
     PROXY_REPLICA_URLS,
     unique_marker,
@@ -91,11 +83,12 @@ from e2e_config import (
 from e2e_metadata import Domain, Mode, Provider, Subject, meta
 from lifecycle import ResourceManager
 from memory_readings import RssCapture, RssReading, WorkerKey, read_rss_everywhere
-from models import ChatMessage, RouterSettingsOverride, SpendLogRow
+from models import ChatMessage, LiteLLMParamsBody, ReliabilityChatBody, RouterSettingsOverride
 from proxy_client import ProxyClient
-from reliability_support import REAL_MODEL, chat_override, create_never_benched_refusing_deployment
 
-pytestmark = [pytest.mark.e2e, pytest.mark.quiet_stack]
+pytestmark = [pytest.mark.e2e, pytest.mark.perf]
+
+REFUSING_MODEL: Final = "openai/gpt-5.5"
 
 DEPLOYMENTS_PER_GROUP: Final = 2
 RSS_SAMPLE_CAP: Final = 4 * MEMORY_RSS_SETTLE_SAMPLES
@@ -110,7 +103,6 @@ class FailedCall:
     status_code: int
     seconds: float
     body_head: str
-    call_id: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -123,8 +115,17 @@ class WorkerGrowth:
         return self.after.ram_usage_mb - self.warm.ram_usage_mb
 
 
+def _create_never_benched_refusing_deployment(proxy: ProxyClient, name: str) -> str:
+    return proxy.create_model(
+        name,
+        LiteLLMParamsBody(
+            model=REFUSING_MODEL, api_key="sk-unreachable", api_base="http://127.0.0.1:9/v1", cooldown_time=0
+        ),
+    )
+
+
 def _register_refusing_group(proxy: ProxyClient, resources: ResourceManager, name: str) -> None:
-    for model_id in tuple(create_never_benched_refusing_deployment(proxy, name) for _ in range(DEPLOYMENTS_PER_GROUP)):
+    for model_id in tuple(_create_never_benched_refusing_deployment(proxy, name) for _ in range(DEPLOYMENTS_PER_GROUP)):
         resources.defer(lambda model_id=model_id: proxy.delete_model(model_id))
 
 
@@ -141,10 +142,18 @@ TRANSCRIPT: Final = _transcript(MEMORY_TRANSCRIPT_TURNS)
 
 def _fail_once(proxy: ProxyClient, key: str, model: str, override: RouterSettingsOverride) -> FailedCall:
     started: Final = time.perf_counter()
-    resp: Final = chat_override(
-        proxy, key, model, f"memory regression {unique_marker()}", override=override, history=TRANSCRIPT
+    resp: Final = proxy.transport.send(
+        "/chat/completions",
+        headers=proxy.transport.bearer(key),
+        json=ReliabilityChatBody(
+            model=model,
+            messages=[*TRANSCRIPT, ChatMessage(role="user", content=f"memory regression {unique_marker()}")],
+            max_tokens=512,
+            router_settings_override=override,
+            cache={"no-cache": True},
+        ),
     )
-    return FailedCall(resp.status_code, time.perf_counter() - started, resp.body[:300], resp.call_id)
+    return FailedCall(resp.status_code, time.perf_counter() - started, resp.body[:300])
 
 
 def _fail_many(proxy: ProxyClient, key: str, model: str, override: RouterSettingsOverride) -> tuple[FailedCall, ...]:
@@ -259,24 +268,6 @@ def _assert_every_call_failed_through_fallback(calls: Sequence[FailedCall], fall
     )
 
 
-def _stored_request_kb(proxy: ProxyClient, call: FailedCall) -> float:
-    assert call.call_id, (
-        f"the failing call carried no x-litellm-call-id header, so its spend log cannot be read back: {call.body_head}"
-    )
-    rows: Final[Sequence[SpendLogRow]] = proxy.poll_logs_for_request_id(call.call_id)
-    assert rows, (
-        f"no spend log row appeared for failing call {call.call_id} within the poll window: either the stack "
-        "writes no spend logs or its writer dropped the row, which the v1.100.0 one did once the stored "
-        "request outgrew the writer's queue budget"
-    )
-    snapshot: Final = rows[0].proxy_server_request
-    assert snapshot, (
-        f"spend log {call.call_id} stored no request body, so the stack is not running with "
-        "general_settings.store_prompts_in_spend_logs and the stored-request check would pass vacuously"
-    )
-    return len(json.dumps(snapshot).encode()) / 1024
-
-
 class TestReliabilityMemory:
     @pytest.mark.covers("reliability.perf.idle_memory.under_slo")
     @meta(
@@ -309,13 +300,13 @@ class TestReliabilityMemory:
         Subject(
             domain=Domain.ROUTING,
             providers=(Provider.OPENAI,),
-            models=(REAL_MODEL,),
+            models=(REFUSING_MODEL,),
             mode=Mode.NONSTREAM,
         )
     )
-    def test_failing_requests_do_not_grow_rss_or_stored_request(
+    def test_failing_requests_do_not_grow_rss(
         self,
-        client: ComplexityRouterClient,
+        proxy: ProxyClient,
         resources: ResourceManager,
         scoped_key: str,
         record_property: Callable[[str, object], None],
@@ -323,35 +314,25 @@ class TestReliabilityMemory:
         marker: Final = unique_marker()
         primary: Final = f"reliability-memory-{marker}"
         fallback: Final = f"reliability-memory-fb-{marker}"
-        _register_refusing_group(client.proxy, resources, primary)
-        _register_refusing_group(client.proxy, resources, fallback)
+        _register_refusing_group(proxy, resources, primary)
+        _register_refusing_group(proxy, resources, fallback)
         override: Final = RouterSettingsOverride(
             num_retries=MEMORY_RETRIES_PER_REQUEST, fallbacks=[{primary: [fallback]}]
         )
 
-        probe: Final = _fail_once(client.proxy, scoped_key, primary, override)
-        _assert_every_call_failed_through_fallback((probe,), fallback)
-        stored_kb: Final = _stored_request_kb(client.proxy, probe)
-        assert stored_kb <= MEMORY_STORED_REQUEST_BUDGET_KB, (
-            f"the spend log of one failing request stored a {stored_kb:.0f} KB request body, past the "
-            f"{MEMORY_STORED_REQUEST_BUDGET_KB:.0f} KB budget for a {len(TRANSCRIPT)}-message transcript with "
-            f"{MEMORY_RETRIES_PER_REQUEST} retries and a fallback; the retry breadcrumbs are copying the whole "
-            f"request into the stored snapshot the way the v1.100.0 ones did"
-        )
-
         warm: Final = _settled_rss_after_batches(
-            client.proxy,
+            proxy,
             scoped_key,
             primary,
             override,
             fallback,
             record_property,
-            _settled_rss_per_worker(client.proxy),
+            _settled_rss_per_worker(proxy),
             1,
             WARMUP_BATCHES,
         )
         after: Final = _settled_rss_after_batches(
-            client.proxy,
+            proxy,
             scoped_key,
             primary,
             override,
