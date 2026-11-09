@@ -38,6 +38,7 @@ from litellm.integrations.otel.model.payloads import (
     RequestIdentity,
     _upstream_address_port,
 )
+from litellm.integrations.otel.model.semconv import PASSTHROUGH_OPERATION_KEY
 from litellm.integrations.otel.model.spans import (
     SPAN_REGISTRY,
     LiteLLMSpanKind,
@@ -47,6 +48,7 @@ from litellm.integrations.otel.model.spans import (
     validate_registry,
 )
 from litellm.integrations.otel.model.trace_controls import TraceControls, caller_trace_controls
+from litellm.types.responses.main import build_web_search_call
 
 
 @pytest.fixture(autouse=True)
@@ -221,6 +223,16 @@ def test_operation_resolution():
     assert resolve_operation(None) is GenAIOperation.CHAT
     # An MCP tool call is an ``execute_tool`` operation, not a chat completion.
     assert resolve_operation("call_mcp_tool") is GenAIOperation.EXECUTE_TOOL
+
+
+def test_passthrough_operation_wins_over_the_call_type() -> None:
+    assert resolve_operation("pass_through_endpoint", GenAIOperation.RETRIEVAL) is GenAIOperation.RETRIEVAL
+    assert resolve_operation("pass_through_endpoint", "retrieval") is GenAIOperation.CHAT
+    event: Final = LLMCallEvent.from_dict(
+        {"call_type": "pass_through_endpoint", "model": "unknown", PASSTHROUGH_OPERATION_KEY: GenAIOperation.RETRIEVAL}
+    )
+    assert event.operation is GenAIOperation.RETRIEVAL
+    assert event.provisional_span_name == "retrieval unknown"
 
 
 @pytest.mark.parametrize("call_type", ["vector_store_search", "avector_store_search"])
@@ -527,6 +539,27 @@ def test_llm_call_adapter_extracts_all_fields():
     assert data.identity.key_hash == "hsh"
 
 
+@pytest.mark.parametrize(
+    ("model_group", "response_model", "expected"),
+    [
+        ("auto-router", "auto-router", ("gpt-4o-group", "gpt-4o-group")),
+        ("smart", "smart", ("gpt-4o-group", "gpt-4o-group")),
+        ("auto-router", "gpt-4o-2024", ("gpt-4o-group", "gpt-4o-2024")),
+        (None, None, ("gpt-4o", None)),
+    ],
+    ids=["restamped-to-router", "restamped-to-alias", "provider-model", "no-group-no-response"],
+)
+def test_llm_call_adapter_names_the_routed_model_for_an_auto_router_call(model_group, response_model, expected):
+    data = LLMCallSpanData.from_standard_logging_payload(
+        _sample_payload(
+            model_group=model_group,
+            response={"id": "resp_1", "model": response_model, "choices": [{"finish_reason": "stop"}]},
+            metadata={"routing_decision": {"routed_model": "gpt-4o-group"}},
+        )
+    )
+    assert (data.request_model, data.response_model) == expected
+
+
 def test_llm_call_adapter_extracts_cache_tokens_from_usage_object():
     payload = _sample_payload()
     payload["metadata"] = {
@@ -785,6 +818,39 @@ def test_responses_tool_calls_fold_into_the_assistant_message_with_tool_calls_fi
         {"id": "call_2", "type": "function", "function": {"name": "grep", "arguments": "-r TODO"}},
     ]
     assert data.finish_reasons == ("tool_calls",)
+
+
+def test_responses_claude_web_calls_lead_the_tool_calls_without_ending_the_turn_on_tool_calls():
+    claude_fetch: Final = (
+        build_web_search_call("srvtoolu_01", {"url": "https://example.com/"}, None, tool_name="web_fetch")
+    )
+    openai_search: Final = {
+        "type": "web_search_call",
+        "id": "ws_1",
+        "status": "completed",
+        "action": {"type": "search", "query": "news"},
+    }
+    client_call: Final = {"type": "function_call", "call_id": "call_1", "name": "get_weather", "arguments": "{}"}
+    claude_tool_call: Final = {
+        "id": "srvtoolu_01",
+        "type": "function",
+        "function": {"name": "web_fetch", "arguments": '{"url": "https://example.com/"}'},
+    }
+
+    hosted_only: Final = LLMCallSpanData.from_standard_logging_payload(
+        _responses_payload([_RESPONSES_TEXT_ITEM, claude_fetch.model_dump(), openai_search]), capture_content=True
+    )
+    with_client_call: Final = LLMCallSpanData.from_standard_logging_payload(
+        _responses_payload([_RESPONSES_TEXT_ITEM, claude_fetch.model_dump(), client_call]), capture_content=True
+    )
+
+    assert json.loads(json.dumps(hosted_only.choices_out[0]["message"]["tool_calls"])) == [claude_tool_call]
+    assert hosted_only.finish_reasons == ("stop",)
+    assert json.loads(json.dumps(with_client_call.choices_out[0]["message"]["tool_calls"])) == [
+        claude_tool_call,
+        {"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": "{}"}},
+    ]
+    assert with_client_call.finish_reasons == ("tool_calls",)
 
 
 def test_responses_tool_call_only_output_has_no_content():

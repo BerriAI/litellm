@@ -11,6 +11,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.types.router import RouterRateLimitError
+from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 
 
 def _setup_model_block_mocks(monkeypatch, *, updated_blocked: bool):
@@ -34,7 +35,7 @@ def _setup_model_block_mocks(monkeypatch, *, updated_blocked: bool):
     mock_prisma_client = MagicMock()
     mock_prisma_client.db.litellm_proxymodeltable = model_table
 
-    mock_router = MagicMock()
+    mock_router = route_entry_points_to_stubs(MagicMock())
     mock_router.get_model_ids.return_value = [model_id]
 
     # No reconcile ran in these tests, so both fields are None and the verdict falls

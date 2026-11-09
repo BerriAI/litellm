@@ -17,6 +17,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
 )
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
+from litellm.llms.custom_httpx.sse_lines import iter_sse_lines
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import Choices, Message, ModelResponse, Usage
@@ -357,14 +358,17 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
         api_key: str | None = None,
     ) -> list[dict[str, str]]:
         streamed_response: Final = CustomStreamWrapper(
-            completion_stream=response.iter_lines(),
+            completion_stream=iter_sse_lines(response.iter_text()),
             model=model,
             custom_llm_provider="huggingface",
             logging_obj=logging_obj,
         )
         content: str = ""
         for chunk in streamed_response:
-            content += chunk["choices"][0]["delta"]["content"]
+            delta_content = chunk.choices[0].delta.content
+            if delta_content is None:
+                raise TypeError('can only concatenate str (not "NoneType") to str')
+            content += delta_content
         completion_response: Final[list[dict[str, str]]] = [{"generated_text": content}]
         ## LOGGING
         logging_obj.post_call(

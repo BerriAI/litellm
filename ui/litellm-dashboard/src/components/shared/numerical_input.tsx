@@ -1,5 +1,6 @@
 import React from "react";
 import { Input } from "@/components/ui/input";
+import i18n from "@/i18n/i18n";
 
 interface NumericalInputProps {
   step?: number;
@@ -24,7 +25,15 @@ interface NumericalInputProps {
  */
 const NumericalInput = React.forwardRef<HTMLInputElement, NumericalInputProps>(
   (
-    { step = 0.01, style = { width: "100%" }, placeholder = "Enter a numerical value", min, max, onChange, ...rest },
+    {
+      step = 0.01,
+      style = { width: "100%" },
+      placeholder = i18n.t("shared.numericalInput.placeholder"),
+      min,
+      max,
+      onChange,
+      ...rest
+    },
     ref,
   ) => (
     <Input

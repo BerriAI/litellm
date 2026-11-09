@@ -7,8 +7,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import orjson
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
-from starlette.datastructures import FormData
+from starlette.datastructures import FormData, Headers, UploadFile
 from starlette.requests import Request
 
 
@@ -23,6 +24,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     safe_get_request_query_params,
     safe_set_request_parsed_body,
     coerce_numeric_form_fields,
+    convert_upload_files_to_file_data,
     get_form_data,
     get_request_body,
     get_tags_from_request_body,
@@ -62,6 +64,24 @@ def _starlette_request(
         return {"type": "http.request", "body": next(chunks, b""), "more_body": False}
 
     return Request(scope, receive)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path, path_params", [
+    ("/claude-code/plugins/skill/archive/digest.zip", {"plugin_name": "skill"}),
+    ("/vector_stores/vs-safe/files", {}),
+])
+async def test_request_vector_store_values_cannot_forge_debug_log_lines(
+    path: str, path_params: Mapping[str, str], caplog: pytest.LogCaptureFixture,
+) -> None:
+    untrusted: Final = "private-value\r\nFORGED LOG LINE"
+    request: Final = _starlette_request(b"{}", "application/json", path)
+    request.scope["path_params"] = dict(path_params)
+    with caplog.at_level("DEBUG", logger=http_parsing_utils.verbose_proxy_logger.name):
+        result: Final = populate_request_with_path_params({"vector_store_ids": [untrusted]}, request)
+    assert untrusted in result["vector_store_ids"]
+    assert "private-value" not in caplog.text
+    assert "FORGED LOG LINE" not in caplog.text
 
 
 @pytest.mark.asyncio
@@ -376,7 +396,7 @@ async def test_form_data_with_json_metadata():
 
 
 @pytest.mark.asyncio
-async def test_form_data_with_invalid_json_metadata():
+async def test_form_data_with_invalid_json_metadata() -> None:
     """
     Test that form data with invalid JSON in metadata field raises an exception.
 
@@ -397,9 +417,10 @@ async def test_form_data_with_invalid_json_metadata():
     mock_request.scope = {}
     mock_request.state._cached_headers = None
 
-    # Should raise JSONDecodeError when trying to parse invalid JSON metadata
-    with pytest.raises(json.JSONDecodeError):
+    with pytest.raises(ProxyException) as exc_info:
         await read_request_body(mock_request)
+    assert exc_info.value.code == "400"
+    assert exc_info.value.param == "metadata"
 
 
 @pytest.mark.asyncio
@@ -785,6 +806,17 @@ async def test_get_form_data():
     assert result["temperature"] == "0.2"
     assert result["include"] == ["logprobs"]
     assert result["timestamp_granularities"] == ["word", "segment"]
+    assert tuple(result) == (
+        "file",
+        "model",
+        "include",
+        "language",
+        "prompt",
+        "response_format",
+        "stream",
+        "temperature",
+        "timestamp_granularities",
+    )
 
 
 def test_get_tags_from_request_body_with_metadata_tags():
@@ -1692,3 +1724,65 @@ async def test_form_data_metadata_keeps_non_ascii_and_valid_surrogate_pairs():
     result = await read_request_body(mock_request)
 
     assert result["metadata"]["tags"] == ["café", "😀"]
+
+
+def _request_whose_client_disconnects_mid_upload(content_type: str) -> Request:
+    scope: Final = {
+        "type": "http",
+        "method": "POST",
+        "path": "/v1/chat/completions",
+        "headers": [(b"content-type", content_type.encode()), (b"content-length", b"96")],
+        "query_string": b"",
+    }
+
+    async def receive() -> Message:
+        return {"type": "http.disconnect"}
+
+    return Request(scope, receive)
+
+
+@pytest.mark.parametrize(
+    "content_type",
+    ("application/json", "multipart/form-data; boundary=synthetic-boundary", "application/x-protobuf"),
+)
+async def test_read_request_body_aborts_with_499_when_the_client_disconnects_mid_upload(content_type: str) -> None:
+    request: Final = _request_whose_client_disconnects_mid_upload(content_type)
+    with pytest.raises(HTTPException) as raised:
+        await read_request_body(request)
+    assert (raised.value.status_code, raised.value.detail) == (499, "Client disconnected the request")
+    assert _safe_get_request_parsed_body(request) is None, "a half-received body must never be cached as {}"
+
+
+async def test_read_request_body_closes_the_otel_server_span_when_the_client_disconnects_mid_upload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy import proxy_server
+
+    span: Final = MagicMock()
+    monkeypatch.setattr(proxy_server, "open_telemetry_logger", MagicMock(), raising=False)
+    request: Final = _request_whose_client_disconnects_mid_upload("application/json")
+    request.state.parent_otel_span = span
+    with pytest.raises(HTTPException):
+        await read_request_body(request)
+    assert (span.end.called, request.state.parent_otel_span) == (True, None), "the auth-time span must not dangle"
+
+
+def _upload(filename: str, content: bytes, content_type: str) -> UploadFile:
+    return UploadFile(file=io.BytesIO(content), filename=filename, headers=Headers({"content-type": content_type}))
+
+
+@pytest.mark.asyncio
+async def test_convert_upload_files_to_file_data_reads_every_upload_into_file_tuples():
+    form_data: Final = {
+        "files": [_upload("a.txt", b"alpha", "text/plain"), _upload("b.json", b"{}", "application/json")],
+        "file": _upload("skill.zip", b"PK", "application/zip"),
+        "tags": ["red", "blue"],
+        "display_title": "My skill",
+    }
+
+    assert await convert_upload_files_to_file_data(form_data) == {
+        "files": [("a.txt", b"alpha", "text/plain"), ("b.json", b"{}", "application/json")],
+        "file": [("skill.zip", b"PK", "application/zip")],
+        "tags": ["red", "blue"],
+        "display_title": "My skill",
+    }

@@ -9,9 +9,7 @@ pub struct HeaderError {
 use litellm_core_utils::core_helpers::json_type_name;
 use serde_json::{Map, Value};
 
-/// Max characters of an upstream error body echoed across the call boundary
-/// before truncation, so provider bodies are bounded and data-minimized.
-const UPSTREAM_ERROR_BODY_MAX_CHARS: usize = 256;
+use crate::Error;
 
 pub enum HeaderPolicy<'a> {
     All,
@@ -40,25 +38,27 @@ pub fn with_headers(
         })
 }
 
-pub async fn http_request(
-    request: reqwest::RequestBuilder,
-) -> Result<reqwest::Response, reqwest::Error> {
-    request.send().await
+pub async fn http_request(request: reqwest::RequestBuilder) -> Result<reqwest::Response, Error> {
+    Ok(request.send().await?)
 }
 
 pub async fn execute_http_request(
     client: &reqwest::Client,
     request: reqwest::Request,
-) -> Result<reqwest::Response, reqwest::Error> {
-    client.execute(request).await
+) -> Result<reqwest::Response, Error> {
+    Ok(client.execute(request).await?)
 }
 
-pub fn truncate_error_body(body: &str) -> String {
-    if body.chars().count() <= UPSTREAM_ERROR_BODY_MAX_CHARS {
-        return body.to_string();
-    }
-    let truncated: String = body.chars().take(UPSTREAM_ERROR_BODY_MAX_CHARS).collect();
-    format!("{truncated}... (truncated)")
+pub fn header_pairs(headers: &reqwest::header::HeaderMap) -> Vec<(String, String)> {
+    headers
+        .iter()
+        .filter_map(|(name, value)| {
+            value
+                .to_str()
+                .ok()
+                .map(|value| (name.to_string(), value.to_string()))
+        })
+        .collect()
 }
 
 pub fn string_headers(
@@ -201,22 +201,6 @@ mod tests {
                 .starts_with("multipart/form-data; boundary=")
         );
         assert_ne!(request.headers()["content-length"], "0");
-    }
-
-    #[test]
-    fn truncate_leaves_short_bodies_untouched() {
-        assert_eq!(truncate_error_body("short"), "short");
-    }
-
-    #[test]
-    fn truncate_bounds_long_bodies_by_characters() {
-        let body = "\u{00e9}".repeat(UPSTREAM_ERROR_BODY_MAX_CHARS + 10);
-        let truncated = truncate_error_body(&body);
-        assert!(truncated.ends_with("... (truncated)"));
-        assert_eq!(
-            truncated.chars().count(),
-            UPSTREAM_ERROR_BODY_MAX_CHARS + "... (truncated)".chars().count()
-        );
     }
 
     #[test]
