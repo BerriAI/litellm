@@ -4408,6 +4408,7 @@ dependencies = [
  "litellm-redis-resolve",
  "litellm-redis-store",
  "litellm-redis-types",
+ "litellm-request-auth-core",
  "litellm-router-core",
  "litellm-router-types",
  "litellm-secret-value",
@@ -4560,6 +4561,19 @@ dependencies = [
  "litellm-secret-value",
  "rstest",
  "url",
+]
+
+[[package]]
+name = "litellm-request-auth-core"
+version = "0.1.0"
+dependencies = [
+ "litellm-secret-value",
+ "rstest",
+ "serde",
+ "sha2 0.10.9",
+ "strum",
+ "thiserror 2.0.19",
+ "veil",
 ]
 
 [[package]]

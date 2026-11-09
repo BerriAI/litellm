@@ -13,6 +13,7 @@ mod model_registry;
 mod preflight;
 mod python_settings;
 mod redis;
+mod request_auth;
 mod router;
 mod routes;
 mod secrets;
@@ -59,6 +60,12 @@ mod _native {
     #[pymodule_export]
     use crate::redis::store::{
         NativePending, NativeRedisStoreError, router_cooldowns::NativeRouterCooldowns,
+    };
+    #[pymodule_export]
+    use crate::request_auth::{
+        NativeAuthContinuation, request_auth_budgets, request_auth_litellm_header_token,
+        request_auth_scheme_credential, request_auth_select_api_key,
+        request_auth_select_websocket_api_key, request_auth_start,
     };
     #[pymodule_export]
     use crate::router::{RouterCall, RouterCoreHandle};
