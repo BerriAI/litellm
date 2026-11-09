@@ -6,15 +6,18 @@ from typing import Literal
 from typing_extensions import NotRequired, ReadOnly, Required, TypedDict
 
 # Known Anthropic error types
-# Source: https://docs.anthropic.com/en/api/errors
+# Source: https://platform.claude.com/docs/en/api/errors
 AnthropicErrorType = Literal[
     "invalid_request_error",
     "authentication_error",
+    "billing_error",
     "permission_error",
     "not_found_error",
+    "conflict_error",
     "request_too_large",
     "rate_limit_error",
     "api_error",
+    "timeout_error",
     "overloaded_error",
 ]
 
@@ -25,6 +28,7 @@ class AnthropicErrorDetail(TypedDict):
     type: AnthropicErrorType
     message: str
     provider_specific_fields: NotRequired[ReadOnly[Mapping[str, object]]]
+    litellm_error_type: NotRequired[ReadOnly[str]]
     litellm_call_id: NotRequired[ReadOnly[str]]
 
 

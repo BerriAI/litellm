@@ -1,5 +1,6 @@
 import asyncio
 import json
+from contextlib import asynccontextmanager
 from types import MappingProxyType, SimpleNamespace
 from typing import Final, Mapping, Optional, cast
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -1189,6 +1190,27 @@ async def _run_legacy_update_organization(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    ("body", "twin_after"),
+    [
+        ({"organization_id": "org-1", "spend": 0.0}, None),
+        ({"organization_id": "org-1", "organization_alias": "renamed"}, 7.0),
+    ],
+)
+async def test_legacy_update_drops_the_committed_org_spend_only_when_it_writes_the_stored_spend(
+    monkeypatch, body, twin_after
+):
+    from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
+
+    spend: Final = FakeSpendCounters(redis=None, memory={"spend:committed:org:org-1": 7.0})
+    monkeypatch.setattr("litellm.proxy.proxy_server.spend_counter_store", spend.store())
+
+    await _run_legacy_update_organization(monkeypatch, body=body, existing_budget_id="budget-1")
+
+    assert spend.memory.get("spend:committed:org:org-1") == twin_after
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     "body",
     [
         {"organization_id": "org-1", "tpm_limit": None},
@@ -1560,6 +1582,12 @@ async def test_delete_organization_evicts_the_cache_of_the_keys_it_deletes(monke
     prisma_client.db.litellm_jwtkeymapping = jwt_table
     prisma_client.db.litellm_organizationtable.delete = AsyncMock(return_value=MagicMock())
 
+    @asynccontextmanager
+    async def transaction():
+        yield prisma_client.db
+
+    prisma_client.tx = transaction
+
     monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True, raising=False)
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma_client)
     monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", cache)
@@ -1573,6 +1601,49 @@ async def test_delete_organization_evicts_the_cache_of_the_keys_it_deletes(monke
     assert all(cache.get_cache(key=cache_key) is None for cache_key in doomed_cache_keys)
     assert all(cache.get_cache(key=cache_key) == {"retained": True} for cache_key in kept_cache_keys)
     assert jwt_table.rows == (kept_row,)
+
+
+@pytest.mark.asyncio
+async def test_delete_organization_drops_the_committed_spend_of_the_org_and_its_teams(monkeypatch):
+    from litellm.proxy._types import DeleteOrganizationRequest, LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.management_endpoints.organization_endpoints import delete_organization
+    from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
+
+    spend: Final = FakeSpendCounters(
+        redis=None,
+        memory={
+            "spend:committed:org:org-doomed": 7.0,
+            "spend:committed:team:team-in-org": 5.0,
+            "spend:committed:org:org-kept": 3.0,
+            "spend:committed:team:team-elsewhere": 2.0,
+        },
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.spend_counter_store", spend.store())
+    prisma_client: Final = AsyncMock()
+    prisma_client.db.litellm_teamtable.find_many = AsyncMock(
+        return_value=[SimpleNamespace(team_id="team-in-org", organization_id="org-doomed")]
+    )
+    prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    prisma_client.db.litellm_jwtkeymapping.find_many = AsyncMock(return_value=[])
+    prisma_client.db.litellm_organizationtable.delete = AsyncMock(return_value=MagicMock())
+
+    @asynccontextmanager
+    async def transaction():
+        yield prisma_client.db
+
+    prisma_client.tx = transaction
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True, raising=False)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", UserApiKeyCache())
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", None)
+
+    await delete_organization(
+        data=DeleteOrganizationRequest(organization_ids=["org-doomed"]),
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+
+    assert spend.memory == {"spend:committed:org:org-kept": 3.0, "spend:committed:team:team-elsewhere": 2.0}
 
 
 @pytest.mark.asyncio
@@ -1615,3 +1686,99 @@ async def test_delete_organization_is_refused_while_one_of_its_teams_holds_a_ptu
     prisma_client.db.litellm_teamtable.delete_many.assert_not_called()
     prisma_client.db.litellm_verificationtoken.delete_many.assert_not_called()
     prisma_client.db.litellm_organizationtable.delete.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_organization_member_add_reports_an_unknown_org_as_a_request_error_not_an_auth_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    from fastapi import Request
+
+    from litellm.proxy._types import (
+        LitellmUserRoles,
+        OrganizationMemberAddRequest,
+        OrgMember,
+        ProxyException,
+        UserAPIKeyAuth,
+    )
+    from litellm.proxy.management_endpoints.organization_endpoints import organization_member_add
+
+    mock_prisma_client: Final = MagicMock()
+    mock_prisma_client.db.litellm_organizationtable.find_unique = AsyncMock(return_value=None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    with pytest.raises(ProxyException) as exc_info:
+        await organization_member_add(
+            data=OrganizationMemberAddRequest(
+                organization_id="no-such-org",
+                member=OrgMember(role="internal_user", user_id="someone"),
+            ),
+            http_request=MagicMock(spec=Request),
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    assert (exc_info.value.code, exc_info.value.type) == ("404", "invalid_request_error")
+    assert "Authentication Error" not in exc_info.value.message
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("budget_duration", ["30d", None])
+async def test_new_organization_schedules_budget_reset_from_duration(monkeypatch, budget_duration):
+    """/organization/new with an inline budget_duration must write budget_reset_at on the auto-created
+    budget row, the way team create and /budget/new do, or the org budget never resets and the UI
+    cannot show the current budget period."""
+    from datetime import datetime
+
+    from litellm.proxy._types import LitellmUserRoles, NewOrganizationRequest, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.organization_endpoints import new_organization
+    from litellm.proxy.utils import PrismaClient
+
+    prisma_client = MagicMock()
+    prisma_client.jsonify_object = MagicMock(side_effect=lambda data: PrismaClient.jsonify_object(prisma_client, data))
+    prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
+    prisma_client.db.litellm_budgettable.create = AsyncMock(return_value=MagicMock(budget_id="budget-1"))
+    prisma_client.db.litellm_organizationtable.create = AsyncMock(return_value={"organization_id": "org-1"})
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", MagicMock())
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True, raising=False)
+
+    await new_organization(
+        data=NewOrganizationRequest(organization_alias="org", max_budget=100, budget_duration=budget_duration),
+        user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+
+    budget_write = prisma_client.db.litellm_budgettable.create.await_args.kwargs["data"]
+    if budget_duration is None:
+        assert "budget_reset_at" not in budget_write, budget_write
+        return
+    reset_at = budget_write["budget_reset_at"]
+    assert isinstance(reset_at, datetime) and reset_at.tzinfo is not None, budget_write
+    assert budget_write["budget_duration"] == budget_duration
+
+
+def test_organization_info_response_keeps_budget_reset_at():
+    """/organization/info must return the budget row's budget_reset_at so the dashboard can show
+    which budget period the org's spend covers."""
+    from datetime import datetime, timezone
+
+    from litellm.proxy._types import LiteLLM_OrganizationTableWithMembers
+
+    reset_at = datetime(2026, 11, 1, tzinfo=timezone.utc)
+    created_at = datetime(2026, 10, 1, tzinfo=timezone.utc)
+    response = LiteLLM_OrganizationTableWithMembers(
+        organization_id="org-1",
+        organization_alias="org",
+        budget_id="budget-1",
+        models=[],
+        created_by="admin",
+        updated_by="admin",
+        created_at=created_at,
+        updated_at=created_at,
+        litellm_budget_table={
+            "budget_id": "budget-1",
+            "max_budget": 100.0,
+            "budget_duration": "30d",
+            "budget_reset_at": reset_at,
+            "created_at": created_at,
+        },
+    )
+
+    assert response.model_dump()["litellm_budget_table"]["budget_reset_at"] == reset_at

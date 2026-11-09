@@ -6,8 +6,8 @@ use std::io::{self, Write};
 use serde::Serialize;
 use serde_json::ser::{Formatter, Serializer};
 
-use super::Error;
 use super::types::TextValue;
+use super::{Error, Unsupported};
 
 pub(super) fn dumps(value: &TextValue) -> Result<String, Error> {
     let mut output = Vec::with_capacity(serialized_len(value)?);
@@ -16,9 +16,9 @@ pub(super) fn dumps(value: &TextValue) -> Result<String, Error> {
             &mut output,
             PythonFormatter,
         ))
-        .map_err(Error::JsonSerialization)?;
+        .map_err(Unsupported::JsonSerialization)?;
     debug_assert_eq!(output.len(), output.capacity());
-    String::from_utf8(output).map_err(Error::JsonUtf8)
+    String::from_utf8(output).map_err(|error| Unsupported::JsonUtf8(error).into())
 }
 
 fn serialized_len(value: &TextValue) -> Result<usize, Error> {
@@ -29,7 +29,7 @@ fn serialized_len(value: &TextValue) -> Result<usize, Error> {
         TextValue::Number(number) => match (number.as_i64(), number.as_u64()) {
             (Some(number), _) => Ok(unsigned_len(number.unsigned_abs()) + usize::from(number < 0)),
             (_, Some(number)) => Ok(unsigned_len(number)),
-            _ => Err(Error::FloatText),
+            _ => Err(Unsupported::FloatText.into()),
         },
         TextValue::Text(text) => Ok(quoted_len(text)),
         TextValue::List(items) => items
@@ -147,9 +147,9 @@ mod tests {
         let value = serde_json::from_str(input).expect("fixture parses");
         let error = dumps(&value).expect_err("floats are declined");
 
-        assert_eq!(
-            error.to_string(),
-            "unsupported by the rust token counter: float text values are counted by the python path"
-        );
+        assert!(matches!(
+            error,
+            crate::Error::Unsupported(crate::Unsupported::FloatText)
+        ));
     }
 }

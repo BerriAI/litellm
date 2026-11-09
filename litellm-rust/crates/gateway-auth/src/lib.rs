@@ -16,7 +16,7 @@ pub use authorization::{
     AccessRequest, AuthenticatedRequest, AuthorizedOperation, Authorizer, McpAction,
     NoAdditionalPolicy, Permissions, UiAction,
 };
-pub use error::{Error, KeyError, UiAuthError};
+pub use error::Error;
 pub use http::{Bearer, CredentialExtractor, RequireMasterKey, authenticate};
 pub use identity::{
     AuthenticatedCaller, Authentication, AuthenticationMethod, Principal, PrincipalKind,

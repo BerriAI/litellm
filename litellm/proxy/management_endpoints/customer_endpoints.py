@@ -14,7 +14,7 @@ from collections.abc import Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from datetime import datetime, timedelta
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, NamedTuple, Protocol, TypeVar, overload
+from typing import TYPE_CHECKING, Annotated, Final, NamedTuple, Protocol, TypeVar, overload
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -35,14 +35,16 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     end_user_cache_key,
     end_user_restricted_registry_cache_key,
 )
-from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity
+from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity, unless_database_fails
 from litellm.proxy.management_endpoints.common_utils import validate_budget_duration
 from litellm.proxy.management_helpers.object_permission_utils import (  # noqa: F401  # legacy module exports
     _set_object_permission,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     handle_update_object_permission_common,
     set_object_permission,
 )
+from litellm.proxy.spend_tracking.committed_spend import drop_committed_spend
 from litellm.proxy.utils import handle_exception_on_proxy
+from litellm.redis.stores.spend_counters import end_user_counter
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.chunked_in import find_many_in
 from litellm.repositories.table_repositories import EndUserRepository
@@ -84,6 +86,9 @@ if TYPE_CHECKING:
             self,
             where: Mapping[str, object] | None = None,
             include: Mapping[str, bool] | None = None,
+            take: int | None = None,
+            skip: int | None = None,
+            order: Mapping[str, str] | None = None,
         ) -> Sequence[_RowT_co]: ...
 
         async def create(
@@ -434,11 +439,11 @@ async def new_end_user(
                     status_code=422,
                     detail={"error": CommonProxyErrors.no_llm_router.value},
                 )
-            elif data.default_model not in llm_router.get_model_names():
+            elif data.default_model not in llm_router.registry().names():
                 raise HTTPException(
                     status_code=422,
                     detail={
-                        "error": f"Default Model not on proxy. Configure via `/model/new` or config.yaml. Default_model={data.default_model}, proxy_model_names={set(llm_router.get_model_names())}"
+                        "error": f"Default Model not on proxy. Configure via `/model/new` or config.yaml. Default_model={data.default_model}, proxy_model_names={set(llm_router.registry().names())}"
                     },
                 )
 
@@ -519,10 +524,12 @@ async def resolve_customer_daily_activity_scope(
     prisma_client: "PrismaClient",
 ) -> _CustomerDailyActivityScope:
     end_user_table: Final = _typed_table(EndUserRepository(prisma_client))
-    end_user_aliases: Final = (
-        await find_many_in(end_user_table, "user_id", end_user_ids)
+    end_user_aliases: Final = await unless_database_fails(
+        find_many_in(end_user_table, "user_id", end_user_ids)
         if end_user_ids is not None
-        else await end_user_table.find_many(where={})
+        else end_user_table.find_many(where={}),
+        (),
+        "its customer aliases",
     )
     metadata: Final = MappingProxyType({end_user.user_id: {"alias": end_user.alias} for end_user in end_user_aliases})
     return _CustomerDailyActivityScope(end_user_ids, metadata)
@@ -807,7 +814,7 @@ async def delete_end_user(
     See below for all params 
     ```
     """
-    from litellm.proxy.proxy_server import prisma_client
+    from litellm.proxy.proxy_server import prisma_client, spend_counter_store
 
     try:
         if prisma_client is None:
@@ -837,6 +844,9 @@ async def delete_end_user(
             verbose_proxy_logger.debug("received response from updating prisma client. response=%s", response)
 
             await _evict_end_user_cache_keys(_end_user_cache_keys(data.user_ids))
+            await drop_committed_spend(
+                spend_counter_store, tuple(end_user_counter(user_id) for user_id in data.user_ids)
+            )
 
             return DeleteCustomersResponse(
                 deleted_customers=response,
@@ -866,9 +876,15 @@ async def delete_end_user(
 async def list_end_user(
     http_request: Request,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    page: Annotated[int, fastapi.Query(ge=1, description="Page number")] = 1,
+    page_size: Annotated[int, fastapi.Query(ge=1, le=100, description="Number of customers per page")] = 50,
+    search: Annotated[
+        str | None,
+        fastapi.Query(description="Case-insensitive search by customer ID or alias"),
+    ] = None,
 ) -> list[CustomerResponse]:
     """
-    [Admin-only] List all available customers
+    [Admin-only] List customers in pages of up to 100, ordered by user ID. Defaults to 50 customers per page.
 
     Example curl:
     ```
@@ -896,7 +912,18 @@ async def list_end_user(
             )
 
         response: Final = await _typed_table(EndUserRepository(prisma_client)).find_many(
-            include={"litellm_budget_table": True, "object_permission": True}
+            where={
+                "OR": (
+                    {"user_id": {"contains": search, "mode": "insensitive"}},
+                    {"alias": {"contains": search, "mode": "insensitive"}},
+                )
+            }
+            if search
+            else None,
+            include={"litellm_budget_table": True, "object_permission": True},
+            take=page_size,
+            skip=(page - 1) * page_size,
+            order={"user_id": "asc"},
         )
 
         return [_to_customer_response(item) for item in response]
