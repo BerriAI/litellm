@@ -31441,7 +31441,7 @@ export interface components {
             use_google_kms?: boolean | null;
             /**
              * Use Spend Logs Ledger
-             * @description Apply request accounting from stored SpendLogs deliveries. Set to false to roll back to the previous in-memory and Redis spend queues.
+             * @description Apply request accounting from stored SpendLogs deliveries. Set to false to roll back to the previous in-memory and Redis spend queues. When unset, use_redis_transaction_buffer selects those queues instead.
              * @default true
              */
             use_spend_logs_ledger: boolean;

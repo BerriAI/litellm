@@ -94,6 +94,7 @@ from litellm.proxy.spend_tracking.savings import (
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
 from litellm.repositories.prisma_protocols import BatchTable
 from litellm.responses.streaming_iterator import spawn_logging_task
+from litellm.secret_managers.main import str_to_bool
 from litellm.types.utils import CallTypes
 from litellm.types.videos.utils import VIDEO_COST_REQUEST_ID_SUFFIX, VIDEO_STATUS_CALL_TYPES
 
@@ -164,6 +165,24 @@ def _org_member_transaction_key(org_id: str, user_id: str) -> str:
 
 
 ACCOUNTING_LEDGER_KWARG: Final = "accounting_ledger"
+
+
+def _setting_enabled(value: object) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return str_to_bool(value)
+    return None
+
+
+def spend_logs_ledger_enabled(proxy_settings: Mapping[str, object]) -> bool:
+    """An explicit ``use_spend_logs_ledger`` wins. Without one, ``use_redis_transaction_buffer``
+    keeps spend on the aggregated Redis queues it opted into, and the ledger stays the default
+    everywhere else."""
+    explicit: Final = _setting_enabled(proxy_settings.get("use_spend_logs_ledger"))
+    if explicit is not None:
+        return explicit
+    return _setting_enabled(proxy_settings.get("use_redis_transaction_buffer")) is not True
 
 
 def _persistable_api_key(token: str | None, logged_api_key: str) -> str | None:
@@ -734,7 +753,7 @@ class DBSpendUpdateWriter:
         proxy_settings: Final = cast(  # cast-ok: proxy settings use string keys
             Mapping[str, object], general_settings
         )
-        use_ledger: Final = proxy_settings.get("use_spend_logs_ledger", True) is not False
+        use_ledger: Final = spend_logs_ledger_enabled(proxy_settings)
         request_fields: Final = _SPEND_METADATA_ADAPTER.validate_python(kwargs or {})
         if kwargs is not None:
             kwargs[ACCOUNTING_LEDGER_KWARG] = use_ledger  # rebind-ok: spend counters leave ledger windows to the worker

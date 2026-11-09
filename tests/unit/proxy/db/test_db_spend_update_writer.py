@@ -5887,3 +5887,63 @@ async def test_request_error_counts_survive_the_ledger_path_switch(monkeypatch: 
     assert accumulator.drain() == {RequestErrorKey(
         date="2026-11-02", api_key=prisma.spend_log_transactions[0]["api_key"], team_id="", user_id="user", model_group="ledger-test", status_code=503,
     ): 1}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("general_settings", "expect_ledger"),
+    [
+        ({"use_redis_transaction_buffer": True}, False),
+        ({"use_redis_transaction_buffer": "true"}, False),
+        ({"use_redis_transaction_buffer": True, "use_spend_logs_ledger": True}, True),
+        ({"use_redis_transaction_buffer": True, "use_spend_logs_ledger": False}, False),
+        ({"use_spend_logs_ledger": "false"}, False),
+        ({"use_redis_transaction_buffer": False}, True),
+        ({}, True),
+    ],
+)
+async def test_redis_transaction_buffer_selects_buffered_spend_path_unless_ledger_is_explicit(
+    monkeypatch: pytest.MonkeyPatch, general_settings: dict[str, object], expect_ledger: bool
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.types.utils import ModelResponse, Usage
+
+    writer: Final = DBSpendUpdateWriter()
+    prisma: Final = _tool_usage_prisma()
+    prisma.get_request_status.return_value = "success"
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    monkeypatch.setattr(proxy_server, "disable_spend_logs", False)
+    monkeypatch.setattr(proxy_server, "general_settings", general_settings)
+    monkeypatch.setattr(proxy_server, "accounting_window_keys", AsyncMock(return_value=()))
+    now: Final = datetime(2026, 11, 9, 12, tzinfo=timezone.utc)
+    result: Final = ModelResponse(
+        model="gpt-4o-mini", usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15)
+    )
+    assert await writer.update_database(
+        token="test-token",
+        user_id="test-user",
+        end_user_id=None,
+        team_id=None,
+        org_id=None,
+        kwargs={
+            "model": "gpt-4o-mini",
+            "litellm_call_id": "buffer-precedence-call",
+            "litellm_params": {
+                "metadata": {
+                    "user_api_key": "test-token",
+                    "user_api_key_user_id": "test-user",
+                    "status": "success",
+                }
+            },
+        },
+        completion_response=result,
+        start_time=now,
+        end_time=now,
+        response_cost=0.23,
+    )
+    await drain_logging_tasks()
+    assert len(prisma.spend_log_transactions) == 1
+    assert ("accounting_payload" in prisma.spend_log_transactions[0]) is expect_ledger
+    updates: Final = await writer.daily_spend_update_queue.flush_all_updates_from_in_memory_queue()
+    rows: Final = [row for update in updates for row in update.values()]
+    assert [row["spend"] for row in rows] == ([] if expect_ledger else [pytest.approx(0.23)])
