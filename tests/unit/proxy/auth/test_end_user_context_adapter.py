@@ -8,9 +8,11 @@ import litellm
 from litellm._auth.failure import NativeAuthRuntimeError
 from litellm.models.budget import LiteLLM_BudgetTable
 from litellm.proxy._types import LiteLLM_EndUserTable, LiteLLM_UserTable, UserAPIKeyAuth
-from litellm.proxy.auth import auth_checks, user_api_key_auth as legacy
+from litellm.proxy.auth import auth_checks
 from litellm.proxy.auth import end_user_context_adapter as adapter
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from tests.unit.proxy.auth import phase1_budget_auth_reference as auth_reference
+from tests.unit.proxy.auth import phase1_budget_context_reference as legacy
 
 
 @pytest.fixture(params=(False, True), ids=("reference", "native"))
@@ -22,7 +24,7 @@ def native(request: pytest.FixtureRequest) -> bool:
     "value,expected", ((None, None), ("", None), (" ", " "), ("budget", "budget"), (0, None), (False, None), ({}, None))
 )
 def test_metadata_id_keeps_only_nonempty_strings(native: bool, value: object, expected: str | None) -> None:
-    function: Final = adapter.get_key_end_user_budget_id if native else auth_checks.get_key_end_user_budget_id
+    function: Final = adapter.get_key_end_user_budget_id if native else auth_reference.get_key_end_user_budget_id
     assert function({"end_user_budget_id": value}) == expected
     assert function(None) is None
 
@@ -39,7 +41,7 @@ async def test_default_budget_id_and_cache_selection(
     selected: Final = explicit if explicit is not None else global_id
     budget: Final = LiteLLM_BudgetTable(budget_id=selected, max_budget=0)
     await cache.async_set_cache(key=f"default_end_user_budget:{selected}", value=budget, model_type=LiteLLM_BudgetTable)
-    function: Final = adapter.get_default_end_user_budget if native else auth_checks.get_default_end_user_budget
+    function: Final = adapter.get_default_end_user_budget if native else auth_reference.get_default_end_user_budget
     result: Final = await function(Mock() if db_present else None, cache, budget_id=explicit)
     assert result == (budget if db_present and selected is not None else None)
 
@@ -67,8 +69,9 @@ async def test_default_application_preserves_own_budget_and_copies_only_resolved
     )
     load: Final = AsyncMock(return_value=default)
     monkeypatch.setattr(auth_checks, "get_default_end_user_budget", load)
+    monkeypatch.setattr(auth_reference, "get_default_end_user_budget", load)
     function: Final = (
-        adapter.apply_default_budget_to_end_user if native else auth_checks._apply_default_budget_to_end_user  # pyright: ignore[reportPrivateUsage]  # Phase 1 parity reference
+        adapter.apply_default_budget_to_end_user if native else auth_reference._apply_default_budget_to_end_user  # pyright: ignore[reportPrivateUsage]  # Phase 1 parity reference
     )  # pyright: ignore[reportPrivateUsage]  # Phase 1 parity reference
     result: Final = await function(row, Mock(), UserApiKeyCache(), key_end_user_budget_id=key_id)
     unchanged: Final = (own_id is not None and own_present) or (key_id is None and global_id is None) or not found
@@ -105,7 +108,8 @@ async def test_unrestricted_registry_requires_absence_of_all_budget_and_validati
     monkeypatch.setattr(litellm, "validate_end_user_id_in_db", validate)
     load: Final = AsyncMock(return_value=ids)
     monkeypatch.setattr(auth_checks, "_load_end_user_restricted_registry", load)
-    function: Final = adapter.end_user_is_known_unrestricted if native else auth_checks._end_user_is_known_unrestricted  # pyright: ignore[reportPrivateUsage]  # Phase 1 parity reference
+    monkeypatch.setattr(auth_reference, "_load_end_user_restricted_registry", load)
+    function: Final = adapter.end_user_is_known_unrestricted if native else auth_reference._end_user_is_known_unrestricted  # pyright: ignore[reportPrivateUsage]  # Phase 1 parity reference
     result: Final = await function("eu", Mock(), UserApiKeyCache(), max_budget, key_id)
     blocked: Final = global_id is not None or key_id is not None or validate or max_budget is not None
     assert result is (not blocked and ids is not None and "eu" not in ids)
@@ -208,9 +212,11 @@ async def test_validation_uses_raw_row_presence_and_preserves_unknown_ids_with_d
     end: Final = AsyncMock(return_value=LiteLLM_EndUserTable(user_id=identity, blocked=False) if end_found else None)
     user: Final = AsyncMock(return_value=LiteLLM_UserTable(user_id=identity) if user_found else None)
     monkeypatch.setattr(auth_checks, "get_end_user_object", end)
+    monkeypatch.setattr(auth_reference, "get_end_user_object", end)
     monkeypatch.setattr(auth_checks, "get_user_object", user)
+    monkeypatch.setattr(auth_reference, "get_user_object", user)
     function: Final = (
-        adapter.resolve_and_validate_end_user_id if native else auth_checks.resolve_and_validate_end_user_id
+        adapter.resolve_and_validate_end_user_id if native else auth_reference.resolve_and_validate_end_user_id
     )
     result: Final = await function(identity, Mock(), cache, key_end_user_budget_id=key_id)
     valid: Final = cached == "valid" or (cached != "invalid" and (end_found or user_found))
@@ -238,7 +244,7 @@ async def test_validation_disabled_or_without_db_skips_all_lookups(
     read: Final = AsyncMock(side_effect=AssertionError("cache must not be read"))
     cache.async_get_cache = read
     function: Final = (
-        adapter.resolve_and_validate_end_user_id if native else auth_checks.resolve_and_validate_end_user_id
+        adapter.resolve_and_validate_end_user_id if native else auth_reference.resolve_and_validate_end_user_id
     )
     assert await function(identity, Mock() if db else None, cache) == identity
     read.assert_not_called()
@@ -270,8 +276,10 @@ async def test_lookup_uses_row_before_default_and_only_fills_missing_max_budget(
     end: Final = AsyncMock(return_value=row)
     default: Final = AsyncMock(return_value=budget if found else None)
     monkeypatch.setattr(auth_checks, "get_end_user_object", end)
+    monkeypatch.setattr(auth_reference, "get_end_user_object", end)
     monkeypatch.setattr(legacy, "get_end_user_object", end)
     monkeypatch.setattr(auth_checks, "get_default_end_user_budget", default)
+    monkeypatch.setattr(auth_reference, "get_default_end_user_budget", default)
     token: Final = UserAPIKeyAuth(
         end_user_id="eu", end_user_max_budget=initial_max, end_user_tpm_limit=9, metadata={"end_user_budget_id": key_id}
     )
@@ -308,7 +316,9 @@ async def test_lookup_io_failure_does_not_select_defaults_and_native_failure_is_
     load: Final = AsyncMock(side_effect=failure)
     default: Final = AsyncMock(side_effect=AssertionError("no defaults after lookup error"))
     monkeypatch.setattr(auth_checks, "get_end_user_object", load)
+    monkeypatch.setattr(auth_reference, "get_end_user_object", load)
     monkeypatch.setattr(auth_checks, "get_default_end_user_budget", default)
+    monkeypatch.setattr(auth_reference, "get_default_end_user_budget", default)
     token: Final = UserAPIKeyAuth(end_user_id="eu", metadata={"end_user_budget_id": "key"})
     if native_failure:
         with pytest.raises(NativeAuthRuntimeError) as raised:
@@ -327,8 +337,10 @@ async def test_native_validation_failure_stops_before_user_fallback(monkeypatch:
     monkeypatch.setattr(litellm, "validate_end_user_id_in_db", True)
     failure: Final = NativeAuthRuntimeError("native")
     monkeypatch.setattr(auth_checks, "get_end_user_object", AsyncMock(side_effect=failure))
+    monkeypatch.setattr(auth_reference, "get_end_user_object", AsyncMock(side_effect=failure))
     user: Final = AsyncMock()
     monkeypatch.setattr(auth_checks, "get_user_object", user)
+    monkeypatch.setattr(auth_reference, "get_user_object", user)
     with pytest.raises(NativeAuthRuntimeError) as raised:
         await adapter.resolve_and_validate_end_user_id("eu", Mock(), UserApiKeyCache())
     assert raised.value is failure
@@ -345,7 +357,7 @@ async def test_default_budget_cache_miss_reads_database_and_caches_only_found_ro
     row: Final = LiteLLM_BudgetTable(budget_id="budget", max_budget=0) if found else None
     read: Final = AsyncMock(return_value=row)
     db: Final = Mock(db=Mock(litellm_budgettable=Mock(find_unique=read)))
-    function: Final = adapter.get_default_end_user_budget if native else auth_checks.get_default_end_user_budget
+    function: Final = adapter.get_default_end_user_budget if native else auth_reference.get_default_end_user_budget
     assert await function(db, cache, budget_id="budget") == row
     read.assert_awaited_once_with(where={"budget_id": "budget"})
     assert await cache.async_get_cache(key="default_end_user_budget:budget", model_type=LiteLLM_BudgetTable) == row
@@ -375,7 +387,7 @@ async def test_default_budget_cache_failure_is_not_swallowed(native: bool) -> No
     cache: Final = Mock(spec=UserApiKeyCache)
     read: Final = AsyncMock(side_effect=failure)
     cache.async_get_cache = read
-    function: Final = adapter.get_default_end_user_budget if native else auth_checks.get_default_end_user_budget
+    function: Final = adapter.get_default_end_user_budget if native else auth_reference.get_default_end_user_budget
     with pytest.raises(RuntimeError) as raised:
         await function(Mock(), cache, budget_id="budget")
     assert raised.value is failure
@@ -398,8 +410,10 @@ async def test_validation_lookup_errors_select_secondary_identity_read(
         else AsyncMock(side_effect=RuntimeError("user read"))
     )
     monkeypatch.setattr(auth_checks, "get_end_user_object", own)
+    monkeypatch.setattr(auth_reference, "get_end_user_object", own)
     monkeypatch.setattr(auth_checks, "get_user_object", user)
-    function: Final = adapter.end_user_id_exists_in_db if native else auth_checks._end_user_id_exists_in_db  # pyright: ignore[reportPrivateUsage]  # Phase 1 parity reference
+    monkeypatch.setattr(auth_reference, "get_user_object", user)
+    function: Final = adapter.end_user_id_exists_in_db if native else auth_reference._end_user_id_exists_in_db  # pyright: ignore[reportPrivateUsage]  # Phase 1 parity reference
     assert await function("eu", Mock(), UserApiKeyCache()) is user_found
     own.assert_awaited_once()
     user.assert_awaited_once()
@@ -410,6 +424,7 @@ async def test_lookup_budget_denial_preserves_exception_identity(native: bool, m
     failure: Final = litellm.BudgetExceededError(current_cost=2, max_budget=1)
     read: Final = AsyncMock(side_effect=failure)
     monkeypatch.setattr(auth_checks, "get_end_user_object", read)
+    monkeypatch.setattr(auth_reference, "get_end_user_object", read)
     monkeypatch.setattr(legacy, "get_end_user_object", read)
     invocation: Final = (
         adapter.lookup_end_user_and_apply_budget(UserAPIKeyAuth(), "", None, Mock(), UserApiKeyCache(), None)

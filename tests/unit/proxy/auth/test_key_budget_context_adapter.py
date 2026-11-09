@@ -8,9 +8,9 @@ import pytest
 import litellm
 from litellm._auth import budget_context as core
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.auth import budget_throttle
 from litellm.proxy.auth import key_budget_context_adapter as adapter
-from litellm.proxy.auth import user_api_key_auth as legacy
+from tests.unit.proxy.auth import phase1_budget_context_reference as legacy
+from tests.unit.proxy.auth import phase1_budget_throttle_reference as budget_throttle
 
 _NOW: Final = datetime(2025, 1, 1, tzinfo=timezone.utc)
 
