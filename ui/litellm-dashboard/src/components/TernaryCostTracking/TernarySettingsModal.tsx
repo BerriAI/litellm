@@ -1,4 +1,5 @@
 import { useEffect, useMemo } from "react";
+import { useTranslation } from "react-i18next";
 
 import {
   useTernaryCreate,
@@ -41,6 +42,7 @@ interface TernarySettingsModalProps {
 }
 
 export default function TernarySettingsModal({ open, settings, onSaved, onCancel }: TernarySettingsModalProps) {
+  const { t } = useTranslation();
   const isEdit = settings !== null;
   const currentBaseUrl = settings?.ternary_base_url ?? "";
   const schema = useMemo(() => (isEdit ? updateSchemaFor(currentBaseUrl) : createSchema), [isEdit, currentBaseUrl]);
@@ -49,7 +51,8 @@ export default function TernarySettingsModal({ open, settings, onSaved, onCancel
   const updateMutation = useTernaryUpdate();
   const isPending = createMutation.isPending || updateMutation.isPending;
   const frequency = form.watch("frequency");
-  const submitLabel = isEdit ? "Update" : "Create";
+  const frequencyItems = FREQUENCY_ITEMS.map((item) => ({ value: item.value, label: t(item.labelKey) }));
+  const submitLabel = isEdit ? t("loggingAndAlerts.ternary.form.update") : t("loggingAndAlerts.ternary.form.create");
 
   useEffect(() => {
     if (open) {
@@ -59,7 +62,7 @@ export default function TernarySettingsModal({ open, settings, onSaved, onCancel
 
   const callbacks = {
     onSuccess: (response: { message: string }) => onSaved(response.message),
-    onError: (error: Error) => toast.error(error.message || "Failed to save the Ternary integration"),
+    onError: (error: Error) => toast.error(error.message || t("loggingAndAlerts.ternary.form.saveFailed")),
   };
 
   const handleSubmit = (values: TernaryFormValues) => {
@@ -74,43 +77,56 @@ export default function TernarySettingsModal({ open, settings, onSaved, onCancel
     <Dialog open={open} onOpenChange={(next) => !next && onCancel()}>
       <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>{isEdit ? "Edit Ternary Integration" : "Add Ternary Integration"}</DialogTitle>
-          <DialogDescription>
-            Create an AI Gateway integration in Ternary (Admin, Integrations, New Integration) to get a connection ID
-            and API key.
-          </DialogDescription>
+          <DialogTitle>
+            {isEdit ? t("loggingAndAlerts.ternary.form.editTitle") : t("loggingAndAlerts.ternary.form.addTitle")}
+          </DialogTitle>
+          <DialogDescription>{t("loggingAndAlerts.ternary.form.description")}</DialogDescription>
         </DialogHeader>
         <form onSubmit={(event) => event.preventDefault()} noValidate>
           <FieldGroup>
             <FormField
               control={form.control}
               name="api_key"
-              label="API Key"
-              description={isEdit ? "Leave empty to keep the current key" : undefined}
+              label={t("loggingAndAlerts.ternary.form.apiKey")}
+              description={isEdit ? t("loggingAndAlerts.ternary.form.apiKeyHint") : undefined}
             >
               {({ ref, ...field }) => (
                 <PasswordInput
                   {...field}
                   ref={ref}
                   autoComplete="off"
-                  placeholder={isEdit ? "Enter a new API key" : "Enter your Ternary API key"}
+                  placeholder={
+                    isEdit
+                      ? t("loggingAndAlerts.ternary.form.newApiKeyPlaceholder")
+                      : t("loggingAndAlerts.ternary.form.apiKeyPlaceholder")
+                  }
                 />
               )}
             </FormField>
-            <FormField control={form.control} name="connection_id" label="Connection ID">
-              {({ ref, ...field }) => <Input {...field} ref={ref} placeholder="Enter your Ternary connection ID" />}
+            <FormField
+              control={form.control}
+              name="connection_id"
+              label={t("loggingAndAlerts.ternary.form.connectionId")}
+            >
+              {({ ref, ...field }) => (
+                <Input {...field} ref={ref} placeholder={t("loggingAndAlerts.ternary.form.connectionIdPlaceholder")} />
+              )}
             </FormField>
-            <FormField control={form.control} name="ternary_base_url" label="Base URL">
+            <FormField
+              control={form.control}
+              name="ternary_base_url"
+              label={t("loggingAndAlerts.ternary.form.baseUrl")}
+            >
               {({ ref, ...field }) => <Input {...field} ref={ref} placeholder="https://api.ternary.app" />}
             </FormField>
-            <FormField control={form.control} name="frequency" label="Export Frequency">
+            <FormField control={form.control} name="frequency" label={t("loggingAndAlerts.ternary.form.frequency")}>
               {({ id, value, onChange, "aria-invalid": ariaInvalid, "aria-describedby": describedBy }) => (
-                <Select items={FREQUENCY_ITEMS} value={value} onValueChange={onChange}>
+                <Select items={frequencyItems} value={value} onValueChange={onChange}>
                   <SelectTrigger id={id} aria-invalid={ariaInvalid} aria-describedby={describedBy} className="w-full">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {FREQUENCY_ITEMS.map((item) => (
+                    {frequencyItems.map((item) => (
                       <SelectItem key={item.value} value={item.value}>
                         {item.label}
                       </SelectItem>
@@ -120,7 +136,11 @@ export default function TernarySettingsModal({ open, settings, onSaved, onCancel
               )}
             </FormField>
             {frequency === "interval" && (
-              <FormField control={form.control} name="interval_seconds" label="Interval (seconds)">
+              <FormField
+                control={form.control}
+                name="interval_seconds"
+                label={t("loggingAndAlerts.ternary.form.intervalSeconds")}
+              >
                 {({ ref, ...field }) => <Input {...field} ref={ref} inputMode="numeric" placeholder="300" />}
               </FormField>
             )}
@@ -128,10 +148,10 @@ export default function TernarySettingsModal({ open, settings, onSaved, onCancel
         </form>
         <DialogFooter>
           <Button variant="outline" onClick={onCancel} disabled={isPending}>
-            Cancel
+            {t("loggingAndAlerts.ternary.form.cancel")}
           </Button>
           <Button onClick={() => void form.handleSubmit(handleSubmit)()} disabled={isPending} aria-busy={isPending}>
-            {isPending ? "Saving..." : submitLabel}
+            {isPending ? t("loggingAndAlerts.ternary.form.saving") : submitLabel}
           </Button>
         </DialogFooter>
       </DialogContent>
