@@ -51,6 +51,7 @@ from litellm.litellm_core_utils.hidden_params import (
     set_hidden_params,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field
 from litellm.llms.anthropic.common_utils import supports_anthropic_cache_control
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.common_utils import bedrock_declared_cache_point_support
@@ -141,6 +142,7 @@ from .tool_search import (
     is_anthropic_tool_search_use,
     is_server_tool_search_tool,
     provider_builds_anthropic_request,
+    provider_chat_config,
     tool_search_call_ids,
     without_tool_search_calls,
     without_tool_search_uses,
@@ -334,6 +336,20 @@ def without_item_cache_control(input: str | ResponseInputParam) -> str | Respons
     return cast(  # cast-ok: the same input items, each minus its own cache_control key
         ResponseInputParam, [_without_cache_control_key(item) for item in input]
     )
+
+
+def _dropped_final_user_turn(input_items: str | ResponseInputParam, messages: Sequence[object]) -> bool:
+    if isinstance(input_items, str) or not input_items or not messages:
+        return False
+    return message_field(input_items[-1], "role") == "user" and message_field(messages[-1], "role") == "assistant"
+
+
+def _target_fills_empty_user_turns(model: str, custom_llm_provider: str | None) -> bool:
+    from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+
+    return isinstance(
+        provider_chat_config(model, custom_llm_provider), AmazonConverseConfig
+    ) or provider_builds_anthropic_request(model, custom_llm_provider)
 
 
 _PROVIDERS_KEEPING_MESSAGE_CACHE_CONTROL: Final = frozenset(("anthropic", "dashscope", "minimax", "sap", "zai"))
@@ -866,6 +882,7 @@ class LiteLLMCompletionResponsesConfig:
             responses_api_request=responses_api_request,
             replay_reasoning=True,
             item_cache_control=keeps_item_marks,
+            route_fills_empty_user_turns=partial(_target_fills_empty_user_turns, model, custom_llm_provider),
         )
 
         litellm_completion_request: dict = {
@@ -927,6 +944,7 @@ class LiteLLMCompletionResponsesConfig:
         responses_api_request: ResponsesAPIOptionalRequestParams | dict,
         replay_reasoning: bool = False,
         item_cache_control: bool = False,
+        route_fills_empty_user_turns: Callable[[], bool] | None = None,
     ) -> list[
         AllMessageValues
         | GenericChatCompletionMessage
@@ -969,6 +987,12 @@ class LiteLLMCompletionResponsesConfig:
                 replay_reasoning=replay_reasoning,
             )
         )
+        if (
+            route_fills_empty_user_turns is not None
+            and _dropped_final_user_turn(input, messages)
+            and route_fills_empty_user_turns()
+        ):
+            messages.append(GenericChatCompletionMessage(role="user", content=""))
 
         return messages
 
@@ -1904,8 +1928,6 @@ class LiteLLMCompletionResponsesConfig:
             ]
         else:
             content: Final[object] = input_item.get("content")
-            if content is None and input_item.get("role") == "user":
-                return [GenericChatCompletionMessage(role="user", content="")]
             # Handle None content: Responses API allows None content, but GenericChatCompletionMessage requires content
             # Since guardrails skip None content anyway, we return empty list to exclude it from structured messages
             if content is None:
