@@ -553,7 +553,7 @@ class RouteChecks:
         return route in _UNBILLED_ROUTES or resource in _TOKEN_COUNTING_SEGMENTS or action == _TOKEN_COUNTING_ACTION
 
     @staticmethod
-    def is_llm_api_route(route: str) -> bool:
+    def is_llm_api_route(route: str, configured_eu_jev: bool | None = None) -> bool:
         """
         Helper to checks if provided route is an OpenAI route
 
@@ -615,12 +615,14 @@ class RouteChecks:
         for _llm_passthrough_route in LiteLLMRoutes.mapped_pass_through_routes.value:
             if route == _llm_passthrough_route or route.startswith(_llm_passthrough_route + "/"):
                 return True
-        return RouteChecks.is_builtin_eu_jev_decision_route(route=route)
+        return RouteChecks.is_builtin_eu_jev_decision_route(route=route, configured_eu_jev=configured_eu_jev)
 
     @staticmethod
-    def is_builtin_eu_jev_decision_route(route: str) -> bool:
+    def is_builtin_eu_jev_decision_route(route: str, configured_eu_jev: bool | None = None) -> bool:
         if route.rstrip("/") != _EU_JEV_DECISION_ROUTE:
             return False
+        if configured_eu_jev is not None:
+            return not configured_eu_jev
         from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (  # noqa: PLC0415  # pass_through_endpoints imports the auth stack
             InitPassThroughEndpointHelpers,
         )

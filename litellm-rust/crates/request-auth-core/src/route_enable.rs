@@ -25,6 +25,7 @@ pub struct Facts {
     pub admin: Option<Setting>,
     pub llm: Option<Setting>,
     pub exemptions: Option<Vec<String>>,
+    pub eu_jev_configured: Option<bool>,
 }
 
 #[derive(Clone, Copy, Deserialize, strum::VariantArray)]
@@ -46,9 +47,40 @@ pub enum Decision {
     PropagateHttp,
     ReadImport,
     ReadExemptions,
+    ReadEuJev,
     ReadSettings { feature: Feature },
     ReadSecret { feature: Feature },
     Deny { feature: Feature, reason: Reason },
+}
+
+#[derive(Debug, PartialEq, Eq, Serialize, strum::VariantArray)]
+pub enum LlmDecision {
+    Allow,
+    Deny,
+    ReadEuJev,
+}
+
+pub fn llm_route(context: &RouteContext, configured: Option<bool>) -> Result<LlmDecision, Error> {
+    let static_context = RouteContext {
+        configured_eu_jev: true,
+        ..context.clone()
+    };
+    if route_access::decide(route_access::Request::Classify {
+        context: static_context,
+        kind: Classification::Llm,
+    })?
+    .allowed
+    {
+        return Ok(LlmDecision::Allow);
+    }
+    if context.route.trim_end_matches('/') != "/eu_jev/v1/systemone" {
+        return Ok(LlmDecision::Deny);
+    }
+    Ok(match configured {
+        None => LlmDecision::ReadEuJev,
+        Some(true) => LlmDecision::Deny,
+        Some(false) => LlmDecision::Allow,
+    })
 }
 
 fn setting(setting: Option<&Setting>, feature: Feature) -> Option<Decision> {
@@ -93,13 +125,10 @@ pub fn decide(facts: &Facts) -> Result<Decision, Error> {
     {
         return Ok(decision);
     }
-    if !route_access::decide(route_access::Request::Classify {
-        context: facts.context.clone(),
-        kind: Classification::Llm,
-    })?
-    .allowed
-    {
-        return Ok(Decision::Allow);
+    match llm_route(&facts.context, facts.eu_jev_configured)? {
+        LlmDecision::Deny => return Ok(Decision::Allow),
+        LlmDecision::ReadEuJev => return Ok(Decision::ReadEuJev),
+        LlmDecision::Allow => (),
     }
     let Some(exemptions) = &facts.exemptions else {
         return Ok(Decision::ReadExemptions);
@@ -114,6 +143,18 @@ pub fn decide(facts: &Facts) -> Result<Decision, Error> {
 mod tests {
     use super::*;
     use rstest::rstest;
+
+    #[rstest]
+    #[case::missing(None, LlmDecision::ReadEuJev)]
+    #[case::builtin(Some(false), LlmDecision::Allow)]
+    #[case::configured(Some(true), LlmDecision::Deny)]
+    fn builtin_configuration(#[case] configured: Option<bool>, #[case] expected: LlmDecision) {
+        let context = RouteContext {
+            route: "/eu_jev/v1/systemone/".into(),
+            ..RouteContext::default()
+        };
+        assert_eq!(llm_route(&context, configured).unwrap(), expected);
+    }
 
     #[rstest]
     #[case::license(true, false, Decision::Deny { feature: Feature::Admin, reason: Reason::License })]

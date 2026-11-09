@@ -25,8 +25,13 @@ def route_enable(facts: RouteEnableFacts) -> RouteEnableDecision:
         admin: Final = _setting(facts.admin, "Admin")
         if admin is not None:
             return admin
-    if not RouteChecks.is_llm_api_route(facts.context.route):
-        return RouteEnableDecision("Allow")
+    if not RouteChecks.is_llm_api_route(facts.context.route, configured_eu_jev=True):
+        if facts.context.route.rstrip("/") != "/eu_jev/v1/systemone":
+            return RouteEnableDecision("Allow")
+        if facts.eu_jev_configured is None:
+            return RouteEnableDecision("ReadEuJev")
+        if facts.eu_jev_configured:
+            return RouteEnableDecision("Allow")
     if facts.exemptions is None:
         return RouteEnableDecision("ReadExemptions")
     if facts.context.route in facts.exemptions:
