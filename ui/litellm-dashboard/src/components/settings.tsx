@@ -54,6 +54,7 @@ type CallbackFormValues = Record<string, string>;
 const SETTINGS_TABS = [
   "logging-callbacks",
   "cloudzero-cost-tracking",
+  "ternary-cost-export",
   "alerting-types",
   "alerting-settings",
   "email-alerts",

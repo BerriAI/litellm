@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Pencil, Play, Trash2, Upload } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 import {
   useTernaryDelete,
@@ -24,7 +25,7 @@ import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/componen
 import { Separator } from "@/components/ui/separator";
 import { toast } from "@/lib/toast";
 
-import { describeExport, describeFrequency, formatEstimatedSpend } from "./ternaryDisplay";
+import { describeExport, describeFrequency, describePreview } from "./ternaryDisplay";
 
 const DRY_RUN_LIMIT = 500;
 
@@ -42,6 +43,7 @@ const DetailRow = ({ label, children }: { label: string; children: React.ReactNo
 );
 
 export function TernaryIntegrationSettings({ settings, onEdit, onDeleted }: TernaryIntegrationSettingsProps) {
+  const { t } = useTranslation();
   const [isDeleteOpen, setIsDeleteOpen] = useState(false);
   const [isExportConfirmOpen, setIsExportConfirmOpen] = useState(false);
   const dryRun = useTernaryDryRun();
@@ -51,7 +53,7 @@ export function TernaryIntegrationSettings({ settings, onEdit, onDeleted }: Tern
   const handleDryRun = () =>
     dryRun.mutate(
       { limit: DRY_RUN_LIMIT },
-      { onError: (error) => toast.error(error.message || "Failed to preview the export") },
+      { onError: (error) => toast.error(error.message || t("loggingAndAlerts.ternary.settings.toasts.previewFailed")) },
     );
 
   const handleExport = () =>
@@ -59,7 +61,7 @@ export function TernaryIntegrationSettings({ settings, onEdit, onDeleted }: Tern
       {},
       {
         onSuccess: () => setIsExportConfirmOpen(false),
-        onError: (error) => toast.error(error.message || "Failed to export to Ternary"),
+        onError: (error) => toast.error(error.message || t("loggingAndAlerts.ternary.settings.toasts.exportFailed")),
       },
     );
 
@@ -69,7 +71,7 @@ export function TernaryIntegrationSettings({ settings, onEdit, onDeleted }: Tern
         setIsDeleteOpen(false);
         onDeleted(response.message);
       },
-      onError: (error) => toast.error(error.message || "Failed to delete the Ternary integration"),
+      onError: (error) => toast.error(error.message || t("loggingAndAlerts.ternary.settings.toasts.deleteFailed")),
     });
 
   const summary = dryRun.data?.summary;
@@ -81,18 +83,22 @@ export function TernaryIntegrationSettings({ settings, onEdit, onDeleted }: Tern
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-lg">
-              Ternary Configuration
-              <Badge variant="secondary">{managedByConfigFile ? "Config file" : "Configured"}</Badge>
+              {t("loggingAndAlerts.ternary.settings.title")}
+              <Badge variant="secondary">
+                {managedByConfigFile
+                  ? t("loggingAndAlerts.ternary.settings.statusConfigFile")
+                  : t("loggingAndAlerts.ternary.settings.statusConfigured")}
+              </Badge>
             </CardTitle>
             {!managedByConfigFile && (
               <CardAction className="flex gap-2">
                 <Button variant="outline" onClick={onEdit}>
                   <Pencil />
-                  Edit
+                  {t("loggingAndAlerts.ternary.settings.edit")}
                 </Button>
                 <Button variant="destructive" onClick={() => setIsDeleteOpen(true)}>
                   <Trash2 />
-                  Delete
+                  {t("loggingAndAlerts.ternary.settings.delete")}
                 </Button>
               </CardAction>
             )}
@@ -100,58 +106,52 @@ export function TernaryIntegrationSettings({ settings, onEdit, onDeleted }: Tern
 
           <CardContent>
             {managedByConfigFile ? (
-              <p className="text-sm text-muted-foreground">
-                This proxy sets up Ternary in its config file, with callbacks: [&quot;ternary&quot;] and the TERNARY_*
-                environment variables. Change or remove it there.
-              </p>
+              <p className="text-sm text-muted-foreground">{t("loggingAndAlerts.ternary.settings.configFileNotice")}</p>
             ) : (
               <>
                 <dl className="rounded-md border border-border">
-                  <DetailRow label="API Key (Redacted)">
+                  <DetailRow label={t("loggingAndAlerts.ternary.settings.fields.apiKey")}>
                     <span className="font-mono">{settings.api_key_masked}</span>
                   </DetailRow>
-                  <DetailRow label="Connection ID">
+                  <DetailRow label={t("loggingAndAlerts.ternary.settings.fields.connectionId")}>
                     <span className="font-mono">{settings.connection_id}</span>
                   </DetailRow>
-                  <DetailRow label="Base URL">
+                  <DetailRow label={t("loggingAndAlerts.ternary.settings.fields.baseUrl")}>
                     <span className="font-mono">{settings.ternary_base_url}</span>
                   </DetailRow>
-                  <DetailRow label="Export Frequency">{describeFrequency(settings)}</DetailRow>
+                  <DetailRow label={t("loggingAndAlerts.ternary.settings.fields.frequency")}>
+                    {describeFrequency(settings)}
+                  </DetailRow>
                 </dl>
                 <p className="mt-3 text-xs text-muted-foreground">
-                  Scheduled exports pick up changes saved here after the proxy restarts. Export Now always uses the
-                  settings shown.
+                  {t("loggingAndAlerts.ternary.settings.restartHint")}
                 </p>
               </>
             )}
 
             <div className="mt-6 flex items-center gap-3">
-              <span className="text-sm text-muted-foreground">Actions</span>
+              <span className="text-sm text-muted-foreground">{t("loggingAndAlerts.ternary.settings.actions")}</span>
               <Separator className="flex-1" />
             </div>
 
             <div className="mt-4 mb-6 flex flex-wrap gap-4">
               <Button variant="outline" onClick={handleDryRun} disabled={dryRun.isPending}>
                 <Play />
-                Preview Export
+                {t("loggingAndAlerts.ternary.settings.preview")}
               </Button>
               <Button onClick={() => setIsExportConfirmOpen(true)} disabled={exportNow.isPending}>
                 <Upload />
-                Export Now
+                {t("loggingAndAlerts.ternary.settings.exportNow")}
               </Button>
             </div>
 
             {summary && (
               <Alert>
-                <AlertTitle>Preview (LiteLLM estimated spend)</AlertTitle>
+                <AlertTitle>{t("loggingAndAlerts.ternary.settings.previewTitle")}</AlertTitle>
                 <AlertDescription className="min-w-0">
-                  <p>
-                    {summary.total_records} FOCUS rows across {summary.days.length} day(s), estimated spend{" "}
-                    {formatEstimatedSpend(summary.estimated_spend)}, {summary.total_tokens.toLocaleString()} tokens,{" "}
-                    {summary.unique_teams} team(s), {summary.unique_models} model(s). Nothing was sent to Ternary.
-                  </p>
+                  <p>{describePreview(summary)}</p>
                   <p className="text-xs text-muted-foreground">
-                    Spend is LiteLLM&apos;s estimate, not your provider&apos;s invoice.
+                    {t("loggingAndAlerts.ternary.settings.previewEstimateNote")}
                   </p>
                   <pre className="max-h-96 w-full max-w-full overflow-auto rounded-md border border-border bg-muted p-4 font-mono text-xs text-foreground">
                     {JSON.stringify(dryRun.data?.normalized_data.slice(0, 5), null, 2)}
@@ -162,7 +162,11 @@ export function TernaryIntegrationSettings({ settings, onEdit, onDeleted }: Tern
 
             {exportNow.data && (
               <Alert>
-                <AlertTitle>{exportNow.data.days_uploaded.length ? "Export complete" : "Nothing to export"}</AlertTitle>
+                <AlertTitle>
+                  {exportNow.data.days_uploaded.length
+                    ? t("loggingAndAlerts.ternary.settings.exportComplete")
+                    : t("loggingAndAlerts.ternary.settings.nothingToExport")}
+                </AlertTitle>
                 <AlertDescription>{describeExport(exportNow.data)}</AlertDescription>
               </Alert>
             )}
@@ -173,16 +177,19 @@ export function TernaryIntegrationSettings({ settings, onEdit, onDeleted }: Tern
       <AlertDialog open={isExportConfirmOpen} onOpenChange={setIsExportConfirmOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Export to Ternary now?</AlertDialogTitle>
+            <AlertDialogTitle>{t("loggingAndAlerts.ternary.settings.exportDialog.title")}</AlertDialogTitle>
             <AlertDialogDescription>
-              This uploads LiteLLM usage for today and the two days before (UTC), the same days a scheduled export
-              sends. Each day with usage replaces what Ternary has for that day.
+              {t("loggingAndAlerts.ternary.settings.exportDialog.description")}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel disabled={exportNow.isPending}>Cancel</AlertDialogCancel>
+            <AlertDialogCancel disabled={exportNow.isPending}>
+              {t("loggingAndAlerts.ternary.settings.exportDialog.cancel")}
+            </AlertDialogCancel>
             <Button onClick={handleExport} disabled={exportNow.isPending}>
-              {exportNow.isPending ? "Exporting..." : "Export"}
+              {exportNow.isPending
+                ? t("loggingAndAlerts.ternary.settings.exportDialog.exporting")
+                : t("loggingAndAlerts.ternary.settings.exportDialog.confirm")}
             </Button>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -190,10 +197,16 @@ export function TernaryIntegrationSettings({ settings, onEdit, onDeleted }: Tern
 
       <DeleteResourceModal
         isOpen={isDeleteOpen}
-        title="Delete Ternary Integration?"
-        message="This removes the stored Ternary settings. Scheduled exports stop after the proxy restarts."
-        resourceInformationTitle="Integration Details"
-        resourceInformation={[{ label: "Connection ID", value: settings.connection_id ?? "", code: true }]}
+        title={t("loggingAndAlerts.ternary.settings.deleteDialog.title")}
+        message={t("loggingAndAlerts.ternary.settings.deleteDialog.message")}
+        resourceInformationTitle={t("loggingAndAlerts.ternary.settings.deleteDialog.infoTitle")}
+        resourceInformation={[
+          {
+            label: t("loggingAndAlerts.ternary.settings.deleteDialog.connectionId"),
+            value: settings.connection_id ?? "",
+            code: true,
+          },
+        ]}
         onCancel={() => setIsDeleteOpen(false)}
         onOk={handleDelete}
         confirmLoading={deleteSettings.isPending}

@@ -5,22 +5,29 @@ import type {
   TernarySettingsUpdate,
   TernarySettingsView,
 } from "@/app/(dashboard)/hooks/ternary/useTernary";
+import i18n from "@/i18n/i18n";
 
 export const TERNARY_DEFAULT_BASE_URL = "https://api.ternary.app";
 
 export const FREQUENCY_ITEMS = [
-  { value: "daily", label: "Daily" },
-  { value: "interval", label: "Fixed interval (setup testing)" },
+  { value: "daily", labelKey: "loggingAndAlerts.ternary.form.frequencyDaily" },
+  { value: "interval", labelKey: "loggingAndAlerts.ternary.form.frequencyInterval" },
 ] as const;
 
 const intervalSecondsField = z.string().refine((value) => value === "" || /^[1-9]\d*$/.test(value), {
-  message: "Enter a whole number of seconds",
+  error: () => i18n.t("loggingAndAlerts.ternary.form.intervalSecondsInvalid"),
 });
 
 const baseShape = {
   api_key: z.string(),
-  connection_id: z.string().trim().min(1, "Enter the connection ID from Ternary"),
-  ternary_base_url: z.string().trim().min(1, "Enter the Ternary API base URL"),
+  connection_id: z
+    .string()
+    .trim()
+    .min(1, { error: () => i18n.t("loggingAndAlerts.ternary.form.connectionIdRequired") }),
+  ternary_base_url: z
+    .string()
+    .trim()
+    .min(1, { error: () => i18n.t("loggingAndAlerts.ternary.form.baseUrlRequired") }),
   frequency: z.enum(["daily", "interval"]),
   interval_seconds: intervalSecondsField,
 };
@@ -29,12 +36,21 @@ const baseSchema = z.object(baseShape);
 
 const requireIntervalSeconds = (values: z.infer<typeof baseSchema>, ctx: z.RefinementCtx) => {
   if (values.frequency === "interval" && values.interval_seconds === "") {
-    ctx.addIssue({ code: "custom", path: ["interval_seconds"], message: "Enter how often to export, in seconds" });
+    ctx.addIssue({
+      code: "custom",
+      path: ["interval_seconds"],
+      message: i18n.t("loggingAndAlerts.ternary.form.intervalSecondsRequired"),
+    });
   }
 };
 
 export const createSchema = baseSchema
-  .extend({ api_key: z.string().trim().min(1, "Enter the API key from Ternary") })
+  .extend({
+    api_key: z
+      .string()
+      .trim()
+      .min(1, { error: () => i18n.t("loggingAndAlerts.ternary.form.apiKeyRequired") }),
+  })
   .superRefine(requireIntervalSeconds);
 
 export const updateSchemaFor = (currentBaseUrl: string) =>
@@ -44,7 +60,7 @@ export const updateSchemaFor = (currentBaseUrl: string) =>
       ctx.addIssue({
         code: "custom",
         path: ["api_key"],
-        message: "Enter the API key again when changing the base URL",
+        message: i18n.t("loggingAndAlerts.ternary.form.apiKeyRequiredForBaseUrl"),
       });
     }
   });

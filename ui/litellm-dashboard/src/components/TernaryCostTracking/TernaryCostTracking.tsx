@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Inbox } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 import { useTernarySettings } from "@/app/(dashboard)/hooks/ternary/useTernary";
 import { Alert, AlertDescription, AlertTitle } from "@/components/shared/Alert";
@@ -10,6 +11,7 @@ import { TernaryIntegrationSettings } from "./TernaryIntegrationSettings";
 import TernarySettingsModal from "./TernarySettingsModal";
 
 export default function TernaryCostTracking() {
+  const { t } = useTranslation();
   const { data: settings, isLoading, error } = useTernarySettings();
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [restartNotice, setRestartNotice] = useState<string | null>(null);
@@ -18,7 +20,7 @@ export default function TernaryCostTracking() {
     return (
       <Card>
         <CardContent>
-          <p className="text-sm text-muted-foreground">Loading Ternary settings...</p>
+          <p className="text-sm text-muted-foreground">{t("loggingAndAlerts.ternary.page.loading")}</p>
         </CardContent>
       </Card>
     );
@@ -28,7 +30,10 @@ export default function TernaryCostTracking() {
     return (
       <Card>
         <CardContent>
-          <p className="text-sm text-destructive">Error loading Ternary settings: {error.message}</p>
+          <p className="text-sm text-destructive">
+            {t("loggingAndAlerts.ternary.page.loadErrorPrefix")}
+            {error.message}
+          </p>
         </CardContent>
       </Card>
     );
@@ -45,7 +50,7 @@ export default function TernaryCostTracking() {
     <>
       {restartNotice && (
         <Alert className="mx-auto mb-6 max-w-4xl">
-          <AlertTitle>Restart the proxy to apply</AlertTitle>
+          <AlertTitle>{t("loggingAndAlerts.ternary.page.restartTitle")}</AlertTitle>
           <AlertDescription>{restartNotice}</AlertDescription>
         </Alert>
       )}
@@ -60,12 +65,12 @@ export default function TernaryCostTracking() {
         <div className="mx-auto mt-8 max-w-2xl rounded-lg border border-dashed border-border bg-card p-12 text-center">
           <div className="flex flex-col items-center gap-2">
             <Inbox className="size-10 text-muted-foreground" aria-hidden />
-            <h4 className="text-base font-semibold">No Ternary Integration Found</h4>
+            <h4 className="text-base font-semibold">{t("loggingAndAlerts.ternary.emptyPlaceholder.title")}</h4>
             <p className="mx-auto max-w-md text-sm text-muted-foreground">
-              Send LiteLLM spend to Ternary as FOCUS data, so AI costs can be allocated across teams.
+              {t("loggingAndAlerts.ternary.emptyPlaceholder.description")}
             </p>
             <Button size="lg" onClick={() => setIsModalOpen(true)} className="mt-4">
-              Add Ternary Integration
+              {t("loggingAndAlerts.ternary.emptyPlaceholder.add")}
             </Button>
           </div>
         </div>
