@@ -103,6 +103,8 @@ FABLE_5_2_VARIANTS = (
     "us.anthropic.claude-fable-5-2",
     "eu.anthropic.claude-fable-5-2",
     "us-gov.anthropic.claude-fable-5-2",
+    "bedrock/us-gov-west-1/anthropic.claude-fable-5-2",
+    "bedrock/us-gov-east-1/anthropic.claude-fable-5-2",
     "vertex_ai/claude-fable-5-2",
     "vertex_ai/claude-fable-5-2@default",
     "bedrock/claude_platform/claude-fable-5-2",
