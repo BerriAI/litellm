@@ -14,14 +14,16 @@ from types import MappingProxyType
 from typing import Final, TypeVar
 
 import litellm
+from litellm._auth.failure import NativeAuthFailure
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.litellm_logging import use_custom_pricing_for_model
 from litellm.litellm_core_utils.pattern_match_deployments import PatternMatchRouter
 from litellm.llms.azure.ptu_capacity import is_str_keyed_mapping
-from litellm.proxy._types import SpecialModelNames, UserAPIKeyAuth
+from litellm.proxy._types import LiteLLM_ObjectPermissionTable, SpecialModelNames, UserAPIKeyAuth
 from litellm.proxy.common_utils.model_listing_utils import CallerAliases, alias_map, dispatched_model
 from litellm.proxy.common_utils.token_count_settings import cost_map_entry
+from litellm.repositories.native_auth_repository import native_auth_repository
 from litellm.repositories.object_permission_repository import ObjectPermissionRepository
 from litellm.responses.main import strip_responses_routing_prefix
 from litellm.router import Router
@@ -132,12 +134,21 @@ async def get_mcp_server_ids(
 
     # Make a direct SQL query to get just the mcp_servers
     try:
-        result: Final = await ObjectPermissionRepository(prisma_client).table.find_unique(
-            where={"object_permission_id": user_api_key_dict.object_permission_id},
+        native: Final = native_auth_repository(prisma_client)
+        result: Final = (
+            await native.one(
+                "object_permission", [user_api_key_dict.object_permission_id], LiteLLM_ObjectPermissionTable
+            )
+            if native is not None
+            else await ObjectPermissionRepository(prisma_client).table.find_unique(
+                where={"object_permission_id": user_api_key_dict.object_permission_id},
+            )
         )
         if result and result.mcp_servers:
             return result.mcp_servers
         return []
+    except NativeAuthFailure:
+        raise
     except Exception:
         return []
 
