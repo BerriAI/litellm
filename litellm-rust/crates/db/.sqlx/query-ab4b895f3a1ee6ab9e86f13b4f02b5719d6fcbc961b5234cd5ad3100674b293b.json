@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT to_jsonb(t) || jsonb_build_object('models', COALESCE(to_jsonb(t.models), '[]'::jsonb), 'litellm_budget_table', (SELECT to_jsonb(b) || jsonb_build_object('allowed_models', COALESCE(to_jsonb(b.allowed_models), '[]'::jsonb)) FROM \"LiteLLM_BudgetTable\" b WHERE b.budget_id = t.budget_id)) AS \"data!: AuthData\"\nFROM \"LiteLLM_TagTable\" t\nWHERE t.tag_name = ANY($1::text[])\nORDER BY t.tag_name\n",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "data!: AuthData",
+        "type_info": "Jsonb",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "TextArray"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "ab4b895f3a1ee6ab9e86f13b4f02b5719d6fcbc961b5234cd5ad3100674b293b"
+}

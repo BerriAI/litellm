@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT jsonb_build_object('user_id', user_id) AS \"data!: AuthData\" FROM \"LiteLLM_EndUserTable\"\nWHERE blocked OR budget_id IS NOT NULL OR allowed_model_region IS NOT NULL OR default_model IS NOT NULL OR object_permission_id IS NOT NULL OR cardinality(models) > 0\nORDER BY user_id LIMIT $1\n",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "data!: AuthData",
+        "type_info": "Jsonb",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "f6ed52b7b550c41a8d085f1a66bd1dcafc1f0cf69e33cb58ebe8642b75ee8d36"
+}

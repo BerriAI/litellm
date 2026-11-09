@@ -1,0 +1,25 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT to_jsonb(i) || jsonb_build_object('required_roles', COALESCE(to_jsonb(i.required_roles), '[]'::jsonb),\n    'required_scopes', COALESCE(to_jsonb(i.required_scopes), '[]'::jsonb)) AS \"data!: AuthData\" FROM \"LiteLLM_AgentIdentity\" i WHERE i.provider=$1 AND i.tenant_id=$2 AND i.client_id=$3\n",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "data!: AuthData",
+        "type_info": "Jsonb",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "3b2157705b66ebcf6ee0c9805f15926a45b69c60677f527f227a2f8a58020b5b"
+}

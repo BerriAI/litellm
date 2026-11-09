@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT jsonb_build_object('spend', COALESCE(SUM(spend), 0.0)) AS \"data!: AuthData\" FROM \"LiteLLM_SpendLogs\" WHERE \"team_id\"=$1 AND \"startTime\" >= $2\n",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "data!: AuthData",
+        "type_info": "Jsonb",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Timestamp"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "0136e6b22d40ef0181f3f122c5abc5f270be24cd01b8c39bceea2de70d44608b"
+}

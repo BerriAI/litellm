@@ -1,5 +1,13 @@
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error("invalid database setting {0}")]
+    InvalidSetting(&'static str),
+    #[error("invalid auth read arguments")]
+    InvalidAuthArguments,
+    #[error("native database is not configured")]
+    NotConfigured,
+    #[error("database connection timed out")]
+    ConnectTimeout(#[from] tokio::time::error::Elapsed),
     #[error("database query failed")]
     Query(#[from] sqlx::Error),
     #[error("spend batch has {ids} ids and {costs} costs")]

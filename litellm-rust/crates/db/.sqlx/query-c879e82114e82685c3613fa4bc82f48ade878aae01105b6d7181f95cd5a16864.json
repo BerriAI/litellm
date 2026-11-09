@@ -1,0 +1,25 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT to_jsonb(i) AS \"data!: AuthData\" FROM \"LiteLLM_VerifiedSubject\" i WHERE i.issuer=$1 AND i.tenant_id=$2 AND i.oid=$3\n",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "data!: AuthData",
+        "type_info": "Jsonb",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "c879e82114e82685c3613fa4bc82f48ade878aae01105b6d7181f95cd5a16864"
+}

@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT to_jsonb(a) AS \"data!: AuthData\"\nFROM \"LiteLLM_RetiredAgent\" a\nWHERE a.original_agent_id = ANY($1::text[])\nORDER BY a.original_agent_id\n",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "data!: AuthData",
+        "type_info": "Jsonb",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "TextArray"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "16fec3e3896126e8bd14726b346a2a45bd52705356fbf94128776db52032fd05"
+}
