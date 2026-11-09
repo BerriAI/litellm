@@ -41,6 +41,7 @@ from litellm.types.proxy.management_endpoints.common_daily_activity import (
 )
 from litellm.types.repositories.daily_activity import (
     AggregatedRows,
+    CustomerTeamRollupRow,
     DailyActivityScope,
     EntityRollupRow,
     GroupingSetsRow,
@@ -3053,3 +3054,34 @@ def test_metric_merges_preserve_every_additive_field() -> None:
     metrics: Final = SpendMetrics.model_validate(dict.fromkeys(SpendMetrics.model_fields, 2))
     merged: Final = common_daily_activity_module.sum_spend_metrics((SpendMetrics(), metrics, metrics))
     assert merged.model_dump() == dict.fromkeys(SpendMetrics.model_fields, 4)
+
+
+@pytest.mark.parametrize("team_ids", (("team-a", "Unassigned"), ()))
+def test_customer_teams_preserve_metrics_and_unassigned_bucket(team_ids: tuple[str, ...]) -> None:
+    from litellm.types.proxy.management_endpoints.common_daily_activity import DailySpendData
+
+    rows: Final = tuple(
+        CustomerTeamRollupRow(
+            date="2026-01-01",
+            api_key=None,
+            team_id=team_id,
+            team_alias="Team A" if team_id == "team-a" else None,
+            **{
+                field.name: 2
+                for field in fields(CustomerTeamRollupRow)
+                if field.name not in ("date", "api_key", "team_id", "team_alias")
+            },
+        )
+        for team_id in team_ids
+    )
+    day: Final = DailySpendData(date=date(2026, 1, 1), metrics=SpendMetrics())
+    results: Final = common_daily_activity_module._with_customer_teams((day,), rows)
+    teams: Final = results[0].breakdown.teams
+    assert teams is not None
+    assert tuple(teams) == team_ids
+    for team_id in team_ids:
+        assert teams[team_id].metrics.spend == 2
+        assert teams[team_id].metrics.api_requests == 2
+        assert teams[team_id].metrics.total_tokens == 4
+        assert teams[team_id].metadata == {"team_alias": "Team A" if team_id == "team-a" else None}
+    assert "teams" not in day.breakdown.model_dump()

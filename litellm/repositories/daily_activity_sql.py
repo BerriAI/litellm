@@ -75,6 +75,7 @@ def build_where_clause(scope: DailyActivityScope, *, start_index: int = 1) -> tu
     exclusion_index: Final = entity_index + int(has_entity_array)
     model_index: Final = exclusion_index + int(bool(scope.exclude_entity_ids))
     api_keys_index: Final = model_index + int(bool(scope.model))
+    team_index: Final = api_keys_index + int(bool(scope.api_keys))
     conditions: Final = (
         f"date >= ${start_index}",
         f"date <= ${start_index + 1}",
@@ -105,6 +106,11 @@ def build_where_clause(scope: DailyActivityScope, *, start_index: int = 1) -> tu
             if scope.api_keys
             else ()
         ),
+        *(
+            (f"{_customer_team_expression(scope)} = ANY(${team_index}::text[])",)
+            if scope.table is DailyActivityTable.CUSTOMER and scope.team_ids is not None
+            else ()
+        ),
     )
     params: Final = (
         adjusted_start,
@@ -113,8 +119,44 @@ def build_where_clause(scope: DailyActivityScope, *, start_index: int = 1) -> tu
         *((list(scope.exclude_entity_ids),) if scope.exclude_entity_ids else ()),
         *((scope.model,) if scope.model else ()),
         *((list(scope.api_keys),) if scope.api_keys else ()),
+        *((list(scope.team_ids),) if scope.table is DailyActivityTable.CUSTOMER and scope.team_ids is not None else ()),
     )
     return " AND ".join(conditions), params
+
+
+def _customer_team_expression(scope: DailyActivityScope) -> str:
+    table: Final = PRISMA_TO_PG_TABLE[scope.table]
+    return (
+        "COALESCE(NULLIF((SELECT current_key.team_id FROM ("
+        'SELECT token, team_id, 0 AS priority, NULL::timestamp AS deleted_at FROM "LiteLLM_VerificationToken" '
+        "UNION ALL "
+        'SELECT token, team_id, 1 AS priority, deleted_at FROM "LiteLLM_DeletedVerificationToken"'
+        f') current_key WHERE current_key.token = "{table}".api_key '
+        "ORDER BY priority, deleted_at DESC LIMIT 1), ''), 'Unassigned')"
+    )
+
+
+def build_customer_team_rollup_sql(scope: DailyActivityScope, *, row_ids: tuple[str, ...] | None = None) -> SqlQuery:
+    where_clause, params = build_where_clause(scope)
+    team: Final = _customer_team_expression(scope)
+    rows_filter: Final = f" AND id = ANY(${len(params) + 1}::text[])" if row_ids is not None else ""
+    return SqlQuery(
+        sql=f'''SELECT date, NULL::text AS api_key, customer_team_id AS team_id,
+            (SELECT team_alias FROM "LiteLLM_TeamTable" WHERE team_id = scoped.customer_team_id) AS team_alias,
+            {_rollup_metric_select(scope.table)}
+            FROM (SELECT *, {team} AS customer_team_id FROM "{PRISMA_TO_PG_TABLE[scope.table]}"
+                WHERE {where_clause}{rows_filter}) scoped
+            GROUP BY date, customer_team_id''',
+        params=(*params, *((list(row_ids),) if row_ids is not None else ())),
+    )
+
+
+def build_customer_filtered_keys_sql(scope: DailyActivityScope) -> SqlQuery:
+    where_clause, params = build_where_clause(scope)
+    return SqlQuery(
+        sql=f'SELECT DISTINCT api_key FROM "{PRISMA_TO_PG_TABLE[scope.table]}" WHERE {where_clause}',
+        params=params,
+    )
 
 
 def _ptu_flat_cost_select(table: DailyActivityTable, *, aggregate: bool = True) -> str:

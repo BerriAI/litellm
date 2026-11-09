@@ -18,6 +18,8 @@ from litellm.repositories.daily_activity_sql import (
     adjust_dates_for_timezone,
     build_aggregated_sql,
     build_cache_leakage_keys_sql,
+    build_customer_filtered_keys_sql,
+    build_customer_team_rollup_sql,
     build_entity_rollup_sql,
     build_export_sql,
     build_guardrail_spend_sql,
@@ -29,6 +31,7 @@ from litellm.repositories.daily_activity_sql import (
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.types.repositories.daily_activity import (
     AggregatedRows,
+    CustomerTeamRollupRow,
     DailyActivityProxyReads,
     DailyActivityRow,
     DailyActivityScope,
@@ -102,6 +105,8 @@ class DailyActivityDatabase(Protocol):
 
 
 _GROUPING_ADAPTER: Final = TypeAdapter(tuple[GroupingSetsRow, ...])
+_CUSTOMER_TEAM_ADAPTER: Final = TypeAdapter(tuple[CustomerTeamRollupRow, ...])
+_FILTERED_KEYS_ADAPTER: Final = TypeAdapter(tuple[dict[str, StrictStr], ...])
 _ENTITY_ADAPTER: Final = TypeAdapter(tuple[EntityRollupRow, ...])
 _GUARDRAIL_SPEND_ADAPTER: Final = TypeAdapter(tuple[GuardrailSpendRow, ...])
 _KEY_SPEND_ADAPTER: Final = TypeAdapter(tuple[KeySpendRow, ...])
@@ -341,6 +346,16 @@ class DailyActivityRepository:
             if scope.exclude_entity_ids
             else {}
         )
+        filtered_keys: Final = (
+            tuple(
+                row["api_key"]
+                for row in _FILTERED_KEYS_ADAPTER.validate_python(
+                    await self._query(build_customer_filtered_keys_sql(scope))
+                )
+            )
+            if scope.table is DailyActivityTable.CUSTOMER and scope.team_ids is not None
+            else scope.api_keys
+        )
         conditions: Final = {
             "date": {"gte": adjusted_start, "lte": adjusted_end},
             **({scope.entity_id_field: {"in": list(scope.entity_ids)}} if scope.entity_ids is not None else {}),
@@ -352,7 +367,7 @@ class DailyActivityRepository:
                 if scope.model
                 else {}
             ),
-            **({"api_key": {"in": list(scope.api_keys)}} if scope.api_keys is not None else {}),
+            **({"api_key": {"in": list(filtered_keys)}} if filtered_keys is not None else {}),
         }
         count, rows = await asyncio.gather(
             table.count(where=conditions),
@@ -364,3 +379,10 @@ class DailyActivityRepository:
             ),
         )
         return DailyRowsPage(total_count=count, rows=tuple(rows))
+
+    async def customer_team_spend(
+        self, scope: DailyActivityScope, *, row_ids: tuple[str, ...] | None = None
+    ) -> tuple[CustomerTeamRollupRow, ...]:
+        return _CUSTOMER_TEAM_ADAPTER.validate_python(
+            await self._query(build_customer_team_rollup_sql(scope, row_ids=row_ids))
+        )

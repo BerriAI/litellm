@@ -15625,6 +15625,11 @@
       "showUnknown": "Show Unknown",
       "showUnknownHint": "Requests that failed to route to a provider"
     },
+    "customerTeamSpend": {
+      "title": "Spend by team",
+      "attributionNote": "Uses each key's current team, or its last team when deleted. This is not historical team ownership.",
+      "noData": "No customer spend for this period"
+    },
     "teamUserSpend": {
       "columns": {
         "team": "Team",

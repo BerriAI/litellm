@@ -28757,6 +28757,13 @@ export interface components {
             providers?: {
                 [key: string]: components["schemas"]["MetricWithMetadata"];
             };
+            /**
+             * Teams
+             * @description Customer spend by the key's current team, or last team for deleted keys. Keys without a known team are grouped under Unassigned
+             */
+            teams?: {
+                [key: string]: components["schemas"]["MetricWithMetadata"];
+            } | null;
         };
         /** BudgetConfig */
         BudgetConfig: {
@@ -59743,6 +59750,7 @@ export interface operations {
                 page?: number;
                 page_size?: number;
                 exclude_end_user_ids?: string | null;
+                team_ids?: string | null;
             };
             header?: never;
             path?: never;
@@ -59781,6 +59789,7 @@ export interface operations {
                 api_key?: string | null;
                 exclude_end_user_ids?: string | null;
                 timezone?: number | null;
+                team_ids?: string | null;
             };
             header?: never;
             path?: never;
@@ -59820,6 +59829,7 @@ export interface operations {
                 api_key?: string | null;
                 exclude_end_user_ids?: string | null;
                 timezone?: number | null;
+                team_ids?: string | null;
             };
             header?: never;
             path?: never;
@@ -59860,6 +59870,7 @@ export interface operations {
                 api_key?: string | null;
                 exclude_end_user_ids?: string | null;
                 timezone?: number | null;
+                team_ids?: string | null;
             };
             header?: never;
             path?: never;
@@ -59899,6 +59910,7 @@ export interface operations {
                 api_key?: string | null;
                 exclude_end_user_ids?: string | null;
                 timezone?: number | null;
+                team_ids?: string | null;
             };
             header?: never;
             path?: never;
@@ -59938,6 +59950,7 @@ export interface operations {
                 api_key?: string | null;
                 exclude_end_user_ids?: string | null;
                 timezone?: number | null;
+                team_ids?: string | null;
             };
             header?: never;
             path?: never;
@@ -60794,6 +60807,7 @@ export interface operations {
                 page?: number;
                 page_size?: number;
                 exclude_end_user_ids?: string | null;
+                team_ids?: string | null;
             };
             header?: never;
             path?: never;
@@ -60832,6 +60846,7 @@ export interface operations {
                 api_key?: string | null;
                 exclude_end_user_ids?: string | null;
                 timezone?: number | null;
+                team_ids?: string | null;
             };
             header?: never;
             path?: never;
@@ -60871,6 +60886,7 @@ export interface operations {
                 api_key?: string | null;
                 exclude_end_user_ids?: string | null;
                 timezone?: number | null;
+                team_ids?: string | null;
             };
             header?: never;
             path?: never;
@@ -60911,6 +60927,7 @@ export interface operations {
                 api_key?: string | null;
                 exclude_end_user_ids?: string | null;
                 timezone?: number | null;
+                team_ids?: string | null;
             };
             header?: never;
             path?: never;
@@ -60950,6 +60967,7 @@ export interface operations {
                 api_key?: string | null;
                 exclude_end_user_ids?: string | null;
                 timezone?: number | null;
+                team_ids?: string | null;
             };
             header?: never;
             path?: never;
@@ -60989,6 +61007,7 @@ export interface operations {
                 api_key?: string | null;
                 exclude_end_user_ids?: string | null;
                 timezone?: number | null;
+                team_ids?: string | null;
             };
             header?: never;
             path?: never;
