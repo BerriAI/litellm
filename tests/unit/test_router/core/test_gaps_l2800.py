@@ -427,29 +427,31 @@ async def test_a_default_metadata_list_applies_only_when_the_request_sets_none(
     assert _metadata(host.calls[0].kwargs)["regions"] == sent_regions
 
 
+@pytest.mark.parametrize("mask_key", ["mask_input", "mask_output"])
 @pytest.mark.parametrize(
-    ("default_mask", "request_metadata", "sent_mask"),
+    ("default_mask", "request_mask", "sent_mask"),
     [
-        (True, {"mask_input": False}, True),
-        (True, {}, True),
-        ("true", {"mask_input": False}, "true"),
-        (False, {"mask_input": True}, True),
-        (False, {}, False),
-        ("false", {"mask_input": True}, True),
+        (True, False, True),
+        (True, None, True),
+        ("true", False, "true"),
+        (False, True, True),
+        (False, None, False),
+        ("false", True, True),
     ],
 )
 async def test_default_metadata_masking_stays_on_once_either_side_turns_it_on(
     make_core: MakeCore,
     host: ScriptedHost,
+    mask_key: str,
     default_mask: object,
-    request_metadata: Mapping[str, object],
+    request_mask: object,
     sent_mask: object,
 ) -> None:
     core: Final = make_core(
-        model_list=[deployment("g", "d1")], default_litellm_params={"metadata": {"mask_input": default_mask}}
+        model_list=[deployment("g", "d1")], default_litellm_params={"metadata": {mask_key: default_mask}}
     )
-    await core.acompletion(model="g", messages=MESSAGES, metadata=dict(request_metadata))  # pyright: ignore[reportAttributeAccessIssue]  # endpoint method
-    assert _metadata(host.calls[0].kwargs)["mask_input"] == sent_mask
+    await core.acompletion(model="g", messages=MESSAGES, metadata={mask_key: request_mask})  # pyright: ignore[reportAttributeAccessIssue]  # endpoint method
+    assert _metadata(host.calls[0].kwargs)[mask_key] == sent_mask
 
 
 async def test_a_default_redis_namespace_beats_the_request_redis_namespace(
