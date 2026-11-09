@@ -499,6 +499,7 @@ class RequestRateLimiterStash:
     reserved_tokens: int = 0
     reserved_model: RateLimitedModel | None = None
     reserved_scopes: frozenset[tuple[str, str]] = field(default_factory=frozenset)
+    reserved_window_identities: frozenset[ReservationWindowIdentity] = field(default_factory=frozenset)
     ptu_ceiling: PTUTeamCeiling | None = None
     ptu_reserved_tokens: int = 0
     ptu_reserved_window_identities: frozenset[ReservationWindowIdentity] = field(default_factory=frozenset)
@@ -4031,6 +4032,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                         for identity in tpm_response.get("reservation_windows", frozenset())
                         if identity[0].scope.descriptor_key == PTU_TEAM_DESCRIPTOR_KEY
                     )
+                    stash.reserved_window_identities = tpm_response.get("reservation_windows", frozenset())
                     stash.reserved_model = self._rate_limited_model(requested_model)
                     stash.reserved_scopes = frozenset(
                         (d["key"], d["value"])
@@ -5271,11 +5273,12 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         tpm_actual, itpm_actual, otpm_actual = self._recovered_partial_usage_tokens(request_data)
 
         combined_ops: Final = (
-            self._build_reservation_aware_tpm_ops(
+            self._build_project_reservation_ops(
                 targets=tuple(scope for scope in stash.reserved_scopes if scope[0] != PTU_TEAM_DESCRIPTOR_KEY),
                 reserved_scopes=stash.reserved_scopes,
                 actual_tokens=tpm_actual,
                 reserved_tokens=reserved_tokens,
+                reservation_window_identities=stash.reserved_window_identities,
             )
             if reserved_tokens > 0
             else ()
@@ -5327,9 +5330,11 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 otpm_reserved,
             )
         stash.mark_reservation_released()
-        if combined_ops:
-            await self.rate_limits.increment_many(combined_ops)
-        for project_ops in (itpm_ops, otpm_ops, ptu_ops):
+        unguarded_tpm_ops: Final = [op for op in combined_ops if isinstance(op, CounterIncrement)]
+        guarded_tpm_ops: Final = tuple(op for op in combined_ops if isinstance(op, WindowGuardedIncrement))
+        if unguarded_tpm_ops:
+            await self.rate_limits.increment_many(unguarded_tpm_ops)
+        for project_ops in (guarded_tpm_ops, itpm_ops, otpm_ops, ptu_ops):
             if isinstance(project_ops, list):
                 await self.rate_limits.increment_many(project_ops)
             elif project_ops:

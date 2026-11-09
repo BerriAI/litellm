@@ -6015,6 +6015,35 @@ async def test_a_responses_websocket_close_whose_refund_fails_still_frees_its_sl
 
 
 @pytest.mark.asyncio
+async def test_a_responses_websocket_that_closes_in_a_later_minute_leaves_that_minutes_key_tpm_alone() -> None:
+    cache: Final = DualCache()
+    clock = [datetime(2026, 11, 9, 12, 0, 0)]
+    handler: Final = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(cache), time_provider=lambda: clock[-1]
+    )
+    proxy_logging_obj: Final = ProxyLogging(user_api_key_cache=DualCache())
+    proxy_logging_obj.proxy_hook_mapping["parallel_request_limiter"] = handler
+    api_key: Final = hash_token("sk-responses-websocket-late-close")
+    auth: Final = UserAPIKeyAuth(api_key=api_key, tpm_limit=1_000, metadata={"default_estimated_output_tokens": 60})
+    await _admit_responses_websocket(handler, cache, auth, "socket")
+    clock.append(clock[-1] + timedelta(seconds=handler.window_size + 1))
+    await handler.atomic_check_and_increment_by_n(
+        descriptors=[
+            {
+                "key": "api_key",
+                "value": api_key,
+                "rate_limit": {"tokens_per_unit": 1_000, "window_size": handler.window_size},
+            }
+        ],
+        increments=[{"tokens": 20}],
+    )
+
+    await proxy_logging_obj.arelease_responses_websocket_admission(auth)
+
+    assert int(_local(handler, _counter("api_key", api_key)) or 0) == 20
+
+
+@pytest.mark.asyncio
 async def test_a_closed_responses_websocket_refunds_a_project_reservation_stashed_without_its_window() -> None:
     cache: Final = DualCache()
     handler, proxy_logging_obj = _responses_websocket_limiter(cache)
