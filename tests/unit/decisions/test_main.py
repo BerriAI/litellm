@@ -24,7 +24,6 @@ from respx.models import Call
 
 import litellm
 from litellm.constants import AWS_SIGNING_MAX_THREADS
-from litellm.cost_calculator import get_response_cost_from_hidden_params
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.get_model_cost_map import ModelCostMapReloaded, refetch_model_cost_map
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
@@ -1813,7 +1812,7 @@ async def test_openrouter_decisions_uses_provider_reported_cost_without_cost_map
     )
 
     assert route.called
-    assert get_response_cost_from_hidden_params(response.hidden_params) == cost
+    assert litellm.completion_cost(completion_response=response) == pytest.approx(cost)
 
 
 _SAFETY_IDENTIFIER: Final = "end-user-7"
@@ -4959,42 +4958,200 @@ async def test_vercel_ai_gateway_decisions_never_fall_back_to_the_openai_key(
     assert len(respx_mock.calls) == 0
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("model", "gateway_cost", "reported_cost"),
-    (
-        ("example/unpriced-decider", "0.000001386", 1.386e-06),
-        ("openai/gpt-6-luna-decisions", "0.00005722", 5.722e-05),
-        ("openai/gpt-6-luna-decisions", "not-a-number", None),
-    ),
-    ids=("unpriced_model", "cache_hit_on_priced_model", "unreadable_charge"),
-)
-async def test_vercel_ai_gateway_decisions_bill_the_charge_the_gateway_reports(
-    model: str,
-    gateway_cost: str,
-    reported_cost: float | None,
-    monkeypatch: pytest.MonkeyPatch,
-    respx_mock: respx.MockRouter,
-) -> None:
+_VERCEL_DECISIONS_URL: Final = "https://ai-gateway.vercel.sh/v1/decisions"
+
+
+def _gateway_routing(*attempts: tuple[str, bool]) -> Mapping[str, object]:
+    return {
+        "modelAttempts": [
+            {
+                "providerAttempts": [
+                    {"provider": "openai", "credentialType": credential_type, "success": success}
+                    for credential_type, success in attempts
+                ]
+            }
+        ]
+    }
+
+
+def _vercel_response(model: str, provider_metadata: Mapping[str, object]) -> Mapping[str, object]:
+    return {
+        "model": model,
+        "answers": [{"type": "predicate", "name": "is_defect", "probability": 0.9}],
+        "usage": {"input_tokens": _INPUT_TOKENS, "output_tokens": 0, "total_tokens": _INPUT_TOKENS},
+        "provider_metadata": provider_metadata,
+    }
+
+
+@pytest.fixture
+def vercel_gateway_key(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("VERCEL_AI_GATEWAY_API_BASE", raising=False)
     monkeypatch.setenv("VERCEL_AI_GATEWAY_API_KEY", "gateway-key")
-    respx_mock.post("https://ai-gateway.vercel.sh/v1/decisions").respond(
-        json={
-            "model": model,
-            "answers": [{"type": "predicate", "name": "is_defect", "probability": 0.9}],
-            "usage": {"input_tokens": _INPUT_TOKENS, "output_tokens": 0, "total_tokens": _INPUT_TOKENS},
-            "provider_metadata": {"gateway": {"cost": gateway_cost}},
-        }
-    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("vercel_gateway_key")
+@pytest.mark.parametrize(
+    ("model", "gateway", "billed"),
+    (
+        ("example/unpriced-decider", {"cost": "0.000001386"}, 1.386e-06),
+        ("openai/gpt-6-luna-decisions", {"cost": "0.00005722"}, 5.722e-05),
+        (
+            "openai/gpt-6-luna-decisions",
+            {"cost": "0", "marketCost": "0.0000164", "routing": _gateway_routing(("byok", True))},
+            1.64e-05,
+        ),
+        (
+            "openai/gpt-6-luna-decisions",
+            {
+                "cost": "0.0000164",
+                "marketCost": "0.0000164",
+                "routing": _gateway_routing(("byok", False), ("system", True)),
+            },
+            1.64e-05,
+        ),
+    ),
+    ids=("unpriced_model", "cache_hit_on_priced_model", "own_provider_key", "own_key_failed_over_to_gateway_credits"),
+)
+async def test_vercel_ai_gateway_decisions_bill_the_charge_the_gateway_reports(
+    model: str, gateway: Mapping[str, object], billed: float, respx_mock: respx.MockRouter
+) -> None:
+    respx_mock.post(_VERCEL_DECISIONS_URL).respond(json=_vercel_response(model, {"gateway": gateway}))
 
     response: Final = await litellm.adecisions(
         model=f"vercel_ai_gateway/{model}",
         input="The package arrived broken.",
-        questions=[{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
+        questions=_PREDICATE_QUESTIONS,
     )
 
     assert response.answers[0].probability == 0.9
-    assert get_response_cost_from_hidden_params(response.hidden_params) == reported_cost
+    assert litellm.completion_cost(completion_response=response) == pytest.approx(billed)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("vercel_gateway_key")
+async def test_vercel_ai_gateway_decisions_price_an_unreadable_charge_from_the_cost_map(
+    respx_mock: respx.MockRouter,
+) -> None:
+    respx_mock.post(_VERCEL_DECISIONS_URL).respond(
+        json=_vercel_response("openai/gpt-6-luna-decisions", {"gateway": {"cost": "not-a-number"}})
+    )
+
+    response: Final = await litellm.adecisions(
+        model="vercel_ai_gateway/openai/gpt-6-luna-decisions",
+        input="The package arrived broken.",
+        questions=_PREDICATE_QUESTIONS,
+    )
+
+    luna: Final = litellm.model_cost["vercel_ai_gateway/openai/gpt-6-luna-decisions"]
+    assert litellm.completion_cost(completion_response=response) == pytest.approx(
+        _INPUT_TOKENS * float(luna["input_cost_per_token"])
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("vercel_gateway_key")
+async def test_vercel_ai_gateway_decisions_apply_the_operator_discount_and_margin_to_the_gateway_charge(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setattr(litellm, "cost_discount_config", {"vercel_ai_gateway": 0.5})
+    monkeypatch.setattr(litellm, "cost_margin_config", {"vercel_ai_gateway": 0.1})
+    respx_mock.post(_VERCEL_DECISIONS_URL).respond(
+        json=_vercel_response("openai/gpt-6-luna-decisions", {"gateway": {"cost": "0.00005722"}})
+    )
+
+    response: Final = await litellm.adecisions(
+        model="vercel_ai_gateway/openai/gpt-6-luna-decisions",
+        input="The package arrived broken.",
+        questions=_PREDICATE_QUESTIONS,
+    )
+
+    assert litellm.completion_cost(completion_response=response) == pytest.approx(5.722e-05 * 0.5 * 1.1)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("vercel_gateway_key")
+@pytest.mark.parametrize(
+    ("model", "drop_params", "sent_content"),
+    (
+        (
+            "typesafe-ai/jev-1.14.0",
+            False,
+            [
+                {"type": "input_text", "text": _SCREEN_TEXT},
+                {"type": "input_image", "image_url": _PNG_DATA_URL, "detail": "high"},
+            ],
+        ),
+        ("typesafe-ai/jev", True, [{"type": "input_text", "text": _SCREEN_TEXT}]),
+    ),
+    ids=("model_reads_images", "text_only_model_drops_them"),
+)
+async def test_vercel_ai_gateway_decisions_send_images_only_to_models_that_read_them(
+    model: str, drop_params: bool, sent_content: list[Mapping[str, object]], respx_mock: respx.MockRouter
+) -> None:
+    route: Final = respx_mock.post(_VERCEL_DECISIONS_URL).respond(json=_vercel_response(model, {}))
+
+    await litellm.adecisions(
+        model=f"vercel_ai_gateway/{model}",
+        input=_screen_messages(_PNG_DATA_URL),
+        questions=_PREDICATE_QUESTIONS,
+        drop_params=drop_params,
+    )
+
+    assert json.loads(route.calls.last.request.content)["input"][0]["content"] == sent_content
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("vercel_gateway_key")
+async def test_vercel_ai_gateway_text_only_decisions_model_refuses_images_before_http(
+    respx_mock: respx.MockRouter,
+) -> None:
+    with pytest.raises(litellm.UnsupportedParamsError, match="input_image"):
+        await litellm.adecisions(
+            model="vercel_ai_gateway/typesafe-ai/jev",
+            input=_screen_messages(_PNG_DATA_URL),
+            questions=_PREDICATE_QUESTIONS,
+        )
+
+    assert len(respx_mock.calls) == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("vercel_gateway_key")
+async def test_vercel_ai_gateway_decisions_inline_remote_images(
+    respx_mock: respx.MockRouter, async_only_image_fetch
+) -> None:
+    route: Final = respx_mock.post(_VERCEL_DECISIONS_URL).respond(
+        json=_vercel_response("openai/gpt-6-luna-decisions", {})
+    )
+
+    await litellm.adecisions(
+        model="vercel_ai_gateway/openai/gpt-6-luna-decisions",
+        input=_screen_messages(_REMOTE_IMAGE_URL),
+        questions=_PREDICATE_QUESTIONS,
+    )
+
+    assert async_only_image_fetch.fetched == [_REMOTE_IMAGE_URL]
+    sent_image: Final = json.loads(route.calls.last.request.content)["input"][0]["content"][1]
+    assert sent_image["image_url"] == async_only_image_fetch.data_url
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("vercel_gateway_key")
+async def test_vercel_ai_gateway_decisions_forward_provider_options(respx_mock: respx.MockRouter) -> None:
+    provider_options: Final = {"gateway": {"order": ["openai"], "byok": {"openai": [{"apiKey": "caller-openai-key"}]}}}
+    route: Final = respx_mock.post(_VERCEL_DECISIONS_URL).respond(
+        json=_vercel_response("openai/gpt-6-luna-decisions", {})
+    )
+
+    await litellm.adecisions(
+        model="vercel_ai_gateway/openai/gpt-6-luna-decisions",
+        input="The package arrived broken.",
+        questions=_PREDICATE_QUESTIONS,
+        providerOptions=provider_options,
+    )
+
+    assert json.loads(route.calls.last.request.content)["providerOptions"] == provider_options
 
 
 @pytest.mark.asyncio
@@ -5026,3 +5183,48 @@ async def test_vercel_ai_gateway_jev_sends_box_questions(
 
     assert json.loads(route.calls.last.request.content)["questions"] == [box_question]
     assert response.answers[0].confidence == 0.8
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("upstream_input_tokens", "cached_tokens", "cache_write_tokens"),
+    ((_INPUT_TOKENS, _INPUT_TOKENS - 20, 20), (_INPUT_TOKENS + 1, 0, 0)),
+    ids=("upstream_reports_this_call", "upstream_count_disagrees"),
+)
+async def test_vercel_ai_gateway_decisions_report_the_upstream_cache_split(
+    upstream_input_tokens: int,
+    cached_tokens: int,
+    cache_write_tokens: int,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.delenv("VERCEL_AI_GATEWAY_API_BASE", raising=False)
+    monkeypatch.setenv("VERCEL_AI_GATEWAY_API_KEY", "gateway-key")
+    respx_mock.post("https://ai-gateway.vercel.sh/v1/decisions").respond(
+        json={
+            "model": "openai/gpt-6-luna-decisions",
+            "answers": [{"type": "predicate", "name": "is_defect", "probability": 0.9}],
+            "usage": {"input_tokens": _INPUT_TOKENS, "output_tokens": 0, "total_tokens": _INPUT_TOKENS},
+            "provider_metadata": {
+                "openai": {
+                    "usage": {
+                        "input_tokens": upstream_input_tokens,
+                        "input_tokens_details": {"cached_tokens": _INPUT_TOKENS - 20, "cache_write_tokens": 20},
+                        "output_tokens": 0,
+                        "total_tokens": upstream_input_tokens,
+                    }
+                },
+                "gateway": {"cost": "0.00005722"},
+            },
+        }
+    )
+
+    response: Final = await litellm.adecisions(
+        model="vercel_ai_gateway/openai/gpt-6-luna-decisions",
+        input="The package arrived broken.",
+        questions=[{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
+    )
+
+    assert response.usage.input_tokens_details.cached_tokens == cached_tokens
+    assert response.usage.input_tokens_details.cache_write_tokens == cache_write_tokens
+    assert litellm.completion_cost(completion_response=response) == pytest.approx(5.722e-05)

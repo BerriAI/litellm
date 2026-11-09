@@ -12,7 +12,7 @@ from typing_extensions import assert_never
 
 import litellm
 from litellm.cost_calculator import cost_map_key_prices_anything
-from litellm.litellm_core_utils.core_helpers import RESPONSE_COST_HEADER, normalize_drop_params
+from litellm.litellm_core_utils.core_helpers import UPSTREAM_USAGE_COST, normalize_drop_params
 from litellm.litellm_core_utils.decisions_pricing import QUERY_PRICED_DECISIONS_PROVIDERS
 from litellm.litellm_core_utils.get_provider_specific_headers import ProviderSpecificHeaderUtils
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -290,6 +290,7 @@ class _ResolvedSupport:
     box_questions: bool
     audio: bool
     videos: bool
+    images: bool
 
 
 def _takes_audio(
@@ -346,6 +347,7 @@ def _resolved_support(
         ),
         audio=bool(fields.audio) and _takes_audio(provider_config, model, custom_llm_provider, deployment),
         videos=bool(fields.videos) and _takes_videos(provider_config, model, custom_llm_provider, deployment),
+        images=provider_config.supports_image_input(model, custom_llm_provider),
     )
 
 
@@ -387,7 +389,9 @@ def _unsupported_params(
         ir_request.safety_identifier is not None and not provider_config.supports_safety_identifier
     )
     refused_image_param: Final = (
-        None if provider_config.supports_images_in(ir_request.input, headers) else image_param(ir_request.input)
+        None
+        if support.images and provider_config.supports_images_in(ir_request.input, headers)
+        else image_param(ir_request.input)
     )
     refuses_assets: Final = bool(ir_request.assets) and not provider_config.supports_assets(headers)
     refuses_box_questions: Final = _has_box_question(ir_request.questions) and not support.box_questions
@@ -421,7 +425,7 @@ def _without_unsupported_params(
         ir_request,
         input=(
             ir_request.input
-            if provider_config.supports_images_in(ir_request.input, headers)
+            if support.images and provider_config.supports_images_in(ir_request.input, headers)
             else with_images_where(ir_request.input, _no_image)
         ),
         safety_identifier=ir_request.safety_identifier if provider_config.supports_safety_identifier else None,
@@ -750,7 +754,7 @@ def _request_body(call: DecisionsCall) -> Mapping[str, object]:
             model=call.requested_model,
             llm_provider=call.custom_llm_provider,
         )
-    return body
+    return {**body, **call.provider_config.provider_request_fields(call.litellm_params)}
 
 
 def _pricing_model(response: DecisionsIRResponse, call: DecisionsCall) -> str:
@@ -768,7 +772,7 @@ def _format_response(response: DecisionsIRResponse, call: DecisionsCall) -> Deci
             "model": f"{call.custom_llm_provider}/{call.model}",
             "custom_llm_provider": call.custom_llm_provider,
             "provider_response_model": _pricing_model(response, call),
-            **({"additional_headers": {RESPONSE_COST_HEADER: provider_cost}} if provider_cost is not None else {}),
+            **({UPSTREAM_USAGE_COST: provider_cost} if provider_cost is not None else {}),
         }
     )
     return formatted
