@@ -39,6 +39,7 @@ pub mod protocol;
 pub mod reservation;
 pub mod resolved_models;
 pub mod route_access;
+pub mod route_roles;
 pub mod spend_counter_policy;
 pub mod team_aliases;
 pub mod team_override;
