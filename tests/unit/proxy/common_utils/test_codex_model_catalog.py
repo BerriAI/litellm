@@ -6,6 +6,7 @@ from types import MappingProxyType
 from typing import Final, Literal
 
 import pytest
+from packaging.version import Version
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -13,6 +14,7 @@ from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.llm_cost_calc.utils import get_service_tier_cost_key
 from litellm.llms.bedrock.common_utils import bedrock_model_name_without_provider
 from litellm.proxy.common_utils.codex_model_catalog import (
+    CODEX_BEDROCK_MODELS_MINIMAL_CLIENT_VERSION,
     CODEX_CATALOG_BYTE_LIMIT,
     CodexCatalogRow,
     CodexStockModel,
@@ -1300,21 +1302,44 @@ def test_a_bedrock_deployment_of_a_model_its_bedrock_catalog_leaves_out_gets_a_t
     assert "model_messages" not in entry and entry["base_instructions"] == _PROMPT
 
 
-@pytest.mark.parametrize(
-    ("endpoint", "upstream"),
-    [("bedrock", "bedrock/us.openai.{name}"), ("bedrock_mantle", "bedrock_mantle/openai.{name}")],
-)
-def test_a_codex_older_than_the_openai_entry_a_bedrock_one_is_built_from_gets_an_entry_it_can_decode(
-    endpoint: Literal["bedrock", "bedrock_mantle"], upstream: str
-) -> None:
-    name: Final = next(
-        name for name in _bedrock_names(endpoint) if bundled_codex_models()[name].minimal_client_version is not None
-    )
-    minimum: Final = bundled_codex_models()[name].minimal_client_version
-    assert isinstance(minimum, str)
-    row: Final = _row("team-model", upstream_model=upstream.format(name=name))
+def _bedrock_endpoint_names() -> Iterator[tuple[str, str]]:
+    for endpoint in _BEDROCK_UPSTREAMS:
+        for name in _bedrock_names(endpoint):
+            yield endpoint, name
 
-    older: Final = _only_entry(row, client_version="0.0.1")
+
+def _just_below(version: str) -> str:
+    release: Final = Version(version).release
+    major, minor, micro = (*release, 0, 0)[:3]
+    return f"{major}.{minor}.{micro - 1}" if micro else f"{major}.{minor - 1}.999"
+
+
+@pytest.mark.parametrize(("endpoint", "name"), tuple(_bedrock_endpoint_names()))
+def test_no_bedrock_entry_reaches_a_codex_whose_decoder_needs_fields_debug_models_leaves_out(
+    endpoint: Literal["bedrock", "bedrock_mantle"], name: str
+) -> None:
+    """Codex rust-v0.147.0's ModelInfo requires `supports_parallel_tool_calls`, which 0.166.0's
+    `codex debug models` does not print (checked in openai/codex on 2026-11-09)."""
+    entry: Final = _only_entry(
+        _row("team-model", upstream_model=_BEDROCK_UPSTREAMS[endpoint][0].format(name=name)), client_version="0.147.0"
+    )
+
+    assert "model_messages" not in entry and entry["base_instructions"] == _PROMPT
+
+
+@pytest.mark.parametrize(("endpoint", "name"), tuple(_bedrock_endpoint_names()))
+def test_a_codex_too_old_to_decode_a_bedrock_entry_gets_a_translated_one_instead(
+    endpoint: Literal["bedrock", "bedrock_mantle"], name: str
+) -> None:
+    built_from: Final = bundled_codex_models()[name].minimal_client_version
+    assert built_from is None or isinstance(built_from, str)
+    minimum: Final = max(
+        (version for version in (built_from, CODEX_BEDROCK_MODELS_MINIMAL_CLIENT_VERSION) if version is not None),
+        key=Version,
+    )
+    row: Final = _row("team-model", upstream_model=_BEDROCK_UPSTREAMS[endpoint][0].format(name=name))
+
+    older: Final = _only_entry(row, client_version=_just_below(minimum))
     at_minimum: Final = _only_entry(row, client_version=minimum)
 
     assert "model_messages" not in older and older["base_instructions"] == _PROMPT

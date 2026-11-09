@@ -28,7 +28,8 @@ copy of each entry's ``model_messages.instructions_template`` that it adds for o
 ``codex -c 'model_provider="amazon-bedrock-runtime"' debug models | jq 'del(.models[].base_instructions)'``
 as ``codex_bedrock_runtime_models_0.166.0.json``, and ``model_provider="amazon-bedrock"`` the same way as
 ``codex_bedrock_mantle_models_0.166.0.json``. Refresh them at the same release as the bundled catalog,
-which they take each entry's ``minimal_client_version`` from.
+which they take each entry's ``minimal_client_version`` from, and recheck
+``CODEX_BEDROCK_MODELS_MINIMAL_CLIENT_VERSION`` against the fields the new output leaves out.
 """
 
 from __future__ import annotations
@@ -68,6 +69,7 @@ if TYPE_CHECKING:
 CODEX_BASE_INSTRUCTIONS_PATH: Final = Path(__file__).with_name("codex_base_instructions.md")
 CODEX_BUNDLED_MODELS_PATH: Final = Path(__file__).with_name("codex_bundled_models_0.166.0.json")
 CodexBedrockEndpoint: TypeAlias = Literal["bedrock", "bedrock_mantle"]
+CODEX_BEDROCK_MODELS_MINIMAL_CLIENT_VERSION: Final = "0.148.0"
 CODEX_BEDROCK_MODELS_PATHS: Final[Mapping[CodexBedrockEndpoint, Path]] = MappingProxyType(
     {
         "bedrock": Path(__file__).with_name("codex_bedrock_runtime_models_0.166.0.json"),
@@ -175,14 +177,21 @@ def bundled_codex_models() -> Mapping[str, CodexStockModel]:
     return MappingProxyType({model.slug: model for model in catalog.models})
 
 
-def _with_minimal_client_version(model: CodexStockModel, version: str | tuple[int, ...] | None) -> CodexStockModel:
-    return model if version is None else model.model_copy(update={"minimal_client_version": version})
+def _with_minimal_client_version(model: CodexStockModel, built_from: str | tuple[int, ...] | None) -> CodexStockModel:
+    source_minimum: Final = built_from if not isinstance(built_from, tuple) else ".".join(map(str, built_from))
+    minimum: Final = max(
+        (version for version in (CODEX_BEDROCK_MODELS_MINIMAL_CLIENT_VERSION, source_minimum) if version is not None),
+        key=Version,
+    )
+    return model.model_copy(update={"minimal_client_version": minimum})
 
 
 @cache
 def bundled_bedrock_codex_models(endpoint: CodexBedrockEndpoint) -> Mapping[str, CodexStockModel]:
     """Codex's catalog for a Bedrock endpoint by slug, read once from the vendored file. `codex debug models`
-    prints no `minimal_client_version`, so each entry takes the one of the bundled entry Codex built it from."""
+    prints no `minimal_client_version`, so each entry takes the later of the bundled entry's Codex built it from
+    and `CODEX_BEDROCK_MODELS_MINIMAL_CLIENT_VERSION`, the first release that decodes an entry without the fields
+    `debug models` leaves out, such as `supports_parallel_tool_calls`."""
     from litellm.llms.bedrock.common_utils import bedrock_model_name_without_provider
 
     catalog: Final = CodexStockCatalog.model_validate_json(
