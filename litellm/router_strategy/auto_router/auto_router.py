@@ -6,12 +6,13 @@ import asyncio
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, NamedTuple, Optional
 
-from pydantic import ConfigDict
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm._logging import verbose_router_logger
 from litellm.constants import DEFAULT_AUTO_ROUTER_MAX_INPUT_CHARS
 from litellm.exceptions import Timeout as LiteLLMTimeout
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.core_helpers import decoded_json_object, iter_items
 from litellm.litellm_core_utils.internal_call_metadata import (
     effective_turn_off_message_logging,
     forwarded_internal_call_metadata,
@@ -39,6 +40,9 @@ else:
     Route = Any
     SemanticRouter = Any
     LiteLLMRouterEncoder = Any
+
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class _CallerMetadata(LiteLLMBaseModel):
@@ -123,14 +127,15 @@ class AutoRouter(CustomLogger):
         if self.auto_router_config is None:
             raise ValueError("No auto router config provided")
         auto_router_routes: Final[list[Route]] = []
-        loaded_config: Final = json.loads(self.auto_router_config)
-        for route in loaded_config.get("routes", []):
+        loaded_config: Final = decoded_json_object(_DECODED_JSON.validate_python(json.loads(self.auto_router_config)))
+        for route in iter_items(loaded_config.get("routes", [])):
+            route_config = decoded_json_object(route)
             auto_router_routes.append(
                 Route(
-                    name=route.get("name"),
-                    description=route.get("description"),
-                    utterances=route.get("utterances", []),
-                    score_threshold=route.get("score_threshold"),
+                    name=route_config.get("name"),
+                    description=route_config.get("description"),
+                    utterances=route_config.get("utterances", []),
+                    score_threshold=route_config.get("score_threshold"),
                 )
             )
         return auto_router_routes
@@ -204,6 +209,7 @@ class AutoRouter(CustomLogger):
         messages: list[dict[str, object]] | None = None,
         input: str | list | None = None,
         specific_deployment: bool | None = False,
+        call_type: str | None = None,
     ) -> Optional["PreRoutingHookResponse"]:
         """
         This hook is called before the routing decision is made.

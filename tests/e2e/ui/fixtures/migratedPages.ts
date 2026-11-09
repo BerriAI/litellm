@@ -79,7 +79,7 @@ export const MIGRATED_E2E_PAGES: Readonly<Record<string, MigratedPage>> = {
     group: "Tools",
     content: { role: "heading", name: "Tool Policies" },
   },
-  skills: { segment: "skills", linkName: "Skills", content: { role: "heading", name: "Skills" } },
+  skills: { segment: "skills", linkName: "Skills Hub", content: { role: "heading", name: "Skills Hub" } },
   caching: { segment: "caching", linkName: "Response Cache", content: { role: "tab", name: "Cache Settings" } },
   "cost-tracking": {
     segment: "cost-tracking",
