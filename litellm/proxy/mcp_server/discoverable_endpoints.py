@@ -105,6 +105,7 @@ from litellm.proxy.mcp_server.oauth_utils import (
     get_cimd_client_id,
     get_cimd_document_url,
     get_request_base_url,
+    grant_covers_scopes,
     needs_cimd_discovery,
     oauth_client_registration_matches,
     resolve_upstream_resource,
@@ -2548,7 +2549,7 @@ async def _vendor_credential_state(
     if oauth_grant_state(credential) == "absent":
         return "absent"
     granted_scopes: Final = credential.get("scopes") if credential else None
-    return "present" if set(requested_scopes).issubset(granted_scopes or ()) else "absent"
+    return "present" if grant_covers_scopes(tuple(granted_scopes or ()), requested_scopes) else "absent"
 
 
 @router.get("/authorize/flow")

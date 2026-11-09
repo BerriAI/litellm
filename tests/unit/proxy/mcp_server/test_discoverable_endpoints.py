@@ -15278,6 +15278,9 @@ async def test_managed_resource_metadata_excludes_refresh_permission(monkeypatch
         (["tools.read", "tools.write"], ("tools.write",), "present"),
         (None, ("tools.write",), "absent"),
         (["tools.read"], (), "present"),
+        (["channels:read,chat:write"], ("channels:read", "chat:write"), "present"),
+        (["channels:read,chat:write"], ("channels:read", "files:write"), "absent"),
+        (["channels:read"], ("channels:read", "chat:write"), "absent"),
     ],
 )
 async def test_connect_requires_the_requested_vendor_grant(monkeypatch, granted, required, expected):
@@ -15291,6 +15294,28 @@ async def test_connect_requires_the_requested_vendor_grant(monkeypatch, granted,
     monkeypatch.setattr(db, "get_user_oauth_credential", read)
     assert await endpoints._vendor_credential_state("owner", "server", required) == expected
     read.assert_awaited_once_with(prisma, "owner", "server")
+
+
+@pytest.mark.parametrize(
+    ("granted", "requested", "expected"),
+    [
+        (("channels:read,chat:write",), ("channels:read", "chat:write"), True),
+        (("channels:read,chat:write",), ("channels:read", "files:write"), False),
+        (("files:read,write",), ("files:read,write",), True),
+        (("channels:read,chat:write",), ("read",), False),
+        (("read", "write,admin"), ("admin",), False),
+        (("write,admin", "read"), ("admin",), False),
+        (("read", "write"), ("read", "write"), True),
+        ((), ("read",), False),
+        ((), (), True),
+    ],
+)
+def test_grant_covers_scopes_reads_a_lone_token_as_comma_separated(
+    granted: tuple[str, ...], requested: tuple[str, ...], expected: bool
+) -> None:
+    from litellm.proxy.mcp_server.oauth_utils import grant_covers_scopes
+
+    assert grant_covers_scopes(granted, requested) is expected
 
 
 @pytest.mark.parametrize(

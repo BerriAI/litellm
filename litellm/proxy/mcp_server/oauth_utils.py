@@ -3,7 +3,7 @@
 
 import os
 import re
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from ipaddress import ip_address
 from types import MappingProxyType
@@ -129,6 +129,13 @@ def build_upstream_authorize_url(authorization_url: str, params: Mapping[str, st
     )
     merged: Final = {**provider_defaults, **dict(parse_qsl(parsed.query)), **params}
     return urlunparse(parsed._replace(query=urlencode(merged)))
+
+
+def grant_covers_scopes(granted: tuple[str, ...], requested: Iterable[str]) -> bool:
+    """Whether a stored grant holds every requested scope. A grant stored as one token also
+    counts its comma-separated parts, the form Slack and GitHub reply with."""
+    comma_parts: Final = frozenset(granted[0].split(",")) if len(granted) == 1 else frozenset[str]()
+    return all(scope in granted or scope in comma_parts for scope in requested)
 
 
 def proxy_base_url_from_env() -> str | None:
