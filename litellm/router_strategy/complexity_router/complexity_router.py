@@ -803,7 +803,6 @@ def _newest_turn_is_human_ask(
 
 _CLAUDE_CODE_REQUEST_CLASS_HEADER: Final = "x-claude-code-request-class"
 _CLAUDE_CODE_AUXILIARY_SENTINEL: Final = f"{_CLAUDE_CODE_REQUEST_CLASS_HEADER}: auxiliary"
-_PIN_WRITING_REQUEST_CLASSES: Final = frozenset({None, "main", "subagent"})
 
 
 def _claude_code_request_class(request_kwargs: Mapping[str, object]) -> str | None:
@@ -821,12 +820,6 @@ def _claude_code_request_class(request_kwargs: Mapping[str, object]) -> str | No
         ),
         None,
     )
-
-
-def _request_class_may_write_pin(request_kwargs: Mapping[str, object]) -> bool:
-    """Claude Code's gateway hint names side requests (summaries, titles), compaction and workflow
-    agents. Only a real main or subagent turn decides the tier a session's later turns replay."""
-    return _claude_code_request_class(request_kwargs) in _PIN_WRITING_REQUEST_CLASSES
 
 
 _CODEX_TURN_METADATA_KEY: Final = "x-codex-turn-metadata"
@@ -4570,9 +4563,6 @@ class ComplexityRouter(CustomLogger):
         conversation_continuing: Final = _conversation_is_continuing(resolved_messages)
 
         use_session_affinity: Final = self._uses_tier_pin
-        request_class_may_write_pin: Final = _request_class_may_write_pin(
-            cast(Mapping[str, object], request_kwargs)  # cast-ok: the hook's request_kwargs is an untyped dict
-        )
         session_id: Final = self._get_tier_pin_session_id(request_kwargs) if use_session_affinity else None
         cache_key = self._get_session_affinity_cache_key(session_id, request_kwargs) if session_id is not None else None
 
@@ -4685,7 +4675,7 @@ class ComplexityRouter(CustomLogger):
                         if pin_placement is not None and pin_context_original_tier is not None
                         else floor_model
                     )
-                    if escalated and request_class_may_write_pin:
+                    if escalated:
                         await self.ctx.health().store.async_set_cache(
                             key=cache_key,
                             value=_session_affinity_cache_value(session_model, resolved_pin_tier),
@@ -4787,7 +4777,6 @@ class ComplexityRouter(CustomLogger):
             and response is not None
             and _decision_is_pinnable(response.routing_decision)
             and self._matched_plan_mode_signal(request_kwargs, resolved_messages) is None
-            and request_class_may_write_pin
         )
         if pinnable and cache_key is not None and response is not None:
             await self.ctx.health().store.async_set_cache(

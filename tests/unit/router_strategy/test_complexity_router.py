@@ -7773,9 +7773,6 @@ class TestChildSessionTierPins:
 
 
 class TestClaudeCodeTierPins:
-    """Claude Code sends one x-claude-code-session-id for the main agent, every subagent and their side
-    requests, so a subagent ask (#50099) or an agent summary (#50444) used to rewrite another agent's pin."""
-
     SESSION: Final = "11111111-2222-3333-4444-555555555555"
     AGENT_A: Final = "a7256c04dfd99c9b9"
     AGENT_B: Final = "a71aeeb9c67f32cee"
@@ -7911,42 +7908,6 @@ class TestClaudeCodeTierPins:
                 (self._continuation(), own_class, ("REASONING", "user_turn_continuation")),
             ):
                 assert await self._route(router, messages, agent_id, request_class) == expected
-        finally:
-            router.discard()
-
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize(
-        "request_class,parent_tier_after",
-        [("main", "SIMPLE"), ("compaction", "REASONING"), ("workflow", "REASONING"), ("not-yet-defined", "REASONING")],
-    )
-    async def test_only_main_and_subagent_turns_write_the_pin(self, request_class: str, parent_tier_after: str) -> None:
-        router: Final = self._router()
-        try:
-            for messages, sent_class, expected in (
-                (self._ask("reason carefully"), "main", ("REASONING", "literal_keyword_match")),
-                (self._ask("Hello!"), request_class, ("SIMPLE", "heuristic_scorer")),
-                (self._continuation(), "main", (parent_tier_after, "user_turn_continuation")),
-            ):
-                assert await self._route(router, messages, request_class=sent_class) == expected
-        finally:
-            router.discard()
-
-    @pytest.mark.asyncio
-    async def test_an_auxiliary_request_never_pins_even_with_housekeeping_routing_off(self) -> None:
-        router: Final = self._router(route_housekeeping_to_cheapest_tier=False)
-        try:
-            assert await self._route(router, self._ask("reason carefully"), self.AGENT_A, "subagent") == (
-                "REASONING",
-                "literal_keyword_match",
-            )
-            _, summary_cause = await self._route(
-                router, self._side_request(self.SUMMARY_ASK), self.AGENT_A, "auxiliary"
-            )
-            assert summary_cause != "housekeeping"
-            assert await self._route(router, self._continuation(), self.AGENT_A, "subagent") == (
-                "REASONING",
-                "user_turn_continuation",
-            )
         finally:
             router.discard()
 
