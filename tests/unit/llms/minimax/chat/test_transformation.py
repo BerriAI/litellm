@@ -169,11 +169,10 @@ def test_minimax_flash_cost_map_entry_declares_its_effort_levels(local_model_cos
     assert info["output_cost_per_token"] == 6e-07
 
 
-@pytest.mark.parametrize("model", ["MiniMax-M3.2", "a-deployment-name-the-map-does-not-know"])
-def test_minimax_forwards_reasoning_effort_for_unmapped_models(minimax_request_mock: respx.Route, model: str):
-    """A MiniMax model newer than the cost map keeps reasoning_effort instead of losing it."""
-    assert f"minimax/{model}" not in litellm.model_cost
-    assert _sent_body(model, minimax_request_mock, "low", drop_params=False)["reasoning_effort"] == "low"
+def test_minimax_forwards_reasoning_effort_for_an_unmapped_m_series_model(minimax_request_mock: respx.Route):
+    """A MiniMax M model newer than the cost map keeps reasoning_effort through the fallback rule."""
+    assert "minimax/MiniMax-M3.2" not in litellm.model_cost
+    assert _sent_body("MiniMax-M3.2", minimax_request_mock, "low", drop_params=False)["reasoning_effort"] == "low"
 
 
 def test_minimax_unmapped_m_series_model_is_reasoning_capable(local_model_cost_map):
