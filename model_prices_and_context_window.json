@@ -65197,8 +65197,8 @@
             },
             {
                 "name": "minimax-reasoning-baseline",
-                "pattern": "^minimax/minimax-m\\d",
-                "description": "Any MiniMax M-series text model id under the minimax/ namespace, such as minimax/MiniMax-M3.2. Every M-series model MiniMax has shipped reasons, and new ones reach callers before this registry names them, so an id the map has not described yet is treated as reasoning-capable and keeps the caller's reasoning_effort and thinking instead of dropping them. Anchored to minimax/minimax-m so MiniMax's speech, video and image ids never match. Rules lose to exact entries. Carries no mode and no pricing, so cost stays on the standard unpriced behavior.",
+                "pattern": "^minimax/",
+                "description": "Any MiniMax model id under the minimax/ namespace, anchored so only that provider's ids match. MiniMax ships reasoning models faster than this registry names them, so an id the map has not described yet is treated as reasoning-capable and keeps the caller's reasoning_effort and thinking instead of dropping them. Rules lose to exact entries, so mapped speech, video and image models are unaffected. Carries no mode and no pricing, so cost stays on the standard unpriced behavior.",
                 "model_info": {
                     "supports_reasoning": true
                 }

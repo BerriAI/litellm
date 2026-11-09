@@ -89,7 +89,7 @@ class MinimaxChatConfig(OpenAIGPTConfig):
         """
         Get supported OpenAI parameters for MiniMax.
         Adds reasoning_split, plus thinking and reasoning_effort when the cost map, or its
-        MiniMax M-series fallback rule, says the model supports reasoning.
+        minimax/ fallback rule for unlisted models, says the model supports reasoning.
         """
         reasoning_params: Final = ("thinking", "reasoning_effort") if _supports_reasoning(model) else ()
         return [*super().get_supported_openai_params(model=model), "reasoning_split", *reasoning_params]

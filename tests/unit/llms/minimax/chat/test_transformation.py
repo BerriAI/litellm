@@ -193,16 +193,12 @@ def test_minimax_flash_cost_map_entry_is_a_priced_reasoning_model(local_model_co
     assert 0 < info["cache_read_input_token_cost"] < info["input_cost_per_token"] < info["output_cost_per_token"]
 
 
-def test_minimax_forwards_reasoning_effort_for_an_unmapped_m_series_model(minimax_request_mock: respx.Route) -> None:
-    """A MiniMax M model newer than the cost map keeps reasoning_effort through the fallback rule."""
-    assert "minimax/MiniMax-M3.2" not in litellm.model_cost
-    assert _sent_body("MiniMax-M3.2", minimax_request_mock, "low", drop_params=False)["reasoning_effort"] == "low"
-
-
-def test_minimax_unmapped_m_series_model_is_reasoning_capable(local_model_cost_map: None) -> None:
-    """The minimax-reasoning-baseline rule marks new M-series ids as reasoning, so thinking is kept too."""
-    assert litellm.supports_reasoning(model="MiniMax-M3.2", custom_llm_provider="minimax") is True
-    assert "thinking" in MinimaxChatConfig().get_supported_openai_params(model="MiniMax-M3.2")
+@pytest.mark.parametrize("model", ["MiniMax-M3.2", "MiniMax-Text-02"])
+def test_minimax_forwards_reasoning_effort_for_an_unmapped_model(minimax_request_mock: respx.Route, model: str) -> None:
+    """A MiniMax model newer than the cost map keeps reasoning_effort and thinking through the fallback rule."""
+    assert f"minimax/{model}" not in litellm.model_cost
+    assert "thinking" in MinimaxChatConfig().get_supported_openai_params(model=model)
+    assert _sent_body(model, minimax_request_mock, "low", drop_params=False)["reasoning_effort"] == "low"
 
 
 @pytest.mark.respx(assert_all_called=False)

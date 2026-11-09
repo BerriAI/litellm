@@ -810,10 +810,10 @@ def test_shipped_wandb_rule_is_anchored_to_the_wandb_namespace(shipped_cost_map)
         assert matched is None or not matched.get("supports_reasoning"), foreign
 
 
-def test_shipped_rules_flag_unmapped_minimax_m_series_ids_as_reasoning(shipped_cost_map):
-    """MiniMax ships M-series reasoning models faster than the registry names them. The rule
+@pytest.mark.parametrize("model", ["minimax/MiniMax-M3.2", "minimax/MiniMax-Text-02"])
+def test_shipped_rules_flag_unmapped_minimax_ids_as_reasoning(shipped_cost_map, model):
+    """MiniMax ships reasoning models faster than the registry names them. The rule
     carries no mode and no pricing, so cost stays on the standard unpriced behavior."""
-    model = "minimax/MiniMax-M3.2"
     assert model not in litellm.model_cost
 
     info = litellm.get_model_info(model, custom_llm_provider="minimax")
@@ -824,19 +824,19 @@ def test_shipped_rules_flag_unmapped_minimax_m_series_ids_as_reasoning(shipped_c
     assert not info.get("output_cost_per_token")
 
 
-def test_shipped_minimax_rule_matches_only_minimax_m_series_ids(shipped_cost_map):
-    """``^minimax/minimax-m\\d`` stays off MiniMax's speech, video and image ids and off other namespaces."""
-    for matching in ("minimax/MiniMax-M3.2", "minimax/MiniMax-M4-Flash", "minimax/minimax-m3.1-flash"):
-        assert match_capability_generalizations(matching) == {"supports_reasoning": True}, matching
-    for foreign in (
-        "minimax/speech-02-hd",
-        "minimax/MiniMax-H3",
-        "minimax/image-01",
-        "openrouter/minimax/minimax-m3",
-        "notminimax/MiniMax-M3",
-    ):
+def test_shipped_minimax_rule_is_anchored_to_the_minimax_namespace(shipped_cost_map):
+    """``^minimax/`` is anchored, so it cannot leak onto another provider's ids."""
+    assert match_capability_generalizations("minimax/some-new-model") == {"supports_reasoning": True}
+    for foreign in ("openrouter/minimax/minimax-m3", "notminimax/MiniMax-M3", "together_ai/minimax/MiniMax-M3"):
         matched = match_capability_generalizations(foreign)
         assert matched is None or not matched.get("supports_reasoning"), foreign
+
+
+@pytest.mark.parametrize("model", ["speech-02-hd", "MiniMax-H3"])
+def test_shipped_minimax_rule_leaves_mapped_entries_alone(shipped_cost_map, model):
+    assert f"minimax/{model}" in litellm.model_cost
+    assert match_fill_missing_generalizations(f"minimax/{model}", "minimax") is None
+    assert litellm.supports_reasoning(model=model, custom_llm_provider="minimax") is False
 
 
 def test_shipped_wandb_rule_keeps_reasoning_effort_on_an_unmapped_model(shipped_cost_map):
