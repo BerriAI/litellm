@@ -1001,7 +1001,9 @@ fn pinned_to_a1() -> Arc<ScriptedHost> {
 
 #[rstest]
 #[tokio::test]
-async fn a_stream_retry_leaves_the_pinned_deployment_the_stream_failed_on(mut config: RouterConfig) {
+async fn a_stream_retry_leaves_the_pinned_deployment_the_stream_failed_on(
+    mut config: RouterConfig,
+) {
     config.callback_filters = true;
     let host = pinned_to_a1();
     let router = router(config, json!({}), host.clone());
@@ -1010,7 +1012,12 @@ async fn a_stream_retry_leaves_the_pinned_deployment_the_stream_failed_on(mut co
         ..stream_origin()
     };
     router
-        .retry_stream(Op::from("acompletion"), stream_request(), origin, server_error())
+        .retry_stream(
+            Op::from("acompletion"),
+            stream_request(),
+            origin,
+            server_error(),
+        )
         .await
         .unwrap();
     assert_eq!(host.selected(), vec!["a2".to_owned()]);
@@ -1024,7 +1031,12 @@ async fn a_stream_retry_leaves_a_pinned_deployment_a_retry_failed_on(mut config:
     *host.first_failure.lock() = Some(server_error());
     let router = router(config, json!({}), host.clone());
     router
-        .retry_stream(Op::from("acompletion"), stream_request(), stream_origin(), server_error())
+        .retry_stream(
+            Op::from("acompletion"),
+            stream_request(),
+            stream_origin(),
+            server_error(),
+        )
         .await
         .unwrap();
     assert_eq!(host.selected(), vec!["a1".to_owned(), "a2".to_owned()]);
