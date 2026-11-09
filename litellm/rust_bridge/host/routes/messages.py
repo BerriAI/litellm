@@ -84,7 +84,7 @@ def inferred_provider(model: str, api_base: str | None) -> str | None:
 
 
 def body_params(request: Mapping[str, object]) -> Mapping[str, object]:
-    params: Final = known_params(_BODY_FIELDS, request)
+    params: Final = known_params(_BODY_FIELDS.difference(handler.additional_drop_paths(request)), request)
     if deployment_reasoning_effort_levels(request.get("model_info")) is None:
         return params
     return _with_deployment_effort(params, request)
