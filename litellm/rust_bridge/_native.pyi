@@ -7,6 +7,7 @@ from pydantic import JsonValue
 from typing_extensions import disjoint_base
 
 from litellm.redis.store_settings import RedisBreakerSettings, RedisStoreSettings
+from litellm.repositories.database_settings import NativeDatabaseSettings
 from litellm.rust_bridge.execution import Execution
 from litellm.rust_bridge.public_call import NativeCall
 
@@ -458,7 +459,15 @@ class NativeSpendCounters:
 @final
 class NativeDatabase:
     @staticmethod
-    def connect() -> Future[NativeDatabase]: ...
+    def connect(
+        writer_settings: NativeDatabaseSettings | None = None,
+        reader_settings: NativeDatabaseSettings | None = None,
+    ) -> Future[NativeDatabase]: ...
+    def auth_read(self, kind: str, ids: list[str], writer: bool = False) -> Future[list[dict[str, JsonValue]]]: ...
+    def auth_spend(self, kind: str, id: str) -> Future[float | None]: ...
+    @property
+    def reader_available(self) -> bool: ...
+    def set_passwords(self, writer_password: str | None = None, reader_password: str | None = None) -> None: ...
     def close(self) -> Future[None]: ...
 
 @final

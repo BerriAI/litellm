@@ -332,7 +332,9 @@ if TYPE_CHECKING:
     from litellm.proxy.db.baseline_accounting import BaselineAccountingRecord
     from litellm.proxy.db.model_usage_rollup import ModelUsageTransaction
     from litellm.proxy.db.spend_log_tool_index import ToolUsageTransaction
+    from litellm.repositories.database_settings import NativeDatabaseSettings
     from litellm.repositories.prisma_protocols import TableActions
+    from litellm.rust_bridge._native import NativeDatabase
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
     from litellm.types.proxy.policy_engine.pipeline_types import GuardrailPipeline, PipelineStep
 
@@ -5675,6 +5677,8 @@ class PrismaClient:
         http_client: "HttpConfig | None" = None,
         engine_exit_wait_seconds: float = _SHUTDOWN_ENGINE_EXIT_WAIT_SECONDS,
     ):
+        self.native_auth_database: NativeDatabase | None = None
+        self._native_database_url: Final = database_url
         ## init logging object
         self.baseline_accounting_transactions: list[BaselineAccountingRecord] = []
         self.baseline_accounting_lock: Final = asyncio.Lock()
@@ -5774,6 +5778,7 @@ class PrismaClient:
                 self.db = writer_wrapper
         else:
             self.db = writer_wrapper  # Client to connect to Prisma db
+        self._native_reader_url: Final = read_replica_url if isinstance(self.db, RoutingPrismaWrapper) else None
         self._db_reconnect_lock = asyncio.Lock()
         self._closing: bool = False
         self._engine_exit_wait_seconds: Final = engine_exit_wait_seconds
@@ -5841,6 +5846,23 @@ class PrismaClient:
         if isinstance(self.db, RoutingPrismaWrapper):
             return self.db.read_target
         return self.db
+
+    @property
+    def native_writer_settings(self) -> "NativeDatabaseSettings":
+        from litellm.repositories.database_settings import NativeDatabaseSettings
+
+        return NativeDatabaseSettings.from_url(self._native_database_url, self.writer_db.token_auth)
+
+    def set_native_auth_database(self, native: "NativeDatabase | None") -> None:
+        self.native_auth_database = native
+
+    @property
+    def native_reader_settings(self) -> "NativeDatabaseSettings | None":
+        from litellm.repositories.database_settings import NativeDatabaseSettings
+
+        if self._native_reader_url is None or not isinstance(self.db, RoutingPrismaWrapper):
+            return None
+        return NativeDatabaseSettings.from_url(self._native_reader_url, self.db.reader.token_auth)
 
     def tx(
         self, *, timeout: timedelta = _PRISMA_DEFAULT_TX_TIMEOUT, max_wait: timedelta = _PRISMA_DEFAULT_TX_MAX_WAIT

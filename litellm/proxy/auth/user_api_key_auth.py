@@ -1136,6 +1136,11 @@ async def fetch_global_spend_with_event_coordination(
     """
 
     async def _load_global_spend() -> float | None:
+        from litellm.repositories.native_auth_repository import native_auth_repository
+
+        native: Final = native_auth_repository(prisma_client)
+        if native is not None:
+            return await bounded_db_lookup(native.spend("user", LITELLM_PROXY_BUDGET_NAME), name="proxy_budget")
         proxy_budget_row: Final = await bounded_db_lookup(
             UserRepository(prisma_client).table.find_unique(where={"user_id": LITELLM_PROXY_BUDGET_NAME}),
             name="proxy_budget",
