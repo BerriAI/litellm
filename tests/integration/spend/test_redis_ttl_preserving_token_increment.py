@@ -11,7 +11,7 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     PROXY_MaxParallelRequestsHandler_v3 as _PROXY_MaxParallelRequestsHandler,
 )
 from litellm.proxy.utils import InternalUsageCache
-from litellm.types.caching import RedisPipelineIncrementOperation
+from litellm.redis.stores.rate_limits import CounterIncrement, RateLimitScope
 
 
 @pytest.mark.asyncio
@@ -22,11 +22,12 @@ async def test_async_increment_tokens_with_ttl_preservation() -> None:
     handler: Final = _PROXY_MaxParallelRequestsHandler(
         internal_usage_cache=InternalUsageCache(DualCache(redis_cache=redis_cache))
     )
-    assert handler.token_increment_script is not None
 
     suffix: Final = uuid.uuid4().hex[:8]
-    key_with_ttl: Final = f"{{test_ttl}}:with_ttl:{suffix}"
-    key_without_ttl: Final = f"{{test_ttl}}:without_ttl:{suffix}"
+    scope_with_ttl: Final = RateLimitScope("test_ttl", f"with_ttl:{suffix}")
+    scope_without_ttl: Final = RateLimitScope("test_ttl", f"without_ttl:{suffix}")
+    key_with_ttl: Final = f"{{test_ttl:with_ttl:{suffix}}}:tokens"
+    key_without_ttl: Final = f"{{test_ttl:without_ttl:{suffix}}}:tokens"
 
     try:
         await redis_cache.async_delete_cache(key_with_ttl)
@@ -34,8 +35,8 @@ async def test_async_increment_tokens_with_ttl_preservation() -> None:
 
         await handler.async_increment_tokens_with_ttl_preservation(
             pipeline_operations=[
-                RedisPipelineIncrementOperation(key=key_with_ttl, increment_value=10.0, ttl=60),
-                RedisPipelineIncrementOperation(key=key_without_ttl, increment_value=5.0, ttl=None),
+                CounterIncrement(scope_with_ttl.counter("tokens"), 10.0, 60),
+                CounterIncrement(scope_without_ttl.counter("tokens"), 5.0, None),
             ]
         )
 
@@ -50,8 +51,8 @@ async def test_async_increment_tokens_with_ttl_preservation() -> None:
 
         await handler.async_increment_tokens_with_ttl_preservation(
             pipeline_operations=[
-                RedisPipelineIncrementOperation(key=key_with_ttl, increment_value=15.0, ttl=60),
-                RedisPipelineIncrementOperation(key=key_without_ttl, increment_value=7.0, ttl=None),
+                CounterIncrement(scope_with_ttl.counter("tokens"), 15.0, 60),
+                CounterIncrement(scope_without_ttl.counter("tokens"), 7.0, None),
             ]
         )
 

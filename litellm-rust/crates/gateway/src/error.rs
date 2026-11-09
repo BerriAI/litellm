@@ -12,13 +12,12 @@ pub enum Error {
     Mcp(#[from] litellm_gateway_mcp::ConnectError),
     #[error(transparent)]
     Config(#[from] litellm_config::Error),
-    #[error("invalid Redis setting {setting}: {reason}")]
-    RedisInvalid {
-        setting: &'static str,
-        reason: &'static str,
-    },
     #[error(transparent)]
-    RedisConnect(#[from] litellm_redis_client::ConnectError),
+    Redis(#[from] litellm_redis_resolve::Error),
+    #[error("Redis setting {setting} is not plain data")]
+    RedisNotPlainData { setting: String },
+    #[error(transparent)]
+    RedisConnect(#[from] litellm_redis_connect::Error),
     #[error("MCP requires working gateway authentication")]
     Auth(#[from] litellm_gateway_auth::Error),
 }

@@ -8,11 +8,18 @@ from typing import Final
 from typing_extensions import assert_never
 
 from litellm import constants
-from litellm.constants import PTU_SENTINEL_API_KEY
+from litellm.constants import PTU_SENTINEL_API_KEY, UNKNOWN_MODEL_SPEND_LOG_MODEL
+from litellm.repositories.daily_activity_buckets import UNATTRIBUTED_API_KEY, UNKNOWN_MODEL_GROUP
 from litellm.types.repositories.daily_activity import DailyActivityScope, DailyActivityTable, ExportType
 
 _API_KEY_ROLLED_UP_BIT: Final = 32
-_MODEL_GROUP_EXPR: Final = "COALESCE(NULLIF(model_group, ''), model)"
+_MODEL_EXPR: Final = f"COALESCE(NULLIF(model, ''), '{UNKNOWN_MODEL_SPEND_LOG_MODEL}')"
+_MODEL_GROUP_EXPR: Final = f"COALESCE(NULLIF(model_group, ''), NULLIF(model, ''), '{UNKNOWN_MODEL_GROUP}')"
+
+_API_KEY_EXPR: Final = (
+    f"CASE WHEN api_key = '' THEN '{UNATTRIBUTED_API_KEY}' "
+    f"WHEN api_key = '{UNATTRIBUTED_API_KEY}' OR api_key LIKE 'raw:%' THEN 'raw:' || api_key ELSE api_key END"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,7 +93,11 @@ def build_where_clause(scope: DailyActivityScope, *, start_index: int = 1) -> tu
             if scope.exclude_entity_ids
             else ()
         ),
-        *((f"model = ${model_index}",) if scope.model else ()),
+        *(
+            (f"{_MODEL_EXPR if scope.model == UNKNOWN_MODEL_SPEND_LOG_MODEL else 'model'} = ${model_index}",)
+            if scope.model
+            else ()
+        ),
         *(
             ("FALSE",)
             if scope.api_keys == ()
@@ -143,7 +154,7 @@ def _top_api_keys_sql(pg_table: str, where_clause: str, *, sentinel_param: int, 
             FROM "{pg_table}"
             WHERE {where_clause} AND api_key <> ${sentinel_param}
             GROUP BY api_key
-            ORDER BY SUM(spend::numeric) DESC, api_key
+            ORDER BY SUM(spend::numeric) DESC, {_API_KEY_EXPR}
             LIMIT ${limit_param}
         """
 
@@ -162,13 +173,13 @@ def build_aggregated_sql(scope: DailyActivityScope, *, api_key_limit: int) -> Sq
         (SELECT
             date,
             NULL::text AS api_key,
-            model,
+            {_MODEL_EXPR} AS model,
             {_MODEL_GROUP_EXPR} AS model_group,
             custom_llm_provider,
             mcp_namespaced_tool_name,
             endpoint,
             (GROUPING(date) << 6) | {_API_KEY_ROLLED_UP_BIT}
-                | GROUPING(model, {_MODEL_GROUP_EXPR},
+                | GROUPING({_MODEL_EXPR}, {_MODEL_GROUP_EXPR},
                            custom_llm_provider, mcp_namespaced_tool_name,
                            endpoint) AS group_level,
             NULL::bigint AS distinct_api_keys,{metric_select}
@@ -176,7 +187,7 @@ def build_aggregated_sql(scope: DailyActivityScope, *, api_key_limit: int) -> Sq
         WHERE {where_clause}
         GROUP BY GROUPING SETS (
             (date),
-            (date, model),
+            (date, {_MODEL_EXPR}),
             (date, {_MODEL_GROUP_EXPR}),
             (date, custom_llm_provider),
             (date, mcp_namespaced_tool_name),
@@ -190,12 +201,12 @@ def build_aggregated_sql(scope: DailyActivityScope, *, api_key_limit: int) -> Sq
         SELECT
             date,
             api_key,
-            model,
+            {_MODEL_EXPR} AS model,
             {_MODEL_GROUP_EXPR} AS model_group,
             custom_llm_provider,
             mcp_namespaced_tool_name,
             endpoint,
-            GROUPING(date, api_key, model, {_MODEL_GROUP_EXPR},
+            GROUPING(date, api_key, {_MODEL_EXPR}, {_MODEL_GROUP_EXPR},
                      custom_llm_provider, mcp_namespaced_tool_name,
                      endpoint) AS group_level,
             MAX(top_api_keys.distinct_api_keys) AS distinct_api_keys,{metric_select}
@@ -203,7 +214,7 @@ def build_aggregated_sql(scope: DailyActivityScope, *, api_key_limit: int) -> Sq
         WHERE {where_clause}
         GROUP BY GROUPING SETS (
             (date, api_key),
-            (date, model, api_key),
+            (date, {_MODEL_EXPR}, api_key),
             (date, {_MODEL_GROUP_EXPR}, api_key),
             (date, custom_llm_provider, api_key),
             (date, mcp_namespaced_tool_name, api_key),
@@ -313,7 +324,7 @@ def build_key_page_sql(scope: DailyActivityScope, *, offset: int, limit: int) ->
         FROM (SELECT 1) AS one
         LEFT JOIN LATERAL (
             SELECT * FROM ranked
-            ORDER BY rank_spend DESC, api_key
+            ORDER BY rank_spend DESC, {_API_KEY_EXPR}
             LIMIT ${limit_param} OFFSET ${offset_param}
         ) AS page ON TRUE
     """
@@ -376,7 +387,7 @@ def build_key_search_sql(scope: DailyActivityScope, *, search: str, limit: int) 
         WHERE {where_clause}
           AND api_key <> ${sentinel_param}
           AND (
-            api_key ILIKE ${search_param} ESCAPE '\\'
+            {_API_KEY_EXPR} ILIKE ${search_param} ESCAPE '\\'
             OR api_key IN (
                 SELECT v.token FROM "LiteLLM_VerificationToken" v
                 LEFT JOIN "LiteLLM_UserTable" u ON u.user_id = v.user_id
@@ -392,7 +403,7 @@ def build_key_search_sql(scope: DailyActivityScope, *, search: str, limit: int) 
             )
           )
         GROUP BY api_key
-        ORDER BY SUM(spend::numeric) DESC, api_key
+        ORDER BY SUM(spend::numeric) DESC, {_API_KEY_EXPR}
         LIMIT ${limit_param}
     """
     return SqlQuery(sql=sql, params=(*where_params, f"%{escaped}%", PTU_SENTINEL_API_KEY, limit))
@@ -406,15 +417,13 @@ def build_model_top_keys_sql(
     model_param: Final = len(where_params) + 1
     sentinel_param: Final = model_param + 1
     limit_param: Final = sentinel_param + 1
-    model_clause: Final = (
-        f"COALESCE(NULLIF(model_group, ''), model) = ${model_param}" if by_model_group else f"model = ${model_param}"
-    )
+    model_clause: Final = f"{_MODEL_GROUP_EXPR if by_model_group else _MODEL_EXPR} = ${model_param}"
     sql: Final = f"""
         SELECT api_key,{_key_spend_select()}
         FROM "{PRISMA_TO_PG_TABLE[scope.table]}"
         WHERE {where_clause} AND {model_clause} AND api_key <> ${sentinel_param}
         GROUP BY api_key
-        ORDER BY SUM(spend::numeric) DESC, api_key
+        ORDER BY SUM(spend::numeric) DESC, {_API_KEY_EXPR}
         LIMIT ${limit_param}
     """
     return SqlQuery(sql=sql, params=(*where_params, model_group, PTU_SENTINEL_API_KEY, limit))
@@ -431,7 +440,7 @@ def build_cache_leakage_keys_sql(scope: DailyActivityScope, *, limit: int) -> Sq
         WHERE {where_clause} AND api_key <> ${sentinel_param}
         GROUP BY api_key
         HAVING SUM(prompt_tokens) - SUM(cache_read_input_tokens) > 0
-        ORDER BY SUM(prompt_tokens) - SUM(cache_read_input_tokens) DESC, api_key
+        ORDER BY SUM(prompt_tokens) - SUM(cache_read_input_tokens) DESC, {_API_KEY_EXPR}
         LIMIT ${limit_param}
     """
     return SqlQuery(sql=sql, params=(*where_params, PTU_SENTINEL_API_KEY, limit))
@@ -483,7 +492,7 @@ def build_export_sql(
             {alias_expression} AS entity_alias,
             {output_key} AS api_key,
             {user_fields},
-            {"NULLIF(COALESCE(scoped.model, ''), '')" if export_type is ExportType.DAILY_WITH_MODELS else "NULL::text"} AS model,
+            {_MODEL_EXPR if export_type is ExportType.DAILY_WITH_MODELS else "NULL::text"} AS model,
             COALESCE(SUM(scoped.spend), 0)::float AS spend,
             {flat_cost} AS flat_cost,
             COALESCE(SUM(scoped.prompt_tokens), 0)::bigint AS prompt_tokens,
@@ -521,25 +530,26 @@ def _export_grouping(export_type: ExportType) -> tuple[str, str, str, tuple[str,
         )
     if export_type is ExportType.DAILY_WITH_KEYS:
         return (
-            "scoped.api_key",
-            "NULLIF(scoped.api_key, '')",
-            "MAX(COALESCE(vt.key_alias, dvt.key_alias)) AS key_alias, "
+            _API_KEY_EXPR,
+            _API_KEY_EXPR,
+            "MAX(CASE WHEN scoped.api_key = '' THEN 'Unattributed' "
+            "ELSE COALESCE(vt.key_alias, dvt.key_alias) END) AS key_alias, "
             "MAX(COALESCE(vt.user_id, dvt.user_id)) AS user_id, MAX(u.user_email) AS user_email",
             (
-                'LEFT JOIN "LiteLLM_VerificationToken" vt ON vt.token = scoped.api_key',
+                "LEFT JOIN \"LiteLLM_VerificationToken\" vt ON vt.token = scoped.api_key AND scoped.api_key <> ''",
                 """LEFT JOIN LATERAL (
                     SELECT key_alias, user_id
                     FROM "LiteLLM_DeletedVerificationToken"
                     WHERE token = scoped.api_key
                     ORDER BY deleted_at DESC
                     LIMIT 1
-                ) dvt ON vt.token IS NULL""",
+                ) dvt ON vt.token IS NULL AND scoped.api_key <> ''""",
                 'LEFT JOIN "LiteLLM_UserTable" u ON u.user_id = COALESCE(vt.user_id, dvt.user_id)',
             ),
         )
     if export_type is ExportType.DAILY_WITH_MODELS:
         return (
-            "COALESCE(scoped.model, '')",
+            _MODEL_EXPR,
             "NULL::text",
             "NULL::text AS key_alias, NULL::text AS user_id, NULL::text AS user_email",
             (),

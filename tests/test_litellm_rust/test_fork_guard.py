@@ -66,7 +66,7 @@ _SDK_CONTRACT = textwrap.dedent(
 
     import litellm
     from litellm.rust_bridge.fork_guard import ForkedAfterNativeRuntimeStarted
-    from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
+    from litellm.litellm_core_utils.add_retry_fallback_headers import get_hidden_params_dict
 
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self):

@@ -2402,7 +2402,7 @@ def test_async_cache_write_completes_when_asyncio_run_closes_the_loop(monkeypatc
 
     async def _short_lived_script():
         await handler.async_set_cache(
-            result=litellm.ModelResponse(),
+            result=chat_completion_response,
             original_function=acompletion,
             kwargs={},
         )
@@ -2434,7 +2434,7 @@ def test_async_cache_write_runs_in_the_post_response_phase_without_leaking_it(mo
     monkeypatch.setattr(litellm, "cache", _PhaseRecordingCache())
 
     async def _request():
-        await handler.async_set_cache(result=litellm.ModelResponse(), original_function=acompletion, kwargs={})
+        await handler.async_set_cache(result=chat_completion_response, original_function=acompletion, kwargs={})
         leaked = in_post_response_phase()
         await asyncio.gather(*_PENDING_CACHE_WRITES)
         return leaked
@@ -2689,7 +2689,7 @@ async def test_response_cache_lookup_and_write_declare_the_llm_response_target(m
         call_type=CallTypes.acompletion.value,
         kwargs={"messages": [{"role": "user", "content": "hi"}]},
     )
-    await handler.async_set_cache(result=litellm.ModelResponse(), original_function=acompletion, kwargs={})
+    await handler.async_set_cache(result=chat_completion_response, original_function=acompletion, kwargs={})
     await asyncio.gather(*_PENDING_CACHE_WRITES)
 
     assert seen == {"get": "llm_response", "set": "llm_response"}
@@ -2755,10 +2755,46 @@ def _anthropic_message_missing_content() -> dict[str, object]:
     return {"id": f"msg_{uuid.uuid4()}", "type": "message", "role": "assistant", "model": "claude-sonnet-5"}
 
 
+def _anthropic_message_with_only_an_empty_text_block() -> dict[str, object]:
+    return {
+        "id": f"msg_{uuid.uuid4()}",
+        "type": "message",
+        "role": "assistant",
+        "model": "gemini/gemini-3.8-flash",
+        "content": [{"type": "text", "text": ""}],
+    }
+
+
+def _anthropic_message_with_only_a_whitespace_text_block() -> dict[str, object]:
+    return {**_anthropic_message_with_only_an_empty_text_block(), "content": [{"type": "text", "text": "\n\n"}]}
+
+
+def _empty_reply_with_provider_metadata(provider_specific_fields: dict[str, object]) -> ModelResponse:
+    return litellm.ModelResponse(
+        choices=[litellm.Choices(message=litellm.Message(content="", provider_specific_fields=provider_specific_fields))]
+    )
+
+
 def _anthropic_stream_without_content_blocks() -> dict[str, object]:
     return {
         CACHED_STREAM_EVENTS_KEY: [
             'event: message_start\ndata: {"type": "message_start", "message": {"id": "msg_1", "content": []}}\n\n',
+            'event: message_delta\ndata: {"type": "message_delta", "delta": {"stop_reason": "end_turn"}}\n\n',
+            'event: message_stop\ndata: {"type": "message_stop"}\n\n',
+        ]
+    }
+
+
+def _anthropic_sse_event(payload: dict[str, object]) -> str:
+    return f"event: {payload['type']}\ndata: {json.dumps(payload)}\n\n"
+
+
+def _anthropic_stream_with_only_empty_blocks(*blocks_and_deltas: dict[str, object]) -> dict[str, object]:
+    return {
+        CACHED_STREAM_EVENTS_KEY: [
+            'event: message_start\ndata: {"type": "message_start", "message": {"id": "msg_1", "content": []}}\n\n',
+            *(_anthropic_sse_event(event) for event in blocks_and_deltas),
+            'event: content_block_stop\ndata: {"type": "content_block_stop", "index": 0}\n\n',
             'event: message_delta\ndata: {"type": "message_delta", "delta": {"stop_reason": "end_turn"}}\n\n',
             'event: message_stop\ndata: {"type": "message_stop"}\n\n',
         ]
@@ -2809,7 +2845,58 @@ def _empty_response_cases() -> list[EmptyResponseCase]:
             {"messages": _unique_messages(), "max_tokens": 16},
         ),
         (
+            _anthropic_message_with_only_an_empty_text_block(),
+            aanthropic_messages,
+            CallTypes.aanthropic_messages.value,
+            {"messages": _unique_messages(), "max_tokens": 16},
+        ),
+        (
+            _empty_reply_with_provider_metadata({"thought_signatures": ["c2lnbmF0dXJl"]}),
+            litellm.acompletion,
+            CallTypes.acompletion.value,
+            {"messages": _unique_messages()},
+        ),
+        (
+            _empty_reply_with_provider_metadata({"continuation_token": "dG9rZW4="}),
+            litellm.acompletion,
+            CallTypes.acompletion.value,
+            {"messages": _unique_messages()},
+        ),
+        (
             _anthropic_stream_without_content_blocks(),
+            aanthropic_messages,
+            CallTypes.aanthropic_messages.value,
+            {"messages": _unique_messages(), "max_tokens": 16, "stream": True},
+        ),
+        (
+            _anthropic_stream_with_only_empty_blocks(
+                {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+            ),
+            aanthropic_messages,
+            CallTypes.aanthropic_messages.value,
+            {"messages": _unique_messages(), "max_tokens": 16, "stream": True},
+        ),
+        (
+            _anthropic_stream_with_only_empty_blocks(
+                {
+                    "type": "content_block_start",
+                    "index": 0,
+                    "content_block": {"type": "text", "text": "", "citations": None},
+                },
+                {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": ""}},
+            ),
+            aanthropic_messages,
+            CallTypes.aanthropic_messages.value,
+            {"messages": _unique_messages(), "max_tokens": 16, "stream": True},
+        ),
+        (
+            _anthropic_stream_with_only_empty_blocks(
+                {
+                    "type": "content_block_start",
+                    "index": 0,
+                    "content_block": {"type": "text", "text": "", "citations": []},
+                },
+            ),
             aanthropic_messages,
             CallTypes.aanthropic_messages.value,
             {"messages": _unique_messages(), "max_tokens": 16, "stream": True},
@@ -2866,6 +2953,74 @@ async def test_async_get_cache_treats_stored_response_without_output_as_miss(
         kwargs=kwargs,
     )
     assert lookup.cached_result is None
+
+
+def _chat_reply(content: str) -> ModelResponse:
+    return litellm.ModelResponse(choices=[litellm.Choices(message=litellm.Message(content=content))])
+
+
+def _text_completion_fill(text: str) -> TextCompletionResponse:
+    return litellm.TextCompletionResponse(choices=[litellm.utils.TextChoices(text=text)])
+
+
+def _replies_that_look_empty_but_carry_output() -> list[EmptyResponseCase]:
+    return [
+        (_chat_reply("\n\nParis\n"), litellm.acompletion, CallTypes.acompletion.value, {"messages": _unique_messages()}),
+        (_chat_reply("\n\n"), litellm.acompletion, CallTypes.acompletion.value, {"messages": _unique_messages()}),
+        (
+            _anthropic_message_with_only_a_whitespace_text_block(),
+            aanthropic_messages,
+            CallTypes.aanthropic_messages.value,
+            {"messages": _unique_messages(), "max_tokens": 16},
+        ),
+        (
+            _anthropic_stream_with_only_empty_blocks(
+                {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+                {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "\n\n"}},
+            ),
+            aanthropic_messages,
+            CallTypes.aanthropic_messages.value,
+            {"messages": _unique_messages(), "max_tokens": 16, "stream": True},
+        ),
+        (_text_completion_fill("    "), litellm.atext_completion, CallTypes.atext_completion.value, {"prompt": str(uuid.uuid4())}),
+        (_text_completion_fill(""), litellm.atext_completion, CallTypes.atext_completion.value, {"prompt": str(uuid.uuid4())}),
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "result, original_function, call_type, kwargs",
+    _replies_that_look_empty_but_carry_output(),
+    ids=[
+        "chat-padded",
+        "chat-whitespace",
+        "messages-whitespace",
+        "messages-stream-whitespace",
+        "text-completion-indent",
+        "text-completion-empty-fill",
+    ],
+)
+async def test_async_set_cache_keeps_whitespace_replies_and_text_completion_fills(
+    result: EmptyResult,
+    original_function: Callable[..., Awaitable[object]],
+    call_type: str,
+    kwargs: dict[str, object],
+):
+    setup_cache()
+    handler: Final = LLMCachingHandler(original_function=original_function, request_kwargs={}, start_time=_FIXED_START)
+
+    await handler.async_set_cache(result=result, original_function=original_function, kwargs=kwargs)
+    await asyncio.gather(*_PENDING_CACHE_WRITES)
+    lookup: Final = await handler.async_get_cache(
+        model="gpt-3.5-turbo",
+        original_function=original_function,
+        logging_obj=_completion_logging_obj(call_type),
+        start_time=_FIXED_START,
+        call_type=call_type,
+        kwargs=kwargs,
+    )
+
+    assert lookup.cached_result is not None
 
 
 @pytest.mark.asyncio
@@ -3014,6 +3169,18 @@ def _closing_chunk_without_output() -> ModelResponseStream:
     return _stream_chunk([StreamingChoices(finish_reason="stop", index=0, delta=Delta())])
 
 
+def _closing_chunk_with_only_a_thought_signature() -> ModelResponseStream:
+    return _stream_chunk(
+        [
+            StreamingChoices(
+                finish_reason="stop",
+                index=0,
+                delta=Delta(content="", provider_specific_fields={"thought_signatures": ["c2lnbmF0dXJl"]}),
+            )
+        ]
+    )
+
+
 def _cached_content(cached: object) -> object:
     assert cached is not None
     stored = cached if isinstance(cached, dict) else json.loads(cached)
@@ -3025,12 +3192,17 @@ def _content_chunk(content: str) -> ModelResponseStream:
 
 
 @pytest.mark.asyncio
-async def test_async_streamed_answer_without_output_is_never_cached():
+@pytest.mark.parametrize(
+    "closing_chunk",
+    [_closing_chunk_without_output(), _closing_chunk_with_only_a_thought_signature()],
+    ids=["no-delta", "only-a-thought-signature"],
+)
+async def test_async_streamed_answer_without_output_is_never_cached(closing_chunk: ModelResponseStream):
     setup_cache()
     kwargs = {"model": "gpt-4o", "messages": _unique_messages()}
     handler = LLMCachingHandler(original_function=litellm.acompletion, request_kwargs=kwargs, start_time=_FIXED_START)
 
-    await handler.add_streaming_response_to_cache(_closing_chunk_without_output())
+    await handler.add_streaming_response_to_cache(closing_chunk)
     await asyncio.gather(*_PENDING_CACHE_WRITES)
 
     assert litellm.cache.get_cache(**kwargs) is None
@@ -3047,6 +3219,23 @@ async def test_async_streamed_answer_with_content_is_cached():
     await asyncio.gather(*_PENDING_CACHE_WRITES)
 
     assert _cached_content(litellm.cache.get_cache(**kwargs)) == "hi"
+
+
+def _streamed_text_completion_closing_chunk(text: str) -> TextCompletionResponse:
+    return litellm.TextCompletionResponse(choices=[litellm.utils.TextChoices(text=text, finish_reason="stop")])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("text, cached", [("", False), ("    ", True)], ids=["empty", "indent"])
+async def test_async_streamed_text_completion_is_cached_only_with_text(text: str, cached: bool):
+    setup_cache()
+    kwargs = {"model": "gpt-3.5-turbo-instruct", "prompt": str(uuid.uuid4())}
+    handler = LLMCachingHandler(original_function=litellm.atext_completion, request_kwargs=kwargs, start_time=_FIXED_START)
+
+    await handler.add_streaming_response_to_cache(_streamed_text_completion_closing_chunk(text))
+    await asyncio.gather(*_PENDING_CACHE_WRITES)
+
+    assert (litellm.cache.get_cache(**kwargs) is not None) is cached
 
 
 def test_sync_streamed_answer_without_output_is_never_cached():
