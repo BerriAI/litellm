@@ -21,6 +21,7 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
     calculate_cache_writing_cost,
     generic_cost_per_token,
     get_billed_token_rates,
+    get_regional_uplift_multiplier,
     get_token_type_cost_breakdown,
 )
 from litellm.llms.gemini.image_generation.cost_calculator import (
@@ -2779,6 +2780,45 @@ def test_fedramp_uplift_defaults_to_one(model_info: ModelInfo, data_residency: s
     from litellm.litellm_core_utils.llm_cost_calc.utils import get_fedramp_uplift_multiplier
 
     assert get_fedramp_uplift_multiplier(model_info, data_residency) == 1.0
+
+
+@pytest.mark.parametrize(
+    "model_info, data_residency",
+    [({f"regional_processing_uplift_multiplier_{r.value}": "1.25"}, r.value.upper()) for r in DataResidency],
+)
+def test_regional_uplift_reads_the_multiplier_named_by_each_residency(model_info: ModelInfo, data_residency: str):
+    assert get_regional_uplift_multiplier(model_info, data_residency) == 1.25
+
+
+@pytest.mark.parametrize(
+    "model_info",
+    [{"regional_processing_uplift_multiplier_us": value} for value in (1.25, "1.25", b"1.25", bytearray(b"1.25"))],
+)
+def test_regional_uplift_accepts_every_value_float_converts(model_info: ModelInfo):
+    assert get_regional_uplift_multiplier(model_info, "us") == 1.25
+
+
+class _IndexOnly:
+    def __index__(self) -> int:
+        return 2
+
+
+@pytest.mark.parametrize("model_info", [{"regional_processing_uplift_multiplier_us": _IndexOnly()}])
+def test_regional_uplift_accepts_an_index_only_value(model_info: ModelInfo):
+    assert get_regional_uplift_multiplier(model_info, "us") == 2.0
+
+
+@pytest.mark.parametrize(
+    "model_info, data_residency",
+    [
+        ({"regional_processing_uplift_multiplier_eu": "not-a-number"}, "eu"),
+        ({"regional_processing_uplift_multiplier_eu": [1.25]}, "eu"),
+        ({"regional_processing_uplift_multiplier_apac": 1.25}, "apac"),
+        ({"regional_processing_uplift_multiplier_eu": 1.25}, None),
+    ],
+)
+def test_regional_uplift_defaults_to_one(model_info: ModelInfo, data_residency: str | None):
+    assert get_regional_uplift_multiplier(model_info, data_residency) == 1.0
 
 
 def test_service_tier_suffixes_constant_in_sync_with_enum():

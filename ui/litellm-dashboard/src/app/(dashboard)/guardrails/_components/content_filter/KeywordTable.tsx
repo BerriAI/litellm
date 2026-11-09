@@ -16,7 +16,7 @@ interface BlockedWord {
 
 interface KeywordTableProps {
   keywords: BlockedWord[];
-  onActionChange: (id: string, field: string, value: any) => void;
+  onActionChange: (id: string, field: "action", value: any) => void;
   onRemove: (id: string) => void;
 }
 

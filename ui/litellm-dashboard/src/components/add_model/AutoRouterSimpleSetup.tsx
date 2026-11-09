@@ -5,6 +5,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { ROUTER_FAMILIES, ROUTER_GOALS, type FamilyPreference, type RouterGoal, type SolverModel } from "./auto_setup";
 
+const TIER_ROLES = ["everyday", "hard"] as const;
+
 type Props = {
   customized: boolean;
   hasSuggestions: boolean;
@@ -83,7 +85,7 @@ export default function AutoRouterSimpleSetup({
                   aria-pressed={goal === key}
                   onClick={() => onGoalChange(key as RouterGoal)}
                 >
-                  {label}
+                  {t(label)}
                 </Button>
               ))}
             </div>
@@ -144,7 +146,7 @@ export default function AutoRouterSimpleSetup({
               )}
             </div>
             <div className="grid gap-3 sm:grid-cols-2">
-              {(["everyday", "hard"] as const).map((role) => {
+              {TIER_ROLES.map((role) => {
                 const chosen = role === "everyday" ? everyday : hard;
                 const other = role === "everyday" ? hard : everyday;
                 const choices = models.filter((model) => model.name !== other?.name);

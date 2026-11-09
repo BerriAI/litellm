@@ -3,7 +3,7 @@ from collections.abc import Callable, Iterator, Mapping, Sequence
 from functools import partial
 from itertools import chain
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Optional, cast
+from typing import TYPE_CHECKING, ClassVar, Final, Optional, cast
 
 import httpx
 from httpx import Response
@@ -32,6 +32,7 @@ from ..request_metadata import (
     merge_bedrock_invoke_headers,
     resolve_bedrock_request_metadata,
 )
+from ..web_identity_session_policy import BEDROCK_AGENT_RUNTIME_SESSION_POLICY, WebIdentitySessionPolicy
 
 if TYPE_CHECKING:
     from botocore.eventstream import EventStreamMessage
@@ -377,6 +378,10 @@ class BedrockEventStreamCollector:
 
     def build_logged_response(self, litellm_logging_obj: "LiteLLMLoggingObj") -> Optional["CostResponseTypes"]:
         return _build_logged_response(self._chunks.chunks(), litellm_logging_obj)
+
+
+class BedrockAgentRuntimeAWS(BaseAWSLLM):
+    _web_identity_session_policy: ClassVar[WebIdentitySessionPolicy] = BEDROCK_AGENT_RUNTIME_SESSION_POLICY
 
 
 class BedrockPassthroughConfig(BaseAWSLLM, BedrockModelInfo, BedrockEventStreamDecoderBase, BasePassthroughConfig):

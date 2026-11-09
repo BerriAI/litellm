@@ -14,6 +14,14 @@ import {
 import { toast } from "@/lib/toast";
 const mockToast = vi.mocked(toast);
 
+const arabicDigitsLocaleString = function (
+  this: number,
+  _locales?: Intl.LocalesArgument,
+  options?: Intl.NumberFormatOptions,
+): string {
+  return new Intl.NumberFormat("ar-EG", options).format(this);
+};
+
 describe("dataUtils", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -117,6 +125,30 @@ describe("dataUtils", () => {
     it("should respect custom decimals", () => {
       expect(getSpendString(0.01234, 3)).toBe("$0.012");
       expect(getSpendString(999.9999, 1)).toBe("$1,000.0");
+    });
+
+    it("rounds a spend of exactly half the smallest unit up instead of reporting it below the threshold", () => {
+      expect(getSpendString(0.0000005, 6)).toBe("$0.000001");
+      expect(getSpendString(-0.0000005, 6)).toBe("$-0.000001");
+    });
+
+    it("reports spend just under half the smallest unit as below the threshold", () => {
+      expect(getSpendString(0.00000045, 6)).toBe("< $0.000001");
+      expect(getSpendString(4.9999999999999996e-26, 25)).toBe("< $0.0000000000000000000000001");
+    });
+
+    describe("when numbers render with non-Latin digits", () => {
+      beforeEach(() => {
+        vi.spyOn(Number.prototype, "toLocaleString").mockImplementation(arabicDigitsLocaleString);
+      });
+
+      afterEach(() => {
+        vi.mocked(Number.prototype.toLocaleString).mockRestore();
+      });
+
+      it("still reports spend that rounds to zero as below the threshold", () => {
+        expect(getSpendString(0.0000004, 6)).toBe("< $0.000001");
+      });
     });
   });
 

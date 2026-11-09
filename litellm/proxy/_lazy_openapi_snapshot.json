@@ -7541,9 +7541,159 @@
           "title": "PluginAuthor",
           "type": "object"
         },
+        "PluginDownloadEvent": {
+          "properties": {
+            "authenticated": {
+              "title": "Authenticated",
+              "type": "boolean"
+            },
+            "digest": {
+              "title": "Digest",
+              "type": "string"
+            },
+            "downloaded_at": {
+              "format": "date-time",
+              "title": "Downloaded At",
+              "type": "string"
+            },
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "key_alias": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Key Alias"
+            },
+            "team_alias": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Team Alias"
+            },
+            "team_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Team Id"
+            },
+            "user_email": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "User Email"
+            },
+            "user_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "User Id"
+            },
+            "version": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Version"
+            }
+          },
+          "required": [
+            "id",
+            "downloaded_at",
+            "version",
+            "digest",
+            "authenticated",
+            "user_id",
+            "user_email",
+            "key_alias",
+            "team_id",
+            "team_alias"
+          ],
+          "title": "PluginDownloadEvent",
+          "type": "object"
+        },
+        "PluginDownloadsResponse": {
+          "properties": {
+            "anonymous_downloads": {
+              "title": "Anonymous Downloads",
+              "type": "integer"
+            },
+            "downloads": {
+              "items": {
+                "$ref": "#/components/schemas/PluginDownloadEvent"
+              },
+              "title": "Downloads",
+              "type": "array"
+            },
+            "next_cursor": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Next Cursor"
+            },
+            "total_downloads": {
+              "title": "Total Downloads",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "total_downloads",
+            "anonymous_downloads",
+            "downloads",
+            "next_cursor"
+          ],
+          "title": "PluginDownloadsResponse",
+          "type": "object"
+        },
         "PluginListItem": {
           "description": "Plugin item in list responses.",
           "properties": {
+            "approved_by": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Approved By"
+            },
             "author": {
               "anyOf": [
                 {
@@ -7576,6 +7726,17 @@
               ],
               "title": "Created At"
             },
+            "created_by": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Created By"
+            },
             "description": {
               "anyOf": [
                 {
@@ -7597,6 +7758,17 @@
                 }
               ],
               "title": "Domain"
+            },
+            "download_count": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Download Count"
             },
             "enabled": {
               "title": "Enabled",
@@ -7661,6 +7833,22 @@
                 }
               ],
               "title": "Namespace"
+            },
+            "published_by": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Published By"
+            },
+            "security_scan_passed": {
+              "default": false,
+              "title": "Security Scan Passed",
+              "type": "boolean"
             },
             "source": {
               "additionalProperties": {
@@ -8703,6 +8891,87 @@
           ]
         }
       },
+      "/claude-code/plugins/{plugin_name}/downloads": {
+        "get": {
+          "description": "Admin-only ZIP download totals and authenticated downloader history.\n\nAnonymous downloads contribute only to totals. Counts include repeat requests and client prefetches,\nstarting when tracking is deployed. External sources and installation completion are not observed.",
+          "operationId": "get_plugin_downloads_claude_code_plugins__plugin_name__downloads_get",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "plugin_name",
+              "required": true,
+              "schema": {
+                "title": "Plugin Name",
+                "type": "string"
+              }
+            },
+            {
+              "description": "Maximum number of download events",
+              "in": "query",
+              "name": "limit",
+              "required": false,
+              "schema": {
+                "default": 25,
+                "description": "Maximum number of download events",
+                "maximum": 100,
+                "minimum": 1,
+                "title": "Limit",
+                "type": "integer"
+              }
+            },
+            {
+              "description": "Previous next_cursor",
+              "in": "query",
+              "name": "cursor",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "pattern": "^[1-9][0-9]{0,18}$",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Previous next_cursor",
+                "title": "Cursor"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/PluginDownloadsResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Get Plugin Downloads",
+          "tags": [
+            "claude_code_marketplace"
+          ]
+        }
+      },
       "/claude-code/plugins/{plugin_name}/enable": {
         "post": {
           "description": "Enable a disabled plugin.\n\nRequires a proxy admin API key.\n\nParameters:\n    - plugin_name: The name of the plugin to enable",
@@ -9364,7 +9633,7 @@
     "paths": {
       "/backend-api/codex/{endpoint}": {
         "get": {
-          "description": "Forward a client's ChatGPT subscription with separate LiteLLM authentication.",
+          "description": "Forward a client's ChatGPT subscription with separate LiteLLM authentication, listing and serving the\nkey's other chat models through LiteLLM.",
           "operationId": "codex_passthrough_route_backend_api_codex__endpoint__get",
           "parameters": [
             {
@@ -9412,7 +9681,7 @@
           ]
         },
         "post": {
-          "description": "Forward a client's ChatGPT subscription with separate LiteLLM authentication.",
+          "description": "Forward a client's ChatGPT subscription with separate LiteLLM authentication, listing and serving the\nkey's other chat models through LiteLLM.",
           "operationId": "codex_passthrough_route_backend_api_codex__endpoint__post",
           "parameters": [
             {
@@ -9455,7 +9724,7 @@
                   }
                 }
               },
-              "description": "Unmodified Codex response or server-sent events"
+              "description": "Codex response, the model catalog with the key's LiteLLM models, or server-sent events"
             },
             "422": {
               "content": {
@@ -16271,6 +16540,22 @@
               "description": "Character budget for each text sent to the guardrail's model. Implemented by guardrail='decision_model'.",
               "title": "Max Input Chars"
             },
+            "mcp_block_behavior": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "tool_result",
+                    "raise"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "How to handle guardrail blocks when executing MCP tools for an LLM request. 'raise' propagates the guardrail error to the client. 'tool_result' or None returns the block as a tool result and lets the LLM continue.",
+              "title": "Mcp Block Behavior"
+            },
             "model": {
               "anyOf": [
                 {
@@ -16328,7 +16613,7 @@
                   "type": "null"
                 }
               ],
-              "description": "For /v1/realtime sessions: 'warn' speaks the violation message and continues; 'end_session' speaks the message and closes the connection. For guardrail='mcp_security': 'block' rejects the request; 'alert' only logs a warning.",
+              "description": "For /v1/realtime sessions: 'warn' speaks the violation message and continues; 'end_session' speaks the message and closes the connection. Bedrock Nova Sonic cannot cancel a spoken turn's answer, so a blocked spoken turn always ends its session. For guardrail='mcp_security': 'block' rejects the request; 'alert' only logs a warning.",
               "title": "On Violation"
             },
             "only_scan_new_messages": {
@@ -16404,7 +16689,7 @@
                   "type": "null"
                 }
               ],
-              "description": "The message the bot speaks aloud when a /v1/realtime guardrail fires. Falls back to violation_message_template if not set.",
+              "description": "The message the bot speaks aloud when a /v1/realtime guardrail fires. Falls back to the guardrail's block reason if not set.",
               "title": "Realtime Violation Message"
             },
             "run_in_parallel": {
@@ -18847,6 +19132,22 @@
               "description": "Character budget for each text sent to the guardrail's model. Implemented by guardrail='decision_model'.",
               "title": "Max Input Chars"
             },
+            "mcp_block_behavior": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "tool_result",
+                    "raise"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "How to handle guardrail blocks when executing MCP tools for an LLM request. 'raise' propagates the guardrail error to the client. 'tool_result' or None returns the block as a tool result and lets the LLM continue.",
+              "title": "Mcp Block Behavior"
+            },
             "metadata": {
               "anyOf": [
                 {
@@ -19002,7 +19303,7 @@
                   "type": "null"
                 }
               ],
-              "description": "For /v1/realtime sessions: 'warn' speaks the violation message and continues; 'end_session' speaks the message and closes the connection. For guardrail='mcp_security': 'block' rejects the request; 'alert' only logs a warning.",
+              "description": "For /v1/realtime sessions: 'warn' speaks the violation message and continues; 'end_session' speaks the message and closes the connection. Bedrock Nova Sonic cannot cancel a spoken turn's answer, so a blocked spoken turn always ends its session. For guardrail='mcp_security': 'block' rejects the request; 'alert' only logs a warning.",
               "title": "On Violation"
             },
             "only_scan_new_messages": {
@@ -19423,7 +19724,7 @@
                   "type": "null"
                 }
               ],
-              "description": "The message the bot speaks aloud when a /v1/realtime guardrail fires. Falls back to violation_message_template if not set.",
+              "description": "The message the bot speaks aloud when a /v1/realtime guardrail fires. Falls back to the guardrail's block reason if not set.",
               "title": "Realtime Violation Message"
             },
             "rules": {
@@ -36104,6 +36405,11 @@
               "description": "Validation Error"
             }
           },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
           "summary": "Vertex Discovery Proxy Route",
           "tags": [
             "llm_passthrough"
@@ -36143,6 +36449,11 @@
               "description": "Validation Error"
             }
           },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
           "summary": "Vertex Discovery Proxy Route",
           "tags": [
             "llm_passthrough"
@@ -36182,6 +36493,11 @@
               "description": "Validation Error"
             }
           },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
           "summary": "Vertex Discovery Proxy Route",
           "tags": [
             "llm_passthrough"
@@ -36221,6 +36537,11 @@
               "description": "Validation Error"
             }
           },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
           "summary": "Vertex Discovery Proxy Route",
           "tags": [
             "llm_passthrough"
@@ -36260,6 +36581,11 @@
               "description": "Validation Error"
             }
           },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
           "summary": "Vertex Discovery Proxy Route",
           "tags": [
             "llm_passthrough"
@@ -49681,6 +50007,10 @@
               ],
               "title": "Content"
             },
+            "is_error": {
+              "title": "Is Error",
+              "type": "boolean"
+            },
             "role": {
               "const": "tool",
               "title": "Role",
@@ -58998,6 +59328,145 @@
           "title": "ImportSkillRequest",
           "type": "object"
         },
+        "PluginDownloadEvent": {
+          "properties": {
+            "authenticated": {
+              "title": "Authenticated",
+              "type": "boolean"
+            },
+            "digest": {
+              "title": "Digest",
+              "type": "string"
+            },
+            "downloaded_at": {
+              "format": "date-time",
+              "title": "Downloaded At",
+              "type": "string"
+            },
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "key_alias": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Key Alias"
+            },
+            "team_alias": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Team Alias"
+            },
+            "team_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Team Id"
+            },
+            "user_email": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "User Email"
+            },
+            "user_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "User Id"
+            },
+            "version": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Version"
+            }
+          },
+          "required": [
+            "id",
+            "downloaded_at",
+            "version",
+            "digest",
+            "authenticated",
+            "user_id",
+            "user_email",
+            "key_alias",
+            "team_id",
+            "team_alias"
+          ],
+          "title": "PluginDownloadEvent",
+          "type": "object"
+        },
+        "PluginDownloadsResponse": {
+          "properties": {
+            "anonymous_downloads": {
+              "title": "Anonymous Downloads",
+              "type": "integer"
+            },
+            "downloads": {
+              "items": {
+                "$ref": "#/components/schemas/PluginDownloadEvent"
+              },
+              "title": "Downloads",
+              "type": "array"
+            },
+            "next_cursor": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Next Cursor"
+            },
+            "total_downloads": {
+              "title": "Total Downloads",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "total_downloads",
+            "anonymous_downloads",
+            "downloads",
+            "next_cursor"
+          ],
+          "title": "PluginDownloadsResponse",
+          "type": "object"
+        },
         "SkillHubAgentSkill": {
           "properties": {
             "description": {
@@ -59055,6 +59524,14 @@
                 "$ref": "#/components/schemas/SkillHubSkill"
               },
               "title": "Skills",
+              "type": "array"
+            },
+            "tags": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Tags",
               "type": "array"
             }
           },
@@ -59331,6 +59808,17 @@
         },
         "SkillHubSkill": {
           "properties": {
+            "approved_by": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Approved By"
+            },
             "content_url": {
               "anyOf": [
                 {
@@ -59341,6 +59829,29 @@
                 }
               ],
               "title": "Content Url"
+            },
+            "created_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Created At"
+            },
+            "created_by": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Created By"
             },
             "description": {
               "anyOf": [
@@ -59363,6 +59874,18 @@
                 }
               ],
               "title": "Domain"
+            },
+            "download_count": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Gateway ZIP downloads, including repeat downloads",
+              "title": "Download Count"
             },
             "download_url": {
               "anyOf": [
@@ -59407,6 +59930,22 @@
                 }
               ],
               "title": "Namespace"
+            },
+            "published_by": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Published By"
+            },
+            "security_scan_passed": {
+              "default": false,
+              "title": "Security Scan Passed",
+              "type": "boolean"
             },
             "source": {
               "additionalProperties": {
@@ -60062,6 +60601,66 @@
                 "minimum": 1,
                 "title": "Limit",
                 "type": "integer"
+              }
+            },
+            {
+              "in": "query",
+              "name": "tag",
+              "required": false,
+              "schema": {
+                "default": "",
+                "title": "Tag",
+                "type": "string"
+              }
+            },
+            {
+              "in": "query",
+              "name": "security_scan_passed",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Security Scan Passed"
+              }
+            },
+            {
+              "in": "query",
+              "name": "sort_by",
+              "required": false,
+              "schema": {
+                "default": "name",
+                "enum": [
+                  "name",
+                  "download_count",
+                  "updated_at",
+                  "created_at",
+                  "created_by",
+                  "published_by",
+                  "approved_by",
+                  "security_scan_passed"
+                ],
+                "title": "Sort By",
+                "type": "string"
+              }
+            },
+            {
+              "in": "query",
+              "name": "sort_order",
+              "required": false,
+              "schema": {
+                "default": "asc",
+                "enum": [
+                  "asc",
+                  "desc"
+                ],
+                "title": "Sort Order",
+                "type": "string"
               }
             }
           ],
@@ -60835,6 +61434,87 @@
             }
           ],
           "summary": "Download Skill Version",
+          "tags": [
+            "skill_hub"
+          ]
+        }
+      },
+      "/skill-hub/skills/{plugin_name}/downloads": {
+        "get": {
+          "description": "Admin-only ZIP download totals and authenticated downloader history.\n\nAnonymous downloads contribute only to totals. Counts include repeat requests and client prefetches,\nstarting when tracking is deployed. External sources and installation completion are not observed.",
+          "operationId": "get_plugin_downloads_skill_hub_skills__plugin_name__downloads_get",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "plugin_name",
+              "required": true,
+              "schema": {
+                "title": "Plugin Name",
+                "type": "string"
+              }
+            },
+            {
+              "description": "Maximum number of download events",
+              "in": "query",
+              "name": "limit",
+              "required": false,
+              "schema": {
+                "default": 25,
+                "description": "Maximum number of download events",
+                "maximum": 100,
+                "minimum": 1,
+                "title": "Limit",
+                "type": "integer"
+              }
+            },
+            {
+              "description": "Previous next_cursor",
+              "in": "query",
+              "name": "cursor",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "pattern": "^[1-9][0-9]{0,18}$",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Previous next_cursor",
+                "title": "Cursor"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/PluginDownloadsResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Get Plugin Downloads",
           "tags": [
             "skill_hub"
           ]

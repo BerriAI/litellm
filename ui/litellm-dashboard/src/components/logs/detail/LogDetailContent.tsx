@@ -184,7 +184,7 @@ export function LogDetailContent({
               )}
               {typeof logEntry.metadata?.used_client_oauth_token === "boolean" && (
                 <DescriptionItem label={t("logs.detail.content.credential")}>
-                  {CREDENTIAL_LABELS[String(logEntry.metadata.used_client_oauth_token)]}
+                  {t(CREDENTIAL_LABELS[String(logEntry.metadata.used_client_oauth_token)])}
                 </DescriptionItem>
               )}
               {hasGuardrailData && (
@@ -551,11 +551,13 @@ function MetricsSection({ logEntry, metadata }: { logEntry: LogEntry; metadata: 
               ${formatNumberWithCommas(logEntry.spend || 0, 8)}
             </DescriptionItem>
             <DescriptionItem label={t("logs.detail.metrics.duration")}>
-              {logEntry.request_duration_ms != null ? (logEntry.request_duration_ms / 1000).toFixed(3) : "-"} s
+              {logEntry.request_duration_ms != null ? (logEntry.request_duration_ms / 1000).toFixed(3) : "-"}
+              {t("logs.detail.metrics.secondsSuffix")}
             </DescriptionItem>
             {ttftMs != null && ttftMs > 0 && (
               <DescriptionItem label={t("logs.detail.metrics.timeToFirstToken")}>
-                {(ttftMs / 1000).toFixed(3)} s
+                {(ttftMs / 1000).toFixed(3)}
+                {t("logs.detail.metrics.secondsSuffix")}
               </DescriptionItem>
             )}
 
@@ -592,7 +594,7 @@ function MetricsSection({ logEntry, metadata }: { logEntry: LogEntry; metadata: 
                 label={
                   <MetricLabel
                     label={t("logs.detail.metrics.promptCacheReadTokens")}
-                    tooltip={PROMPT_CACHE_READ_TOOLTIP}
+                    tooltip={t(PROMPT_CACHE_READ_TOOLTIP)}
                     docsUrl={PROMPT_CACHE_DOCS_URL}
                   />
                 }
@@ -605,7 +607,7 @@ function MetricsSection({ logEntry, metadata }: { logEntry: LogEntry; metadata: 
                 label={
                   <MetricLabel
                     label={t("logs.detail.metrics.promptCacheCreationTokens")}
-                    tooltip={PROMPT_CACHE_CREATION_TOOLTIP}
+                    tooltip={t(PROMPT_CACHE_CREATION_TOOLTIP)}
                     docsUrl={PROMPT_CACHE_DOCS_URL}
                   />
                 }
