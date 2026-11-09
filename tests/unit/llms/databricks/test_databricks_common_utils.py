@@ -259,6 +259,32 @@ def test_should_not_reuse_a_token_for_a_different_workspace_or_credentials(chang
 
 
 @responses.activate
+def test_validate_environment_reuses_cached_oauth_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DATABRICKS_CLIENT_ID", "synthetic-client")
+    monkeypatch.setenv("DATABRICKS_CLIENT_SECRET", "synthetic-secret")
+    monkeypatch.setenv("DATABRICKS_API_BASE", SDK_HOST)
+    responses.post(f"{SDK_HOST}/oidc/v1/token", json={"access_token": "cached-token", "expires_in": 3600})
+    base: Final = DatabricksBase()
+    _, headers_first = base.databricks_validate_environment(
+        api_key=None,
+        api_base=None,
+        endpoint_type="chat_completions",
+        custom_endpoint=False,
+        headers=None,
+    )
+    _, headers_second = base.databricks_validate_environment(
+        api_key=None,
+        api_base=None,
+        endpoint_type="embeddings",
+        custom_endpoint=False,
+        headers=None,
+    )
+    assert headers_first["Authorization"] == "Bearer cached-token"
+    assert headers_second["Authorization"] == "Bearer cached-token"
+    assert len(responses.calls) == 1
+
+
+@responses.activate
 def test_should_propagate_oauth_failure_and_retry_the_next_request() -> None:
     get_token: Final = partial(
         DatabricksBase().get_cached_oauth_m2m_token,
