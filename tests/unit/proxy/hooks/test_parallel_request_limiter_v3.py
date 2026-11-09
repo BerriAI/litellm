@@ -7,6 +7,7 @@ import contextvars
 import logging
 import sys
 import time
+from dataclasses import dataclass
 from collections.abc import AsyncGenerator, Awaitable, Iterator, Sequence
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -5979,6 +5980,38 @@ async def test_a_closed_responses_websocket_gives_back_its_project_token_reserva
     await proxy_logging_obj.arelease_responses_websocket_admission(auth)
 
     assert [int(_local(handler, key) or 0) for key in project_keys] == [0, 0]
+
+
+@dataclass
+class _RefundFailingRateLimits(FakeRateLimits):
+    connected: bool = False
+    refunds_fail: bool = False
+
+    async def increment_many(self, increments: Sequence[CounterIncrement]) -> None:
+        if self.refunds_fail:
+            raise ConnectionError("rate limit store unreachable")
+        await super().increment_many(increments)
+
+
+@pytest.mark.asyncio
+async def test_a_responses_websocket_close_whose_refund_fails_still_frees_its_slot() -> None:
+    cache: Final = DualCache()
+    fakes: Final = _RefundFailingRateLimits()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(cache), rate_limit_store=fakes.store()
+    )
+    proxy_logging_obj: Final = ProxyLogging(user_api_key_cache=DualCache())
+    proxy_logging_obj.proxy_hook_mapping["parallel_request_limiter"] = handler
+    api_key: Final = hash_token("sk-responses-websocket-refund-fails")
+    auth: Final = UserAPIKeyAuth(
+        api_key=api_key, tpm_limit=1_000, max_parallel_requests=1, metadata={"default_estimated_output_tokens": 60}
+    )
+    await _admit_responses_websocket(handler, cache, auth, "socket")
+    fakes.refunds_fail = True
+
+    await proxy_logging_obj.arelease_responses_websocket_admission(auth)
+
+    assert handler._gauge_in_flight_from_cache_value(_local(handler, RateLimitScope("api_key", api_key).gauge)) == 0
 
 
 @pytest.mark.asyncio
