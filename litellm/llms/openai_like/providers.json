@@ -319,6 +319,6 @@
     "base_url": "https://api.thegrid.ai/v1",
     "api_key_env": "THEGRID_API_KEY",
     "api_base_env": "THEGRID_API_BASE",
-    "supported_endpoints": ["/v1/chat/completions", "/v1/responses"]
+    "supported_endpoints": ["/v1/chat/completions", "/v1/responses", "/v1/messages"]
   }
 }

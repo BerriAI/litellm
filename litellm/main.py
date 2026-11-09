@@ -2768,6 +2768,10 @@ def _complete_hosted_vllm(ctx: CompletionDispatchContext) -> _CompletionDispatch
     return response
 
 
+# Providers whose requests must carry their own key: they never fall back to the OpenAI key or organization.
+_PROVIDERS_WITH_OWN_API_KEY: Final = frozenset({"bigmodel", "thegrid"})
+
+
 def _complete_custom_openai(
     ctx: CompletionDispatchContext,
 ) -> _CompletionDispatchResult:
@@ -2795,13 +2799,19 @@ def _complete_custom_openai(
 
     # for deepinfra/perplexity/anyscale/groq/friendliai we check in get_llm_provider and pass in the api base from there
     api_base = _resolve_openai_api_base(api_base)
-    if custom_llm_provider == "bigmodel" and not api_key:
+    if custom_llm_provider in _PROVIDERS_WITH_OWN_API_KEY and not api_key:
         raise litellm.AuthenticationError(
-            message="Set BIGMODEL_API_KEY or pass api_key", llm_provider="bigmodel", model=model
+            message=f"Set {custom_llm_provider.upper()}_API_KEY or pass api_key",
+            llm_provider=custom_llm_provider,
+            model=model,
         )
     organization = (
         organization
-        or (None if custom_llm_provider == "bigmodel" else litellm.organization or get_secret("OPENAI_ORGANIZATION"))
+        or (
+            None
+            if custom_llm_provider in _PROVIDERS_WITH_OWN_API_KEY
+            else litellm.organization or get_secret("OPENAI_ORGANIZATION")
+        )
         or None  # default - https://github.com/openai/openai-python/blob/284c1799070c723c6a553337134148a7ab088dd8/openai/util.py#L105
     )
     openai.organization = organization

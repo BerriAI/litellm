@@ -1095,7 +1095,7 @@ def chunk_usage(chunk: object) -> object:
     return getattr(chunk, "usage", None)
 
 
-PROVIDERS_BILLED_FROM_THEIR_OWN_USAGE_FIELDS: Final = frozenset({"xai", "perplexity", "opencode_go"})
+PROVIDERS_BILLED_FROM_THEIR_OWN_USAGE_FIELDS: Final = frozenset({"xai", "perplexity", "opencode_go", "thegrid"})
 
 
 UPSTREAM_USAGE_COST: Final = "upstream_usage_cost"
@@ -1156,7 +1156,10 @@ def provider_reported_usage_cost(usage: object, custom_llm_provider: str | None)
 
     OpenCode Go reports the model's list price (peak hours and long-context tiers included) under
     ``usage.opencode.list_cost``, while its ``usage.cost`` is what hit the prepaid balance, 0 inside the plan.
+    The Grid AI's ``usage.cost`` is not what it charges, so its requests are priced from the cost map instead.
     """
+    if custom_llm_provider == "thegrid":
+        return None
     if custom_llm_provider == "opencode_go":
         return _reported_cost_value(_usage_field(_usage_field(usage, "opencode"), "list_cost"))
     return _reported_cost_value(_usage_field(usage, "cost"))
