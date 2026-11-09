@@ -717,6 +717,17 @@ export const PARTNER_GUARDRAIL_CARDS: GuardrailCardInfo[] = [
     tags: ["Security", "Prompt Injection", "PII", "Secrets", "Redaction"],
     providerKey: "Airia",
   },
+  {
+    id: "reco",
+    name: "Reco",
+    description:
+      "Reco AI agent security. Checks every prompt against your Reco policies before the model call, blocking prompt injection and sensitive data leaks.",
+    descriptionKey: "guardrails.gardenCatalog.partner.reco.description",
+    category: "partner",
+    logo: guardrailLogoMap["Reco"],
+    tags: ["Security", "Prompt Injection", "Data Protection", "Policy"],
+    providerKey: "Reco",
+  },
 ];
 
 export const ALL_CARDS = [...LITELLM_CONTENT_FILTER_CARDS, ...DECISION_MODEL_CARDS, ...PARTNER_GUARDRAIL_CARDS];

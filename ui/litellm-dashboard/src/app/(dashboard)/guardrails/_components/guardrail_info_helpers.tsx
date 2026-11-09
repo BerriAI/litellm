@@ -27,6 +27,7 @@ import pillarLogo from "../../../../../public/assets/logos/pillar.jpeg";
 import promptSecurityLogo from "../../../../../public/assets/logos/prompt_security.png";
 import promptguardLogo from "../../../../../public/assets/logos/promptguard.svg";
 import qohashLogo from "../../../../../public/assets/logos/qohash.jpg";
+import recoLogo from "../../../../../public/assets/logos/reco.png";
 import repelloAiLogo from "../../../../../public/assets/logos/repelloai.png";
 import straikerLogo from "../../../../../public/assets/logos/straiker.svg";
 import wingbackLogo from "../../../../../public/assets/logos/wingback.png";
@@ -332,6 +333,7 @@ export const guardrailLogoMap = {
   "Conduct Guard": conductLogo.src,
   Wingback: wingbackLogo.src,
   "Airia Guardrail": airiaLogo.src,
+  Reco: recoLogo.src,
   "Decision Model": litellmLogo.src,
 } satisfies Record<string, string>;
 
