@@ -4,7 +4,7 @@ from collections.abc import Mapping
 from typing import Final
 
 import litellm
-from litellm.types.router import holds_api_key_secret_reference
+from litellm.types.router import holds_api_key_secret_reference, oauth_secret_reference_field
 from litellm.types.utils import (
     API_KEY_SECRET_REFERENCE_REJECTION,
     CredentialItem,
@@ -55,9 +55,23 @@ def sends_api_key_secret_reference(params: Mapping[str, object]) -> bool:
 def reject_api_key_secret_reference(params: Mapping[str, object]) -> None:
     if holds_api_key_secret_reference(params):
         raise ValueError(API_KEY_SECRET_REFERENCE_REJECTION)
-    named: Final = params.get("litellm_credential_name")
-    if isinstance(named, str) and holds_api_key_secret_reference(CredentialAccessor.get_credential_values(named)):
+    oauth_field: Final = oauth_secret_reference_field(params)
+    if oauth_field is not None:
         raise ValueError(
-            f"Rejected Request: litellm_credential_name={named!r} names a credential holding an oidc/ api_key "
-            "secret reference, which only a deployment a proxy admin configures can attach."
+            f"Rejected Request: {oauth_field} holds an os.environ/ or oidc/ secret reference, which only a deployment "
+            "or credential a proxy admin configures can carry."
         )
+    named: Final = params.get("litellm_credential_name")
+    if isinstance(named, str):
+        cred_vals = CredentialAccessor.get_credential_values(named)
+        if holds_api_key_secret_reference(cred_vals):
+            raise ValueError(
+                f"Rejected Request: litellm_credential_name={named!r} names a credential holding an oidc/ api_key "
+                "secret reference, which only a deployment a proxy admin configures can attach."
+            )
+        named_oauth_field = oauth_secret_reference_field(cred_vals)
+        if named_oauth_field is not None:
+            raise ValueError(
+                f"Rejected Request: litellm_credential_name={named!r} names a credential holding a {named_oauth_field} "
+                "secret reference, which only a deployment a proxy admin configures can attach."
+            )

@@ -16,6 +16,7 @@ from litellm.llms.databricks.common_utils import (
     DATABRICKS_ANTHROPIC_MESSAGES_PATH,
     DATABRICKS_SERVING_ENDPOINTS_MESSAGES_PATH,
     DatabricksBase,
+    DatabricksException,
 )
 from litellm.types.llms.anthropic import ANTHROPIC_API_HEADERS
 from litellm.types.router import GenericLiteLLMParams
@@ -131,6 +132,14 @@ class DatabricksAnthropicMessagesConfig(DatabricksBase, AnthropicMessagesConfig)
         client_anthropic_headers: Final = {
             key: value for key, value in headers.items() if key.lower() in ANTHROPIC_API_HEADERS
         }
+        for secret_param in ("client_id", "client_secret", "databricks_client_id", "databricks_client_secret"):
+            val = optional_params.get(secret_param)
+            if isinstance(val, str) and (val.startswith("os.environ/") or val.startswith("oidc/")):
+                raise DatabricksException(
+                    status_code=400,
+                    message=f"Request-supplied {secret_param} cannot be an os.environ/ or oidc/ secret reference",
+                )
+
         client_id: Final = (
             litellm_params.get("client_id")
             or litellm_params.get("databricks_client_id")
@@ -148,9 +157,7 @@ class DatabricksAnthropicMessagesConfig(DatabricksBase, AnthropicMessagesConfig)
             litellm_params.get("api_key") if isinstance(litellm_params, Mapping) else None
         ) or optional_params.pop("api_key", None)
         resolved_api_key: Final = (
-            deployment_api_key
-            or api_key
-            or (None if has_deployment_oauth else self.resolve_api_key(api_key))
+            deployment_api_key or api_key or (None if has_deployment_oauth else self.resolve_api_key(api_key))
         )
         messages_api_base, auth_headers = self.databricks_validate_environment(  # pyright: ignore[reportUnknownMemberType]  # the shared helper takes a bare dict
             api_key=resolved_api_key,

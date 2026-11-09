@@ -70,6 +70,10 @@ def _admin_config_fields_to_clear_on_base_override() -> list[str]:
         # ``api_base`` for the same reason as the OCI entries above.
         "nvcf_function_id",
         "use_ssl",
+        # Databricks OAuth aliases — ensure admin credentials do not flow
+        # through to an attacker-redirected upstream
+        "databricks_client_id",
+        "databricks_client_secret",
         # Server-owned federation and OAuth token-exchange fields, restated here from
         # server_owned_wif_litellm_params the same way azure_ad_token above is restated
         # despite also being declared on CredentialLiteLLMParams (hence covered by
@@ -100,6 +104,16 @@ def get_dynamic_litellm_params(litellm_params: dict, request_kwargs: dict) -> di
 
     for generating a unique model_id.
     """
+    # Normalize databricks aliases into standard credential fields before isolation
+    if "databricks_client_id" in litellm_params:
+        if "client_id" not in litellm_params:
+            litellm_params["client_id"] = litellm_params["databricks_client_id"]
+        litellm_params.pop("databricks_client_id", None)
+    if "databricks_client_secret" in litellm_params:
+        if "client_secret" not in litellm_params:
+            litellm_params["client_secret"] = litellm_params["databricks_client_secret"]
+        litellm_params.pop("databricks_client_secret", None)
+
     # update litellm_params with clientside credentials
     for key in clientside_credential_keys:
         if key in request_kwargs:

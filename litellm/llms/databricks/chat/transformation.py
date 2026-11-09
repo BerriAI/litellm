@@ -444,6 +444,14 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
             or os.getenv("DATABRICKS_USER_AGENT")
         )
 
+        for secret_param in ("client_id", "client_secret", "databricks_client_id", "databricks_client_secret"):
+            val = optional_params.get(secret_param)
+            if isinstance(val, str) and (val.startswith("os.environ/") or val.startswith("oidc/")):
+                raise DatabricksException(
+                    status_code=400,
+                    message=f"Request-supplied {secret_param} cannot be an os.environ/ or oidc/ secret reference",
+                )
+
         client_id: Final = (
             litellm_params.get("client_id")
             or litellm_params.get("databricks_client_id")
