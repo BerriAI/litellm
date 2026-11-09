@@ -27,6 +27,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     authorize_model_for_key,
     caller_may_use_model,
     carries_explicit_credentials,
+    explicit_request_credentials,
     get_credentials_for_model,
     get_team_provider_deployment,
     handle_model_based_routing,
@@ -198,6 +199,15 @@ def _store_carries_credentials(store: LiteLLM_ManagedVectorStore | None) -> bool
     )
 
 
+_CALLER_DESTINATION_KEYS: Final = frozenset({"api_base", "base_url"})
+
+
+def _keys_a_pinned_call_drops(data: Mapping[str, object]) -> frozenset[str]:
+    if explicit_request_credentials(data):
+        return frozenset({"custom_llm_provider"})
+    return frozenset({"custom_llm_provider", *_CALLER_DESTINATION_KEYS})
+
+
 def _public_model_name_reaching(llm_router: "Router", deployment: Deployment, team_id: str | None) -> str | None:
     public_model_name: Final = deployment.model_info.team_public_model_name or deployment.model_name
     reachable_ids: Final = frozenset(
@@ -341,8 +351,9 @@ async def _update_request_data_with_managed_file_id(
                     file_id,
                     provider_file_id,
                 )
+                dropped_keys: Final = _keys_a_pinned_call_drops(data)
                 return {
-                    **{key: value for key, value in data.items() if key != "custom_llm_provider"},
+                    **{key: value for key, value in data.items() if key not in dropped_keys},
                     "model": _public_model_name_reaching(llm_router, routing_deployment, user_api_key_dict.team_id)
                     or routing_deployment_id,
                     "file_id": provider_file_id,

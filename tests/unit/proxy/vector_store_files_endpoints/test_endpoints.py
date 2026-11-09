@@ -397,6 +397,61 @@ async def test_managed_file_id_reaches_its_upload_deployment_only_for_that_team(
     assert upstream.calls.last.request.headers["Authorization"] == expected_authorization
 
 
+_CALLER_OPENAI_BASE: Final = "https://caller-openai.example/v1"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("caller_credentials", "expected_base", "expected_authorization"),
+    [
+        ({"api_base": _CALLER_OPENAI_BASE}, _TEAM_OPENAI_BASE, "Bearer team-openai-key"),
+        ({"api_base": _CALLER_OPENAI_BASE, "api_key": "caller-key"}, _CALLER_OPENAI_BASE, "Bearer caller-key"),
+    ],
+)
+async def test_managed_file_id_sends_its_deployment_key_only_to_that_deployment_base(
+    monkeypatch: pytest.MonkeyPatch,
+    caller_credentials: Mapping[str, str],
+    expected_base: str,
+    expected_authorization: str,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    caller: Final = UserAPIKeyAuth(api_key="sk-test", user_id="caller-user", team_id="team-b")
+    router: Final = _proxy_and_team_b_openai_router()
+    managed_file_id: Final = (
+        base64.urlsafe_b64encode(
+            SpecialEnums.LITELLM_MANAGED_FILE_COMPLETE_STR.value.format(
+                "text/plain", "ingested-unified-id", "openai/*", RAW_FILE_ID, "team-b-openai"
+            ).encode()
+        )
+        .decode()
+        .rstrip("=")
+    )
+
+    data, _ = await _update_request_data_with_managed_file_id(
+        data={"vector_store_id": "vs-test", "file_id": managed_file_id, **caller_credentials},
+        file_id=managed_file_id,
+        request=MagicMock(headers={}, query_params={}),
+        user_api_key_dict=caller,
+        managed_files_obj=ManagedResourceAccessCheckerStub(file_access="allow"),
+        llm_router=router,
+    )
+    with respx.mock(assert_all_called=True) as respx_mock:
+        upstream: Final = respx_mock.get(f"{expected_base}/vector_stores/vs-test/files/{RAW_FILE_ID}").mock(
+            return_value=httpx.Response(200, json=dict(_vector_store_file_row(RAW_FILE_ID)))
+        )
+        await (
+            await route_request(
+                {**data, "custom_llm_provider": "openai", "metadata": {"user_api_key_team_id": caller.team_id}},
+                router,
+                None,
+                "avector_store_file_retrieve",
+                user_api_key_dict=caller,
+            )
+        )
+
+    assert upstream.calls.last.request.headers["Authorization"] == expected_authorization
+
+
 class _SuccessRecorder(CustomLogger):
     def __init__(self) -> None:
         super().__init__()
