@@ -8,6 +8,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.models.performance_alert import (
     Claim,
     PerformanceAlertStore,
+    ResourceUnreadableError,
     SweepOwnershipLostError,
     SweepState,
     new_sweep,
@@ -25,20 +26,15 @@ PAUSE_SECONDS: Final = 0.1
 async def _step(store: PerformanceAlertStore, owner: str, state: SweepState) -> SweepState:
     """One page, falling back to a single resource and then stepping over it, so one bad resource
     cannot hold up the rest of the sweep."""
-    from prisma.errors import PrismaError
-    from pydantic import ValidationError
-
     try:
         return await store.evaluate_page(owner, state, PAGE_SIZE)
-    except (PrismaError, ValidationError, TimeoutError):
+    except ResourceUnreadableError:
         pass
     try:
         return await store.evaluate_page(owner, state, 1)
-    except (PrismaError, ValidationError, TimeoutError) as exc:
+    except ResourceUnreadableError:
         verbose_proxy_logger.warning(
-            "Performance alerts skipped one %s it could not read within its limits (%s)",
-            state.scope,
-            type(exc).__name__,
+            "Performance alerts skipped one %s it could not read within its limits", state.scope
         )
     return await store.skip_next(owner, state)
 

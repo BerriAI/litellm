@@ -6,13 +6,14 @@ from datetime import date, datetime, time, timedelta, timezone
 from itertools import chain
 from typing import TYPE_CHECKING, Final, Protocol, cast  # noqa: TID251  # Prisma generates transaction types
 
-from pydantic import BaseModel, ConfigDict, TypeAdapter
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import LiteralString
 
 from litellm.models.performance_alert import (
     BASELINE_DAYS,
     Claim,
     PerformanceScope,
+    ResourceUnreadableError,
     ResourceWindow,
     SweepOwnershipLostError,
     SweepState,
@@ -26,6 +27,7 @@ if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
 
 KEY_DATE_INDEX: Final = "LiteLLM_DailyUserSpend_api_key_date_idx"
+_STATEMENT_TIMED_OUT: Final = "`57014`"
 _STATEMENT_TIMEOUT: Final = "2s"
 _TRANSACTION_TIMEOUT: Final = timedelta(seconds=5)
 
@@ -160,6 +162,10 @@ WHERE state = 'pending' AND created_at < $1::timestamp LIMIT 1"""
 _INDEX_READY: Final = """SELECT 1 AS resource_id FROM pg_index WHERE indexrelid = to_regclass($1) AND indisvalid"""
 
 
+def is_statement_timeout(error: Exception) -> bool:
+    return _STATEMENT_TIMED_OUT in str(error)
+
+
 class PerformanceAlertRepository:
     def __init__(self, prisma_client: "PrismaClient") -> None:
         self._database: Final = cast(  # cast-ok: generated Prisma transactions expose the bounded SQL surface
@@ -201,6 +207,18 @@ class PerformanceAlertRepository:
 
     async def evaluate_page(self, owner: str, state: SweepState, limit: int) -> SweepState:
         """Evaluate the next `limit` resources and save their alerts together with the new position."""
+        from prisma.errors import RawQueryError
+
+        try:
+            return await self._evaluate_page(owner, state, limit)
+        except ValidationError as exc:
+            raise ResourceUnreadableError() from exc
+        except RawQueryError as exc:
+            if is_statement_timeout(exc):
+                raise ResourceUnreadableError() from exc
+            raise
+
+    async def _evaluate_page(self, owner: str, state: SweepState, limit: int) -> SweepState:
         async with self._transaction() as transaction:
             windows: Final = _WINDOWS.validate_python(
                 await transaction.query_raw(_page_sql(state.scope, state.wrapped), *self._arguments(state, limit))

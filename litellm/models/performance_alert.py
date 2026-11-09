@@ -73,6 +73,11 @@ class SweepOwnershipLostError(Exception):
     pass
 
 
+class ResourceUnreadableError(Exception):
+    """A page that timed out or held invalid data. Retried alone, then stepped over.
+    Any other database error ends the run so the next run resumes from the same place."""
+
+
 class PerformanceAlertStore(Protocol):
     async def claim(self, interval: timedelta) -> Claim | None: ...
     async def accounting_pending(self, day: date) -> bool: ...

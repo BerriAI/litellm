@@ -4,7 +4,14 @@ from typing import Final
 
 import pytest
 
-from litellm.models.performance_alert import Claim, SweepOwnershipLostError, SweepState, advance, new_sweep
+from litellm.models.performance_alert import (
+    Claim,
+    ResourceUnreadableError,
+    SweepOwnershipLostError,
+    SweepState,
+    advance,
+    new_sweep,
+)
 from litellm.proxy.spend_tracking.performance_alerts import PAGE_SIZE, RUN_BUDGET_SECONDS, run_performance_alerts
 
 NOW: Final = datetime(2026, 1, 9, 2, 0, tzinfo=timezone.utc)
@@ -48,9 +55,7 @@ class Store:
         self.pages.append((state.scope, limit))
         ids: Final = self._next(state, limit)
         if self.unreadable.intersection(ids):
-            from prisma.errors import PrismaError
-
-            raise PrismaError("canceling statement due to statement timeout")
+            raise ResourceUnreadableError()
         advanced: Final = advance(state, ids, limit)
         await self.save(owner, advanced)
         return advanced
@@ -152,5 +157,18 @@ async def test_losing_the_claim_mid_run_stops_quietly() -> None:
             raise SweepOwnershipLostError()
 
     store: Final = TakenOver()
+    await _run(store)
+    assert store.saved == []
+
+
+@pytest.mark.asyncio
+async def test_a_database_wide_failure_ends_the_run_without_skipping_anything() -> None:
+    class Unavailable(Store):
+        async def evaluate_page(self, owner: str, state: SweepState, limit: int) -> SweepState:
+            from prisma.errors import RawQueryError
+
+            raise RawQueryError({"user_facing_error": {"message": "FATAL: sorry, too many clients already"}})
+
+    store: Final = Unavailable()
     await _run(store)
     assert store.saved == []
