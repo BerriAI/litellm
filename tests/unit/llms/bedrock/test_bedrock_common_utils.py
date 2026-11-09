@@ -846,6 +846,7 @@ def test_sign_aws_request_assumes_role_with_external_id(monkeypatch):
     import boto3
     from botocore.exceptions import ClientError
 
+    from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
     from litellm.llms.bedrock.common_utils import CommonBatchFilesUtils
 
     monkeypatch.delenv("AWS_EXTERNAL_ID", raising=False)
@@ -879,7 +880,7 @@ def test_sign_aws_request_assumes_role_with_external_id(monkeypatch):
     }
 
     with patch.object(boto3, "client", return_value=FakeSTSClient()):
-        signed_headers, signed_data = CommonBatchFilesUtils().sign_aws_request(
+        signed_headers, signed_data = CommonBatchFilesUtils(BaseAWSLLM()).sign_aws_request(
             service_name="bedrock",
             data={"jobName": "litellm-batch-job"},
             endpoint_url="https://bedrock.us-east-1.amazonaws.com/model-invocation-job",
@@ -899,6 +900,7 @@ def test_sign_aws_request_assumes_role_with_session_tags(monkeypatch):
     import boto3
     from botocore.exceptions import ClientError
 
+    from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
     from litellm.llms.bedrock.common_utils import CommonBatchFilesUtils
 
     monkeypatch.delenv("AWS_WEB_IDENTITY_TOKEN_FILE", raising=False)
@@ -934,7 +936,7 @@ def test_sign_aws_request_assumes_role_with_session_tags(monkeypatch):
     }
 
     with patch.object(boto3, "client", return_value=FakeSTSClient()):
-        signed_headers, _signed_data = CommonBatchFilesUtils().sign_aws_request(
+        signed_headers, _signed_data = CommonBatchFilesUtils(BaseAWSLLM()).sign_aws_request(
             service_name="bedrock",
             data={"jobName": "litellm-batch-job"},
             endpoint_url="https://bedrock.us-east-1.amazonaws.com/model-invocation-job",

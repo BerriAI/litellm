@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import type { ComplexityRouterConfigValue } from "./ComplexityRouterConfig";
 import { getReminderMarkersError, type ReminderMarkerPair } from "./build_complexity_router_config";
+import { codeSamples } from "@/i18n/untranslated/codeSamples";
 
 const ReminderMarkers: React.FC<{
   value: ComplexityRouterConfigValue;
@@ -42,7 +43,7 @@ const ReminderMarkers: React.FC<{
               </label>
               <Input
                 id={`reminder-marker-${index}-open`}
-                placeholder="<note>"
+                placeholder={codeSamples.models.reminderMarkerOpen}
                 value={marker.open}
                 onChange={(event) => update(index, { open: event.target.value })}
               />
@@ -53,7 +54,7 @@ const ReminderMarkers: React.FC<{
               </label>
               <Input
                 id={`reminder-marker-${index}-close`}
-                placeholder="</note>"
+                placeholder={codeSamples.models.reminderMarkerClose}
                 value={marker.close}
                 onChange={(event) => update(index, { close: event.target.value })}
               />
