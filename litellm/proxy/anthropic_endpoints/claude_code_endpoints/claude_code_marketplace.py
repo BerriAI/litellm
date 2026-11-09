@@ -197,7 +197,12 @@ async def header_key_caller(request: Request) -> UserAPIKeyAuth:
 
 
 async def _marketplace_caller(request: Request, key: str | None) -> UserAPIKeyAuth | None:
-    if marketplace_auth_required():
+    """Resolve the effective caller for Claude Code marketplace access.
+
+    `claude_code_marketplace_auth_required` enforces credentials from the Authorization or
+    x-litellm-api-key headers before any anonymous or `?key=` fallback is considered.
+    """
+    if marketplace_key_header_present(request) or marketplace_auth_required():
         return await header_key_caller(request)
     if key:
         return await user_api_key_auth(request=request, api_key=f"Bearer {key}")
@@ -297,11 +302,7 @@ async def download_plugin_archive(
     uploads: PluginUploadRepositoryDep,
 ) -> Response:
     """Download an uploaded ZIP under the same visibility policy as its skill."""
-    caller: Final = (
-        await header_key_caller(request)
-        if marketplace_key_header_present(request)
-        else await _marketplace_caller(request, None)
-    )
+    caller: Final = await _marketplace_caller(request, None)
     visibility: Final = await resolve_skill_visibility(caller)
     if uploads is None:
         raise _error_response(500, CommonProxyErrors.db_not_connected_error.value)
