@@ -16,8 +16,10 @@ from litellm.types.llms.openai import (
     OpenAIChatCompletionLogprobsContent,
     OpenAIModerationResponse,
     OpenAIVideoObject,
+    OutputTextDeltaEvent,
     ResponseCompletedEvent,
     ResponsesAPIResponse,
+    ResponsesAPIStreamEvents,
 )
 
 
@@ -816,3 +818,32 @@ def test_rebuilding_a_dumped_responses_answer_keeps_the_tool_search_call_keys(ex
     rebuilt: Final = ResponsesAPIResponse(**answer.model_dump())
 
     assert rebuilt.model_dump()["output"] == [search_call]
+
+
+def _text_delta() -> OutputTextDeltaEvent:
+    return OutputTextDeltaEvent(
+        type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA, item_id="msg_1", output_index=0, content_index=0, delta="hi"
+    )
+
+
+def test_stream_event_dict_reads_see_a_field_set_after_construction():
+    event: Final = _text_delta().model_copy(update={"sequence_number": 3})
+
+    assert event["sequence_number"] == 3
+    assert event.get("sequence_number") == 3
+    assert "sequence_number" in event
+    assert dict(event.items())["sequence_number"] == 3
+    assert event["delta"] == "hi"
+
+
+def test_stream_event_dict_reads_see_an_undeclared_field_named_keys():
+    assert _text_delta().model_copy(update={"keys": "value"})["keys"] == "value"
+
+
+def test_stream_event_dict_reads_still_miss_absent_keys():
+    event: Final = _text_delta()
+
+    assert event.get("sequence_number", "fallback") == "fallback"
+    assert "sequence_number" not in event
+    with pytest.raises(KeyError):
+        event["sequence_number"]

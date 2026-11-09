@@ -17,6 +17,7 @@ import litellm
 from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.routing_common_utils import is_proxy_admin_request
+from litellm.litellm_core_utils.total_deadline import enforce_total_timeout_scope
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.router import router_arguments
 from litellm.router_api import router_init_args
@@ -271,6 +272,10 @@ REQUIRED_ONE_OF_BODY_PARAMS_BY_ROUTE: Final[Mapping[str, tuple[str, str]]] = Map
     {"acreate_interaction": ("model", "agent"), "acreate_agent": ("id", "name")}
 )
 
+BODY_PARAM_ALTERNATIVES_BY_ROUTE: Final[Mapping[str, Mapping[str, tuple[str, ...]]]] = MappingProxyType(
+    {"acreate_interaction": MappingProxyType({"input": ("continuation_token",)})}
+)
+
 JSON_OBJECT_ADAPTER: Final[TypeAdapter[dict[str, object]]] = TypeAdapter(dict[str, object])
 _OPTIONAL_JSON_OBJECT_ADAPTER: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(
     Mapping[str, object] | None
@@ -320,8 +325,11 @@ def _find_missing_required_body_param(
     )
     if missing_merge_base_param is not None:
         return MissingBodyParam(name=missing_merge_base_param, model_deployments_loaded=True)
+    alternatives: Final = BODY_PARAM_ALTERNATIVES_BY_ROUTE.get(route_type, {})
     missing_present_params: Final = tuple(
-        param for param in REQUIRED_PRESENT_BODY_PARAMS_BY_ROUTE.get(route_type, ()) if param not in data
+        param
+        for param in REQUIRED_PRESENT_BODY_PARAMS_BY_ROUTE.get(route_type, ())
+        if param not in data and not any(alternative in data for alternative in alternatives.get(param, ()))
     )
     if not missing_present_params:
         return None
@@ -621,7 +629,9 @@ RouteType = Literal[
     "alist_input_items",
     "_arealtime",  # private function for realtime API
     "acreate_realtime_client_secret",
+    "acreate_realtime_translation_client_secret",
     "arealtime_calls",
+    "arealtime_translation_calls",
     "acreate_realtime_transcription_session",
     "_aresponses_websocket",  # private function for responses WebSocket mode
     "aimage_edit",
@@ -752,6 +762,7 @@ async def route_request(
     """
     Common helper to route the request
     """
+    enforce_total_timeout_scope(data)  # pyright: ignore[reportUnknownArgumentType]  # route_request takes an untyped dict body
     router_only_settings_from_override: Final = _merge_router_settings_override(data)  # pyright: ignore[reportUnknownArgumentType]  # route_request takes an untyped dict body
     try:
         return await _route_request_single_attempt(

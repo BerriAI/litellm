@@ -8,6 +8,7 @@ import { useTeamMetadataSchema } from "@/app/(dashboard)/hooks/teams/useTeamMeta
 import { toast } from "@/lib/toast";
 import { fetchAvailableModelsForTeamOrKey } from "./key_team_helpers/fetch_available_models_team_key";
 import { MODEL_MAX_BUDGET_PREMIUM_HINT } from "./key_team_helpers/ModelMaxBudgetEditor";
+import i18n from "@/i18n/i18n";
 import {
   fetchMCPAccessGroups,
   getDefaultTeamSettings,
@@ -1546,7 +1547,7 @@ describe("Teams - the exact bytes the create call sends", () => {
     await openCreateModal({ premiumUser: false });
 
     expect(screen.getByRole("button", { name: /Add Model Budget/i })).toBeDisabled();
-    expect(screen.getByText(MODEL_MAX_BUDGET_PREMIUM_HINT)).toBeInTheDocument();
+    expect(screen.getByText(i18n.t(MODEL_MAX_BUDGET_PREMIUM_HINT))).toBeInTheDocument();
   });
 
   it("sends the per-model budget a licensed operator fills in, keyed by model", async () => {
