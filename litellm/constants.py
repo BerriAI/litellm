@@ -569,6 +569,18 @@ TOKEN_COUNTER_MAX_EXACT_CHARS: Final = get_env_int_in_range(
     minimum=1,
     maximum=1_000_000_000,
 )
+TOKEN_COUNT_MEMO_MAX_ENTRIES: Final = get_env_int_in_range(
+    "TOKEN_COUNT_MEMO_MAX_ENTRIES",
+    default=16_384,
+    minimum=0,
+    maximum=10_000_000,
+)
+TOKEN_COUNT_MEMO_MIN_CHARS: Final = get_env_int_in_range(
+    "TOKEN_COUNT_MEMO_MIN_CHARS",
+    default=256,
+    minimum=1,
+    maximum=1_000_000_000,
+)
 TOKEN_COUNTER_MAX_CONCURRENT_COUNTS: Final = get_env_int_in_range(
     "TOKEN_COUNTER_MAX_CONCURRENT_COUNTS",
     default=4,
