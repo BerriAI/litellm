@@ -37,6 +37,9 @@ _CASES: Final = (
     pytest.param(replace(_BASE, grants=("mo*",)), "Allow", id="prefix-wildcard"),
     pytest.param(replace(_BASE, requested=("model\n",), grants=("mo*",)), "Allow", id="python-final-newline"),
     pytest.param(replace(_BASE, requested=("mod\nel",), grants=("mo*l",)), "Deny", id="embedded-newline"),
+    pytest.param(replace(_BASE, requested=("\u0301a",), grants=(r"\w*",)), "Deny", id="word-combining-mark"),
+    pytest.param(replace(_BASE, requested=("\u200da",), grants=(r"\w*",)), "Deny", id="word-join-control"),
+    pytest.param(replace(_BASE, requested=("\u00b2a",), grants=(r"\w*",)), "Allow", id="word-other-number"),
     pytest.param(
         replace(_BASE, grants=("p/*",), registry=Registry(records={"model": Record(provider=Provider("model", "p"))})),
         "Allow",
@@ -189,6 +192,30 @@ def test_model_policy_case_table(
     decision: Final = policy(facts)
     assert decision.kind == kind
     assert decision == reference.model_access(facts)
+
+
+@pytest.mark.parametrize(
+    "grant",
+    (
+        r"\w*", r"\W*", r"[\w]*", r"[\W]*", r"[^\w]*", r"[^\W]*",
+        r"[\w\W]*", r"[^\w\W]*", r"[^\w]+*", r"[\w^]*", r"[\w-]*",
+        r"[\-\w]*", r"[]\w]*", r"[^]\w]*", r"[[\w]*", r"[\b\w]*",
+        r"\\w*", r"[\\w]*", r"\b\w*", r"\B\w*", r"\w\b*", r"\w\B*",
+        r"\W\b*", r"\W\B*", r"(?u:\w)*", r"(?i:\w)*", r"(?i:[\wΙ])*",
+        r"(?i:[^\wΙ])*", r"[a-zA-Z0-9_]*", r"(?# [\b)\w*",
+        "(?x:# [\\b)\n\\w)*", "(?x:# [\n)(?-x:#)\\w*", r"(\w)\1*",
+    ),
+)
+@pytest.mark.parametrize(
+    "model",
+    (
+        "\u0301a", "\u200da", "\u203fa", "\u0345a", "²a", "¼a", "Ⅷa", "a²", "a\u0301",
+        "_", "-", "^", "a", "A", "é", "한글", "αα", "\n", "\b", r"\word", "]a", "[a", "#²", " a",
+    ),
+)
+def test_unicode_regex_model_access_matches_python(grant: str, model: str) -> None:
+    facts: Final = replace(_BASE, requested=(model,), grants=(grant,))
+    assert native.model_access(facts) == reference.model_access(facts)
 
 
 @pytest.mark.parametrize(
