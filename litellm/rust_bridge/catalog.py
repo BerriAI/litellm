@@ -95,7 +95,7 @@ class Feature(str, Enum):
     CACHE_CONTROL_INJECTION = "cache_control_injection"
     """Prompt caching injection that Python applies to messages and system."""
     STREAM_COST_INJECTION = "stream_cost_injection"
-    """litellm.include_cost_in_streaming_usage, where Python adds cost to streamed usage."""
+    """litellm.include_cost_in_streaming_usage or the x-litellm-include-cost-in-streaming-usage header, where Python adds cost to streamed usage."""
     THINKING_SIGNATURE_RETRY = "thinking_signature_retry"
     """Replayed thinking blocks, which Python strips and retries once if Anthropic rejects their signature."""
     TOOL_CUSTOM_FIELD = "tool_custom_field"

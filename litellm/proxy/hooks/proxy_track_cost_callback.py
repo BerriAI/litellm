@@ -67,7 +67,7 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (  # noqa: F401  #
     deployment_params_provider,
     get_request_model_access_groups,
     sanitize_error_information_for_spend_logs,  # pyright: ignore[reportUnusedImport]  # backwards-compatible package export
-    should_store_prompts_and_responses_in_spend_logs,
+    should_store_prompts_for_call,
 )
 from litellm.proxy.utils import (
     REJECTED_BEFORE_REQUEST_SETUP,
@@ -425,7 +425,7 @@ class _ProxyDBLogger(CustomLogger):
             response_obj,
             start_time,
             end_time,
-            store_bodies=should_store_prompts_and_responses_in_spend_logs(),
+            store_bodies=should_store_prompts_for_call(kwargs),
         )
         if isinstance(event, SpendEventBuildError):
             verbose_proxy_logger.warning("collector: tracking cost in-process, event not buildable: %s", event.reason)
@@ -489,6 +489,7 @@ class _ProxyDBLogger(CustomLogger):
             LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(user_api_key_dict=user_api_key_dict)
         )
         _metadata["user_api_key"] = LiteLLMProxyRequestSetup.get_logged_api_key(user_api_key_dict)
+        _metadata.update(LiteLLMProxyRequestSetup.get_tenant_logging_metadata(user_api_key_dict))
         _metadata["status"] = "failure"
         _error_information = StandardLoggingPayloadSetup.get_error_information(
             original_exception=original_exception,

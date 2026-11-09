@@ -64,9 +64,7 @@ impl<'py> IntoPyObject<'py> for LocalValue {
 /// `litellm.redis.stores.rate_limits.RateLimitScope`.
 #[derive(FromPyObject)]
 struct PyScope {
-    #[pyo3(attribute)]
     descriptor_key: String,
-    #[pyo3(attribute)]
     descriptor_value: String,
 }
 
@@ -82,9 +80,7 @@ impl From<PyScope> for Scope {
 /// `RateLimitCounter`.
 #[derive(FromPyObject)]
 struct PyCounter {
-    #[pyo3(attribute)]
     scope: PyScope,
-    #[pyo3(attribute)]
     kind: Spelled<Kind>,
 }
 
@@ -100,9 +96,7 @@ impl From<PyCounter> for Counter {
 /// `RateLimitWindow`, `RateLimitCounter` or `RateLimitGauge`, told apart by the key suffix each names.
 #[derive(FromPyObject)]
 struct PyEntry {
-    #[pyo3(attribute)]
     suffix: String,
-    #[pyo3(attribute)]
     scope: PyScope,
 }
 
@@ -118,11 +112,8 @@ impl TryFrom<PyEntry> for Entry {
 /// `CounterIncrement`.
 #[derive(FromPyObject)]
 struct PyIncrement {
-    #[pyo3(attribute)]
     counter: PyCounter,
-    #[pyo3(attribute)]
     amount: PyNumber,
-    #[pyo3(attribute)]
     ttl: Option<u64>,
 }
 
@@ -139,15 +130,10 @@ impl From<PyIncrement> for Increment {
 /// `AtomicCounter`.
 #[derive(FromPyObject)]
 struct PyAtomicCounter {
-    #[pyo3(attribute)]
     counter: PyCounter,
-    #[pyo3(attribute)]
     limit: i64,
-    #[pyo3(attribute)]
     increment: i64,
-    #[pyo3(attribute)]
     ttl: i64,
-    #[pyo3(attribute)]
     window_size: i64,
 }
 

@@ -72,7 +72,8 @@ from litellm.litellm_core_utils.reasoning_effort_utils import OPAQUE_VALUE, warn
 from litellm.litellm_core_utils.tool_fields import tool_params_without_hosted_mcp
 from litellm.llms.base_llm.base_utils import (
     ResponseFormatSchema,
-    as_json_object,
+    answer_json_text,
+    decoded_answer_object,
     response_format_answer_json,
     response_format_schema,
     split_response_format_answer,
@@ -1717,7 +1718,13 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         llm_provider: str = "anthropic",
     ) -> AnthropicThinkingParam | None:
         """Capability probes read the cost map under ``custom_llm_provider``; ``llm_provider`` only tags raised exceptions."""
-        if reasoning_effort is None or reasoning_effort == "none":
+        if reasoning_effort is None:
+            return None
+        if reasoning_effort == "none":
+            if AnthropicModelInfo.thinks_by_default(
+                model, custom_llm_provider
+            ) and not AnthropicModelInfo._is_always_on_thinking_model(model, custom_llm_provider):
+                return AnthropicThinkingParam(type="disabled")
             return None
         if AnthropicConfig._is_adaptive_thinking_model(model, custom_llm_provider):
             # without display, Anthropic defaults adaptive thinking to
@@ -2125,12 +2132,14 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     custom_llm_provider=self._resolved_provider,
                     llm_provider=self._resolved_provider,
                 )
-                if mapped_thinking is None:
+                if mapped_thinking is None or mapped_thinking.get("type") == "disabled":
                     optional_params.pop("thinking", None)
                     optional_params.pop("output_config", None)
-                else:
+                if mapped_thinking is not None:
                     optional_params["thinking"] = mapped_thinking
-                    if AnthropicConfig._is_adaptive_thinking_model(model, self._resolved_provider):
+                    if mapped_thinking.get("type") != "disabled" and AnthropicConfig._is_adaptive_thinking_model(
+                        model, self._resolved_provider
+                    ):
                         mapped_effort = REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT.get(effort_value)
                         if mapped_effort is None:
                             AnthropicConfig._raise_invalid_reasoning_effort(
@@ -3416,22 +3425,21 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         )
         if split_answer is not None:
             return litellm.Message(content=response_format_answer_json(split_answer))
-        try:
-            payload: Final = _DECODED_JSON.validate_python(json.loads(json_mode_content_str))
-        except (json.JSONDecodeError, RecursionError):
-            # json decode error does occur, return the original tool response str
+        payload_object: Final = decoded_answer_object(json_mode_content_str)
+        if payload_object is None:
             return litellm.Message(content=json_mode_content_str)
         if response_format_schema is not None:
             return litellm.Message(
                 content=response_format_answer_json(
-                    unwrap_response_format_envelope(payload, response_format_schema, RESPONSE_FORMAT_TOOL_NAME)
+                    unwrap_response_format_envelope(payload_object, response_format_schema, RESPONSE_FORMAT_TOOL_NAME)
                 )
             )
         # a lot of the times the `values` key is not present in the tool response
         # relevant issue: https://github.com/BerriAI/litellm/issues/6741
-        payload_object: Final = as_json_object(payload)
-        values: Final = None if payload_object is None else payload_object.get("values")
-        return litellm.Message(content=json.dumps(payload if values is None else values))
+        values: Final = payload_object.get("values")
+        return litellm.Message(
+            content=answer_json_text(payload_object if values is None else values, ensure_ascii=True)
+        )
 
     @classmethod
     def convert_tool_response_to_message(

@@ -12,7 +12,7 @@ from typing import Final
 
 from cli_harness.lockdown import isolated_home, locked_down_env
 from cli_harness.rate_limiter import RateBucket, RateLimiter
-from codex.rollout import Compaction, rollout_compactions
+from codex.rollout import Compaction, Subagent, rollout_compactions, rollout_parent_thread, rollout_subagent
 from codex.run import CodexRun, codex_run
 from e2e_metadata import step
 
@@ -71,8 +71,28 @@ class CodexHarness:
             _ = config.write(_mcp_server_table(name, server))
 
     @step('Run Codex on {model} through the proxy with the prompt "{prompt}"')
-    def exec(self, prompt: str, *, model: str, cwd: Path, compact_after_tokens: int | None = None) -> CodexRun:
-        return self._run(("exec",), (*_compaction_flags(compact_after_tokens), "--model", model, "--", prompt), cwd)
+    def exec(
+        self,
+        prompt: str,
+        *,
+        model: str,
+        cwd: Path,
+        compact_after_tokens: int | None = None,
+        enable: tuple[str, ...] = (),
+        disable: tuple[str, ...] = (),
+    ) -> CodexRun:
+        return self._run(
+            ("exec",),
+            (
+                *_compaction_flags(compact_after_tokens),
+                *_feature_flags(enable=enable, disable=disable),
+                "--model",
+                model,
+                "--",
+                prompt,
+            ),
+            cwd,
+        )
 
     @step('Resume Codex thread {thread_id} on {model} through the proxy with the prompt "{prompt}"')
     def resume(
@@ -87,6 +107,12 @@ class CodexHarness:
     def compactions(self, thread_id: str) -> tuple[Compaction, ...]:
         rollouts: Final = sorted(self.codex_home.glob(f"sessions/**/rollout-*-{thread_id}.jsonl"))
         return tuple(chain.from_iterable(rollout_compactions(rollout.read_text()) for rollout in rollouts))
+
+    def subagents(self, thread_id: str) -> tuple[Subagent, ...]:
+        rollouts: Final = tuple(
+            path.read_text() for path in sorted(self.codex_home.glob("sessions/**/rollout-*.jsonl"))
+        )
+        return tuple(rollout_subagent(rollout) for rollout in rollouts if rollout_parent_thread(rollout) == thread_id)
 
     def _run(self, subcommand: tuple[str, ...], args: tuple[str, ...], cwd: Path) -> CodexRun:
         _ = self.limiter.acquire(self.rate_bucket)
@@ -113,6 +139,13 @@ def _mcp_server_table(name: str, server: McpServer) -> str:
         f"args = {json.dumps(server.args)}\n"
         f"env = {{ {env} }}\n"
         'default_tools_approval_mode = "approve"\n'
+    )
+
+
+def _feature_flags(*, enable: tuple[str, ...], disable: tuple[str, ...]) -> tuple[str, ...]:
+    return (
+        *chain.from_iterable(("--enable", feature) for feature in enable),
+        *chain.from_iterable(("--disable", feature) for feature in disable),
     )
 
 

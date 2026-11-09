@@ -62,6 +62,7 @@ from litellm.proxy.auth.auth_utils import (
     abbreviate_api_key,
     enforce_batch_limits_are_admin_only,
     enforce_output_token_estimates_are_admin_only,
+    enforce_vector_store_index_grants_are_admin_only,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
@@ -1509,6 +1510,13 @@ async def _common_key_generation_helper(
         user_api_key_dict=user_api_key_dict,
         entity="key",
     )
+    enforce_vector_store_index_grants_are_admin_only(
+        data=data,
+        top_level_grants=data.allowed_vector_store_indexes,
+        existing_metadata=None,
+        user_api_key_dict=user_api_key_dict,
+        entity="key",
+    )
 
     if data.metadata is not None and data.metadata.get("service_account_id") is not None and data.team_id is None:
         await validate_team_id_used_in_service_account_request(
@@ -2418,7 +2426,7 @@ async def generate_key_fn(
     - prompts: Optional[List[str]] - List of allowed prompts for the key. If specified, the key will only be able to use these specific prompts.
     - auto_rotate: Optional[bool] - Whether this key should be automatically rotated (regenerated)
     - rotation_interval: Optional[str] - How often to auto-rotate this key (e.g., '30s', '30m', '30h', '30d'). Required if auto_rotate=True.
-    - allowed_vector_store_indexes: Optional[List[dict]] - List of allowed vector store indexes for the key. Example - [{"index_name": "my-index", "index_permissions": ["write", "read"]}]. If specified, the key will only be able to use these specific vector store indexes. Create index, using `/v1/indexes` endpoint.
+    - allowed_vector_store_indexes: Optional[List[dict]] - List of allowed vector store indexes for the key. Example - [{"index_name": "my-index", "index_permissions": ["write", "read"]}]. If specified, the key will only be able to use these specific vector store indexes. Only a proxy admin can set or change it. Create index, using `/v1/indexes` endpoint.
     - router_settings: Optional[UpdateRouterConfig] - key-specific router settings. Example - {"model_group_retry_policy": {"gpt-4": {"RateLimitErrorRetries": 5}}}. IF null or {} then no router settings.
     - access_group_ids: Optional[List[str]] - List of access group IDs to associate with the key. Access groups define which models a key can access. Example - ["access_group_1", "access_group_2"].
     - budget_limits: Optional[list] - List of concurrent budget windows for the key. Each window specifies a budget_limit, time_period, and optional budget_duration. Example - [{"budget_limit": 10.0, "time_period": "1d"}, {"budget_limit": 50.0, "time_period": "7d"}].
@@ -2620,7 +2628,7 @@ async def generate_service_account_key_fn(
     - allowed_routes: Optional[list] - List of allowed routes for the key. Store the actual route or store a wildcard pattern for a set of routes. Example - ["/chat/completions", "/embeddings", "/keys/*"]
     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - key-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "agents": ["agent_1", "agent_2"], "agent_access_groups": ["dev_group"]}. IF null or {} then no object permission.
     Examples:
-    - allowed_vector_store_indexes: Optional[List[dict]] - List of allowed vector store indexes for the key. Example - [{"index_name": "my-index", "index_permissions": ["write", "read"]}]. If specified, the key will only be able to use these specific vector store indexes. Create index, using `/v1/indexes` endpoint.
+    - allowed_vector_store_indexes: Optional[List[dict]] - List of allowed vector store indexes for the key. Example - [{"index_name": "my-index", "index_permissions": ["write", "read"]}]. If specified, the key will only be able to use these specific vector store indexes. Only a proxy admin can set or change it. Create index, using `/v1/indexes` endpoint.
 
 
     1. Allow users to turn on/off pii masking
@@ -3339,6 +3347,13 @@ async def _process_single_key_update(
         user_api_key_dict=user_api_key_dict,
         entity="key",
     )
+    enforce_vector_store_index_grants_are_admin_only(
+        data=update_key_request,
+        top_level_grants=update_key_request.allowed_vector_store_indexes,
+        existing_metadata=existing_key_row.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # LiteLLM_VerificationToken.metadata is a bare dict
+        user_api_key_dict=user_api_key_dict,
+        entity="key",
+    )
 
     await _check_single_key_update_team_permissions(
         user_api_key_dict=user_api_key_dict,
@@ -3847,6 +3862,13 @@ async def _validate_update_key_data(
         user_api_key_dict=user_api_key_dict,
         entity="key",
     )
+    enforce_vector_store_index_grants_are_admin_only(
+        data=data,
+        top_level_grants=data.allowed_vector_store_indexes,
+        existing_metadata=_existing_metadata if isinstance(_existing_metadata, dict) else None,  # pyright: ignore[reportUnknownArgumentType]  # stored metadata is a bare dict
+        user_api_key_dict=user_api_key_dict,
+        entity="key",
+    )
 
     # Personal-key bypass: the caller both created the key AND still owns it
     # (user_id == caller).  Checking only created_by would let a demoted admin
@@ -4090,7 +4112,7 @@ async def update_key_fn(
     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - key-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "agents": ["agent_1", "agent_2"], "agent_access_groups": ["dev_group"]}. IF null or {} then no object permission.
     - auto_rotate: Optional[bool] - Whether this key should be automatically rotated
     - rotation_interval: Optional[str] - How often to rotate this key (e.g., '30d', '90d'). Required if auto_rotate=True
-    - allowed_vector_store_indexes: Optional[List[dict]] - List of allowed vector store indexes for the key. Example - [{"index_name": "my-index", "index_permissions": ["write", "read"]}]. If specified, the key will only be able to use these specific vector store indexes. Create index, using `/v1/indexes` endpoint.
+    - allowed_vector_store_indexes: Optional[List[dict]] - List of allowed vector store indexes for the key. Example - [{"index_name": "my-index", "index_permissions": ["write", "read"]}]. If specified, the key will only be able to use these specific vector store indexes. Only a proxy admin can set or change it. Create index, using `/v1/indexes` endpoint.
     - router_settings: Optional[UpdateRouterConfig] - key-specific router settings. Example - {"model_group_retry_policy": {"gpt-4": {"RateLimitErrorRetries": 5}}}. IF null or {} then no router settings.
     - access_group_ids: Optional[List[str]] - List of access group IDs to associate with the key. Access groups define which models a key can access. Example - ["access_group_1", "access_group_2"].
     - budget_limits: Optional[list] - List of concurrent budget windows for the key. Each window specifies a budget_limit, time_period, and optional budget_duration. Example - [{"budget_limit": 10.0, "time_period": "1d"}, {"budget_limit": 50.0, "time_period": "7d"}].
@@ -5104,9 +5126,14 @@ async def info_key_fn(
 
         # default to using Auth token if no key is passed in
         key = key or user_api_key_dict.api_key
-        hashed_key: str | None = key
-        if key is not None:
-            hashed_key = hash_token_if_needed(token=key)  # rebind-ok: pre-existing rebinding on a rename-only line
+        if not key:
+            raise ProxyException(
+                message="No key passed in. Pass ?key= or authenticate with a virtual key.",
+                type=ProxyErrorTypes.bad_request_error,
+                param="key",
+                code=status.HTTP_400_BAD_REQUEST,
+            )
+        hashed_key: str | None = hash_token_if_needed(token=key)
         live_key_info: Final = await _prisma_table(VerificationTokenRepository(prisma_client)).find_unique(
             where={"token": hashed_key},
             include={"litellm_budget_table": True},
@@ -6304,6 +6331,13 @@ async def _execute_virtual_key_regeneration(
         enforce_batch_limits_are_admin_only(
             data=data,
             existing_metadata=_existing_key_metadata if isinstance(_existing_key_metadata, dict) else None,
+            user_api_key_dict=user_api_key_dict,
+            entity="key",
+        )
+        enforce_vector_store_index_grants_are_admin_only(
+            data=data,
+            top_level_grants=data.allowed_vector_store_indexes,
+            existing_metadata=_existing_key_metadata if isinstance(_existing_key_metadata, dict) else None,  # pyright: ignore[reportUnknownArgumentType]  # stored metadata is a bare dict
             user_api_key_dict=user_api_key_dict,
             entity="key",
         )

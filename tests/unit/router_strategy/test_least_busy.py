@@ -16,11 +16,11 @@ import respx
 
 import litellm
 from litellm import Router
-
 from litellm.caching.caching import DualCache
 from litellm.caching.in_memory_cache import DEFAULT_MAX_SIZE_IN_MEMORY, InMemoryCache
 from litellm.caching.redis_cache import RedisCircuitBreakerOpenError
 from litellm.constants import LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL
+from litellm.litellm_core_utils.attempt_settlement import routed_attempt
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.router_strategy.least_busy import (
     IN_FLIGHT_COUNT_TTL_SECONDS,
@@ -28,6 +28,7 @@ from litellm.router_strategy.least_busy import (
     LeastBusyLoggingHandler,
     owning_picks,
     picks_reserve,
+    release_started_attempt,
     release_unstarted_picks,
 )
 from litellm.types.utils import CallTypes, ModelResponse
@@ -287,7 +288,9 @@ class OpenBreakerRedis(SharedRedisCounters):
 
 
 @pytest.mark.asyncio
-async def test_an_open_circuit_breaker_falls_back_without_a_warning_per_request(caplog: pytest.LogCaptureFixture) -> None:
+async def test_an_open_circuit_breaker_falls_back_without_a_warning_per_request(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     worker: Final = _worker(OpenBreakerRedis())
 
     with caplog.at_level(logging.DEBUG, logger="LiteLLM Router"):
@@ -463,9 +466,7 @@ async def test_router_picks_least_busy_deployment_and_completion_restores_counts
         if use_async
         else router.get_available_deployment(model=ROUTER_GROUP, messages=None)
     )
-    response: Final = await router.acompletion(
-        model=ROUTER_GROUP, messages=[{"role": "user", "content": "hi"}]
-    )
+    response: Final = await router.acompletion(model=ROUTER_GROUP, messages=[{"role": "user", "content": "hi"}])
     for _ in range(10):
         await asyncio.sleep(0)
         await GLOBAL_LOGGING_WORKER.flush()
@@ -604,7 +605,9 @@ def test_two_threads_picking_at_once_reserve_different_deployments() -> None:
     worker: Final = LeastBusyLoggingHandler(router_cache=DualCache(), reservation_store=store)
 
     with store.first_reads_meet(), ThreadPoolExecutor(max_workers=2) as pool:
-        picks: Final = tuple(pool.map(lambda _: worker.get_available_deployments(GROUP, HEALTHY, reserve=True), range(2)))
+        picks: Final = tuple(
+            pool.map(lambda _: worker.get_available_deployments(GROUP, HEALTHY, reserve=True), range(2))
+        )
 
     assert sorted(pick["model_info"]["id"] for pick in picks if pick is not None) == ["dep-a", "dep-b"]
 
@@ -624,7 +627,6 @@ def test_a_reservation_and_a_release_on_one_deployment_at_once_both_count() -> N
 
     assert worker.get_available_deployments(GROUP, HEALTHY, reserve=True) is DEPLOYMENT_A
     assert worker.get_available_deployments(GROUP, HEALTHY, reserve=True) is DEPLOYMENT_B
-
 
 
 class _SlowLocalRead(InMemoryCache):
@@ -706,7 +708,9 @@ async def test_looking_up_a_pass_through_deployment_does_not_hold_it_for_later_p
         for _ in range(2)
     ]
     sync_picks: Final = [
-        router.get_available_deployment_for_pass_through(ROUTER_GROUP, request_kwargs={"metadata": {}})["model_info"]["id"]
+        router.get_available_deployment_for_pass_through(ROUTER_GROUP, request_kwargs={"metadata": {}})["model_info"][
+            "id"
+        ]
         for _ in range(2)
     ]
 
@@ -733,7 +737,9 @@ def test_a_cache_hit_leaves_requests_in_flight_on_its_deployment_counted() -> No
     assert worker.get_available_deployments(GROUP, HEALTHY) is DEPLOYMENT_B
 
 
-@pytest.mark.parametrize("outcome", [LeastBusyLoggingHandler.log_success_event, LeastBusyLoggingHandler.log_failure_event])
+@pytest.mark.parametrize(
+    "outcome", [LeastBusyLoggingHandler.log_success_event, LeastBusyLoggingHandler.log_failure_event]
+)
 def test_a_call_that_ends_before_reaching_the_provider_frees_its_pick(
     outcome: Callable[[LeastBusyLoggingHandler, dict[str, object], None, None, None], None],
 ) -> None:
@@ -751,6 +757,16 @@ def test_a_call_the_proxy_rejected_after_logging_its_start_leaves_no_count_behin
 
     worker.log_pre_api_call(model="m", messages=[], kwargs=rejected)
     worker.log_failure_event(rejected, None, None, None)
+
+    assert worker.get_available_deployments(GROUP, HEALTHY) is DEPLOYMENT_A
+
+
+def test_a_proxy_error_logged_on_a_request_whose_failure_was_already_logged_leaves_no_count_behind() -> None:
+    worker: Final = _worker(None)
+
+    worker.log_pre_api_call(
+        model="m", messages=[], kwargs={**_call_kwargs("dep-a"), LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL: True}
+    )
 
     assert worker.get_available_deployments(GROUP, HEALTHY) is DEPLOYMENT_A
 
@@ -916,7 +932,9 @@ _REJECTED_BATCH: Final = {"error": {"message": "Invalid input file", "type": "in
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("provider_response", [httpx.Response(200, json=_BATCH), httpx.Response(400, json=_REJECTED_BATCH)])
+@pytest.mark.parametrize(
+    "provider_response", [httpx.Response(200, json=_BATCH), httpx.Response(400, json=_REJECTED_BATCH)]
+)
 async def test_a_batch_create_does_not_keep_its_deployment_busy(
     provider_response: httpx.Response, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -926,7 +944,10 @@ async def test_a_batch_create_does_not_keep_its_deployment_busy(
 
     with contextlib.suppress(openai.BadRequestError):
         await router.acreate_batch(
-            model=ROUTER_GROUP, completion_window="24h", endpoint="/v1/chat/completions", input_file_id="file-least-busy"
+            model=ROUTER_GROUP,
+            completion_window="24h",
+            endpoint="/v1/chat/completions",
+            input_file_id="file-least-busy",
         )
     await _drain_logging()
 
@@ -1013,7 +1034,6 @@ def test_a_sync_text_completion_does_not_keep_its_deployment_busy(
     assert _router_pick(router, TEXT_GROUP) == _called_deployment(route)
 
 
-
 @pytest.mark.parametrize("call_identity", _CALL_IDENTITIES)
 def test_a_sync_responses_call_that_fails_before_reaching_its_provider_frees_its_pick(
     call_identity: dict[str, str],
@@ -1024,6 +1044,7 @@ def test_a_sync_responses_call_that_fails_before_reaching_its_provider_frees_its
         router.responses(model=ROUTER_GROUP, input="hi", api_base="not-a-url", **call_identity)
 
     assert _router_pick(router) == ROUTER_DEPLOYMENT_IDS[0]
+
 
 @pytest.mark.asyncio
 async def test_a_batch_cancel_does_not_keep_its_deployment_busy(
@@ -1047,3 +1068,161 @@ async def test_picking_a_deployment_without_calling_it_does_not_keep_it_busy() -
     picked: Final = await router.select(ROUTER_GROUP, {"metadata": {}})
 
     assert _router_pick(router) == picked["model_info"]["id"]
+
+
+def _started_in_its_own_attempt(worker: LeastBusyLoggingHandler, kwargs: dict[str, object]) -> contextvars.Context:
+    def start() -> contextvars.Context:
+        with routed_attempt():
+            worker.log_pre_api_call(model="m", messages=[], kwargs=kwargs)
+            return contextvars.copy_context()
+
+    return contextvars.copy_context().run(start)
+
+
+def test_a_late_duplicate_failure_of_one_attempt_leaves_the_next_attempt_counted() -> None:
+    worker: Final = _worker(None)
+    attempt: Final = _call_kwargs("dep-a", "retried-call")
+    first: Final = _started_in_its_own_attempt(worker, attempt)
+    first.run(worker.log_failure_event, attempt, None, None, None)
+    _ = _started_in_its_own_attempt(worker, attempt)
+
+    first.run(worker.log_failure_event, attempt, None, None, None)
+
+    assert worker.get_available_deployments(GROUP, HEALTHY, reserve=True) is DEPLOYMENT_B
+
+
+class _HeldSharedDecrement(SharedRedisCounters):
+    def __init__(self) -> None:
+        super().__init__()
+        self.decrementing: Final = asyncio.Event()
+        self.release: Final = asyncio.Event()
+
+    async def async_increment_with_floor(self, key: str, value: int, ttl: int) -> int:
+        if value < 0:
+            self.decrementing.set()
+            await self.release.wait()
+        return self.increment_with_floor(key, value, ttl)
+
+
+@pytest.mark.asyncio
+async def test_a_failure_callback_cancelled_mid_decrement_still_frees_the_shared_count() -> None:
+    shared: Final = _HeldSharedDecrement()
+    worker: Final = _worker(shared)
+    attempt: Final = _call_kwargs("dep-a")
+    worker.log_pre_api_call(model="m", messages=[], kwargs=attempt)
+    settling: Final = asyncio.create_task(worker.async_log_failure_event(attempt, None, None, None))
+    await shared.decrementing.wait()
+
+    settling.cancel()
+    settling.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await settling
+    shared.release.set()
+    await asyncio.sleep(0)
+
+    assert shared.count(f"{GROUP}_request_count:dep-a") == 0
+
+
+_CHAT_REPLY: Final = {
+    "id": "chatcmpl-least-busy",
+    "object": "chat.completion",
+    "created": 1,
+    "model": "gpt-4.1-mini",
+    "choices": [{"index": 0, "message": {"role": "assistant", "content": "done"}, "finish_reason": "stop"}],
+    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+}
+
+
+@pytest.mark.parametrize(
+    "attempts",
+    [("hang",), ("503", "hang"), ("503", "503")],
+    ids=["cancelled_while_waiting_on_the_provider", "cancelled_on_its_retry", "every_attempt_failed"],
+)
+@pytest.mark.asyncio
+async def test_a_request_sharing_one_logging_object_that_ends_without_an_answer_leaves_its_deployment_idle(
+    attempts: tuple[str, ...], respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    waiting_on_provider: Final = asyncio.Event()
+    script: Final = iter((*attempts, "ok"))
+
+    async def upstream(_: httpx.Request) -> httpx.Response:
+        match next(script):
+            case "503":
+                return httpx.Response(503, json={"error": {"message": "overloaded"}})
+            case "hang":
+                waiting_on_provider.set()
+                await asyncio.Event().wait()
+        return httpx.Response(200, json=_CHAT_REPLY)
+
+    respx_mock.post("https://api.openai.com/v1/chat/completions").mock(side_effect=upstream)
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": ROUTER_GROUP,
+                "litellm_params": {"model": "openai/gpt-4.1-mini", "api_key": "key-1"},
+                "model_info": {"id": "1"},
+            }
+        ],
+        routing_strategy="least-busy",
+        num_retries=1,
+        retry_after=0,
+    )
+    logging_obj, request = litellm.utils.function_setup(
+        original_function="acompletion",
+        rules_obj=litellm.utils.Rules(),
+        start_time=datetime.datetime(2026, 1, 1),
+        model=ROUTER_GROUP,
+        messages=[{"role": "user", "content": "hi"}],
+        litellm_call_id="unanswered-call",
+    )
+    call: Final["asyncio.Task[object]"] = asyncio.create_task(
+        router.acompletion(**request, litellm_logging_obj=logging_obj)
+    )
+    if "hang" in attempts:
+        await waiting_on_provider.wait()
+        call.cancel()
+
+    with pytest.raises((asyncio.CancelledError, litellm.ServiceUnavailableError)):
+        await call
+    await _drain_logging()
+
+    assert router.cache.get_cache(key=f"{ROUTER_GROUP}_request_count:1") == 0
+    assert isinstance(
+        await router.acompletion(model=ROUTER_GROUP, messages=[{"role": "user", "content": "hi"}]), ModelResponse
+    )
+
+
+@pytest.mark.asyncio
+async def test_an_attempt_that_retried_inside_itself_frees_every_start_once_whatever_order_they_end_in() -> None:
+    shared: Final = SharedRedisCounters()
+    store: Final = InMemoryCache()
+    cache: Final = DualCache(in_memory_cache=InMemoryCache(), redis_cache=shared)  # pyright: ignore[reportArgumentType]  # duck-typed Redis double
+    worker: Final = LeastBusyLoggingHandler(router_cache=cache, reservation_store=store)
+    attempt: Final = _call_kwargs("dep-a")
+
+    async def retried_then_cancelled() -> None:
+        with routed_attempt() as routed:
+            worker.log_pre_api_call(model="m", messages=[], kwargs=attempt)
+            worker.log_pre_api_call(model="m", messages=[], kwargs=attempt)
+            await worker.async_log_failure_event(attempt, None, None, None)
+            release: Final = release_started_attempt(store, cache, routed.attempt_id)
+            if release is not None:
+                await release
+
+    await retried_then_cancelled()
+
+    assert shared.count(f"{GROUP}_request_count:dep-a") == 0
+    assert worker.get_available_deployments(GROUP, HEALTHY, reserve=True) is DEPLOYMENT_A
+
+
+def test_every_call_in_flight_at_once_frees_its_count_with_the_default_store_size() -> None:
+    worker: Final = _worker(None)
+    in_flight: Final = 7_000
+    calls: Final = tuple(_call_kwargs("dep-a", f"call-{n}") for n in range(in_flight))
+    attempts: Final = tuple(_started_in_its_own_attempt(worker, call) for call in calls)
+
+    for attempt, call in zip(attempts, calls, strict=True):
+        attempt.run(worker.log_failure_event, call, None, None, None)
+
+    assert worker.get_available_deployments(GROUP, HEALTHY) is DEPLOYMENT_A

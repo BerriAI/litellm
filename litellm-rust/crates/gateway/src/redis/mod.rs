@@ -4,7 +4,7 @@ use litellm_circuit_breaker::Config as BreakerConfig;
 use litellm_config::{CacheSettings, Config, RedisSettings, Value};
 use litellm_core_utils::settings::Lookup;
 use litellm_redis_client::{RedisClient, RedisEvents};
-use litellm_redis_connect::{HostServices, SharedEnvironment, TracingEvents};
+use litellm_redis_connect::{HostServices, RedisHosts, SharedEnvironment, TracingEvents};
 use litellm_redis_resolve::Expected;
 use litellm_redis_types::Resolution;
 
@@ -80,8 +80,9 @@ pub(crate) async fn connect(
     let plan = plan(config, lookup)?;
     let breaker = breaker_config(lookup)?;
     let events: Arc<dyn RedisEvents> = Arc::new(TracingEvents::new(lookup));
+    let hosts = RedisHosts::default();
     let client = |params: Params| -> Result<RedisClient, Error> {
-        Ok(litellm_redis_connect::connect(
+        Ok(hosts.client(
             params,
             HostServices {
                 events: Some(events.clone()),

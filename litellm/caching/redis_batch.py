@@ -384,7 +384,7 @@ class RedisBatch:
                 return await pipe.execute(raise_on_error=False)
 
         try:
-            replies: Final = await _run_under_circuit_breaker(self.redis_cache._circuit_breaker, self.name, run)  # pyright: ignore[reportPrivateUsage]  # same breaker as the cache's own methods
+            replies: Final = await _run_under_circuit_breaker(self.redis_cache._health, self.name, run)  # pyright: ignore[reportPrivateUsage]  # same breaker as the cache's own methods
         except Exception as e:  # noqa: BLE001  # each declaring caller applies its own Redis fallback
             log_redis_failure(verbose_logger, logging.WARNING, f"{self.name}: pipeline of {len(ops)} ops failed", e)
             with service_target(target):
