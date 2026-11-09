@@ -19807,9 +19807,17 @@ _INDEX_GRANT = [{"index_name": "docs", "index_permissions": ["read", "write"]}]
         ("resent unchanged in metadata", None, _INDEX_GRANT, _INDEX_GRANT, True),
         ("resent unchanged top-level", _INDEX_GRANT, _UNTOUCHED, _INDEX_GRANT, True),
         ("left untouched", None, _UNTOUCHED, _INDEX_GRANT, True),
+        ("cleared top-level with an empty list", [], _UNTOUCHED, _INDEX_GRANT, False),
+        ("empty top-level list on a key with none stored", [], _UNTOUCHED, None, True),
     ],
 )
-def test_vector_store_index_grants_admin_gate_matrix(label, top_level, sent, stored, allowed):
+def test_vector_store_index_grants_admin_gate_matrix(
+    label: str,
+    top_level: list[dict[str, object]] | None,
+    sent: object,
+    stored: list[dict[str, object]] | None,
+    allowed: bool,
+) -> None:
     from litellm.proxy.auth.auth_utils import (
         enforce_vector_store_index_grants_are_admin_only,
     )
@@ -19820,7 +19828,7 @@ def test_vector_store_index_grants_admin_gate_matrix(label, top_level, sent, sto
     data = UpdateKeyRequest(key="sk-1", **request_body)
     existing_metadata = None if stored is None else {"allowed_vector_store_indexes": stored}
 
-    def _call(caller):
+    def _call(caller: UserAPIKeyAuth) -> None:
         enforce_vector_store_index_grants_are_admin_only(
             data=data,
             top_level_grants=data.allowed_vector_store_indexes,
@@ -19847,7 +19855,7 @@ def test_vector_store_index_grants_admin_gate_matrix(label, top_level, sent, sto
     [{"allowed_vector_store_indexes": _INDEX_GRANT}, {"metadata": {"allowed_vector_store_indexes": _INDEX_GRANT}}],
     ids=["top-level", "metadata"],
 )
-async def test_generate_key_vector_store_index_grants_rejected_for_non_admin(request_fields):
+async def test_generate_key_vector_store_index_grants_rejected_for_non_admin(request_fields: dict[str, object]) -> None:
     """An index grant on a key opens document reads and writes on that index, so a
     non-admin minting their own key cannot pick its grants."""
     with patch("litellm.proxy.proxy_server.prisma_client", AsyncMock()):
@@ -19867,7 +19875,9 @@ async def test_generate_key_vector_store_index_grants_rejected_for_non_admin(req
 
 
 @pytest.mark.asyncio
-async def test_update_key_vector_store_index_grants_unchanged_allows_non_admin_edit(monkeypatch):
+async def test_update_key_vector_store_index_grants_unchanged_allows_non_admin_edit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """A key owner renaming a key that carries admin-set index grants resends them
     with the rest of the form, which must not count as setting them."""
     from litellm.proxy.management_endpoints.key_management_endpoints import (
@@ -19895,7 +19905,9 @@ async def test_update_key_vector_store_index_grants_unchanged_allows_non_admin_e
 
 
 @pytest.mark.asyncio
-async def test_update_key_vector_store_index_grants_widened_rejected_for_non_admin(monkeypatch):
+async def test_update_key_vector_store_index_grants_widened_rejected_for_non_admin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         update_key_fn,
     )

@@ -1570,8 +1570,8 @@ def _requested_vector_store_index_grants(
     top_level_grants: Sequence[AllowedVectorStoreIndexItem] | None,
     stored_grants: object,
 ) -> object:
-    if top_level_grants:
-        return [grant.model_dump() for grant in top_level_grants]
+    if top_level_grants is not None:
+        return [grant.model_dump() for grant in top_level_grants] or None
     if "metadata" in data.model_fields_set:
         return (data.metadata or EMPTY_MAPPING).get(VECTOR_STORE_INDEX_GRANTS_METADATA_KEY) or None
     return stored_grants
