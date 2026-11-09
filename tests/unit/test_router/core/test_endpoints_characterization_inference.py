@@ -215,6 +215,7 @@ async def test_sync_text_completion_keeps_the_request_metadata_over_the_default_
     core.text_completion(model="g", prompt="p", metadata={"requester_metadata": {"env": "dev", "team": "t1"}})
     assert _bucket(_sent(host))["requester_metadata"] == {"env": "dev", "region": "us", "team": "t1"}
 
+
 async def test_sync_text_completion_sends_the_model_group_name_not_the_deployment_model(
     make_core: MakeCore, host: EndpointHost
 ):

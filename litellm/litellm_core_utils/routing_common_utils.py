@@ -18,6 +18,7 @@ from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_structure
 from litellm.llms.sagemaker.common_utils import deployment_inference_component
+from litellm.secret_managers.main import str_to_bool
 from litellm.types.router import (
     CredentialLiteLLMParams,
     Deployment,
@@ -64,6 +65,7 @@ def without_router_only_kwargs(kwargs: Mapping[str, _V]) -> dict[str, _V]:
 
 
 _ROUTER_OWNED_METADATA_KEYS: Final = frozenset({"caching_groups"})
+_MASKING_METADATA_KEYS: Final = frozenset({"mask_input", "mask_output"})
 
 
 def metadata_defaults_under_request(
@@ -78,9 +80,16 @@ def metadata_defaults_under_request(
 def _default_under_request(key: str, default: object, requested: object) -> object:
     if key in _ROUTER_OWNED_METADATA_KEYS:
         return default
+    if key in _MASKING_METADATA_KEYS and _is_flag_on(default):
+        return default
     if key == "tags":
         return _request_tags_then_default_tags(default=default, requested=requested)
     return _request_value_over_default(default=default, requested=requested)
+
+
+def _is_flag_on(value: object) -> bool:
+    parsed: Final = str_to_bool(value) if isinstance(value, str) else None
+    return bool(value) if parsed is None else parsed
 
 
 def _request_tags_then_default_tags(default: object, requested: object) -> object:
