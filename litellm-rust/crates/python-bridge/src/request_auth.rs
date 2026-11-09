@@ -399,3 +399,65 @@ pub(crate) fn request_auth_end_user_validation(
         &py.detach(move || core::end_user_context::validation(&facts)),
     )
 }
+
+#[pyfunction]
+pub(crate) fn request_auth_route_role(
+    py: Python<'_>,
+    facts: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    let facts: core::route_roles::RoleFacts = from_py(facts)?;
+    let decision = py.detach(move || core::route_roles::role(&facts));
+    to_py(py, &decision)
+}
+
+#[pyfunction]
+pub(crate) fn request_auth_route_role_api(
+    py: Python<'_>,
+    facts: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    let facts: core::route_roles::ApiFacts = from_py(facts)?;
+    let decision = py.detach(move || core::route_roles::api(&facts));
+    to_py(py, &decision)
+}
+
+#[pyfunction]
+pub(crate) fn request_auth_route_role_jwt(
+    py: Python<'_>,
+    facts: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    let facts: core::route_roles::JwtFacts = from_py(facts)?;
+    let decision = py.detach(move || core::route_roles::jwt(&facts));
+    to_py(py, &decision)
+}
+
+#[pyfunction]
+pub(crate) fn request_auth_route_role_inside(
+    py: Python<'_>,
+    facts: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    let facts: core::route_roles::InsideFacts = from_py(facts)?;
+    let decision = py.detach(move || core::route_roles::inside(&facts));
+    to_py(py, &decision)
+}
+
+#[pyfunction]
+pub(crate) fn request_auth_route_role_expand(
+    py: Python<'_>,
+    facts: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    let facts: core::route_roles::Entry = from_py(facts)?;
+    let decision = py.detach(move || core::route_roles::expand(&facts));
+    to_py(py, &decision)
+}
+
+#[pyfunction]
+pub(crate) fn request_auth_route_role_listed(
+    py: Python<'_>,
+    facts: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    let facts: core::route_roles::ListedFacts = from_py(facts)?;
+    let decision = py
+        .detach(move || core::route_roles::listed(&facts))
+        .map_err(map_error)?;
+    to_py(py, &decision)
+}

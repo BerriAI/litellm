@@ -50,8 +50,11 @@ mod _native {
         request_auth_end_user_registry, request_auth_end_user_validation,
         request_auth_litellm_header_token, request_auth_member_limit,
         request_auth_model_budget_check, request_auth_model_budget_query,
-        request_auth_model_budget_resolve, request_auth_scheme_credential,
-        request_auth_select_api_key, request_auth_select_websocket_api_key, request_auth_start,
+        request_auth_model_budget_resolve, request_auth_route_role, request_auth_route_role_api,
+        request_auth_route_role_expand, request_auth_route_role_inside,
+        request_auth_route_role_jwt, request_auth_route_role_listed,
+        request_auth_scheme_credential, request_auth_select_api_key,
+        request_auth_select_websocket_api_key, request_auth_start,
     };
     #[pymodule_export]
     use crate::router::{RouterCall, RouterCoreHandle};

@@ -11,6 +11,7 @@ mod key;
 pub mod model_budget_data;
 mod model_budgets;
 pub mod protocol;
+pub mod route_roles;
 
 pub use error::Error;
 pub use key::{start, start_resolved_key};
