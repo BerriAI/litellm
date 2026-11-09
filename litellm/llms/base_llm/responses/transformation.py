@@ -1,7 +1,7 @@
 import types
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, cast, get_args
 
 import httpx
 
@@ -27,6 +27,20 @@ else:
     BaseLLMException = Any
 
 ReasoningSummaryLevel: TypeAlias = Literal["auto", "concise", "detailed"]
+ReasoningFieldValues: TypeAlias = Mapping[str, frozenset[str | None] | None]
+REASONING_SUMMARY_VALUES: Final = frozenset((*get_args(ReasoningSummaryLevel), None))
+SUMMARY_ONLY_REASONING_FIELD_VALUES: Final[ReasoningFieldValues] = types.MappingProxyType(
+    {"summary": REASONING_SUMMARY_VALUES}
+)
+STANDARD_MODE_WITHOUT_CONTEXT_REASONING_FIELD_VALUES: Final[ReasoningFieldValues] = types.MappingProxyType(
+    {**SUMMARY_ONLY_REASONING_FIELD_VALUES, "mode": frozenset({"standard"})}
+)
+STANDARD_MODE_REASONING_FIELD_VALUES: Final[ReasoningFieldValues] = types.MappingProxyType(
+    {**STANDARD_MODE_WITHOUT_CONTEXT_REASONING_FIELD_VALUES, "context": None}
+)
+ANY_REASONING_FIELD_VALUES: Final[ReasoningFieldValues] = types.MappingProxyType(
+    {**SUMMARY_ONLY_REASONING_FIELD_VALUES, "mode": None, "context": None}
+)
 
 
 class BaseResponsesAPIConfig(ABC):
@@ -69,6 +83,9 @@ class BaseResponsesAPIConfig(ABC):
     def supports_encrypted_agent_messages(self) -> bool:
         return False
 
+    def supports_streamed_retrieval(self) -> bool:
+        return self.custom_llm_provider in (LlmProviders.OPENAI, LlmProviders.AZURE, LlmProviders.AZURE_AI)
+
     def sign_request(
         self,
         headers: dict,
@@ -96,6 +113,18 @@ class BaseResponsesAPIConfig(ABC):
     def auto_reasoning_summary(self) -> ReasoningSummaryLevel:
         """The ``reasoning.summary`` LiteLLM's opt-in auto summary asks this provider for."""
         return "detailed"
+
+    def reasoning_field_values(self) -> ReasoningFieldValues | None:
+        return None
+
+    def deployment_names_wrap_openai_models(self) -> bool:
+        return False
+
+    def unresolved_model_reasoning_field_values(self, model: str) -> ReasoningFieldValues | None:
+        return None
+
+    def ignores_unsupported_reasoning_fields(self) -> bool:
+        return False
 
     @abstractmethod
     def map_openai_params(
@@ -209,7 +238,7 @@ class BaseResponsesAPIConfig(ABC):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, str]]:
         pass
 
     @abstractmethod

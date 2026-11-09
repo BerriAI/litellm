@@ -1,6 +1,6 @@
 import pytest
 
-from litellm.router_utils.deployment_pricing import deployment_pricing_models, pricing_models
+from litellm.litellm_core_utils.deployment_pricing import deployment_pricing_models, pricing_models
 
 
 @pytest.mark.parametrize(

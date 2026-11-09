@@ -1,6 +1,8 @@
 import base64
 import json
 
+import pytest
+
 from litellm.llms.bedrock.count_tokens.transformation import (
     DEFAULT_ANTHROPIC_INVOKE_MODEL_MAX_TOKENS,
     BedrockCountTokensConfig,
@@ -53,6 +55,22 @@ def test_detect_input_type_converse_blocks_route_to_converse():
     assert config._detect_input_type(request) == "converse"
 
 
+@pytest.mark.parametrize("content", [[{"text": "hi"}], "hi"])
+@pytest.mark.parametrize(
+    "context_management", [None, {"edits": [{"type": "clear_tool_uses_20250919"}]}]
+)
+def test_a_pass_through_body_with_context_management_keeps_its_converse_input(content, context_management):
+    request = {
+        "model": "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "messages": [{"role": "user", "content": content}],
+        "context_management": context_management,
+    }
+
+    transformed = BedrockCountTokensConfig().transform_anthropic_to_bedrock_count_tokens(request)
+
+    assert transformed["input"]["converse"]["messages"] == [{"role": "user", "content": [{"text": "hi"}]}]
+
+
 def test_transform_to_invoke_model_format_base64_encodes_body():
     """The CountTokens API expects invokeModel.body as a base64-encoded blob;
     Anthropic Messages bodies additionally need anthropic_version/max_tokens
@@ -71,6 +89,27 @@ def test_transform_to_invoke_model_format_base64_encodes_body():
     assert "model" not in body
     assert body["anthropic_version"] == "bedrock-2023-05-31"
     assert body["max_tokens"] == DEFAULT_ANTHROPIC_INVOKE_MODEL_MAX_TOKENS
+
+
+def test_transform_to_invoke_model_format_counts_tools_the_way_bedrock_messages_sends_them():
+    schema = {"type": "object", "properties": {}}
+
+    result = BedrockCountTokensConfig().transform_anthropic_to_bedrock_count_tokens(
+        {
+            "model": "anthropic.claude-haiku-5-5",
+            "messages": [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}],
+            "tools": [
+                {"name": "read", "input_schema": schema, "custom": {"defer_loading": True}},
+                {"name": "write", "input_schema": schema, "custom": {"eager_input_streaming": True}},
+            ],
+        }
+    )
+
+    body = json.loads(base64.b64decode(result["input"]["invokeModel"]["body"]))
+    assert body["tools"] == [
+        {"name": "read", "input_schema": schema, "defer_loading": True},
+        {"name": "write", "input_schema": schema},
+    ]
 
 
 def test_transform_to_invoke_model_format_raw_body_unchanged():

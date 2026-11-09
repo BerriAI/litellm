@@ -1,3 +1,5 @@
+import type { TFunction } from "i18next";
+import i18n from "@/i18n/i18n";
 import type { RoutingGroup } from "./types";
 
 export const STRATEGIES_WITH_ARGS = new Set<string>(["latency-based-routing", "usage-based-routing"]);
@@ -52,7 +54,10 @@ export const toRoutingGroupFormValues = (
 export const argsForStrategy = (routingStrategy: string, routingStrategyArgs: string): string =>
   STRATEGIES_WITH_ARGS.has(routingStrategy) ? routingStrategyArgs : "";
 
-export const buildRoutingGroupPayload = (values: RoutingGroupFormValues): RoutingGroupPayload => {
+export const buildRoutingGroupPayload = (
+  values: RoutingGroupFormValues,
+  t: TFunction = i18n.t.bind(i18n),
+): RoutingGroupPayload => {
   const base = {
     group_name: values.group_name.trim(),
     models: values.models,
@@ -69,7 +74,7 @@ export const buildRoutingGroupPayload = (values: RoutingGroupFormValues): Routin
       return {
         ok: false,
         field: "model_priorities",
-        message: "Set a priority for each selected model and remove unused priorities",
+        message: t("routingGroups.payload.prioritiesMismatch"),
       };
     }
     if (
@@ -81,7 +86,7 @@ export const buildRoutingGroupPayload = (values: RoutingGroupFormValues): Routin
       return {
         ok: false,
         field: "model_priorities",
-        message: "Priorities must be whole numbers from 1 to 9007199254740991",
+        message: t("routingGroups.payload.prioritiesInvalid"),
       };
     }
     return {
@@ -101,6 +106,6 @@ export const buildRoutingGroupPayload = (values: RoutingGroupFormValues): Routin
   try {
     return { ok: true, group: { ...base, routing_strategy_args: JSON.parse(args) as Record<string, unknown> } };
   } catch {
-    return { ok: false, field: "routing_strategy_args", message: "Must be valid JSON" };
+    return { ok: false, field: "routing_strategy_args", message: t("routingGroups.payload.invalidJson") };
   }
 };
