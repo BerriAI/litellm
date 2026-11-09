@@ -444,6 +444,18 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
             or os.getenv("DATABRICKS_USER_AGENT")
         )
 
+        client_id: Final = (
+            litellm_params.get("client_id")
+            or litellm_params.get("databricks_client_id")
+            or optional_params.pop("client_id", None)
+            or optional_params.pop("databricks_client_id", None)
+        )
+        client_secret: Final = (
+            litellm_params.get("client_secret")
+            or litellm_params.get("databricks_client_secret")
+            or optional_params.pop("client_secret", None)
+            or optional_params.pop("databricks_client_secret", None)
+        )
         api_base, headers = self.databricks_validate_environment(
             api_base=api_base,
             api_key=api_key,
@@ -451,6 +463,9 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
             custom_endpoint=False,
             headers=headers,
             custom_user_agent=custom_user_agent,
+            client_id=client_id,
+            client_secret=client_secret,
+            litellm_params=litellm_params,
         )
         # Ensure Content-Type header is set
         headers["Content-Type"] = "application/json"

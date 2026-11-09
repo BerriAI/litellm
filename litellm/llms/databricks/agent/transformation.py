@@ -22,7 +22,11 @@ from litellm.llms.databricks.agent.responses_output import (
     DatabricksAgentResponsesIterator,
     output_text,
 )
-from litellm.llms.databricks.common_utils import DatabricksBase, DatabricksException
+from litellm.llms.databricks.common_utils import (
+    DatabricksBase,
+    DatabricksException,
+    resolve_databricks_oauth_credentials,
+)
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import Choices, Message, ModelResponse, Usage
@@ -190,11 +194,20 @@ def _without_authorization(headers: Mapping[str, object]) -> Mapping[str, object
     return {name: value for name, value in headers.items() if name.lower() != "authorization"}
 
 
-def _env_oauth_m2m_token(api_base: str | None) -> str | None:
-    client_id: Final = get_secret_str("DATABRICKS_CLIENT_ID")
-    client_secret: Final = get_secret_str("DATABRICKS_CLIENT_SECRET")
-    if not (client_id and client_secret):
+def _env_oauth_m2m_token(
+    api_base: str | None,
+    litellm_params: Mapping[str, object] | None = None,
+    client_id: str | None = None,
+    client_secret: str | None = None,
+) -> str | None:
+    creds: Final = resolve_databricks_oauth_credentials(
+        litellm_params=litellm_params,
+        client_id=client_id,
+        client_secret=client_secret,
+    )
+    if not creds:
         return None
+    resolved_id, resolved_secret = creds
     workspace: Final = get_secret_str("DATABRICKS_HOST") or workspace_url_from_api_base(api_base)
     if workspace is None:
         raise DatabricksException(
@@ -204,7 +217,7 @@ def _env_oauth_m2m_token(api_base: str | None) -> str | None:
                 "set DATABRICKS_HOST to the workspace URL (a Databricks App URL is not a workspace)"
             ),
         )
-    return DatabricksBase().get_cached_oauth_m2m_token(workspace, client_id, client_secret)
+    return DatabricksBase().get_cached_oauth_m2m_token(workspace, resolved_id, resolved_secret)
 
 
 def _resolved_env_reference(value: str | None) -> str | None:
@@ -297,8 +310,25 @@ class DatabricksAgentConfig(BaseConfig):
         litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
+        client_id: str | None = None,
+        client_secret: str | None = None,
+        **kwargs: object,
     ) -> dict[str, object]:  # mutable-ok: mirrors override contract
-        bearer: Final = api_key or _env_oauth_m2m_token(api_base) or get_secret_str("DATABRICKS_API_KEY")
+        api_key = api_key or (
+            litellm_params.get("api_key")
+            if isinstance(litellm_params, Mapping) and isinstance(litellm_params.get("api_key"), str)
+            else None
+        )
+        bearer: Final = (
+            api_key
+            or _env_oauth_m2m_token(
+                api_base=api_base,
+                litellm_params=litellm_params,
+                client_id=client_id,
+                client_secret=client_secret,
+            )
+            or get_secret_str("DATABRICKS_API_KEY")
+        )
         if bearer:
             return {
                 **_without_authorization(headers),

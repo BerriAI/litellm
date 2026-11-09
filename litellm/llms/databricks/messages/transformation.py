@@ -131,13 +131,37 @@ class DatabricksAnthropicMessagesConfig(DatabricksBase, AnthropicMessagesConfig)
         client_anthropic_headers: Final = {
             key: value for key, value in headers.items() if key.lower() in ANTHROPIC_API_HEADERS
         }
+        client_id: Final = (
+            litellm_params.get("client_id")
+            or litellm_params.get("databricks_client_id")
+            or optional_params.pop("client_id", None)
+            or optional_params.pop("databricks_client_id", None)
+        )
+        client_secret: Final = (
+            litellm_params.get("client_secret")
+            or litellm_params.get("databricks_client_secret")
+            or optional_params.pop("client_secret", None)
+            or optional_params.pop("databricks_client_secret", None)
+        )
+        has_deployment_oauth: Final = bool(client_id or client_secret)
+        deployment_api_key: Final = (
+            litellm_params.get("api_key") if isinstance(litellm_params, Mapping) else None
+        ) or optional_params.pop("api_key", None)
+        resolved_api_key: Final = (
+            deployment_api_key
+            or api_key
+            or (None if has_deployment_oauth else self.resolve_api_key(api_key))
+        )
         messages_api_base, auth_headers = self.databricks_validate_environment(  # pyright: ignore[reportUnknownMemberType]  # the shared helper takes a bare dict
-            api_key=self.resolve_api_key(api_key),
+            api_key=resolved_api_key,
             api_base=self.resolve_api_base(api_base),
             endpoint_type="anthropic_messages",
             custom_endpoint=False,
             headers={key: value for key, value in headers.items() if key not in client_anthropic_headers},
             custom_user_agent=self.configured_user_agent(litellm_params),
+            client_id=client_id,
+            client_secret=client_secret,
+            litellm_params=litellm_params,
         )
         workspace_api_base: Final = messages_api_base.removesuffix(DATABRICKS_ANTHROPIC_MESSAGES_PATH)
         normalized_headers: Final = {

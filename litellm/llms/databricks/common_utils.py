@@ -73,6 +73,107 @@ class OAuthM2MToken(BaseModel):
     expires_in: int = _DEFAULT_M2M_TOKEN_LIFETIME_SECONDS
 
 
+def _resolve_param_secret(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    val: Final = value.strip()
+    if not val:
+        return None
+    if val.startswith("os.environ/"):
+        return get_secret_str(val)
+    return val
+
+
+def _get_credential_param(params: Mapping[str, object] | object | None, *keys: str) -> object | None:
+    if params is None:
+        return None
+    if isinstance(params, Mapping):
+        for key in keys:
+            val = params.get(key)
+            if val is not None:
+                return val
+        nested = params.get("litellm_params")
+        if isinstance(nested, Mapping):
+            for key in keys:
+                val = nested.get(key)
+                if val is not None:
+                    return val
+        return None
+    for key in keys:
+        if hasattr(params, key):
+            val = getattr(params, key)
+            if val is not None:
+                return val
+    nested = getattr(params, "litellm_params", None)
+    if isinstance(nested, Mapping):
+        for key in keys:
+            val = nested.get(key)
+            if val is not None:
+                return val
+    return None
+
+
+def resolve_databricks_oauth_credentials(
+    litellm_params: Mapping[str, object] | object | None = None,
+    client_id: str | None = None,
+    client_secret: str | None = None,
+) -> tuple[str, str] | None:
+    """
+    Resolve Databricks OAuth M2M credentials.
+
+    Follows atomic pair semantics:
+    - If deployment credentials are supplied via `litellm_params` or explicit arguments,
+      both `client_id` and `client_secret` must be provided and resolve to non-empty values.
+      Missing, empty, or unresolvable deployment credentials raise a DatabricksException.
+    - Deployment credentials override global environment variables.
+    - If no deployment credentials are supplied, falls back to `DATABRICKS_CLIENT_ID`
+      and `DATABRICKS_CLIENT_SECRET`. If neither or only one is set globally, returns None.
+
+    Returns:
+        (client_id, client_secret) tuple if configured, or None.
+    Raises:
+        DatabricksException: If incomplete deployment credentials are provided.
+    """
+    raw_id: Final = (
+        client_id
+        if client_id is not None
+        else _get_credential_param(litellm_params, "client_id", "databricks_client_id")
+    )
+    raw_secret: Final = (
+        client_secret
+        if client_secret is not None
+        else _get_credential_param(litellm_params, "client_secret", "databricks_client_secret")
+    )
+
+    deployment_credentials_provided: Final = raw_id is not None or raw_secret is not None
+
+    if deployment_credentials_provided:
+        resolved_id: Final = _resolve_param_secret(raw_id)
+        resolved_secret: Final = _resolve_param_secret(raw_secret)
+        if not resolved_id or not resolved_secret:
+            missing: Final = []
+            if not resolved_id:
+                missing.append("client_id")
+            if not resolved_secret:
+                missing.append("client_secret")
+            raise DatabricksException(
+                status_code=400,
+                message=(
+                    f"Incomplete Databricks deployment OAuth credentials: missing or unresolved {', '.join(missing)}. "
+                    "Both client_id and client_secret must be set and non-empty."
+                ),
+            )
+        return resolved_id, resolved_secret
+
+    # Global environment fallback
+    global_id: Final = get_secret_str("DATABRICKS_CLIENT_ID")
+    global_secret: Final = get_secret_str("DATABRICKS_CLIENT_SECRET")
+    if global_id and global_secret:
+        return global_id, global_secret
+
+    return None
+
+
 class DatabricksBase:
     """
     Base class for Databricks integration with authentication,
@@ -191,6 +292,14 @@ class DatabricksBase:
     @staticmethod
     def resolve_api_base(api_base: str | None) -> str | None:
         return api_base or litellm.api_base or os.getenv("DATABRICKS_API_BASE")
+
+    @staticmethod
+    def resolve_oauth_credentials(
+        litellm_params: Mapping[str, object] | object | None = None,
+        client_id: str | None = None,
+        client_secret: str | None = None,
+    ) -> tuple[str, str] | None:
+        return resolve_databricks_oauth_credentials(litellm_params, client_id, client_secret)
 
     @staticmethod
     def serves_native_anthropic_messages(model: str) -> bool:
@@ -432,14 +541,17 @@ class DatabricksBase:
         custom_endpoint: bool | None,
         headers: dict | None,
         custom_user_agent: str | None = None,
+        client_id: str | None = None,
+        client_secret: str | None = None,
+        litellm_params: Mapping[str, object] | object | None = None,
     ) -> tuple[str, dict[str, str]]:  # mutable-ok: becomes the outbound headers
         """
         Validate and configure the Databricks environment.
 
         Authentication priority:
-        1. OAuth M2M (DATABRICKS_CLIENT_ID + DATABRICKS_CLIENT_SECRET) - Recommended
-        2. PAT (DATABRICKS_API_KEY) - Supported for development
-        3. Databricks SDK automatic auth - Fallback (uses unified auth)
+        1. Deployment static API key (api_key)
+        2. OAuth M2M (deployment or global DATABRICKS_CLIENT_ID + DATABRICKS_CLIENT_SECRET)
+        3. PAT (DATABRICKS_API_KEY) / Databricks SDK automatic auth - Fallback (uses unified auth)
 
         Args:
             api_key: Personal access token (PAT)
@@ -448,39 +560,100 @@ class DatabricksBase:
             custom_endpoint: Whether using a custom endpoint URL
             headers: Existing headers dict
             custom_user_agent: Optional custom user agent to prefix
+            client_id: Optional OAuth client ID
+            client_secret: Optional OAuth client secret
+            litellm_params: Optional deployment litellm_params
 
         Returns:
             Tuple of (api_base, headers) with authentication configured
         """
         from litellm._logging import verbose_logger
 
-        # Check for OAuth M2M credentials (recommended for production)
-        client_id: Final = os.getenv("DATABRICKS_CLIENT_ID")
-        client_secret: Final = os.getenv("DATABRICKS_CLIENT_SECRET")
-
         # Determine api_base first
         if api_base is None:
             api_base = os.getenv("DATABRICKS_API_BASE")
 
-        if client_id and client_secret and api_base:
-            # Use OAuth M2M flow (preferred for production)
-            verbose_logger.debug("Using OAuth M2M authentication for Databricks")
-            access_token: Final = self.get_oauth_m2m_token(api_base, client_id, client_secret)
+        deployment_api_key: Final = (
+            _get_credential_param(litellm_params, "api_key") if litellm_params is not None else None
+        )
+        has_deployment_oauth: Final = bool(
+            client_id is not None
+            or client_secret is not None
+            or _get_credential_param(litellm_params, "client_id", "databricks_client_id") is not None
+            or _get_credential_param(litellm_params, "client_secret", "databricks_client_secret") is not None
+        )
+        global_key: Final = get_secret_str("DATABRICKS_API_KEY") or get_secret_str("DATABRICKS_TOKEN")
+        is_ambient_global_key: Final = bool(
+            has_deployment_oauth
+            and deployment_api_key is None
+            and api_key is not None
+            and (api_key == global_key or api_key == litellm.api_key or api_key == litellm.databricks_key)
+        )
+        effective_static_key: Final = None if is_ambient_global_key else (deployment_api_key or api_key)
+
+        if effective_static_key is not None:
+            # Deployment static API key takes precedence over OAuth M2M
+            if api_base is None:
+                if custom_endpoint:
+                    raise DatabricksException(
+                        status_code=400,
+                        message="Missing API Base - A call is being made to LLM Provider but no api base is set either in the environment variables ({LLM_PROVIDER}_API_KEY) or via params",
+                    )
+                else:
+                    api_base, headers = self._get_databricks_credentials(
+                        api_base=api_base, api_key=effective_static_key, headers=headers
+                    )
             headers = headers or {}
-            headers["Authorization"] = f"Bearer {access_token}"
+            headers["Authorization"] = f"Bearer {effective_static_key}"
             headers["Content-Type"] = "application/json"
-        elif api_key is None and not headers:
-            if custom_endpoint is True:
-                raise DatabricksException(
-                    status_code=400,
-                    message="Missing API Key - A call is being made to LLM Provider but no key is set either in the environment variables ({LLM_PROVIDER}_API_KEY) or via params",
-                )
-            else:
-                # Fallback to Databricks SDK (registers partner telemetry)
-                verbose_logger.debug("Using Databricks SDK for authentication")
-                api_base, headers = self._get_databricks_credentials(
-                    api_base=api_base, api_key=api_key, headers=headers
-                )
+        else:
+            oauth_credentials: Final = resolve_databricks_oauth_credentials(
+                litellm_params=litellm_params,
+                client_id=client_id,
+                client_secret=client_secret,
+            )
+            if oauth_credentials is not None:
+                oauth_id, oauth_secret = oauth_credentials
+                if api_base is None:
+                    if custom_endpoint:
+                        raise DatabricksException(
+                            status_code=400,
+                            message="Missing API Base - A call is being made to LLM Provider but no api base is set either in the environment variables ({LLM_PROVIDER}_API_KEY) or via params",
+                        )
+                    else:
+                        api_base, _ = self._get_databricks_credentials(api_base=api_base, api_key=None, headers=headers)
+                verbose_logger.debug("Using OAuth M2M authentication for Databricks")
+                access_token: Final = self.get_oauth_m2m_token(api_base, oauth_id, oauth_secret)
+                headers = headers or {}
+                headers["Authorization"] = f"Bearer {access_token}"
+                headers["Content-Type"] = "application/json"
+            elif api_key is not None:
+                # Ambient global DATABRICKS_API_KEY fallback
+                if api_base is None:
+                    if custom_endpoint:
+                        raise DatabricksException(
+                            status_code=400,
+                            message="Missing API Base - A call is being made to LLM Provider but no api base is set either in the environment variables ({LLM_PROVIDER}_API_KEY) or via params",
+                        )
+                    else:
+                        api_base, headers = self._get_databricks_credentials(
+                            api_base=api_base, api_key=api_key, headers=headers
+                        )
+                headers = headers or {}
+                headers["Authorization"] = f"Bearer {api_key}"
+                headers["Content-Type"] = "application/json"
+            elif not headers:
+                if custom_endpoint is True:
+                    raise DatabricksException(
+                        status_code=400,
+                        message="Missing API Key - A call is being made to LLM Provider but no key is set either in the environment variables ({LLM_PROVIDER}_API_KEY) or via params",
+                    )
+                else:
+                    # Fallback to Databricks SDK (registers partner telemetry)
+                    verbose_logger.debug("Using Databricks SDK for authentication")
+                    api_base, headers = self._get_databricks_credentials(
+                        api_base=api_base, api_key=None, headers=headers
+                    )
 
         if api_base is None:
             if custom_endpoint:
@@ -495,15 +668,17 @@ class DatabricksBase:
 
         if headers is None:
             headers = {
-                "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
             }
-        else:
-            if api_key is not None:
-                headers.update({"Authorization": f"Bearer {api_key}"})
-
-        if api_key is not None:
-            headers["Authorization"] = f"Bearer {api_key}"
+            if effective_static_key is not None:
+                headers["Authorization"] = f"Bearer {effective_static_key}"
+            elif api_key is not None:
+                headers["Authorization"] = f"Bearer {api_key}"
+        elif "Authorization" not in headers:
+            if effective_static_key is not None:
+                headers["Authorization"] = f"Bearer {effective_static_key}"
+            elif api_key is not None:
+                headers["Authorization"] = f"Bearer {api_key}"
 
         # Set User-Agent with optional custom prefix
         headers["User-Agent"] = self._build_user_agent(custom_user_agent)

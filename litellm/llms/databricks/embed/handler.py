@@ -3,6 +3,7 @@ Calling logic for Databricks embeddings
 """
 
 import os
+from collections.abc import Mapping
 from typing import Final
 
 from litellm.utils import EmbeddingResponse
@@ -27,15 +28,39 @@ class DatabricksEmbeddingHandler(OpenAILikeEmbeddingHandler, DatabricksBase):
         custom_endpoint: bool | None = None,
         headers: dict | None = None,
         drop_params: bool = False,
+        client_id: str | None = None,
+        client_secret: str | None = None,
+        litellm_params: dict | None = None,
+        **kwargs,
     ) -> EmbeddingResponse:
         # Check for custom user agent in optional_params or environment
         # This allows partners building on LiteLLM to set their own telemetry
         # Use pop() to remove these keys so they don't get sent to the API
+        optional_params = optional_params or {}
         custom_user_agent: Final = (
             optional_params.pop("user_agent", None)
             or optional_params.pop("databricks_user_agent", None)
             or os.getenv("LITELLM_USER_AGENT")
             or os.getenv("DATABRICKS_USER_AGENT")
+        )
+
+        resolved_client_id: Final = (
+            client_id
+            or (litellm_params.get("client_id") if isinstance(litellm_params, Mapping) else None)
+            or (litellm_params.get("databricks_client_id") if isinstance(litellm_params, Mapping) else None)
+            or optional_params.pop("client_id", None)
+            or optional_params.pop("databricks_client_id", None)
+            or kwargs.pop("client_id", None)
+            or kwargs.pop("databricks_client_id", None)
+        )
+        resolved_client_secret: Final = (
+            client_secret
+            or (litellm_params.get("client_secret") if isinstance(litellm_params, Mapping) else None)
+            or (litellm_params.get("databricks_client_secret") if isinstance(litellm_params, Mapping) else None)
+            or optional_params.pop("client_secret", None)
+            or optional_params.pop("databricks_client_secret", None)
+            or kwargs.pop("client_secret", None)
+            or kwargs.pop("databricks_client_secret", None)
         )
 
         api_base, headers = self.databricks_validate_environment(
@@ -45,6 +70,9 @@ class DatabricksEmbeddingHandler(OpenAILikeEmbeddingHandler, DatabricksBase):
             custom_endpoint=custom_endpoint,
             headers=headers,
             custom_user_agent=custom_user_agent,
+            client_id=resolved_client_id,
+            client_secret=resolved_client_secret,
+            litellm_params=litellm_params,
         )
         return super().embedding(
             model=model,

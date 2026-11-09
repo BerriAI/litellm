@@ -46,7 +46,11 @@ class DatabricksResponsesAPIConfig(DatabricksBase, OpenAIResponsesAPIConfig):
         litellm_params: GenericLiteLLMParams | None,
     ) -> dict:
         litellm_params = litellm_params or GenericLiteLLMParams()
-        api_key: Final = litellm_params.api_key or os.getenv("DATABRICKS_API_KEY")
+        client_id: Final = getattr(litellm_params, "client_id", None)
+        client_secret: Final = getattr(litellm_params, "client_secret", None)
+        has_deployment_oauth: Final = bool(client_id or client_secret)
+
+        api_key: Final = litellm_params.api_key or (None if has_deployment_oauth else os.getenv("DATABRICKS_API_KEY"))
         api_base: Final = litellm_params.api_base or os.getenv("DATABRICKS_API_BASE")
 
         # Reuse Databricks auth logic (OAuth M2M, PAT, SDK fallback).
@@ -59,6 +63,9 @@ class DatabricksResponsesAPIConfig(DatabricksBase, OpenAIResponsesAPIConfig):
             endpoint_type="chat_completions",
             custom_endpoint=False,
             headers=headers,
+            client_id=client_id,
+            client_secret=client_secret,
+            litellm_params=litellm_params,
         )
 
         headers["Content-Type"] = "application/json"

@@ -8,8 +8,11 @@ from pydantic import TypeAdapter, ValidationError
 
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.decisions.transformation import BaseDecisionsConfig
-from litellm.llms.databricks.common_utils import DatabricksBase
-from litellm.secret_managers.main import get_secret_str
+from litellm.llms.databricks.common_utils import (
+    DatabricksBase,
+    _get_credential_param,
+    resolve_databricks_oauth_credentials,
+)
 from litellm.types.decisions import DecisionsIRRequest, UnsupportedDecisionsRequest
 
 DATABRICKS_AI_DECIDE_MODEL: Final = "ai_decide"
@@ -79,12 +82,40 @@ class DatabricksDecisionsConfig(BaseDecisionsConfig):
     def resolve_credential(
         self, api_key: str | None, api_base: str, litellm_params: Mapping[str, object]
     ) -> str | None:
+        deployment_api_key: Final = (
+            _get_credential_param(litellm_params, "api_key")
+            if isinstance(_get_credential_param(litellm_params, "api_key"), str)
+            else None
+        )
+        if deployment_api_key:
+            return deployment_api_key
+
+        env_key: Final = self._first_secret(self.api_key_env)
+        # If an explicit static api_key was passed as argument (not from env), it takes precedence
+        if api_key and api_key != env_key:
+            return api_key
+
+        # If deployment OAuth credentials are provided, they take precedence over global env credentials
+        has_deployment_oauth: Final = any(
+            _get_credential_param(litellm_params, k) is not None
+            for k in ("client_id", "client_secret", "databricks_client_id", "databricks_client_secret")
+        )
+        if has_deployment_oauth:
+            creds: Final = resolve_databricks_oauth_credentials(litellm_params)
+            if not creds:
+                return None
+            client_id, client_secret = creds
+            return DatabricksBase().get_cached_oauth_m2m_token(api_base, client_id, client_secret)
+
+        # Fallback to global static key (from env) if present
         if api_key:
             return api_key
-        client_id: Final = get_secret_str("DATABRICKS_CLIENT_ID")
-        client_secret: Final = get_secret_str("DATABRICKS_CLIENT_SECRET")
-        if not client_id or not client_secret:
+
+        # Fallback to global OAuth M2M credentials
+        creds = resolve_databricks_oauth_credentials(litellm_params)
+        if not creds:
             return None
+        client_id, client_secret = creds
         return DatabricksBase().get_cached_oauth_m2m_token(api_base, client_id, client_secret)
 
     def missing_api_base_message(self, custom_llm_provider: str) -> str:

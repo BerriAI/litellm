@@ -7104,6 +7104,11 @@ def embedding(
                 optional_params=optional_params,
                 client=client,
                 aembedding=aembedding,
+                client_id=kwargs.get("client_id")
+                or (litellm_params_dict.get("client_id") if litellm_params_dict else None),
+                client_secret=kwargs.get("client_secret")
+                or (litellm_params_dict.get("client_secret") if litellm_params_dict else None),
+                litellm_params=litellm_params_dict,
             )
         elif custom_llm_provider == "hosted_vllm":
             api_base = api_base or litellm.api_base or get_secret_str("HOSTED_VLLM_API_BASE")

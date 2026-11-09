@@ -723,3 +723,219 @@ async def test_acompletion_resolves_os_environ_api_base_and_api_key(
     )
     assert route.calls.last.request.headers["Authorization"] == "Bearer pat-from-env"
     assert response.choices[0].message.content == "pong"
+
+
+@responses.activate
+def test_validate_environment_with_deployment_oauth_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("DATABRICKS_CLIENT_ID", raising=False)
+    monkeypatch.delenv("DATABRICKS_CLIENT_SECRET", raising=False)
+    monkeypatch.delenv("DATABRICKS_API_KEY", raising=False)
+    token = responses.post(TOKEN_URL, json={"access_token": "deploy-token", "expires_in": 3600})
+    headers = DatabricksAgentConfig().validate_environment(
+        headers={},
+        model="my-agent",
+        messages=[],
+        optional_params={},
+        litellm_params={"client_id": "dep-id", "client_secret": "dep-secret"},
+        api_base=WORKSPACE,
+    )
+    assert headers["Authorization"] == "Bearer deploy-token"
+    assert token.call_count == 1
+
+
+@responses.activate
+def test_validate_environment_deployment_oauth_overrides_global_env(
+    env_oauth_m2m: None,
+) -> None:
+    import base64
+
+    token = responses.post(TOKEN_URL, json={"access_token": "deploy-override-token", "expires_in": 3600})
+    headers = DatabricksAgentConfig().validate_environment(
+        headers={},
+        model="my-agent",
+        messages=[],
+        optional_params={},
+        litellm_params={"client_id": "override-id", "client_secret": "override-secret"},
+        api_base=WORKSPACE,
+    )
+    assert headers["Authorization"] == "Bearer deploy-override-token"
+    auth_header = token.calls[0].request.headers["Authorization"]
+    basic_creds = base64.b64decode(auth_header.split(" ")[1]).decode()
+    assert basic_creds.startswith("override-id:")
+
+
+@responses.activate
+def test_validate_environment_deployment_oauth_os_environ_resolution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AGENT_DEPLOY_ID", "resolved-agent-id")
+    monkeypatch.setenv("AGENT_DEPLOY_SECRET", "resolved-agent-secret")
+    token = responses.post(TOKEN_URL, json={"access_token": "resolved-agent-token", "expires_in": 3600})
+    headers = DatabricksAgentConfig().validate_environment(
+        headers={},
+        model="my-agent",
+        messages=[],
+        optional_params={},
+        litellm_params={
+            "client_id": "os.environ/AGENT_DEPLOY_ID",
+            "client_secret": "os.environ/AGENT_DEPLOY_SECRET",
+        },
+        api_base=WORKSPACE,
+    )
+    assert headers["Authorization"] == "Bearer resolved-agent-token"
+    assert token.call_count == 1
+
+
+def test_validate_environment_deployment_oauth_incomplete_credentials_raises_400(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DATABRICKS_CLIENT_SECRET", "global-secret")
+    with pytest.raises(DatabricksException, match="Incomplete Databricks deployment OAuth credentials") as exc_info:
+        DatabricksAgentConfig().validate_environment(
+            headers={},
+            model="my-agent",
+            messages=[],
+            optional_params={},
+            litellm_params={"client_id": "lone-client-id"},
+            api_base=WORKSPACE,
+        )
+    assert exc_info.value.status_code == 400
+
+
+@responses.activate
+def test_validate_environment_static_api_key_takes_precedence_over_deployment_oauth(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    headers = DatabricksAgentConfig().validate_environment(
+        headers={},
+        model="my-agent",
+        messages=[],
+        optional_params={},
+        litellm_params={"client_id": "dep-id", "client_secret": "dep-secret"},
+        api_key="static-pat-key",
+        api_base=WORKSPACE,
+    )
+    assert headers["Authorization"] == "Bearer static-pat-key"
+    assert len(responses.calls) == 0
+
+
+@responses.activate
+def test_validate_environment_static_api_key_in_litellm_params_takes_precedence_over_oauth(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    headers = DatabricksAgentConfig().validate_environment(
+        headers={},
+        model="my-agent",
+        messages=[],
+        optional_params={},
+        litellm_params={
+            "api_key": "static-pat-in-params",
+            "client_id": "dep-id",
+            "client_secret": "dep-secret",
+        },
+        api_base=WORKSPACE,
+    )
+    assert headers["Authorization"] == "Bearer static-pat-in-params"
+    assert len(responses.calls) == 0
+
+
+@responses.activate
+def test_validate_environment_deployment_oauth_app_url_requires_databricks_host(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("DATABRICKS_HOST", raising=False)
+    with pytest.raises(DatabricksException, match="set DATABRICKS_HOST") as exc_info:
+        DatabricksAgentConfig().validate_environment(
+            headers={},
+            model="my-agent",
+            messages=[],
+            optional_params={},
+            litellm_params={"client_id": "dep-id", "client_secret": "dep-secret"},
+            api_base=APP_URL,
+        )
+    assert exc_info.value.status_code == 400
+    assert len(responses.calls) == 0
+
+
+@responses.activate
+def test_validate_environment_deployment_oauth_app_url_with_databricks_host(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DATABRICKS_HOST", WORKSPACE)
+    token = responses.post(TOKEN_URL, json={"access_token": "app-deploy-token", "expires_in": 3600})
+    headers = DatabricksAgentConfig().validate_environment(
+        headers={},
+        model="my-agent",
+        messages=[],
+        optional_params={},
+        litellm_params={"client_id": "app-dep-id", "client_secret": "app-dep-secret"},
+        api_base=APP_URL,
+    )
+    assert headers["Authorization"] == "Bearer app-deploy-token"
+    assert token.call_count == 1
+
+
+@responses.activate
+def test_validate_environment_deployment_oauth_cache_isolation() -> None:
+    token = responses.post(TOKEN_URL, json={"access_token": "cached-token", "expires_in": 3600})
+    config = DatabricksAgentConfig()
+
+    # Deploy 1 call 1
+    h1 = config.validate_environment(
+        headers={},
+        model="my-agent",
+        messages=[],
+        optional_params={},
+        litellm_params={"client_id": "iso-client-1", "client_secret": "iso-secret-1"},
+        api_base=WORKSPACE,
+    )
+    assert h1["Authorization"] == "Bearer cached-token"
+    assert token.call_count == 1
+
+    # Deploy 1 call 2 (cached)
+    h2 = config.validate_environment(
+        headers={},
+        model="my-agent",
+        messages=[],
+        optional_params={},
+        litellm_params={"client_id": "iso-client-1", "client_secret": "iso-secret-1"},
+        api_base=WORKSPACE,
+    )
+    assert h2["Authorization"] == "Bearer cached-token"
+    assert token.call_count == 1
+
+    # Deploy 2 call 1 (different client_id -> new token minted)
+    h3 = config.validate_environment(
+        headers={},
+        model="my-agent",
+        messages=[],
+        optional_params={},
+        litellm_params={"client_id": "iso-client-2", "client_secret": "iso-secret-1"},
+        api_base=WORKSPACE,
+    )
+    assert h3["Authorization"] == "Bearer cached-token"
+    assert token.call_count == 2
+
+
+@responses.activate
+@respx.mock
+async def test_acompletion_with_deployment_oauth_credentials(
+    httpx_transport: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("DATABRICKS_CLIENT_ID", raising=False)
+    monkeypatch.delenv("DATABRICKS_CLIENT_SECRET", raising=False)
+    monkeypatch.delenv("DATABRICKS_API_KEY", raising=False)
+    token = responses.post(TOKEN_URL, json={"access_token": "agent-deploy-token", "expires_in": 3600})
+    route = respx.post(INVOCATIONS_URL).mock(return_value=httpx.Response(200, json={"output": [MESSAGE_ITEM]}))
+    response = await litellm.acompletion(
+        model="databricks_agent/my-agent",
+        messages=[{"role": "user", "content": "ping"}],
+        api_base=WORKSPACE,
+        client_id="agent-client-id",
+        client_secret="agent-client-secret",
+    )
+    assert token.call_count == 1
+    assert route.calls.last.request.headers["Authorization"] == "Bearer agent-deploy-token"
+    assert response.choices[0].message.content == "pong"

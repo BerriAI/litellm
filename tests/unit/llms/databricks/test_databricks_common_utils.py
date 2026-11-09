@@ -15,15 +15,21 @@ import litellm
 from litellm._version import version
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.exceptions import BadRequestError
-from litellm.llms.databricks.common_utils import DatabricksBase, DatabricksException
+from litellm.llms.databricks.chat.transformation import DatabricksConfig
+from litellm.llms.databricks.common_utils import (
+    DatabricksBase,
+    DatabricksException,
+    resolve_databricks_oauth_credentials,
+)
+from litellm.llms.databricks.embed.handler import DatabricksEmbeddingHandler
+from litellm.llms.databricks.messages.transformation import DatabricksAnthropicMessagesConfig
+from litellm.types.router import GenericLiteLLMParams
 
 
 def test_databricks_validate_environment():
     databricks_base = DatabricksBase()
 
-    with patch.object(
-        databricks_base, "_get_databricks_credentials"
-    ) as mock_get_credentials:
+    with patch.object(databricks_base, "_get_databricks_credentials") as mock_get_credentials:
         try:
             databricks_base.databricks_validate_environment(
                 api_key=None,
@@ -273,3 +279,301 @@ def test_should_propagate_oauth_failure_and_retry_the_next_request() -> None:
     with pytest.raises(DatabricksException, match="OAuth M2M token request failed"):
         get_token()
     assert get_token() == "valid-token"
+
+
+def test_resolve_literal_deployment_credentials() -> None:
+    # Direct arguments
+    creds = resolve_databricks_oauth_credentials(client_id="direct-id", client_secret="direct-secret")
+    assert creds == ("direct-id", "direct-secret")
+
+    # Dict in litellm_params
+    creds_dict = resolve_databricks_oauth_credentials({"client_id": "dict-id", "client_secret": "dict-secret"})
+    assert creds_dict == ("dict-id", "dict-secret")
+
+    # GenericLiteLLMParams
+    creds_params = resolve_databricks_oauth_credentials(
+        GenericLiteLLMParams(client_id="param-id", client_secret="param-secret")
+    )
+    assert creds_params == ("param-id", "param-secret")
+
+
+def test_resolve_environ_deployment_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CUSTOM_DATABRICKS_ID", "env-resolved-id")
+    monkeypatch.setenv("CUSTOM_DATABRICKS_SECRET", "env-resolved-secret")
+
+    creds = resolve_databricks_oauth_credentials(
+        litellm_params={
+            "client_id": "os.environ/CUSTOM_DATABRICKS_ID",
+            "client_secret": "os.environ/CUSTOM_DATABRICKS_SECRET",
+        }
+    )
+    assert creds == ("env-resolved-id", "env-resolved-secret")
+
+
+def test_deployment_credentials_override_global(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DATABRICKS_CLIENT_ID", "global-id")
+    monkeypatch.setenv("DATABRICKS_CLIENT_SECRET", "global-secret")
+
+    creds = resolve_databricks_oauth_credentials(
+        litellm_params={
+            "client_id": "deployment-id",
+            "client_secret": "deployment-secret",
+        }
+    )
+    assert creds == ("deployment-id", "deployment-secret")
+
+
+def test_global_only_configuration(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DATABRICKS_CLIENT_ID", "global-only-id")
+    monkeypatch.setenv("DATABRICKS_CLIENT_SECRET", "global-only-secret")
+
+    creds = resolve_databricks_oauth_credentials()
+    assert creds == ("global-only-id", "global-only-secret")
+
+    creds_empty = resolve_databricks_oauth_credentials({})
+    assert creds_empty == ("global-only-id", "global-only-secret")
+
+
+def test_missing_global_credentials_returns_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("DATABRICKS_CLIENT_ID", raising=False)
+    monkeypatch.delenv("DATABRICKS_CLIENT_SECRET", raising=False)
+
+    assert resolve_databricks_oauth_credentials() is None
+    assert resolve_databricks_oauth_credentials({}) is None
+
+    # Partial global env should return None (allowing PAT / SDK fallback)
+    monkeypatch.setenv("DATABRICKS_CLIENT_ID", "only-id")
+    assert resolve_databricks_oauth_credentials() is None
+
+
+def test_missing_deployment_environment_reference_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("UNSET_DATABRICKS_VAR", raising=False)
+    monkeypatch.setenv("VALID_DATABRICKS_SECRET", "some-secret")
+
+    with pytest.raises(DatabricksException) as exc_info:
+        resolve_databricks_oauth_credentials(
+            litellm_params={
+                "client_id": "os.environ/UNSET_DATABRICKS_VAR",
+                "client_secret": "os.environ/VALID_DATABRICKS_SECRET",
+            }
+        )
+    assert exc_info.value.status_code == 400
+    assert "client_id" in str(exc_info.value.message)
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        {"client_id": "only-id"},
+        {"client_secret": "only-secret"},
+        {"client_id": "only-id", "client_secret": ""},
+        {"client_id": "", "client_secret": "only-secret"},
+        {"client_id": "   ", "client_secret": "only-secret"},
+    ],
+)
+def test_partial_deployment_credentials_raises(params: dict[str, str]) -> None:
+    with pytest.raises(DatabricksException) as exc_info:
+        resolve_databricks_oauth_credentials(litellm_params=params)
+    assert exc_info.value.status_code == 400
+    assert "Incomplete Databricks deployment OAuth credentials" in str(exc_info.value.message)
+
+
+def test_credential_source_isolation_never_mixes_deployment_and_global(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DATABRICKS_CLIENT_ID", "global-id")
+    monkeypatch.setenv("DATABRICKS_CLIENT_SECRET", "global-secret")
+
+    # If deployment specifies only client_id, it must NOT borrow global DATABRICKS_CLIENT_SECRET
+    with pytest.raises(DatabricksException) as exc_info:
+        resolve_databricks_oauth_credentials(litellm_params={"client_id": "deployment-id"})
+    assert exc_info.value.status_code == 400
+    assert "client_secret" in str(exc_info.value.message)
+
+    # If deployment specifies only client_secret, it must NOT borrow global DATABRICKS_CLIENT_ID
+    with pytest.raises(DatabricksException) as exc_info:
+        resolve_databricks_oauth_credentials(litellm_params={"client_secret": "deployment-secret"})
+    assert exc_info.value.status_code == 400
+    assert "client_id" in str(exc_info.value.message)
+
+
+def test_alias_credentials_supported() -> None:
+    creds = resolve_databricks_oauth_credentials(
+        litellm_params={
+            "databricks_client_id": "alias-id",
+            "databricks_client_secret": "alias-secret",
+        }
+    )
+    assert creds == ("alias-id", "alias-secret")
+
+
+def test_databricks_base_resolve_oauth_credentials_matches() -> None:
+    creds = DatabricksBase.resolve_oauth_credentials(client_id="base-id", client_secret="base-secret")
+    assert creds == ("base-id", "base-secret")
+
+
+@responses.activate
+def test_chat_validate_environment_deployment_oauth() -> None:
+    config = DatabricksConfig()
+    responses.post(
+        f"{SDK_HOST}/oidc/v1/token",
+        json={"access_token": "chat-oauth-token", "expires_in": 3600},
+    )
+
+    headers = config.validate_environment(
+        headers={},
+        model="databricks/dbrx-instruct",
+        messages=[],
+        optional_params={},
+        litellm_params={
+            "client_id": "chat-client-id",
+            "client_secret": "chat-client-secret",
+        },
+        api_base=f"{SDK_HOST}/serving-endpoints",
+    )
+    assert headers["Authorization"] == "Bearer chat-oauth-token"
+    assert headers["Content-Type"] == "application/json"
+
+
+@responses.activate
+def test_chat_validate_environment_static_api_key_precedence() -> None:
+    config = DatabricksConfig()
+    # If static api_key is present, it must win and not call OAuth
+    headers = config.validate_environment(
+        headers={},
+        model="databricks/dbrx-instruct",
+        messages=[],
+        optional_params={},
+        litellm_params={
+            "client_id": "chat-client-id",
+            "client_secret": "chat-client-secret",
+        },
+        api_key="static-test-api-key",
+        api_base=f"{SDK_HOST}/serving-endpoints",
+    )
+    assert headers["Authorization"] == "Bearer static-test-api-key"
+    assert len(responses.calls) == 0
+
+
+@responses.activate
+def test_chat_validate_environment_environ_reference(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DEP_CHAT_CLIENT_ID", "env-chat-id")
+    monkeypatch.setenv("DEP_CHAT_CLIENT_SECRET", "env-chat-secret")
+
+    config = DatabricksConfig()
+    responses.post(
+        f"{SDK_HOST}/oidc/v1/token",
+        json={"access_token": "env-chat-token", "expires_in": 3600},
+    )
+
+    headers = config.validate_environment(
+        headers={},
+        model="databricks/dbrx-instruct",
+        messages=[],
+        optional_params={},
+        litellm_params={
+            "client_id": "os.environ/DEP_CHAT_CLIENT_ID",
+            "client_secret": "os.environ/DEP_CHAT_CLIENT_SECRET",
+        },
+        api_base=f"{SDK_HOST}/serving-endpoints",
+    )
+    assert headers["Authorization"] == "Bearer env-chat-token"
+
+
+@responses.activate
+def test_chat_validate_environment_global_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DATABRICKS_CLIENT_ID", "global-chat-client")
+    monkeypatch.setenv("DATABRICKS_CLIENT_SECRET", "global-chat-secret")
+
+    config = DatabricksConfig()
+    responses.post(
+        f"{SDK_HOST}/oidc/v1/token",
+        json={"access_token": "global-chat-token", "expires_in": 3600},
+    )
+
+    headers = config.validate_environment(
+        headers={},
+        model="databricks/dbrx-instruct",
+        messages=[],
+        optional_params={},
+        litellm_params={},
+        api_base=f"{SDK_HOST}/serving-endpoints",
+    )
+    assert headers["Authorization"] == "Bearer global-chat-token"
+
+
+@responses.activate
+def test_embeddings_validate_environment_deployment_oauth() -> None:
+    base = DatabricksBase()
+    responses.post(
+        f"{SDK_HOST}/oidc/v1/token",
+        json={"access_token": "embed-oauth-token", "expires_in": 3600},
+    )
+
+    url, headers = base.databricks_validate_environment(
+        api_key=None,
+        api_base=f"{SDK_HOST}/serving-endpoints",
+        endpoint_type="embeddings",
+        custom_endpoint=False,
+        headers={},
+        client_id="embed-client",
+        client_secret="embed-secret",
+    )
+    assert headers["Authorization"] == "Bearer embed-oauth-token"
+    assert url == f"{SDK_HOST}/serving-endpoints/embeddings"
+
+
+@responses.activate
+def test_embeddings_validate_environment_static_api_key_precedence() -> None:
+    base = DatabricksBase()
+    url, headers = base.databricks_validate_environment(
+        api_key="embed-static-key",
+        api_base=f"{SDK_HOST}/serving-endpoints",
+        endpoint_type="embeddings",
+        custom_endpoint=False,
+        headers={},
+        client_id="embed-client",
+        client_secret="embed-secret",
+    )
+    assert headers["Authorization"] == "Bearer embed-static-key"
+    assert len(responses.calls) == 0
+
+
+@responses.activate
+def test_messages_validate_environment_deployment_oauth() -> None:
+    config = DatabricksAnthropicMessagesConfig()
+    responses.post(
+        f"{SDK_HOST}/oidc/v1/token",
+        json={"access_token": "messages-oauth-token", "expires_in": 3600},
+    )
+
+    headers, workspace = config.validate_anthropic_messages_environment(
+        headers={},
+        model="databricks-claude-3-5-sonnet",
+        messages=[],
+        optional_params={},
+        litellm_params={
+            "client_id": "messages-client",
+            "client_secret": "messages-secret",
+        },
+        api_base=f"{SDK_HOST}/serving-endpoints",
+    )
+    assert headers["Authorization"] == "Bearer messages-oauth-token"
+    assert workspace == f"{SDK_HOST}/serving-endpoints"
+
+
+@responses.activate
+def test_messages_validate_environment_static_api_key_precedence() -> None:
+    config = DatabricksAnthropicMessagesConfig()
+    headers, workspace = config.validate_anthropic_messages_environment(
+        headers={},
+        model="databricks-claude-3-5-sonnet",
+        messages=[],
+        optional_params={},
+        litellm_params={
+            "client_id": "messages-client",
+            "client_secret": "messages-secret",
+        },
+        api_key="messages-static-key",
+        api_base=f"{SDK_HOST}/serving-endpoints",
+    )
+    assert headers["Authorization"] == "Bearer messages-static-key"
+    assert len(responses.calls) == 0
