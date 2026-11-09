@@ -115,6 +115,8 @@ _OPENSEARCH_INDEX_SEARCH: Final = re.compile(rf"{re.escape(OPENSEARCH_PASS_THROU
 
 
 def _classify_llm_route(path: str) -> str | None:
+    if path.startswith(f"{OPENSEARCH_PASS_THROUGH_ROUTE_PREFIX}/"):
+        return OPENSEARCH_PASS_THROUGH_ROUTE_PREFIX if _OPENSEARCH_INDEX_SEARCH.fullmatch(path) else None
     exact_match: Final = next((route for route in _LLM_ROUTE_EXACT if path == route), None)
     if exact_match is not None:
         return exact_match
@@ -123,8 +125,6 @@ def _classify_llm_route(path: str) -> str | None:
         return suffix_match
     if RouteChecks.is_builtin_eu_jev_decision_route(route=path):
         return path
-    if _OPENSEARCH_INDEX_SEARCH.fullmatch(path):
-        return OPENSEARCH_PASS_THROUGH_ROUTE_PREFIX
     # Deep passthrough paths only: the bare prefix itself is not an inference call.
     return next((prefix for prefix in _PASSTHROUGH_PREFIXES if path.startswith(f"{prefix}/")), None)
 

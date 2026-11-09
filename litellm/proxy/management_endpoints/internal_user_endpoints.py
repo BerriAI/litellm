@@ -39,7 +39,10 @@ from litellm.proxy.auth.auth_checks import (
     get_team_object,
     get_user_object,
 )
-from litellm.proxy.auth.auth_utils import enforce_batch_limits_are_admin_only
+from litellm.proxy.auth.auth_utils import (
+    enforce_batch_limits_are_admin_only,
+    enforce_vector_store_index_grants_are_admin_only,
+)
 from litellm.proxy.auth.password_policy import (
     validate_password_not_breached,
     validate_password_policy,
@@ -594,6 +597,7 @@ async def new_user(
 
         if data.auto_create_key and isinstance(user_api_key_dict, UserAPIKeyAuth):
             enforce_batch_limits_are_admin_only(data, None, user_api_key_dict, "key")
+            enforce_vector_store_index_grants_are_admin_only(data, None, None, user_api_key_dict, "key")
 
         check_permissions_caller_permission(
             data=data,

@@ -172,6 +172,11 @@ def test_classify_billable(path: str, expected: Tuple[BillableCategory, str]):
         "/opensearch/docs/_update/1",
         "/opensearch/docs/_count",
         "/opensearch/docs/_mget",
+        "/opensearch/docs/_doc/search",
+        "/opensearch/docs/_update/search",
+        "/opensearch/docs/_create/embeddings",
+        "/opensearch/docs/_doc/completions",
+        "/opensearch/docs/_explain/rerank",
         # a bare provider prefix is not an inference call
         "/bedrock",
         "/eu_jev/v1/systemone/extra",
