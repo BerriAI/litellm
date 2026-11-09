@@ -18,6 +18,7 @@ import { CopyToClipboard } from "react-copy-to-clipboard";
 import { toast } from "@/lib/toast";
 import { downloadBlob } from "@/components/EntityUsageExport/utils";
 import { Trans, useTranslation } from "react-i18next";
+import { codeSamples } from "@/i18n/untranslated/codeSamples";
 
 interface BulkCreateUsersProps {
   accessToken: string;
@@ -590,7 +591,7 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
                       <div className="flex items-start">
                         <div className="w-3 h-3 rounded-full bg-border mt-1.5 mr-2 shrink-0"></div>
                         <div>
-                          <p className="font-medium">teams</p>
+                          <p className="font-medium">{codeSamples.users.bulkTemplateTeamsColumn}</p>
                           <p className="text-sm text-muted-foreground">{t("users.bulkCreate.templateColumns.teams")}</p>
                         </div>
                       </div>
@@ -615,7 +616,7 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
                       <div className="flex items-start">
                         <div className="w-3 h-3 rounded-full bg-border mt-1.5 mr-2 shrink-0"></div>
                         <div>
-                          <p className="font-medium">models</p>
+                          <p className="font-medium">{codeSamples.users.bulkTemplateModelsColumn}</p>
                           <p className="text-sm text-muted-foreground">
                             {t("users.bulkCreate.templateColumns.models")}
                           </p>

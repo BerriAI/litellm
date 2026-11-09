@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Table, TableHeader, TableHead, TableBody, TableRow, TableCell } from "@/components/ui/table";
 import ModelSelector from "./ModelSelector";
 import { toast } from "@/lib/toast";
+import { codeSamples } from "@/i18n/untranslated/codeSamples";
 
 interface ModelAliasManagerProps {
   accessToken: string;
@@ -302,7 +303,7 @@ const ModelAliasManager: React.FC<ModelAliasManagerProps> = ({
               {Object.keys(aliasObject).length === 0 ? (
                 <span className="text-muted-foreground">
                   <br />
-                  &nbsp;&nbsp;# No aliases configured yet
+                  {codeSamples.models.noAliasesYamlComment}
                 </span>
               ) : (
                 Object.entries(aliasObject).map(([key, value]) => (

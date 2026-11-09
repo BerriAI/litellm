@@ -35,6 +35,7 @@ import type { RoutingGroup } from "./types";
 import { modelConflictError } from "./modelOwnership";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { codeSamples } from "@/i18n/untranslated/codeSamples";
 
 interface RoutingGroupModalProps {
   open: boolean;
@@ -304,7 +305,13 @@ const RoutingGroupModal: React.FC<RoutingGroupModalProps> = ({
                 description={t(ARGS_EXAMPLES[selectedStrategy] ?? "routingGroups.modal.defaultArgsExample")}
               >
                 {({ ref, ...field }) => (
-                  <Textarea {...field} ref={ref} rows={4} placeholder='{ "ttl": 3600 }' className="font-mono text-xs" />
+                  <Textarea
+                    {...field}
+                    ref={ref}
+                    rows={4}
+                    placeholder={codeSamples.routingGroups.cacheParamsJson}
+                    className="font-mono text-xs"
+                  />
                 )}
               </FormField>
             )}

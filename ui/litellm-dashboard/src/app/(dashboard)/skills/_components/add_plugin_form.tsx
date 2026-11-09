@@ -16,6 +16,9 @@ import { isValidSemanticVersion } from "@/components/claude_code_plugins/helpers
 import { isPendingSkill, type SkillHubSkill, type SkillMutationResponse } from "@/components/claude_code_plugins/types";
 import { buildSkillImport, buildSkillMetadata, skillFormValues } from "@/components/claude_code_plugins/skillForm";
 
+const EDIT_SKILL_SOURCES = ["metadata", "upload"] as const;
+const NEW_SKILL_SOURCES = ["upload", "import"] as const;
+
 interface AddPluginFormProps {
   visible: boolean;
   onClose: () => void;
@@ -119,7 +122,7 @@ export default function AddPluginForm({
             <FormField control={form.control} name="mode" label={t("skills.addForm.labels.source")}>
               {({ value }) => (
                 <RadioGroup value={value} onValueChange={changeMode} className="flex gap-5">
-                  {(skill ? (["metadata", "upload"] as const) : (["upload", "import"] as const)).map((option) => (
+                  {(skill ? EDIT_SKILL_SOURCES : NEW_SKILL_SOURCES).map((option) => (
                     <label key={option} className="flex items-center gap-2 text-sm">
                       <RadioGroupItem value={option} />
                       {t(`skills.addForm.modes.${option}`)}

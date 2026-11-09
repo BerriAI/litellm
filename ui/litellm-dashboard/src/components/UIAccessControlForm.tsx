@@ -16,6 +16,7 @@ import { useZodForm } from "@/lib/forms/useZodForm";
 import i18n from "@/i18n/i18n";
 import { toast } from "@/lib/toast";
 import { getSSOSettings, updateSSOSettings } from "./networking";
+import { codeSamples } from "@/i18n/untranslated/codeSamples";
 
 interface UIAccessControlFormProps {
   accessToken: string | null;
@@ -211,7 +212,9 @@ const UIAccessControlForm: React.FC<UIAccessControlFormProps> = ({ accessToken, 
                 t("adminPanel.uiAccessControl.fields.jwtFieldHint"),
               )}
             >
-              {({ ref, value, ...field }) => <Input {...field} ref={ref} value={value ?? ""} placeholder="groups" />}
+              {({ ref, value, ...field }) => (
+                <Input {...field} ref={ref} value={value ?? ""} placeholder={codeSamples.users.ssoGroupsClaim} />
+              )}
             </FormField>
           </FieldGroup>
 
