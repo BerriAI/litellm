@@ -926,3 +926,17 @@ pub(crate) fn request_auth_route_enable(
         .map_err(map_error)?;
     to_py(py, &decision)
 }
+
+#[pyfunction]
+#[pyo3(signature = (context, configured=None))]
+pub(crate) fn request_auth_llm_route(
+    py: Python<'_>,
+    context: &Bound<'_, PyAny>,
+    configured: Option<bool>,
+) -> PyResult<Py<PyAny>> {
+    let context: core::route_access::RouteContext = from_py(context)?;
+    let decision = py
+        .detach(move || core::route_enable::llm_route(&context, configured))
+        .map_err(map_error)?;
+    to_py(py, &decision)
+}

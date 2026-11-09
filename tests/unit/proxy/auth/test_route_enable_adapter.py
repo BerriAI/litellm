@@ -112,3 +112,29 @@ def test_optional_import_failure_policy(error: Exception) -> None:
         assert caught.value is error
     else:
         assert check_route_enabled("/key/generate", readers=readers) is None
+
+
+@pytest.mark.parametrize("configured", (False, True))
+@pytest.mark.parametrize("route", ("/eu_jev/v1/systemone", "/eu_jev/v1/systemone/"))
+def test_configured_eu_jev_route_skips_llm_disable_setting(configured: bool, route: str) -> None:
+    events: Final[SimpleQueue[str]] = SimpleQueue()
+
+    def eu_jev() -> bool:
+        events.put("configuration")
+        return configured
+
+    def setting(feature: RouteFeature) -> RouteSetting:
+        events.put(feature)
+        return RouteSetting(True, True)
+
+    readers: Final = RouteEnableReaders(
+        enterprise=lambda: object(), setting=setting, secret=lambda _: True, exemptions=lambda _: (), eu_jev=eu_jev
+    )
+    if configured:
+        assert check_route_enabled(route, readers=readers) is None
+        assert tuple(events.get() for _ in range(events.qsize())) == ("configuration",)
+    else:
+        with pytest.raises(HTTPException) as error:
+            check_route_enabled(route, readers=readers)
+        assert (error.value.status_code, error.value.detail) == (403, "LLM API routes are disabled for this instance.")
+        assert tuple(events.get() for _ in range(events.qsize())) == ("configuration", "Llm")

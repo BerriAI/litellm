@@ -9,7 +9,7 @@ from pydantic import TypeAdapter
 from litellm._auth.failure import NativeAuthFailure, NativeAuthRuntimeError
 from litellm._auth.route_enable import RouteEnableDecision, RouteEnableFacts, RouteFeature, RouteSetting, route_enable
 from litellm.proxy._types import CommonProxyErrors
-from litellm.proxy.auth.route_policy_adapter import route_context
+from litellm.proxy.auth.route_policy_adapter import read_eu_jev_configuration, route_context
 
 _KEYS: Final = {"Admin": "DISABLE_ADMIN_ENDPOINTS", "Llm": "DISABLE_LLM_API_ENDPOINTS"}
 
@@ -50,6 +50,7 @@ class RouteEnableReaders:
     setting: Callable[[RouteFeature], RouteSetting] = read_setting
     secret: Callable[[RouteFeature], bool] = read_secret
     exemptions: Callable[[object], tuple[str, ...]] = read_exemptions
+    eu_jev: Callable[[], bool] = read_eu_jev_configuration
 
 
 _READERS: Final = RouteEnableReaders()
@@ -63,6 +64,8 @@ def _answer(
             return replace(facts, imported=True), readers.enterprise()
         case "ReadExemptions":
             return replace(facts, exemptions=readers.exemptions(enterprise)), enterprise
+        case "ReadEuJev":
+            return replace(facts, eu_jev_configured=readers.eu_jev()), enterprise
         case "ReadSettings" | "ReadSecret":
             if decision.feature is None:
                 raise NativeAuthRuntimeError("route setting read without feature")

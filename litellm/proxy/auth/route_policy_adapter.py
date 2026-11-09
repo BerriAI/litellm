@@ -219,7 +219,21 @@ def classify(
     kind: Literal["Llm", "Unbilled", "Discovery", "SelfCredential", "Azure", "Managed"],
     method: str | None = None,
 ) -> bool:
-    return routes.classify_route(route_context(route, method, registration=kind == "Llm"), kind)
+    from litellm._auth.route_enable import llm_route
+
+    context: Final = route_context(route, method)
+    if kind != "Llm":
+        return routes.classify_route(context, kind)
+    decision: Final = llm_route(context)
+    if decision == "ReadEuJev":
+        return llm_route(context, read_eu_jev_configuration()) == "Allow"
+    return decision == "Allow"
+
+
+def read_eu_jev_configuration() -> bool:
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import InitPassThroughEndpointHelpers
+
+    return InitPassThroughEndpointHelpers.has_configured_route_ignoring_trailing_slash("/eu_jev/v1/systemone")
 
 
 def denied_passthrough(route: str, metadata_sources: Iterable[Mapping[str, object] | None]) -> str | None:
