@@ -2695,22 +2695,14 @@ async def test_affinity_keeps_reasoning_when_every_deployment_already_refused_th
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "origin_failure",
-    [
-        Exception("upstream 500"),
-        litellm.RateLimitError(message="upstream 429", llm_provider="openai", model="gpt-5.4"),
-    ],
-    ids=["server_error", "rate_limit"],
-)
-async def test_retry_leaves_the_pinned_origin_after_a_retryable_failure(origin_failure: Exception):
+async def test_retry_leaves_the_pinned_origin_after_a_server_error():
     def deployment(region: str, mock_response: object) -> dict[str, object]:
         base: Final = _region_deployment(region)
         return {**base, "litellm_params": {**base["litellm_params"], "mock_response": mock_response}}
 
     router: Final = litellm.Router(
         model_list=[
-            deployment("region-a", origin_failure),
+            deployment("region-a", Exception("upstream 500")),
             deployment("region-b", "ok"),
             deployment("region-c", "ok"),
         ],

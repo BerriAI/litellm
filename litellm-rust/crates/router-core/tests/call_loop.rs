@@ -992,6 +992,44 @@ async fn a_stream_retry_is_reported_before_its_attempt(config: RouterConfig) {
     assert_eq!((response.attempted_retries, host.retries()), (1, 1));
 }
 
+fn pinned_to_a1() -> Arc<ScriptedHost> {
+    Arc::new(ScriptedHost {
+        pinned: Some("a1"),
+        ..ScriptedHost::default()
+    })
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_stream_retry_leaves_the_pinned_deployment_the_stream_failed_on(mut config: RouterConfig) {
+    config.callback_filters = true;
+    let host = pinned_to_a1();
+    let router = router(config, json!({}), host.clone());
+    let origin = StreamOrigin {
+        deployment_id: Some("a1".to_owned()),
+        ..stream_origin()
+    };
+    router
+        .retry_stream(Op::from("acompletion"), stream_request(), origin, server_error())
+        .await
+        .unwrap();
+    assert_eq!(host.selected(), vec!["a2".to_owned()]);
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_stream_retry_leaves_a_pinned_deployment_a_retry_failed_on(mut config: RouterConfig) {
+    config.callback_filters = true;
+    let host = pinned_to_a1();
+    *host.first_failure.lock() = Some(server_error());
+    let router = router(config, json!({}), host.clone());
+    router
+        .retry_stream(Op::from("acompletion"), stream_request(), stream_origin(), server_error())
+        .await
+        .unwrap();
+    assert_eq!(host.selected(), vec!["a1".to_owned(), "a2".to_owned()]);
+}
+
 fn fallback_list(value: serde_json::Value) -> Fallbacks {
     serde_json::from_value(value).unwrap()
 }
