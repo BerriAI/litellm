@@ -842,12 +842,15 @@ def test_get_cache_key():
 
         print(embedding_cache_key)
 
-        embedding_cache_key_str = "model: azure/text-embedding-ada-002input: ['hi who is ishaan']"
+        embedding_cache_key_str = (
+            "model: azure/text-embedding-ada-002 api_base: https://openai-gpt-4-test-v-1.openai.azure.com/"
+            "input: ['hi who is ishaan']"
+        )
         hash_object = hashlib.sha256(embedding_cache_key_str.encode())
         # Hexadecimal representation of the hash
         hash_hex = hash_object.hexdigest()
         assert embedding_cache_key == hash_hex, (
-            f"{embedding_cache_key} != 'model: azure/text-embedding-ada-002input: ['hi who is ishaan']'. The same kwargs should have the same cache key across runs"
+            f"{embedding_cache_key} != '{embedding_cache_key_str}'. The same kwargs should have the same cache key across runs"
         )
 
         # Proxy - embedding cache, test if embedding key, gets model_group and not model
@@ -1655,3 +1658,51 @@ def test_cache_key_separates_model_ids_unless_a_model_group_owns_the_key() -> No
     assert key_a != bare
     assert key_a == key_a_again
     assert grouped_a == grouped_b
+
+
+def test_cache_key_separates_api_bases_unless_a_model_group_owns_the_key() -> None:
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    variants: Final[tuple[dict[str, object], ...]] = (
+        {"api_base": "https://backend-a.test/v1"},
+        {"api_base": "https://backend-b.test/v1"},
+        {},
+        {"api_base": "https://backend-a.test/v1"},
+        {"api_base": "https://backend-a.test/v1", "metadata": {"model_group": "chat"}},
+        {"api_base": "https://backend-b.test/v1", "metadata": {"model_group": "chat"}},
+        {"api_base": "https://backend-a.test/v1", "litellm_metadata": {"model_group": "chat"}},
+        {"api_base": "https://backend-b.test/v1", "litellm_metadata": {"model_group": "chat"}},
+    )
+    key_a, key_b, bare, key_a_again, grouped_a, grouped_b, litellm_grouped_a, litellm_grouped_b = (
+        cache.get_cache_key(model="gpt-4o", messages=[{"role": "user", "content": "hi"}], **extra) for extra in variants
+    )
+
+    assert key_a != key_b
+    assert key_a != bare
+    assert key_a == key_a_again
+    assert grouped_a == grouped_b
+    assert litellm_grouped_a == litellm_grouped_b
+
+
+def test_cache_key_is_unchanged_without_an_api_base() -> None:
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    messages: Final = [{"role": "user", "content": "hi"}]
+
+    assert (
+        cache.get_cache_key(model="gpt-4o", messages=messages, api_base=None)
+        == hashlib.sha256(f"model: gpt-4omessages: {messages}".encode()).hexdigest()
+    )
+
+
+def test_completion_cache_is_not_shared_across_api_bases(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL))
+    messages: Final = [{"role": "user", "content": f"which backend {uuid.uuid4().hex}"}]
+    request: Final[dict[str, object]] = {"model": "gpt-4o", "messages": messages, "caching": True}
+
+    from_a: Final = completion(**request, api_base="https://backend-a.test/v1", mock_response="from A")
+    from_b: Final = completion(**request, api_base="https://backend-b.test/v1", mock_response="from B")
+    from_a_again: Final = completion(**request, api_base="https://backend-a.test/v1", mock_response="not cached")
+
+    assert from_a.choices[0].message.content == "from A"
+    assert from_b.choices[0].message.content == "from B"
+    assert from_a_again.choices[0].message.content == "from A"
+    assert from_a_again._hidden_params["cache_hit"] is True
