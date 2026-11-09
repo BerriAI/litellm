@@ -246,6 +246,26 @@ async def test_bridged_turn_with_a_client_field_named_previous_response_client_i
     assert isinstance(response, ResponsesAPIResponse)
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("client_field", ["caller_input", "names_non_string_fields"])
+async def test_bridged_turn_with_a_client_field_named_like_a_bridge_keyword_reaches_the_provider(client_field: str):
+    provider: Final = _RecordingAnthropicHandler(_ANTHROPIC_MESSAGE_PAYLOAD)
+    client: Final = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(provider))
+
+    response = await litellm.aresponses(
+        model="azure_ai/claude-sonnet-4-6",
+        api_base="https://fake-foundry-resource.services.ai.azure.com",
+        api_key="fake-api-key",
+        input="Double it",
+        client=client,
+        **{client_field: "from the client body"},
+    )
+
+    assert provider.request_body is not None, "the bridged turn never reached the provider"
+    assert isinstance(response, ResponsesAPIResponse)
+
+
 class _StoredTurns:
     def __init__(self, rows: tuple[Mapping[str, object], ...]) -> None:
         self.rows: Final = rows
@@ -310,3 +330,32 @@ async def test_bridged_next_turn_replays_a_turn_stored_under_the_id_the_client_h
         ("assistant", json.dumps([{"type": "text", "text": "Noted."}])),
         ("user", json.dumps([{"type": "text", "text": "Double it"}])),
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("client_field", ["caller_input", "names_non_string_fields"])
+async def test_bridged_follow_up_after_a_client_tool_search_with_a_client_field_named_like_a_bridge_keyword_reaches_the_provider(
+    client_field: str,
+):
+    previous_response_id: Final = ResponsesAPIRequestUtils._build_responses_api_response_id(
+        custom_llm_provider="azure_ai", model_id="deployment-a", response_id="chatcmpl-turn-one"
+    )
+    stored_turns: Final = _StoredTurns((_stored_mcp_turn(previous_response_id),))
+    provider: Final = _RecordingAnthropicHandler(_ANTHROPIC_MESSAGE_PAYLOAD)
+    client: Final = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(provider))
+
+    with patch("litellm.proxy.proxy_server.prisma_client", SimpleNamespace(db=stored_turns)):
+        response = await litellm.aresponses(
+            model="azure_ai/claude-sonnet-4-6",
+            api_base="https://fake-foundry-resource.services.ai.azure.com",
+            api_key="fake-api-key",
+            input="Double it",
+            tools=[{"type": "tool_search", "execution": "client"}],
+            previous_response_id=previous_response_id,
+            client=client,
+            **{client_field: "from the client body"},
+        )
+
+    assert provider.request_body is not None, "the bridged turn never reached the provider"
+    assert isinstance(response, ResponsesAPIResponse)

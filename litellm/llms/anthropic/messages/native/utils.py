@@ -2,7 +2,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from functools import lru_cache
 from typing import TYPE_CHECKING, Final, cast, get_type_hints
 
-from pydantic import JsonValue, TypeAdapter, ValidationError
+from pydantic import ConfigDict, JsonValue, TypeAdapter, ValidationError, with_config
 
 from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
@@ -160,6 +160,34 @@ def openai_chat_refusal_text(message_or_delta: object) -> str | None:
     if isinstance(refusal, str) and refusal:
         return refusal
     return _mapping_str_field(getattr(message_or_delta, "provider_specific_fields", None), "refusal")
+
+
+def anthropic_stop_reason(message_or_delta: object) -> str | None:
+    return _mapping_str_field(getattr(message_or_delta, "provider_specific_fields", None), "stop_reason")
+
+
+def refusal_reply_text(message_or_delta: object) -> str | None:
+    if anthropic_stop_reason(message_or_delta) == "refusal":
+        return None
+    return openai_chat_refusal_text(message_or_delta)
+
+
+@with_config(ConfigDict(extra="allow"))
+class _AnthropicRefusalStopDetails(AnthropicStopDetails, total=False):
+    pass
+
+
+_ANTHROPIC_REFUSAL_STOP_DETAILS: Final = TypeAdapter(_AnthropicRefusalStopDetails)
+
+
+def anthropic_refusal_stop_details(message_or_delta: object) -> AnthropicStopDetails | None:
+    provider_specific_fields: Final = getattr(message_or_delta, "provider_specific_fields", None)
+    if _mapping_str_field(provider_specific_fields, "stop_reason") != "refusal":
+        return None
+    try:
+        return _ANTHROPIC_REFUSAL_STOP_DETAILS.validate_python(_mapping_field(provider_specific_fields, "stop_details"))
+    except ValidationError:
+        return refusal_stop_details(openai_chat_refusal_text(message_or_delta))
 
 
 def _responses_message_refusal_text(item: object) -> str | None:

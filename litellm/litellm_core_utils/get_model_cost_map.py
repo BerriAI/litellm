@@ -320,9 +320,7 @@ def _classify_fetch_content(content: bytes, url: str, etag: str | None) -> _Fetc
         return ModelCostMapReloadUnavailable(reason=f"invalid JSON from {url}: {e}")
     if not isinstance(parsed, dict):
         return ModelCostMapReloadUnavailable(reason=f"expected a JSON object from {url}, got {type(parsed).__name__}")
-    model_cost_map: Final = cast(  # cast-ok: JSON object keys are strings by definition
-        dict[str, object], parsed
-    )
+    model_cost_map: Final = _BUNDLED_CATALOG_ADAPTER.validate_python(parsed)
     return ModelCostMapReloaded(model_cost_map=model_cost_map, revision=git_blob_id(content), etag=etag)
 
 
@@ -582,21 +580,25 @@ def _alias_groups(alias_owners: Mapping[str, str]) -> Mapping[str, tuple[str, ..
 
 def _expand_model_aliases(model_cost: dict[str, dict[str, object]]) -> dict[str, dict[str, object]]:
     """
-    Expand ``aliases`` lists in model cost entries into top-level entries.
+    Expand alias rows into top-level entries that share their owner's ``AliasedCostEntry``.
 
-    Each alias gets a reference to the **same** ``AliasedCostEntry`` as the
-    canonical entry, which carries every name it is served under.  The
-    ``aliases`` key is removed from the entry so downstream code never sees it.
+    A row whose ``alias_of`` names another row is served as that row, and an
+    ``aliases`` list on a row adds further names for it. Every name in a group
+    references the **same** ``AliasedCostEntry``, which carries every name it is
+    served under, and neither key survives into the served entries.
 
-    If an alias collides with an existing canonical entry the alias is
-    skipped and a warning is logged.
+    An alias that collides with a canonical entry or another alias, or a row whose
+    ``alias_of`` names nothing, is skipped and a warning is logged.
     """
+    pointer_rows: Final = {
+        name: target for name, info in model_cost.items() if isinstance(target := info.get("alias_of"), str)
+    }
     alias_owners: Final[dict[str, str]] = {}
     keys_with_aliases: Final[list[str]] = []
 
     for model_name, model_info in model_cost.items():
         aliases: object = model_info.get("aliases")
-        if aliases is None:
+        if aliases is None or model_name in pointer_rows:
             continue
         keys_with_aliases.append(model_name)
         if not isinstance(aliases, list):
@@ -609,7 +611,7 @@ def _expand_model_aliases(model_cost: dict[str, dict[str, object]]) -> dict[str,
         if not aliases:
             continue
         for alias in aliases:
-            if alias in model_cost:
+            if alias in model_cost and alias not in pointer_rows:
                 verbose_logger.warning(
                     "LiteLLM model alias conflict: alias '%s' (from '%s') "
                     "already exists as a canonical entry — skipping.",
@@ -627,9 +629,26 @@ def _expand_model_aliases(model_cost: dict[str, dict[str, object]]) -> dict[str,
                 continue
             alias_owners[alias] = model_name
 
+    for alias, target in pointer_rows.items():
+        if target not in model_cost or target in pointer_rows:
+            verbose_logger.warning(
+                "LiteLLM model alias '%s' points at '%s', which is not a model entry, dropping it.", alias, target
+            )
+        elif alias in alias_owners:
+            verbose_logger.warning(
+                "LiteLLM model alias conflict: alias '%s' (pointing at '%s') "
+                "was already claimed by another entry — skipping.",
+                alias,
+                target,
+            )
+        else:
+            alias_owners[alias] = target
+
     # Remove the ``aliases`` key from entries so it doesn't pollute model info
     for key in keys_with_aliases:
         model_cost[key].pop("aliases", None)
+    for alias in pointer_rows.keys() - alias_owners.keys():
+        model_cost.pop(alias)
 
     for owner, names in _alias_groups(alias_owners).items():
         model_cost.update(dict.fromkeys(names, AliasedCostEntry(model_cost[owner], names)))
