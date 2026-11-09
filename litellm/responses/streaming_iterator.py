@@ -2340,7 +2340,7 @@ class GuardedResponsesWsFrame:
     frame: str
     guardrail_information: tuple[Mapping[str, object], ...] = ()
     pii_tokens: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))
-    bill_refusal: Callable[[Exception], None] | None = None
+    bill_refusal: Callable[[Exception], Awaitable[None]] | None = None
 
 
 ResponsesWsFrameGuard: TypeAlias = Callable[[str], Awaitable[GuardedResponsesWsFrame]]
@@ -2374,7 +2374,7 @@ async def _reject_guarded_turn(
 ) -> None:
     """Bills the refused turn as its own failed request, then answers it on the open socket."""
     if guarded.bill_refusal is not None:
-        guarded.bill_refusal(rejection)
+        await guarded.bill_refusal(rejection)
     with contextlib.suppress(Exception):
         await websocket.send_text(_turn_rejection_frame(rejection))
 

@@ -93,6 +93,7 @@ from litellm.proxy.hooks.responses_id_security import ResponsesIDSecurity, decry
 from litellm.proxy.litellm_pre_call_utils import (
     _CLIENT_PRICING_METADATA_FIELDS,  # pyright: ignore[reportPrivateUsage]  # the HTTP path's own strip list
     _UNTRUSTED_METADATA_CONTROL_FIELDS,  # pyright: ignore[reportPrivateUsage]  # the HTTP path's own strip list
+    _UNTRUSTED_ROOT_CONTROL_FIELDS,  # pyright: ignore[reportPrivateUsage]  # the HTTP path's own strip list
     add_guardrails_from_policy_engine,
     is_chat_completions_body,
 )
@@ -2183,6 +2184,9 @@ _CLIENT_GUARDRAIL_SELECTORS: Final = ("guardrails", "guardrail_config", "policie
 _METADATA_GUARDRAIL_SELECTORS: Final = ("guardrails", "guardrail_config")
 _PROXY_ONLY_FRAME_FIELDS: Final = (*_CLIENT_GUARDRAIL_SELECTORS, "include_guardrail_response")
 _UNFORWARDED_FRAME_FIELDS: Final = (*_GUARDED_FRAME_FIELDS, *_PROXY_ONLY_FRAME_FIELDS, "litellm_metadata")
+_UNTRUSTED_TURN_FIELDS: Final = frozenset(
+    (*_UNTRUSTED_ROOT_CONTROL_FIELDS, "standard_callback_dynamic_params", "litellm_params")
+)
 _OBJECTS: Final = TypeAdapter(list[object])
 _TURN_COPIED_CONTAINERS: Final = (list, dict)
 
@@ -2256,12 +2260,14 @@ def _responses_ws_frame_guard(
 
     failure_row: Final = partial(_turn_failure_row, metadata_key, admitted_bucket)
 
-    def bill_refusal(turn: Mapping[str, object], started_at: datetime, refusal: Exception) -> None:
+    async def bill_refusal(turn: Mapping[str, object], started_at: datetime, refusal: Exception) -> None:
         record_refused_turn(refusal)
-        _ = spawn_logging_task(
-            asyncio.get_running_loop(),
-            _bill_rejected_frame(rejected_frame_auth, refusal, failure_row(turn, started_at)),
-            task_name="Responses WebSocket refused turn row",
+        await asyncio.shield(
+            spawn_logging_task(
+                asyncio.get_running_loop(),
+                _bill_rejected_frame(rejected_frame_auth, refusal, failure_row(turn, started_at)),
+                task_name="Responses WebSocket refused turn row",
+            )
         )
 
     async def rejection(
@@ -2344,12 +2350,13 @@ def _turn_failure_row(
 ) -> dict[str, object]:  # mutable-ok: the spend logger stamps the failure row on the request dict
     """A turn bills like an HTTP ``/v1/responses`` request: its own call id, start time, guardrail records and stored
     request, under the socket's call type and the model group the router resolved for the socket."""
+    trusted_turn: Final = {key: value for key, value in turn.items() if key not in _UNTRUSTED_TURN_FIELDS}
     turn_bucket: Final = turn.get(metadata_key)
     model_group: Final = (
         _WS_FRAME.validate_python(socket_bucket).get("model_group") if isinstance(socket_bucket, dict) else None
     )
     return {
-        **turn,
+        **trusted_turn,
         metadata_key: {
             **(_WS_FRAME.validate_python(turn_bucket) if isinstance(turn_bucket, dict) else {}),
             **({"model_group": model_group} if isinstance(model_group, str) else {}),
@@ -2359,7 +2366,7 @@ def _turn_failure_row(
         "proxy_server_request": {
             "body": {
                 key: _without_untrusted_metadata(key, value)
-                for key, value in without_server_streaming_classification(turn).items()
+                for key, value in without_server_streaming_classification(trusted_turn).items()
                 if key not in (metadata_key, "litellm_call_id")
             }
         },

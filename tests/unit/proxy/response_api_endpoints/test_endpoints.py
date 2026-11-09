@@ -2752,7 +2752,7 @@ class TestResponsesWSFirstFrameModelAuth:
                 with pytest.raises(ValueError, match="blocked"):
                     await guard(frame)
             else:
-                (await guard(frame)).bill_refusal(refusal)
+                await (await guard(frame)).bill_refusal(refusal)
             await drain_logging_tasks(timeout=1)
             answered_at = datetime.now()
             spend_writer.update_database.assert_awaited_once()
@@ -2775,6 +2775,100 @@ class TestResponsesWSFirstFrameModelAuth:
             "metadata": {"trace": "t1"},
             "model": "gpt-4o-mini",
         }
+
+    @pytest.mark.asyncio
+    async def test_frame_guard_bills_a_refused_turn_without_the_logging_state_its_frame_forges(self):
+        from unittest.mock import create_autospec
+
+        from litellm.exceptions import RateLimitError
+        from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
+        from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
+        from litellm.proxy.response_api_endpoints.endpoints import _responses_ws_frame_guard
+        from litellm.responses.streaming_iterator import drain_logging_tasks
+
+        refusal = RateLimitError(message="crossed budget", llm_provider="", model="")
+        proxy_logging_obj = MagicMock(during_call_hook=AsyncMock())
+        proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=lambda **kwargs: kwargs["data"])
+        spend_writer = create_autospec(DBSpendUpdateWriter, instance=True)
+        guard = _responses_ws_frame_guard(
+            {"model": "gpt-4o-mini", "litellm_metadata": {"tags": ["ws-tag"], "model_group": "mini-group"}},
+            UserAPIKeyAuth(api_key="sk-socket", request_route="/v1/responses"),
+            proxy_logging_obj,
+            MagicMock(),
+        )
+        frame = json.dumps(
+            {
+                "type": "response.create",
+                "input": "my secret prompt",
+                "standard_logging_object": {},
+                "standard_callback_dynamic_params": {"turn_off_message_logging": False},
+                "litellm_params": {"metadata": {"tags": ["forged-tag"]}},
+            }
+        )
+
+        with (
+            patch.object(litellm, "callbacks", [ProxyDBLogger(spend_writer=lambda: spend_writer)]),
+            patch.object(litellm, "turn_off_message_logging", True),
+            patch(  # test-quality-ok: stored prompts are off by default and the stored request is under test
+                "litellm.proxy.proxy_server.general_settings", {"store_prompts_in_spend_logs": True}
+            ),
+        ):
+            await (await guard(frame)).bill_refusal(refusal)
+            await drain_logging_tasks(timeout=1)
+            spend_writer.update_database.assert_awaited_once()
+            row = _spend_log_row(spend_writer.update_database.await_args.kwargs)
+
+        stored_request = json.loads(row["proxy_server_request"])
+        assert row["model_group"] == "mini-group"
+        assert json.loads(row["request_tags"]) == ["ws-tag"]
+        assert "my secret prompt" not in row["proxy_server_request"]
+        assert stored_request.keys().isdisjoint(
+            {"standard_logging_object", "standard_callback_dynamic_params", "litellm_params"}
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_refused_turn_row_is_written_even_when_the_socket_is_cancelled_while_billing_it(self):
+        from unittest.mock import create_autospec
+
+        from litellm.exceptions import RateLimitError
+        from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
+        from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
+        from litellm.proxy.response_api_endpoints.endpoints import _responses_ws_frame_guard
+        from litellm.responses.streaming_iterator import drain_logging_tasks
+
+        writing = asyncio.Event()
+        may_finish = asyncio.Event()
+        written = asyncio.Event()
+
+        async def slow_update_database(**kwargs: object) -> None:
+            writing.set()
+            await may_finish.wait()
+            written.set()
+
+        proxy_logging_obj = MagicMock(during_call_hook=AsyncMock())
+        proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=lambda **kwargs: kwargs["data"])
+        spend_writer = create_autospec(DBSpendUpdateWriter, instance=True)
+        spend_writer.update_database.side_effect = slow_update_database
+        guard = _responses_ws_frame_guard(
+            {"model": "gpt-4o-mini", "litellm_metadata": {}},
+            UserAPIKeyAuth(api_key="sk-socket", request_route="/v1/responses"),
+            proxy_logging_obj,
+            MagicMock(),
+        )
+        guarded = await guard(json.dumps({"type": "response.create", "input": "hi"}))
+
+        with patch.object(litellm, "callbacks", [ProxyDBLogger(spend_writer=lambda: spend_writer)]):
+            billing = asyncio.ensure_future(
+                guarded.bill_refusal(RateLimitError(message="crossed budget", llm_provider="", model=""))
+            )
+            await asyncio.wait_for(writing.wait(), timeout=1)
+            billing.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await billing
+            may_finish.set()
+            await drain_logging_tasks(timeout=1)
+
+        assert written.is_set()
 
     @pytest.mark.asyncio
     async def test_frame_guard_guards_the_nested_response_body_and_copies_back_tools(self):
@@ -3712,7 +3806,7 @@ class TestResponsesWSFirstFrameModelAuth:
                         json.dumps({"type": "response.create", "input": turn})
                     )
                     if turn in rejections:
-                        guarded.bill_refusal(rejections[turn])
+                        await guarded.bill_refusal(rejections[turn])
                 await drain_logging_tasks(timeout=1)
                 rows_while_open.extend(_spend_log_row(write.kwargs) for write in spend_writer.update_database.await_args_list)
                 if ending == "crash":
@@ -3828,7 +3922,7 @@ class TestResponsesWSFirstFrameModelAuth:
         def route_request(data, **kwargs):
             async def relay():
                 guarded = await data["responses_ws_frame_guard"](json.dumps({"type": "response.create", "input": "two"}))
-                guarded.bill_refusal(refusal)
+                await guarded.bill_refusal(refusal)
                 if relay_outcome == "still_relaying":
                     await asyncio.Event().wait()
                 if relay_outcome in ("returns_despite_the_cancel", "crashes_despite_the_cancel"):
@@ -3923,7 +4017,7 @@ class TestResponsesWSFirstFrameModelAuth:
         def route_request(data, **kwargs):
             async def relay():
                 guarded = await data["responses_ws_frame_guard"](json.dumps({"type": "response.create", "input": "two"}))
-                guarded.bill_refusal(refusal)
+                await guarded.bill_refusal(refusal)
                 if ending == "crash":
                     raise crash
                 return refusal
@@ -3998,7 +4092,7 @@ class TestResponsesWSFirstFrameModelAuth:
         def route_request(data, **kwargs):
             async def relay():
                 guarded = await data["responses_ws_frame_guard"](json.dumps({"type": "response.create", "input": "two"}))
-                guarded.bill_refusal(refusal)
+                await guarded.bill_refusal(refusal)
                 raise RuntimeError("relay crashed")
 
             return relay()

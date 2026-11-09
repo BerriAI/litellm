@@ -1690,7 +1690,7 @@ def _guard_blocking(word: str):
     return guard
 
 
-def _guard_recording(bill_refusal: MagicMock):
+def _guard_recording(bill_refusal: AsyncMock):
     from litellm.responses.streaming_iterator import GuardedResponsesWsFrame
 
     async def guard(frame: str) -> GuardedResponsesWsFrame:
@@ -2439,7 +2439,7 @@ class TestWebSocketTurnAdmission:
 
         first, second, third = _turn_frames()
         refusal: Final = RateLimitError(message="crossed budget", llm_provider="", model="")
-        bill_refusal: Final = MagicMock()
+        bill_refusal: Final = AsyncMock()
         backend_ws: Final = MagicMock()
         backend_ws.send = AsyncMock()
         backend_ws.close = AsyncMock()
@@ -2456,8 +2456,40 @@ class TestWebSocketTurnAdmission:
         close_time_failure: Final = await handler.bidirectional_forward()
 
         assert [json.loads(sent.args[0])["input"] for sent in backend_ws.send.await_args_list] == ["one", "three"]
-        bill_refusal.assert_called_once_with(refusal)
+        bill_refusal.assert_awaited_once_with(refusal)
         assert close_time_failure is refusal
+
+    @pytest.mark.asyncio
+    async def test_native_relay_forwards_no_later_turn_until_the_refused_turn_is_billed(self):
+        from unittest.mock import AsyncMock
+
+        from litellm.exceptions import RateLimitError
+
+        first, second, third = _turn_frames()
+        events: Final[list[str]] = []
+
+        async def bill_refusal(rejection: Exception) -> None:
+            await asyncio.sleep(0.01)
+            events.append("billed")
+
+        backend_ws: Final = MagicMock()
+        backend_ws.send = AsyncMock(side_effect=lambda frame: events.append(json.loads(frame)["input"]))
+        backend_ws.close = AsyncMock()
+        backend_ws.recv = AsyncMock(side_effect=asyncio.Event().wait)
+        handler: Final = _make_streaming(
+            websocket=_ClientSocket(second, third),
+            backend_ws=backend_ws,
+            request_data={},
+            first_message=first,
+            frame_guard=_guard_recording(AsyncMock(side_effect=bill_refusal)),
+            turn_admission=AsyncMock(
+                side_effect=[RateLimitError(message="crossed budget", llm_provider="", model=""), {}]
+            ),
+        )
+
+        _ = await handler.bidirectional_forward()
+
+        assert events == ["one", "billed", "three"]
 
     @pytest.mark.asyncio
     async def test_a_refused_turn_is_recorded_even_when_the_relay_is_cancelled_while_answering_it(self):
@@ -2467,7 +2499,7 @@ class TestWebSocketTurnAdmission:
 
         first, second, third = _turn_frames()
         refusal: Final = RateLimitError(message="crossed budget", llm_provider="", model="")
-        bill_refusal: Final = MagicMock()
+        bill_refusal: Final = AsyncMock()
         backend_ws: Final = MagicMock()
         backend_ws.send = AsyncMock()
         backend_ws.close = AsyncMock()
@@ -2488,7 +2520,7 @@ class TestWebSocketTurnAdmission:
         with pytest.raises(asyncio.CancelledError):
             await relay
 
-        bill_refusal.assert_called_once_with(refusal)
+        bill_refusal.assert_awaited_once_with(refusal)
 
     @pytest.mark.asyncio
     async def test_managed_relay_bills_a_refused_turn_and_returns_it_as_the_close_time_failure(
@@ -2515,7 +2547,7 @@ class TestWebSocketTurnAdmission:
         monkeypatch.setattr(litellm, "aresponses", fake_aresponses)
         first, second, third = _turn_frames()
         refusal: Final = RateLimitError(message="crossed budget", llm_provider="", model="")
-        bill_refusal: Final = MagicMock()
+        bill_refusal: Final = AsyncMock()
         handler: Final = ManagedResponsesWebSocketHandler(
             websocket=_ClientSocket(second, third),
             model="test-model",
@@ -2536,7 +2568,7 @@ class TestWebSocketTurnAdmission:
         close_time_failure: Final = await handler.run()
 
         assert answered == ["one", "three"]
-        bill_refusal.assert_called_once_with(refusal)
+        bill_refusal.assert_awaited_once_with(refusal)
         assert close_time_failure is refusal
 
     @pytest.mark.asyncio
