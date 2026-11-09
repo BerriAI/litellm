@@ -34,11 +34,9 @@ fn merge_headers(
     forwarded: Option<Map<String, Value>>,
     extra_headers: Option<Map<String, Value>>,
 ) -> Option<Map<String, Value>> {
-    let merged: Map<String, Value> = forwarded
-        .into_iter()
-        .flatten()
-        .chain(extra_headers.into_iter().flatten())
-        .collect();
+    let merged = litellm_inference_messages::merge_messages_header_sources(
+        forwarded.into_iter().chain(extra_headers),
+    );
     (!merged.is_empty()).then_some(merged)
 }
 
@@ -107,10 +105,19 @@ impl MessagesPythonHost {
             .map(|value| python_timeout_seconds(py, value.unbind()))
             .transpose()?
             .flatten();
-        let custom_llm_provider = string("custom_llm_provider")?;
-        let shaping = self.shaping(py, &model, custom_llm_provider.as_deref(), arguments)?;
         let api_key = string("api_key")?;
         let api_base = string("api_base")?;
+        // Python's handler resolves a bare model name (`claude-sonnet-4-5`) through
+        // `get_llm_provider`'s model lists, which the native prefix lookup does not carry.
+        let custom_llm_provider = match string("custom_llm_provider")? {
+            Some(provider) => Some(provider),
+            None => py
+                .import(ROUTE_HOST_MODULE)?
+                .getattr("inferred_provider")?
+                .call1((&model, api_base.as_deref()))?
+                .extract()?,
+        };
+        let shaping = self.shaping(py, &model, custom_llm_provider.as_deref(), arguments)?;
         let extra_headers = self.merged_headers(py, arguments)?;
         let provider_specific_header = self.provider_specific_header(py, arguments)?;
         let litellm_params = project_litellm_params(argument, |name| module_global(py, name))?;

@@ -1,4 +1,5 @@
 import { useCallback, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useDebouncedValue } from "@tanstack/react-pacer/debouncer";
 import { useQuery, keepPreviousData } from "@tanstack/react-query";
 import { ColumnFiltersState, OnChangeFn, PaginationState } from "@tanstack/react-table";
@@ -39,6 +40,7 @@ export default function AuditLogsPanel({
   isActive,
   premiumUser,
 }: AuditLogsProps) {
+  const { t } = useTranslation();
   const [pagination, setPagination] = useState<PaginationState>({ pageIndex: 0, pageSize: PAGE_SIZE });
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
   const [searchInput, setSearchInput] = useState("");
@@ -101,16 +103,14 @@ export default function AuditLogsPanel({
   if (!premiumUser) {
     return (
       <div className="flex min-h-0 flex-1 flex-col items-center justify-center overflow-y-auto text-center">
-        <h1 style={{ display: "block", marginBottom: "10px" }}>✨ Enterprise Feature.</h1>
-        <p style={{ display: "block", marginBottom: "10px" }}>
-          This is a LiteLLM Enterprise feature, and requires a valid key to use.
-        </p>
+        <h1 style={{ display: "block", marginBottom: "10px" }}>{t("logs.audit.panel.enterpriseTitle")}</h1>
+        <p style={{ display: "block", marginBottom: "10px" }}>{t("logs.audit.panel.enterpriseDescription")}</p>
         <p style={{ display: "block", marginBottom: "20px", fontStyle: "italic" }}>
-          Here&apos;s a preview of what Audit Logs offer:
+          {t("logs.audit.panel.previewIntro")}
         </p>
         <img
           src={resolveLogoSrc(auditLogsPreviewImg)}
-          alt="Audit Logs Preview"
+          alt={t("logs.audit.panel.previewAlt")}
           style={{
             maxWidth: "100%",
             maxHeight: "700px",

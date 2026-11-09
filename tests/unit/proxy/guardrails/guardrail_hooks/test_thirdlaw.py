@@ -1486,7 +1486,7 @@ async def test_a_buffered_responses_stream_block_reaches_the_client_as_its_block
 ):
     """The Responses error event carried a fixed 400, which the proxy answered with (TL-2934)."""
     import litellm
-    from litellm.proxy.common_request_processing import create_response
+    from litellm.proxy.common_request_processing import RESPONSES_FIRST_CHUNK_FRAMING, create_response
     from litellm.proxy.proxy_server import (
         async_data_generator,  # pyright: ignore[reportUnknownVariableType]  # its response parameter is untyped
     )
@@ -1506,6 +1506,7 @@ async def test_a_buffered_responses_stream_block_reaches_the_client_as_its_block
         ),
         media_type="text/event-stream",
         headers={},
+        framing=RESPONSES_FIRST_CHUNK_FRAMING,
     )
 
     assert response.status_code == 403

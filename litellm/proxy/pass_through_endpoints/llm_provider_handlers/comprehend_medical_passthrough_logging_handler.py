@@ -2,7 +2,7 @@ import math
 from collections.abc import Mapping
 from datetime import datetime
 from types import MappingProxyType
-from typing import Final
+from typing import ClassVar, Final
 
 import httpx
 
@@ -11,6 +11,8 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.litellm_logging import (
     get_standard_logging_object_payload,
 )
+from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+from litellm.llms.bedrock.web_identity_session_policy import COMPREHEND_MEDICAL_SESSION_POLICY, WebIdentitySessionPolicy
 from litellm.proxy._types import PassThroughEndpointLoggingTypedDict
 from litellm.types.utils import StandardPassThroughResponseObject
 
@@ -25,6 +27,10 @@ COMPREHEND_MEDICAL_COST_PER_UNIT_USD: Final[Mapping[str, float]] = MappingProxyT
     }
 )
 COMPREHEND_MEDICAL_SUPPORTED_OPERATIONS: Final = frozenset(COMPREHEND_MEDICAL_COST_PER_UNIT_USD)
+
+
+class ComprehendMedicalAWS(BaseAWSLLM):
+    _web_identity_session_policy: ClassVar[WebIdentitySessionPolicy] = COMPREHEND_MEDICAL_SESSION_POLICY
 
 
 def _operation_from_headers(headers: Mapping[str, str]) -> str:

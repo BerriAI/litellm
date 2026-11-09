@@ -68,29 +68,34 @@ class MetricWithMetadata(MetricBase):
 class GuardrailSpendMetrics(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
-    spend: float = 0.0
-    untracked_units: int = 0
+    spend: float = Field(default=0.0, description="Guardrail spend in USD, already included in key and model spend")
+    untracked_units: int = Field(default=0, description="Guardrail units with no known price, excluded from spend")
 
 
 class GuardrailKeyMetric(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
-    metrics: GuardrailSpendMetrics
-    metadata: KeyMetadata
+    metrics: GuardrailSpendMetrics = Field(description="Guardrail spend and unpriced units for this API key")
+    metadata: KeyMetadata = Field(description="API key alias and existence information")
 
 
 class GuardrailMetadata(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
-    guardrail_name: str
+    guardrail_name: str = Field(description="Guardrail display name, falling back to the guardrail ID")
 
 
 class GuardrailMetric(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
-    metrics: GuardrailSpendMetrics
-    metadata: GuardrailMetadata
-    api_key_breakdown: Mapping[str, GuardrailKeyMetric] = Field(default_factory=dict)
+    metrics: GuardrailSpendMetrics = Field(
+        description="Guardrail spend and unpriced units across all matching API keys"
+    )
+    metadata: GuardrailMetadata = Field(description="Guardrail name information")
+    api_key_breakdown: Mapping[str, GuardrailKeyMetric] = Field(
+        default_factory=dict,
+        description="Per-key guardrail spend and unpriced units, limited to keys in the day's API key breakdown",
+    )
 
 
 class BreakdownMetrics(LiteLLMBaseModel):
@@ -103,7 +108,11 @@ class BreakdownMetrics(LiteLLMBaseModel):
     endpoints: dict[str, MetricWithMetadata] = Field(default_factory=dict)  # endpoint -> {metrics, metadata}
     api_keys: dict[str, KeyMetricWithMetadata] = Field(default_factory=dict)  # api_key -> {metrics, metadata}
     entities: dict[str, MetricWithMetadata] = Field(default_factory=dict)  # entity -> {metrics, metadata}
-    guardrails: Mapping[str, GuardrailMetric] = Field(default_factory=dict)  # guardrail_id -> spend
+    guardrails: Mapping[str, GuardrailMetric] = Field(
+        default_factory=dict,
+        description="Spend by guardrail ID, already included in key and model spend. "
+        "Populated on user, team and organization aggregated activity only, without a model filter",
+    )
 
 
 class DailySpendData(LiteLLMBaseModel):
