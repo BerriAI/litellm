@@ -1552,7 +1552,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[rstest]
     fn an_answer_by_id_keeps_its_order_and_every_candidate_sharing_an_id() {
         let candidates: Vec<Arc<Deployment>> = ["a", "b", "a", "c"]
             .into_iter()
