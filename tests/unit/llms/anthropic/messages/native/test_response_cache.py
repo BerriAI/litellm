@@ -1,9 +1,12 @@
 import asyncio
 import json
+import re
+from collections.abc import Sequence
 from typing import Any, AsyncIterator, Dict, Final, List
 
 import pytest
 import pytest_asyncio
+from pydantic import TypeAdapter, ValidationError
 
 
 import datetime
@@ -20,6 +23,43 @@ from litellm.llms.anthropic.messages.native.response_cache import (
     AnthropicMessagesStreamCacheWriter,
     CachedAnthropicMessagesStreamIterator,
 )
+
+
+_WIRE_EVENT: Final = TypeAdapter(dict[str, object])
+
+
+def _message_delta_without_cost(line: bytes) -> bytes | None:
+    if not line.startswith(b"data:"):
+        return None
+    try:
+        event: Final = _WIRE_EVENT.validate_json(line[5:])
+    except ValidationError:
+        return None
+    if event.get("type") != "message_delta":
+        return None
+    usage: Final = event.get("usage")
+    if not isinstance(usage, dict):
+        return None
+    fields: Final = _WIRE_EVENT.validate_python(usage)
+    return (
+        b"data: "
+        + json.dumps({**event, "usage": {key: value for key, value in fields.items() if key != "cost"}}).encode()
+    )
+
+
+def _without_usage_cost_frame(frame: bytes) -> bytes:
+    for line in frame.splitlines():
+        normalized: Final = _message_delta_without_cost(line)
+        if normalized is not None:
+            return b"event: message_delta\n" + normalized + b"\n\n"
+    return frame
+
+
+def _without_usage_cost(chunks: Sequence[bytes]) -> bytes:
+    return b"".join(
+        _without_usage_cost_frame(frame) for frame in re.split(rb"(?<=\n\n)|(?<=\r\n\r\n)", b"".join(chunks))
+    )
+
 
 STREAM_EVENTS: List[bytes] = [
     b'event: message_start\ndata: {"type": "message_start", "message": {"id": "msg_stream_1", "type": "message", '
@@ -187,8 +227,8 @@ async def test_streaming_request_is_replayed_from_cache(local_cache, request_kwa
     second = await _collect(second_stream)
 
     assert len(fake_handler.calls) == 1
-    assert first == events
-    assert second == events
+    assert _without_usage_cost(first) == _without_usage_cost(events)
+    assert _without_usage_cost(second) == _without_usage_cost(events)
     assert second_stream._hidden_params["cache_hit"] is True
 
 
@@ -225,9 +265,9 @@ async def test_stream_without_output_is_not_cached(local_cache, request_kwargs, 
     await asyncio.sleep(0)
     replayed = await _collect(await litellm.anthropic_messages(**request_kwargs, stream=True))
 
-    assert empty == empty_events
-    assert refilled == STREAM_EVENTS
-    assert replayed == STREAM_EVENTS
+    assert _without_usage_cost(empty) == _without_usage_cost(empty_events)
+    assert _without_usage_cost(refilled) == _without_usage_cost(STREAM_EVENTS)
+    assert _without_usage_cost(replayed) == _without_usage_cost(STREAM_EVENTS)
     assert len(fake_handler.calls) == 2
 
 
@@ -244,7 +284,7 @@ async def test_failed_stream_is_not_cached(local_cache, request_kwargs, monkeypa
 
     assert failed == error_events
     assert len(fake_handler.calls) == 2
-    assert replayed == STREAM_EVENTS
+    assert _without_usage_cost(replayed) == _without_usage_cost(STREAM_EVENTS)
 
 
 @pytest.mark.asyncio
@@ -265,8 +305,8 @@ async def test_multibyte_utf8_split_across_chunks_streams_and_caches(local_cache
     second = await _collect(await litellm.anthropic_messages(**request_kwargs, stream=True))
 
     assert len(fake_handler.calls) == 1
-    assert first == chunks
-    assert b"".join(second) == b"".join(chunks)
+    assert _without_usage_cost(first) == _without_usage_cost(chunks)
+    assert _without_usage_cost(second) == _without_usage_cost(chunks)
 
 
 @pytest.mark.asyncio
@@ -283,8 +323,8 @@ async def test_message_stop_split_across_chunks_still_caches(local_cache, reques
     second = await _collect(await litellm.anthropic_messages(**request_kwargs, stream=True))
 
     assert len(fake_handler.calls) == 1
-    assert first == chunks
-    assert b"".join(second) == b"".join(chunks)
+    assert _without_usage_cost(first) == _without_usage_cost(chunks)
+    assert _without_usage_cost(second) == _without_usage_cost(chunks)
 
 
 @pytest.mark.asyncio
@@ -299,9 +339,9 @@ async def test_error_event_split_across_chunks_is_not_cached(local_cache, reques
     failed = await _collect(await litellm.anthropic_messages(**request_kwargs, stream=True))
     replayed = await _collect(await litellm.anthropic_messages(**request_kwargs, stream=True))
 
-    assert failed == chunks
+    assert _without_usage_cost(failed) == _without_usage_cost(chunks)
     assert len(fake_handler.calls) == 2
-    assert replayed == STREAM_EVENTS
+    assert _without_usage_cost(replayed) == _without_usage_cost(STREAM_EVENTS)
 
 
 @pytest.mark.asyncio
@@ -316,7 +356,7 @@ async def test_abandoned_stream_is_not_cached(local_cache, request_kwargs, monke
     replayed = await _collect(await litellm.anthropic_messages(**request_kwargs, stream=True))
 
     assert len(fake_handler.calls) == 2
-    assert replayed == STREAM_EVENTS
+    assert _without_usage_cost(replayed) == _without_usage_cost(STREAM_EVENTS)
 
 
 @pytest.mark.asyncio

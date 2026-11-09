@@ -5301,12 +5301,6 @@ class Logging(LiteLLMLoggingBaseClass):
         priced as is."""
         served: Final[object] = result
         call_type: Final[object] = getattr(self, "call_type", None)
-        if (
-            call_type == CallTypes.anthropic_messages.value
-            and isinstance(result, ModelResponse)
-            and self.bridged_model_response is not None
-        ):
-            return self._anthropic_messages_logged_response(result=served)
         if not isinstance(result, dict):
             return served
         if self.bridged_model_response is not None:
@@ -5381,10 +5375,10 @@ class Logging(LiteLLMLoggingBaseClass):
         )
         provider_response_id: Final = _provider_response_id(raw_body)
         bridged: Final = self.bridged_model_response
-        if bridged is not None and isinstance(result, (dict, ModelResponse)):
+        if bridged is not None and isinstance(result, dict):
             return bridged if provider_response_id is None else bridged.model_copy(update={"id": provider_response_id})
         httpx_response: Final = self.model_call_details.get("httpx_response", None)
-        if served_body is None and httpx_response and isinstance(httpx_response, httpx.Response):
+        if not self.stream and httpx_response and isinstance(httpx_response, httpx.Response):
             result = litellm.AnthropicConfig().transform_response(
                 raw_response=httpx_response,
                 model_response=litellm.ModelResponse(id=provider_response_id),

@@ -1,6 +1,7 @@
 import asyncio
 import json
 import re
+from collections import deque
 from collections.abc import AsyncGenerator, AsyncIterator, Generator, Iterator, Mapping, Sequence
 from contextvars import ContextVar
 from datetime import datetime
@@ -429,6 +430,7 @@ class AnthropicMessagesStreamingResponse:
 _SSE_FRAME_END: Final = re.compile(rb"(?<=\n\n)|(?<=\r\n\r\n)")
 _SSE_FRAME_TERMINATORS: Final = (b"\n\n", b"\r\n\r\n")
 _SSE_TERMINATOR_OVERLAP: Final = max(len(terminator) for terminator in _SSE_FRAME_TERMINATORS) - 1
+_USAGE_COST_BUFFER_LIMIT: Final = 1024 * 1024
 _SSE_EVENT: Final = TypeAdapter(Mapping[str, object])
 
 
@@ -458,7 +460,10 @@ class UsageCostMessagesStream:
         self.stream = stream
         self.logging_obj = logging_obj
         self.message: Mapping[str, object] = {}
-        self.pending = b""
+        self.pending: Final = bytearray()
+        self.raw_chunks: Final = deque[bytes]()
+        self.terminal: Final = bytearray()
+        self.passthrough = False
         self.frames = self._iterate()
         self.sync_frames = self._iterate_sync()
 
@@ -501,8 +506,10 @@ class UsageCostMessagesStream:
         if event.get("type") != "message_delta" or not isinstance(usage, Mapping):
             return frame
         initial_usage: Final = self.message.get("usage")
+        delta: Final = event.get("delta")
         body: Final[Mapping[str, object]] = {
             **self.message,
+            **(_SSE_EVENT.validate_python(delta) if isinstance(delta, Mapping) else {}),
             "type": "message",
             "content": (),
             "usage": {
@@ -515,18 +522,67 @@ class UsageCostMessagesStream:
         return anthropic_sse_frame(stamped) if billed else frame
 
     def _frames(self, chunk: object) -> Iterator[bytes]:
-        self.pending += _usage_cost_sse_bytes(chunk)
+        raw: Final = _usage_cost_sse_bytes(chunk)
+        if self.passthrough:
+            yield raw
+            return
+        if not raw:
+            return
+        scan_from: Final = max(len(self.pending) - _SSE_TERMINATOR_OVERLAP, 0)
+        self.pending.extend(raw)
+        self.raw_chunks.append(raw)
+        if len(self.pending) + len(self.terminal) > _USAGE_COST_BUFFER_LIMIT:
+            self.passthrough = True
+            yield bytes(self.terminal) + bytes(self.pending)
+            self.terminal.clear()
+            self.pending.clear()
+            self.raw_chunks.clear()
+            return
+        if not _ends_a_frame(self.pending, scan_from):
+            return
         *frames, remaining = _SSE_FRAME_END.split(self.pending)
-        self.pending = remaining
-        return (self._stamp(frame) for frame in frames)
+        self.pending[:] = remaining
+        for frame in frames:
+            yield from self._frame_chunks(frame)
+
+    def _frame_chunks(self, frame: bytes) -> Iterator[bytes]:
+        original: Final = tuple(self._drain_raw(len(frame)))
+        event: Final = _sse_frame_event(frame)
+        if self.terminal or event is not None and event.get("type") == "message_delta":
+            self.terminal.extend(frame)
+            return
+        self._stamp(frame)
+        yield from original
+
+    def _drain_raw(self, size: int) -> Iterator[bytes]:
+        remaining = size  # rebind-ok: byte count shrinks as original provider chunks are drained
+        while remaining:
+            chunk = self.raw_chunks.popleft()
+            if len(chunk) > remaining:
+                self.raw_chunks.appendleft(chunk[remaining:])
+                yield chunk[:remaining]
+                return
+            yield chunk
+            remaining -= len(chunk)
+
+    def _finish(self) -> Iterator[bytes]:
+        for frame in _SSE_FRAME_END.split(self.terminal):
+            if frame:
+                yield self._stamp(frame)
+        if self.pending:
+            raw: Final = bytes(self.pending)
+            stamped: Final = self._stamp(raw)
+            if stamped == raw:
+                yield from self.raw_chunks
+            else:
+                yield stamped
 
     def _iterate_sync(self) -> Generator[bytes, None, None]:
         if not isinstance(self.stream, Iterator):
             return
         for chunk in self.stream:
             yield from self._frames(chunk)
-        if self.pending:
-            yield self._stamp(self.pending)
+        yield from self._finish()
 
     async def _iterate(self) -> AsyncGenerator[bytes, None]:
         if not isinstance(self.stream, AsyncIterator):
@@ -536,8 +592,8 @@ class UsageCostMessagesStream:
         async for chunk in self.stream:
             for frame in self._frames(chunk):
                 yield frame
-        if self.pending:
-            yield self._stamp(self.pending)
+        for frame in self._finish():
+            yield frame
 
 
 async def _stamped_sse_frame(frame: bytes, safeguard_results: StreamedSafeguardResults) -> bytes:
@@ -612,6 +668,7 @@ class BaseAnthropicMessagesStreamingIterator:
         )
 
         end_time: Final = datetime.now()
+        self.litellm_logging_obj.model_call_details["end_time"] = end_time
         # Set completion_start_time so TTFT is calculated from the first
         # chunk rather than falling back to end_time in async_success_handler.
         if self.completion_start_time is not None:

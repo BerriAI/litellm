@@ -303,7 +303,7 @@ def update_response_metadata(
             response_timing_metrics(start_time, end_time, logging_obj, include_overhead)
         )
         stamper: Final = MessagesUsageCostStamper.for_response(result)
-        if stamper is not None:
+        if stamper is not None and logging_obj.stream is not True and kwargs.get("stream") is not True:
             stamper.stamp_calculated(logging_obj, cache_hit=cache_hit)
         return
 

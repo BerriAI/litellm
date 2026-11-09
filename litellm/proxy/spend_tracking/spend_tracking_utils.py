@@ -888,7 +888,7 @@ def get_logging_payload(
         ),
     )
 
-    special_usage_fields: Final = ["completion_tokens", "prompt_tokens", "total_tokens"]
+    special_usage_fields: Final = ["completion_tokens", "prompt_tokens", "total_tokens", "cost"]
     additional_usage_values = {}
     for k, v in usage.items():
         if k not in special_usage_fields:

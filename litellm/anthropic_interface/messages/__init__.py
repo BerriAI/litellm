@@ -10,7 +10,7 @@ This is an __init__.py file to allow the following interface
 
 """
 
-from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping
+from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping, Sequence
 from datetime import datetime, timezone
 from typing import Final
 from uuid import uuid4
@@ -32,6 +32,33 @@ from litellm.types.llms.anthropic_messages.anthropic_response import (
 _REQUEST_KWARGS: Final = TypeAdapter(dict[str, object])
 _MESSAGES: Final = TypeAdapter(list[dict[str, object]])
 _OPTIONAL_MAPPING: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
+
+
+def _sync_logging_obj(
+    request_kwargs: Mapping[str, object], model: str, messages: Sequence[Mapping[str, object]], stream: bool | None
+) -> Logging | None:
+    supplied: Final = request_kwargs.get("litellm_logging_obj")
+    if isinstance(supplied, Logging):
+        return supplied
+    if request_kwargs.get("is_async"):
+        return None
+    from litellm.litellm_core_utils.rules import Rules
+    from litellm.utils import function_setup
+
+    logging_obj, _ = function_setup(
+        "anthropic_messages",
+        Rules(),
+        datetime.now(timezone.utc),
+        is_async_call=False,
+        **{
+            **request_kwargs,
+            "model": model,
+            "messages": messages,
+            "stream": stream,
+            "litellm_call_id": request_kwargs.get("litellm_call_id", str(uuid4())),
+        },
+    )
+    return logging_obj
 
 
 async def acreate(
@@ -138,20 +165,7 @@ def create(
         Dict: Response from the API
     """
     request_kwargs: Final = _REQUEST_KWARGS.validate_python(kwargs)
-    supplied_logging: Final = request_kwargs.get("litellm_logging_obj")
-    logging_obj: Final = (
-        supplied_logging
-        if isinstance(supplied_logging, Logging)
-        else Logging(
-            model=model,
-            messages=_MESSAGES.validate_python(messages),
-            stream=stream is True,
-            call_type="anthropic_messages",
-            start_time=datetime.now(timezone.utc),
-            litellm_call_id=str(uuid4()),
-            function_id=str(uuid4()),
-        )
-    )
+    logging_obj: Final = _sync_logging_obj(request_kwargs, model, _MESSAGES.validate_python(messages), stream)
     response: Final = _sync_anthropic_messages(
         max_tokens=max_tokens,
         messages=_MESSAGES.validate_python(messages),
@@ -167,8 +181,14 @@ def create(
         top_k=top_k,
         top_p=top_p,
         container=container,
-        **{**request_kwargs, "litellm_logging_obj": logging_obj},
+        **(
+            {**request_kwargs, "litellm_logging_obj": logging_obj}
+            if stream and logging_obj is not None
+            else request_kwargs
+        ),
     )
+    if logging_obj is None:
+        return response
     if not stream:
         update_response_metadata(
             response,

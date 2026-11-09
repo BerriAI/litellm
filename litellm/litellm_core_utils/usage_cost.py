@@ -86,8 +86,6 @@ class ResponsesUsageCostStamper(UsageCostStamper):
             return
         if bill > 0 or isinstance(normalized.cost, (int, float)):
             self.stamp(float(bill))
-        if getattr(logging_obj, "call_type", None) == "anthropic_messages":
-            logging_obj.record_bridged_responses_api_response(self.response)
 
 
 class MessagesUsageCostStamper(UsageCostStamper):
@@ -118,10 +116,10 @@ class MessagesUsageCostStamper(UsageCostStamper):
                 return False
             priced: Final = logging_obj.normalize_endpoint_logging_result(body)
             cost: Final = validated_usage_cost(logging_obj.response_cost_calculator(result=priced, cache_hit=cache_hit))
-            stamp_usage_cost(priced, cost)
             if cost is not None:
                 self.stamp(cost)
             if isinstance(priced, ModelResponse):
+                stamp_usage_cost(priced, cost)
                 logging_obj.record_bridged_model_response(priced)
         except Exception:  # noqa: BLE001  # optional billing metadata must not fail a completed response or stream
             return False

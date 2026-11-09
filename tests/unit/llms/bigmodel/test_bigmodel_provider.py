@@ -1027,8 +1027,15 @@ async def test_messages_stream_preserves_native_events() -> None:
         "web_search_requests": 0,
         "web_fetch_requests": 0,
     }
+    assert isinstance(parsed[-2]["usage"]["cost"], float)
+    expected_events: Final = tuple(
+        {**event, "usage": {**event["usage"], "cost": parsed[-2]["usage"]["cost"]}}
+        if event["type"] == "message_delta"
+        else event
+        for event in events[1:]
+    )
     assert tuple(line for line in lines if line.startswith("data: {"))[1:] == tuple(
-        f"data: {json.dumps(event, ensure_ascii=False)}" for event in events[1:]
+        f"data: {json.dumps(event, ensure_ascii=False)}" for event in expected_events
     )
     assert "event: ping" in lines
     assert "data: [DONE]" in lines

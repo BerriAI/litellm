@@ -1480,8 +1480,6 @@ def _set_stream_builder_response_cost(
     if response_cost is None:
         return
     _set_hidden_response_cost(response, response_cost)
-    if logging_obj is not None and getattr(logging_obj, "call_type", None) == "anthropic_messages":
-        logging_obj.record_bridged_model_response(response)
 
 
 def _carry_upstream_usage_cost(response: ModelResponse, chunks: Sequence[object]) -> None:

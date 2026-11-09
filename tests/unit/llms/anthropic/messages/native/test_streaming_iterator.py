@@ -79,6 +79,14 @@ def test_usage_cost_stream_close_closes_the_upstream() -> None:
     assert upstream.closed
 
 
+def test_usage_cost_preserves_oversized_frames_and_stops_stamping() -> None:
+    frame: Final = b":" + b"x" * (2 * 1024 * 1024) + b"\n\n"
+    terminal: Final = b'data: {"type":"message_delta","usage":{"output_tokens":4}}\n\n'
+    chunks: Final = (frame[index : index + 1024] for index in range(0, len(frame), 1024))
+    stream: Final = UsageCostMessagesStream(iter((*chunks, terminal)), _usage_cost_logging_obj())
+    assert b"".join(stream) == frame + terminal
+
+
 class _RecordingLoggingIterator(BaseAnthropicMessagesStreamingIterator):
     def __init__(self, litellm_logging_obj: LiteLLMLoggingObj, request_body: dict):
         super().__init__(litellm_logging_obj=litellm_logging_obj, request_body=request_body)

@@ -772,4 +772,10 @@ async def test_streamed_message_stop_drops_the_bedrock_invocation_metrics(chunk_
     relayed_events: Final = [
         json.loads(line.removeprefix(b"data:")) for line in relayed.splitlines() if line.startswith(b"data:")
     ]
-    assert relayed_events == [*(payload for _, payload in events[:-1]), {"type": "message_stop"}], relayed.decode()
+    cost: Final = relayed_events[-2]["usage"]["cost"]
+    assert isinstance(cost, float)
+    assert relayed_events == [
+        *(payload for _, payload in events[:-2]),
+        {**events[-2][1], "usage": {"output_tokens": 4, "cost": cost}},
+        {"type": "message_stop"},
+    ], relayed.decode()

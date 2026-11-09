@@ -233,6 +233,9 @@ class SpeechToCompletionBridgeTransformationHandler:
         binary_response: Final = HttpxBinaryResponseContent(response)
         binary_response.set_response_cost(_completion_response_cost(model_response))
         binary_response.usage = _completion_usage(model_response)
+        source_hidden_params: Final = get_hidden_params(model_response)
+        if source_hidden_params is not None and "upstream_usage_cost" in source_hidden_params:
+            set_hidden_param(binary_response, "upstream_usage_cost", source_hidden_params["upstream_usage_cost"])
         cached_hidden_params: Final = get_hidden_params(model_response) if served_from_cache(model_response) else None
         if cached_hidden_params is not None:
             set_hidden_param(binary_response, "cache_hit", True)
