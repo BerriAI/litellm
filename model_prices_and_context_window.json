@@ -17046,6 +17046,10 @@
         "source": "https://platform.claude.com/docs/en/about-claude/pricing"
     },
     "claude-fable-5-2": {
+        "supports_prompt_caching": true,
+        "thinking_always_on": true,
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
         "cache_creation_input_token_cost": 0.00001,
         "cache_creation_input_token_cost_above_1hr": 0.000016,
         "cache_read_input_token_cost": 2e-7,
