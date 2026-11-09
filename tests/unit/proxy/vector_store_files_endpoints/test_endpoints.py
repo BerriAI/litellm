@@ -20,6 +20,7 @@ from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
+import openai
 import pytest
 import respx
 from fastapi import HTTPException
@@ -859,6 +860,44 @@ async def test_managed_file_id_attached_by_a_team_key_attaches_the_copy_the_stor
     assert upstream.call_count == 1
     assert json.loads(upstream.calls.last.request.content)["file_id"] == attached_copy
     assert upstream.calls.last.request.headers["Authorization"] == f"Bearer {upstream_key}"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("check_status", [429, 500])
+async def test_managed_file_id_whose_store_check_fails_without_a_404_never_falls_back_to_the_team_copy(
+    monkeypatch: pytest.MonkeyPatch, check_status: int
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    caller: Final = UserAPIKeyAuth(api_key="sk-test", user_id="caller-user", team_id="team-b")
+    managed_file_id: Final = (
+        base64.urlsafe_b64encode(
+            SpecialEnums.LITELLM_MANAGED_FILE_COMPLETE_STR.value.format(
+                "text/plain", "two-copy-unified-id", "openai/*", "file-proxy-copy", "proxy-openai"
+            ).encode()
+        )
+        .decode()
+        .rstrip("=")
+    )
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        team_deployment: Final = respx_mock.route(host="team-openai.example")
+        respx_mock.get(f"{_PROXY_OPENAI_BASE}/vector_stores/vs-test/files/file-proxy-copy").mock(
+            return_value=httpx.Response(check_status, json={"error": {"message": "try again", "type": "server_error"}})
+        )
+        with pytest.raises(openai.APIStatusError) as raised:
+            await _update_request_data_with_managed_file_id(
+                data={"vector_store_id": "vs-test", "file_id": managed_file_id},
+                file_id=managed_file_id,
+                request=MagicMock(headers={}, query_params={}),
+                user_api_key_dict=caller,
+                managed_files_obj=ManagedFileCopiesStub(
+                    copies={"proxy-openai": "file-proxy-copy", "team-b-openai": "file-team-copy"}
+                ),
+                llm_router=_proxy_and_team_b_openai_router(),
+            )
+
+    assert raised.value.status_code == check_status
+    assert team_deployment.call_count == 0
 
 
 @pytest.mark.asyncio

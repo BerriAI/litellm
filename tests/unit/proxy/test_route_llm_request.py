@@ -2883,6 +2883,69 @@ async def test_registered_store_credential_wins_over_the_team_deployment_on_a_mo
     assert route.calls.last.request.headers["Authorization"] == "Bearer store-credential-key"
 
 
+
+@pytest.mark.asyncio
+async def test_a_model_less_file_call_leaves_the_team_credential_headers_intact_for_later_file_uploads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy.openai_files_endpoints.common_utils import get_credentials_for_model
+    from litellm.types.utils import CredentialItem
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="team-a-openai",
+                credential_info={"custom_llm_provider": "openai"},
+                credential_values={
+                    "api_key": "team-openai-key",
+                    "api_base": _TEAM_OPENAI_BASE,
+                    "extra_headers": {"X-Team": "team-a"},
+                },
+            )
+        ],
+    )
+    router: Final = _team_a_router(("openai/*", {"model": "openai/*", "litellm_credential_name": "team-a-openai"}))
+    method, path, body = _VECTOR_STORE_FILE_CALLS["avector_store_file_retrieve"]
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        respx_mock.route(method=method, url=f"{_TEAM_OPENAI_BASE}{path}").mock(
+            return_value=httpx.Response(200, json=body)
+        )
+        upload: Final = respx_mock.post(f"{_TEAM_OPENAI_BASE}/files").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": "file-uploaded",
+                    "object": "file",
+                    "bytes": 5,
+                    "created_at": 1,
+                    "filename": "notes.txt",
+                    "purpose": "assistants",
+                    "status": "processed",
+                },
+            )
+        )
+        await (
+            await route_request(
+                dict(_model_less_vector_store_file_request("avector_store_file_retrieve")),
+                router,
+                None,
+                "avector_store_file_retrieve",
+                user_api_key_dict=_TEAM_A_MEMBER,
+            )
+        )
+        await litellm.acreate_file(
+            file=("notes.txt", b"hello", "text/plain"),
+            purpose="assistants",
+            **get_credentials_for_model(llm_router=router, model_id="team-a-openai/*"),
+        )
+
+    assert upload.calls.last.request.headers["Content-Type"].startswith("multipart/form-data")
+    assert upload.calls.last.request.headers["X-Team"] == "team-a"
+
 @pytest.fixture(autouse=True)
 def discard_cached_user_config_routers() -> Iterator[None]:
     yield

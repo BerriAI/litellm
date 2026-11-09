@@ -147,7 +147,7 @@ async def _store_holds_file(
             **{key: value for key, value in credentials.items() if key not in _PROBE_ARGUMENTS},
             **{"no-log": True},
         )
-    except openai.APIError:
+    except openai.NotFoundError:
         return False
     return True
 
