@@ -312,7 +312,6 @@ def test_arize_otel_v2_b3_non_openinference_callback_family(callback: str, gatew
 
 
 def test_arize_otel_v2_b3_langfuse_carries_metadata_baggage(gateway: Gateway, tmp_path: Path) -> None:
-    pytest.skip("BUG: LIT-9128 Langfuse OTel v2 preset omits request-metadata baggage")
     marker: Final = "b3-langfuse-" + uuid.uuid4().hex
 
     def upstream(request: Request) -> Reply:
