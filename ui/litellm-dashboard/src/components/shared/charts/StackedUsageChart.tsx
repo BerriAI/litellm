@@ -6,6 +6,9 @@ import { type ChartConfig, ChartContainer, ChartTooltip, ChartTooltipContent } f
 import i18n from "@/i18n/i18n";
 import { cn } from "@/lib/cva.config";
 
+const LOG_SCALE_DOMAIN: [number, "auto"] = [1, "auto"];
+const LINEAR_SCALE_DOMAIN: [number, "auto"] = [0, "auto"];
+
 /** The Model Leaderboard palette; shared so the usage page stacks in the same colors. */
 export const STACKED_USAGE_PALETTE = [
   "#ec4899",
@@ -106,7 +109,7 @@ export function StackedUsageChart({
         />
         <YAxis
           scale={scale}
-          domain={scale === "log" ? [1, "auto"] : [0, "auto"]}
+          domain={scale === "log" ? LOG_SCALE_DOMAIN : LINEAR_SCALE_DOMAIN}
           allowDataOverflow
           tickLine={false}
           axisLine={false}

@@ -28,6 +28,7 @@ from typing_extensions import LiteralString, ReadOnly, TypedDict
 import litellm
 from litellm._internal_context import service_target, with_service_target
 from litellm._logging import verbose_proxy_logger
+from litellm.accounting.metrics import Cadence
 from litellm.caching import RedisCache
 from litellm.constants import (
     BILLED_RETRY_ATTEMPT_METADATA_KEY,
@@ -682,8 +683,11 @@ class DBSpendUpdateWriter:
     def __init__(
         self,
         redis_cache: RedisCache | None = None,
+        accounting_clock: Callable[[], float] = time.monotonic,
     ):
         self.redis_cache = redis_cache
+        self.accounting_storage_checks = Cadence(accounting_clock)
+        self.accounting_delay_alerts = Cadence(accounting_clock)
         self.redis_update_buffer = RedisUpdateBuffer(redis_cache=self.redis_cache)
         self.pod_lock_manager = PodLockManager()
         self.spend_update_queue = SpendUpdateQueue()

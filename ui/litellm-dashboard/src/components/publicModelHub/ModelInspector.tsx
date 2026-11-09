@@ -25,6 +25,7 @@ import { Badges, CodeBlock, type Fact, Facts, PaneSection, ProviderAvatar, Provi
 import { curlSnippet, modelSnippet } from "./hubSnippets";
 import { HealthBadge } from "./HubStatus";
 import { InspectorHeader } from "./InspectorHeader";
+import { productNames } from "@/i18n/untranslated/productNames";
 
 const summary = (model: ModelGroupInfo): string | undefined => {
   if (model.description) return model.description;
@@ -98,8 +99,8 @@ function CallThisModel({ model }: { model: ModelGroupInfo }) {
     <PaneSection title={t("publicModelHub.modelInspector.callThisModel.title")}>
       <Tabs defaultValue="python" className="gap-3">
         <TabsList>
-          <TabsTrigger value="python">Python</TabsTrigger>
-          <TabsTrigger value="curl">cURL</TabsTrigger>
+          <TabsTrigger value="python">{productNames.python}</TabsTrigger>
+          <TabsTrigger value="curl">{productNames.curl}</TabsTrigger>
         </TabsList>
         <TabsContent value="python">
           <CodeBlock code={modelSnippet(model)} />

@@ -72,6 +72,7 @@ import { teamCreateCall } from "./networking";
 import { normalizeTeamModelSelection } from "./team/teamModelAccess";
 import { ModelSelect } from "./ModelSelect/ModelSelect";
 import { StorePromptsToggle } from "./common_components/StorePromptsToggle";
+import { codeSamples } from "@/i18n/untranslated/codeSamples";
 
 const SUPPRESSED_BY_DESCRIPTION = "";
 
@@ -1010,7 +1011,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, isViewOnly 
                               ref={ref}
                               value={value ?? ""}
                               rows={4}
-                              placeholder='{"namespace": "admin", "mount": "secret", "path_prefix": "litellm"}'
+                              placeholder={codeSamples.teams.vaultConfigJson}
                               disabled={!premiumUser}
                             />
                           )}

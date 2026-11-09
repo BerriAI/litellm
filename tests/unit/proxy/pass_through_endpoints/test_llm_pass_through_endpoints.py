@@ -2,12 +2,14 @@ import asyncio
 import base64
 import contextlib
 import hashlib
+import itertools
 import json
 import logging
 import os
 import re
 import traceback
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping
+from datetime import datetime, timezone
 from pathlib import Path
 from types import MappingProxyType, SimpleNamespace
 from typing import Final, Literal
@@ -2209,7 +2211,7 @@ class TestBedrockAgentRuntimePassthroughToggle:
                 "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.get_secret_str",
                 return_value="us-east-1",
             ),
-            patch("litellm.llms.bedrock.chat.BedrockConverseLLM", return_value=bedrock_llm),
+            patch("litellm.llms.bedrock.passthrough.transformation.BedrockAgentRuntimeAWS", return_value=bedrock_llm),
             patch(
                 "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_request_copy",
                 Mock(),
@@ -2496,6 +2498,67 @@ async def test_bedrock_agent_runtime_region_lookup_leaves_the_event_loop_free(mo
     assert vault.read.is_set()
     assert not vault.read_on_loop.is_set()
     assert retrieve.calls.last.request.headers["authorization"].startswith("AWS4-HMAC-SHA256")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("endpoint", "action"),
+    [
+        ("retrieveAndGenerate/", "bedrock:RetrieveAndGenerate"),
+        ("flows/FLOW123456/aliases/ALIAS12345", "bedrock:InvokeFlow"),
+        ("generateQuery/", "bedrock:GenerateQuery"),
+        ("optimize-prompt/", "bedrock:OptimizePrompt"),
+        ("agents/session-1", "bedrock:InvokeInlineAgent"),
+    ],
+)
+async def test_bedrock_agent_runtime_web_identity_session_grants_the_routes_action(
+    monkeypatch: pytest.MonkeyPatch, endpoint: str, action: str
+) -> None:
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+    for ambient in (
+        *TestBedrockAgentRuntimePassthroughVirtualKeyLeak.AMBIENT_AWS_ENV,
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
+    ):
+        monkeypatch.delenv(ambient, raising=False)
+    monkeypatch.setenv("AWS_REGION_NAME", "us-east-1")
+    monkeypatch.setenv("AWS_WEB_IDENTITY_TOKEN", "oidc/google/litellm")
+    monkeypatch.setenv("AWS_ROLE_NAME", "arn:aws:iam::123456789012:role/litellm-role")
+    monkeypatch.setenv("AWS_SESSION_NAME", f"agent-runtime-{endpoint}")
+    sts: Final = MagicMock()
+    sts.assume_role_with_web_identity.return_value = {
+        "Credentials": {
+            "AccessKeyId": "k",
+            "SecretAccessKey": "s",
+            "SessionToken": "t",
+            "Expiration": datetime(2099, 1, 1, tzinfo=timezone.utc),
+        },
+        "PackedPolicySize": 0,
+    }
+    request: Final = Mock()
+    request.method = "POST"
+    request.state = SimpleNamespace()
+    request.json = AsyncMock(return_value={"input": {"text": "hi"}})
+    module: Final = "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints"
+
+    with (
+        patch("boto3.client", return_value=sts),
+        patch("litellm.llms.bedrock.base_aws_llm.get_secret", return_value="oidc-jwt-token"),
+        patch(f"{module}.create_request_copy", Mock()),
+        patch(f"{module}.create_pass_through_route", return_value=AsyncMock(return_value="forwarded")),
+    ):
+        _ = await bedrock_proxy_route(
+            endpoint=endpoint,
+            request=request,
+            fastapi_response=Response(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-litellm-caller"),
+        )
+
+    session_policy: Final = json.loads(sts.assume_role_with_web_identity.call_args.kwargs["Policy"])
+    granted: Final = frozenset(
+        itertools.chain.from_iterable(statement["Action"] for statement in session_policy["Statement"])
+    )
+    assert action in granted, f"/bedrock/{endpoint} authorizes against {action}, which its session does not grant"
 
 
 class TestLLMPassthroughFactoryProxyRoute:
@@ -10946,3 +11009,80 @@ class TestOpenSearchProxyRoute:
             )
 
         assert (response.status_code, route.called) == (401, False)
+
+    @pytest.mark.parametrize(
+        "method, api, action",
+        [
+            ("GET", "_doc/1", "es:ESHttpGet"),
+            ("HEAD", "_doc/1", "es:ESHttpHead"),
+            ("PUT", "_doc/1", "es:ESHttpPut"),
+            ("DELETE", "_doc/1", "es:ESHttpDelete"),
+            ("POST", "_search", "es:ESHttpPost"),
+        ],
+    )
+    def test_a_web_identity_session_allows_the_verb_sent_to_a_managed_domain(
+        self, opensearch_client: TestClient, monkeypatch: pytest.MonkeyPatch, method: str, api: str, action: str
+    ) -> None:
+        from litellm.types.vector_stores import IndexCreateLiteLLMParams, LiteLLM_ManagedVectorStoreIndex
+        from litellm.vector_stores.vector_store_registry import VectorStoreIndexRegistry, VectorStoreRegistry
+
+        domain: Final = "search-docs-abc123.us-east-1.es.amazonaws.com"
+        monkeypatch.setattr(
+            litellm,
+            "vector_store_index_registry",
+            VectorStoreIndexRegistry(
+                [
+                    LiteLLM_ManagedVectorStoreIndex(
+                        id="index-domain-docs",
+                        index_name="docs",
+                        litellm_params=IndexCreateLiteLLMParams(
+                            vector_store_index="prod-docs-v2", vector_store_name="opensearch-domain"
+                        ),
+                    )
+                ]
+            ),
+        )
+        monkeypatch.setattr(
+            litellm,
+            "vector_store_registry",
+            VectorStoreRegistry(
+                [
+                    {
+                        "vector_store_id": "opensearch-domain",
+                        "vector_store_name": "opensearch-domain",
+                        "custom_llm_provider": "opensearch",
+                        "litellm_params": {
+                            "api_base": f"https://{domain}",
+                            "aws_web_identity_token": "oidc/google/litellm",
+                            "aws_role_name": "arn:aws:iam::123456789012:role/litellm-role",
+                            "aws_session_name": f"opensearch-index-{method}",
+                            "aws_region_name": "us-east-1",
+                        },
+                    }
+                ]
+            ),
+        )
+        sts: Final = MagicMock()
+        sts.assume_role_with_web_identity.return_value = {
+            "Credentials": {
+                "AccessKeyId": "k",
+                "SecretAccessKey": "s",
+                "SessionToken": "t",
+                "Expiration": datetime(2099, 1, 1, tzinfo=timezone.utc),
+            },
+            "PackedPolicySize": 0,
+        }
+        _act_as(monkeypatch, _opensearch_caller("read", "write"))
+        with (
+            patch("boto3.client", return_value=sts),
+            patch("litellm.llms.bedrock.base_aws_llm.get_secret", return_value="oidc-jwt-token"),
+            respx.mock(assert_all_called=True) as upstream,
+        ):
+            upstream.route(method=method, host=domain).mock(return_value=httpx.Response(200, json={}))
+            response = opensearch_client.request(
+                method, f"/opensearch/docs/{api}", content=b"{}", headers={"Content-Type": JSON_TYPE}
+            )
+
+        policy: Final = json.loads(sts.assume_role_with_web_identity.call_args.kwargs["Policy"])
+        granted: Final = frozenset(action for statement in policy["Statement"] for action in statement["Action"])
+        assert (response.status_code, action in granted) == (200, True)
