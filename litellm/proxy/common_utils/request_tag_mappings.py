@@ -1,4 +1,6 @@
 from collections.abc import Mapping, Sequence
+from fnmatch import fnmatchcase
+from types import MappingProxyType
 from typing import Final
 from urllib.parse import unquote_plus
 
@@ -8,11 +10,29 @@ from opentelemetry.baggage.propagation import W3CBaggagePropagator
 from opentelemetry.context import Context
 from pydantic import TypeAdapter
 
+from litellm.litellm_core_utils.dot_notation_indexing import get_nested_value
 from litellm.proxy._types import LiteLLMRoutes, ProxyErrorTypes, ProxyException
 from litellm.proxy.auth.route_checks import RouteChecks
-from litellm.types.proxy.request_tag_mappings import RequestTagMapping
+from litellm.types.proxy.request_tag_mappings import RequestPatternTagMapping, RequestTagMapping
 
 REQUEST_TAG_MAPPINGS_ADAPTER: Final = TypeAdapter(tuple[RequestTagMapping, ...])
+REQUEST_PATTERN_TAG_MAPPINGS_ADAPTER: Final = TypeAdapter(tuple[RequestPatternTagMapping, ...])
+
+
+def resolve_pattern_tag_mappings(
+    headers: Mapping[str, str], body: Mapping[str, object], rules: Sequence[RequestPatternTagMapping]
+) -> tuple[tuple[str, bool], ...]:
+    normalized_headers: Final = MappingProxyType({key.lower(): value for key, value in headers.items()})
+
+    def matches(rule: RequestPatternTagMapping) -> bool:
+        value: Final[object] = (
+            normalized_headers.get(rule.field.lower())
+            if rule.source == "header"
+            else get_nested_value({"request": body}, f"request.{rule.field}")
+        )
+        return isinstance(value, str) and fnmatchcase(value, rule.pattern)
+
+    return tuple((tag, True) for tag in dict.fromkeys(rule.tag for rule in rules if matches(rule)))
 
 
 def is_baggage_mapped_route(route: str) -> bool:

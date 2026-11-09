@@ -61,6 +61,7 @@ const defaultProps = {
   canModify: true,
   onEditClick: vi.fn(),
   onDeleteClick: vi.fn(),
+  onAssignClick: vi.fn(),
 };
 
 describe("BudgetTable", () => {

@@ -30,6 +30,7 @@ interface BudgetTableProps {
   canModify: boolean;
   onEditClick: (budget: budgetItem) => void;
   onDeleteClick: (budget: budgetItem) => void;
+  onAssignClick: (budget: budgetItem) => void;
 }
 
 const PAGE_SIZE_OPTIONS = [25, 50, 100];
@@ -209,13 +210,13 @@ function BudgetFilterFields({ get, set }: FilterDraft) {
   );
 }
 
-const BudgetTable: React.FC<BudgetTableProps> = ({ list, canModify, onEditClick, onDeleteClick }) => {
+const BudgetTable: React.FC<BudgetTableProps> = ({ list, canModify, onEditClick, onDeleteClick, onAssignClick }) => {
   const [filtersOpen, setFiltersOpen] = useState(false);
 
-  const columns = useMemo(
-    () => getBudgetTableColumns({ canModify, onEditClick, onDeleteClick }),
-    [canModify, onEditClick, onDeleteClick],
-  );
+  const columns = useMemo(() => {
+    const dependencies = { canModify, onEditClick, onDeleteClick, onAssignClick };
+    return getBudgetTableColumns(dependencies);
+  }, [canModify, onEditClick, onDeleteClick, onAssignClick]);
 
   const hasQuery = list.searchValue.trim() !== "" || list.columnFilters.length > 0;
   const emptyMessage = list.error === null ? <EmptyState hasQuery={hasQuery} /> : <ErrorState error={list.error} />;

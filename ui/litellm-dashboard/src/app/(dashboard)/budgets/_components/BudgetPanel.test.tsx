@@ -89,7 +89,7 @@ describe("Budget Panel", () => {
     const { container } = renderPanel();
 
     expect(await screen.findByRole("heading", { level: 1, name: "Budgets" })).toBeInTheDocument();
-    expect(screen.getByText("Spend, TPM and RPM limits you can assign to customers.")).toBeInTheDocument();
+    expect(screen.getByText("Assign limits to customers, teams and matching requests")).toBeInTheDocument();
     expect(container.querySelector(".lucide-wallet")).not.toBeNull();
   });
 
