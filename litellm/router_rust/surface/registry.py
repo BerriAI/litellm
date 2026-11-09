@@ -95,7 +95,7 @@ from litellm.litellm_core_utils.routing_groups import apply_routing_group_priori
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.llms.openai_like.model_info import MODEL_INFO_REFRESH_SECONDS
 from litellm.redis.stores.connection import connect
-from litellm.redis.stores.router_usage import RouterUsage, RouterUsageStore
+from litellm.redis.stores.router_usage import RouterUsage, RouterUsageStore, UsageCounter
 from litellm.responses.bridge_check import keep_registered_mode
 from litellm.router_api import RouterRegistry, deployment_id
 from litellm.router_rust.invoke.shaping import ROUTER_CLIENTS_TARGET
@@ -585,6 +585,7 @@ def _index_key(value: object) -> str | None:
 
 
 GroupMembers: TypeAlias = tuple[tuple[object, object], ...]
+GroupCounters: TypeAlias = tuple[object, str, tuple[tuple[UsageCounter, ...], ...]]
 
 
 def _members_of(model_list: Sequence[Mapping[str, object]] | None) -> GroupMembers | None:

@@ -27,14 +27,7 @@ import math
 from collections.abc import Callable, Mapping, Sequence
 from functools import partial
 from types import MappingProxyType
-from typing import (  # noqa: TID251  # the core's own signatures, ported unchanged
-    TYPE_CHECKING,
-    Any,
-    Final,
-    TypeAlias,
-    Union,
-    cast,
-)
+from typing import TYPE_CHECKING, Any, Final, Union, cast  # noqa: TID251  # the core's own signatures, ported unchanged
 
 from pydantic import BaseModel, TypeAdapter
 from typing_extensions import overload
@@ -82,6 +75,7 @@ from litellm.types.utils import ModelInfo as ModelMapInfo
 from litellm.utils import get_utc_datetime, is_generalized_model_info
 
 if TYPE_CHECKING:
+    from litellm.router_rust.surface.registry import GroupCounters
     from litellm.rust_bridge._native import (
         RouterCall,
         RouterCoreHandle,
@@ -259,14 +253,11 @@ def _remaining_usage(
     return {**io_headers, **tpm_headers, **rpm_headers}
 
 
-_GroupCounters: TypeAlias = tuple[object, str, tuple[tuple[UsageCounter, ...], ...]]
-
-
 class HostModelInfo:
     """Mixed into ``HostRegistry``, which holds the model list, the indexes and the host."""
 
     _core_usage_store: RouterUsage
-    _group_counters_cache: dict[str, "_GroupCounters"]  # mutable-ok: by model group
+    _group_counters_cache: dict[str, "GroupCounters"]  # mutable-ok: by model group
 
     def _live_handle(self) -> "RouterCoreHandle | None": ...  # the registry's: the handle ``RustCore`` set
 
