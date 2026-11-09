@@ -17,7 +17,7 @@ from litellm.llms.base_llm.managed_resources.utils import (
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing, proxy_exception_from_route_error
 from litellm.proxy.common_utils.openai_endpoint_utils import (
     get_custom_llm_provider_from_request_body,
     get_custom_llm_provider_from_request_headers,
@@ -149,6 +149,8 @@ async def _store_holds_file(
         )
     except openai.NotFoundError:
         return False
+    except openai.APIError as error:
+        raise proxy_exception_from_route_error(error) from error
     return True
 
 

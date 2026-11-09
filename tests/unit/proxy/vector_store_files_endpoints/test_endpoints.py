@@ -20,14 +20,13 @@ from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
-import openai
 import pytest
 import respx
 from fastapi import HTTPException
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.vector_store_files_endpoints.endpoints import (
     _update_request_data_with_litellm_managed_vector_store_registry,
@@ -884,7 +883,7 @@ async def test_managed_file_id_whose_store_check_fails_without_a_404_never_falls
         respx_mock.get(f"{_PROXY_OPENAI_BASE}/vector_stores/vs-test/files/file-proxy-copy").mock(
             return_value=httpx.Response(check_status, json={"error": {"message": "try again", "type": "server_error"}})
         )
-        with pytest.raises(openai.APIStatusError) as raised:
+        with pytest.raises(ProxyException) as raised:
             await _update_request_data_with_managed_file_id(
                 data={"vector_store_id": "vs-test", "file_id": managed_file_id},
                 file_id=managed_file_id,
@@ -896,7 +895,8 @@ async def test_managed_file_id_whose_store_check_fails_without_a_404_never_falls
                 llm_router=_proxy_and_team_b_openai_router(),
             )
 
-    assert raised.value.status_code == check_status
+    assert raised.value.code == str(check_status)
+    assert "try again" in raised.value.message
     assert team_deployment.call_count == 0
 
 

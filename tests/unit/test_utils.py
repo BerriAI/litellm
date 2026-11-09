@@ -7382,6 +7382,71 @@ def test_load_credentials_from_list_fills_kwargs_from_the_loaded_credential_with
     assert _credential_warnings(caplog) == []
 
 
+@pytest.mark.asyncio
+async def test_a_call_by_credential_name_leaves_its_headers_intact_for_later_uploads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="team-openai",
+                credential_values={
+                    "api_key": "team-openai-key",
+                    "api_base": "https://team-openai.example/v1",
+                    "extra_headers": {"X-Team": "team-a"},
+                },
+                credential_info={},
+            )
+        ],
+    )
+
+    with respx.mock(assert_all_called=True) as upstream:
+        upstream.get("https://team-openai.example/v1/vector_stores/vs-1/files/file-1").respond(
+            200,
+            json={
+                "id": "file-1",
+                "object": "vector_store.file",
+                "created_at": 1,
+                "usage_bytes": 1,
+                "vector_store_id": "vs-1",
+                "status": "completed",
+                "last_error": None,
+                "chunking_strategy": {"type": "auto"},
+                "attributes": {},
+            },
+        )
+        upload: Final = upstream.post("https://team-openai.example/v1/files").respond(
+            200,
+            json={
+                "id": "file-uploaded",
+                "object": "file",
+                "bytes": 5,
+                "created_at": 1,
+                "filename": "notes.txt",
+                "purpose": "assistants",
+                "status": "processed",
+            },
+        )
+        await litellm.avector_store_file_retrieve(
+            vector_store_id="vs-1",
+            file_id="file-1",
+            custom_llm_provider="openai",
+            litellm_credential_name="team-openai",
+        )
+        await litellm.acreate_file(
+            file=("notes.txt", b"hello", "text/plain"),
+            purpose="assistants",
+            custom_llm_provider="openai",
+            litellm_credential_name="team-openai",
+        )
+
+    assert upload.calls.last.request.headers["Content-Type"].startswith("multipart/form-data")
+    assert upload.calls.last.request.headers["X-Team"] == "team-a"
+
+
 _MISTRAL_CHAT_URL: Final = "https://api.mistral.ai/v1/chat/completions"
 _MISTRAL_REPLY: Final = {
     "id": "chatcmpl-oidc",
