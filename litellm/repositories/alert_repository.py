@@ -28,8 +28,9 @@ async def record_alerts(transaction: AlertTransaction, detections: Sequence[Aler
         return
     await transaction.execute_raw(
         """INSERT INTO "LiteLLM_Alert"
-            (detection_key, type, resource_type, resource_id, window_start, window_end, evidence)
-        SELECT detection_key, type, resource_type, resource_id, window_start, window_end, evidence
+            (detection_key, type, resource_type, resource_id, window_start, window_end, evidence, created_at, updated_at)
+        SELECT detection_key, type, resource_type, resource_id, window_start, window_end, evidence,
+            now() AT TIME ZONE 'UTC', now() AT TIME ZONE 'UTC'
         FROM jsonb_to_recordset($1::jsonb) AS rows(detection_key text, type text, resource_type text,
             resource_id text, window_start timestamp, window_end timestamp, evidence jsonb)
         ON CONFLICT (detection_key) DO NOTHING""",

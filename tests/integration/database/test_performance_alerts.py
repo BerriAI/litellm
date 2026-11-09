@@ -158,6 +158,12 @@ async def test_a_full_sweep_saves_one_alert_per_real_change_and_nothing_for_norm
 
     await fixture.sweep()
 
+    (age,) = read_rows(
+        "SELECT max(abs(extract(epoch FROM created_at - (now() AT TIME ZONE 'UTC'))))::int AS seconds"
+        ' FROM "LiteLLM_Alert" WHERE resource_id LIKE %s',
+        (f"{p}%",),
+    )
+    assert int(str(age["seconds"])) < 300
     assert fixture.saved() == {
         (f"{p}-team-spike", "spend"): ("team", "open"),
         (f"{p}-user-stopped", "traffic"): ("user", "open"),

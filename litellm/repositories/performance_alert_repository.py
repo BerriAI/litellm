@@ -149,13 +149,14 @@ _LIMITS: Final = f"""SELECT set_config('statement_timeout', '{_STATEMENT_TIMEOUT
     set_config('lock_timeout', '100ms', true), set_config('work_mem', '1MB', true),
     set_config('max_parallel_workers_per_gather', '0', true)"""
 _CLAIM: Final = """INSERT INTO "LiteLLM_PerformanceAlertState" (id, owner, next_run_at, updated_at)
-VALUES (1, $1, now() + $2::interval, now())
-ON CONFLICT (id) DO UPDATE SET owner = EXCLUDED.owner, next_run_at = EXCLUDED.next_run_at, updated_at = now()
+VALUES (1, $1, now() + $2::interval, now() AT TIME ZONE 'UTC')
+ON CONFLICT (id) DO UPDATE SET owner = EXCLUDED.owner, next_run_at = EXCLUDED.next_run_at,
+    updated_at = now() AT TIME ZONE 'UTC'
 WHERE "LiteLLM_PerformanceAlertState".next_run_at <= now() + interval '30 seconds'
 RETURNING day, scope, resume_after AS cursor, wrapped, checked, skipped, completed_at IS NOT NULL AS completed"""
 _SAVE: Final = """UPDATE "LiteLLM_PerformanceAlertState"
 SET day = $2, scope = $3, resume_after = $4, wrapped = $5, checked = $6, skipped = $7,
-    completed_at = CASE WHEN $8 THEN now() END, updated_at = now()
+    completed_at = CASE WHEN $8 THEN now() AT TIME ZONE 'UTC' END, updated_at = now() AT TIME ZONE 'UTC'
 WHERE id = 1 AND owner = $1"""
 _ACCOUNTING_PENDING: Final = """SELECT 1 AS resource_id FROM "LiteLLM_SpendLogDelivery"
 WHERE state = 'pending' AND created_at < $1::timestamp LIMIT 1"""
