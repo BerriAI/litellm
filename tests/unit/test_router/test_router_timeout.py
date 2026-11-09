@@ -194,6 +194,135 @@ def test_a_stream_keeps_the_deployment_stream_timeout_when_only_the_request_time
     assert router._get_timeout(kwargs={"service_tier": "flex"}, data=deployment_params) == 900.0
 
 
+_PLAIN_ANSWER: Final = {
+    "id": "chatcmpl-replayed",
+    "object": "chat.completion",
+    "created": 1712697600,
+    "model": "gpt-5.6",
+    "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "deployment_fake_stream, caller_fake_stream, router_fake_stream",
+    [(True, None, None), (None, "true", None), (None, None, True)],
+    ids=["deployment", "caller", "router_default"],
+)
+@pytest.mark.parametrize(
+    "stream_timeout, request_timeout, expected_read_timeout",
+    [
+        (2, 600, 600.0),
+        (900, 30, 900.0),
+        ("90", "600", 600.0),
+        (2, httpx.Timeout(600.0, connect=5.0), 600.0),
+    ],
+    ids=["request_longer", "stream_longer", "env_var_strings", "httpx_timeout"],
+)
+async def test_a_fake_stream_waits_for_the_longer_of_the_stream_and_request_timeouts(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    deployment_fake_stream: bool | None,
+    caller_fake_stream: str | None,
+    router_fake_stream: bool | None,
+    stream_timeout: int | str,
+    request_timeout: int | str | httpx.Timeout,
+    expected_read_timeout: float,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(200, json=_PLAIN_ANSWER)
+    )
+    deployment_params: Final = {
+        "model": "openai/gpt-5.6",
+        "api_key": "fake-key",
+        "stream_timeout": stream_timeout,
+        "timeout": request_timeout,
+    }
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "replayed",
+                "litellm_params": deployment_params
+                if deployment_fake_stream is None
+                else {**deployment_params, "fake_stream": deployment_fake_stream},
+            }
+        ],
+        num_retries=0,
+        default_litellm_params=None if router_fake_stream is None else {"fake_stream": router_fake_stream},
+    )
+    caller_kwargs: Final = {} if caller_fake_stream is None else {"fake_stream": caller_fake_stream}
+
+    await router.acompletion(
+        model="replayed", messages=[{"role": "user", "content": "hi"}], stream=True, **caller_kwargs
+    )
+
+    assert route.call_count == 1
+    assert route.calls.last.request.extensions["timeout"]["read"] == expected_read_timeout
+
+
+@pytest.mark.asyncio
+async def test_a_caller_turning_fake_stream_off_keeps_the_stream_timeout(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(200, json=_PLAIN_ANSWER)
+    )
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "replayed",
+                "litellm_params": {
+                    "model": "openai/gpt-5.6",
+                    "api_key": "fake-key",
+                    "stream_timeout": 2,
+                    "timeout": 600,
+                    "fake_stream": True,
+                },
+            }
+        ],
+        num_retries=0,
+    )
+
+    await router.acompletion(
+        model="replayed", messages=[{"role": "user", "content": "hi"}], stream=True, fake_stream="false"
+    )
+
+    assert route.call_count == 1
+    assert route.calls.last.request.extensions["timeout"]["read"] == 2.0
+
+
+def test_a_live_responses_stream_keeps_the_stream_timeout_when_fake_stream_is_set(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(
+        return_value=httpx.Response(200, text="", headers={"content-type": "text/event-stream"})
+    )
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "live",
+                "litellm_params": {
+                    "model": "openai/gpt-5.6",
+                    "api_key": "fake-key",
+                    "stream_timeout": 2,
+                    "timeout": 600,
+                    "fake_stream": True,
+                },
+            }
+        ],
+        num_retries=0,
+    )
+
+    router.responses(model="live", input="hi", stream=True)
+
+    assert route.call_count == 1
+    assert route.calls.last.request.extensions["timeout"]["read"] == 2.0
+
+
 @pytest.mark.asyncio
 async def test_bedrock_timeout_preserves_the_provider_timeout_error(
     respx_mock: respx.MockRouter,

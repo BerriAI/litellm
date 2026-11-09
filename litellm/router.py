@@ -81,6 +81,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.otel.routing import routing_decision_attributes
 from litellm.integrations.otel.runtime import phase_attributes, phase_event, phase_span
 from litellm.litellm_core_utils.asyncify import run_async_function
+from litellm.litellm_core_utils.completion_timeout import CompletionTimeout, StreamKind
 from litellm.litellm_core_utils.core_helpers import (
     coerce_token_limit,
     get_litellm_metadata_from_kwargs,
@@ -91,6 +92,7 @@ from litellm.litellm_core_utils.core_helpers import (
 from litellm.litellm_core_utils.coroutine_checker import coroutine_checker
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.dd_tracing import tracer
+from litellm.litellm_core_utils.get_litellm_params import parse_control_options
 from litellm.litellm_core_utils.get_llm_provider_logic import (
     declared_authenticating_provider,
     is_registered_custom_provider,
@@ -308,7 +310,7 @@ from litellm.router_utils.routing_groups import (
 )
 from litellm.router_utils.routing_read_batch import ROUTER_USAGE_TARGET, RoutingPrefetch, RoutingReadBatch
 from litellm.scheduler import FlowItem, Scheduler
-from litellm.types.litellm_params import RoutingStrategyName
+from litellm.types.litellm_params import ControlOptions, RoutingStrategyName
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionToolParam,
@@ -444,6 +446,14 @@ RouterStrategySelector: TypeAlias = (
     | LowestTPMLoggingHandler
     | LowestTPMLoggingHandler_v2
 )
+
+
+def _requests_fake_stream(*params_by_precedence: Mapping[str, object]) -> bool:
+    fake_stream: Final = next(
+        (params["fake_stream"] for params in params_by_precedence if "fake_stream" in params), None
+    )
+    control: Final = parse_control_options({"fake_stream": fake_stream})
+    return isinstance(control, ControlOptions) and control.fake_stream is True
 
 
 def _cost_value_as_float(value: str | float | None) -> float | None:
@@ -4537,7 +4547,9 @@ class Router:
                 router_stream_timeout=_router_stream_timeout,
             )
         else:
-            kwargs["timeout"] = self._get_timeout(kwargs=kwargs, data=deployment["litellm_params"])
+            kwargs["timeout"] = self._get_timeout(
+                kwargs=kwargs, data=deployment["litellm_params"], function_name=function_name
+            )
 
         self._update_kwargs_with_default_litellm_params(kwargs=kwargs, metadata_variable_name=metadata_variable_name)
         hop_kwargs: Final = _FALLBACK_HOP_ADAPTER.validate_python(kwargs)
@@ -4599,16 +4611,24 @@ class Router:
         )
         return timeout
 
-    def _get_timeout(self, kwargs: dict, data: dict) -> float | int | None:
+    def _get_timeout(
+        self, kwargs: dict[str, object], data: dict[str, object], function_name: str | None = None
+    ) -> float | int | httpx.Timeout | None:
         """Helper to get timeout from kwargs or deployment params"""
-        timeout: float | int | None = None
-        if kwargs.get("stream", False):
-            timeout = self._get_stream_timeout(kwargs=kwargs, data=data)
-        if timeout is None:
-            timeout = self._get_non_stream_timeout(
-                kwargs=kwargs, data=data
-            )  # default to this if no stream specific timeout set
-        return timeout
+        stream_timeout: Final = self._get_stream_timeout(kwargs=kwargs, data=data) if kwargs.get("stream") else None
+        fakes_stream: Final = function_name != "generic_api_call" and _requests_fake_stream(
+            kwargs, self.default_litellm_params, data
+        )
+        if stream_timeout is not None and not fakes_stream:
+            return stream_timeout
+        request_timeout: Final = self._get_non_stream_timeout(kwargs=kwargs, data=data)
+        if stream_timeout is None:
+            return request_timeout
+        if request_timeout is None:
+            return stream_timeout
+        return CompletionTimeout.for_stream(
+            StreamKind.FAKED, CompletionTimeout.as_limit(request_timeout), CompletionTimeout.as_limit(stream_timeout)
+        )
 
     async def abatch_completion(
         self,
