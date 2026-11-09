@@ -44,7 +44,7 @@ async def _start(store: PerformanceAlertStore, claim: Claim, now: datetime) -> S
     if claim.state is not None and claim.state.day == day:
         return claim.state
     if claim.state is not None and not claim.state.completed:
-        verbose_proxy_logger.warning(
+        verbose_proxy_logger.info(
             "Performance alerts did not finish %s: stopped in %s after %d resources, %d skipped",
             claim.state.day,
             claim.state.scope,
