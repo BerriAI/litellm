@@ -1,5 +1,6 @@
 from typing import Protocol, assert_never
 
+from litellm._auth.budget_pricing import ExemptionFacts
 from litellm._auth.decision import (
     AlertKeyBudget,
     AlertKeySoftBudget,
@@ -24,10 +25,11 @@ from litellm._auth.decision import (
     LoadKeyContext,
     LoadKeyOwner,
     ModelBudgetEffect,
-    ModelBudgetExceeded,
+    ModelBudgetRead,
     ModelBudgetScope,
     Outcome,
     OwnerFacts,
+    PrefetchAuthObjects,
     PrepareKey,
     PresentedKey,
     ReadKeySpend,
@@ -48,28 +50,31 @@ from litellm._auth.decision import (
     TeamMemberStep,
     VetTeamMemberFallback,
 )
+from litellm._auth.fallback_access import FallbackAuthorizationFacts
+from litellm._auth.fallback_candidate import FallbackCandidateFacts
+from litellm._auth.key_model_access import KeyAndFallbackModelAccessFacts
 
 
 class ModelBudgetHandler(Protocol):
     async def read_model_budget_scope(self) -> ModelBudgetScope: ...
 
-    async def check_key_model_budget(self, model: str) -> ModelBudgetExceeded | None: ...
+    async def check_key_model_budget(self, model: str) -> ModelBudgetRead: ...
 
-    async def authorize_budget_fallback(self, model: str) -> bool: ...
+    async def authorize_budget_fallback(self, model: str) -> FallbackAuthorizationFacts: ...
 
     async def rewrite_request_model(self, model: str) -> None: ...
 
-    async def check_user_model_budget(self, model: str) -> ModelBudgetExceeded | None: ...
+    async def check_user_model_budget(self, model: str) -> ModelBudgetRead: ...
 
 
 class TeamMemberModelBudgetHandler(Protocol):
     async def read_team_member_model_budget_scope(self) -> TeamMemberModelBudgetScope: ...
 
-    async def check_team_member_model_budget(self, model: str) -> ModelBudgetExceeded | None: ...
+    async def check_team_member_model_budget(self, model: str) -> ModelBudgetRead: ...
 
     async def read_team_member_fallbacks(self, model: str) -> tuple[FallbackTarget, ...]: ...
 
-    async def vet_team_member_fallback(self, target: FallbackTarget) -> bool: ...
+    async def vet_team_member_fallback(self, target: FallbackTarget) -> FallbackCandidateFacts: ...
 
     async def reroute_team_member_request(self, model: str) -> None: ...
 
@@ -87,11 +92,13 @@ class EffectHandler(ModelBudgetHandler, Protocol):
 
     async def inspect_key(self) -> KeyFacts: ...
 
-    async def enforce_model_access(self) -> None: ...
+    async def enforce_model_access(self) -> KeyAndFallbackModelAccessFacts: ...
+
+    async def prefetch_auth_objects(self) -> None: ...
 
     async def load_key_owner(self, user_id: str) -> OwnerFacts | None: ...
 
-    async def check_budget_exemption(self) -> bool: ...
+    async def check_budget_exemption(self) -> ExemptionFacts: ...
 
     async def read_team_member_budget(self, user_id: str, team_id: str) -> TeamMemberBudget | None: ...
 
@@ -122,6 +129,7 @@ async def _answer(step: Effect, handler: EffectHandler) -> Step:
             | PrepareKey()
             | InspectKey()
             | EnforceModelAccess()
+            | PrefetchAuthObjects()
             | LoadKeyOwner()
             | CheckBudgetExemption()
             | LoadKeyContext()
@@ -158,7 +166,9 @@ async def _answer_identity(step: IdentityEffect, handler: EffectHandler) -> Step
         case InspectKey(resume=resume):
             return resume(await handler.inspect_key())
         case EnforceModelAccess(resume=resume):
-            await handler.enforce_model_access()
+            return resume(await handler.enforce_model_access())
+        case PrefetchAuthObjects(resume=resume):
+            await handler.prefetch_auth_objects()
             return resume()
         case LoadKeyOwner(user_id=user_id, resume=resume):
             return resume(await handler.load_key_owner(user_id))

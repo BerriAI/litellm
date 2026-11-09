@@ -6,7 +6,7 @@ from functools import reduce
 from typing import Final
 
 from litellm._auth import decision
-from litellm._auth.python_core import PythonCore
+from tests.unit._auth.reference_core import PythonCore
 from litellm._auth.rust_core import (
     AUTH_STEP,
     MEMBER_STEP,

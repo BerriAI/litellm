@@ -28,12 +28,14 @@ from litellm._auth.decision import (
     MasterKey,
     MasterKeyOnlyRoute,
     MissingKey,
+    ModelAccessDenied,
     NoDatabase,
     NoMasterKey,
     NonAdminKey,
     NotAVirtualKey,
     OwnerDeactivated,
     OwnerFacts,
+    PrefetchAuthObjects,
     PrepareKey,
     PresentedKey,
     ReadKeySpend,
@@ -54,7 +56,8 @@ from litellm._auth.decision import (
     WithinModelBudgets,
 )
 from litellm._auth.key import hash_token, is_master_key
-from litellm._auth.model_budgets import (
+from tests.unit._auth.raw_model_reference import initial_access
+from tests.unit._auth.reference_model_budgets import (
     check_model_budgets,
     check_team_member_model_budgets,
     check_user_model_budgets,
@@ -148,7 +151,13 @@ def _check_key(check: _KeyCheck) -> Step:
 def _after_inspect(check: _KeyCheck, key: KeyFacts) -> Step:
     if key.blocked:
         return Deny(KeyBlocked())
-    return EnforceModelAccess(resume=lambda: _check_owner(check, key))
+    return EnforceModelAccess(
+        resume=lambda facts: (
+            Deny(ModelAccessDenied(denial))
+            if (denial := initial_access(facts)) is not None
+            else PrefetchAuthObjects(resume=lambda: _check_owner(check, key))
+        )
+    )
 
 
 def _check_owner(check: _KeyCheck, key: KeyFacts) -> Step:
@@ -165,7 +174,9 @@ def _after_owner(check: _KeyCheck, key: KeyFacts, user_id: str, owner: OwnerFact
 
 
 def _check_budget_exemption(check: _KeyCheck, key: KeyFacts) -> Step:
-    return CheckBudgetExemption(resume=lambda exempt: _check_team_member_budget(check, key, exempt))
+    from tests.unit._auth.budget_reference import exemption
+
+    return CheckBudgetExemption(resume=lambda facts: _check_team_member_budget(check, key, exemption(facts)))
 
 
 def _check_team_member_budget(check: _KeyCheck, key: KeyFacts, exempt: bool) -> Step:

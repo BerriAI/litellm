@@ -74,7 +74,7 @@ from litellm.proxy.auth.auth_checks import (
     cache_key_object,
     jwt_key_mapping_cache_key,
 )
-from litellm._auth.python_core import PythonCore
+from tests.unit._auth.reference_core import PythonCore
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.common_utils.http_parsing_utils import get_client_requested_model
 from litellm.proxy.auth.user_api_key_auth import (
@@ -451,26 +451,15 @@ async def test_should_not_reuse_cached_key_object_for_request_state():
 @pytest.mark.asyncio
 async def test_custom_auth_does_not_enforce_key_model_access_by_default():
     valid_token = UserAPIKeyAuth(token="test_token", models=["gpt-4o-mini"])
-    request_data = {"model": "gpt-4o"}
-
-    with (
-        patch(
-            "litellm.proxy.auth.user_api_key_auth.can_key_call_model",
-            new_callable=AsyncMock,
-        ) as mock_can_key,
-        patch(
-            "litellm.proxy.proxy_server.general_settings",
-            {},
-        ),
-    ):
-        await _run_post_custom_auth_checks(
+    with patch("litellm.proxy.proxy_server.general_settings", {}):
+        result = await _run_post_custom_auth_checks(
             valid_token=valid_token,
             request=None,
-            request_data=request_data,
+            request_data={"model": "gpt-4o"},
             route="/v1/chat/completions",
             parent_otel_span=None,
         )
-        mock_can_key.assert_not_awaited()
+    assert result is valid_token
 
 
 @pytest.mark.asyncio
@@ -499,29 +488,20 @@ async def test_custom_auth_honors_key_level_model_access_restriction_allowed_wit
     request_data = {"model": "gpt-4o-mini"}
 
     with (
-        patch(
-            "litellm.proxy.auth.user_api_key_auth.can_key_call_model",
-            new_callable=AsyncMock,
-        ) as mock_can_key,
         patch("litellm.proxy.auth.user_api_key_auth.common_checks", new_callable=AsyncMock),
         patch(
             "litellm.proxy.proxy_server.general_settings",
             {"custom_auth_run_common_checks": True},
         ),
     ):
-        await _run_post_custom_auth_checks(
+        result = await _run_post_custom_auth_checks(
             valid_token=valid_token,
             request=None,
             request_data=request_data,
             route="/v1/chat/completions",
             parent_otel_span=None,
         )
-        mock_can_key.assert_awaited_once_with(
-            model="gpt-4o-mini",
-            llm_model_list=ANY,
-            valid_token=valid_token,
-            llm_router=ANY,
-        )
+        assert result is valid_token
 
 
 @pytest.mark.asyncio
@@ -530,63 +510,37 @@ async def test_custom_auth_enforces_key_model_access_from_file_route_header_with
     request = _RoutingRequest(headers={"x-litellm-model": "restricted-model"})
 
     with (
-        patch(
-            "litellm.proxy.auth.user_api_key_auth.can_key_call_model",
-            new_callable=AsyncMock,
-        ) as mock_can_key,
         patch("litellm.proxy.auth.user_api_key_auth.common_checks", new_callable=AsyncMock),
         patch(
             "litellm.proxy.proxy_server.general_settings",
             {"custom_auth_run_common_checks": True},
         ),
     ):
-        await _run_post_custom_auth_checks(
-            valid_token=valid_token,
-            request=request,
-            request_data={},
-            route="/v1/files",
-            parent_otel_span=None,
-        )
-        mock_can_key.assert_awaited_once_with(
-            model="restricted-model",
-            llm_model_list=ANY,
-            valid_token=valid_token,
-            llm_router=ANY,
-        )
+        with pytest.raises(ProxyException) as denial:
+            await _run_post_custom_auth_checks(
+                valid_token=valid_token,
+                request=request,
+                request_data={},
+                route="/v1/files",
+                parent_otel_span=None,
+            )
+        assert denial.value.type == ProxyErrorTypes.key_model_access_denied
+        assert "restricted-model" in str(denial.value)
 
 
 @pytest.mark.asyncio
 async def test_custom_auth_honors_key_level_model_access_restriction_denied_with_opt_in():
     valid_token = UserAPIKeyAuth(token="test_token", models=["gpt-4o-mini"])
-    request_data = {"model": "gpt-4o"}
-
-    with (
-        patch(
-            "litellm.proxy.auth.user_api_key_auth.can_key_call_model",
-            new_callable=AsyncMock,
-        ) as mock_can_key,
-        patch("litellm.proxy.auth.user_api_key_auth.common_checks", new_callable=AsyncMock),
-        patch(
-            "litellm.proxy.proxy_server.general_settings",
-            {"custom_auth_run_common_checks": True},
-        ),
-    ):
-        mock_can_key.side_effect = ProxyException(
-            message="Key not allowed to access model",
-            type=ProxyErrorTypes.key_model_access_denied,
-            param="model",
-            code=401,
-        )
+    with patch("litellm.proxy.proxy_server.general_settings", {"custom_auth_run_common_checks": True}):
         with pytest.raises(ProxyException) as exc:
             await _run_post_custom_auth_checks(
                 valid_token=valid_token,
                 request=None,
-                request_data=request_data,
+                request_data={"model": "gpt-4o"},
                 route="/v1/chat/completions",
                 parent_otel_span=None,
             )
-
-        assert exc.value.type == ProxyErrorTypes.key_model_access_denied
+    assert exc.value.type == ProxyErrorTypes.key_model_access_denied
 
 
 def _proxy_server_attrs_for_custom_auth(*, user_custom_auth):
@@ -1896,7 +1850,13 @@ async def test_auth_prefetches_referenced_objects_only_after_the_key_may_call_th
     from litellm.proxy.proxy_server import hash_token
 
     api_key = "sk-prefetch-order-test"
-    valid_token = UserAPIKeyAuth(api_key=api_key, token=hash_token(api_key), user_id="u1", team_id="t1")
+    valid_token = UserAPIKeyAuth(
+        api_key=api_key,
+        token=hash_token(api_key),
+        user_id="u1",
+        team_id="t1",
+        models=["gpt-4o" if model_allowed else "other-model"],
+    )
 
     mock_cache = AsyncMock()
     mock_cache.async_get_cache = AsyncMock(return_value=None)
@@ -1912,7 +1872,7 @@ async def test_auth_prefetches_referenced_objects_only_after_the_key_may_call_th
         "proxy_logging_obj": mock_proxy_logging_obj,
         "master_key": "sk-master-key",
         "general_settings": {},
-        "llm_model_list": [],
+        "llm_model_list": [{"model_name": "gpt-4o"}],
         "llm_router": None,
         "open_telemetry_logger": None,
         "model_max_budget_limiter": MagicMock(),
@@ -1921,12 +1881,6 @@ async def test_auth_prefetches_referenced_objects_only_after_the_key_may_call_th
         "litellm_proxy_admin_name": "admin",
     }
     _original_values = {attr: getattr(_proxy_server_mod, attr, None) for attr in _attrs_to_set}
-    denied = ProxyException(
-        message="Key not allowed to access model",
-        type=ProxyErrorTypes.key_model_access_denied,
-        param="model",
-        code=401,
-    )
     try:
         for attr, val in _attrs_to_set.items():
             setattr(_proxy_server_mod, attr, val)
@@ -1938,11 +1892,6 @@ async def test_auth_prefetches_referenced_objects_only_after_the_key_may_call_th
                 "litellm.proxy.auth.resolvers.store.IdentityStore._resolve_key",
                 new_callable=AsyncMock,
                 return_value=valid_token,
-            ),
-            patch(  # test-quality-ok: the observable is whether the prefetch runs before or after this check
-                "litellm.proxy.auth.user_api_key_auth.enforce_key_and_fallback_model_access",
-                new_callable=AsyncMock,
-                side_effect=None if model_allowed else denied,
             ),
             patch(  # test-quality-ok: counting prefetch calls on a denied request IS the regression being pinned
                 "litellm.proxy.auth.user_api_key_auth.prefetch_auth_objects", new_callable=AsyncMock
@@ -9596,13 +9545,23 @@ class TestJWTAuthUserEmail:
 
 
 def _key_over_budget_for(*models: str) -> AsyncMock:
-    async def is_key_within_model_budget(user_api_key_dict: UserAPIKeyAuth, model: str) -> bool:
-        if model in models:
-            raise litellm.BudgetExceededError(current_cost=10, max_budget=5, message=f"over budget for {model}")
-        return True
+    from litellm._auth.model_budget_data import ModelBudgetSnapshot
+    from litellm.proxy.auth.model_budget_adapter import ModelBudgetReading
+
+    async def read_model_budget_raw(
+        entity: str,
+        entity_id: str | None,
+        team_id: str | None,
+        model: str,
+        budgets: Mapping[str, object] | None,
+        key_budgets: Mapping[str, object] | None = None,
+    ) -> ModelBudgetReading:
+        return ModelBudgetReading(
+            ModelBudgetSnapshot(5, 10 if model in models else 0, None, None, None, None, 0), model, model
+        )
 
     limiter: Final = AsyncMock()
-    limiter.is_key_within_model_budget.side_effect = is_key_within_model_budget
+    limiter.read_model_budget_raw.side_effect = read_model_budget_raw
     return limiter
 
 
@@ -9696,7 +9655,9 @@ class TestKeyModelBudgetFallback:
                 valid_token, _key_over_budget_for(*over_budget), request_data, self._make_request()
             )
 
-        assert exc_info.value.message == "over budget for gpt-4o"
+        assert (
+            exc_info.value.message == "LiteLLM Virtual Key: test-key, key_alias: None, exceeded budget for model=gpt-4o"
+        )
         assert (exc_info.value.current_cost, exc_info.value.max_budget) == (10, 5)
         assert request_data["model"] == "gpt-4o"
 

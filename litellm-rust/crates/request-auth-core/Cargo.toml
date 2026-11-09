@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+fancy-regex.workspace = true
 litellm-secret-value.workspace = true
 serde.workspace = true
 sha2.workspace = true

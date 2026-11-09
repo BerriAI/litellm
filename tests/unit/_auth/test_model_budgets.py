@@ -1,3 +1,5 @@
+from litellm._auth.fallback_candidate import FallbackCandidateFacts
+from tests.unit._auth.raw_answers import candidate_read
 from dataclasses import dataclass, replace
 from typing import Final
 
@@ -5,9 +7,11 @@ import pytest
 
 from litellm._auth.decision import (
     Allow,
+    AuthCore,
     Deny,
     FallbackTarget,
     ModelBudgetExceeded,
+    ModelBudgetRead,
     ModelBudgetScope,
     Outcome,
     Step,
@@ -15,7 +19,8 @@ from litellm._auth.decision import (
     WithinModelBudgets,
 )
 from litellm._auth.driver import drive_model_budgets, drive_team_member_model_budgets
-from litellm._auth.decision import AuthCore
+from litellm._auth.fallback_access import FallbackAuthorizationFacts
+from tests.unit._auth.raw_answers import budget_read, fallback_read
 
 Call = tuple[str, str | None]
 
@@ -54,13 +59,13 @@ class FakeRequest:
         self._record("read")
         return self.scope
 
-    async def check_key_model_budget(self, model: str) -> ModelBudgetExceeded | None:
+    async def check_key_model_budget(self, model: str) -> ModelBudgetRead:
         self._record("key", model)
-        return _exceeded("key", model) if model in self.key_over else None
+        return budget_read(_exceeded("key", model) if model in self.key_over else None)
 
-    async def authorize_budget_fallback(self, model: str) -> bool:
+    async def authorize_budget_fallback(self, model: str) -> FallbackAuthorizationFacts:
         self._record("authorize", model)
-        return model not in self.unauthorized
+        return fallback_read(model, model not in self.unauthorized)
 
     async def rewrite_request_model(self, model: str) -> None:
         self._record("rewrite", model)
@@ -70,9 +75,9 @@ class FakeRequest:
             rewritable_model=model,
         )
 
-    async def check_user_model_budget(self, model: str) -> ModelBudgetExceeded | None:
+    async def check_user_model_budget(self, model: str) -> ModelBudgetRead:
         self._record("user", model)
-        return _exceeded("user", model) if model in self.user_over else None
+        return budget_read(_exceeded("user", model) if model in self.user_over else None)
 
 
 async def _run(step: Step, request: FakeRequest) -> tuple[Outcome, tuple[Call, ...]]:
@@ -211,18 +216,18 @@ class FakeTeamMemberRequest:
         self._record("read")
         return self.scope
 
-    async def check_team_member_model_budget(self, model: str) -> ModelBudgetExceeded | None:
+    async def check_team_member_model_budget(self, model: str) -> ModelBudgetRead:
         self._record("member", model)
-        return _exceeded("member", model) if model in self.over else None
+        return budget_read(_exceeded("member", model) if model in self.over else None)
 
     async def read_team_member_fallbacks(self, model: str) -> tuple[FallbackTarget, ...]:
         self._record("fallbacks", model)
         return self.targets if self.targets is not None else tuple(_target(fallback) for fallback in self.fallbacks)
 
-    async def vet_team_member_fallback(self, target: FallbackTarget) -> bool:
+    async def vet_team_member_fallback(self, target: FallbackTarget) -> FallbackCandidateFacts:
         self._record("vet", target.model)
         self.vetted = (*self.vetted, target)
-        return target.model not in self.unusable
+        return candidate_read(target.model, target.model not in self.unusable)
 
     async def reroute_team_member_request(self, model: str) -> None:
         self._record("reroute", model)

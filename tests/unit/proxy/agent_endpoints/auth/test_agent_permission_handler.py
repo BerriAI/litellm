@@ -1369,7 +1369,7 @@ def personal_key_owner_teams(monkeypatch: pytest.MonkeyPatch, request: pytest.Fi
     monkeypatch.setattr(proxy_server, "user_api_key_cache", user_api_key_cache)
     monkeypatch.setattr(proxy_server, "proxy_logging_obj", MagicMock())
     monkeypatch.setattr(auth_checks, "get_team_object", _get_team_object)
-    monkeypatch.setattr(auth_checks, "_check_team_member_budget", AsyncMock(return_value=None))
+    monkeypatch.setattr(auth_checks, "get_team_membership", AsyncMock(return_value=None))
     monkeypatch.setattr(
         auth_checks,
         "get_user_object",
@@ -1428,7 +1428,9 @@ async def test_empty_owner_team_id_does_not_restrict_agent_access(
 
     assert owner_teams.unreadable is False
     assert tuple(team.team_id for team in owner_teams.teams) == ("team-open",)
-    assert await AgentRequestHandler.resolve_key_team_agent_access(personal_key_owner_teams) == UnrestrictedAgentAccess()
+    assert (
+        await AgentRequestHandler.resolve_key_team_agent_access(personal_key_owner_teams) == UnrestrictedAgentAccess()
+    )
     assert all(call.kwargs["team_id"] == "team-open" for call in team_loader.await_args_list)
 
 
@@ -1671,7 +1673,6 @@ async def test_personal_key_agent_billing_keeps_team_controls_when_org_lookup_fa
     org_loader: Final = AsyncMock(side_effect=RuntimeError("org lookup failed"))
     monkeypatch.setattr(auth_checks, "get_team_object", _get_team_object)
     monkeypatch.setattr(auth_checks, "get_team_membership", AsyncMock(return_value=None))
-    monkeypatch.setattr(auth_checks, "_check_team_member_budget", AsyncMock(return_value=None))
     monkeypatch.setattr(auth_checks, "get_org_object", AsyncMock(return_value=None))
     monkeypatch.setattr(auth_checks, "get_org_object_for_request", org_loader)
 
@@ -1717,7 +1718,9 @@ async def test_personal_key_agent_billing_keeps_team_controls_when_membership_lo
         AsyncMock(side_effect=RuntimeError("membership lookup failed")),
     )
 
-    billed: Final = await AgentRequestHandler.personal_key_agent_billing_auth(personal_key_owner_teams, "agent-b")
+    billed: Final = await AgentRequestHandler._personal_key_agent_billing_auth_for_team(  # pyright: ignore[reportPrivateUsage]  # exercise billing after owner-team selection has completed
+        personal_key_owner_teams, "agent-b", await _get_team_object("team-b"), strict=False
+    )
 
     assert billed.team_id == "team-b"
     assert billed.team_rpm_limit == 5
@@ -1761,9 +1764,7 @@ async def test_personal_key_agent_billing_uses_fresh_membership_for_strict_polic
             ),
         )
 
-    async def _get_team_membership(
-        user_id: str, team_id: str, **kwargs: object
-    ) -> LiteLLM_TeamMembership:
+    async def _get_team_membership(user_id: str, team_id: str, **kwargs: object) -> LiteLLM_TeamMembership:
         database_value: Final = bool(kwargs.get("check_db_only"))
         return LiteLLM_TeamMembership(
             user_id=user_id,
@@ -1774,7 +1775,6 @@ async def test_personal_key_agent_billing_uses_fresh_membership_for_strict_polic
     team_loader: Final = AsyncMock(side_effect=_get_team_object)
     monkeypatch.setattr(auth_checks, "get_team_object", team_loader)
     monkeypatch.setattr(auth_checks, "get_team_membership", AsyncMock(side_effect=_get_team_membership))
-    monkeypatch.setattr(auth_checks, "_check_team_member_budget", AsyncMock(return_value=None))
     monkeypatch.setattr(auth_checks, "get_org_object", AsyncMock(return_value=None))
     auth: Final = personal_key_owner_teams.model_copy(update={"requires_fresh_policy": strict})
 
@@ -2135,9 +2135,7 @@ async def test_strict_personal_key_agent_access_reads_owner_teams_from_the_datab
         return LiteLLM_TeamTable(
             team_id=team_id,
             object_permission_id=f"perm-{team_id}",
-            object_permission=LiteLLM_ObjectPermissionTable(
-                object_permission_id=f"perm-{team_id}", agents=["agent-a"]
-            ),
+            object_permission=LiteLLM_ObjectPermissionTable(object_permission_id=f"perm-{team_id}", agents=["agent-a"]),
         )
 
     monkeypatch.setattr(auth_checks, "get_team_object", _get_team_object)

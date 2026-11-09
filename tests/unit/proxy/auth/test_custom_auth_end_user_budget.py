@@ -115,7 +115,7 @@ async def test_custom_auth_enforces_end_user_budget_when_common_checks_skipped()
 
     with (
         patch(
-            "litellm.proxy.auth.user_api_key_auth.get_end_user_object",
+            "litellm.proxy.auth.auth_checks.get_end_user_object",
             new_callable=AsyncMock,
             return_value=over_budget_end_user,
         ),

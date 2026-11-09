@@ -12,6 +12,7 @@ from litellm._auth.decision import (
     MalformedKey,
     MasterKeyOnlyRoute,
     MissingKey,
+    ModelAccessDenied,
     ModelBudgetExceeded,
     NoDatabase,
     NotAVirtualKey,
@@ -19,10 +20,12 @@ from litellm._auth.decision import (
     TeamMemberBudgetExceeded,
     UserAuthDisabled,
 )
+from litellm._auth.failure import NativeAuthFailure
 from litellm.constants import INVALID_VIRTUAL_KEY_ERROR_MARKER, INVALID_VIRTUAL_KEY_ERROR_MESSAGE
 from litellm.proxy._types import Litellm_EntityType, ProxyErrorTypes, ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import key_budget_exceeded_error
 from litellm.proxy.auth.auth_utils import abbreviate_api_key
+from litellm.proxy.auth.model_access_adapter import raise_model_denial
 from litellm.types.proxy.auth.user_api_key_auth import is_jwt
 
 _JWT_AUTH_DISABLED_HINT: Final = (
@@ -52,6 +55,9 @@ def denial_exception(
     key: UserAPIKeyAuth | None,
 ) -> ProxyException | HTTPException | litellm.BudgetExceededError:
     match denial:
+        case ModelAccessDenied(decision=model_decision):
+            raise_model_denial(model_decision, model_decision.model or "")
+            raise NativeAuthFailure("native model denial contained an allow")
         case MissingKey():
             return ProxyException(
                 message="Authentication Error, No api key passed in.",

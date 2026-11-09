@@ -3,6 +3,13 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol, TypeAlias
 
+from litellm._auth.budget_pricing import ExemptionFacts
+from litellm._auth.fallback_access import FallbackAuthorizationFacts
+from litellm._auth.fallback_candidate import FallbackCandidateFacts
+from litellm._auth.key_model_access import KeyAndFallbackModelAccessFacts
+from litellm._auth.model_access import ModelAccessDecision
+from litellm._auth.model_budget_data import ModelBudgetSnapshot
+
 
 @dataclass(frozen=True, slots=True)
 class RequestFacts:
@@ -128,8 +135,22 @@ class ModelBudgetExceeded:
     entity_id: str | None
 
 
+@dataclass(frozen=True, slots=True)
+class ModelBudgetRead:
+    snapshot: ModelBudgetSnapshot
+    message: str = ""
+    entity_type: str | None = None
+    entity_id: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ModelAccessDenied:
+    decision: ModelAccessDecision
+
+
 Denial: TypeAlias = (
-    MissingKey
+    ModelAccessDenied
+    | MissingKey
     | MalformedKey
     | UserAuthDisabled
     | ExpiredKey
@@ -257,6 +278,11 @@ class InspectKey:
 
 @dataclass(frozen=True, slots=True)
 class EnforceModelAccess:
+    resume: "Callable[[KeyAndFallbackModelAccessFacts], Step]"
+
+
+@dataclass(frozen=True, slots=True)
+class PrefetchAuthObjects:
     resume: "Callable[[], Step]"
 
 
@@ -268,7 +294,7 @@ class LoadKeyOwner:
 
 @dataclass(frozen=True, slots=True)
 class CheckBudgetExemption:
-    resume: "Callable[[bool], Step]"
+    resume: "Callable[[ExemptionFacts], Step]"
 
 
 @dataclass(frozen=True, slots=True)
@@ -332,13 +358,13 @@ class ReadModelBudgetScope:
 @dataclass(frozen=True, slots=True)
 class CheckKeyModelBudget:
     model: str
-    resume: "Callable[[ModelBudgetExceeded | None], Step]"
+    resume: "Callable[[ModelBudgetRead], Step]"
 
 
 @dataclass(frozen=True, slots=True)
 class AuthorizeBudgetFallback:
     model: str
-    resume: "Callable[[bool], Step]"
+    resume: "Callable[[FallbackAuthorizationFacts], Step]"
 
 
 @dataclass(frozen=True, slots=True)
@@ -350,7 +376,7 @@ class RewriteRequestModel:
 @dataclass(frozen=True, slots=True)
 class CheckUserModelBudget:
     model: str
-    resume: "Callable[[ModelBudgetExceeded | None], Step]"
+    resume: "Callable[[ModelBudgetRead], Step]"
 
 
 IdentityEffect: TypeAlias = (
@@ -361,6 +387,7 @@ IdentityEffect: TypeAlias = (
     | PrepareKey
     | InspectKey
     | EnforceModelAccess
+    | PrefetchAuthObjects
     | LoadKeyOwner
     | CheckBudgetExemption
     | LoadKeyContext
@@ -390,7 +417,7 @@ class ReadTeamMemberModelBudgetScope:
 @dataclass(frozen=True, slots=True)
 class CheckTeamMemberModelBudget:
     model: str
-    resume: "Callable[[ModelBudgetExceeded | None], TeamMemberStep]"
+    resume: "Callable[[ModelBudgetRead], TeamMemberStep]"
 
 
 @dataclass(frozen=True, slots=True)
@@ -402,7 +429,7 @@ class ReadTeamMemberFallbacks:
 @dataclass(frozen=True, slots=True)
 class VetTeamMemberFallback:
     target: FallbackTarget
-    resume: "Callable[[bool], TeamMemberStep]"
+    resume: "Callable[[FallbackCandidateFacts], TeamMemberStep]"
 
 
 @dataclass(frozen=True, slots=True)

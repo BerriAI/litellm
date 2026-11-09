@@ -63,6 +63,9 @@ pub enum Grant {
 #[derive(Clone, veil::Redact, Serialize)]
 #[serde(tag = "kind")]
 pub enum Denial {
+    ModelAccessDenied {
+        decision: crate::model_access::Decision,
+    },
     MissingKey,
     MalformedKey,
     UserAuthDisabled,
@@ -106,6 +109,30 @@ pub struct ModelBudgetExceeded {
     pub max_budget: f64,
     pub entity_type: Option<String>,
     pub entity_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct ModelBudgetRead {
+    pub snapshot: crate::model_budget_data::Snapshot,
+    pub message: String,
+    pub entity_type: Option<String>,
+    pub entity_id: Option<String>,
+}
+
+impl ModelBudgetRead {
+    pub fn exceeded(self) -> Option<ModelBudgetExceeded> {
+        let result = crate::model_budget_data::check(&self.snapshot);
+        if !result.denied {
+            return None;
+        }
+        Some(ModelBudgetExceeded {
+            message: self.message,
+            current_cost: result.current_spend,
+            max_budget: self.snapshot.max_budget?,
+            entity_type: self.entity_type,
+            entity_id: self.entity_id,
+        })
+    }
 }
 
 impl From<ModelBudgetExceeded> for Denial {
@@ -196,6 +223,7 @@ pub enum Effect {
     },
     InspectKey,
     EnforceModelAccess,
+    PrefetchAuthObjects,
     LoadKeyOwner {
         user_id: String,
     },
@@ -267,8 +295,12 @@ pub enum Node {
 #[derive(Deserialize)]
 #[serde(tag = "kind", content = "value")]
 pub enum Answer {
+    ModelAccess(Box<crate::key_model_access::Facts>),
+    FallbackAccess(Box<crate::fallback_access::Facts>),
+    Candidate(Box<crate::fallback_candidate::Facts>),
     Unit,
     Bool(bool),
+    Exemption(crate::budget_pricing::ExemptionFacts),
     Presented(Option<PresentedKey>),
     Key(KeyFacts),
     Owner(Option<OwnerFacts>),
@@ -277,6 +309,7 @@ pub enum Answer {
     ProxySpend(Option<f64>),
     ModelScope(ModelBudgetScope),
     Exceeded(Option<ModelBudgetExceeded>),
+    ModelBudgetData(ModelBudgetRead),
     TeamScope(TeamMemberModelBudgetScope),
     Targets(Vec<FallbackTarget>),
 }
@@ -298,6 +331,7 @@ macro_rules! answer {
     };
 }
 answer!(bool, Bool);
+answer!(crate::budget_pricing::ExemptionFacts, Exemption);
 answer!(Option<PresentedKey>, Presented);
 answer!(KeyFacts, Key);
 answer!(Option<OwnerFacts>, Owner);
@@ -306,8 +340,36 @@ answer!(f64, Spend);
 answer!(Option<f64>, ProxySpend);
 answer!(ModelBudgetScope, ModelScope);
 answer!(Option<ModelBudgetExceeded>, Exceeded);
+answer!(ModelBudgetRead, ModelBudgetData);
 answer!(TeamMemberModelBudgetScope, TeamScope);
 answer!(Vec<FallbackTarget>, Targets);
+
+impl FromAnswer for crate::fallback_candidate::Facts {
+    fn from_answer(answer: Answer) -> Result<Self, Error> {
+        match answer {
+            Answer::Candidate(value) => Ok(*value),
+            _ => Err(Error::InvalidAnswer),
+        }
+    }
+}
+
+impl FromAnswer for crate::key_model_access::Facts {
+    fn from_answer(answer: Answer) -> Result<Self, Error> {
+        match answer {
+            Answer::ModelAccess(value) => Ok(*value),
+            _ => Err(Error::InvalidAnswer),
+        }
+    }
+}
+
+impl FromAnswer for crate::fallback_access::Facts {
+    fn from_answer(answer: Answer) -> Result<Self, Error> {
+        match answer {
+            Answer::FallbackAccess(value) => Ok(*value),
+            _ => Err(Error::InvalidAnswer),
+        }
+    }
+}
 
 impl FromAnswer for () {
     fn from_answer(answer: Answer) -> Result<Self, Error> {
