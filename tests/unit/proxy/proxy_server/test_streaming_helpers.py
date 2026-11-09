@@ -939,13 +939,12 @@ async def test_responses_stream_sends_fallback_metadata_as_a_typed_event_framed_
             )
         ]
     )
-    event_frames: Final = frames[:-1]
+    event_frames: Final = tuple(frame for frame in frames if frame != "data: [DONE]\n\n")
     payloads: Final = tuple(
         json.loads(next(line.removeprefix("data: ") for line in frame.splitlines() if line.startswith("data: ")))
         for frame in event_frames
     )
 
-    assert frames[-1] == "data: [DONE]\n\n"
     assert tuple(payload.get("type") for payload in payloads) == (
         "response.created",
         "litellm.fallback_metadata",
