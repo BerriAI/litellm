@@ -481,3 +481,32 @@ def test_get_complete_url_default_is_unchanged() -> None:
         litellm_params={},
     )
     assert url == "https://api.cohere.ai/v2/embed"
+
+@pytest.mark.parametrize(
+    "api_base",
+    [
+        "https://gateway.example.com/v1/embed",
+        "https://gateway.example.com/embeddings",
+        "https://gateway.example.com/cohere/v1/embed/",
+    ],
+)
+def test_get_complete_url_keeps_an_explicit_endpoint_verbatim(api_base: str) -> None:
+    url: Final = CohereEmbeddingConfig().get_complete_url(
+        api_base=api_base,
+        api_key=None,
+        model="embed-english-v3.0",
+        optional_params={},
+        litellm_params={},
+    )
+    assert url == api_base.rstrip("/")
+
+
+def test_get_complete_url_rejects_a_chat_endpoint() -> None:
+    with pytest.raises(ValueError, match="chat endpoint"):
+        CohereEmbeddingConfig().get_complete_url(
+            api_base="https://gateway.example.com/v1/chat",
+            api_key=None,
+            model="embed-english-v3.0",
+            optional_params={},
+            litellm_params={},
+        )

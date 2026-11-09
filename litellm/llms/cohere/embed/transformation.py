@@ -14,6 +14,7 @@ from collections.abc import Iterable, Iterator, Mapping, Sequence, Sized
 from enum import Enum
 from itertools import chain, starmap
 from typing import Final, Protocol, TypeAlias, cast
+from urllib.parse import urlsplit
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
@@ -21,8 +22,6 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 import litellm
 from litellm import COHERE_DEFAULT_EMBEDDING_INPUT_TYPE
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from urllib.parse import urlsplit
-
 from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.base_llm import BaseEmbeddingConfig
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -217,14 +216,21 @@ class CohereEmbeddingConfig(BaseEmbeddingConfig):
         # would otherwise get embeddings joined onto it and 404 on upgrade
         # (review of #50249). An explicit, actionable error beats a silent
         # break of a working chat-only setup.
-        urlsplit_base = urlsplit(base.rstrip("/"))
-        if urlsplit_base.path.endswith(("/v2/chat", "/v1/chat")):
+        last_segment = (
+            urlsplit(base.rstrip("/")).path.rstrip("/").rsplit("/", 1)[-1].lower()
+        )
+        if last_segment == "chat":
             raise ValueError(
                 f"COHERE_API_BASE points at a chat endpoint ({base!r}), but "
                 "embeddings need a base URL ending in /v2/embed (or a bare "
                 "gateway host). Chat and embeddings share this variable with "
                 "different semantics — configure them separately."
             )
+        if "embed" in last_segment:
+            # The caller already named the embedding endpoint, so an explicit
+            # path (Cohere's /v2/embed, or a gateway exposing /v1/embed or
+            # /embeddings) is used verbatim instead of getting a second route.
+            return base
         return ensure_api_route(base, "v2/embed")
 
     def _transform_request(
