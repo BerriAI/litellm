@@ -25,7 +25,7 @@ from litellm.integrations.langfuse.langfuse import langfuse_trace_id, langfuse_t
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.xai.common_utils import xai_reported_cost_in_usd
 from litellm.proxy.mcp_server import mcp_server_manager
-from litellm.proxy.mcp_server.faults.list_outcomes import ServerListOk
+from litellm.proxy.mcp_server.faults.list_outcomes import AggregateToolListing, ServerListOk
 from litellm.proxy.utils import _estimate_dispatched_failure_usage, _failure_fields_to_lift
 from litellm.responses.mcp.litellm_proxy_mcp_handler import LiteLLM_Proxy_MCP_Handler
 from litellm.responses.mcp.mcp_streaming_iterator import MCPEnhancedStreamingIterator
@@ -927,7 +927,7 @@ async def test_mcp_parameter_preparation_helpers():
     ), "Stream should be restored to original setting"
     assert (
         "tool_choice" not in follow_up_params
-    ), "tool_choice should be removed for follow-up call"
+    ), "a tool_choice that is not allowed_tools should be removed for follow-up call"
     assert follow_up_params["temperature"] == 0.7, "Other params should be preserved"
     assert (
         base_call_params["tool_choice"] == "required"
@@ -1726,23 +1726,24 @@ def _served_by_a_recording_mcp_server(monkeypatch: pytest.MonkeyPatch, call_tool
             call_tool=call_tool,
             get_mcp_server_from_tool_name=MagicMock(return_value=None),
             get_mcp_server_by_name=MagicMock(side_effect=_demo_server_named),
+            get_allowed_mcp_servers=AsyncMock(return_value=[_DEMO_MCP_SERVER.server_id]),
+            get_mcp_servers_from_ids=MagicMock(return_value=[_DEMO_MCP_SERVER]),
         ),
     )
 
 
 def _echo_tool_listed() -> AbstractContextManager[object]:
-    return patch.object(
-        LiteLLM_Proxy_MCP_Handler,
-        "process_mcp_tools_without_openai_transform",
+    return patch(
+        "litellm.proxy.mcp_server.server._get_tools_from_mcp_servers",
         AsyncMock(
-            return_value=(
-                [
+            return_value=AggregateToolListing(
+                tools=[
                     MCPTool.model_validate(
                         {"name": "echo", "inputSchema": {"type": "object", "properties": {"value": {"type": "string"}}}},
                         by_name=False,
                     )
                 ],
-                {"echo": "demo"},
+                outcomes={},
             )
         ),
     )
@@ -1950,6 +1951,35 @@ async def test_the_provider_gets_the_converted_function_in_place_of_a_gateway_mc
         "tools": [{"type": "function", "name": "echo"}],
     }
     assert call_tool.await_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True])
+async def test_the_follow_up_after_a_gateway_call_keeps_the_converted_allowlist_without_forcing_a_call(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, stream: bool
+) -> None:
+    route: Final = _serve_responses(
+        respx_mock,
+        monkeypatch,
+        tuple(
+            _streamed(body) if stream else httpx.Response(200, content=json.dumps(body, default=dict))
+            for body in (_ROUND_ONE_BODY, _ROUND_TWO_BODY)
+        ),
+    )
+    _served_by_a_recording_mcp_server(
+        monkeypatch, AsyncMock(return_value=CallToolResult(content=[TextContent(type="text", text="PING")]))
+    )
+
+    await _call_echo_with_the_demo_label(
+        {"type": "allowed_tools", "mode": "required", "tools": [{"type": "mcp", "server_label": "demo", "name": "echo"}]},
+        stream=stream,
+    )
+
+    assert json.loads(route.calls[1].request.content)["tool_choice"] == {
+        "type": "allowed_tools",
+        "mode": "auto",
+        "tools": [{"type": "function", "name": "echo"}],
+    }
 
 
 @pytest.mark.asyncio

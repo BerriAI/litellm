@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypeAlias, Type
 
 from openai.types.chat import ChatCompletionToolParam
 from openai.types.responses.function_tool_param import FunctionToolParam
+from pydantic import TypeAdapter, ValidationError
 from typing_extensions import TypedDict as ExtraItemsTypedDict
 from typing_extensions import Unpack
 
@@ -16,6 +17,7 @@ from litellm.litellm_core_utils.allowed_tools_tool_choice import (
     NO_GATEWAY_TOOLS,
     GatewayTool,
     GatewayTools,
+    allowed_tools_tool_choice_kept_on_follow_up,
     parse_allowed_tools_tool_choice,
     tool_calls_the_choice_excludes,
 )
@@ -149,8 +151,11 @@ class _LabelScope:
     whole_gateway: bool = False
     server_ids: frozenset[str] = frozenset()
     toolset_tools: Mapping[str, tuple[str, ...]] = field(default_factory=lambda: MappingProxyType({}))
+    allowed_tools: frozenset[str] | None = None
 
     def serves(self, server: MCPServer | None, tool_name: str) -> bool:
+        if not self._allows(server, tool_name):
+            return False
         if self.whole_gateway:
             return True
         if server is None:
@@ -159,6 +164,24 @@ class _LabelScope:
         return server.server_id in self.server_ids or (
             toolset_names is not None and match_known_tool_name(tool_name, server, toolset_names) is not None
         )
+
+    def _allows(self, server: MCPServer | None, tool_name: str) -> bool:
+        if self.allowed_tools is None:
+            return True
+        if server is None:
+            return tool_name in self.allowed_tools
+        return match_known_tool_name(tool_name, server, self.allowed_tools) is not None
+
+
+_OBJECT_LIST: Final = TypeAdapter(list[object])
+
+
+def _listed_allowed_tools(tool: Mapping[str, object]) -> frozenset[str] | None:
+    try:
+        allowed_tools: Final = _OBJECT_LIST.validate_python(tool.get("allowed_tools"))
+    except ValidationError:
+        return None
+    return frozenset(name for name in allowed_tools if isinstance(name, str)) if allowed_tools else None
 
 
 def _gateway_tool(name: str, server: MCPServer | None, tool_name: str, scopes: Iterable[_LabelScope]) -> GatewayTool:
@@ -678,15 +701,20 @@ class LiteLLM_Proxy_MCP_Handler:
         server_url: Final = tool.get("server_url")
         if not isinstance(label, str) or not isinstance(server_url, str):
             return None
+        allowed_tools: Final = _listed_allowed_tools(tool)
         if names_whole_gateway(tool):
-            return _LabelScope(label=label, whole_gateway=True)
+            return _LabelScope(label=label, whole_gateway=True, allowed_tools=allowed_tools)
         kind, value = await LiteLLM_Proxy_MCP_Handler._resolve_proxy_mcp_name(
             server_url.split("/")[-1], user_api_key_auth, granted_toolsets
         )
         match kind:
             case "server":
                 resolved: Final = await _get_allowed_mcp_servers_from_mcp_server_names([value], list(servers))
-                return _LabelScope(label=label, server_ids=frozenset(server.server_id for server in resolved))
+                return _LabelScope(
+                    label=label,
+                    server_ids=frozenset(server.server_id for server in resolved),
+                    allowed_tools=allowed_tools,
+                )
             case "toolset":
                 permissions: Final = await global_mcp_server_manager.resolve_toolset_tool_permissions(
                     toolset_ids=[value]
@@ -694,6 +722,7 @@ class LiteLLM_Proxy_MCP_Handler:
                 return _LabelScope(
                     label=label,
                     toolset_tools=MappingProxyType({key: tuple(names) for key, names in permissions.items()}),
+                    allowed_tools=allowed_tools,
                 )
             case "denied_toolset":
                 return _LabelScope(label=label)
@@ -1496,18 +1525,15 @@ class LiteLLM_Proxy_MCP_Handler:
         """
         Prepare call parameters for the follow-up LLM call after tool execution.
 
-        Restores the original streaming setting and removes tool_choice since
-        we're now providing tool results, not requesting tool calls.
+        Restores the original streaming setting and keeps only an allowed_tools
+        tool_choice, in auto mode, so the follow-up keeps the caller's allowlist
+        without forcing another tool call.
         """
-        follow_up_params: Final = _AresponsesOptions(**call_params)
-
-        # Restore original streaming setting for follow-up call
-        follow_up_params["stream"] = original_stream_setting
-
-        # Remove tool_choice since we're providing results, not requesting tool calls
-        follow_up_params.pop("tool_choice", None)
-
-        return follow_up_params
+        return _AresponsesOptions(
+            **{key: value for key, value in call_params.items() if key not in ("stream", "tool_choice")},
+            **allowed_tools_tool_choice_kept_on_follow_up(call_params.get("tool_choice")),
+            stream=original_stream_setting,
+        )
 
     _prepare_follow_up_call_params = prepare_follow_up_call_params
 

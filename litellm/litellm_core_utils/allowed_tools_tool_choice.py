@@ -390,6 +390,12 @@ def allowed_tools_tool_choice_in_auto_mode(tool_choice: object) -> object:
             return layout.model_copy(update={"mode": "auto"}).model_dump(mode="json")
 
 
+def allowed_tools_tool_choice_kept_on_follow_up(tool_choice: object) -> Mapping[str, object]:
+    if not is_allowed_tools_tool_choice(tool_choice):
+        return MappingProxyType({})
+    return MappingProxyType({"tool_choice": allowed_tools_tool_choice_in_auto_mode(tool_choice)})
+
+
 def _gateway_entry(tool: Mapping[str, object], gateway_labels: frozenset[str]) -> tuple[str, str | None] | None:
     entry: Final = _server_entry(tool)
     return entry if entry is not None and entry[0] in gateway_labels else None

@@ -1836,10 +1836,24 @@ async def _calls_the_gateway_runs(
     called: tuple[str, ...],
     unresolvable_tools: Mapping[str, str] = MappingProxyType({}),
 ) -> tuple[str, ...]:
-    user: Final = UserAPIKeyAuth(api_key="sk-team", team_id="team-1", user_role=LitellmUserRoles.INTERNAL_USER)
-    mcp_tools: Final = [
-        {"type": "mcp", "server_label": label, "server_url": url} for label, url in labeled_server_urls.items()
-    ]
+    return await _calls_the_entries_run(
+        monkeypatch,
+        UserAPIKeyAuth(api_key="sk-team", team_id="team-1", user_role=LitellmUserRoles.INTERNAL_USER),
+        [{"type": "mcp", "server_label": label, "server_url": url} for label, url in labeled_server_urls.items()],
+        allowed_label,
+        called,
+        unresolvable_tools,
+    )
+
+
+async def _calls_the_entries_run(
+    monkeypatch: pytest.MonkeyPatch,
+    user: UserAPIKeyAuth,
+    mcp_tools: Sequence[Mapping[str, object]],
+    allowed_label: str,
+    called: tuple[str, ...],
+    unresolvable_tools: Mapping[str, str] = MappingProxyType({}),
+) -> tuple[str, ...]:
     tools, server_names = await _listing_through_the_gateway(monkeypatch, user, mcp_tools, _team_grants("ts-granted"))
     _deduplicated, tool_server_map = LiteLLM_Proxy_MCP_Handler._deduplicate_mcp_tools(tools, server_names)
     tool_choice: Final = {"type": "allowed_tools", "mode": "auto", "tools": [{"type": "mcp", "server_label": allowed_label}]}
@@ -1875,6 +1889,30 @@ async def test_an_mcp_entry_allows_only_the_tools_its_labels_toolset_or_server_s
 ):
     ran: Final = await _calls_the_gateway_runs(
         monkeypatch, labeled_server_urls, allowed_label, ("calc-add", "docs-lookup")
+    )
+
+    assert ran == runs
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("allowed_label", "runs"), [("reader", ("calc-add",)), ("writer", ("calc-subtract",))])
+async def test_an_mcp_entry_allows_only_the_tools_its_own_allowed_tools_lists(
+    monkeypatch: pytest.MonkeyPatch, allowed_label: str, runs: tuple[str, ...]
+):
+    ran: Final = await _calls_the_entries_run(
+        monkeypatch,
+        _key_holding("srv-1"),
+        [
+            {"type": "mcp", "server_label": "reader", "server_url": "litellm_proxy/mcp/calc", "allowed_tools": ["add"]},
+            {
+                "type": "mcp",
+                "server_label": "writer",
+                "server_url": "litellm_proxy/mcp/calc",
+                "allowed_tools": ["subtract"],
+            },
+        ],
+        allowed_label,
+        ("calc-add", "calc-subtract"),
     )
 
     assert ran == runs
