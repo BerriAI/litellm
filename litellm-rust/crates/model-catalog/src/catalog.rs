@@ -12,7 +12,8 @@ use crate::store::{Rows, Store};
 use crate::wire::{EntryWire, Fields};
 
 const SAMPLE_SPEC: &str = "sample_spec";
-const FALLBACK_GENERALIZATIONS: &str = "fallback_generalizations";
+/// The top-level key of the rules block, which is never a model row
+pub const FALLBACK_GENERALIZATIONS: &str = "fallback_generalizations";
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct IntegrityLimits {
@@ -416,6 +417,20 @@ impl Catalog {
             canonical_key,
             entry,
         })
+    }
+
+    /// The row under an exact model or alias key, an alias reading its owner's row
+    pub fn get(&self, key: &str) -> Option<&Fields> {
+        self.rows().fields(key)
+    }
+
+    /// A top-level value that is not a model row, such as `sample_spec`
+    pub fn section(&self, key: &str) -> Option<&Value> {
+        self.sections
+            .iter()
+            .filter(|section| is_section(&section.key))
+            .find(|section| section.key == key)
+            .map(|section| &section.value)
     }
 
     pub fn model_count(&self) -> usize {
