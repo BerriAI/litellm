@@ -1,5 +1,6 @@
 import asyncio
 import json
+from contextlib import asynccontextmanager
 from types import MappingProxyType, SimpleNamespace
 from typing import Final, Mapping, Optional, cast
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -1189,6 +1190,27 @@ async def _run_legacy_update_organization(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    ("body", "twin_after"),
+    [
+        ({"organization_id": "org-1", "spend": 0.0}, None),
+        ({"organization_id": "org-1", "organization_alias": "renamed"}, 7.0),
+    ],
+)
+async def test_legacy_update_drops_the_committed_org_spend_only_when_it_writes_the_stored_spend(
+    monkeypatch, body, twin_after
+):
+    from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
+
+    spend: Final = FakeSpendCounters(redis=None, memory={"spend:committed:org:org-1": 7.0})
+    monkeypatch.setattr("litellm.proxy.proxy_server.spend_counter_store", spend.store())
+
+    await _run_legacy_update_organization(monkeypatch, body=body, existing_budget_id="budget-1")
+
+    assert spend.memory.get("spend:committed:org:org-1") == twin_after
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     "body",
     [
         {"organization_id": "org-1", "tpm_limit": None},
@@ -1560,6 +1582,12 @@ async def test_delete_organization_evicts_the_cache_of_the_keys_it_deletes(monke
     prisma_client.db.litellm_jwtkeymapping = jwt_table
     prisma_client.db.litellm_organizationtable.delete = AsyncMock(return_value=MagicMock())
 
+    @asynccontextmanager
+    async def transaction():
+        yield prisma_client.db
+
+    prisma_client.tx = transaction
+
     monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True, raising=False)
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma_client)
     monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", cache)
@@ -1573,6 +1601,49 @@ async def test_delete_organization_evicts_the_cache_of_the_keys_it_deletes(monke
     assert all(cache.get_cache(key=cache_key) is None for cache_key in doomed_cache_keys)
     assert all(cache.get_cache(key=cache_key) == {"retained": True} for cache_key in kept_cache_keys)
     assert jwt_table.rows == (kept_row,)
+
+
+@pytest.mark.asyncio
+async def test_delete_organization_drops_the_committed_spend_of_the_org_and_its_teams(monkeypatch):
+    from litellm.proxy._types import DeleteOrganizationRequest, LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.management_endpoints.organization_endpoints import delete_organization
+    from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
+
+    spend: Final = FakeSpendCounters(
+        redis=None,
+        memory={
+            "spend:committed:org:org-doomed": 7.0,
+            "spend:committed:team:team-in-org": 5.0,
+            "spend:committed:org:org-kept": 3.0,
+            "spend:committed:team:team-elsewhere": 2.0,
+        },
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.spend_counter_store", spend.store())
+    prisma_client: Final = AsyncMock()
+    prisma_client.db.litellm_teamtable.find_many = AsyncMock(
+        return_value=[SimpleNamespace(team_id="team-in-org", organization_id="org-doomed")]
+    )
+    prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    prisma_client.db.litellm_jwtkeymapping.find_many = AsyncMock(return_value=[])
+    prisma_client.db.litellm_organizationtable.delete = AsyncMock(return_value=MagicMock())
+
+    @asynccontextmanager
+    async def transaction():
+        yield prisma_client.db
+
+    prisma_client.tx = transaction
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True, raising=False)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", UserApiKeyCache())
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", None)
+
+    await delete_organization(
+        data=DeleteOrganizationRequest(organization_ids=["org-doomed"]),
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+
+    assert spend.memory == {"spend:committed:org:org-kept": 3.0, "spend:committed:team:team-elsewhere": 2.0}
 
 
 @pytest.mark.asyncio

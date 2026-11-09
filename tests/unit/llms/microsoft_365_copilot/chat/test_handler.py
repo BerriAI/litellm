@@ -324,7 +324,7 @@ def test_partial_token_exchange_configuration_fails_without_http_calls() -> None
 
 
 def test_api_base_override_clears_exchange_config_and_fails_closed_without_token_post() -> None:
-    from litellm.router_utils.clientside_credential_handler import get_dynamic_litellm_params
+    from litellm.litellm_core_utils.clientside_credential_handler import get_dynamic_litellm_params
 
     assertion: Final = "header-base-override.payload-base-override.signature-base-override"
     oauth_fields: Final = (
