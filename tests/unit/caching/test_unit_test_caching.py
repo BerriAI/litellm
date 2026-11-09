@@ -8,6 +8,7 @@ load_dotenv()
 import asyncio
 import hashlib
 import random
+from typing import Final
 
 import pytest
 
@@ -16,7 +17,7 @@ from litellm import aembedding, completion, embedding
 from litellm.caching.caching import Cache
 
 from unittest.mock import AsyncMock, patch, MagicMock
-from litellm.caching.caching_handler import LLMCachingHandler, CachingHandlerResponse
+from litellm.caching.caching_handler import LLMCachingHandler, CachingHandlerResponse, _PENDING_CACHE_WRITES
 from litellm.caching.caching import LiteLLMCacheType
 from litellm.types.utils import CallTypes
 from litellm.types.rerank import RerankResponse
@@ -276,6 +277,107 @@ def test_get_model_param_value_reads_model_group_from_litellm_metadata():
     assert cache.get_cache_key(**request, litellm_metadata={"model_group": "group-a"}) != cache.get_cache_key(
         **request, litellm_metadata={"model_group": "group-b"}
     )
+
+
+def test_get_model_param_value_prefers_the_router_group_over_a_caller_model_group():
+    cache: Final = Cache()
+    deployment: Final = {"id": "deployment-1"}
+    request: Final = {"model": "openai/gpt-5.6", "input": "search this text", "model_info": deployment}
+    router_metadata: Final = {"model_group": "caller", "model_info": deployment}
+
+    assert (
+        cache._get_model_param_value(
+            {**request, "metadata": {"model_group": "target"}, "litellm_metadata": router_metadata}
+        )
+        == "caller"
+    )
+    assert (
+        cache._get_model_param_value(
+            {
+                **request,
+                "litellm_params": {"metadata": {"model_group": "target"}, "litellm_metadata": router_metadata},
+            }
+        )
+        == "caller"
+    )
+    assert (
+        cache._get_model_param_value(
+            {
+                **request,
+                "metadata": {"model_group": "target", "model_info": deployment},
+                "litellm_metadata": router_metadata,
+            }
+        )
+        == "caller"
+    )
+    assert (
+        cache._get_model_param_value(
+            {
+                **request,
+                "metadata": router_metadata,
+                "litellm_metadata": {"model_group": "parent", "model_info": {"id": "parent-deployment"}},
+            }
+        )
+        == "caller"
+    )
+
+
+def test_get_model_param_value_keeps_metadata_first_outside_the_router():
+    cache: Final = Cache()
+
+    assert (
+        cache._get_model_param_value(
+            {
+                "model": "openai/gpt-5.6",
+                "input": "search this text",
+                "metadata": {"model_group": "group-a"},
+                "litellm_metadata": {"model_group": "group-b"},
+            }
+        )
+        == "group-a"
+    )
+
+
+@pytest.mark.asyncio
+async def test_router_call_keeps_its_own_group_when_forwarded_litellm_metadata_names_another(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL))
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": group,
+                "litellm_params": {"model": "openai/gpt-5.6", "api_key": "sk-test", "mock_response": f"{group} answer"},
+            }
+            for group in ("group-a", "group-b")
+        ]
+    )
+    messages: Final = [{"role": "user", "content": "which group answers this"}]
+
+    await router.acompletion(
+        model="group-a",
+        messages=messages,
+        caching=True,
+        litellm_metadata={"model_group": "group-b", "model_info": {"id": "parent-deployment"}},
+    )
+    await asyncio.gather(*_PENDING_CACHE_WRITES)
+    reply: Final = await router.acompletion(model="group-b", messages=messages, caching=True)
+
+    assert reply.choices[0].message.content == "group-b answer"
+
+
+@pytest.mark.parametrize("planted", [["sales-premium"], [("sales", "sales-premium")]], ids=["string", "tuple"])
+def test_get_model_param_value_reads_caching_groups_only_beside_the_router_group(planted: list[str | tuple[str, str]]):
+    cache: Final = Cache()
+    request: Final = {
+        "model": "openai/gpt-5.6",
+        "input": "search this text",
+        "model_info": {"id": "sales-deployment"},
+        "litellm_metadata": {"model_group": "sales", "caching_groups": None, "model_info": {"id": "sales-deployment"}},
+        "metadata": {"caching_groups": planted},
+    }
+
+    assert cache._get_model_param_value(request) == "sales"
 
 
 def test_preset_cache_key():
