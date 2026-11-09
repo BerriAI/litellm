@@ -1238,7 +1238,9 @@ def convert_key_logging_metadata_to_callback(
     return team_callback_settings_obj
 
 
-def get_validated_callback_metadata(item: Mapping[str, object], *, source: str) -> AddTeamCallback | None:
+def get_validated_callback_metadata(item: object, *, source: str) -> AddTeamCallback | None:
+    if not isinstance(item, Mapping):
+        raise TypeError(f"{source} metadata.logging must be a list of objects, got an item of {type(item).__name__}")
     try:
         return AddTeamCallback.model_validate(item)
     except (PydanticValidationError, ValueError) as e:
