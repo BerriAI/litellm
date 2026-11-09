@@ -9,6 +9,7 @@ from datetime import datetime
 from types import MappingProxyType, SimpleNamespace
 from typing import Final
 from unittest.mock import MagicMock
+from urllib.parse import unquote
 from uuid import uuid4
 
 import httpx
@@ -3177,23 +3178,111 @@ def proxy_aws_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("AWS_REGION_NAME", "us-west-2")
 
 
+@pytest.mark.parametrize(
+    "model_id",
+    [
+        pytest.param(_BEDROCK_MODEL_ID, id="inference-profile-id"),
+        pytest.param(
+            f"arn:aws:bedrock:us-west-2:111122223333:inference-profile/{_BEDROCK_MODEL_ID}",
+            id="inference-profile-arn",
+        ),
+        pytest.param("acme.brand-new-model-v1:0", id="vendor-missing-from-the-cost-map"),
+    ],
+)
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("proxy_aws_env")
-async def test_route_request_sends_a_bedrock_model_id_missing_from_the_config_to_bedrock_with_the_proxy_credentials() -> (
-    None
-):
+async def test_route_request_sends_a_bedrock_model_id_missing_from_the_config_to_bedrock_with_the_proxy_credentials(
+    model_id: str,
+) -> None:
     router: Final = litellm.Router(model_list=[])
 
     with respx.mock(assert_all_called=True) as respx_mock:
         upstream: Final = respx_mock.post(
-            f"https://bedrock-runtime.us-west-2.amazonaws.com/model/{_BEDROCK_MODEL_ID}/converse"
+            url__regex=r"https://bedrock-runtime\.us-west-2\.amazonaws\.com/model/.+/converse"
         ).mock(return_value=httpx.Response(200, json=dict(_BEDROCK_CONVERSE_ANSWER)))
         response: Final = await (
-            await route_request(_bedrock_passthrough_data(_BEDROCK_MODEL_ID), router, None, "allm_passthrough_route")
+            await route_request(_bedrock_passthrough_data(model_id), router, None, "allm_passthrough_route")
         )
 
     assert response.json() == dict(_BEDROCK_CONVERSE_ANSWER)
+    assert unquote(upstream.calls.last.request.url.raw_path.decode()) == f"/model/{model_id}/converse"
     assert upstream.calls.last.request.headers["authorization"].startswith("AWS4-HMAC-SHA256 Credential=AKIDPROXYENV/")
+
+
+@pytest.mark.parametrize(
+    "request_overrides",
+    [
+        pytest.param({"endpoint": f"model/{_BEDROCK_MODEL_ID}/../other/converse"}, id="dot-segments-after-the-model"),
+        pytest.param({"endpoint": f"../model/{_BEDROCK_MODEL_ID}/converse"}, id="dot-segments-before-the-model"),
+        pytest.param({"endpoint": f"model/{_BEDROCK_MODEL_ID}/%2E%2E/other/converse"}, id="encoded-dot-segments"),
+        pytest.param({"endpoint": f"model/{_BEDROCK_MODEL_ID}?x=/converse"}, id="query-in-the-path"),
+        pytest.param({"custom_llm_provider": "gigachat"}, id="another-provider"),
+    ],
+)
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("proxy_aws_env")
+async def test_route_request_only_calls_bedrock_directly_for_a_plain_bedrock_model_path(
+    request_overrides: Mapping[str, str],
+) -> None:
+    router: Final = litellm.Router(model_list=[])
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        upstream: Final = respx_mock.route(host__regex=r"bedrock-runtime\..*").mock(
+            return_value=httpx.Response(200, json=dict(_BEDROCK_CONVERSE_ANSWER))
+        )
+        with pytest.raises(ProxyModelNotFoundError):
+            await route_request(
+                {**_bedrock_passthrough_data(_BEDROCK_MODEL_ID), **request_overrides},
+                router,
+                None,
+                "allm_passthrough_route",
+            )
+
+    assert not upstream.called
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("proxy_aws_env")
+async def test_route_request_serves_a_bedrock_model_created_on_a_sibling_replica_from_its_deployment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import litellm.proxy.proxy_server as proxy_server
+
+    model_name: Final = "bedrock-model-added-on-a-sibling-replica"
+    router: Final = litellm.Router(
+        model_list=[
+            {"model_name": "some-other-model", "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake"}}
+        ]
+    )
+    db_row: Final = SimpleNamespace(
+        model_id=f"{model_name}-id",
+        model_name=model_name,
+        litellm_params={
+            "model": f"bedrock/{_BEDROCK_MODEL_ID}",
+            "aws_access_key_id": "AKIDDEPLOYMENT",
+            "aws_secret_access_key": "deployment-secret",
+            "aws_region_name": "us-east-1",
+        },
+        model_info={},
+        blocked=False,
+    )
+    fake_prisma, _ = _fake_prisma_client_with_models([db_row])
+    monkeypatch.setattr(proxy_server, "prisma_client", fake_prisma)
+    monkeypatch.setattr(proxy_server, "store_model_in_db", True)
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        upstream: Final = respx_mock.post(url__regex=r"https://bedrock-runtime\.us-east-1\.amazonaws\.com/.*").mock(
+            return_value=httpx.Response(200, json=dict(_BEDROCK_CONVERSE_ANSWER))
+        )
+        response: Final = await (
+            await route_request(_bedrock_passthrough_data(model_name), router, None, "allm_passthrough_route")
+        )
+
+    assert response.json() == dict(_BEDROCK_CONVERSE_ANSWER)
+    assert upstream.calls.last.request.headers["authorization"].startswith(
+        "AWS4-HMAC-SHA256 Credential=AKIDDEPLOYMENT/"
+    )
 
 
 @pytest.mark.parametrize(

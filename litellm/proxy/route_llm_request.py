@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import json
+import re
 from collections import OrderedDict
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -125,6 +126,20 @@ def _request_logging_obj(data: Mapping[str, object], route_type: str) -> LiteLLM
 def _is_a2a_agent_model(model_name: object) -> bool:
     """Check if the model name is for an A2A agent (a2a/ prefix)."""
     return isinstance(model_name, str) and model_name.startswith("a2a/")
+
+
+_PLAIN_BEDROCK_ENDPOINT: Final = re.compile(r"[A-Za-z0-9._:/-]+")
+
+
+def _may_call_bedrock_without_a_deployment(route_type: str, data: Mapping[str, object]) -> bool:
+    endpoint: Final = data.get("endpoint")
+    return (
+        route_type == "allm_passthrough_route"
+        and data.get("custom_llm_provider") == "bedrock"
+        and isinstance(endpoint, str)
+        and _PLAIN_BEDROCK_ENDPOINT.fullmatch(endpoint) is not None
+        and not {".", ".."}.intersection(endpoint.split("/"))
+    )
 
 
 def _raise_if_model_fully_blocked(llm_router: LitellmRouter, model_name: object, team_id: str | None) -> None:
@@ -786,11 +801,14 @@ async def route_request(
             model_registry_read_through,
         )
 
-        if not await model_registry_read_through.attempt(requested_model):
+        loaded_by_read_through: Final = await model_registry_read_through.attempt(requested_model)
+        if not loaded_by_read_through and not _may_call_bedrock_without_a_deployment(
+            route_type, JSON_OBJECT_ADAPTER.validate_python(data)
+        ):
             raise
         return await _route_request_single_attempt(
             data=data,
-            llm_router=proxy_server.llm_router,
+            llm_router=proxy_server.llm_router if loaded_by_read_through else None,
             user_model=user_model,
             route_type=route_type,
             router_only_settings_from_override=router_only_settings_from_override,
@@ -991,7 +1009,6 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
                 # Only match deployment_names if no wildcard matched
                 return getattr(llm_router, f"{route_type}")(**data, specific_deployment=True)
             elif route_type in [
-                "allm_passthrough_route",
                 "amoderation",
                 "aget_responses",
                 "adelete_responses",
