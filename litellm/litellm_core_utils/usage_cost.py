@@ -114,16 +114,17 @@ class MessagesUsageCostStamper(UsageCostStamper):
             body: Final = self.response if billing_body is None else billing_body
             if body.get("type") != "message" or not isinstance(body.get("usage"), Mapping):
                 return False
-            priced: Final = logging_obj.normalize_endpoint_logging_result(body)
+            priced: Final = logging_obj.normalize_endpoint_logging_result(body, for_billing=True)
             cost: Final = validated_usage_cost(logging_obj.response_cost_calculator(result=priced, cache_hit=cache_hit))
-            if cost is not None:
-                self.stamp(cost)
+            if cost is None:
+                return False
+            self.stamp(cost)
             if isinstance(priced, ModelResponse):
                 stamp_usage_cost(priced, cost)
                 logging_obj.record_bridged_model_response(priced)
         except Exception:  # noqa: BLE001  # optional billing metadata must not fail a completed response or stream
             return False
-        return cost is not None
+        return True
 
 
 def stamp_usage_cost(response: object, cost: float | None) -> None:

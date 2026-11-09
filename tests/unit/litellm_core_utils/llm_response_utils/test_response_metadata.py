@@ -13,6 +13,7 @@ from typing import Final
 from unittest.mock import MagicMock, patch
 
 import pytest
+import httpx
 
 import litellm
 import litellm.litellm_core_utils.llm_response_utils.response_metadata as response_metadata_mod
@@ -46,15 +47,16 @@ def test_metadata_apply_preserves_model_hidden_params(
     assert response.model_dump() == before
 
 
-@pytest.mark.parametrize("shape", ["chat", "responses", "messages"])
+@pytest.mark.parametrize("shape", ["chat", "responses", "messages", "messages_httpx"])
 @pytest.mark.parametrize("input_tokens,output_tokens", [(3, 4), (0, 0)])
 def test_nonstream_usage_cost_matches_the_bill(shape: str, input_tokens: int, output_tokens: int) -> None:
     start: Final = datetime.datetime(2026, 1, 1)
+    messages_response: Final = shape.startswith("messages")
     logging_obj: Final = Logging(
         model="gpt-6.1-sol",
         messages=[{"role": "user", "content": "hi"}],
         stream=False,
-        call_type="anthropic_messages" if shape == "messages" else "completion",
+        call_type="anthropic_messages" if messages_response else "completion",
         start_time=start,
         litellm_call_id="usage-cost-" + shape,
         function_id="usage-cost",
@@ -77,7 +79,7 @@ def test_nonstream_usage_cost_matches_the_bill(shape: str, input_tokens: int, ou
             "stop_sequence": None,
             "usage": {"input_tokens": input_tokens, "output_tokens": output_tokens},
         }
-        if shape == "messages"
+        if messages_response
         else ResponsesAPIResponse(
             id="resp_cost",
             created_at=0,
@@ -94,6 +96,9 @@ def test_nonstream_usage_cost_matches_the_bill(shape: str, input_tokens: int, ou
             model="gpt-6.1-sol", usage=Usage(prompt_tokens=input_tokens, completion_tokens=output_tokens)
         )
     )
+    if shape == "messages_httpx" and isinstance(response, dict):
+        logging_obj.model_call_details["httpx_response"] = httpx.Response(200, json=response)
+        response["usage"] = {"input_tokens": 0, "output_tokens": 0}
     with patch.object(litellm, "response_cost_calculator", wraps=litellm.response_cost_calculator) as calculator:
         update_response_metadata(response, logging_obj, "gpt-6.1-sol", {}, start, start)
         logging_obj.prepare_success_logging(
@@ -111,7 +116,7 @@ def test_nonstream_usage_cost_matches_the_bill(shape: str, input_tokens: int, ou
     assert cost == pytest.approx(input_tokens * 0.01 + output_tokens * 0.02)
     priced: Final = logging_obj.normalize_endpoint_logging_result(response)
     assert logging_obj.response_cost_calculator(result=priced) == pytest.approx(cost)
-    hidden_response: Final = logging_obj.bridged_model_response if shape == "messages" else response
+    hidden_response: Final = logging_obj.bridged_model_response if messages_response else response
     assert hidden_response is not None
     assert hidden_response._hidden_params["response_cost"] == pytest.approx(cost)
     assert logging_obj.model_call_details["response_cost"] == pytest.approx(cost)
