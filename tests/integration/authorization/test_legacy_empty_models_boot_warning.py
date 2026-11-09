@@ -59,7 +59,9 @@ def test_boot_logs_the_keys_and_teams_on_the_deprecated_empty_models_defaults(
         ) as rebooted:
             log: Final = eventually(lambda: rebooted.log.read_text(), lambda text: WARNING_HEADER in text, seconds=60)
 
-    assert "2 keys without a team have an empty models list, which grants every proxy model." in log
-    assert "1 key without a team lists all-team-models, which grants every proxy model." in log
-    assert "3 team keys have an empty models list, which grants all of the team's models." in log
-    assert "1 team has an empty models list, which grants every proxy model." in log
+    assert "2 keys without a team have an empty models list, which means every proxy model." in log
+    assert "1 key without a team lists all-team-models, which means every proxy model." in log
+    assert "3 team keys have an empty models list, which means all of the team's models." in log
+    assert "1 team has an empty models list, which means every proxy model." in log
+    assert "rewrites empty models lists to all-proxy-models or all-team-models" in log
+    assert "keys without a team that list all-team-models get no models" in log

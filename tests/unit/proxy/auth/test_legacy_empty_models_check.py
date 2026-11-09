@@ -31,22 +31,22 @@ def test_no_warning_when_nothing_relies_on_the_deprecated_defaults() -> None:
     [
         (
             LegacyEmptyModelsCounts(3, 0, 0, 0),
-            "3 keys without a team have an empty models list, which grants every proxy model.",
+            "3 keys without a team have an empty models list, which means every proxy model.",
             ("all-team-models, which", "team key", "team has", "teams have"),
         ),
         (
             LegacyEmptyModelsCounts(0, 1, 0, 0),
-            "1 key without a team lists all-team-models, which grants every proxy model.",
+            "1 key without a team lists all-team-models, which means every proxy model.",
             ("empty models list", "team key"),
         ),
         (
             LegacyEmptyModelsCounts(0, 0, 4, 0),
-            "4 team keys have an empty models list, which grants all of the team's models.",
+            "4 team keys have an empty models list, which means all of the team's models.",
             ("without a team", "teams have"),
         ),
         (
             LegacyEmptyModelsCounts(0, 0, 0, 1),
-            "1 team has an empty models list, which grants every proxy model.",
+            "1 team has an empty models list, which means every proxy model.",
             ("without a team", "team key"),
         ),
     ],
@@ -62,6 +62,29 @@ def test_warning_reports_only_the_categories_in_use(
     assert DEPRECATION_DISCUSSION_URL in message
 
 
+REWRITE_OUTCOME: Final = "rewrites empty models lists to all-proxy-models or all-team-models"
+NO_MODELS_OUTCOME: Final = "keys without a team that list all-team-models get no models"
+
+
+@pytest.mark.parametrize(
+    ("counts", "named_outcome", "left_out_outcome"),
+    [
+        (LegacyEmptyModelsCounts(3, 0, 0, 0), REWRITE_OUTCOME, NO_MODELS_OUTCOME),
+        (LegacyEmptyModelsCounts(0, 0, 4, 0), REWRITE_OUTCOME, NO_MODELS_OUTCOME),
+        (LegacyEmptyModelsCounts(0, 0, 0, 1), REWRITE_OUTCOME, NO_MODELS_OUTCOME),
+        (LegacyEmptyModelsCounts(0, 1, 0, 0), NO_MODELS_OUTCOME, REWRITE_OUTCOME),
+    ],
+)
+def test_warning_names_only_the_upgrade_outcomes_that_apply(
+    counts: LegacyEmptyModelsCounts, named_outcome: str, left_out_outcome: str
+) -> None:
+    message: Final = legacy_empty_models_warning(counts)
+
+    assert message is not None
+    assert named_outcome in message
+    assert left_out_outcome not in message
+
+
 def test_warning_reports_every_category_in_use_at_once() -> None:
     message: Final = legacy_empty_models_warning(LegacyEmptyModelsCounts(2, 5, 7, 11))
 
@@ -70,6 +93,8 @@ def test_warning_reports_every_category_in_use_at_once() -> None:
     assert "5 keys without a team list all-team-models" in message
     assert "7 team keys have an empty models list" in message
     assert "11 teams have an empty models list" in message
+    assert REWRITE_OUTCOME in message
+    assert NO_MODELS_OUTCOME in message
 
 
 class _RecordingHandler(logging.Handler):

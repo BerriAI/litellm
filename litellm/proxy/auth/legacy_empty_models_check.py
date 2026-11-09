@@ -43,14 +43,36 @@ async def count_legacy_empty_models_rows(keys: CountTable, teams: CountTable) ->
     )
 
 
-def _finding(count: int, singular: str, plural: str, grant: str) -> str:
-    return f"{count} {singular if count == 1 else plural}, which grants {grant}."
+def _finding(count: int, singular: str, plural: str, meaning: str) -> str:
+    return f"{count} {singular if count == 1 else plural}, which means {meaning}."
+
+
+def _upgrade_outcomes(counts: LegacyEmptyModelsCounts) -> tuple[str, ...]:
+    empty_lists: Final = (
+        counts.teamless_keys_with_empty_models + counts.team_keys_with_empty_models + counts.teams_with_empty_models
+    )
+    return tuple(
+        outcome
+        for count, outcome in (
+            (
+                empty_lists,
+                "The upgrade to LiteLLM 2.0.0 rewrites empty models lists to all-proxy-models or all-team-models, "
+                "so their access stays the same.",
+            ),
+            (
+                counts.teamless_keys_with_all_team_models,
+                "In LiteLLM 2.0.0, keys without a team that list all-team-models get no models, "
+                "so attach each one to a team or give it All Proxy Models.",
+            ),
+        )
+        if count > 0
+    )
 
 
 def legacy_empty_models_warning(counts: LegacyEmptyModelsCounts) -> str | None:
     findings: Final = tuple(
-        _finding(count, singular, plural, grant)
-        for count, singular, plural, grant in (
+        _finding(count, singular, plural, meaning)
+        for count, singular, plural, meaning in (
             (
                 counts.teamless_keys_with_empty_models,
                 "key without a team has an empty models list",
@@ -84,9 +106,10 @@ def legacy_empty_models_warning(counts: LegacyEmptyModelsCounts) -> str | None:
         (
             "Deprecated model access defaults are still in use.",
             *findings,
-            "LiteLLM 2.0.0 removes these defaults and rewrites such keys and teams to all-proxy-models or "
-            "all-team-models during the upgrade, so their access stays the same. To set it yourself first, pick "
-            f"All Proxy Models, All Team Models, or a list of models on each one. See {DEPRECATION_DISCUSSION_URL}",
+            "These counts include blocked and expired keys and blocked teams.",
+            *_upgrade_outcomes(counts),
+            "To choose access yourself before the upgrade, pick All Proxy Models, All Team Models, or a list of "
+            f"models on each one. See {DEPRECATION_DISCUSSION_URL}",
         )
     )
 
