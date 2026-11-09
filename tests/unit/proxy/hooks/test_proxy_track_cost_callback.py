@@ -907,17 +907,27 @@ async def test_async_post_call_failure_hook_non_llm_route():
 
 
 @pytest.mark.asyncio
-async def test_async_post_call_failure_hook_tracks_config_defined_pass_through_route():
+@pytest.mark.parametrize(
+    ("route", "call_type", "written"),
+    [
+        ("/azure-search", CallTypes.pass_through.value, True),
+        ("/azure-search", CallTypes.acompletion.value, False),
+        (None, CallTypes.acompletion.value, True),
+    ],
+)
+async def test_async_post_call_failure_hook_tracks_config_defined_pass_through_route(
+    route: str | None, call_type: str, written: bool
+) -> None:
     logger: Final = ProxyDBLogger()
     api_base: Final = "http://upstream.example/indexes/x/docs/search"
     request_data: Final = {
         "model": "azure-search",
-        "call_type": CallTypes.pass_through.value,
+        "call_type": call_type,
         "litellm_params": {"api_base": api_base, "metadata": {}},
     }
     user_api_key_dict: Final = UserAPIKeyAuth(
         api_key="test_api_key",
-        request_route="/azure-search",
+        request_route=route,
     )
 
     with patch(  # test-quality-ok: this regression asserts the spend writer receives the pass-through failure payload
@@ -930,7 +940,9 @@ async def test_async_post_call_failure_hook_tracks_config_defined_pass_through_r
             user_api_key_dict=user_api_key_dict,
         )
 
-        mock_update_database.assert_called_once()
+        assert mock_update_database.await_count == (1 if written else 0)
+        if not written:
+            return
         call_args: Final = mock_update_database.call_args
         assert call_args.kwargs["kwargs"]["litellm_params"]["api_base"] == api_base
         assert call_args.kwargs["kwargs"]["litellm_params"]["metadata"]["status"] == "failure"
