@@ -570,6 +570,7 @@ def _invoke_params_for_schema(
         ("us.anthropic.claude-opus-4-8", "bedrock", {"thinking": {"type": "adaptive"}}, True),
         ("us.anthropic.claude-opus-4-8", "bedrock", {"reasoning_effort": "low"}, True),
         ("us.anthropic.claude-haiku-5-5", "bedrock", {"thinking": {"type": "disabled"}}, False),
+        ("us.anthropic.claude-haiku-5-5", "default", {"thinking": {"type": "disabled"}}, True),
     ],
     ids=[
         "legacy-key",
@@ -578,6 +579,7 @@ def _invoke_params_for_schema(
         "bedrock-key-adaptive",
         "bedrock-key-effort",
         "bedrock-key-thinking-disabled",
+        "default-key-thinking-disabled",
     ],
 )
 def test_bedrock_native_output_key_applies_only_when_the_model_will_think(
@@ -2047,9 +2049,9 @@ def _invoke_chat_params(
 )
 @pytest.mark.parametrize("model", ["us.anthropic.claude-opus-4-8", "global.anthropic.claude-sonnet-5"])
 def test_invoke_uses_opt_in_native_output_when_the_opt_in_drove_native_output(
-    local_model_cost_map, model, thinking_params, monkeypatch
+    set_native_structured_output, model, thinking_params
 ):
-    monkeypatch.setitem(litellm.model_cost[model], "supports_native_structured_output", False)
+    set_native_structured_output(model, "bedrock")
     optional_params: Final = _invoke_chat_params(
         model, None, {"response_format": _CITY_RESPONSE_FORMAT, **thinking_params}
     )
@@ -2084,8 +2086,12 @@ def test_invoke_uses_opt_in_native_output_is_false_when_native_output_did_not_co
     )
 
 
-def test_invoke_uses_default_native_output_for_schema_retry(local_model_cost_map: None) -> None:
-    model: Final = "us.anthropic.claude-opus-5"
+@pytest.mark.parametrize(
+    "model",
+    ["us.anthropic.claude-opus-5", "us.anthropic.claude-sonnet-5"],
+    ids=["opus-5", "sonnet-5"],
+)
+def test_invoke_uses_default_native_output_for_schema_retry(local_model_cost_map: None, model: str) -> None:
     optional_params: Final = _invoke_chat_params(
         model, None, {"response_format": _CITY_RESPONSE_FORMAT, "thinking": {"type": "disabled"}}
     )

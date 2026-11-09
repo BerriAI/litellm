@@ -12,7 +12,6 @@ from itertools import accumulate, chain, groupby
 from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
-    Any,
     Final,
     Literal,
     Protocol,
@@ -22,12 +21,6 @@ from typing import (
     runtime_checkable,
 )
 
-from openai.types.chat.chat_completion_named_tool_choice_param import (
-    ChatCompletionNamedToolChoiceParam,
-)
-from openai.types.chat.chat_completion_named_tool_choice_param import (
-    Function as NamedToolChoiceFunction,
-)
 from openai.types.responses import ResponseFunctionToolCall, ResponseFunctionWebSearch, ResponseOutputRefusal
 from openai.types.responses.response_compaction_item import ResponseCompactionItem
 from openai.types.responses.response_create_params import ResponseInputParam
@@ -56,7 +49,12 @@ from litellm.integrations.anthropic_cache_control_hook import (
     whole_messages_within_cache_control_limit,
     with_cache_control,
 )
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params, normalize_drop_params
+from litellm.litellm_core_utils.core_helpers import (
+    as_str_mapping,
+    drops_unsupported_params,
+    normalize_drop_params,
+    require_attributes,
+)
 from litellm.litellm_core_utils.get_supported_openai_params import (
     get_supported_openai_params,
 )
@@ -66,6 +64,7 @@ from litellm.litellm_core_utils.hidden_params import (
     set_hidden_params,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import is_str_keyed_dict
 from litellm.litellm_core_utils.model_param_helper import embeds_thought_signature_in_tool_call_id
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     invalid_type_message,
@@ -73,7 +72,12 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     is_unhashable_value_behind,
 )
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field, parts_of
-from litellm.llms.anthropic.common_utils import supports_anthropic_cache_control
+from litellm.llms.anthropic.common_utils import (
+    anthropic_server_tool_call_params,
+    anthropic_server_tool_calls,
+    supports_anthropic_cache_control,
+    validated_object_mapping,
+)
 from litellm.llms.anthropic.messages.native.utils import anthropic_stop_reason, openai_chat_refusal_text
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.common_utils import bedrock_declared_cache_point_support
@@ -84,11 +88,13 @@ from litellm.responses.litellm_completion_transformation.session_handler import 
     ResponsesSessionHandler,
     StoredTurns,
 )
-from litellm.types.llms.anthropic import AnthropicToolSearchToolRegex
+from litellm.responses.utils import ResponsesAPIRequestUtils
+from litellm.types.llms.anthropic import AnthropicToolSearchToolRegex, claude_hosted_web_tool_call
 from litellm.types.llms.base import CachedTokensDetails
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAssistantMessage,
+    ChatCompletionAssistantToolCall,
     ChatCompletionAudioObject,
     ChatCompletionCachedContent,
     ChatCompletionFileObject,
@@ -192,6 +198,8 @@ ResponseTools: TypeAlias = Sequence[Mapping[str, object]] | None
 ChatToolParam: TypeAlias = ChatCompletionToolParam | OpenAIMcpServerTool | AnthropicToolSearchToolRegex
 NAMESPACE_DESCRIPTION_SEPARATOR: Final = "\n\n"
 NAMESPACE_MEMBER_TYPES_WITH_CHAT_TOOLS: Final = frozenset({"function", "custom"})
+RESPONSES_WEB_SEARCH_TOOL_TYPES: Final = frozenset({"web_search", "web_search_preview"})
+RESPONSES_TOOL_TYPES_WITHOUT_CHAT_FORM: Final = frozenset({"computer_use", "image_generation", "local_shell", "shell"})
 _INCOMPLETE_REASON_BY_FINISH_REASON: Final[Mapping[str, Literal["max_output_tokens", "content_filter"]]] = (
     MappingProxyType({"length": "max_output_tokens", "content_filter": "content_filter", "refusal": "content_filter"})
 )
@@ -375,6 +383,10 @@ class _HasToolCalls(Protocol):
 @runtime_checkable
 class _HasId(Protocol):
     id: object
+
+
+class _SupportsGet(Protocol):
+    def get(self, key: str, /) -> object: ...
 
 
 class _ResponsesToolCallItem(Protocol):
@@ -933,6 +945,22 @@ def _chain_session_metadata(chain_session: str, request_kwargs: Mapping[str, obj
     return {key: {**_STR_KEY_DICT_ADAPTER.validate_python(metadata), CALLER_SESSION_ID_METADATA_KEY: chain_session}}
 
 
+def claude_web_search_call_tool_call(search: ResponseFunctionWebSearch) -> ChatCompletionAssistantToolCall | None:
+    claude_call: Final = claude_hosted_web_tool_call(search)
+    if claude_call is None:
+        return None
+    tool_id, name, arguments = claude_call
+    return ChatCompletionAssistantToolCall(
+        id=tool_id,
+        type="function",
+        function=ChatCompletionToolCallFunctionChunk(name=name, arguments=arguments),
+    )
+
+
+def _pending_claude_server_tool_call(search: ResponseFunctionWebSearch) -> ChatCompletionAssistantToolCall | None:
+    return claude_web_search_call_tool_call(search) if search.status == "in_progress" else None
+
+
 class LiteLLMCompletionResponsesConfig:
     @staticmethod
     def get_supported_openai_params(model: str) -> list:
@@ -959,8 +987,8 @@ class LiteLLMCompletionResponsesConfig:
 
     @staticmethod
     def _transform_tool_choice(
-        tool_choice: Any,
-    ) -> str | dict[str, object] | None:
+        tool_choice: object,
+    ) -> object:
         """
         Transform tool_choice from various formats to OpenAI Chat Completion format.
 
@@ -984,11 +1012,13 @@ class LiteLLMCompletionResponsesConfig:
         if isinstance(tool_choice, str):
             return tool_choice
 
-        if isinstance(tool_choice, dict):
+        if is_str_keyed_dict(tool_choice):
             tool_choice_type: Final = tool_choice.get("type")
 
             # If it has a function with name, it's standard OpenAI format - pass through
-            if tool_choice.get("function") and tool_choice.get("function", {}).get("name"):
+            if tool_choice.get("function") and require_attributes(
+                tool_choice.get("function", {}), _SupportsGet, "get"
+            ).get("name"):
                 return tool_choice
 
             # Handle Cursor IDE dict formats without function name
@@ -1003,17 +1033,13 @@ class LiteLLMCompletionResponsesConfig:
             elif tool_choice_type == "function":
                 function_name: Final = tool_choice.get("name")
                 if function_name:
-                    return ChatCompletionNamedToolChoiceParam(
-                        type="function", function=NamedToolChoiceFunction(name=function_name)
-                    )
+                    return {"type": "function", "function": {"name": function_name}}
                 return "required"
             elif tool_choice_type == "custom":
                 custom: Final = tool_choice.get("custom")
-                custom_name = tool_choice.get("name") or (custom.get("name") if isinstance(custom, dict) else None)
+                custom_name = tool_choice.get("name") or (custom.get("name") if is_str_keyed_dict(custom) else None)
                 if custom_name:
-                    return ChatCompletionNamedToolChoiceParam(
-                        type="function", function=NamedToolChoiceFunction(name=custom_name)
-                    )
+                    return {"type": "function", "function": {"name": custom_name}}
                 return "required"
 
         # Return as-is for unknown formats
@@ -1037,7 +1063,7 @@ class LiteLLMCompletionResponsesConfig:
                 return ToolChoiceCustomParam(type="custom", name=custom_name)
             case _, {"type": "function", "function": {"name": str(function_name)}}:
                 return ToolChoiceFunctionParam(type="function", name=function_name)
-            case _, "none" | "auto" | "required" as normalized:
+            case _, normalized if normalized in ("none", "auto", "required"):
                 return normalized
             case _, _:
                 return "auto"
@@ -1889,10 +1915,22 @@ class LiteLLMCompletionResponsesConfig:
         message_cache_control: Final = (
             None if isinstance(content, list) else new_cache_control or previous_cache_control
         )
+        new_server_tool_calls: Final = anthropic_server_tool_call_params(new_message)
+        server_tool_call_fields: Final = (
+            {
+                "provider_specific_fields": {
+                    **(validated_object_mapping(last_message.get("provider_specific_fields")) or {}),
+                    "server_tool_calls": [*anthropic_server_tool_call_params(last_message), *new_server_tool_calls],
+                }
+            }
+            if new_server_tool_calls
+            else {}
+        )
         merged: Final = {
             **{key: value for key, value in last_message.items() if key != "cache_control"},
             "content": content,
             **({} if message_cache_control is None else {"cache_control": message_cache_control}),
+            **server_tool_call_fields,
         }
         return cast(  # cast-ok: preserves the assistant fields and content blocks
             ChatCompletionAssistantMessage, merged
@@ -2334,10 +2372,15 @@ class LiteLLMCompletionResponsesConfig:
                         content="Hosted web search: " + replay.model_dump_json(exclude_none=True),
                     )
                 ]
+            hosted_search_text: Final = "Hosted web search: " + search.model_dump_json(exclude_none=True)
+            pending_server_tool_call: Final = _pending_claude_server_tool_call(search)
+            if pending_server_tool_call is None:
+                return [GenericChatCompletionMessage(role="assistant", content=hosted_search_text)]
             return [
-                GenericChatCompletionMessage(
+                ChatCompletionResponseMessage(
                     role="assistant",
-                    content="Hosted web search: " + search.model_dump_json(exclude_none=True),
+                    content=hosted_search_text,
+                    provider_specific_fields={"server_tool_calls": [pending_server_tool_call]},
                 )
             ]
         if LiteLLMCompletionResponsesConfig._is_input_item_tool_call_output(input_item):
@@ -2517,7 +2560,12 @@ class LiteLLMCompletionResponsesConfig:
         Returns None for anything this deployment did not write, so a genuinely
         opaque blob is still skipped rather than forwarded as garbage.
         """
-        decoded: Final = decode_thinking_blocks(input_item.get("encrypted_content"))
+        encrypted_content: Final = input_item.get("encrypted_content")
+        decoded: Final = decode_thinking_blocks(
+            ResponsesAPIRequestUtils.unwrap_encrypted_content_with_model_id(encrypted_content)[1]
+            if isinstance(encrypted_content, str)
+            else encrypted_content
+        )
         if decoded is None:
             return None
         return tuple(
@@ -2903,7 +2951,7 @@ class LiteLLMCompletionResponsesConfig:
         tool_type: Final = tool.get("type")
         if tool_type == "mcp":
             return ResponsesToolChatForm(chat_tools=(cast(OpenAIMcpServerTool, tool),), web_search_options=None)
-        if tool_type == "web_search_preview" or tool_type == "web_search":
+        if tool_type in RESPONSES_WEB_SEARCH_TOOL_TYPES:
             _search_context_size: Final[Literal["low", "medium", "high"]] = cast(
                 Literal["low", "medium", "high"], tool.get("search_context_size")
             )
@@ -2956,7 +3004,7 @@ class LiteLLMCompletionResponsesConfig:
             return ResponsesToolChatForm(chat_tools=(client_tool_search_chat_tool(tool),), web_search_options=None)
         if tool_type == "tool_search":
             return ResponsesToolChatForm(chat_tools=(anthropic_tool_search_chat_tool(),), web_search_options=None)
-        if tool_type in ("computer_use", "image_generation", "local_shell", "shell"):
+        if tool_type in RESPONSES_TOOL_TYPES_WITHOUT_CHAT_FORM:
             verbose_logger.warning(
                 "Dropping Responses API tool of type '%s': it has no Chat Completions "
                 "equivalent and the target provider would reject the request.",
@@ -3085,13 +3133,12 @@ class LiteLLMCompletionResponsesConfig:
         all_chat_completion_tools: Final[list[ChatCompletionMessageToolCall]] = []
         for choice in chat_completion_response.choices:
             if isinstance(choice, Choices):
-                if choice.message.tool_calls:
-                    all_chat_completion_tools.extend(choice.message.tool_calls)
-                    for tool_call in choice.message.tool_calls:
-                        TOOL_CALLS_CACHE.set_cache(
-                            key=tool_call.id,
-                            value=tool_call,
-                        )
+                for tool_call in (*anthropic_server_tool_calls(choice.message), *(choice.message.tool_calls or ())):
+                    all_chat_completion_tools.append(tool_call)
+                    TOOL_CALLS_CACHE.set_cache(
+                        key=tool_call.id,
+                        value=tool_call,
+                    )
 
         request_tools: Final = responses_api_request.get("tools") if responses_api_request is not None else None
         custom_tool_names: Final = extract_custom_tool_names(request_tools)
@@ -3522,7 +3569,22 @@ class LiteLLMCompletionResponsesConfig:
                 for item in responses_output
             ]
 
-        return responses_output
+        server_tool_call_ids: Final = LiteLLMCompletionResponsesConfig._server_tool_call_ids(choices)
+        return [
+            item
+            for item in responses_output
+            if not (
+                getattr(item, "type", None) == "function_call"
+                and getattr(item, "call_id", None) in server_tool_call_ids
+            )
+        ]
+
+    @staticmethod
+    def _server_tool_call_ids(choices: Sequence[Choices]) -> frozenset[str]:
+        server_tool_calls: Final = chain.from_iterable(
+            anthropic_server_tool_calls(choice.message) for choice in choices
+        )
+        return frozenset(tool_call.id for tool_call in server_tool_calls)
 
     @staticmethod
     def _extract_tool_result_output_items(

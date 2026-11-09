@@ -45,7 +45,7 @@ class _CountTokensReply(LiteLLMPydanticObjectBase):
 @dataclass(frozen=True, slots=True)
 class CountedTokens:
     input_tokens: int
-    original_response: Mapping[str, JsonValue]
+    original_response: Mapping[str, object]
     tokenizer_type: str
 
 

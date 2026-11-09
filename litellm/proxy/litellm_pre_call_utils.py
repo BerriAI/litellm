@@ -14,6 +14,7 @@ from typing import (
     Any,
     Final,
     Literal,
+    Protocol,
     TypeAlias,
     cast,  # noqa: TID251  # narrows untyped deployment and credential payloads
 )
@@ -22,6 +23,7 @@ from fastapi import HTTPException, Request, status
 from pydantic import TypeAdapter
 from pydantic import ValidationError as PydanticValidationError
 from starlette.datastructures import Headers
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
@@ -49,7 +51,13 @@ from litellm.constants import (
     X_LITELLM_DISABLE_CALLBACKS,
 )
 from litellm.integrations.custom_guardrail import merged_guardrail_entries, without_server_streaming_classification
-from litellm.litellm_core_utils.core_helpers import is_codex_user_agent, normalize_drop_params
+from litellm.litellm_core_utils.core_helpers import (
+    as_str_mapping,
+    attribute_or_none,
+    is_codex_user_agent,
+    normalize_drop_params,
+    require_attributes,
+)
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
     TRUSTED_CALLBACK_VARS_FIELD,
@@ -97,7 +105,7 @@ _REDACTED_HEADER_VALUE: Final = "***REDACTED***"
 _DECODED_JSON: Final = TypeAdapter(object)
 _OBJECT_LIST_ADAPTER: Final = TypeAdapter(list[object])
 _CREDENTIAL_HEADER_NAMES: Final = SpecialHeaders.litellm_credential_header_names() | frozenset(
-    {"cookie", "proxy-authorization"}
+    {"cookie", "proxy-authorization", "x-amz-security-token"}
 )
 _TRANSPORT_ONLY_CREDENTIAL_KEYS: Final = frozenset({"provider_specific_header", "headers", "api_key"})
 _REQUEST_FIELDS: Final = TypeAdapter(Mapping[str, object])
@@ -1636,7 +1644,19 @@ def redact_credential_headers(headers: Mapping[str, str]) -> Mapping[str, str]:
     }
 
 
+class TenantLoggingMetadata(TypedDict):
+    user_api_key_metadata: ReadOnly[Mapping[str, object] | None]
+    user_api_key_team_metadata: ReadOnly[Mapping[str, object] | None]
+
+
 class LiteLLMProxyRequestSetup:
+    @staticmethod
+    def get_tenant_logging_metadata(user_api_key_dict: UserAPIKeyAuth) -> TenantLoggingMetadata:
+        return {
+            "user_api_key_metadata": strip_callback_config(user_api_key_dict.metadata),
+            "user_api_key_team_metadata": strip_callback_config(user_api_key_dict.team_metadata),
+        }
+
     @staticmethod
     def _get_timeout_from_request(headers: dict) -> float | None:
         """
@@ -2136,7 +2156,14 @@ class LiteLLMProxyRequestSetup:
                 user_api_key_dict.matched_model_access_groups
             )
         # UserAPIKeyAuth object for MCP server access control
-        data[_metadata_variable_name]["user_api_key_auth"] = user_api_key_dict.model_copy(
+        data[_metadata_variable_name]["user_api_key_auth"] = LiteLLMProxyRequestSetup.auth_for_request_metadata(
+            user_api_key_dict
+        )
+        return data
+
+    @staticmethod
+    def auth_for_request_metadata(user_api_key_dict: UserAPIKeyAuth) -> UserAPIKeyAuth:
+        return user_api_key_dict.model_copy(
             update={
                 "metadata": strip_callback_config(user_api_key_dict.metadata),
                 "team_metadata": strip_callback_config(user_api_key_dict.team_metadata),
@@ -2144,7 +2171,6 @@ class LiteLLMProxyRequestSetup:
                 "organization_metadata": strip_callback_config(user_api_key_dict.organization_metadata),
             }
         )
-        return data
 
     @staticmethod
     def add_management_endpoint_metadata_to_request_metadata(
@@ -2664,11 +2690,11 @@ async def add_litellm_data_to_request(
 
     _raw_headers: Final[dict[str, str]] = RedactedDict(safe_get_request_headers(request))
 
-    forward_llm_auth = False
-    if general_settings:
-        forward_llm_auth = general_settings.get("forward_llm_provider_auth_headers", False)
-    if not forward_llm_auth:
-        forward_llm_auth = getattr(litellm, "forward_llm_provider_auth_headers", False)
+    general_settings_view: Final = as_str_mapping(general_settings)
+    forward_llm_auth: Final = bool(
+        (general_settings_view.get("forward_llm_provider_auth_headers", False) if general_settings_view else False)
+        or attribute_or_none(litellm, "forward_llm_provider_auth_headers")
+    )
     _headers: Final[dict[str, str]] = clean_headers(
         request.headers,
         litellm_key_header_name=(
@@ -3562,6 +3588,10 @@ def _warn_stale_team_alias_once(warning_key: str, message: str, *args: str) -> N
     verbose_proxy_logger.warning(message, *args)
 
 
+class _SupportsStartswith(Protocol):
+    def startswith(self, prefix: str, /) -> bool: ...
+
+
 def _update_model_if_team_alias_exists(
     data: dict,
     user_api_key_dict: UserAPIKeyAuth,
@@ -3589,14 +3619,15 @@ def _update_model_if_team_alias_exists(
     exist (e.g. a gateway-level model group shared with the team).
     """
     _model: Final = data.get("model")
-    if not _model or not user_api_key_dict.team_model_aliases or _model not in user_api_key_dict.team_model_aliases:
+    team_model_aliases: Final = as_str_mapping(user_api_key_dict.team_model_aliases)
+    if not _model or not team_model_aliases or _model not in team_model_aliases:
         return
 
     from litellm.proxy.proxy_server import llm_router
 
     # Skip alias rewrite if this model resolves to team-specific deployments
     # (team models use team_public_model_name, not model_aliases)
-    aliased_target: Final = user_api_key_dict.team_model_aliases[_model]
+    aliased_target: Final = team_model_aliases[_model]
 
     # Optional bypass for stale aliases from pre-PR deployments:
     # only enabled via feature flag to preserve backwards compatibility.
@@ -3607,7 +3638,9 @@ def _update_model_if_team_alias_exists(
     enable_stale_alias_bypass: Final = _ENABLE_TEAM_STALE_ALIAS_BYPASS
     # Check if the alias points to a team-scoped UUID name
     # (format: "model_name_{team_id}_{uuid}")
-    is_stale_team_alias: Final = aliased_target.startswith(f"model_name_{user_api_key_dict.team_id}_")
+    is_stale_team_alias: Final = require_attributes(aliased_target, _SupportsStartswith, "startswith").startswith(
+        f"model_name_{user_api_key_dict.team_id}_"
+    )
     if is_stale_team_alias and llm_router:
         if aliased_target not in llm_router.registry().index("model_name"):
             _warn_stale_team_alias_once(

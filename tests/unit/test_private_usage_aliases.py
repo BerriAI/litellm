@@ -1185,7 +1185,6 @@ ALIAS_CASES: Final = (
     ("litellm", "", "_turn_on_debug", "turn_on_debug", False),
     ("litellm", "", "_turn_on_json", "turn_on_json", False),
     ("litellm._lazy_imports", "", "_get_default_encoding", "get_default_encoding", False),
-    ("litellm._lazy_imports", "", "_get_lazy_import_registry", "get_lazy_import_registry", False),
     ("litellm._lazy_imports", "", "_get_messages_reach_token_count", "get_messages_reach_token_count", False),
     ("litellm._lazy_imports", "", "_get_token_counter_new", "get_token_counter_new", False),
     ("litellm._logging", "", "_is_debugging_on", "is_debugging_on", False),

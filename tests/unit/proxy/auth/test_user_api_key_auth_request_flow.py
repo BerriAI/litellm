@@ -1,4 +1,5 @@
 import asyncio
+import contextvars
 import json
 import logging
 import os
@@ -20,11 +21,16 @@ from unittest.mock import ANY, AsyncMock, MagicMock, patch
 import fastapi
 import orjson
 import pytest
+
+from litellm.redis.stores.connection import connect
+from litellm.redis.stores.spend_counters import SpendCounterStore
+from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
 from fastapi import HTTPException, Request, status
 from starlette.datastructures import UploadFile
 
 import litellm
 import litellm.proxy.proxy_server
+from litellm._internal_context import current_request_parent_otel_span
 from litellm.proxy import utils as proxy_utils
 from litellm.proxy.common_utils import user_api_key_cache as key_cache_utils
 from litellm.caching.dual_cache import DualCache
@@ -5088,6 +5094,70 @@ async def test_centralized_common_checks_carries_team_and_user_budget_state_on_t
     }
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("prometheus_registered", [True, False], ids=["prometheus_logger", "no_prometheus_logger"])
+async def test_centralized_common_checks_carry_the_committed_spend_beside_the_stale_cached_spend(
+    monkeypatch: pytest.MonkeyPatch, prometheus_registered: bool
+):
+    """The enforcement counters also hold budget holds, the committed twins only charged spend."""
+    from starlette.datastructures import URL
+
+    import litellm.proxy.proxy_server as _proxy_server_mod
+    from litellm.integrations.prometheus import PrometheusLogger
+    from litellm.proxy.spend_tracking.committed_spend import committed_spend_key
+    from litellm.proxy.utils import ProxyLogging
+    from litellm.redis.stores.connection import connect
+    from litellm.redis.stores.spend_counters import SpendCounterStore
+    from litellm.types.proxy.carried_budget_state import CommittedBudgetSpend, EntitySpendCounterKeys
+
+    for callback_list in ("success_callback", "failure_callback", "_async_success_callback", "_async_failure_callback"):
+        monkeypatch.setattr(litellm, callback_list, [])
+    monkeypatch.setattr(litellm, "callbacks", [MagicMock(spec=PrometheusLogger)] if prometheus_registered else [])
+    token: Final = UserAPIKeyAuth(api_key="sk-live-spend", max_budget=10.0, spend=0.0, team_id="t-live", team_spend=0.0)
+    user_api_key_cache: Final = UserApiKeyCache()
+    user_api_key_cache.set_cache(
+        key="team_id:t-live", value=LiteLLM_TeamTableCachedObj(team_id="t-live", max_budget=20.0, spend=0.0)
+    )
+    spend_counter_store: Final = SpendCounterStore(connect(None).spend_counters())
+    for counter_key, held, committed in ((f"spend:key:{token.token}", 0.67, 0.37), ("spend:team:t-live", 1.55, 1.25)):
+        spend_counter_store.set_local(counter_key, held)
+        spend_counter_store.set_local(committed_spend_key(counter_key), committed)
+    attrs: Final = {
+        **_proxy_attrs_for_centralized_checks(),
+        "llm_router": None,
+        "prisma_client": MagicMock(),
+        "user_api_key_cache": user_api_key_cache,
+        "spend_counter_store": spend_counter_store,
+        "proxy_logging_obj": ProxyLogging(user_api_key_cache=user_api_key_cache),
+    }
+    originals: Final = {attribute: getattr(_proxy_server_mod, attribute, None) for attribute in attrs}
+    request: Final = Request(scope={"type": "http"})
+    request._url = URL(url="/chat/completions")
+    try:
+        for attribute, value in attrs.items():
+            setattr(_proxy_server_mod, attribute, value)
+        await run_centralized_common_checks(
+            user_api_key_auth_obj=token,
+            request=request,
+            request_data={"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 1000},
+            route="/chat/completions",
+        )
+    finally:
+        for attribute, value in originals.items():
+            setattr(_proxy_server_mod, attribute, value)
+
+    assert token.committed_budget_spend == (
+        CommittedBudgetSpend(
+            counter_keys=EntitySpendCounterKeys(key=f"spend:key:{token.token}", team=f"spend:team:{token.team_id}"),
+            key=0.37,
+            team=1.25,
+        )
+        if prometheus_registered
+        else None
+    )
+    assert (token.spend, token.team_spend) == (0.0, 0.0)
+
+
 def _end_user_budget_row(budget_id: str, max_budget: float) -> MagicMock:
     row = MagicMock()
     row.dict = lambda: {"budget_id": budget_id, "max_budget": max_budget}
@@ -6981,8 +7051,8 @@ async def test_centralized_common_checks_reserves_request_end_user_budget():
     )
 
     attrs = _proxy_attrs_for_centralized_checks(user_custom_auth=None)
-    counter_cache = DualCache()
-    attrs["spend_counter_cache"] = counter_cache
+    counter_cache = SpendCounterStore(connect(None).spend_counters())
+    attrs["spend_counter_store"] = counter_cache
     originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
     try:
         for k, v in attrs.items():
@@ -7026,7 +7096,7 @@ async def test_centralized_common_checks_reserves_request_end_user_budget():
             "applied_adjustment": 0.0,
         }
     ]
-    assert counter_cache.in_memory_cache.get_cache(key="spend:end_user:alice") == pytest.approx(0.6)
+    assert counter_cache.get_local("spend:end_user:alice") == pytest.approx(0.6)
 
 
 @pytest.mark.asyncio
@@ -11792,6 +11862,29 @@ class TestLitellmReceivedAtStamping:
         assert request.state.litellm_received_at == earlier
 
 
+class _RequestSpanLogger:
+    def __init__(self, span: object) -> None:
+        self.span: Final = span
+
+    def create_litellm_proxy_request_started_span(self, start_time: datetime, headers: dict[str, str]) -> object:
+        return self.span
+
+
+@pytest.mark.parametrize("already_on_state", [False, True])
+def test_the_request_span_parents_datastore_spans_of_the_request(monkeypatch, already_on_state: bool):
+    request_span: Final = object()
+    created_span: Final = object() if already_on_state else request_span
+    monkeypatch.setattr("litellm.proxy.proxy_server.open_telemetry_logger", _RequestSpanLogger(created_span))
+    request: Final = MagicMock()
+    request.state = SimpleNamespace(parent_otel_span=request_span) if already_on_state else SimpleNamespace()
+
+    def ambient_parent_after_auth() -> object:
+        _ensure_parent_otel_span_on_request_state(request)
+        return current_request_parent_otel_span()
+
+    assert contextvars.copy_context().run(ambient_parent_after_auth) is request_span
+
+
 _RECORDING_DDTRACE = dedent(
     """
     import functools
@@ -12724,6 +12817,19 @@ def _user_defined_pass_through_endpoint():
 
 
 @pytest.mark.asyncio
+async def test_router_settings_model_group_alias_leaves_a_deployed_name_alone_on_provider_pass_through(monkeypatch):
+    router = _alias_router()
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", router)
+    data = {"model": "claude-sonnet", "messages": [{"role": "user", "content": "hi"}]}
+    route = "/anthropic/v1/messages"
+    request = _alias_request(route, data, path_params={"endpoint": "v1/messages"})
+    token = _alias_token(monkeypatch, "key", {"claude-sonnet": "claude-haiku"}, ["claude-haiku", "claude-sonnet"])
+    await _enforce_alias_access(token, data, route, request, router)
+    assert data["model"] == "claude-sonnet"
+    assert (await request.json())["model"] == "claude-sonnet"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("user_defined", [False, True])
 async def test_router_settings_model_group_alias_leaves_pass_through_bodies_alone(monkeypatch, user_defined):
     """LIT-3054: pass-through handlers forward the body verbatim to the provider, so auth must not rewrite it.
@@ -13076,12 +13182,12 @@ async def test_admission_and_budget_reservation_read_the_key_spend_counter_with_
     async def _reservation_reads_spend(**kwargs):
         reads.append(("reservation", await read_batched_spend_counter("spend:key:hashed")))
 
-    redis = MagicMock()
-    redis.async_batch_get_cache = AsyncMock(return_value={"spend:key:hashed": 4.0})
+    spend = FakeSpendCounters(redis={"spend:key:hashed": 4.0})
+    store = spend.store()
     attrs = {
         **_proxy_attrs_for_centralized_checks(user_custom_auth=None),
         "prisma_client": MagicMock(),
-        "spend_counter_cache": MagicMock(redis_cache=redis),
+        "spend_counter_store": store,
     }
     originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
     try:
@@ -13096,7 +13202,7 @@ async def test_admission_and_budget_reservation_read_the_key_spend_counter_with_
                 "litellm.proxy.spend_tracking.budget_reservation.reserve_budget_for_request",
                 side_effect=_reservation_reads_spend,
             ),
-            spend_counter_batch_scope(redis),
+            spend_counter_batch_scope(store),
         ):
             await run_centralized_common_checks(
                 user_api_key_auth_obj=token,
@@ -13114,8 +13220,8 @@ async def test_admission_and_budget_reservation_read_the_key_spend_counter_with_
         ("reservation", (4.0, True)),
         ("after admission", None),
     ], "admission and reservation share one snapshot, and read-then-write callers go to Redis once it closes"
-    assert redis.async_batch_get_cache.await_count == 1
-    assert "spend:key:hashed" in redis.async_batch_get_cache.await_args.kwargs["key_list"]
+    mgets = [command.split()[1:] for command in spend.commands if command.startswith("MGET")]
+    assert len(mgets) == 1 and "spend:key:hashed" in mgets[0]
 
 
 def test_identity_prefetch_keys_match_what_auth_reads_for_the_request():

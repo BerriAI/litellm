@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import CodeBlock from "@/components/CodeBlock";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import DocLink from "./DocLink";
+import { productNames } from "@/i18n/untranslated/productNames";
 
 interface ApiRefProps {
   proxySettings: {
@@ -36,13 +37,13 @@ const APIReferenceView: React.FC<ApiRefProps> = ({ proxySettings }) => {
         <Tabs defaultValue="openai">
           <TabsList variant="line" className="border-b rounded-none w-full justify-start h-auto p-0">
             <TabsTrigger value="openai" className="rounded-none px-4 py-2 flex-none">
-              OpenAI Python SDK
+              {productNames.openAIPythonSdk}
             </TabsTrigger>
             <TabsTrigger value="llamaindex" className="rounded-none px-4 py-2 flex-none">
-              LlamaIndex
+              {productNames.llamaIndex}
             </TabsTrigger>
             <TabsTrigger value="langchain" className="rounded-none px-4 py-2 flex-none">
-              Langchain Py
+              {productNames.langchainPython}
             </TabsTrigger>
           </TabsList>
           <TabsContent value="openai" keepMounted>

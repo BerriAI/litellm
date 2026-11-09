@@ -1181,7 +1181,8 @@ fn host_call_response(
             stage: Stage::CallbackFilters { .. },
             ..
         } => {
-            // The remaining ids, or a failure mapping as an attempt reports one.
+            // The remaining ids, alone or paired with the id a filter prefers, or a failure
+            // mapping as an attempt reports one.
             let outcome = outcome.ok_or_else(missing)?;
             if let Ok(failure) = outcome.cast::<PyDict>() {
                 return match attempt_outcome(failure)? {
@@ -1191,7 +1192,10 @@ fn host_call_response(
                     )),
                 };
             }
-            Ok(HostCallResponse::Filtered(Ok(outcome.extract()?)))
+            if let Ok(answer) = outcome.cast::<PyTuple>() {
+                return Ok(HostCallResponse::Filtered(Ok(answer.extract()?)));
+            }
+            Ok(HostCallResponse::Filtered(Ok((outcome.extract()?, None))))
         }
         HostCall::Select {
             stage: Stage::Strategy { records, .. },

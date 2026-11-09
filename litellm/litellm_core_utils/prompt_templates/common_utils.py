@@ -10,7 +10,7 @@ from collections.abc import Hashable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from itertools import chain, groupby
 from types import MappingProxyType, ModuleType
-from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, cast
+from typing import TYPE_CHECKING, Final, Literal, TypeAlias, cast
 
 from pydantic import TypeAdapter
 
@@ -710,6 +710,8 @@ def get_content_from_model_response(response: ModelResponse | dict) -> str:
     else:
         new_response = response
 
+    from litellm.llms.anthropic.common_utils import tool_calls_with_server_tool_calls
+
     content = ""
 
     for choice in new_response.choices:
@@ -717,9 +719,8 @@ def get_content_from_model_response(response: ModelResponse | dict) -> str:
             content += choice.message.content if choice.message.content else ""
             if choice.message.function_call:
                 content += choice.message.function_call.model_dump_json()
-            if choice.message.tool_calls:
-                for tc in choice.message.tool_calls:
-                    content += tc.model_dump_json()
+            for tc in tool_calls_with_server_tool_calls(choice.message):
+                content += tc.model_dump_json()
         elif isinstance(choice, StreamingChoices):
             content += getattr(choice, "delta", {}).get("content", "") or ""
     return content
@@ -1248,7 +1249,7 @@ def strip_prefill_prefix_field(message: AllMessageValues) -> AllMessageValues:
     return _message_without_fields(message, frozenset({"prefix"}))
 
 
-def filter_value_from_dict(dictionary: dict, key: str, depth: int = 0) -> Any:
+def filter_value_from_dict(dictionary: dict, key: str, depth: int = 0) -> Mapping[object, object]:
     """
     Filters a value from a dictionary
 

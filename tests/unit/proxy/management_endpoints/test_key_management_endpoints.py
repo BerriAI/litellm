@@ -112,6 +112,7 @@ from litellm.types.proxy.management_endpoints.key_management_endpoints import (
     BulkUpdateKeyResponse,
     CustomKeyPolicyRequest,
 )
+from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
 
 client = TestClient(app)
 
@@ -388,12 +389,9 @@ async def test_budget_reset_and_expires_at_first_of_month(monkeypatch):
 
     from datetime import datetime, timedelta, timezone
 
-    import pytest
-
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         generate_key_helper_fn,
     )
-    from litellm.proxy.proxy_server import prisma_client
 
     # Use monkeypatch to set the prisma_client
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
@@ -470,9 +468,12 @@ async def test_key_expiration_exact_duration_hours(monkeypatch):
 
     from datetime import datetime, timedelta, timezone
 
+    import pytest
+
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         generate_key_helper_fn,
     )
+    from litellm.proxy.proxy_server import prisma_client
 
     # Use monkeypatch to set the prisma_client
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
@@ -6980,6 +6981,22 @@ async def test_info_key_fn_unknown_key_still_404s(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_info_key_fn_no_key_returns_400_not_500(monkeypatch):
+    """#43571: when both ?key= and auth api_key are None, return a clean 400
+    instead of letting Prisma raise MissingRequiredValueError as a 500."""
+    from litellm.proxy.management_endpoints.key_management_endpoints import info_key_fn
+
+    mock_prisma_client = AsyncMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    auth = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, api_key=None)
+    with pytest.raises(ProxyException) as exc_info:
+        await info_key_fn(key=None, user_api_key_dict=auth)
+    assert exc_info.value.code == "400"
+    mock_prisma_client.db.litellm_verificationtoken.find_unique.assert_not_called()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("blocked", "expires", "expected_status"),
     [
@@ -8647,6 +8664,8 @@ async def test_reset_key_spend_success(monkeypatch):
             "litellm.proxy.proxy_server.spend_counter_cache",
             mock_spend_counter_cache,
         )
+        spend = FakeSpendCounters(redis=None)
+        monkeypatch.setattr("litellm.proxy.proxy_server.spend_counter_store", spend.store())
 
         user_api_key_dict = UserAPIKeyAuth(
             user_role=LitellmUserRoles.PROXY_ADMIN,
@@ -8667,15 +8686,14 @@ async def test_reset_key_spend_success(monkeypatch):
         assert response["max_budget"] == 200.0
         mock_prisma_client.db.litellm_verificationtoken.update.assert_called_once()
         mock_delete_cache.assert_awaited_once()
-        mock_spend_counter_cache.in_memory_cache.set_cache.assert_any_call(
-            key=f"spend:key:{hashed_key}", value=50.0, ttl=60
-        )
+        assert spend.memory[f"spend:key:{hashed_key}"] == 50.0
         # spend_db_floor marker is also set to the reset value (LIT-3803 pattern),
         # so a request landing on a pod with a warm pre-reset floor marker cannot
         # re-derive and re-apply the stale spend.
         mock_spend_counter_cache.in_memory_cache.set_cache.assert_any_call(
             key=f"spend_db_floor:spend:key:{hashed_key}", value=50.0, ttl=5
         )
+        assert spend.deleted() == {f"spend:committed:key:{hashed_key}"}
 
 
 @pytest.mark.asyncio
@@ -8746,6 +8764,10 @@ async def test_reset_key_spend_resets_budget_windows(monkeypatch):
         mock_spend_counter_cache,
     )
 
+    spend = FakeSpendCounters()
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.spend_counter_store", spend.store())
+
     with (
         patch("litellm.proxy.proxy_server.hash_token") as mock_hash_token,  # test-quality-ok: no HTTP boundary; same pattern as test_reset_key_spend_success
         patch(  # test-quality-ok: no HTTP boundary; same pattern as test_reset_key_spend_success
@@ -8777,12 +8799,8 @@ async def test_reset_key_spend_resets_budget_windows(monkeypatch):
     assert response["spend"] == 0.0
 
     window_counter_key = f"spend:key:{hashed_key}:window:1d"
-    mock_spend_counter_cache.in_memory_cache.set_cache.assert_any_call(
-        key=window_counter_key, value=0.0, ttl=60
-    )
-    mock_spend_counter_cache.redis_cache.async_set_cache.assert_any_call(
-        key=window_counter_key, value=0.0, ttl=60
-    )
+    assert spend.memory[window_counter_key] == 0.0
+    assert f"SET {window_counter_key} 0.0 60" in spend.commands
     mock_spend_counter_cache.in_memory_cache.set_cache.assert_any_call(
         key=f"spend_db_floor:{window_counter_key}", value=0.0, ttl=5
     )
@@ -8854,6 +8872,10 @@ async def test_reset_key_spend_no_budget_limits_skips_window_reset(monkeypatch):
         "litellm.proxy.proxy_server.spend_counter_cache",
         mock_spend_counter_cache,
     )
+
+    spend = FakeSpendCounters(redis=None)
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.spend_counter_store", spend.store())
 
     with (
         patch("litellm.proxy.proxy_server.hash_token") as mock_hash_token,  # test-quality-ok: no HTTP boundary; same pattern as test_reset_key_spend_success
@@ -8966,6 +8988,8 @@ async def test_update_key_spend_updates_counter(monkeypatch):
         "litellm.proxy.proxy_server.spend_counter_cache",
         mock_spend_counter_cache,
     )
+    spend = FakeSpendCounters()
+    monkeypatch.setattr("litellm.proxy.proxy_server.spend_counter_store", spend.store())
 
     with patch(
         "litellm.proxy.management_endpoints.key_management_endpoints.delete_cache_key_object"
@@ -8989,12 +9013,11 @@ async def test_update_key_spend_updates_counter(monkeypatch):
         )
 
         mock_delete_cache.assert_awaited_once()
-        mock_spend_counter_cache.in_memory_cache.set_cache.assert_called_once_with(
-            key=f"spend:key:{hashed_key}", value=0.0, ttl=60
-        )
-        mock_spend_counter_cache.redis_cache.async_set_cache.assert_awaited_once_with(
-            key=f"spend:key:{hashed_key}", value=0.0, ttl=60
-        )
+        assert spend.memory == {f"spend:key:{hashed_key}": 0.0}
+        assert spend.commands == [
+            f"SET spend:key:{hashed_key} 0.0 60",
+            f"DEL spend:committed:key:{hashed_key}",
+        ]
 
 
 @pytest.mark.asyncio
@@ -19772,6 +19795,150 @@ async def test_bulk_key_update_batch_enqueued_token_limit_rejected_for_non_admin
 
     assert exc.value.status_code == 403
     assert "Only proxy admins can set" in str(exc.value.detail)
+
+
+
+_INDEX_GRANT = [{"index_name": "docs", "index_permissions": ["read", "write"]}]
+
+
+@pytest.mark.parametrize(
+    "label, top_level, sent, stored, allowed",
+    [
+        ("granted top-level on a key with none stored", _INDEX_GRANT, _UNTOUCHED, None, False),
+        ("granted in metadata on a key with none stored", None, _INDEX_GRANT, None, False),
+        ("widened from read to read and write", None, _INDEX_GRANT, [{"index_name": "docs", "index_permissions": ["read"]}], False),
+        ("cleared by replacing the blob", None, None, _INDEX_GRANT, False),
+        ("resent unchanged in metadata", None, _INDEX_GRANT, _INDEX_GRANT, True),
+        ("resent unchanged top-level", _INDEX_GRANT, _UNTOUCHED, _INDEX_GRANT, True),
+        ("left untouched", None, _UNTOUCHED, _INDEX_GRANT, True),
+        ("cleared top-level with an empty list", [], _UNTOUCHED, _INDEX_GRANT, False),
+        ("empty top-level list on a key with none stored", [], _UNTOUCHED, None, True),
+    ],
+)
+def test_vector_store_index_grants_admin_gate_matrix(
+    label: str,
+    top_level: list[dict[str, object]] | None,
+    sent: object,
+    stored: list[dict[str, object]] | None,
+    allowed: bool,
+) -> None:
+    from litellm.proxy.auth.auth_utils import (
+        enforce_vector_store_index_grants_are_admin_only,
+    )
+
+    request_body = {} if sent is _UNTOUCHED else {"metadata": {} if sent is None else {"allowed_vector_store_indexes": sent}}
+    if top_level is not None:
+        request_body["allowed_vector_store_indexes"] = top_level
+    data = UpdateKeyRequest(key="sk-1", **request_body)
+    existing_metadata = None if stored is None else {"allowed_vector_store_indexes": stored}
+
+    def _call(caller: UserAPIKeyAuth) -> None:
+        enforce_vector_store_index_grants_are_admin_only(
+            data=data,
+            top_level_grants=data.allowed_vector_store_indexes,
+            existing_metadata=existing_metadata,
+            user_api_key_dict=caller,
+            entity="key",
+        )
+
+    non_admin = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, api_key="sk-non-admin", user_id="alice")
+    if allowed:
+        _call(non_admin)
+    else:
+        with pytest.raises(HTTPException) as exc:
+            _call(non_admin)
+        assert exc.value.status_code == 403
+        assert "Only proxy admins can set allowed_vector_store_indexes" in str(exc.value.detail)
+
+    _call(UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-admin", user_id="admin"))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "request_fields",
+    [{"allowed_vector_store_indexes": _INDEX_GRANT}, {"metadata": {"allowed_vector_store_indexes": _INDEX_GRANT}}],
+    ids=["top-level", "metadata"],
+)
+async def test_generate_key_vector_store_index_grants_rejected_for_non_admin(request_fields: dict[str, object]) -> None:
+    """An index grant on a key opens document reads and writes on that index, so a
+    non-admin minting their own key cannot pick its grants."""
+    with patch("litellm.proxy.proxy_server.prisma_client", AsyncMock()):
+        with pytest.raises(HTTPException) as exc:
+            await _common_key_generation_helper(
+                data=GenerateKeyRequest(**request_fields),
+                user_api_key_dict=UserAPIKeyAuth(
+                    user_role=LitellmUserRoles.INTERNAL_USER,
+                    api_key="sk-alice",
+                    user_id="alice",
+                ),
+                litellm_changed_by=None,
+                team_table=None,
+            )
+    assert int(getattr(exc.value, "status_code", 0)) == 403
+    assert "Only proxy admins can set allowed_vector_store_indexes" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_update_key_vector_store_index_grants_unchanged_allows_non_admin_edit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A key owner renaming a key that carries admin-set index grants resends them
+    with the rest of the form, which must not count as setting them."""
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        update_key_fn,
+    )
+
+    token = "b3b2c3d4e5f6789012345678901234567890123456789012345678901234abcd"
+    _wire_update_key_fn(monkeypatch, _estimate_key_row(token, {"allowed_vector_store_indexes": _INDEX_GRANT}))
+
+    mock_request = MagicMock()
+    mock_request.query_params = {}
+
+    result = await update_key_fn(
+        request=mock_request,
+        data=UpdateKeyRequest(key=token, key_alias="my-alias", metadata={"allowed_vector_store_indexes": _INDEX_GRANT}),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.INTERNAL_USER,
+            api_key="sk-internal",
+            user_id="internal_user",
+        ),
+        litellm_changed_by=None,
+    )
+
+    assert result is not None
+
+
+@pytest.mark.asyncio
+async def test_update_key_vector_store_index_grants_widened_rejected_for_non_admin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        update_key_fn,
+    )
+
+    token = "c3b2c3d4e5f6789012345678901234567890123456789012345678901234abcd"
+    _wire_update_key_fn(
+        monkeypatch,
+        _estimate_key_row(token, {"allowed_vector_store_indexes": [{"index_name": "docs", "index_permissions": ["read"]}]}),
+    )
+
+    mock_request = MagicMock()
+    mock_request.query_params = {}
+
+    with pytest.raises(ProxyException) as exc:
+        await update_key_fn(
+            request=mock_request,
+            data=UpdateKeyRequest(key=token, allowed_vector_store_indexes=_INDEX_GRANT),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.INTERNAL_USER,
+                api_key="sk-internal",
+                user_id="internal_user",
+            ),
+            litellm_changed_by=None,
+        )
+
+    assert str(exc.value.code) == "403"
+    assert "Only proxy admins can set allowed_vector_store_indexes" in str(exc.value.message)
 
 
 @pytest.mark.asyncio

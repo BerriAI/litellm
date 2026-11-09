@@ -75,7 +75,7 @@ const EmailEventSettings: React.FC<EmailEventSettingsProps> = ({ accessToken }) 
   // Helper function to get a description for each event type
   const getEventDescription = (event: EmailEvent): string => {
     if (event === "Model Deprecations") {
-      return "Email affected key owners and team admins 30 days and 1 day before model deprecation. Uses requests from the last 30 days. Off by default.";
+      return t("loggingAndAlerts.emailEvents.descriptions.modelDeprecations");
     }
     // Convert event name to a sentence with more context
     if (event.includes("Virtual Key Created")) {

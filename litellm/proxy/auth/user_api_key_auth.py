@@ -14,6 +14,7 @@ import secrets
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from enum import Enum
+from functools import partial
 from types import MappingProxyType
 from typing import Final, NamedTuple, Protocol, Union, cast
 
@@ -24,10 +25,9 @@ from pydantic import TypeAdapter
 from starlette.exceptions import WebSocketException
 
 import litellm
-from litellm._internal_context import service_target
+from litellm._internal_context import service_target, set_request_parent_otel_span
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm._service_logger import ServiceLogging
-from litellm.caching.redis_cache import RedisCache
 from litellm.constants import (
     CLIENT_REQUESTED_MODEL_SCOPE_KEY,
     GLOBAL_PROXY_SPEND_CACHE_KEY,
@@ -145,7 +145,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # leg
     _safe_get_request_headers,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _safe_get_request_query_params,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _safe_set_request_parsed_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
-    is_opaque_audio_pass_through_request,
+    is_opaque_pass_through_request,
     populate_request_with_path_params,
     read_raw_json_body,
     read_request_body,
@@ -171,7 +171,15 @@ from litellm.proxy.db.db_lookup_gate import bounded_db_lookup
 from litellm.proxy.db.db_span import db_span
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
-from litellm.proxy.spend_tracking.carried_budget_state import carry_team_and_user_budget_state
+from litellm.proxy.spend_tracking.carried_budget_state import (
+    carry_committed_budget_spend,
+    carry_team_and_user_budget_state,
+)
+from litellm.proxy.spend_tracking.committed_spend import (
+    bind_committed_admission_counters,
+    committed_spend_tracked,
+    read_admission_committed_spend,
+)
 from litellm.proxy.spend_tracking.spend_counter_batch import (
     bind_admission_counter_keys,
     release_spend_counter_batch,
@@ -182,10 +190,19 @@ from litellm.proxy.utils import (
     ProxyLogging,
     normalize_route_for_root_path,
 )
+from litellm.redis.stores.spend_counters import (
+    SpendCounterStore,
+    team_member_counter,
+)
 from litellm.repositories.table_repositories import JWTKeyMappingRepository, TeamMembershipRepository
 from litellm.repositories.user_repository import UserRepository
 from litellm.repositories.verification_token_repository import VerificationTokenRepository
-from litellm.router_api import fallbacks_disabled, references_provider_scoped_resource, request_fallback_chain
+from litellm.router_api import (
+    RoutingContext,
+    fallbacks_disabled,
+    references_provider_scoped_resource,
+    request_fallback_chain,
+)
 from litellm.secret_managers.main import get_secret_bool
 from litellm.types.services import ServiceTypes
 
@@ -301,6 +318,17 @@ async def _normalize_claude_model(
     rewrite_request_model(request_data, request, source)
 
 
+_CODEX_NATIVE_RESPONSES_ROUTE: Final = "/backend-api/codex/responses"
+
+
+def _is_codex_native_litellm_turn(route: str, model: object, llm_router: litellm.Router, team_id: str | None) -> bool:
+    if route != _CODEX_NATIVE_RESPONSES_ROUTE:
+        return False
+    from litellm.proxy.pass_through_endpoints.codex_passthrough_endpoints import routes_to_litellm
+
+    return routes_to_litellm(model, llm_router, team_id)
+
+
 async def _resolve_router_settings_model_group_alias(
     request_data: dict[str, object],  # mutable-ok: the request body is rewritten in place for every downstream reader
     valid_token: UserAPIKeyAuth,
@@ -317,9 +345,12 @@ async def _resolve_router_settings_model_group_alias(
     if request.scope.get(MODEL_GROUP_ALIAS_RESOLVED_SCOPE_KEY) is True:
         return
     request.scope[MODEL_GROUP_ALIAS_RESOLVED_SCOPE_KEY] = True
-    if request_dispatched_to_pass_through_endpoint(request) or request_dispatched_to_provider_pass_through(request):
-        return
     requested: Final = request_data.get("model")
+    if request_dispatched_to_pass_through_endpoint(request) or (
+        request_dispatched_to_provider_pass_through(request)
+        and not _is_codex_native_litellm_turn(route, requested, llm_router, valid_token.team_id)
+    ):
+        return
     if not isinstance(requested, str) or await read_raw_json_body(request=request) is None:
         return
     settings: Final = await proxy_config.get_hierarchical_router_settings(
@@ -330,11 +361,37 @@ async def _resolve_router_settings_model_group_alias(
     target: Final = resolve_model_group_alias(settings.get("model_group_alias"), requested)
     if target is None or target == requested:
         return
+    if request_dispatched_to_provider_pass_through(request):
+        from litellm.proxy.pass_through_endpoints.codex_passthrough_endpoints import native_turn_serves_through_litellm
+
+        if not await native_turn_serves_through_litellm(requested, llm_router, request, valid_token):
+            return
     verbose_proxy_logger.debug(
         "router_settings.model_group_alias resolved %s -> %s before auth",
         requested.replace("\r", "").replace("\n", ""),
         target.replace("\r", "").replace("\n", ""),
     )
+    request.scope.setdefault(CLIENT_REQUESTED_MODEL_SCOPE_KEY, requested)
+    rewrite_request_model(request_data, request, target)
+
+
+def _resolve_codex_native_chatgpt_model(
+    request_data: dict[str, object],  # mutable-ok: the request body is rewritten in place for every downstream reader
+    valid_token: UserAPIKeyAuth,
+    request: Request | None,
+    route: str,
+) -> None:
+    requested: Final = request_data.get("model")
+    if route != _CODEX_NATIVE_RESPONSES_ROUTE or request is None or not isinstance(requested, str):
+        return
+    from litellm.proxy.pass_through_endpoints.codex_passthrough_endpoints import native_chatgpt_model
+    from litellm.proxy.proxy_server import llm_router
+
+    if llm_router is None:
+        return
+    target: Final = native_chatgpt_model(requested, llm_router, valid_token)
+    if target is None:
+        return
     request.scope.setdefault(CLIENT_REQUESTED_MODEL_SCOPE_KEY, requested)
     rewrite_request_model(request_data, request, target)
 
@@ -2051,7 +2108,8 @@ def _ensure_parent_otel_span_on_request_state(request: Request) -> None:
 
     if open_telemetry_logger is None:
         return
-    if getattr(request.state, "parent_otel_span", None) is not None:
+    if (existing_span := getattr(request.state, "parent_otel_span", None)) is not None:
+        set_request_parent_otel_span(existing_span)
         return
     parent_otel_span: Final = open_telemetry_logger.create_litellm_proxy_request_started_span(
         start_time=start_time,
@@ -2067,6 +2125,7 @@ def _ensure_parent_otel_span_on_request_state(request: Request) -> None:
             http_route=get_request_route_template(request),
         )
     request.state.parent_otel_span = parent_otel_span
+    set_request_parent_otel_span(parent_otel_span)
 
 
 async def _read_request_body_deferring_parse_failure(
@@ -2078,7 +2137,7 @@ async def _read_request_body_deferring_parse_failure(
     must run (resolving identity onto the request's trace) before the 400 goes
     out; the caller re-raises the returned exception once identity is seeded.
     """
-    if is_opaque_audio_pass_through_request(
+    if is_opaque_pass_through_request(
         route=get_request_route(request=request),
         content_type=safe_get_request_headers(request=request).get("content-type", ""),
     ):
@@ -2648,6 +2707,7 @@ async def user_api_key_auth_builder(
             await prefetch_identity_keys(
                 _identity_cache_keys(api_key, end_user_id=end_user_id, key_is_resolved=valid_token is not None),
                 user_api_key_cache=user_api_key_cache,
+                before_read=arm_routing_cooldowns,
             )
         if end_user_id:
             try:
@@ -3097,7 +3157,7 @@ async def validate_resolved_virtual_key(  # noqa: C901  # Preserve ordering of e
                         team_member_spend = valid_token.team_member_spend
                         if valid_token.user_id is not None and valid_token.team_id is not None:
                             team_member_spend = await get_current_spend(
-                                counter_key=f"spend:team_member:{valid_token.user_id}:{valid_token.team_id}",
+                                counter_key=team_member_counter(valid_token.user_id, valid_token.team_id),
                                 fallback_spend=team_member_spend,
                                 max_budget=team_member_budget,
                             )
@@ -3599,6 +3659,7 @@ async def run_centralized_common_checks(
         model_max_budget_limiter,
         prisma_client,
         proxy_logging_obj,
+        spend_counter_store,
         user_api_key_cache,
         user_custom_auth,
     )
@@ -3909,6 +3970,7 @@ async def run_centralized_common_checks(
         )
 
     bind_admission_counter_keys(user_api_key_auth_obj, end_user_id=end_user_id)
+    bind_committed_admission_counters(user_api_key_auth_obj, end_user_id=end_user_id)
     try:
         _ = await common_checks(
             request=request,
@@ -3984,6 +4046,18 @@ async def run_centralized_common_checks(
                     user_obj=user_object,
                 )
 
+        if committed_spend_tracked():
+            await carry_committed_budget_spend(
+                valid_token=user_api_key_auth_obj,
+                team_object=typed_team_object,
+                user_object=user_object,
+                end_user_object=end_user_object,
+                read_committed=(
+                    None
+                    if route_skips_budget_checks(route=route)
+                    else partial(read_admission_committed_spend, spend_counter_store)
+                ),
+            )
         await _reserve_budget_after_common_checks(
             user_api_key_auth_obj=user_api_key_auth_obj,
             request=request,
@@ -4161,6 +4235,7 @@ async def _authorize_authenticated_request(
     RouteChecks.should_call_route(route=route, valid_token=user_api_key_auth_obj, request=request)
     await _normalize_claude_model(request_data, user_api_key_auth_obj, request, route)
     await _resolve_router_settings_model_group_alias(request_data, user_api_key_auth_obj, request, route)
+    _resolve_codex_native_chatgpt_model(request_data, user_api_key_auth_obj, request, route)
 
     # Single authorization point. Builder paths MUST NOT call common_checks.
     # Route through the same exception handler the builder uses so
@@ -4266,10 +4341,10 @@ async def _authorize_authenticated_request(
     return None
 
 
-def _spend_counter_redis_cache() -> RedisCache | None:
-    from litellm.proxy.proxy_server import spend_counter_cache
+def _spend_counter_store() -> SpendCounterStore:
+    from litellm.proxy.proxy_server import spend_counter_store
 
-    return spend_counter_cache.redis_cache
+    return spend_counter_store
 
 
 def _identity_cache_keys(api_key: str, *, end_user_id: str | None, key_is_resolved: bool) -> tuple[str, ...]:
@@ -4296,11 +4371,23 @@ async def _prefetch_referenced_auth_objects(
     """Warm every object and spend counter the checks below will read, in one MGET each (one DB query when cold).
     Runs after the key's model access check so a denied request costs no more than it did before."""
     bind_admission_counter_keys(valid_token, end_user_id=end_user_id or None)
+    bind_committed_admission_counters(valid_token, end_user_id=end_user_id or None)
     await prefetch_auth_objects(
         refs=AuthObjectRefs.from_token(valid_token),
         user_api_key_cache=user_api_key_cache,
         prisma_client=prisma_client,
+        before_read=arm_routing_cooldowns,
     )
+
+
+def arm_routing_cooldowns() -> None:
+    """Declares the cooldown read routing takes later into the auth prefetch's native round trip, so a request whose
+    auth objects come from Redis pays one round trip for both. Armed only when a prefetch reads Redis, so a request
+    served from memory, or denied, reads no cooldowns early."""
+    from litellm.proxy.proxy_server import llm_router  # noqa: PLC0415  # runtime global
+
+    if llm_router is not None:
+        RoutingContext(llm_router).arm_cooldown_prefetch()
 
 
 def _seed_request_destinations(user_api_key_dict: UserAPIKeyAuth, request: Request | None = None) -> None:
@@ -4372,7 +4459,7 @@ async def user_api_key_auth(
     with (
         phase_span(f"auth {route}"),
         service_target(AUTH_OBJECTS_TARGET),
-        spend_counter_batch_scope(_spend_counter_redis_cache()),
+        spend_counter_batch_scope(_spend_counter_store()),
     ):
         try:
             user_api_key_auth_obj: Final = await user_api_key_auth_builder(
@@ -4628,6 +4715,7 @@ async def enforce_key_and_fallback_model_access(
     """
     await _normalize_claude_model(request_data, valid_token, request, route)
     await _resolve_router_settings_model_group_alias(request_data, valid_token, request, route)
+    _resolve_codex_native_chatgpt_model(request_data, valid_token, request, route)
     config: Final = valid_token.config
 
     if config != {}:
