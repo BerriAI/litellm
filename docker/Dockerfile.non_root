@@ -125,6 +125,21 @@ RUN HOME=/opt/prisma XDG_CACHE_HOME=/opt/prisma/.cache PRISMA_BINARY_CACHE_DIR=/
 RUN sed -i 's/\r$//' docker/entrypoint.sh && chmod +x docker/entrypoint.sh && \
     sed -i 's/\r$//' docker/prod_entrypoint.sh && chmod +x docker/prod_entrypoint.sh
 
+RUN chown -R nobody:nogroup /app /var/lib/litellm/ui /var/lib/litellm/assets && \
+    PRISMA_PATH=$(python -c "import os, prisma; print(os.path.dirname(prisma.__file__))") && \
+    chown -R nobody:nogroup "$PRISMA_PATH" && \
+    LITELLM_PKG_MIGRATIONS_PATH="$(python -c 'import os, litellm_proxy_extras; print(os.path.dirname(litellm_proxy_extras.__file__))' 2>/dev/null || echo '')/migrations" && \
+    [ -n "$LITELLM_PKG_MIGRATIONS_PATH" ] && chown -R nobody:nogroup "$LITELLM_PKG_MIGRATIONS_PATH" || true && \
+    LITELLM_PROXY_EXTRAS_PATH=$(python -c "import os, litellm_proxy_extras; print(os.path.dirname(litellm_proxy_extras.__file__))" 2>/dev/null || echo "") && \
+    chgrp -R 0 "$PRISMA_PATH" /var/lib/litellm/ui /var/lib/litellm/assets && \
+    [ -n "$LITELLM_PROXY_EXTRAS_PATH" ] && chgrp -R 0 "$LITELLM_PROXY_EXTRAS_PATH" || true && \
+    chmod -R g=u "$PRISMA_PATH" /var/lib/litellm/ui /var/lib/litellm/assets && \
+    [ -n "$LITELLM_PROXY_EXTRAS_PATH" ] && chmod -R g=u "$LITELLM_PROXY_EXTRAS_PATH" || true && \
+    chmod -R g+w "$PRISMA_PATH" /var/lib/litellm/ui /var/lib/litellm/assets && \
+    [ -n "$LITELLM_PROXY_EXTRAS_PATH" ] && chmod -R g+w "$LITELLM_PROXY_EXTRAS_PATH" || true && \
+    chmod -R g+rX "$PRISMA_PATH" /var/lib/litellm/ui /var/lib/litellm/assets && \
+    chmod -R a+rX /opt/prisma
+
 FROM $LITELLM_RUNTIME_IMAGE AS runtime
 ARG LITELLM_RELEASE_TAG=""
 ENV LITELLM_RELEASE_TAG=${LITELLM_RELEASE_TAG}
@@ -137,6 +152,12 @@ RUN for i in 1 2 3; do \
     for i in 1 2 3; do \
       apk add --no-cache python-3.13 bash openssl libssl3 tzdata libsndfile nodejs libevent && break || sleep 5; \
     done
+RUN mkdir -p /nonexistent /app/.cache /app/.venv /app/docker \
+      /app/litellm/proxy /app/enterprise /app/litellm-proxy-extras \
+      /var/lib/litellm/ui /var/lib/litellm/assets && \
+    chown -R nobody:nogroup /app /nonexistent && \
+    chown nobody:0 /var/lib/litellm/ui /var/lib/litellm/assets && \
+    chmod g=u,g+w,g+rX /var/lib/litellm/ui /var/lib/litellm/assets
 COPY --from=pgbouncer-builder /usr/local/bin/pgbouncer /usr/local/bin/pgbouncer
 
 # Copy only what runtime needs. The application is installed inside the venv;
@@ -180,22 +201,7 @@ ENV PATH="/app/.venv/bin:${PATH}" \
     PRISMA_ENGINES_CHECKSUM_IGNORE_MISSING=1 \
     PRISMA_OFFLINE_MODE=true
 
-RUN mkdir -p /nonexistent /app/.cache /var/lib/litellm/assets /var/lib/litellm/ui && \
-    chown -R nobody:nogroup /app /var/lib/litellm/ui /var/lib/litellm/assets /nonexistent && \
-    PRISMA_PATH=$(python -c "import os, prisma; print(os.path.dirname(prisma.__file__))") && \
-    chown -R nobody:nogroup "$PRISMA_PATH" && \
-    LITELLM_PKG_MIGRATIONS_PATH="$(python -c 'import os, litellm_proxy_extras; print(os.path.dirname(litellm_proxy_extras.__file__))' 2>/dev/null || echo '')/migrations" && \
-    [ -n "$LITELLM_PKG_MIGRATIONS_PATH" ] && chown -R nobody:nogroup "$LITELLM_PKG_MIGRATIONS_PATH" || true && \
-    LITELLM_PROXY_EXTRAS_PATH=$(python -c "import os, litellm_proxy_extras; print(os.path.dirname(litellm_proxy_extras.__file__))" 2>/dev/null || echo "") && \
-    chgrp -R 0 "$PRISMA_PATH" /var/lib/litellm/ui /var/lib/litellm/assets && \
-    [ -n "$LITELLM_PROXY_EXTRAS_PATH" ] && chgrp -R 0 "$LITELLM_PROXY_EXTRAS_PATH" || true && \
-    chmod -R g=u "$PRISMA_PATH" /var/lib/litellm/ui /var/lib/litellm/assets && \
-    [ -n "$LITELLM_PROXY_EXTRAS_PATH" ] && chmod -R g=u "$LITELLM_PROXY_EXTRAS_PATH" || true && \
-    chmod -R g+w "$PRISMA_PATH" /var/lib/litellm/ui /var/lib/litellm/assets && \
-    [ -n "$LITELLM_PROXY_EXTRAS_PATH" ] && chmod -R g+w "$LITELLM_PROXY_EXTRAS_PATH" || true && \
-    chmod -R g+rX "$PRISMA_PATH" /var/lib/litellm/ui /var/lib/litellm/assets && \
-    chmod -R a+rX /opt/prisma && \
-    test -x /opt/prisma/binaries/node_modules/.bin/prisma && \
+RUN test -x /opt/prisma/binaries/node_modules/.bin/prisma && \
     test -f /opt/prisma/binaries/node_modules/prisma/build/index.js && \
     ls /opt/prisma/binaries/node_modules/@prisma/engines/query-engine-* >/dev/null 2>&1 && \
     python -c "from prisma.client import BINARY_PATHS; paths = list(BINARY_PATHS.query_engine.values()); assert paths and all(p.startswith('/opt/prisma/') for p in paths), paths"
