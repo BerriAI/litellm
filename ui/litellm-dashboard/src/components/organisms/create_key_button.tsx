@@ -97,6 +97,23 @@ import { buildKeyCreatePayload, type KeyCreateInput } from "./createKeyPayload";
 import { simplifyKeyGenerateError } from "./utils";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
+const GENERATE_KEY_EXCLUDED_FIELDS = [
+  "key_alias",
+  "team_id",
+  "organization_id",
+  "models",
+  "duration",
+  "metadata",
+  "tags",
+  "guardrails",
+  "max_budget",
+  "budget_duration",
+  "tpm_limit",
+  "rpm_limit",
+  "tpd_limit",
+];
+const GENERATE_KEY_EXCLUDED_FIELDS_WITH_KEY = [...GENERATE_KEY_EXCLUDED_FIELDS, "key"];
+
 const KEY_TYPE_OPTIONS: { value: string; label: ParseKeys; hint: ParseKeys }[] = [
   { value: "llm_api", label: "createKey.keyTypes.llmApi.label", hint: "createKey.keyTypes.llmApi.hint" },
   { value: "management", label: "createKey.keyTypes.management.label", hint: "createKey.keyTypes.management.hint" },
@@ -1784,6 +1801,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                               key={routerSettingsKey}
                               ref={routerSettingsRef}
                               accessToken={accessToken || ""}
+                              teamId={selectedCreateKeyTeam?.team_id}
                               value={routerSettings || undefined}
                               onChange={setRouterSettings}
                               modelData={
@@ -1876,22 +1894,11 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                           <SchemaFormFields
                             schemaComponent="GenerateKeyRequest"
                             setValue={form.setValue}
-                            excludedFields={[
-                              "key_alias",
-                              "team_id",
-                              "organization_id",
-                              "models",
-                              "duration",
-                              "metadata",
-                              "tags",
-                              "guardrails",
-                              "max_budget",
-                              "budget_duration",
-                              "tpm_limit",
-                              "rpm_limit",
-                              "tpd_limit",
-                              ...(disableCustomApiKeys ? ["key"] : []),
-                            ]}
+                            excludedFields={
+                              disableCustomApiKeys
+                                ? GENERATE_KEY_EXCLUDED_FIELDS_WITH_KEY
+                                : GENERATE_KEY_EXCLUDED_FIELDS
+                            }
                           />
                         </CollapsibleContent>
                       </Collapsible>

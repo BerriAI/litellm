@@ -194,11 +194,7 @@ def get_llm_provider(
     resolved_model, provider, dynamic_api_key, resolved_api_base = _get_llm_provider(
         model, custom_llm_provider, api_base, api_key, litellm_params
     )
-    explicit_provider: Final = custom_llm_provider or (litellm_params.custom_llm_provider if litellm_params else None)
-    target: Final = (
-        resolve_model_latest_alias(resolved_model, provider) if explicit_provider or "/" in model else resolved_model
-    )
-    return target, provider, dynamic_api_key, resolved_api_base
+    return resolve_model_latest_alias(resolved_model, provider), provider, dynamic_api_key, resolved_api_base
 
 
 def _get_llm_provider(

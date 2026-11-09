@@ -16,6 +16,7 @@ import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings"
 import { uiHref } from "@/utils/uiHref";
 import { cn } from "@/lib/cva.config";
 import i18n from "@/i18n/i18n";
+import { productNames } from "@/i18n/untranslated/productNames";
 
 const GATEWAY = "ai-gateway";
 const CHAT = "chat";
@@ -123,7 +124,7 @@ export default function ViewSwitcher({ className, contentClassName }: ViewSwitch
       label: (
         <div className="flex w-full items-center justify-between gap-6 py-0.5">
           <span className="flex flex-col">
-            <span className="font-medium">Moyai</span>{" "}
+            <span className="font-medium">{productNames.moyai}</span>{" "}
             <span className="text-xs leading-snug text-muted-foreground">
               {t("shell.viewSwitcher.moyaiDescription")}
             </span>
