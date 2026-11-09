@@ -25,15 +25,22 @@ class LegacyEmptyModelsCounts:
 
 async def count_legacy_empty_models_rows(keys: CountTable, teams: CountTable) -> LegacyEmptyModelsCounts:
     teamless_empty, teamless_all_team, team_keys_empty, teams_empty = await asyncio.gather(
-        keys.count(where={"team_id": None, "models": {"isEmpty": True}}),
-        keys.count(where={"team_id": None, "models": {"has": SpecialModelNames.all_team_models.value}}),
+        keys.count(where={"team_id": None, "models": {"isEmpty": True}, "access_group_ids": {"isEmpty": True}}),
+        keys.count(
+            where={
+                "team_id": None,
+                "models": {"has": SpecialModelNames.all_team_models.value},
+                "access_group_ids": {"isEmpty": True},
+            }
+        ),
         keys.count(
             where={
                 "AND": [{"team_id": {"not": None}}, {"team_id": {"not": UI_SESSION_TOKEN_TEAM_ID}}],
                 "models": {"isEmpty": True},
+                "access_group_ids": {"isEmpty": True},
             }
         ),
-        teams.count(where={"models": {"isEmpty": True}}),
+        teams.count(where={"models": {"isEmpty": True}, "access_group_ids": {"isEmpty": True}}),
     )
     return LegacyEmptyModelsCounts(
         teamless_keys_with_empty_models=teamless_empty,
@@ -93,8 +100,8 @@ def legacy_empty_models_warning(counts: LegacyEmptyModelsCounts) -> str | None:
             "Deprecated model access defaults are still in use.",
             *findings,
             "These counts include blocked and expired keys and blocked teams.",
-            "LiteLLM 2.0.0 removes these defaults. To keep today's access, pick All Proxy Models, All Team Models, "
-            "or a list of models on each one before you upgrade.",
+            "LiteLLM 2.0.0 removes these defaults. To keep today's access, pick All Proxy Models or a list of models "
+            "on each one, or All Team Models on keys that belong to a team, before you upgrade.",
             *teamless_all_team_models_advice,
             f"See {DEPRECATION_DISCUSSION_URL}",
         )

@@ -11,21 +11,40 @@ from typing import Final
 
 import psycopg
 
-from tests.integration._support.client import Gateway, eventually, string_value
+from tests.integration._support.client import JSON_OBJECT, Gateway, eventually, string_value
 from tests.integration._support.process import OwnedState, owned_proxy_process
 
 LISTED_MODEL: Final = "openai/gpt-5.4-mini"
 WARNING_HEADER: Final = "Deprecated model access defaults are still in use."
 
 
-def _team(gateway: Gateway, models: list[str]) -> str:
-    created: Final = gateway.post("/team/new", {"team_alias": f"empty-models-{uuid.uuid4().hex}", "models": models})
+def _team(gateway: Gateway, models: list[str], access_group_ids: tuple[str, ...] = ()) -> str:
+    created: Final = gateway.post(
+        "/team/new",
+        {
+            "team_alias": f"empty-models-{uuid.uuid4().hex}",
+            "models": models,
+            "access_group_ids": list(access_group_ids),
+        },
+    )
     return string_value(created["team_id"])
+
+
+def _access_group(gateway: Gateway) -> str:
+    created: Final = gateway.request(
+        "POST",
+        "/v1/access_group",
+        {"access_group_name": f"empty-models-{uuid.uuid4().hex}", "access_model_names": [LISTED_MODEL]},
+    )
+    assert created.status_code == 201, created.text
+    return string_value(JSON_OBJECT.validate_json(created.content)["access_group_id"])
 
 
 def _seed(gateway: Gateway, database_url: str) -> None:
     empty_team: Final = _team(gateway, [])
     listed_team: Final = _team(gateway, [LISTED_MODEL])
+    access_group: Final = _access_group(gateway)
+    _team(gateway, [], access_group_ids=(access_group,))
     keys: Final = (
         {"models": []},
         {"models": []},
@@ -36,6 +55,9 @@ def _seed(gateway: Gateway, database_url: str) -> None:
         {"models": ["all-team-models"], "team_id": listed_team},
         {"models": [LISTED_MODEL]},
         {"models": ["all-proxy-models"]},
+        {"models": [], "access_group_ids": [access_group]},
+        {"models": ["all-team-models"], "access_group_ids": [access_group]},
+        {"models": [], "team_id": listed_team, "access_group_ids": [access_group]},
     )
     for body in keys:
         gateway.post("/key/generate", body)
