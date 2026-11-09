@@ -5,12 +5,15 @@ from typing import Final
 import pytest
 from e2e_config import provider_edge_base, unique_marker
 from e2e_http import require_successful_call
+from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
 from models import ChatBody, ChatMessage, ChatStreamOptions, LiteLLMParamsBody, Usage
 from proxy_client import ProxyClient
 from pydantic import BaseModel
 
 pytestmark = [pytest.mark.e2e, pytest.mark.replayable]
+
+OPENAI_BACKEND: Final = "openai/gpt-5.6"
 
 
 class _Delta(BaseModel):
@@ -30,13 +33,22 @@ class _Chunk(BaseModel):
 
 class TestChatStreamContract:
     @pytest.mark.covers("llm.chat_completions.openai.basic.stream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.OPENAI,),
+            models=(OPENAI_BACKEND,),
+            mode=Mode.STREAM,
+        )
+    )
     def test_chat_stream_is_sse_and_ends_with_done(self, proxy: ProxyClient, resources: ResourceManager) -> None:
         model: Final = f"e2e-chat-stream-{unique_marker()}"
         base: Final = provider_edge_base("openai")
         model_id: Final = proxy.create_model(
             model,
             LiteLLMParamsBody(
-                model="openai/gpt-5.6",
+                model=OPENAI_BACKEND,
                 api_key="os.environ/OPENAI_API_KEY",
                 api_base=f"{base}/v1" if base else None,
             ),

@@ -10,10 +10,10 @@ use crate::base_llm::ocr::{
     error::Error,
     handler::OcrClient,
     transformation::{
-        BaseOcrConfig, LiteLLMOcrResponse, OcrDocument, OcrRequestContext, OcrResponseFormat,
-        PreparedOcrRequest, decode_and_normalize_response,
+        BaseOcrConfig, OcrRequestContext, PreparedOcrRequest, decode_and_normalize_response,
     },
 };
+use litellm_llms_types::formats::ocr::{LiteLLMOcrResponse, OcrDocument, OcrResponseFormat};
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct DetectDocumentTextRequest {
@@ -30,7 +30,7 @@ impl BaseOcrConfig for TextractDetectTextConfig {
     type Environment = TextractEnvironment;
 
     fn secret_names(&self) -> Vec<&'static str> {
-        litellm_auth_aws::constants::SECRET_NAMES.to_vec()
+        litellm_auth::AwsParams::secret_names().to_vec()
     }
 
     fn get_health_check_document(&self) -> OcrDocument {
@@ -48,9 +48,14 @@ impl BaseOcrConfig for TextractDetectTextConfig {
     async fn validate_environment(
         &self,
         request: &PreparedOcrRequest,
-        _client: &OcrClient,
+        client: &OcrClient,
     ) -> Result<TextractEnvironment, Error> {
-        environment(request, TextractOperation::DetectDocumentText).await
+        environment(
+            &client.auth().aws,
+            request,
+            TextractOperation::DetectDocumentText,
+        )
+        .await
     }
 
     fn get_complete_url(
@@ -99,7 +104,7 @@ impl BaseOcrConfig for TextractDetectTextConfig {
         &self,
         error_message: String,
         status_code: u16,
-        headers: Vec<(String, String)>,
+        headers: reqwest::header::HeaderMap,
     ) -> Error {
         error_class(error_message, status_code, headers)
     }
@@ -232,7 +237,7 @@ mod tests {
         let error = TextractDetectTextConfig.get_error_class(
             r#"{"__type":"UnsupportedDocumentException","Message":"Request has unsupported document format"}"#.into(),
             400,
-            Vec::new(),
+            reqwest::header::HeaderMap::new(),
         );
 
         assert!(

@@ -4,17 +4,24 @@ Calls Tavily's /search endpoint to search the web.
 Tavily API Reference: https://docs.tavily.com/documentation/api-reference/endpoint/search
 """
 
+from collections.abc import Iterable, Mapping
 from typing import Final, TypedDict
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.base_llm.search.transformation import (
     BaseSearchConfig,
     SearchResponse,
     SearchResult,
 )
 from litellm.secret_managers.main import get_secret_str
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_JSON_VALUES: Final = TypeAdapter(Iterable[object], config=ConfigDict(hide_input_in_errors=True))
+_RESULT_EXTRAS: Final = ("raw_content", "score", "favicon")
 
 
 class _TavilySearchRequestRequired(TypedDict):
@@ -35,7 +42,7 @@ class TavilySearchRequest(_TavilySearchRequestRequired, total=False):
     topic: str  # Optional - category of search ('general', 'news', 'finance'), default 'general'
     search_depth: str  # Optional - depth of search ('basic', 'advanced'), default 'basic'
     include_answer: bool | str  # Optional - include LLM-generated answer
-    include_raw_content: bool | str  # Optional - include raw HTML content
+    include_raw_content: bool | str  # Optional - include the full page content (bool or 'markdown', 'text')
     include_images: bool  # Optional - perform image search
     include_image_descriptions: bool  # Optional - add descriptions for images
     include_favicon: bool  # Optional - include favicon URL
@@ -85,13 +92,7 @@ class TavilySearchConfig(BaseSearchConfig):
         """
         Get complete URL for Search endpoint.
         """
-        api_base = api_base or get_secret_str("TAVILY_API_BASE") or self.TAVILY_API_BASE
-
-        # Append "/search" to the api base if it's not already there
-        if not api_base.endswith("/search"):
-            api_base = f"{api_base}/search"
-
-        return api_base
+        return ensure_api_route(api_base or get_secret_str("TAVILY_API_BASE") or self.TAVILY_API_BASE, "search")
 
     def transform_search_request(
         self,
@@ -111,7 +112,7 @@ class TavilySearchConfig(BaseSearchConfig):
                 - topic: Category of search ('general', 'news', 'finance')
                 - search_depth: Depth of search ('basic', 'advanced')
                 - include_answer: Include LLM-generated answer (bool or 'basic', 'advanced')
-                - include_raw_content: Include raw HTML content (bool or 'markdown', 'text')
+                - include_raw_content: Include the full page content (bool or 'markdown', 'text')
                 - include_images: Perform image search (bool)
                 - include_image_descriptions: Add descriptions for images (bool)
                 - include_favicon: Include favicon URL (bool)
@@ -166,6 +167,9 @@ class TavilySearchConfig(BaseSearchConfig):
         - results[].url → SearchResult.url
         - results[].content → SearchResult.snippet
         - No date/last_updated fields in Tavily response (set to None)
+        - results[].raw_content / score / favicon → SearchResult.raw_content / score / favicon,
+          each set only when Tavily returned it
+        - every top-level key except results (answer, images, request_id, usage, ...) → SearchResponse.provider_metadata
 
         Args:
             raw_response: Raw httpx response from Tavily API
@@ -174,21 +178,28 @@ class TavilySearchConfig(BaseSearchConfig):
         Returns:
             SearchResponse with standardized format
         """
-        response_json: Final = raw_response.json()
+        response_json: Final = _JSON_OBJECT.validate_python(raw_response.json())
 
         # Transform results to SearchResult objects
         results: Final = []
-        for result in response_json.get("results", []):
-            search_result = SearchResult(
-                title=result.get("title", ""),
-                url=result.get("url", ""),
-                snippet=result.get("content", ""),  # Tavily uses "content" instead of "snippet"
-                date=None,  # Tavily doesn't provide date in response
-                last_updated=None,  # Tavily doesn't provide last_updated in response
+        for raw_result in _JSON_VALUES.validate_python(response_json.get("results", [])):
+            result = _JSON_OBJECT.validate_python(raw_result)
+            search_result = SearchResult.model_validate(
+                {
+                    "title": result.get("title", ""),
+                    "url": result.get("url", ""),
+                    "snippet": result.get("content", ""),  # Tavily uses "content" instead of "snippet"
+                    "date": None,  # Tavily doesn't provide date in response
+                    "last_updated": None,  # Tavily doesn't provide last_updated in response
+                    **{key: result[key] for key in _RESULT_EXTRAS if key in result},
+                }
             )
             results.append(search_result)
 
-        return SearchResponse(
-            results=results,
-            object="search",
+        return SearchResponse.model_validate(
+            {
+                "results": results,
+                "object": "search",
+                "provider_metadata": {key: value for key, value in response_json.items() if key != "results"},
+            }
         )

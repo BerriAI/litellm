@@ -5,6 +5,7 @@ import { useComplexityScorerDefaults } from "@/app/(dashboard)/hooks/autoRouter/
 import ClassificationMethodConfig from "./ClassificationMethodConfig";
 import HeuristicScoringConfig from "./HeuristicScoringConfig";
 import { ClassifierFallback, ClassifierType, ComplexityRouterConfigValue } from "./ComplexityRouterConfig";
+import i18n from "@/i18n/i18n";
 import { DIMENSION_LABELS } from "./heuristic_scoring_knobs";
 import { LOADED_SCORER_DEFAULTS_QUERY, SHIPPED_SCORER_DEFAULTS } from "../../../tests/mocks/complexityScorerDefaults";
 
@@ -169,7 +170,12 @@ describe("ClassificationMethodConfig scorer gating", () => {
   it.each([
     ["heuristic decides the tier", "heuristic" as ClassifierType, undefined, true],
     ["heuristic v2 decides without the weighted scorer", "heuristic_v2" as ClassifierType, undefined, false],
-    ["an LLM classifier falls back to the heuristic", "llm" as ClassifierType, "heuristic" as ClassifierFallback, true],
+    [
+      "an LLM classifier falls back to the heuristic",
+      "llm" as ClassifierType,
+      "heuristic" as ClassifierFallback,
+      false,
+    ],
     [
       "an LLM classifier falls back to the default model",
       "llm" as ClassifierType,
@@ -207,7 +213,7 @@ describe("ClassificationMethodConfig scorer gating", () => {
     await render(BASE);
 
     for (const key of Object.keys(SHIPPED_SCORER_DEFAULTS.dimension_weights)) {
-      expect(screen.getByLabelText(DIMENSION_LABELS[key])).toBeInTheDocument();
+      expect(screen.getByLabelText(i18n.t(DIMENSION_LABELS[key]))).toBeInTheDocument();
     }
   });
 });

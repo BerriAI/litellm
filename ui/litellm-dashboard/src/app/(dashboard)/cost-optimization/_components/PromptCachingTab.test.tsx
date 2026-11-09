@@ -1,6 +1,8 @@
 import { fireEvent, render, waitFor, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
+import { EMPTY_DAILY_ACTIVITY_METADATA } from "@/components/UsagePage/dailyActivityApi";
+
 const mockGetGeneralSettingsCall = vi.fn();
 
 vi.mock("@/components/networking", () => ({
@@ -46,12 +48,16 @@ describe("PromptCachingTab", () => {
       dateValue: {},
       onDateChange: vi.fn(),
       results: [],
+      metadata: EMPTY_DAILY_ACTIVITY_METADATA,
       loading: false,
-      isFetchingMore: false,
-      progress: { currentPage: 1, totalPages: 1 },
-      cancelled: false,
       failed: false,
-      cancel: vi.fn(),
+      scope: {
+        accessToken: "test-token",
+        startTime: null,
+        endTime: null,
+        userId: null,
+        apiKey: null,
+      },
     };
     render(<PromptCachingTab accessToken="test-token" activity={activity} />);
 

@@ -1,5 +1,7 @@
 import os
 import time
+import types
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final, Literal
 
 from httpx import Headers, Response
@@ -8,9 +10,10 @@ import litellm
 from litellm.constants import DEFAULT_MAX_TOKENS
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.prompt_templates.factory import (
-    custom_prompt,
     prompt_factory,
+    render_custom_prompt_template,
 )
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import Choices, Message, ModelResponse, Usage
@@ -232,11 +235,11 @@ class PredibaseConfig(BaseConfig):
         except Exception:
             # Keep usage calculation non-blocking if token counting fails.
             pass
-        output_text: Final = model_response["choices"][0]["message"].get("content", "")
+        output_text: Final = model_response.choices[0].message.content
         if encoding is not None and output_text is not None and len(output_text) > 0:
             completion_tokens = 0
             try:
-                completion_tokens = len(encoding.encode(model_response["choices"][0]["message"].get("content", "")))
+                completion_tokens = len(encoding.encode(output_text))
             except Exception:
                 # Keep usage calculation non-blocking if encoding fails.
                 pass
@@ -260,7 +263,7 @@ class PredibaseConfig(BaseConfig):
             if k.startswith("x-"):
                 response_headers[f"llm_provider-{k}"] = v
 
-        model_response._hidden_params["additional_headers"] = response_headers
+        model_response.hidden_params["additional_headers"] = response_headers
 
         return model_response
 
@@ -275,17 +278,14 @@ class PredibaseConfig(BaseConfig):
         custom_prompt_dict: Final = litellm_params.get("custom_prompt_dict", {})
         if model in custom_prompt_dict:
             model_prompt_details: Final = custom_prompt_dict[model]
-            prompt = custom_prompt(
-                role_dict=model_prompt_details["roles"],
-                initial_prompt_value=model_prompt_details["initial_prompt_value"],
-                final_prompt_value=model_prompt_details["final_prompt_value"],
-                messages=messages,
+            prompt = render_custom_prompt_template(
+                template=model_prompt_details, messages=messages, model=model, llm_provider="predibase"
             )
         else:
             prompt = prompt_factory(model=model, messages=messages)
 
         request_optional_params: Final = {**optional_params}
-        config: Final = self.get_config()
+        config: Final[Mapping[str, object]] = types.MappingProxyType(self.get_config())
         for k, v in config.items():
             if k not in request_optional_params:
                 request_optional_params[k] = v
@@ -338,12 +338,12 @@ class PredibaseConfig(BaseConfig):
         elif "PREDIBASE_API_BASE" in os.environ:
             base_url = os.getenv("PREDIBASE_API_BASE", "")
 
-        completion_url = f"{base_url}/{tenant_id}/deployments/v2/llms/{model}"
+        completion_url = join_api_base(base_url, f"{tenant_id}/deployments/v2/llms/{model}")
         should_stream: Final = stream if stream is not None else optional_params.get("stream", False)
         if should_stream is True:
-            completion_url += "/generate_stream"
+            completion_url = join_api_base(completion_url, "generate_stream")
         else:
-            completion_url += "/generate"
+            completion_url = join_api_base(completion_url, "generate")
         return completion_url
 
     def get_error_class(self, error_message: str, status_code: int, headers: dict | Headers) -> BaseLLMException:

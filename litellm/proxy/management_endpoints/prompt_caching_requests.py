@@ -4,7 +4,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Final
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, Json, TypeAdapter
+from pydantic import Json, TypeAdapter
 
 from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth, user_api_key_has_admin_view
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -14,10 +14,9 @@ from litellm.proxy.spend_tracking.savings import (
     marks_gateway_injection,
     prompt_caching_savings_for_request,
 )
-from litellm.proxy.spend_tracking.spend_tracking_utils import (
-    _query_raw_rows,  # pyright: ignore[reportPrivateUsage]  # existing typed spend-query adapter; rows validated below
-)
+from litellm.proxy.utils import query_raw_within_statement_timeout
 from litellm.types.integrations.anthropic_cache_control_hook import GATEWAY_INJECTED_CACHE_METADATA_KEY
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.management_endpoints.prompt_caching_requests import (
     PromptCachingRequest,
     PromptCachingRequestCursor,
@@ -86,7 +85,7 @@ def prompt_caching_requests_sql(filter: PromptCachingRequestFilter) -> str:
     """
 
 
-class _PromptCachingRow(BaseModel):
+class _PromptCachingRow(LiteLLMBaseModel):
     request_id: str
     start_time: datetime
     end_time: datetime
@@ -127,7 +126,7 @@ def _request_result(row: _PromptCachingRow, llm_router: "Callable[[], Router | N
 
 @router.get(
     "/cost_optimization/prompt_caching/requests",
-    tags=["Cost Optimization"],  # mutable-ok: FastAPI's route API requires a list
+    tags=["Cost Optimization"],
     response_model=PromptCachingRequestsResponse,
 )
 async def get_prompt_caching_requests(
@@ -157,7 +156,7 @@ async def get_prompt_caching_requests(
         else cursor_start_time
     )
     rows: Final = _REQUEST_ROWS.validate_python(
-        await _query_raw_rows(
+        await query_raw_within_statement_timeout(
             prisma_client,
             prompt_caching_requests_sql(filter),
             start.isoformat(),
@@ -165,8 +164,8 @@ async def get_prompt_caching_requests(
             page_size + 1,
             cursor_time.isoformat() if cursor_time is not None else None,
             cursor_request_id,
+            what="Prompt caching requests",
         )
-        or ()
     )
 
     def current_router() -> "Router | None":

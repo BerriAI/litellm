@@ -1,10 +1,16 @@
-use crate::SecretValue;
+use litellm_secret_value::SecretValue;
 
 #[derive(Clone, PartialEq, Eq, veil::Redact)]
 pub enum Secret {
     String(SecretValue),
     Bool(#[redact] bool),
     Json(#[redact] serde_json::Value),
+}
+
+#[derive(Debug)]
+pub enum PythonSecretRead {
+    Value(Option<Secret>),
+    PrimaryJson(SecretValue),
 }
 
 impl From<SecretValue> for Secret {

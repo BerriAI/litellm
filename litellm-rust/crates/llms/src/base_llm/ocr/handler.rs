@@ -2,41 +2,42 @@ use std::sync::Arc;
 
 use bytes::{Bytes, BytesMut};
 use futures_util::future::BoxFuture;
-use litellm_auth_gcp::VertexAuth;
-use litellm_host::event::WireRequest;
+use litellm_auth::AuthServices;
+use litellm_host::interceptors::WireRequest;
 use litellm_http::{
-    ClientVariant, HttpClientConfig, HttpClientPool,
+    Client, ClientVariant, HttpClientConfig, HttpClientPool,
     media::{MediaFetcher, UrlPolicy},
-    outbound::{OutboundRequest, RequestSigner},
-    transport,
+    outbound::{RequestSigner, json, signed},
+    request::header_pairs,
 };
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
 
-use crate::base_llm::inference::secrets::SecretSource;
 use crate::base_llm::ocr::{
     error::Error,
     settings::OcrSettings,
     transformation::{
-        BaseOcrConfig, DecodedOcrResponse, LiteLLMOcrResponse, OcrDocument, OcrResponseContext,
-        PreparedOcrRequest, decode_request_value, decode_response,
+        BaseOcrConfig, DecodedOcrResponse, OcrResponseContext, PreparedOcrRequest,
+        decode_request_value, decode_response,
     },
 };
+use litellm_llms_types::formats::ocr::{LiteLLMOcrResponse, OcrDocument};
+use litellm_secrets::source::SecretSource;
 
 /// The route's view of one call, handed to provider code that has to reach the
 /// caller's hooks mid-flight (guardrails on the outgoing body, raw response events).
 pub trait CallHooks<E>: Send + Sync {
-    fn before_send(&self, wire: WireRequest) -> BoxFuture<'_, Result<WireRequest, E>>;
+    fn before_provider_request(&self, wire: WireRequest) -> BoxFuture<'_, Result<WireRequest, E>>;
 
     fn response_received<'a>(&'a self, body: &'a [u8]) -> BoxFuture<'a, Result<(), E>>;
 }
 
 #[derive(Clone)]
 pub struct OcrClient {
-    provider_http: reqwest::Client,
-    polling_http: reqwest::Client,
+    provider_http: Client,
+    polling_http: Client,
     document_fetcher: MediaFetcher,
-    vertex_auth: VertexAuth,
+    auth: Arc<AuthServices>,
     settings: OcrSettings,
     secrets: Arc<dyn SecretSource>,
 }
@@ -46,7 +47,7 @@ impl OcrClient {
         pool: &HttpClientPool,
         config: &HttpClientConfig,
         url_policy: UrlPolicy,
-        vertex_auth: VertexAuth,
+        auth: Arc<AuthServices>,
         settings: OcrSettings,
         secrets: Arc<dyn SecretSource>,
     ) -> Result<Self, litellm_http::Error> {
@@ -54,17 +55,17 @@ impl OcrClient {
             provider_http: pool.client(config, ClientVariant::Provider)?,
             polling_http: pool.client(config, ClientVariant::NoRedirect)?,
             document_fetcher: MediaFetcher::new(pool, config, url_policy)?,
-            vertex_auth,
+            auth,
             settings,
             secrets,
         })
     }
 
-    pub fn provider_http(&self) -> &reqwest::Client {
+    pub fn provider_http(&self) -> &Client {
         &self.provider_http
     }
 
-    pub fn polling_http(&self) -> &reqwest::Client {
+    pub fn polling_http(&self) -> &Client {
         &self.polling_http
     }
 
@@ -72,8 +73,8 @@ impl OcrClient {
         &self.document_fetcher
     }
 
-    pub fn vertex_auth(&self) -> &VertexAuth {
-        &self.vertex_auth
+    pub fn auth(&self) -> &AuthServices {
+        &self.auth
     }
 
     pub fn settings(&self) -> &OcrSettings {
@@ -85,17 +86,24 @@ impl OcrClient {
     }
 
     #[cfg(any(test, feature = "test-support"))]
-    pub fn for_test(provider_http: reqwest::Client, document_http: reqwest::Client) -> Self {
+    pub fn for_test() -> Self {
+        Self {
+            secrets: Arc::new(
+                litellm_secrets::source::EnvironmentSecrets::python_compatible(Client::for_test()),
+            ),
+            provider_http: Client::for_test(),
+            polling_http: Client::for_test(),
+            document_fetcher: MediaFetcher::for_test(Client::for_test()),
+            auth: Arc::new(AuthServices::default()),
+            settings: OcrSettings::default(),
+        }
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn with_provider_http(self, provider_http: Client) -> Self {
         Self {
             provider_http,
-            polling_http: reqwest::Client::builder()
-                .redirect(reqwest::redirect::Policy::none())
-                .build()
-                .expect("test polling client builds"),
-            document_fetcher: MediaFetcher::for_test(document_http),
-            vertex_auth: VertexAuth::default(),
-            settings: OcrSettings::default(),
-            secrets: Arc::new(crate::base_llm::inference::secrets::EnvironmentSecrets),
+            ..self
         }
     }
 
@@ -120,29 +128,17 @@ pub async fn ocr<C: BaseOcrConfig>(
 ) -> Result<LiteLLMOcrResponse, Error> {
     let http = config.prepare_request(request, client, hooks).await?;
     let url = http.url().to_string();
-    let headers = http.headers().to_vec();
-    let response = http
-        .send(client.provider_http())
+    let headers = header_pairs(http.headers());
+    let response = client
+        .provider_http()
+        .execute(http)
         .await
-        .map_err(transport_error)?;
+        .map_err(litellm_http::Error::from)?;
     if !response.status().is_success() {
-        let headers = response
-            .headers()
-            .iter()
-            .filter_map(|(name, value)| {
-                value
-                    .to_str()
-                    .ok()
-                    .map(|value| (name.to_string(), value.to_string()))
-            })
-            .collect();
-        return match read_response_bytes(response, request.connection.max_response_bytes).await {
-            Err(Error::Transport(transport::Error::Http { status, body })) => {
-                Err(config.get_error_class(body, status, headers))
-            }
-            Err(error) => Err(error),
-            Ok(_) => unreachable!("non-success response produces an HTTP error"),
-        };
+        let status = response.status().as_u16();
+        let headers = response.headers().clone();
+        let body = read_error_body(response, request.connection.max_response_bytes).await?;
+        return Err(config.get_error_class(body, status, headers));
     }
     let context = OcrResponseContext {
         client,
@@ -170,43 +166,41 @@ pub async fn read_response_bytes(
     mut response: reqwest::Response,
     limit: usize,
 ) -> Result<Bytes, Error> {
-    let status = response.status();
-    if status.is_success()
-        && response
-            .content_length()
-            .is_some_and(|length| length > limit as u64)
+    if !response.status().is_success() {
+        let status = response.status().as_u16();
+        let headers = response.headers().clone();
+        let body = read_error_body(response, limit).await?;
+        return Err(Error::Provider {
+            status,
+            body,
+            headers: Box::new(headers),
+        });
+    }
+    if response
+        .content_length()
+        .is_some_and(|length| length > limit as u64)
     {
         return Err(Error::TooLarge { limit });
     }
     let mut bytes = BytesMut::new();
-    while let Some(chunk) = response.chunk().await.map_err(transport_error)? {
-        let remaining = limit.saturating_sub(bytes.len());
-        if status.is_success() && chunk.len() > remaining {
+    while let Some(chunk) = response.chunk().await.map_err(litellm_http::Error::from)? {
+        if chunk.len() > limit.saturating_sub(bytes.len()) {
             return Err(Error::TooLarge { limit });
         }
-        bytes.extend_from_slice(&chunk[..chunk.len().min(remaining)]);
-        if !status.is_success() && bytes.len() == limit {
-            break;
-        }
-    }
-    if !status.is_success() {
-        return Err(transport::Error::Http {
-            status: status.as_u16(),
-            body: String::from_utf8_lossy(&bytes).into_owned(),
-        }
-        .into());
+        bytes.extend_from_slice(&chunk);
     }
     Ok(bytes.freeze())
 }
 
-pub fn transport_error(error: reqwest::Error) -> Error {
-    if error.is_timeout() {
-        return Error::Transport(transport::Error::Http {
-            status: 408,
-            body: "OCR request timed out".into(),
-        });
+async fn read_error_body(mut response: reqwest::Response, limit: usize) -> Result<String, Error> {
+    let mut bytes = BytesMut::new();
+    while bytes.len() < limit
+        && let Some(chunk) = response.chunk().await.map_err(litellm_http::Error::from)?
+    {
+        let remaining = limit - bytes.len();
+        bytes.extend_from_slice(&chunk[..chunk.len().min(remaining)]);
     }
-    transport::Error::from(error).into()
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
 pub async fn transform_request_body<C: BaseOcrConfig, B: Serialize>(
@@ -217,7 +211,7 @@ pub async fn transform_request_body<C: BaseOcrConfig, B: Serialize>(
     body: B,
     signer: Option<&dyn RequestSigner>,
     hooks: &dyn CallHooks<Error>,
-) -> Result<OutboundRequest, Error> {
+) -> Result<reqwest::Request, Error> {
     let composed = litellm_core_utils::call_arguments::compose_body(
         &request.optional_params,
         &body,
@@ -225,25 +219,25 @@ pub async fn transform_request_body<C: BaseOcrConfig, B: Serialize>(
     )?;
     config.validate_request_body(&composed)?;
     let changed = hooks
-        .before_send(wire_request(url, headers, composed))
+        .before_provider_request(wire_request(url, headers, composed))
         .await?;
     if !changed.body.is_object() {
         return Err(Error::RequestField {
             path: "guardrail.body".into(),
+            cause: None,
         });
     }
     config.validate_request_body(&changed.body)?;
-    let timeout = Some(request.connection.timeout);
+    let built = json(
+        url,
+        &changed.headers,
+        &changed.body,
+        Some(request.connection.timeout),
+    )?;
     Ok(match signer {
-        Some(signer) => OutboundRequest::signed_json(
-            url.into(),
-            changed.headers,
-            &changed.body,
-            timeout,
-            signer,
-        ),
-        None => OutboundRequest::json(url.into(), changed.headers, &changed.body, timeout),
-    }?)
+        Some(signer) => signed(built, signer)?,
+        None => built,
+    })
 }
 
 fn wire_request(url: &str, headers: &[(String, String)], body: Value) -> WireRequest {
@@ -259,10 +253,10 @@ pub fn build_http_request(
     url: String,
     headers: Vec<(String, String)>,
     body: &impl Serialize,
-) -> Result<OutboundRequest, Error> {
-    Ok(OutboundRequest::json(
-        url,
-        headers,
+) -> Result<reqwest::Request, Error> {
+    Ok(json(
+        &url,
+        &headers,
         body,
         Some(request.connection.timeout),
     )?)
@@ -274,10 +268,11 @@ pub async fn guardrail_document(
     headers: &[(String, String)],
     hooks: &dyn CallHooks<Error>,
 ) -> Result<(OcrDocument, Vec<(String, String)>), Error> {
-    let body = serde_json::to_value(&request.document).map_err(|_| Error::RequestField {
-        path: "document".into(),
-    })?;
-    let changed = hooks.before_send(wire_request(url, headers, body)).await?;
+    let body = serde_json::to_value(&request.document)
+        .map_err(|error| Error::request_field("document", error))?;
+    let changed = hooks
+        .before_provider_request(wire_request(url, headers, body))
+        .await?;
     let document = decode_request_value(changed.body, "guardrail.document")?;
     Ok((document, changed.headers))
 }
@@ -288,6 +283,7 @@ pub fn body_document(body: &Value) -> Result<OcrDocument, Error> {
         .and_then(Value::as_object)
         .ok_or_else(|| Error::RequestField {
             path: "body.document".into(),
+            cause: None,
         })?;
     let source = document
         .iter()
@@ -299,10 +295,15 @@ pub fn body_document(body: &Value) -> Result<OcrDocument, Error> {
 
 #[cfg(test)]
 mod tests {
+    use crate::base_llm::ocr::{error::Error, handler::read_response_bytes};
+    use rstest::rstest;
     use std::time::Duration;
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpListener,
+    };
 
-    use super::*;
-
+    #[rstest::rstest]
     #[tokio::test]
     async fn request_timeout_has_an_http_408_status() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -311,16 +312,87 @@ mod tests {
             let _connection = listener.accept().await.unwrap();
             tokio::time::sleep(Duration::from_secs(1)).await;
         });
-        let error = reqwest::Client::new()
+        let error = litellm_http::Client::for_test()
             .get(format!("http://{address}"))
             .timeout(Duration::from_millis(10))
             .send()
             .await
             .unwrap_err();
-        assert!(matches!(
-            transport_error(error),
-            Error::Transport(transport::Error::Http { status: 408, .. })
-        ));
+        assert_eq!(
+            Error::from(litellm_http::Error::from(error)).http_status_code(),
+            Some(408)
+        );
         server.abort();
+    }
+
+    /// Answers one request with raw `response` bytes and then holds the connection open, so a
+    /// read that waits for the rest of an oversized body hangs instead of passing.
+    async fn read_bounded(response: String, limit: usize) -> Result<bytes::Bytes, Error> {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = [0; 4096];
+            assert!(socket.read(&mut request).await.unwrap() > 0);
+            socket.write_all(response.as_bytes()).await.unwrap();
+            std::future::pending::<()>().await;
+        });
+        let response = litellm_http::Client::for_test()
+            .get(format!("http://{address}"))
+            .send()
+            .await
+            .unwrap();
+        let result =
+            tokio::time::timeout(Duration::from_secs(2), read_response_bytes(response, limit))
+                .await;
+        server.abort();
+        result.expect("bounded reads must finish without waiting for the rest of an oversized body")
+    }
+
+    #[rstest]
+    #[case::declared("HTTP/1.1 200 OK\r\nContent-Length: 8\r\n\r\nabcdefgh")]
+    #[case::chunked(
+        "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n4\r\nabcd\r\n4\r\nefgh\r\n0\r\n\r\n"
+    )]
+    #[tokio::test]
+    async fn a_body_of_exactly_the_limit_is_read(#[case] response: &str) {
+        assert_eq!(read_bounded(response.into(), 8).await.unwrap(), "abcdefgh");
+    }
+
+    #[rstest]
+    #[case::declared("HTTP/1.1 200 OK\r\nContent-Length: 9\r\n\r\n")]
+    #[case::chunked(
+        "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n4\r\nabcd\r\n5\r\nefghi\r\n"
+    )]
+    #[tokio::test]
+    async fn a_body_over_the_limit_is_rejected(#[case] response: &str) {
+        assert!(matches!(
+            read_bounded(response.into(), 8).await,
+            Err(Error::TooLarge { limit: 8 })
+        ));
+    }
+
+    #[rstest]
+    #[case::declared("Content-Length: 1000000")]
+    #[case::chunked("Transfer-Encoding: chunked")]
+    #[tokio::test]
+    async fn an_oversized_error_keeps_its_status_and_a_bounded_body_without_draining(
+        #[case] headers: &str,
+    ) {
+        let prefix = "x".repeat(4096);
+        let body = match headers.starts_with("Transfer") {
+            true => format!("{:x}\r\n{prefix}\r\n", prefix.len()),
+            false => prefix.clone(),
+        };
+
+        let error = read_bounded(
+            format!("HTTP/1.1 429 Too Many Requests\r\n{headers}\r\n\r\n{body}"),
+            prefix.len(),
+        )
+        .await
+        .unwrap_err();
+
+        let (status, body, _) = error.upstream_response().expect("the provider answered");
+        assert_eq!((status, body), (429, prefix.as_str()));
     }
 }

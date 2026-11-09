@@ -5,32 +5,34 @@ from types import MappingProxyType
 from typing import Final, Literal
 
 from fastapi import HTTPException, Request
+from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy._experimental.mcp_server.ui_session_utils import (
-    is_ui_session_credential,
-    resolve_ui_session_team_ids,
-)
 from litellm.proxy._types import (
     LiteLLM_ObjectPermissionTable,
     LitellmUserRoles,
     UserAPIKeyAuth,
 )
+from litellm.proxy.mcp_server.ui_session_utils import (
+    is_ui_session_credential,
+    resolve_ui_session_team_ids,
+)
 from litellm.types.utils import LlmProviders
 from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
 from litellm.utils import ProviderConfigManager
 
+_JSON_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
 
-def _normalize_litellm_params(
+
+def normalize_litellm_params(
     vector_store: LiteLLM_ManagedVectorStore,
 ) -> LiteLLM_ManagedVectorStore:
     litellm_params: Final = vector_store.get("litellm_params")
     if isinstance(litellm_params, str):
         normalized: Final = LiteLLM_ManagedVectorStore(**dict(vector_store))
         try:
-            parsed: Final = json.loads(litellm_params)
-            normalized["litellm_params"] = parsed if isinstance(parsed, dict) else {}
+            normalized["litellm_params"] = _JSON_OBJECT.validate_python(json.loads(litellm_params))
         except (TypeError, ValueError):
             normalized["litellm_params"] = {}
         return normalized
@@ -42,6 +44,10 @@ def _is_proxy_admin(user_api_key_dict: UserAPIKeyAuth) -> bool:
         user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
         or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
     )
+
+
+def _key_metadata(user_api_key_dict: UserAPIKeyAuth) -> Mapping[str, object]:
+    return user_api_key_dict.metadata
 
 
 def assert_proxy_admin_for_vector_store_index_management(
@@ -276,7 +282,7 @@ async def get_litellm_managed_vector_store(
                 vector_store_id=vector_store_id
             )
             if vector_store is not None:
-                return _normalize_litellm_params(vector_store)
+                return normalize_litellm_params(vector_store)
         except Exception as e:
             verbose_proxy_logger.warning(
                 "Failed to resolve vector store id=%s from registry: %s",
@@ -308,7 +314,7 @@ async def get_litellm_managed_vector_store(
         )
         if not rows:
             return None
-        return _normalize_litellm_params(LiteLLM_ManagedVectorStore(**rows[0].model_dump()))
+        return normalize_litellm_params(LiteLLM_ManagedVectorStore(**rows[0].model_dump()))
     except Exception as e:
         verbose_proxy_logger.warning(
             "Failed to resolve vector store id=%s from shared cache: %s",
@@ -411,6 +417,34 @@ def check_vector_store_permission(
     return False
 
 
+def vector_store_endpoint_forbidden(index_name: str) -> HTTPException:
+    return HTTPException(
+        status_code=403,
+        detail=(
+            f"User does not have permission to call vector store endpoint {index_name}. "
+            "Ask your administrator to add the necessary permissions to your API key/Team."
+        ),
+    )
+
+
+def has_vector_store_index_access(
+    user_api_key_dict: UserAPIKeyAuth, index_name: str, permission: Literal["read", "write"] | None
+) -> bool:
+    return _is_proxy_admin(user_api_key_dict) or (
+        permission is not None
+        and check_vector_store_permission(
+            index_name, permission, _key_metadata(user_api_key_dict), user_api_key_dict.team_metadata
+        )
+    )
+
+
+def assert_vector_store_index_access(
+    user_api_key_dict: UserAPIKeyAuth, index_name: str, permission: Literal["read", "write"] | None
+) -> None:
+    if not has_vector_store_index_access(user_api_key_dict, index_name, permission):
+        raise vector_store_endpoint_forbidden(index_name)
+
+
 def is_allowed_to_call_vector_store_endpoint(
     provider: LlmProviders,
     index_name: str,
@@ -430,7 +464,7 @@ def is_allowed_to_call_vector_store_endpoint(
     ):
         return True
     # check what allowed permissions are for the key
-    key_metadata: Final = user_api_key_dict.metadata
+    key_metadata: Final = _key_metadata(user_api_key_dict)
     team_metadata: Final = user_api_key_dict.team_metadata
 
     provider_config: Final = ProviderConfigManager.get_provider_vector_stores_config(provider=provider)
@@ -476,14 +510,7 @@ def is_allowed_to_call_vector_store_endpoint(
                 break
 
     if permission_type is None:
-        raise HTTPException(
-            status_code=403,
-            detail=(
-                f"User does not have permission to call vector store endpoint "
-                f"{index_name}. Ask your administrator to add the necessary "
-                "permissions to your API key/Team."
-            ),
-        )
+        raise vector_store_endpoint_forbidden(index_name)
 
     # Check if key has specific permission for allowed_vector_store_indexes
     has_permission: Final = check_vector_store_permission(
@@ -494,10 +521,7 @@ def is_allowed_to_call_vector_store_endpoint(
     )
 
     if not has_permission:
-        raise HTTPException(
-            status_code=403,
-            detail=f"User does not have permission to call vector store endpoint {index_name}. Ask your administrator to add the necessary permissions to your API key/Team.",
-        )
+        raise vector_store_endpoint_forbidden(index_name)
 
     return has_permission
 
@@ -514,7 +538,7 @@ def is_allowed_to_call_vector_store_files_endpoint(
     ):
         return True
 
-    key_metadata: Final = user_api_key_dict.metadata
+    key_metadata: Final = _key_metadata(user_api_key_dict)
     team_metadata: Final = user_api_key_dict.team_metadata
 
     provider_config: Final = ProviderConfigManager.get_provider_vector_store_files_config(provider=provider)

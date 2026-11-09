@@ -1,6 +1,6 @@
 # LiteLLM on GCP (Cloud Run)
 
-[![Open in Cloud Shell](https://gstatic.com/cloudssh/images/open-btn.svg)](https://ssh.cloud.google.com/cloudshell/editor?cloudshell_git_repo=https%3A%2F%2Fgithub.com%2FBerriAI%2Flitellm&cloudshell_workspace=terraform%2Flitellm%2Fgcp%2Fexamples%2Fdefault&cloudshell_tutorial=TUTORIAL.md&cloudshell_image=gcr.io/ds-artifacts-cloudshell/deploystack_custom_image&shellonly=true)
+[![Open in Cloud Shell](https://gstatic.com/cloudssh/images/open-btn.svg)](https://ssh.cloud.google.com/cloudshell/editor?cloudshell_git_repo=https%3A%2F%2Fgithub.com%2FBerriAI%2Fterraform-google-litellm&cloudshell_git_branch=v1.105.0&cloudshell_workspace=examples%2Fdefault&cloudshell_tutorial=TUTORIAL.md&cloudshell_image=gcr.io/ds-artifacts-cloudshell/deploystack_custom_image&shellonly=true)
 
 The button above opens the [DeployStack](https://github.com/GoogleCloudPlatform/deploystack) installer in Cloud Shell, walks you through `TUTORIAL.md`, and runs `terraform apply` once you've answered the prompts. The rest of this README is the manual / advanced path.
 
@@ -54,11 +54,15 @@ Then point the stack at it via `image_registry`:
 
 ```hcl
 image_registry = "us-central1-docker.pkg.dev/my-gcp-project/litellm/berriai"
-image_tag      = "v1.86.0-dev"
 ```
 
-The four `litellm-<component>:${image_tag}` URIs are composed from those
-two vars. Set `gateway_image` / `backend_image` / `ui_image` /
+The four `litellm-<component>:${image_tag}` URIs are composed from
+`image_registry` and `image_tag`. A published module version (Terraform
+Registry `BerriAI/litellm/google`) ships with `image_tag` stamped to its
+own release tag, so bumping the module version bumps all four images with
+it. A git ref of this monorepo has no published images of its own, so
+there `image_tag` is required. Set `image_tag` to pin a different LiteLLM
+release. Set `gateway_image` / `backend_image` / `ui_image` /
 `migrations_image` only if you need a per-component override (custom
 build, different tag).
 
@@ -206,33 +210,23 @@ Behavior matches the AWS stack 1:1; the only naming differences are
 
 ### Enterprise billing metrics
 
-License-gated request metering is opt-in and gated entirely on
-`billing_metrics_endpoint`. Empty (default) and no billing env is added to
-the container, so existing deployments are unchanged. Set it and both
-gateway and backend export billable-request counts over OTLP/HTTP,
-authenticating to the collector with the mTLS client certificate issued for
-your deployment.
-
-The proxy accepts the certificate, key, and CA bundle as either a file path
-or literal PEM content. This stack takes the PEM, writes each one to its own
-Secret Manager entry, grants the runtime service account
-`roles/secretmanager.secretAccessor` on them, and injects them as Cloud Run
-secret env vars `LITELLM_BILLING_METRICS_CLIENT_CERT` / `_CLIENT_KEY` (and
-`_CA_CERT` when set), so no volume mount is needed.
+License-gated request metering uses Cognito bearer authentication. Set the
+endpoint, client ID, and token URL as plain values, and provide the client
+secret through the sensitive Terraform variable. The client secret is stored
+in Secret Manager and injected into both gateway and backend services
 
 ```hcl
 billing_metrics_endpoint = "https://telemetry.litellm.ai/v1/metrics"
+billing_metrics_client_id = "cognito-client-id"
+billing_metrics_token_url = "https://litellm-prod.auth.us-west-1.amazoncognito.com/oauth2/token"
 ```
 
 ```bash
-export TF_VAR_billing_metrics_client_cert_pem="$(cat client.crt)"
-export TF_VAR_billing_metrics_client_key_pem="$(cat client.key)"
+export TF_VAR_billing_metrics_client_secret="cognito-client-secret"
 ```
 
-`billing_metrics_ca_cert_pem` is only for private or test collectors whose
-CA is not in the system trust store; leave it empty against
-`telemetry.litellm.ai`. Metering requires an enterprise license, so pair
-this with `litellm_license`. To tune the export cadence, set
+The client ID and client secret are required when the endpoint is set
+Metering also requires an enterprise license. To tune the export cadence, set
 `LITELLM_BILLING_METRICS_EXPORT_INTERVAL_MS` through `gateway_extra_env` /
 `backend_extra_env`
 
@@ -484,6 +478,8 @@ provider "google-beta" {
 
 module "litellm" {
   source = "github.com/BerriAI/litellm//terraform/litellm/gcp?ref=<tag>"
+
+  image_tag = "<litellm release tag>" # a git ref ships no image default, a registry version does
 
   project = "my-gcp-project"
   region  = "us-central1"

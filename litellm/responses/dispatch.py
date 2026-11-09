@@ -3,15 +3,26 @@ from collections.abc import Awaitable, Callable, Coroutine, Mapping
 from types import MappingProxyType
 from typing import Final, TypeAlias, cast  # noqa: TID251  # native binding selects a sync result or an async awaitable
 
+from litellm.exceptions import BadRequestError
+from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.responses import main
 from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
-from litellm.rust_bridge.catalog import Delivery, Route, RouteContext
-from litellm.rust_bridge.dispatch import PublicDispatch, call_hook
-from litellm.rust_bridge.public_call import bind, optional_bool, optional_mapping, optional_str, signature
+from litellm.rust_bridge import detectors
+from litellm.rust_bridge.catalog import Feature, Route, RouteContext
+from litellm.rust_bridge.dispatch import PublicDispatch
+from litellm.rust_bridge.public_call import (
+    AsyncFlag,
+    NativeCall,
+    bind,
+    native_call,
+    native_call_hook,
+    optional_str,
+    signature,
+)
+from litellm.rust_bridge.responses import detectors as route_detectors
 from litellm.rust_bridge.responses.entrypoints import (
     NATIVE_ARESPONSES,
     NATIVE_RESPONSES,
-    LiteLLMResponsesRequest,
 )
 from litellm.types.llms.openai import ResponsesAPIResponse
 
@@ -38,52 +49,81 @@ def _python_aresponses() -> PythonAresponses:
 
 _PYTHON_RESPONSES: Final = _python_responses()
 _RESPONSES: Final = signature(_PYTHON_RESPONSES)
+_FLAG: Final = AsyncFlag("aresponses", sync=_RESPONSES)
 _PYTHON_ARESPONSES: Final = _python_aresponses()
 _ARESPONSES: Final = signature(_PYTHON_ARESPONSES)
 
 
 def _public_request(
     legacy: inspect.Signature, args: tuple[object, ...], kwargs: Mapping[str, object]
-) -> LiteLLMResponsesRequest | None:
+) -> NativeCall | None:
     fields: Final = bind(legacy, args, kwargs)
     if fields is None:
         return None
     model: Final = fields.get("model")
-    extra: Final = optional_mapping(fields.get("kwargs")) or MappingProxyType({})
     if not isinstance(model, str):
         return None
-    return LiteLLMResponsesRequest(
-        model=model,
-        input=fields.get("input"),
-        stream=optional_bool(fields.get("stream")),
-        api_key=optional_str(extra.get("api_key")),
-        api_base=optional_str(extra.get("api_base")) or optional_str(extra.get("base_url")),
-        custom_llm_provider=optional_str(fields.get("custom_llm_provider")),
-        extra_headers=optional_mapping(fields.get("extra_headers")),
-        kwargs=extra,
-    )
+    return native_call(legacy, args, kwargs)
 
 
-def _context(request: LiteLLMResponsesRequest) -> RouteContext:
+def _provider(request: NativeCall) -> str | None:
+    provider: Final = optional_str(request.resolved.get("custom_llm_provider"))
+    try:
+        return get_llm_provider(str(request.resolved["model"]), provider)[1]
+    except BadRequestError:
+        return provider
+
+
+_FEATURES: Final[detectors.Detectors] = MappingProxyType(
+    {
+        **detectors.COMMON,
+        Feature.DROP_PARAMS: detectors.drop_params,
+        Feature.MODIFY_PARAMS: detectors.modify_params,
+        Feature.STREAMING: detectors.streaming,
+        Feature.PROMPT_MANAGEMENT: detectors.prompt_management,
+        Feature.TEXT_FORMAT: route_detectors.text_format,
+        Feature.CHAT_COMPLETIONS_BRIDGE: route_detectors.chat_completions_bridge,
+        Feature.RETRIES_FALLBACKS: detectors.retries_fallbacks,
+        Feature.DEPLOYMENT_RESPONSE_ID: route_detectors.deployment_response_id,
+        Feature.ENCODED_ITEM_IDS: route_detectors.encoded_item_ids,
+        Feature.INPUT_REWRITE: route_detectors.input_rewrite,
+        Feature.EXTRA_BODY: detectors.extra_body,
+        Feature.PROVIDER_AFFINITY: route_detectors.provider_affinity,
+        Feature.RESPONSE_CACHE: detectors.response_cache,
+        Feature.MANAGED_RESOURCE_IDS: route_detectors.managed_resource_ids,
+        Feature.CACHE_CONTROL_MARKS: route_detectors.cache_control_marks,
+        Feature.ANTHROPIC_TOOL_SEARCH: route_detectors.anthropic_tool_search,
+        Feature.TOOL_SCHEMA_REPAIR: route_detectors.tool_schema_repair,
+        Feature.MODEL_PARAM_GATING: route_detectors.model_param_gating,
+        Feature.WORKLOAD_IDENTITY: route_detectors.openai_workload_identity,
+        Feature.CLIENT_HEADERS: route_detectors.client_headers,
+    }
+)
+
+_SYNC_FEATURES: Final[detectors.Detectors] = MappingProxyType(
+    {**_FEATURES, Feature.DEPLOYMENT_HOOK: route_detectors.deployment_hook}
+)
+
+
+def _context(request: NativeCall, features: detectors.Detectors) -> RouteContext:
     return RouteContext(
         Route.RESPONSES,
-        provider=request.custom_llm_provider,
-        model=request.model,
-        delivery=Delivery.STREAMING if request.stream else Delivery.COMPLETED,
+        provider=_provider(request),
+        model=str(request.resolved["model"]),
+        features=detectors.detected(features, request),
     )
 
 
 _DISPATCH: Final = PublicDispatch(
     route=Route.RESPONSES,
     request=lambda args, kwargs: _public_request(_RESPONSES, args, kwargs),
-    context=_context,
-    bypass=lambda request: request.kwargs.get("aresponses") is True,
+    context=lambda request: _context(request, _SYNC_FEATURES),
 )
 
 _ADISPATCH: Final = PublicDispatch(
     route=Route.RESPONSES,
     request=lambda args, kwargs: _public_request(_ARESPONSES, args, kwargs),
-    context=_context,
+    context=lambda request: _context(request, _FEATURES),
 )
 
 
@@ -92,12 +132,14 @@ def responses(
     **kwargs: object,  # kwargs-ok: preserve the public Responses call shape
 ) -> ResponsesResult | Coroutine[object, object, ResponsesResult]:
     python: Final = _PYTHON_RESPONSES
+    if _FLAG.requested(kwargs):
+        return aresponses(**_FLAG.keywords(args, kwargs))
     return _DISPATCH.run(
         args,
-        kwargs,
+        _FLAG.dropped(kwargs),
         python=python,
         binding=NATIVE_RESPONSES,
-        native=call_hook,
+        native=native_call_hook,
     )
 
 
@@ -105,10 +147,10 @@ async def aresponses(*args: object, **kwargs: object) -> ResponsesResult:  # kwa
     python: Final = _PYTHON_ARESPONSES
     return await _ADISPATCH.arun(
         args,
-        kwargs,
+        _FLAG.dropped(kwargs),
         python=python,
         binding=NATIVE_ARESPONSES,
-        native=call_hook,
+        native=native_call_hook,
     )
 
 

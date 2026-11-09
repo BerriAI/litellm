@@ -10,8 +10,6 @@ Pattern follows litellm/llms/litellm_proxy/responses/transformation.py
 from collections.abc import Coroutine, Sequence
 from typing import TYPE_CHECKING, Final, Optional
 
-from pydantic import JsonValue
-
 from litellm.types.llms.anthropic_skills import (
     DeleteSkillResponse,
     ListSkillsResponse,
@@ -21,7 +19,8 @@ from litellm.types.utils import LlmProviders
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-    from litellm.proxy._types import LiteLLM_SkillsTable, UserAPIKeyAuth
+    from litellm.models.skills import LiteLLM_SkillsTable
+    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
 
 class LiteLLMSkillsTransformationHandler:
@@ -46,7 +45,7 @@ class LiteLLMSkillsTransformationHandler:
         file_content: bytes | None = None,
         file_name: str | None = None,
         file_type: str | None = None,
-        metadata: dict[str, JsonValue] | None = None,
+        metadata: dict[str, object] | None = None,
         user_id: str | None = None,
         user_api_key_dict: Optional["UserAPIKeyAuth"] = None,
         _is_async: bool = False,
@@ -129,14 +128,14 @@ class LiteLLMSkillsTransformationHandler:
         file_content: bytes | None = None,
         file_name: str | None = None,
         file_type: str | None = None,
-        metadata: dict[str, JsonValue] | None = None,
+        metadata: dict[str, object] | None = None,
         user_id: str | None = None,
         user_api_key_dict: Optional["UserAPIKeyAuth"] = None,
     ) -> Skill:
         """Async implementation of create_skill."""
         # Lazy import to avoid SDK dependency on proxy
         from litellm.llms.litellm_proxy.skills.handler import LiteLLMSkillsHandler
-        from litellm.proxy._types import NewSkillRequest
+        from litellm.models.skills import NewSkillRequest
 
         skill_request: Final = NewSkillRequest(
             display_title=display_title,
@@ -222,9 +221,7 @@ class LiteLLMSkillsTransformationHandler:
             user_api_key_dict=user_api_key_dict,
         )
 
-        skills: Final = [  # mutable-ok: ListSkillsResponse.data needs list[Skill]; never mutated after
-            self.db_skill_to_response(s) for s in db_skills
-        ]
+        skills: Final = [self.db_skill_to_response(s) for s in db_skills]
         return ListSkillsResponse(
             data=skills,
             has_more=len(skills) >= limit,

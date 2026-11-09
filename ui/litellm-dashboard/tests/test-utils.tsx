@@ -3,6 +3,7 @@ import { render, RenderOptions, screen, waitFor } from "@testing-library/react";
 import type userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { NuqsTestingAdapter, OnUrlUpdateFunction } from "nuqs/adapters/testing";
+import { HotkeysProvider } from "react-hotkeys-hook";
 import { expect } from "vitest";
 
 // Create a client for testing
@@ -25,13 +26,21 @@ export const testQueryClient = new QueryClient({
 interface ProviderOptions {
   searchParams?: string | Record<string, string> | URLSearchParams;
   onUrlUpdate?: OnUrlUpdateFunction;
+  resetUrlUpdateQueueOnMount?: boolean;
 }
 
 export const renderWithProviders = (ui: React.ReactElement, options?: RenderOptions & ProviderOptions) => {
-  const { searchParams, onUrlUpdate, ...renderOptions } = options ?? {};
+  const { searchParams, onUrlUpdate, resetUrlUpdateQueueOnMount, ...renderOptions } = options ?? {};
   const Providers: React.FC<PropsWithChildren> = ({ children }) => (
-    <NuqsTestingAdapter searchParams={searchParams} onUrlUpdate={onUrlUpdate} hasMemory>
-      <QueryClientProvider client={testQueryClient}>{children}</QueryClientProvider>
+    <NuqsTestingAdapter
+      searchParams={searchParams}
+      onUrlUpdate={onUrlUpdate}
+      resetUrlUpdateQueueOnMount={resetUrlUpdateQueueOnMount}
+      hasMemory
+    >
+      <QueryClientProvider client={testQueryClient}>
+        <HotkeysProvider>{children}</HotkeysProvider>
+      </QueryClientProvider>
     </NuqsTestingAdapter>
   );
   return render(ui, { wrapper: Providers, ...renderOptions });

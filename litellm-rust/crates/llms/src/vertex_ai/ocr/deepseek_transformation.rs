@@ -8,15 +8,17 @@ use crate::base_llm::ocr::{
     error::Error,
     handler::OcrClient,
     transformation::{
-        BaseOcrConfig, LiteLLMOcrResponse, OcrDocument, OcrPage, OcrPageDimensions, OcrPageImage,
-        OcrRequestContext, OcrResponseFormat, OcrUsageInfo, PreparedOcrRequest,
-        decode_and_normalize_response, decode_response_value,
+        BaseOcrConfig, OcrRequestContext, PreparedOcrRequest, decode_and_normalize_response,
+        decode_response_value,
     },
 };
+use litellm_llms_types::formats::ocr::{
+    LiteLLMOcrResponse, OcrDocument, OcrPage, OcrPageDimensions, OcrPageImage, OcrResponseFormat,
+    OcrUsageInfo,
+};
+use litellm_llms_types::providers::vertex_ai::{DEFAULT_LOCATION, GLOBAL_API_BASE};
 
-const DEFAULT_API_BASE: &str = "https://aiplatform.googleapis.com";
 const MODEL_PREFIX: &str = "deepseek-ai/";
-const DEFAULT_LOCATION: &str = "us-central1";
 const DEEPSEEK_OCR_PARAMS: &[&str] = &["stream", "temperature", "max_tokens", "top_p", "n", "stop"];
 
 /// DeepSeek-OCR is a transcription model: at the endpoint's default sampling temperature it
@@ -85,7 +87,7 @@ enum DeepSeekContent {
 #[derive(Deserialize)]
 struct DeepSeekPage {
     #[serde(default)]
-    #[serde_as(deserialize_as = "litellm_core_utils::serde_compat::LaxI64")]
+    #[serde_as(deserialize_as = "litellm_llms_types::serde_compat::LaxI64")]
     index: i64,
     #[serde(default)]
     markdown: String,
@@ -233,8 +235,9 @@ pub fn normalize_response(
                     &mut output,
                     PythonJsonFormatter,
                 ))
-                .map_err(|_| response_field("content"))?;
-                String::from_utf8(output).map_err(|_| response_field("content"))?
+                .map_err(|error| Error::response_field(content_path("content"), error))?;
+                String::from_utf8(output)
+                    .map_err(|error| Error::response_field(content_path("content"), error))?
             };
             (data, fallback)
         }
@@ -259,7 +262,12 @@ pub fn normalize_response(
                 })
             })
             .collect::<Result<Vec<_>, Error>>()?,
-        Some(_) => return Err(response_field("pages")),
+        Some(_) => {
+            return Err(Error::ResponseField {
+                path: content_path("pages"),
+                cause: None,
+            });
+        }
         None => Vec::new(),
     };
     let usage = ocr_data
@@ -271,7 +279,12 @@ pub fn normalize_response(
         .transpose()?;
     let model = match ocr_data.get("model") {
         Some(Value::String(model)) => model.clone(),
-        Some(_) => return Err(response_field("model")),
+        Some(_) => {
+            return Err(Error::ResponseField {
+                path: content_path("model"),
+                cause: None,
+            });
+        }
         None => model.to_string(),
     };
     Ok(LiteLLMOcrResponse {
@@ -367,10 +380,8 @@ impl serde_json::ser::Formatter for PythonJsonFormatter {
     }
 }
 
-fn response_field(field: &str) -> Error {
-    Error::ResponseField {
-        path: format!("choices[0].message.content.{field}"),
-    }
+fn content_path(field: &str) -> String {
+    format!("choices[0].message.content.{field}")
 }
 
 pub fn provider_model(model: &str) -> Result<String, Error> {
@@ -378,6 +389,7 @@ pub fn provider_model(model: &str) -> Result<String, Error> {
     if local_model.is_empty() {
         return Err(Error::RequestField {
             path: "model".into(),
+            cause: None,
         });
     }
     Ok(format!("{MODEL_PREFIX}{local_model}"))
@@ -393,7 +405,7 @@ impl VertexAIDeepSeekOCRConfig {
         let base = api_base
             .map(str::trim)
             .filter(|base| !base.is_empty())
-            .unwrap_or(DEFAULT_API_BASE);
+            .unwrap_or(GLOBAL_API_BASE);
         ApiUrl::parse(base)
             .and_then(|url| {
                 url.complete_path(&[
@@ -409,9 +421,7 @@ impl VertexAIDeepSeekOCRConfig {
                 ])
             })
             .map(|url| url.into_string())
-            .map_err(|_| Error::RequestField {
-                path: "api_base".into(),
-            })
+            .map_err(|error| Error::request_field("api_base", error))
     }
 }
 
@@ -424,7 +434,8 @@ mod tests {
         DeepSeekOcrParams, DeepSeekOcrResponse, VertexAIDeepSeekOCRConfig, normalize_response,
         provider_model,
     };
-    use crate::base_llm::ocr::transformation::{BaseOcrConfig, OcrDocument};
+    use crate::base_llm::ocr::transformation::BaseOcrConfig;
+    use litellm_llms_types::formats::ocr::OcrDocument;
 
     fn document() -> OcrDocument {
         serde_json::from_value(json!({"type":"image_url","image_url":"gs://bucket/a.png"})).unwrap()
@@ -622,20 +633,18 @@ mod tests {
         assert_eq!(result["future"], "kept");
     }
 
-    #[test]
-    fn response_transform_rejects_missing_empty_and_malformed_content() {
-        for value in [
-            json!({"choices":[]}),
-            json!({"choices":[{"message":{"content":{}}}]}),
-            json!({"choices":[{"message":{"content":""}}]}),
-            json!({"choices":[{"message":{"content":"{\"pages\":[{\"markdown\":42}]}"}}]}),
-            json!({"choices":[{"message":{"content":{"pages":[{"markdown":42}]}}}]}),
-        ] {
-            let result = serde_json::from_value::<DeepSeekOcrResponse>(value)
-                .map_err(|_| ())
-                .and_then(|response| normalize_response("model", response).map_err(|_| ()));
-            assert!(result.is_err());
-        }
+    #[rstest::rstest]
+    #[case::no_choices(json!({"choices":[]}))]
+    #[case::empty_object(json!({"choices":[{"message":{"content":{}}}]}))]
+    #[case::empty_string(json!({"choices":[{"message":{"content":""}}]}))]
+    #[case::malformed_string(json!({"choices":[{"message":{"content":"{\"pages\":[{\"markdown\":42}]}"}}]}))]
+    #[case::malformed_object(json!({"choices":[{"message":{"content":{"pages":[{"markdown":42}]}}}]}))]
+    fn response_transform_rejects_missing_empty_and_malformed_content(#[case] value: Value) {
+        let rejected = match serde_json::from_value::<DeepSeekOcrResponse>(value) {
+            Ok(response) => normalize_response("model", response).is_err(),
+            Err(_) => true,
+        };
+        assert!(rejected);
     }
 
     #[test]

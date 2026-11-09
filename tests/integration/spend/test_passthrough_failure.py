@@ -1,16 +1,16 @@
 import json
 from typing import Final
+from pathlib import Path
 
 import pytest
-from integration._support.client import Gateway, eventually
-from integration._support.database import read_rows
-from integration._support.process import owned_proxy
-from integration._support.wire import Reply, Request, wire_server
+from tests.integration._support.client import Gateway, eventually
+from tests.integration._support.database import read_rows
+from tests.integration._support.process import owned_proxy
+from tests.integration._support.wire import Reply, Request, wire_server
 
 
-@pytest.mark.covers("quota_management.spend_tracking.pass_through_failure.failure_row_written")
 @pytest.mark.timeout(180)
-def test_config_pass_through_endpoint_failure_writes_a_spend_row(gateway: Gateway, tmp_path) -> None:
+def test_config_pass_through_endpoint_failure_writes_a_spend_row(gateway: Gateway, tmp_path: Path) -> None:
     def respond(request: Request) -> Reply:
         assert request.target == "/"
         assert json.loads(request.body) == {"search": "hello"}
@@ -42,6 +42,7 @@ def test_config_pass_through_endpoint_failure_writes_a_spend_row(gateway: Gatewa
                 lambda: read_rows(
                     'SELECT status, call_type, api_base, spend FROM "LiteLLM_SpendLogs" WHERE request_id=%s',
                     (call_id,),
+                    database_url=candidate.database_url,
                 ),
                 lambda values: len(values) == 1,
                 seconds=70,

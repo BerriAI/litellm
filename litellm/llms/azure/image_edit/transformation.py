@@ -7,7 +7,7 @@ from litellm.llms.azure.common_utils import BaseAzureLLM
 from litellm.llms.openai.image_edit.transformation import OpenAIImageEditConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.router import GenericLiteLLMParams
-from litellm.utils import _add_path_to_api_base
+from litellm.utils import add_path_to_api_base
 
 
 class AzureImageEditConfig(OpenAIImageEditConfig):
@@ -65,7 +65,7 @@ class AzureImageEditConfig(OpenAIImageEditConfig):
         params: Final = GenericLiteLLMParams(**(litellm_params or {}))
         if api_key is not None and params.api_key is None:
             params.api_key = api_key
-        return BaseAzureLLM._base_validate_azure_environment(headers=headers, litellm_params=params)
+        return BaseAzureLLM.base_validate_azure_environment(headers=headers, litellm_params=params)
 
     def get_complete_url(
         self,
@@ -122,7 +122,7 @@ class AzureImageEditConfig(OpenAIImageEditConfig):
 
         # Add the path to the base URL using the model as deployment name
         if "/openai/deployments/" not in api_base:
-            new_url = _add_path_to_api_base(
+            new_url = add_path_to_api_base(
                 api_base=api_base,
                 ending_path=f"/openai/deployments/{model}/images/edits",
             )

@@ -42,22 +42,41 @@ async fn google_kms_decrypts_using_the_configured_resource() {
 #[case::unset(None)]
 #[case::disabled(Some(false))]
 #[tokio::test]
-async fn disabled_google_kms_loader_does_not_require_environment_configuration(
+async fn disabled_google_kms_loader_does_not_read_environment_configuration(
     #[case] enabled: Option<bool>,
 ) {
     use std::sync::Arc;
     assert!(
-        litellm_secrets_google::load_google_kms(enabled, Arc::new(|_: &str| None))
-            .await
-            .unwrap()
-            .is_none()
+        litellm_secrets_google::load_google_kms(
+            enabled,
+            Arc::new(|name: &str| panic!("disabled Google KMS read {name}")),
+        )
+        .await
+        .unwrap()
+        .is_none()
     );
 }
 
 #[rstest]
-#[case::credentials_missing(None, None, "GOOGLE_APPLICATION_CREDENTIALS")]
-#[case::resource_missing(Some("credentials"), None, "GOOGLE_KMS_RESOURCE_NAME")]
-fn enabled_google_kms_requires_all_environment_values(
+#[tokio::test]
+async fn enabled_google_kms_loader_accepts_application_default_credentials() {
+    use std::sync::Arc;
+    let environment = Arc::new(|name: &str| {
+        (name == "GOOGLE_KMS_RESOURCE_NAME")
+            .then(|| "projects/project/locations/global/keyRings/ring/cryptoKeys/key".to_owned())
+    });
+
+    assert!(
+        litellm_secrets_google::load_google_kms(Some(true), environment)
+            .await
+            .unwrap()
+            .is_some()
+    );
+}
+
+#[rstest]
+#[case::resource_missing(None, None, "GOOGLE_KMS_RESOURCE_NAME")]
+fn enabled_google_kms_requires_resource_name(
     #[case] credentials: Option<&str>,
     #[case] resource: Option<&str>,
     #[case] missing: &'static str,
@@ -75,9 +94,13 @@ fn enabled_google_kms_requires_all_environment_values(
 }
 
 #[rstest]
-fn complete_google_kms_environment_is_valid() {
+#[case::service_account_file(Some("credentials"))]
+#[case::application_default_credentials(None)]
+fn google_kms_environment_is_valid_without_required_credential_file(
+    #[case] credentials: Option<&str>,
+) {
     let environment = |name: &str| match name {
-        "GOOGLE_APPLICATION_CREDENTIALS" => Some("credentials".to_owned()),
+        "GOOGLE_APPLICATION_CREDENTIALS" => credentials.map(str::to_owned),
         "GOOGLE_KMS_RESOURCE_NAME" => Some("resource".to_owned()),
         _ => None,
     };

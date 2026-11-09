@@ -51,12 +51,12 @@ def delete_toolset(gateway: Gateway, identity: str) -> None:
     assert response.status_code in (200, 202, 204), response.text
 
 
-def create_toolset(scenario: Scenario, tools: tuple[tuple[str, str], ...]) -> str:
+def create_toolset(scenario: Scenario, tools: tuple[tuple[str, str], ...], toolset_name: str | None = None) -> str:
     response: Final = scenario.gateway.request(
         "POST",
         "/v1/mcp/toolset",
         {
-            "toolset_name": f"integration-{uuid.uuid4().hex[:10]}",
+            "toolset_name": toolset_name or f"integration-{uuid.uuid4().hex[:10]}",
             "tools": [{"server_id": server_id, "tool_name": tool} for server_id, tool in tools],
         },
     )

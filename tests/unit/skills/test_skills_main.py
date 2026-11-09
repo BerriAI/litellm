@@ -30,7 +30,7 @@ def test_create_skill_forwards_description_and_instructions_from_top_level_kwarg
 
 
 def test_create_skill_forwards_description_and_instructions_from_extra_body(monkeypatch) -> None:
-    """The SDK convention (see tests/proxy_unit_tests/test_skills_db.py) nests them under
+    """The SDK convention (see tests/unit/skills/test_skills_db.py) nests them under
     extra_body instead of passing them as top-level kwargs; both paths must reach the DB."""
     handler = MagicMock()
     monkeypatch.setattr(skills_main, "_get_litellm_skills_handler", lambda: handler)

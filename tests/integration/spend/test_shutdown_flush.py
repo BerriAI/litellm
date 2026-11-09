@@ -1,11 +1,14 @@
+import hashlib
 import json
 import os
-import signal
+import re
 import threading
+import time
 import uuid
 from collections.abc import Callable, Iterator
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Final
 
@@ -13,16 +16,236 @@ import httpx
 import psycopg
 import pytest
 import yaml
-
-from integration._support.client import Gateway, delete_key_if_present, eventually, string_value
+from integration._support.client import Gateway, delete_key_if_present, eventually, object_value, string_value
 from integration._support.database import read_rows
 from integration._support.process import OwnedProxy, owned_proxy_process
 from integration._support.wire import Reply, Request, wire_server
+from psycopg import sql
 
 REQUESTS_WHILE_BLOCKED: Final = 6
 CANCEL_LOG_LINE: Final = "in-flight scheduled job(s) for shutdown"
 BATCH_DRAINED_LOG_LINE: Final = f"flushed {REQUESTS_WHILE_BLOCKED} daily spend update items from in-memory queue"
-MODEL_INSERT_ARRIVED_LOG_LINE: Final = "path=/model/new"
+COMMIT_DELAY_SECONDS: Final = 15
+BURST_REQUESTS: Final = 30
+
+_GATED_LOGGER: Final = """
+import os
+import re
+import httpx
+from litellm.integrations.custom_logger import CustomLogger
+
+class ShutdownLogger(CustomLogger):
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        async with httpx.AsyncClient(timeout=25, trust_env=False) as client:
+            await client.post(os.environ["SHUTDOWN_CALLBACK_URL"])
+
+logger = ShutdownLogger()
+"""
+
+
+def _tag_shutdown_config(directory: Path, upstream: str, redis_buffer: bool, *, gated: bool = False) -> Path:
+    path: Final = directory / "tag-shutdown.yaml"
+    if gated:
+        (directory / "shutdown_callbacks.py").write_text(_GATED_LOGGER)
+    path.write_text(
+        yaml.safe_dump(
+            {
+                "model_list": [
+                    {
+                        "model_name": "shutdown-model",
+                        "litellm_params": {
+                            "model": "openai/gpt-4o-mini",
+                            "api_base": upstream + "/v1",
+                            "api_key": "synthetic-key",
+                            "input_cost_per_token": 0.01,
+                            "output_cost_per_token": 0.02,
+                        },
+                    }
+                ],
+                "general_settings": {
+                    "master_key": "os.environ/LITELLM_MASTER_KEY",
+                    "database_url": "os.environ/DATABASE_URL",
+                    "proxy_batch_write_at": 3600,
+                    "use_redis_transaction_buffer": redis_buffer,
+                    "disable_model_info_refresh": True,
+                },
+                "litellm_settings": {
+                    "cache": True,
+                    "cache_params": {"type": "redis", "host": "os.environ/REDIS_HOST", "port": "os.environ/REDIS_PORT"},
+                    "callbacks": ["shutdown_callbacks.logger"] if gated else [],
+                },
+            }
+        )
+    )
+    return path
+
+
+def _tagged_chat(gateway: Gateway, key: str, tags: tuple[str, str]) -> None:
+    response: Final = gateway.request(
+        "POST",
+        "/v1/chat/completions",
+        {
+            "model": "shutdown-model",
+            "messages": [{"role": "user", "content": uuid.uuid4().hex}],
+            "metadata": {"tags": list(tags)},
+        },
+        key=key,
+    )
+    assert response.status_code == 200, response.text
+
+
+def _assert_shutdown_accounting(key: str, tags: tuple[str, str], requests: int) -> None:
+    hashed: Final = hashlib.sha256(key.encode()).hexdigest()
+    for table, count in (("LiteLLM_SpendLogs", "count(*)"), ("LiteLLM_DailyUserSpend", "sum(api_requests)")):
+        rows: Final = read_rows(
+            f'SELECT ({count})::int AS requests, sum(spend) AS spend FROM "{table}" WHERE api_key=%s', (hashed,)
+        )
+        assert rows[0]["requests"] == requests, (table, rows)
+        assert rows[0]["spend"] == pytest.approx(requests * 0.05, abs=1e-9), (table, rows)
+    key_rows: Final = read_rows('SELECT spend FROM "LiteLLM_VerificationToken" WHERE token=%s', (hashed,))
+    assert key_rows[0]["spend"] == pytest.approx(requests * 0.05, abs=1e-9)
+    for tag in tags:
+        tag_rows: Final = read_rows(
+            'SELECT sum(api_requests)::int AS requests, sum(spend) AS spend FROM "LiteLLM_DailyTagSpend" WHERE api_key=%s AND tag=%s',
+            (hashed, tag),
+        )
+        assert tag_rows[0]["requests"] == requests, (tag, tag_rows)
+        assert tag_rows[0]["spend"] == pytest.approx(requests * 0.05, abs=1e-9), (tag, tag_rows)
+
+
+@pytest.mark.parametrize("redis_buffer", [False, True])
+def test_tagged_request_survives_shutdown_before_the_tag_timer(
+    gateway: Gateway, tmp_path: Path, redis_buffer: bool
+) -> None:
+    tags: Final = (f"shutdown-a-{uuid.uuid4().hex}", f"shutdown-b-{uuid.uuid4().hex}")
+    overrides: Final = {"DATABASE_URL": os.environ["DATABASE_URL"], "LITELLM_LOG": "DEBUG"}
+    with wire_server(_provider) as wire:
+        config: Final = _tag_shutdown_config(tmp_path, wire.url, redis_buffer)
+        with owned_proxy_process(gateway, tmp_path, overrides, config=config) as owned:
+            key: Final = string_value(
+                owned.gateway.post("/key/generate", {"user_id": f"shutdown-{uuid.uuid4().hex}"})["key"]
+            )
+            _tagged_chat(owned.gateway, key, tags)
+            owned.begin_shutdown()
+            owned.process.wait(timeout=90)
+        with owned_proxy_process(gateway, tmp_path, overrides, config=config) as restarted:
+            _assert_shutdown_accounting(key, tags, 1)
+            restarted.begin_shutdown()
+            restarted.process.wait(timeout=90)
+        _assert_shutdown_accounting(key, tags, 1)
+
+
+@pytest.mark.parametrize("redis_buffer", [False, True])
+@pytest.mark.parametrize("overflow", [False, True])
+def test_callback_backlog_is_accounted_before_shutdown_disconnects(
+    gateway: Gateway, tmp_path: Path, redis_buffer: bool, overflow: bool
+) -> None:
+    release: Final = threading.Event()
+    requests: Final = 6 if overflow else 3
+    tags: Final = (f"backlog-a-{uuid.uuid4().hex}", f"backlog-b-{uuid.uuid4().hex}")
+    with (
+        wire_server(_provider) as wire,
+        wire_server(lambda _: Reply(chunks=(b"{}",), gate_before_first=release)) as logger,
+    ):
+        config: Final = _tag_shutdown_config(tmp_path, wire.url, redis_buffer, gated=True)
+        with owned_proxy_process(
+            gateway,
+            tmp_path,
+            {
+                "DATABASE_URL": os.environ["DATABASE_URL"],
+                "LOGGING_WORKER_CONCURRENCY": "2",
+                "LOGGING_WORKER_MAX_QUEUE_SIZE": "2" if overflow else "50000",
+                "SHUTDOWN_CALLBACK_URL": logger.url,
+                "GRACEFUL_SHUTDOWN_TIMEOUT": "15",
+                "LITELLM_LOG": "DEBUG",
+            },
+            config=config,
+        ) as owned:
+            key: Final = string_value(
+                owned.gateway.post("/key/generate", {"user_id": f"backlog-{uuid.uuid4().hex}"})["key"]
+            )
+            try:
+                for _ in range(requests):
+                    _tagged_chat(owned.gateway, key, tags)
+                eventually(logger.received.qsize, lambda count: count >= 2, seconds=10)
+                owned.begin_shutdown()
+                eventually(
+                    lambda: (
+                        owned.process.poll() is not None
+                        or "Draining success callbacks before the final spend flush" in owned.log.read_text()
+                    ),
+                    lambda ready: ready,
+                    seconds=30,
+                )
+                release.set()
+                owned.process.wait(timeout=90)
+                _assert_shutdown_accounting(key, tags, requests)
+            finally:
+                release.set()
+
+
+@pytest.mark.parametrize("gunicorn", [False, True])
+def test_sigterm_http_drain_consumes_callback_budget(gateway: Gateway, tmp_path: Path, gunicorn: bool) -> None:
+    release_request: Final = threading.Event()
+    release_callback: Final = threading.Event()
+    tags: Final = (f"deadline-a-{uuid.uuid4().hex}", f"deadline-b-{uuid.uuid4().hex}")
+
+    def held_provider(request: Request) -> Reply:
+        response: Final = _provider(request)
+        return replace(response, chunks=(response.body,), gate_before_first=release_request)
+
+    with (
+        wire_server(held_provider) as wire,
+        wire_server(lambda _: Reply(chunks=(b"{}",), gate_before_first=release_callback)) as logger,
+    ):
+        config: Final = _tag_shutdown_config(tmp_path, wire.url, False, gated=True)
+        with (
+            owned_proxy_process(
+                gateway,
+                tmp_path,
+                {
+                    "DATABASE_URL": os.environ["DATABASE_URL"],
+                    "SHUTDOWN_CALLBACK_URL": logger.url,
+                    "GRACEFUL_SHUTDOWN_TIMEOUT": "30",
+                    "LITELLM_LOG": "DEBUG",
+                },
+                config=config,
+                extra_arguments=("--run_gunicorn",) if gunicorn else (),
+            ) as owned,
+            ThreadPoolExecutor(max_workers=1) as executor,
+        ):
+            key: Final = string_value(
+                owned.gateway.post("/key/generate", {"user_id": f"deadline-{uuid.uuid4().hex}"})["key"]
+            )
+            request: Final = executor.submit(_tagged_chat, owned.gateway, key, tags)
+            try:
+                eventually(wire.received.qsize, lambda count: count == 1, seconds=10)
+                owned.begin_shutdown()
+                eventually(
+                    lambda: "graceful_shutdown_started" in owned.log.read_text(), lambda stamped: stamped, seconds=5
+                )
+                assert not request.done(), "The shutdown clock must start before the HTTP request drains"
+                stamped: Final = time.monotonic()
+                eventually(time.monotonic, lambda now: now - stamped >= 2, seconds=5)
+                held_seconds: Final = time.monotonic() - stamped
+                release_request.set()
+                request.result(timeout=10)
+                budget: Final = eventually(
+                    lambda: re.search(r"remaining_s=([\d.]+) callback_timeout_s=([\d.]+)", owned.log.read_text()),
+                    lambda match: match is not None,
+                    seconds=15,
+                )
+                assert budget is not None
+                remaining: Final = float(budget[1])
+                allowance: Final = float(budget[2])
+                assert remaining <= 30 - held_seconds + 0.05
+                assert allowance == pytest.approx(max(0, remaining - 10), abs=0.002)
+                release_callback.set()
+                owned.process.wait(timeout=45)
+                _assert_shutdown_accounting(key, tags, 1)
+            finally:
+                release_request.set()
+                release_callback.set()
 
 
 def _api_requests(table: str, column: str, identity: str) -> int:
@@ -42,6 +265,50 @@ def _waiting_on(table: str) -> int:
     waiting: Final = rows[0]["waiting"]
     assert isinstance(waiting, int)
     return waiting
+
+
+def _committing_daily_user_spend() -> int:
+    rows: Final = read_rows(
+        "SELECT count(*)::int AS committing FROM pg_stat_activity "
+        "WHERE query='COMMIT' AND state='active' AND wait_event='PgSleep' AND pid IN "
+        "(SELECT pid FROM pg_locks WHERE relation = %s::regclass AND mode='RowExclusiveLock')",
+        ('"LiteLLM_DailyUserSpend"',),
+    )
+    committing: Final = rows[0]["committing"]
+    assert isinstance(committing, int)
+    return committing
+
+
+def _install_slow_commit(user_id: str, fails_once: bool) -> str:
+    suffix: Final = f"slow_commit_{uuid.uuid4().hex}"
+    with psycopg.connect(os.environ["DATABASE_URL"], autocommit=True) as connection:
+        connection.execute(sql.SQL("CREATE SEQUENCE {}").format(sql.Identifier(suffix)))
+        connection.execute(
+            sql.SQL(
+                "CREATE FUNCTION {}() RETURNS trigger LANGUAGE plpgsql AS $slow$ "
+                "BEGIN PERFORM pg_sleep({}); "
+                "IF {} AND nextval({}) = 1 THEN RAISE EXCEPTION 'integration: first COMMIT fails'; END IF; "
+                "RETURN NULL; END $slow$"
+            ).format(
+                sql.Identifier(suffix), sql.Literal(COMMIT_DELAY_SECONDS), sql.Literal(fails_once), sql.Literal(suffix)
+            )
+        )
+        connection.execute(
+            sql.SQL(
+                'CREATE CONSTRAINT TRIGGER {} AFTER INSERT OR UPDATE ON "LiteLLM_DailyUserSpend" '
+                "DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN (NEW.user_id = {}) EXECUTE FUNCTION {}()"
+            ).format(sql.Identifier(suffix), sql.Literal(user_id), sql.Identifier(suffix))
+        )
+    return suffix
+
+
+def _drop_slow_commit(suffix: str) -> None:
+    with psycopg.connect(os.environ["DATABASE_URL"], autocommit=True) as connection:
+        connection.execute(
+            sql.SQL('DROP TRIGGER IF EXISTS {} ON "LiteLLM_DailyUserSpend"').format(sql.Identifier(suffix))
+        )
+        connection.execute(sql.SQL("DROP FUNCTION IF EXISTS {}()").format(sql.Identifier(suffix)))
+        connection.execute(sql.SQL("DROP SEQUENCE IF EXISTS {}").format(sql.Identifier(suffix)))
 
 
 def _provider(request: Request) -> Reply:
@@ -77,8 +344,26 @@ class _Shutdown:
     def daily_user_requests(self) -> int:
         return _api_requests("LiteLLM_DailyUserSpend", "user_id", self.owner)
 
-    def logged(self, line: str, times: int = 1) -> bool:
-        return self.owned.log.read_text(errors="replace").count(line) >= times
+    def spend_logs(self) -> int:
+        rows: Final = read_rows('SELECT count(*)::int AS total FROM "LiteLLM_SpendLogs" WHERE "user"=%s', (self.owner,))
+        total: Final = rows[0]["total"]
+        assert isinstance(total, int)
+        return total
+
+    def burst(self, requests: int) -> None:
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            for outcome in pool.map(lambda _: self.chat(), range(requests)):
+                assert outcome is None
+
+    def logged(self, line: str) -> bool:
+        return line in self.owned.log.read_text(errors="replace")
+
+    def other_requests_in_flight(self) -> int:
+        response: Final = self.owned.gateway.request("GET", "/health/backlog")
+        assert response.status_code == 200, response.text
+        in_flight: Final = object_value(response.json())["in_flight_requests"]
+        assert isinstance(in_flight, int)
+        return in_flight - 1
 
     def chat_while_spend_update_is_blocked(self, blocker: psycopg.Connection, table: str) -> None:
         blocker.execute(f'LOCK TABLE "{table}" IN EXCLUSIVE MODE')
@@ -105,7 +390,7 @@ class _Shutdown:
 
     def terminate_once(self, blocked: Callable[[], bool], release: Callable[[], None]) -> None:
         eventually(blocked, lambda state: state, seconds=60)
-        self.owned.process.send_signal(signal.SIGTERM)
+        self.owned.begin_shutdown()
         eventually(lambda: self.logged(CANCEL_LOG_LINE), lambda seen: seen, seconds=60)
         release()
         self.owned.process.wait(timeout=120)
@@ -121,7 +406,15 @@ def _config_with_pool_limit(tmp_path: Path, pool_limit: int) -> Path:
 
 
 @contextmanager
-def _proxy_with_one_seeded_row(gateway: Gateway, tmp_path: Path, pool_limit: int) -> Iterator[_Shutdown]:
+def _proxy_with_one_seeded_row(
+    gateway: Gateway,
+    tmp_path: Path,
+    pool_limit: int,
+    cancel_timeout_seconds: int = 5,
+    settle_seconds: int = 0,
+    requests: int = REQUESTS_WHILE_BLOCKED,
+    workers: int = 1,
+) -> Iterator[_Shutdown]:
     owner: Final = f"integration-owner-{uuid.uuid4().hex}"
     with gateway.scenario() as scenario, wire_server(_provider) as wire:
         model: Final = scenario.model(api_base=wire.url + "/v1", num_retries=0)
@@ -130,12 +423,15 @@ def _proxy_with_one_seeded_row(gateway: Gateway, tmp_path: Path, pool_limit: int
             gateway,
             tmp_path,
             {
+                "DATABASE_URL": os.environ["DATABASE_URL"],
                 "LITELLM_LOG": "DEBUG",
                 "GRACEFUL_SHUTDOWN_TIMEOUT": "1",
                 "SCHEDULED_JOB_SHUTDOWN_FINISH_TIMEOUT_SECONDS": "1",
-                "SCHEDULED_JOB_SHUTDOWN_CANCEL_TIMEOUT_SECONDS": "5",
+                "SCHEDULED_JOB_SHUTDOWN_CANCEL_TIMEOUT_SECONDS": str(cancel_timeout_seconds),
             },
             config=_config_with_pool_limit(tmp_path, pool_limit),
+            remove_environment=("DATABASE_URL_READ_REPLICA",),
+            workers=workers,
         ) as owned:
             key: Final = string_value(
                 owned.gateway.post("/key/generate", {"user_id": owner, "team_id": team, "models": [model]})["key"]
@@ -145,8 +441,18 @@ def _proxy_with_one_seeded_row(gateway: Gateway, tmp_path: Path, pool_limit: int
             shutdown.chat()
             eventually(shutdown.daily_user_requests, lambda total: total == 1, seconds=60)
             yield shutdown
-    assert _api_requests("LiteLLM_DailyUserSpend", "user_id", owner) == 1 + REQUESTS_WHILE_BLOCKED
-    assert _api_requests("LiteLLM_DailyTeamSpend", "team_id", team) == 1 + REQUESTS_WHILE_BLOCKED
+    written: Final = 1 + requests
+    if settle_seconds:
+        eventually(
+            lambda: (
+                _api_requests("LiteLLM_DailyUserSpend", "user_id", owner),
+                _api_requests("LiteLLM_DailyTeamSpend", "team_id", team),
+            ),
+            lambda totals: totals == (written, written),
+            seconds=settle_seconds,
+        )
+    assert _api_requests("LiteLLM_DailyUserSpend", "user_id", owner) == written
+    assert _api_requests("LiteLLM_DailyTeamSpend", "team_id", team) == written
 
 
 @pytest.mark.covers("quota_management.spend_tracking.shutdown_cancel_keeps_in_flight_daily_batch")
@@ -163,7 +469,7 @@ def test_daily_spend_batch_cancelled_while_waiting_for_a_pool_connection_is_writ
         eventually(lambda: _waiting_on("LiteLLM_ProxyModelTable"), lambda waiting: waiting == 1, seconds=30)
         shutdown.chat_while_spend_update_is_blocked(memberships, "LiteLLM_TeamMembership")
         second: Final = shutdown.start_blocked_model_insert()
-        eventually(lambda: shutdown.logged(MODEL_INSERT_ARRIVED_LOG_LINE, times=2), lambda seen: seen, seconds=30)
+        eventually(shutdown.other_requests_in_flight, lambda in_flight: in_flight == 2, seconds=30)
         memberships.rollback()
         eventually(lambda: _waiting_on("LiteLLM_ProxyModelTable"), lambda waiting: waiting == 2, seconds=30)
         shutdown.terminate_once(lambda: shutdown.logged(BATCH_DRAINED_LOG_LINE), models.rollback)
@@ -187,3 +493,48 @@ def test_daily_spend_batch_cancelled_while_waiting_for_a_row_lock_is_written_exa
             lambda: shutdown.logged(BATCH_DRAINED_LOG_LINE) and _waiting_on("LiteLLM_DailyUserSpend") == 1,
             holder.rollback,
         )
+
+
+@pytest.mark.parametrize(
+    ("cancel_timeout_seconds", "commit_fails_once"),
+    [
+        pytest.param(60, False, id="cancel_budget_outlives_commit"),
+        pytest.param(5, False, id="commit_outlives_cancel_budget"),
+        pytest.param(60, True, id="commit_fails_within_cancel_budget"),
+        pytest.param(5, True, id="commit_fails_after_cancel_budget"),
+    ],
+)
+def test_daily_spend_batch_cancelled_while_postgres_is_committing_it_is_written_exactly_once(
+    gateway: Gateway, tmp_path: Path, cancel_timeout_seconds: int, commit_fails_once: bool
+) -> None:
+    with (
+        _proxy_with_one_seeded_row(
+            gateway, tmp_path, pool_limit=10, cancel_timeout_seconds=cancel_timeout_seconds, settle_seconds=90
+        ) as shutdown,
+        psycopg.connect(os.environ["DATABASE_URL"]) as memberships,
+    ):
+        suffix: Final = _install_slow_commit(shutdown.owner, fails_once=commit_fails_once)
+        try:
+            shutdown.chat_while_spend_update_is_blocked(memberships, "LiteLLM_TeamMembership")
+            memberships.rollback()
+            shutdown.terminate_once(
+                lambda: shutdown.logged(BATCH_DRAINED_LOG_LINE) and _committing_daily_user_spend() == 1,
+                lambda: None,
+            )
+        finally:
+            _drop_slow_commit(suffix)
+
+
+def test_daily_spend_burst_across_two_workers_survives_shutdown_during_commit_exactly_once(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    with _proxy_with_one_seeded_row(
+        gateway, tmp_path, pool_limit=10, settle_seconds=120, requests=BURST_REQUESTS, workers=2
+    ) as shutdown:
+        suffix: Final = _install_slow_commit(shutdown.owner, fails_once=False)
+        try:
+            shutdown.burst(BURST_REQUESTS)
+            eventually(shutdown.spend_logs, lambda total: total == 1 + BURST_REQUESTS, seconds=60)
+            shutdown.terminate_once(lambda: _committing_daily_user_spend() >= 1, lambda: None)
+        finally:
+            _drop_slow_commit(suffix)

@@ -60,13 +60,13 @@ class _HasProxyErrorType(Protocol):
 
 
 _MESSAGE_PATTERNS: Final[tuple[tuple[re.Pattern[str], str], ...]] = (
+    (re.compile(r"upstream passthrough request failed", re.IGNORECASE), UPSTREAM_PASSTHROUGH),
     (
-        re.compile(r"budget has been exceeded|max budget|exceeded.*budget|crossed budget", re.IGNORECASE),
+        re.compile(r"budget has been exceeded|max budget|crossed budget", re.IGNORECASE),
         BUDGET_EXCEEDED,
     ),
     (re.compile(r"no healthy deployments?|no deployments available", re.IGNORECASE), NO_HEALTHY_DEPLOYMENTS),
     (re.compile(r"not allowed to access model due to tags configuration", re.IGNORECASE), MODEL_ACCESS_DENIED),
-    (re.compile(r"upstream passthrough request failed", re.IGNORECASE), UPSTREAM_PASSTHROUGH),
     (re.compile(r"is not supported for provider|not implemented", re.IGNORECASE), UNSUPPORTED_OPERATION),
     (
         re.compile(r"context window|context length|(prompt|input) is too long|tokens? ?> ?\d+ ?maximum", re.IGNORECASE),
@@ -103,9 +103,14 @@ _PROXY_ERROR_TYPE_MAP: Final[Mapping[str, str]] = MappingProxyType(
         "org_model_access_denied": MODEL_ACCESS_DENIED,
         "project_model_access_denied": MODEL_ACCESS_DENIED,
         "agent_model_access_denied": MODEL_ACCESS_DENIED,
+        "customer_model_access_denied": MODEL_ACCESS_DENIED,
         "key_vector_store_access_denied": PERMISSION_DENIED,
         "team_vector_store_access_denied": PERMISSION_DENIED,
         "org_vector_store_access_denied": PERMISSION_DENIED,
+        "user_vector_store_access_denied": PERMISSION_DENIED,
+        "key_search_tool_access_denied": PERMISSION_DENIED,
+        "team_search_tool_access_denied": PERMISSION_DENIED,
+        "user_search_tool_access_denied": PERMISSION_DENIED,
         "tool_access_denied": PERMISSION_DENIED,
         "team_member_permission_error": PERMISSION_DENIED,
         "not_found_error": RESOURCE_NOT_FOUND,
@@ -127,6 +132,8 @@ _STATUS_CODE_MAP: Final[Mapping[str, str]] = MappingProxyType(
         "504": UPSTREAM_TIMEOUT,
     }
 )
+
+_OVERLOADED_STATUS_CODE: Final = "529"
 
 _INTERNAL_STATE_EXCEPTIONS: Final[tuple[type[BaseException], ...]] = (
     TypeError,
@@ -153,6 +160,14 @@ _CLASS_CODE_TABLE: Final[tuple[tuple[tuple[type[BaseException], ...], str], ...]
     ((BadRequestError, UnprocessableEntityError), INVALID_REQUEST),
     ((NotImplementedError,), UNSUPPORTED_OPERATION),
 )
+
+
+def _exceeded_before_budget(message: str) -> bool:
+    """Linear-time equivalent of ``re.search(r"exceeded.*budget", message, re.IGNORECASE)``."""
+    return any(
+        (start := line.find("exceeded")) != -1 and line.find("budget", start + len("exceeded")) != -1
+        for line in message.lower().split("\n")
+    )
 
 
 def _classify_by_message(message: str, patterns: tuple[tuple[re.Pattern[str], str], ...]) -> str | None:
@@ -183,9 +198,13 @@ def normalize_error(exc: Exception | None, status_code: str, message: str) -> st
     by_proxy_type: Final = _PROXY_ERROR_TYPE_MAP.get(proxy_type) if isinstance(proxy_type, str) else None
     if by_proxy_type is not None:
         return by_proxy_type
-    by_message: Final = _classify_by_message(message, _MESSAGE_PATTERNS)
+    by_message: Final = (
+        BUDGET_EXCEEDED if _exceeded_before_budget(message) else _classify_by_message(message, _MESSAGE_PATTERNS)
+    )
     if by_message is not None:
         return by_message
+    if status_code == _OVERLOADED_STATUS_CODE:
+        return PROVIDER_OVERLOADED
     by_class: Final = _classify_by_class(exc)
     if by_class is not None:
         return by_class

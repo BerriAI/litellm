@@ -1,8 +1,8 @@
 mod error;
-mod framer;
+mod framed;
 
 pub use error::*;
-pub use framer::*;
+pub use framed::frames;
 
 #[cfg(feature = "aws")]
 pub mod aws_event_stream;

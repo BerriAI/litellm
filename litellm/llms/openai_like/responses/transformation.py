@@ -8,6 +8,7 @@ provider-specific resolution (slug, API key env var, base URL).
 
 from typing import Final
 
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.router import GenericLiteLLMParams
@@ -47,5 +48,4 @@ class OpenAILikeResponsesConfig(OpenAIResponsesAPIConfig):
         api_base = api_base or get_secret_str("OPENAI_LIKE_API_BASE")
         if not api_base:
             raise ValueError("api_base is required for openai_like provider")
-        api_base = api_base.rstrip("/")
-        return f"{api_base}/responses"
+        return join_api_base(api_base, "responses")

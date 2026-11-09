@@ -1,5 +1,7 @@
 import json
+from collections.abc import Mapping
 from datetime import datetime
+from typing import Final
 from unittest.mock import MagicMock
 
 import httpx
@@ -163,7 +165,10 @@ def test_deployment_named_like_the_first_native_segment_keeps_its_deployment_roo
         litellm_params={"litellm_metadata": {"model_group": "aoai-chat"}},
     )
 
-    assert str(url) == "https://my-resource.openai.azure.com/openai/deployments/chat/chat/completions?api-version=2024-10-21"
+    assert (
+        str(url)
+        == "https://my-resource.openai.azure.com/openai/deployments/chat/chat/completions?api-version=2024-10-21"
+    )
     assert base == "https://my-resource.openai.azure.com/openai/deployments/chat"
 
 
@@ -393,87 +398,86 @@ MISTRAL_OCR_BODY = {
 }
 
 
-def test_mistral_document_ai_relay_is_costed_per_page():
+def _passthrough_ocr(result):
+    calls = []
+
+    def run(model, endpoint, body):
+        calls.append((model, endpoint, body))
+        return result
+
+    return run, calls
+
+
+def test_ocr_result_routes_the_relay_to_per_page_ocr_costing():
+    passthrough_ocr, _ = _passthrough_ocr(MISTRAL_OCR_BODY)
     result, logging_obj = _relay_logging_result(
-        AzureAIPassthroughConfig(), "mistral-document-ai-2512", "providers/mistral/azure/ocr", MISTRAL_OCR_BODY
+        AzureAIPassthroughConfig(passthrough_ocr=passthrough_ocr),
+        "mistral-document-ai-2512",
+        "providers/mistral/azure/ocr",
+        MISTRAL_OCR_BODY,
     )
     per_page = litellm.get_model_info("azure_ai/mistral-document-ai-2512")["ocr_cost_per_page"]
 
     assert isinstance(result, OCRResponse)
-    assert result.usage_info.pages_processed == 2
+    assert logging_obj.call_type == "aocr"
     assert per_page > 0
-    assert logging_obj._response_cost_calculator(result=result) == pytest.approx(2 * per_page)
+    assert logging_obj.response_cost_calculator(result=result) == pytest.approx(2 * per_page)
 
 
-def test_ocr_route_under_a_models_api_base_is_still_recognised():
-    result, _ = _relay_logging_result(
-        AzureAIPassthroughConfig(),
+def test_ocr_binding_receives_the_endpoint_without_the_model_segment():
+    passthrough_ocr, calls = _passthrough_ocr(MISTRAL_OCR_BODY)
+    _relay_logging_result(
+        AzureAIPassthroughConfig(passthrough_ocr=passthrough_ocr),
         "mistral-document-ai-2512",
         "providers/mistral/azure/ocr",
         MISTRAL_OCR_BODY,
         api_base=f"{FOUNDRY_BASE}/models",
     )
 
-    assert isinstance(result, OCRResponse)
+    (model, endpoint, body) = calls[0]
+    assert model == "mistral-document-ai-2512"
+    assert endpoint == "providers/mistral/azure/ocr"
+    assert json.loads(body) == MISTRAL_OCR_BODY
 
 
-def test_relay_to_a_non_ocr_route_keeps_the_passthrough_object_and_call_type():
+def test_relay_the_binding_declines_keeps_the_passthrough_object_and_call_type():
+    passthrough_ocr, _ = _passthrough_ocr(None)
     result, logging_obj = _relay_logging_result(
-        AzureAIPassthroughConfig(), "mistral-document-ai-2512", "models/info", {"name": "mistral-document-ai-2512"}
+        AzureAIPassthroughConfig(passthrough_ocr=passthrough_ocr),
+        "mistral-document-ai-2512",
+        "models/info",
+        {"name": "mistral-document-ai-2512"},
     )
 
     assert result == {"response": {"name": "mistral-document-ai-2512"}}
     assert logging_obj.call_type == "allm_passthrough_route"
 
 
-COHERE_PARSE_BODY = {"id": "parse-1", "pages": [], "meta": {"billed_units": {"pages": 3}}}
-
-
-def test_cohere_parse_relay_is_costed_per_billed_page():
-    result, logging_obj = _relay_logging_result(
-        AzureAIPassthroughConfig(), "Cohere-parse-v5", "providers/cohere/v2/parse", COHERE_PARSE_BODY
-    )
-    per_page = litellm.get_model_info("azure_ai/Cohere-parse-v5")["ocr_cost_per_page"]
-
-    assert isinstance(result, OCRResponse)
-    assert result.usage_info.pages_processed == 3
-    assert logging_obj.call_type == "aocr"
-    assert per_page > 0
-    assert logging_obj._response_cost_calculator(result=result) == pytest.approx(3 * per_page)
-
-
-def test_deployment_without_an_ocr_config_is_never_costed_as_ocr():
-    config = AzureAIPassthroughConfig(ocr_config_for=lambda model: None)
-    result, logging_obj = _relay_logging_result(
-        config, "mistral-document-ai-2512", "providers/mistral/azure/ocr", MISTRAL_OCR_BODY
-    )
-
-    assert result == {"response": MISTRAL_OCR_BODY}
-    assert logging_obj.call_type == "allm_passthrough_route"
-
-
 def test_accepted_ocr_job_without_a_result_body_is_not_costed():
+    passthrough_ocr, calls = _passthrough_ocr(MISTRAL_OCR_BODY)
     result, logging_obj = _relay_logging_result(
-        AzureAIPassthroughConfig(),
+        AzureAIPassthroughConfig(passthrough_ocr=passthrough_ocr),
         "mistral-document-ai-2512",
         "providers/mistral/azure/ocr",
         {"status": "running"},
         status_code=202,
     )
 
+    assert calls == []
     assert result == {"response": {"status": "running"}}
     assert logging_obj.call_type == "allm_passthrough_route"
 
 
-def test_unparseable_ocr_body_falls_back_to_the_passthrough_object():
+def test_binding_result_that_is_not_an_ocr_response_falls_back_to_the_passthrough_object():
+    passthrough_ocr, _ = _passthrough_ocr({"pages": "not a list"})
     result, logging_obj = _relay_logging_result(
-        AzureAIPassthroughConfig(),
+        AzureAIPassthroughConfig(passthrough_ocr=passthrough_ocr),
         "mistral-document-ai-2512",
         "providers/mistral/azure/ocr",
-        ["not", "an", "ocr", "body"],
+        MISTRAL_OCR_BODY,
     )
 
-    assert result == {"response": '["not", "an", "ocr", "body"]'}
+    assert result == {"response": MISTRAL_OCR_BODY}
     assert logging_obj.call_type == "allm_passthrough_route"
 
 
@@ -502,7 +506,7 @@ def test_foundry_embeddings_relay_is_costed_per_input_token():
     assert isinstance(result, EmbeddingResponse)
     assert logging_obj.call_type == "aembedding"
     assert per_token > 0
-    assert logging_obj._response_cost_calculator(result=result) == pytest.approx(1200 * per_token)
+    assert logging_obj.response_cost_calculator(result=result) == pytest.approx(1200 * per_token)
 
 
 def test_cohere_rerank_relay_is_costed_per_search_unit():
@@ -514,7 +518,163 @@ def test_cohere_rerank_relay_is_costed_per_search_unit():
     assert isinstance(result, RerankResponse)
     assert logging_obj.call_type == "arerank"
     assert per_query > 0
-    assert logging_obj._response_cost_calculator(result=result) == pytest.approx(2 * per_query)
+    assert logging_obj.response_cost_calculator(result=result) == pytest.approx(2 * per_query)
+
+
+COHERE_EMBED_BODY: Final[Mapping[str, object]] = {
+    "id": "embed-1",
+    "texts": ["hello world"],
+    "embeddings": {"float": [[0.1, 0.2]]},
+    "meta": {"api_version": {"version": "2"}, "billed_units": {"input_tokens": 2, "image_tokens": 0}},
+    "response_type": "embeddings_by_type",
+}
+COHERE_V1_EMBED_META: Final[Mapping[str, object]] = {
+    "api_version": {"version": "1"},
+    "billed_units": {"input_tokens": 2, "image_tokens": 0},
+}
+TWO_VECTORS: Final = [[0.1, 0.2], [0.3, 0.4]]
+
+
+def _cohere_embed_relay_result(
+    body: Mapping[str, object], native_path: str = "providers/cohere/v2/embed"
+) -> tuple[object, Logging]:
+    return _relay_logging_result(AzureAIPassthroughConfig(), "embed-v-4-0", native_path, body)
+
+
+def _foundry_embed_price(price_key: str) -> float:
+    return litellm.get_model_info("azure_ai/embed-v-4-0")[price_key]
+
+
+def test_native_cohere_embed_relay_is_costed_per_billed_input_token() -> None:
+    result, logging_obj = _cohere_embed_relay_result(COHERE_EMBED_BODY)
+    per_token: Final = _foundry_embed_price("input_cost_per_token")
+
+    assert isinstance(result, EmbeddingResponse)
+    assert logging_obj.call_type == "aembedding"
+    assert per_token > 0
+    assert logging_obj.response_cost_calculator(result=result) == pytest.approx(2 * per_token)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {
+            "id": "embed-1",
+            "texts": ["hello world", "second text"],
+            "embeddings": {"float": TWO_VECTORS},
+            "meta": COHERE_V1_EMBED_META,
+            "response_type": "embeddings_by_type",
+        },
+        {
+            "id": "embed-1",
+            "texts": ["hello world", "second text"],
+            "embeddings": TWO_VECTORS,
+            "meta": COHERE_V1_EMBED_META,
+            "response_type": "embeddings_floats",
+        },
+    ],
+    ids=["embeddings_by_type", "embeddings_floats"],
+)
+def test_native_cohere_v1_embed_relay_is_costed_per_billed_input_token(body: Mapping[str, object]) -> None:
+    result, logging_obj = _cohere_embed_relay_result(body, "providers/cohere/v1/embed")
+    per_token: Final = _foundry_embed_price("input_cost_per_token")
+
+    assert isinstance(result, EmbeddingResponse)
+    assert [(row["index"], row["embedding"]) for row in result.data] == list(enumerate(TWO_VECTORS))
+    assert logging_obj.call_type == "aembedding"
+    assert per_token > 0
+    assert logging_obj.response_cost_calculator(result=result) == pytest.approx(2 * per_token)
+
+
+def test_native_cohere_embed_relay_prices_an_image_at_the_input_tokens_foundry_already_folded_it_into() -> None:
+    body: Final = {
+        **COHERE_EMBED_BODY,
+        "texts": [],
+        "images": [{"width": 64, "height": 64, "format": "image/png", "bit_depth": 8}],
+        "meta": {"api_version": {"version": "2"}, "billed_units": {"input_tokens": 24, "image_tokens": 6}},
+    }
+    result, logging_obj = _cohere_embed_relay_result(body)
+    per_token: Final = _foundry_embed_price("input_cost_per_token")
+    per_image_token: Final = _foundry_embed_price("input_cost_per_image_token")
+
+    assert isinstance(result, EmbeddingResponse)
+    assert per_token > 0
+    assert per_image_token > 0
+    assert logging_obj.response_cost_calculator(result=result) == pytest.approx(24 * per_token)
+
+
+
+def test_native_cohere_embed_relay_rows_keep_their_embedding_type() -> None:
+    result, _ = _cohere_embed_relay_result({**COHERE_EMBED_BODY, "embeddings": {"float": TWO_VECTORS, "int8": [[1, 2]]}})
+
+    assert isinstance(result, EmbeddingResponse)
+    assert [(row["type"], row["index"], row["embedding"]) for row in result.data] == [
+        ("float", 0, TWO_VECTORS[0]),
+        ("float", 1, TWO_VECTORS[1]),
+        ("int8", 0, [1, 2]),
+    ]
+
+@pytest.mark.parametrize("texts", [None, "hello world", [1, 2], ["hello", 3]])
+def test_native_cohere_embed_relay_with_billed_units_is_costed_whatever_texts_holds(texts: object) -> None:
+    result, logging_obj = _cohere_embed_relay_result({**COHERE_EMBED_BODY, "texts": texts})
+
+    assert isinstance(result, EmbeddingResponse)
+    assert logging_obj.call_type == "aembedding"
+    assert logging_obj.response_cost_calculator(result=result) == pytest.approx(
+        2 * _foundry_embed_price("input_cost_per_token")
+    )
+
+
+def test_native_cohere_embed_relay_without_texts_is_costed_per_billed_input_token() -> None:
+    body: Final = {key: value for key, value in COHERE_EMBED_BODY.items() if key != "texts"}
+    result, logging_obj = _cohere_embed_relay_result(body)
+
+    assert isinstance(result, EmbeddingResponse)
+    assert logging_obj.call_type == "aembedding"
+    assert logging_obj.response_cost_calculator(result=result) == pytest.approx(
+        2 * _foundry_embed_price("input_cost_per_token")
+    )
+
+
+@pytest.mark.parametrize(
+    ("texts", "counted_texts"),
+    [
+        (["hello world", "a longer second text"], ["hello world", "a longer second text"]),
+        (["before <|endoftext|> after"], ["before <|endoftext|> after"]),
+        ("hello world", []),
+        (["hello", 3], []),
+        (None, []),
+    ],
+)
+def test_native_cohere_embed_relay_without_billed_units_is_costed_from_the_echoed_texts(
+    texts: object, counted_texts: list[str]
+) -> None:
+    result, logging_obj = _cohere_embed_relay_result({**COHERE_EMBED_BODY, "texts": texts, "meta": {}})
+    per_token: Final = _foundry_embed_price("input_cost_per_token")
+    echoed_tokens: Final = sum(len(litellm.encoding.encode(text, disallowed_special=())) for text in counted_texts)
+
+    assert isinstance(result, EmbeddingResponse)
+    assert logging_obj.call_type == "aembedding"
+    assert result.usage.prompt_tokens == echoed_tokens
+    assert logging_obj.response_cost_calculator(result=result) == pytest.approx(echoed_tokens * per_token)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"message": "no embeddings here"},
+        {**COHERE_EMBED_BODY, "embeddings": None},
+        {**COHERE_EMBED_BODY, "embeddings": "vectors"},
+        {**COHERE_EMBED_BODY, "meta": "not an object"},
+    ],
+)
+def test_native_cohere_embed_relay_with_a_non_embed_body_keeps_the_passthrough_object_and_call_type(
+    body: Mapping[str, object],
+) -> None:
+    result, logging_obj = _cohere_embed_relay_result(body)
+
+    assert result == {"response": body}
+    assert logging_obj.call_type == "allm_passthrough_route"
 
 
 def test_image_generation_relay_is_costed_per_image():
@@ -526,7 +686,7 @@ def test_image_generation_relay_is_costed_per_image():
     assert isinstance(result, ImageResponse)
     assert logging_obj.call_type == "aimage_generation"
     assert per_image > 0
-    assert logging_obj._response_cost_calculator(result=result) == pytest.approx(per_image)
+    assert logging_obj.response_cost_calculator(result=result) == pytest.approx(per_image)
 
 
 def test_flux_2_relay_through_the_provider_route_is_costed_per_image():
@@ -537,7 +697,7 @@ def test_flux_2_relay_through_the_provider_route_is_costed_per_image():
 
     assert isinstance(result, ImageResponse)
     assert logging_obj.call_type == "aimage_generation"
-    assert logging_obj._response_cost_calculator(result=result) == pytest.approx(per_image)
+    assert logging_obj.response_cost_calculator(result=result) == pytest.approx(per_image)
 
 
 def test_rejected_rerank_relay_keeps_the_passthrough_object_and_call_type():
@@ -596,7 +756,7 @@ def test_streaming_responses_chunks_through_a_router_relay_are_costed_like_azure
     assert response is not None
     assert response.response.usage.output_tokens == 100
     assert logging_obj.call_type == "aresponses"
-    assert logging_obj._response_cost_calculator(result=response.response) == pytest.approx(
+    assert logging_obj.response_cost_calculator(result=response.response) == pytest.approx(
         1000 * info["input_cost_per_token"] + 100 * info["output_cost_per_token"]
     )
 

@@ -9,9 +9,7 @@ pub struct HeaderError {
 use litellm_core_utils::core_helpers::json_type_name;
 use serde_json::{Map, Value};
 
-/// Max characters of an upstream error body echoed across the call boundary
-/// before truncation, so provider bodies are bounded and data-minimized.
-const UPSTREAM_ERROR_BODY_MAX_CHARS: usize = 256;
+use crate::Error;
 
 pub enum HeaderPolicy<'a> {
     All,
@@ -40,25 +38,27 @@ pub fn with_headers(
         })
 }
 
-pub async fn http_request(
-    request: reqwest::RequestBuilder,
-) -> Result<reqwest::Response, reqwest::Error> {
-    request.send().await
+pub async fn http_request(request: reqwest::RequestBuilder) -> Result<reqwest::Response, Error> {
+    Ok(request.send().await?)
 }
 
 pub async fn execute_http_request(
     client: &reqwest::Client,
     request: reqwest::Request,
-) -> Result<reqwest::Response, reqwest::Error> {
-    client.execute(request).await
+) -> Result<reqwest::Response, Error> {
+    Ok(client.execute(request).await?)
 }
 
-pub fn truncate_error_body(body: &str) -> String {
-    if body.chars().count() <= UPSTREAM_ERROR_BODY_MAX_CHARS {
-        return body.to_string();
-    }
-    let truncated: String = body.chars().take(UPSTREAM_ERROR_BODY_MAX_CHARS).collect();
-    format!("{truncated}... (truncated)")
+pub fn header_pairs(headers: &reqwest::header::HeaderMap) -> Vec<(String, String)> {
+    headers
+        .iter()
+        .filter_map(|(name, value)| {
+            value
+                .to_str()
+                .ok()
+                .map(|value| (name.to_string(), value.to_string()))
+        })
+        .collect()
 }
 
 pub fn string_headers(
@@ -87,6 +87,50 @@ pub fn has_header(headers: &[(String, String)], name: &str) -> bool {
         .any(|(key, _)| key.eq_ignore_ascii_case(name))
 }
 
+pub fn header_values<'a>(
+    headers: &'a [(String, String)],
+    name: &str,
+) -> impl Iterator<Item = &'a str> {
+    headers
+        .iter()
+        .filter(move |(key, _)| key.eq_ignore_ascii_case(name))
+        .map(|(_, value)| value.as_str())
+}
+
+pub fn header_value<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
+    header_values(headers, name).next()
+}
+
+pub fn without_headers(headers: Vec<(String, String)>, names: &[&str]) -> Vec<(String, String)> {
+    headers
+        .into_iter()
+        .filter(|(key, _)| !names.iter().any(|name| key.eq_ignore_ascii_case(name)))
+        .collect()
+}
+
+pub fn with_header(
+    headers: Vec<(String, String)>,
+    name: &str,
+    value: String,
+) -> Vec<(String, String)> {
+    without_headers(headers, &[name])
+        .into_iter()
+        .chain([(name.to_ascii_lowercase(), value)])
+        .collect()
+}
+
+pub fn with_default_headers(
+    headers: Vec<(String, String)>,
+    defaults: &[(&str, &str)],
+) -> Vec<(String, String)> {
+    let missing: Vec<(String, String)> = defaults
+        .iter()
+        .filter(|(name, _)| !has_header(&headers, name))
+        .map(|(name, value)| ((*name).to_string(), (*value).to_string()))
+        .collect();
+    headers.into_iter().chain(missing).collect()
+}
+
 pub fn has_bearer_auth(headers: &[(String, String)]) -> bool {
     headers.iter().any(|(name, value)| {
         if !name.eq_ignore_ascii_case("authorization") {
@@ -94,7 +138,9 @@ pub fn has_bearer_auth(headers: &[(String, String)]) -> bool {
         }
         let value = value.trim();
         value.len() > 7
-            && value[..7].eq_ignore_ascii_case("bearer ")
+            && value
+                .get(..7)
+                .is_some_and(|prefix| prefix.eq_ignore_ascii_case("bearer "))
             && !value[7..].trim().is_empty()
     })
 }
@@ -158,22 +204,6 @@ mod tests {
     }
 
     #[test]
-    fn truncate_leaves_short_bodies_untouched() {
-        assert_eq!(truncate_error_body("short"), "short");
-    }
-
-    #[test]
-    fn truncate_bounds_long_bodies_by_characters() {
-        let body = "\u{00e9}".repeat(UPSTREAM_ERROR_BODY_MAX_CHARS + 10);
-        let truncated = truncate_error_body(&body);
-        assert!(truncated.ends_with("... (truncated)"));
-        assert_eq!(
-            truncated.chars().count(),
-            UPSTREAM_ERROR_BODY_MAX_CHARS + "... (truncated)".chars().count()
-        );
-    }
-
-    #[test]
     fn string_headers_rejects_non_string_values() {
         let headers = Map::from_iter([("x-trace".to_string(), json!(7))]);
         let err = string_headers("chat completions", Some(headers)).expect_err("non-string value");
@@ -195,6 +225,30 @@ mod tests {
     }
 
     #[test]
+    fn header_value_reads_the_first_match_in_any_case() {
+        let headers = vec![
+            ("X-Api-Key".to_string(), "first".to_string()),
+            ("x-api-key".to_string(), "second".to_string()),
+        ];
+        assert_eq!(header_value(&headers, "x-API-key"), Some("first"));
+        assert_eq!(header_value(&headers, "authorization"), None);
+    }
+
+    #[test]
+    fn without_headers_drops_every_casing_of_the_named_headers_and_keeps_order() {
+        let headers = vec![
+            ("X-Api-Key".to_string(), "k".to_string()),
+            ("anthropic-version".to_string(), "v".to_string()),
+            ("AUTHORIZATION".to_string(), "Bearer t".to_string()),
+            ("x-api-key".to_string(), "k2".to_string()),
+        ];
+        assert_eq!(
+            without_headers(headers, &["x-api-key", "authorization"]),
+            vec![("anthropic-version".to_string(), "v".to_string())]
+        );
+    }
+
+    #[test]
     fn auth_header_detection_is_case_insensitive() {
         let headers = vec![
             ("x-trace-id".to_string(), "trace-1".to_string()),
@@ -211,19 +265,19 @@ mod tests {
         assert!(!has_header(&headers, "authorization"));
     }
 
-    #[test]
-    fn bearer_detection_requires_a_non_empty_token() {
-        assert!(has_bearer_auth(&[(
-            "Authorization".to_string(),
-            "Bearer abc".to_string()
-        )]));
-        assert!(!has_bearer_auth(&[(
-            "Authorization".to_string(),
-            "Bearer    ".to_string()
-        )]));
-        assert!(!has_bearer_auth(&[(
-            "Authorization".to_string(),
-            "Basic abc".to_string()
-        )]));
+    #[rstest::rstest]
+    #[case::bearer("Authorization", "Bearer abc", true)]
+    #[case::lowercase("authorization", "bearer abc", true)]
+    #[case::blank_token("Authorization", "Bearer    ", false)]
+    #[case::empty("authorization", "", false)]
+    #[case::basic("Authorization", "Basic abc", false)]
+    #[case::different_header("x-api-key", "abc", false)]
+    #[case::non_ascii("authorization", "invali\u{00e9}auth", false)]
+    fn bearer_detection_requires_a_non_empty_token(
+        #[case] name: &str,
+        #[case] value: &str,
+        #[case] expected: bool,
+    ) {
+        assert_eq!(has_bearer_auth(&[(name.into(), value.into())]), expected);
     }
 }

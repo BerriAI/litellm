@@ -12,6 +12,7 @@ from builtins import ExceptionGroup
 from dataclasses import dataclass, field
 from typing import Callable, Final, List, Protocol, runtime_checkable
 
+from e2e_metadata import step
 from proxy_client import ProxyClient
 from models import KeyGenerateBody
 
@@ -54,9 +55,7 @@ class ResourceManager:
 
     client: ResourceClient
     strict_cleanup: bool = False
-    _cleanups: List[Callable[[], object]] = field(
-        default_factory=list
-    )  # mutable-ok: append-only teardown registry
+    _cleanups: List[Callable[[], object]] = field(default_factory=list)
 
     def init(self) -> None:
         """No global setup needed today; present for lifecycle symmetry."""
@@ -83,10 +82,10 @@ class ResourceManager:
         self.defer(lambda: self.client.delete_customers([customer_id]))
         return customer_id
 
+    @step("Delete every resource the test created, newest first")
     def teardown(self) -> None:
         failures: Final = tuple(
-            failure for cleanup in reversed(self._cleanups)
-            if (failure := _run_cleanup(cleanup)) is not None
+            failure for cleanup in reversed(self._cleanups) if (failure := _run_cleanup(cleanup)) is not None
         )
         if failures and self.strict_cleanup:
             raise ExceptionGroup("Resource cleanup failed", failures)

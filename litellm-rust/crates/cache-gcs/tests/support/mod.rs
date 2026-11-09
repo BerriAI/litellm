@@ -29,7 +29,7 @@ pub fn cache_with_token(
 ) -> JsonGcsCache {
     GcsCache::with_token_source(
         config(server, gcs_path),
-        reqwest::Client::new(),
+        litellm_http::Client::for_test(),
         JsonCodec::new(),
         token,
     )

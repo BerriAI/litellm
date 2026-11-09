@@ -1,41 +1,31 @@
-mod activation;
-mod binding;
-mod callback;
-mod config;
-mod embedder;
-mod facade;
-mod future;
-mod handle;
-mod identity;
-mod native;
-mod request;
-mod resolver;
-mod semantic;
+mod python;
+mod selection;
 
-use litellm_cache::Error;
-use litellm_http::ClientVariant;
-use pyo3::{
-    exceptions::{PyNotImplementedError, PyRuntimeError, PyValueError},
-    prelude::*,
-    types::PyDict,
-};
+pub(crate) use python::{CacheCall, PythonCache};
+pub(crate) use selection::{Cached, Selection, configure, ensure_cache_disabled};
 
-pub(crate) use self::{
-    binding::ResolvedCache, handle::CacheTestHandle, resolver::CacheTestResolver,
-};
+use pyo3::{exceptions::PyRuntimeError, prelude::*};
 
-fn cache_error(error: Error) -> PyErr {
-    match error {
-        Error::InvalidEntry => PyValueError::new_err(error.to_string()),
-        Error::UnsupportedOperation => PyNotImplementedError::new_err(error.to_string()),
-        _ => PyRuntimeError::new_err(error.to_string()),
-    }
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum HandleError {
+    #[error("this inference route does not support configured caches")]
+    Unsupported,
+    #[error("cache operation without configured cache")]
+    Unconfigured,
+    #[error("cache arguments unavailable")]
+    MissingArguments,
+    #[error("cache reply without pending operation")]
+    NothingPending,
 }
 
-/// The host's pooled HTTP client, configured from the proxy's HTTP settings.
-fn host_client(py: Python<'_>, variant: ClientVariant) -> PyResult<reqwest::Client> {
-    let http_config = crate::http::call_config(py, &PyDict::new(py), true)?;
-    crate::http::pool()
-        .client(&http_config, variant)
-        .map_err(crate::http::client_error)
+impl From<HandleError> for PyErr {
+    fn from(error: HandleError) -> Self {
+        let message = litellm_error::Report::new(&error).to_string();
+        match error {
+            HandleError::Unsupported
+            | HandleError::Unconfigured
+            | HandleError::MissingArguments
+            | HandleError::NothingPending => PyRuntimeError::new_err(message),
+        }
+    }
 }

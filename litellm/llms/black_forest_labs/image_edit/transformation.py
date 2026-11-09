@@ -10,14 +10,17 @@ API Reference: https://docs.bfl.ai/
 import base64
 import time
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, Protocol
 
 import httpx
 from httpx._types import RequestFiles
+from pydantic import ConfigDict, TypeAdapter, with_config
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
-from litellm.litellm_core_utils.url_utils import async_safe_get, safe_get
+from litellm.litellm_core_utils.core_helpers import as_object_list, has_attributes
+from litellm.litellm_core_utils.url_utils import async_safe_get, join_api_base, safe_get
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.images.main import ImageEditOptionalRequestParams
@@ -36,6 +39,33 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _BflSample(TypedDict):
+    sample: NotRequired[ReadOnly[str | None]]
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _BflPolledResult(TypedDict):
+    result: NotRequired[ReadOnly[_BflSample]]
+
+
+_BFL_POLLED_RESULT_ADAPTER: Final = TypeAdapter(_BflPolledResult)
+_DECODED_JSON: Final = TypeAdapter(object)
+_UNTYPED_VALUE: Final = TypeAdapter(object)
+
+
+class _BinaryReadable(Protocol):
+    def read(self) -> bytes: ...
+
+
+class _Tellable(Protocol):
+    def tell(self) -> int: ...
+
+
+class _Seekable(Protocol):
+    def seek(self, offset: int, /) -> object: ...
 
 
 _BFL_REQUEST_PARAMS: Final = (
@@ -174,15 +204,14 @@ class BlackForestLabsImageEditConfig(BaseImageEditConfig):
         """
         Get the complete URL for the Black Forest Labs API request.
         """
-        base_url: str = api_base or get_secret_str("BFL_API_BASE") or DEFAULT_API_BASE
-        base_url = base_url.rstrip("/")
+        base_url: Final = api_base or get_secret_str("BFL_API_BASE") or DEFAULT_API_BASE
 
         endpoint: Final = self._get_model_endpoint(model)
-        return f"{base_url}{endpoint}"
+        return join_api_base(base_url, endpoint)
 
     def _read_image_bytes(
         self,
-        image: Any,
+        image: object,
         depth: int = 0,
         max_depth: int = DEFAULT_MAX_RECURSE_DEPTH,
     ) -> bytes:
@@ -193,9 +222,8 @@ class BlackForestLabsImageEditConfig(BaseImageEditConfig):
             )
         if isinstance(image, bytes):
             return image
-        elif isinstance(image, list):
-            # If it's a list, take the first image
-            return self._read_image_bytes(image[0], depth=depth + 1, max_depth=max_depth)
+        elif (image_list := as_object_list(image)) is not None:
+            return self._read_image_bytes(image_list[0], depth=depth + 1, max_depth=max_depth)
         elif isinstance(image, str):
             if image.startswith(("http://", "https://")):
                 response: Final = safe_get(litellm.module_level_client, image, timeout=60.0)
@@ -206,13 +234,12 @@ class BlackForestLabsImageEditConfig(BaseImageEditConfig):
                     "Unsupported image input: plain string values that are not URLs are not accepted. "
                     "Provide image bytes or a file-like object."
                 )
-        elif hasattr(image, "read"):
-            # File-like object
-            pos: Final = getattr(image, "tell", lambda: 0)()
-            if hasattr(image, "seek"):
+        elif has_attributes(image, _BinaryReadable, "read"):
+            pos: Final = image.tell() if has_attributes(image, _Tellable, "tell") else 0
+            if has_attributes(image, _Seekable, "seek"):
                 image.seek(0)
             data: Final = image.read()
-            if hasattr(image, "seek"):
+            if has_attributes(image, _Seekable, "seek"):
                 image.seek(pos)
             return data
         else:
@@ -250,7 +277,7 @@ class BlackForestLabsImageEditConfig(BaseImageEditConfig):
 
         # Handle mask if provided (for inpainting)
         if "mask" in image_edit_optional_request_params:
-            mask: Final = image_edit_optional_request_params["mask"]
+            mask: Final = _UNTYPED_VALUE.validate_python(image_edit_optional_request_params["mask"])
             mask_bytes: Final = self._read_image_bytes(mask)
             request_body["mask"] = base64.b64encode(mask_bytes).decode("utf-8")
 
@@ -302,12 +329,14 @@ class BlackForestLabsImageEditConfig(BaseImageEditConfig):
         The response contains: {"status": "Ready", "result": {"sample": "https://..."}}
         """
         try:
-            response_data: Final = raw_response.json()
+            raw_response_data: Final = _DECODED_JSON.validate_python(raw_response.json())
         except Exception as e:
             raise BlackForestLabsError(
                 status_code=raw_response.status_code,
                 message=f"Error parsing BFL response: {e}",
             )
+
+        response_data: Final = _BFL_POLLED_RESULT_ADAPTER.validate_python(raw_response_data)
 
         # Get image URL from result
         image_url: Final = response_data.get("result", {}).get("sample")

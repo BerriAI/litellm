@@ -26,6 +26,7 @@ def _install_daily_user_rollup_fault(user_id: str) -> str:
     _execute(
         (
             sql.SQL("CREATE SEQUENCE {}").format(sequence),
+            sql.SQL("GRANT USAGE ON SEQUENCE {} TO PUBLIC").format(sequence),
             sql.SQL(
                 "CREATE FUNCTION {}() RETURNS trigger LANGUAGE plpgsql AS $fault$ "
                 "BEGIN PERFORM nextval({}); "
@@ -141,6 +142,7 @@ def test_failed_daily_user_rollup_commit_is_retried_so_spend_report_and_daily_ac
         assert metrics == {
             "spend": pytest.approx(0.06),
             "flat_cost": pytest.approx(0.0),
+            "ptu_hours": pytest.approx(0.0),
             "prompt_tokens": 20,
             "completion_tokens": 20,
             "cache_read_input_tokens": 0,

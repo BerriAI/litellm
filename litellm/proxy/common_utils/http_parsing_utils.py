@@ -2,18 +2,27 @@ import json
 import re
 from collections.abc import Collection, Mapping
 from types import MappingProxyType, UnionType
-from typing import Annotated, Any, Final, Union, get_args, get_origin
+from typing import Annotated, Any, Final, Literal, Protocol, Union, get_args, get_origin
 
 import orjson
-from fastapi import Request, UploadFile, status
-from typing_extensions import NotRequired, ReadOnly, Required
+from fastapi import HTTPException, Request, UploadFile, status
+from pydantic import TypeAdapter, ValidationError
+from starlette._utils import get_route_path
+from starlette.datastructures import FormData
+from starlette.requests import ClientDisconnect, HTTPConnection
+from typing_extensions import NotRequired, ReadOnly, Required, assert_never
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
     AZURE_SPEECH_PASS_THROUGH_ROUTE_PREFIX,
     CLIENT_REQUESTED_MODEL_SCOPE_KEY,
+    LITELLM_CLIENT_DISCONNECT_DETAIL,
+    LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED,
     MAX_REQUEST_BODY_SIZE_TO_REPAIR_MB,
+    OPENSEARCH_PASS_THROUGH_ROUTE_PREFIX,
 )
+from litellm.integrations.otel.runtime import phase_event
+from litellm.litellm_core_utils.core_helpers import as_object_list, has_attributes, require_attributes
 from litellm.proxy._types import ProxyException
 from litellm.proxy.common_utils.callback_utils import (
     get_metadata_variable_name_from_kwargs,
@@ -21,8 +30,69 @@ from litellm.proxy.common_utils.callback_utils import (
 from litellm.types.router import Deployment
 
 _FORM_CONTENT_TYPES: Final[frozenset[str]] = frozenset({"application/x-www-form-urlencoded", "multipart/form-data"})
+# Binary bodies (e.g. OTLP trace exports on POST /v1/traces) are not JSON: arbitrary bytes used to
+# hit the JSON surrogate-repair path and fail auth with a 400. JSON under these types still parses.
+_BINARY_CONTENT_TYPES: Final[frozenset[str]] = frozenset({"application/x-protobuf", "application/protobuf"})
 
 _ANNOTATION_QUALIFIERS: Final[frozenset[object]] = frozenset({Annotated, NotRequired, ReadOnly, Required})
+_DECODED_JSON: Final = TypeAdapter(object)
+_JSON_REQUEST_BODY: Final = TypeAdapter(Mapping[str, object])
+
+
+class _ReadableUpload(Protocol):
+    async def read(self) -> bytes: ...
+
+
+class _UploadedFileInfo(Protocol):
+    @property
+    def filename(self) -> str | None: ...
+
+    @property
+    def content_type(self) -> str | None: ...
+
+
+def resolve_realtime_route_model(model: str | None, intent: str | None, is_translation: bool) -> str | None:
+    if model is not None:
+        return model
+    if is_translation:
+        return "gpt-realtime-translate"
+    if intent == "transcription":
+        return "gpt-realtime-whisper"
+    return None
+
+
+def resolve_inference_model(
+    body_model: object,
+    settings: Mapping[str, object],
+    cli_model: str | None,
+    endpoint_model: object = None,
+    *,
+    kind: Literal[
+        "completion", "image_generation", "image_edit", "moderation", "speech", "body", "path"
+    ] = "completion",
+) -> object:
+    match kind:
+        case "image_generation":
+            return cli_model or endpoint_model or settings.get("image_generation_model") or body_model
+        case "image_edit":
+            return (
+                settings.get("completion_model")
+                or cli_model
+                or endpoint_model
+                or settings.get("image_generation_model")
+                or body_model
+            )
+        case "moderation":
+            return cli_model or settings.get("moderation_model") or body_model
+        case "speech":
+            return cli_model or body_model
+        case "body":
+            return body_model
+        case "path":
+            return endpoint_model
+        case "completion":
+            return settings.get("completion_model") or cli_model or endpoint_model or body_model
+    return assert_never(kind)
 
 
 def _normalize_media_type(content_type: str) -> str:
@@ -119,7 +189,81 @@ def coerce_numeric_form_fields(
     }
 
 
-async def _read_request_body(request: Request | None) -> dict:
+def _parse_binary_body(body: bytes) -> dict[str, object]:
+    """JSON sent under a binary content type still parses; real binary (protobuf) carries no params -> {}."""
+    try:
+        return dict(_JSON_REQUEST_BODY.validate_python(orjson.loads(body)))
+    except (orjson.JSONDecodeError, ValidationError):
+        pass
+    return {}
+
+
+def _declared_content_length(headers: Mapping[str, str]) -> int | None:
+    declared: Final = headers.get("content-length")
+    return int(declared) if isinstance(declared, str) and declared.isdigit() else None
+
+
+def _mark_body_received(byte_count: int | None) -> None:
+    """Marks the end of body transfer on the request's server span, once per body read."""
+    phase_event(
+        "litellm.request.body_received",
+        None if byte_count is None else {"litellm.request.body_bytes": byte_count},
+    )
+
+
+def is_otlp_trace_request(request: HTTPConnection) -> bool:
+    if request.scope.get("type") != "http":
+        return False
+    return request.scope.get("method") == "POST" and get_route_path(request.scope) in {"/v1/traces", "/v1/logs"}
+
+
+def _parse_form_metadata(raw_metadata: str) -> object:
+    """The JSON body path rejects a lone surrogate escape (``"\\ud800"``) with a
+    400 because no provider or database can encode it. ``json.loads`` accepts
+    the escape, so the multipart ``metadata`` field gets the same check."""
+    try:
+        parsed: Final = _DECODED_JSON.validate_python(json.loads(raw_metadata))
+        json.dumps(parsed, ensure_ascii=False).encode("utf-8")
+    except (json.JSONDecodeError, UnicodeEncodeError) as e:
+        raise ProxyException(
+            message=f"Invalid form payload: metadata {e}",
+            type="invalid_request_error",
+            param="metadata",
+            code=status.HTTP_400_BAD_REQUEST,
+        ) from e
+    return parsed
+
+
+def _reraise_request_size_error(error: Exception) -> None:
+    if isinstance(error, HTTPException) and error.status_code == status.HTTP_413_CONTENT_TOO_LARGE:
+        raise error
+
+
+async def _read_form_data(request: Request) -> FormData:
+    try:
+        form_data: Final = await request.form()
+        _mark_body_received(_declared_content_length(request.headers))
+    except ClientDisconnect:
+        raise
+    except Exception as e:
+        _reraise_request_size_error(e)
+        # ``request.form()`` raises on malformed multipart (missing
+        # boundary, malformed chunk encoding, …). Surface as 400 so
+        # the auth-time pre-read does not silently cache ``{}`` while
+        # a later raw-body re-read sees the original payload —
+        # banned-param checks must see the same body the handler
+        # acts on.
+        verbose_proxy_logger.error("Invalid form payload: %s", e)
+        raise ProxyException(
+            message=f"Invalid form payload: {e}",
+            type="invalid_request_error",
+            param="request_body",
+            code=status.HTTP_400_BAD_REQUEST,
+        )
+    return form_data
+
+
+async def read_request_body(request: Request | None) -> dict:
     """
     Safely read the request body and parse it as JSON.
 
@@ -129,8 +273,10 @@ async def _read_request_body(request: Request | None) -> dict:
     Returns:
     - dict: Parsed request data as a dictionary or an empty dictionary if parsing fails
     """
+    if request is None:
+        return {}
     try:
-        if request is None:
+        if is_otlp_trace_request(request):
             return {}
 
         # Check if we already read and parsed the body
@@ -138,39 +284,32 @@ async def _read_request_body(request: Request | None) -> dict:
         if _cached_request_body is not None:
             return _cached_request_body
 
-        _request_headers: Final[dict] = _safe_get_request_headers(request=request)
+        _request_headers: Final[dict] = safe_get_request_headers(request=request)
         content_type: Final = _request_headers.get("content-type", "")
 
-        if _is_form_content_type(content_type):
-            try:
-                form_data: Final = await request.form()
-            except Exception as e:
-                # ``request.form()`` raises on malformed multipart (missing
-                # boundary, malformed chunk encoding, …). Surface as 400 so
-                # the auth-time pre-read does not silently cache ``{}`` while
-                # a later raw-body re-read sees the original payload —
-                # banned-param checks must see the same body the handler
-                # acts on.
-                verbose_proxy_logger.error("Invalid form payload: %s", e)
-                raise ProxyException(
-                    message=f"Invalid form payload: {e}",
-                    type="invalid_request_error",
-                    param="request_body",
-                    code=status.HTTP_400_BAD_REQUEST,
-                )
-            parsed_body = dict(form_data)
-            if "metadata" in parsed_body and isinstance(parsed_body["metadata"], str):
-                parsed_body["metadata"] = json.loads(parsed_body["metadata"])
+        if _normalize_media_type(content_type) in _BINARY_CONTENT_TYPES:
+            binary_body: Final = await request.body()
+            _mark_body_received(len(binary_body))
+            parsed_body = _parse_binary_body(binary_body)
+        elif _is_form_content_type(content_type):
+            form_body: Final = dict(await _read_form_data(request))
+            raw_metadata: Final = form_body.get("metadata")
+            parsed_body = (
+                {**form_body, "metadata": _parse_form_metadata(raw_metadata)}
+                if isinstance(raw_metadata, str)
+                else form_body
+            )
         else:
             # Read the request body
             body: Final = await request.body()
+            _mark_body_received(len(body))
 
             # Return empty dict if body is empty or None
             if not body:
                 parsed_body = {}
             else:
                 try:
-                    parsed_body = orjson.loads(body)
+                    parsed_body = dict(_JSON_REQUEST_BODY.validate_python(orjson.loads(body)))
                 except orjson.JSONDecodeError as e:
                     # The surrogate-repair fallback below runs two full-body re.sub
                     # passes, which block the event loop on multi-MB malformed bodies.
@@ -196,8 +335,9 @@ async def _read_request_body(request: Request | None) -> dict:
                     body_str = re.sub(r"(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]", "", body_str)
 
                     try:
-                        parsed_body = json.loads(body_str)
-                        json.dumps(parsed_body, ensure_ascii=False).encode("utf-8")
+                        decoded_body: Final = _DECODED_JSON.validate_python(json.loads(body_str))
+                        json.dumps(decoded_body, ensure_ascii=False).encode("utf-8")
+                        parsed_body = dict(_JSON_REQUEST_BODY.validate_python(decoded_body))
                     except (json.JSONDecodeError, UnicodeEncodeError):
                         # json.loads accepts lone surrogate escapes that no provider can encode
                         verbose_proxy_logger.error("Invalid JSON payload received: %s", e)
@@ -209,21 +349,66 @@ async def _read_request_body(request: Request | None) -> dict:
                         )
 
         # Cache the parsed result
-        _safe_set_request_parsed_body(request=request, parsed_body=parsed_body)
+        safe_set_request_parsed_body(request=request, parsed_body=parsed_body)
         return parsed_body
 
+    except ValidationError as e:
+        from fastapi.routing import APIRoute
+
+        from litellm.proxy.auth.auth_utils import (
+            request_dispatched_to_pass_through_endpoint,
+            request_dispatched_to_provider_pass_through,
+        )
+        from litellm.proxy.lens.buffering import LensRoute
+
+        route: Final[object] = request.scope.get("route")
+        if (
+            request_dispatched_to_pass_through_endpoint(request)
+            or request_dispatched_to_provider_pass_through(request)
+            or isinstance(route, LensRoute)
+            or (
+                isinstance(route, APIRoute)
+                and route.body_field is not None
+                and not route.body_field.field_info.is_required()
+                and (await request.body()).strip() == b"null"
+            )
+        ):
+            return {}
+        raise ProxyException(
+            message="Invalid JSON payload: expected an object",
+            type="invalid_request_error",
+            param="request_body",
+            code=status.HTTP_400_BAD_REQUEST,
+        ) from e
     except (json.JSONDecodeError, orjson.JSONDecodeError, ProxyException) as e:
         # Re-raise ProxyException as-is
         verbose_proxy_logger.error("Invalid JSON payload received: %s", e)
         raise
+    except ClientDisconnect as e:
+        from litellm.proxy.proxy_server import (
+            _close_dangling_otel_server_span,  # pyright: ignore[reportPrivateUsage]  # proxy_server keeps the span-close helper private; the Starlette HTTPException handler does not stamp the OTel server span opened at auth time, so the body reader must before it aborts
+        )
+
+        verbose_proxy_logger.info("Client disconnected before the request body was fully received")
+        disconnected: Final = HTTPException(
+            status_code=LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED, detail=LITELLM_CLIENT_DISCONNECT_DETAIL
+        )
+        _close_dangling_otel_server_span(request, LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED, exc=disconnected)
+        raise disconnected from e
     except Exception as e:
         # Catch unexpected errors to avoid crashes
+        _reraise_request_size_error(e)
         verbose_proxy_logger.exception("Unexpected error reading request body - %s", e)
         return {}
 
 
-def is_opaque_audio_pass_through_request(route: str, content_type: str) -> bool:
-    """Azure Speech bodies (raw audio, multipart uploads) are forwarded byte for byte, so auth must not consume them."""
+_read_request_body: Final = read_request_body
+
+
+def is_opaque_pass_through_request(route: str, content_type: str) -> bool:
+    """Azure Speech audio and every OpenSearch body are forwarded byte for byte, so auth must not parse them."""
+    if route.startswith(f"{OPENSEARCH_PASS_THROUGH_ROUTE_PREFIX}/"):
+        return True
     media_type: Final = _normalize_media_type(content_type)
     return route.startswith(f"{AZURE_SPEECH_PASS_THROUGH_ROUTE_PREFIX}/") and (
         media_type.startswith("audio/") or media_type == "multipart/form-data"
@@ -233,7 +418,7 @@ def is_opaque_audio_pass_through_request(route: str, content_type: str) -> bool:
 async def read_raw_json_body(request: Request | None) -> bytes | None:
     if request is None or _safe_get_request_parsed_body(request=request) is None:
         return None
-    content_type: Final = _safe_get_request_headers(request=request).get("content-type", "")
+    content_type: Final = safe_get_request_headers(request=request).get("content-type", "")
     if _is_form_content_type(content_type):
         return None
     try:
@@ -258,7 +443,7 @@ def get_client_requested_model(request: Request | None) -> str | None:
     return model if isinstance(model, str) else None
 
 
-def _safe_get_request_query_params(request: Request | None) -> dict:
+def safe_get_request_query_params(request: Request | None) -> dict:
     if request is None:
         return {}
     try:
@@ -270,7 +455,10 @@ def _safe_get_request_query_params(request: Request | None) -> dict:
         return {}
 
 
-def _safe_set_request_parsed_body(
+_safe_get_request_query_params: Final = safe_get_request_query_params
+
+
+def safe_set_request_parsed_body(
     request: Request | None,
     parsed_body: dict,
 ) -> None:
@@ -280,6 +468,19 @@ def _safe_set_request_parsed_body(
         request.scope["parsed_body"] = (tuple(parsed_body.keys()), parsed_body)
     except Exception as e:
         verbose_proxy_logger.debug("Unexpected error setting request parsed body - %s", e)
+
+
+_safe_set_request_parsed_body: Final = safe_set_request_parsed_body
+
+
+def detach_request_parsed_body(
+    request: Request, request_data: Mapping[str, object]
+) -> dict[str, object]:  # mutable-ok: the client's body copy, which the base tag merges write into
+    client_body: Final = dict(request_data)
+    cached: Final[object] = request.scope.get("parsed_body")
+    if isinstance(cached, tuple) and cached[1] is request_data:
+        request.scope["parsed_body"] = (cached[0], client_body)  # rebind-ok: cache holds the client copy
+    return client_body
 
 
 def rewrite_request_model(
@@ -294,13 +495,15 @@ def rewrite_request_model(
     if request is None:
         return
     cached_body: Final = _safe_get_request_parsed_body(request=request)
-    body: Final = {**cached_body, "model": model} if cached_body is not None else request_data
-    _safe_set_request_parsed_body(request=request, parsed_body=body)
-    request._json = body
-    request._body = orjson.dumps(body)
+    body: Final = (
+        {**_JSON_REQUEST_BODY.validate_python(cached_body), "model": model} if cached_body is not None else request_data
+    )
+    safe_set_request_parsed_body(request=request, parsed_body=body)
+    request._json = body  # pyright: ignore[reportPrivateUsage]  # Starlette JSON cache
+    request._body = orjson.dumps(body)  # pyright: ignore[reportPrivateUsage]  # Starlette body cache
 
 
-def _safe_get_request_headers(request: Request | None) -> dict:
+def safe_get_request_headers(request: Request | None) -> dict:
     """
     [Non-Blocking] Safely get the request headers.
     Caches the result on request.state to avoid re-creating dict(request.headers) per call.
@@ -327,6 +530,9 @@ def _safe_get_request_headers(request: Request | None) -> dict:
     except Exception:
         pass  # request.state may not be available in all contexts
     return headers
+
+
+_safe_get_request_headers: Final = safe_get_request_headers
 
 
 def check_file_size_under_limit(
@@ -356,8 +562,8 @@ def check_file_size_under_limit(
 
     if llm_router is not None and request_data["model"] in router_model_names:
         try:
-            deployment: Final[Deployment | None] = llm_router.get_deployment_by_model_group_name(
-                model_group_name=request_data["model"]
+            deployment: Final[Deployment | None] = llm_router.registry().deployments(
+                request_data["model"], source="first_in_group"
             )
             if (
                 deployment
@@ -399,18 +605,20 @@ async def get_form_data(request: Request) -> dict[str, Any]:
     Handles when OpenAI SDKs pass form keys as `timestamp_granularities[]="word"` instead of `timestamp_granularities=["word", "sentence"]`
     """
     form: Final = await request.form()
-    parsed_form_data: Final[dict[str, Any]] = {}
-    for key, value in form.multi_items():  # not dict(form), which keeps only the last repeat
-        if key.endswith("[]"):
-            clean_key = key[:-2]
-            parsed_form_data.setdefault(clean_key, []).append(value)
-        else:
-            parsed_form_data[key] = value
-    return parsed_form_data
+    form_items: Final = tuple(form.multi_items() if hasattr(form, "multi_items") else form.items())
+    array_keys: Final = frozenset(key[:-2] for key, _ in form_items if key.endswith("[]"))
+    normalized_items: Final = tuple((key.removesuffix("[]"), value) for key, value in form_items)
+    normalized_keys: Final = tuple(dict.fromkeys(key for key, _ in normalized_items))
+    return {
+        key: [value for item_key, value in normalized_items if item_key == key]
+        if key in array_keys
+        else next(value for item_key, value in reversed(normalized_items) if item_key == key)
+        for key in normalized_keys
+    }
 
 
 async def convert_upload_files_to_file_data(
-    form_data: dict[str, Any],
+    form_data: Mapping[str, object],
 ) -> dict[str, Any]:
     """
     Convert FastAPI UploadFile objects to file data tuples for litellm.
@@ -433,35 +641,38 @@ async def convert_upload_files_to_file_data(
     """
     data: Final = {}
     for key, value in form_data.items():
-        if isinstance(value, list):
+        values = as_object_list(value)
+        if values is not None:
             # Check if it's a list of UploadFile objects
-            if value and hasattr(value[0], "read"):
+            if values and has_attributes(values[0], _ReadableUpload, "read"):
                 files = []
-                for f in value:
-                    file_content = await f.read()
+                for f in values:
+                    file_content = await require_attributes(f, _ReadableUpload, "read").read()
+                    file_info = require_attributes(f, _UploadedFileInfo, "filename", "content_type")
                     # Create tuple: (filename, content, content_type)
-                    files.append((f.filename, file_content, f.content_type))
+                    files.append((file_info.filename, file_content, file_info.content_type))
                 data[key] = files
             else:
                 data[key] = value
-        elif hasattr(value, "read"):
+        elif has_attributes(value, _ReadableUpload, "read"):
             # Single UploadFile object - read and convert to list for consistency
             file_content = await value.read()
-            data[key] = [(value.filename, file_content, value.content_type)]
+            upload_info = require_attributes(value, _UploadedFileInfo, "filename", "content_type")
+            data[key] = [(upload_info.filename, file_content, upload_info.content_type)]
         else:
             # Regular form field
             data[key] = value
     return data
 
 
-async def get_request_body(request: Request) -> dict[str, Any]:
+async def get_request_body(request: Request) -> dict[str, object]:
     """
     Read the request body and parse it as JSON.
     """
     if request.method == "POST":
         content_type: Final = request.headers.get("content-type", "")
         if is_json_content_type(content_type):
-            return await _read_request_body(request)
+            return await read_request_body(request)
         elif _is_form_content_type(content_type):
             return await get_form_data(request)
         else:
@@ -574,7 +785,7 @@ def get_tags_from_request_body(request_body: Mapping[str, object]) -> list[str]:
     if isinstance(metadata, str):
         from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 
-        parsed: Final[object] = safe_json_loads(metadata)
+        parsed: Final[object] = _DECODED_JSON.validate_python(safe_json_loads(metadata))
         metadata = parsed if isinstance(parsed, dict) else {}
     elif not isinstance(metadata, dict):
         metadata = {}
@@ -609,7 +820,7 @@ def populate_request_with_path_params(request_data: dict, request: Request) -> d
         dict: Updated request_data with path parameters and query parameters added
     """
     # Add query parameters to request_data (for GET requests, etc.)
-    query_params: Final = _safe_get_request_query_params(request)
+    query_params: Final = safe_get_request_query_params(request)
     if query_params:
         for key, value in query_params.items():
             # Don't overwrite existing values from request body
@@ -629,10 +840,6 @@ def populate_request_with_path_params(request_data: dict, request: Request) -> d
                     request_data["vector_store_ids"] = [value]
                 continue
             request_data.setdefault(key, value)
-        verbose_proxy_logger.debug(
-            "populate_request_with_path_params: Found path_params, vector_store_ids=%s",
-            request_data.get("vector_store_ids"),
-        )
         return request_data
 
     # Fallback: parse the URL path directly to extract vector_store_id
@@ -668,9 +875,3 @@ def _add_vector_store_id_from_path(request_data: dict, request: Request) -> None
                 existing_ids.append(vector_store_id)
         else:
             request_data["vector_store_ids"] = [vector_store_id]
-        verbose_proxy_logger.debug(
-            "populate_request_with_path_params: Updated request_data with vector_store_ids=%s",
-            request_data.get("vector_store_ids"),
-        )
-    else:
-        verbose_proxy_logger.debug("populate_request_with_path_params: No vector_store_id present in path=%s", path)

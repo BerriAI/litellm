@@ -6,9 +6,6 @@
     "start_time",
     "asynchronous"
   ],
-  "check_limits": [
-    "kwargs"
-  ],
   "finalize": [
     "response",
     "logger",
@@ -35,6 +32,17 @@
     "original_response",
     "api_key",
     "additional_args"
+  ],
+  "record_response": [
+    "logger",
+    "status",
+    "headers",
+    "body"
+  ],
+  "record_api_window": [
+    "logger",
+    "start",
+    "end"
   ],
   "defers_async_logging": [
     "logger"
@@ -76,11 +84,6 @@
   ],
   "custom_pricing_fields": [],
   "is_internal_call": [],
-  "credential_list": [],
-  "warn_unknown_credential": [
-    "name",
-    "loaded"
-  ],
   "before_deployment_call": [
     "kwargs",
     "call_type"
@@ -96,7 +99,15 @@
     "call_type"
   ],
   "stream_opened": [
-    "logger"
+    "logger",
+    "head"
+  ],
+  "stamp_stream_head": [
+    "head",
+    "logger",
+    "kwargs",
+    "start_time",
+    "end_time"
   ],
   "stream_success": [
     "logger",

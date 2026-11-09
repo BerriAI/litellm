@@ -5,20 +5,46 @@ use std::{
     pin::pin,
 };
 
+use base64::{Engine, engine::general_purpose::STANDARD};
 use serde_json::{Map, Value};
 use tracing::{
-    Dispatch, Event, Subscriber,
+    Dispatch,
     field::{Field, Visit},
-    subscriber::Interest,
 };
-use tracing_subscriber::{Layer, Registry, layer::Context, prelude::*};
 
+mod layer;
 mod processing;
 mod redaction;
 
+pub use layer::sink_layer;
 pub use processing::{DiagnosticInput, DiagnosticOutput, Policy, Processor};
 pub use redaction::{REDACTED, SecretRedactor};
 pub use tracing::{Level, Metadata, debug, error, info, trace, warn};
+
+pub struct ByteChunk<'a>(&'a [u8]);
+
+impl<'a> ByteChunk<'a> {
+    pub fn new(data: &'a [u8]) -> Self {
+        Self(data)
+    }
+
+    pub fn encoding(&self) -> &'static str {
+        if std::str::from_utf8(self.0).is_ok() {
+            "utf8"
+        } else {
+            "base64"
+        }
+    }
+}
+
+impl fmt::Display for ByteChunk<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match std::str::from_utf8(self.0) {
+            Ok(text) => formatter.write_str(text),
+            Err(_) => formatter.write_str(&STANDARD.encode(self.0)),
+        }
+    }
+}
 
 pub trait Sink: Send + Sync + 'static {
     fn enabled(&self, metadata: &Metadata<'_>) -> bool;
@@ -40,8 +66,18 @@ pub struct Logger {
 impl Logger {
     pub fn new(sink: impl Sink) -> Self {
         Self {
-            dispatch: Dispatch::new(Registry::default().with(Output(sink))),
+            dispatch: layer::dispatch(sink),
         }
+    }
+
+    pub fn current() -> Self {
+        Self {
+            dispatch: tracing::dispatcher::get_default(Clone::clone),
+        }
+    }
+
+    pub fn install_global(&self) -> Result<(), tracing::dispatcher::SetGlobalDefaultError> {
+        tracing::dispatcher::set_global_default(self.dispatch.clone())
     }
 
     pub fn scope<T>(&self, operation: impl FnOnce() -> T) -> T {
@@ -78,37 +114,9 @@ impl Drop for Emitting {
     }
 }
 
-struct Output<S>(S);
-
-impl<S: Sink, R: Subscriber> Layer<R> for Output<S> {
-    fn register_callsite(&self, _: &'static Metadata<'static>) -> Interest {
-        Interest::sometimes()
-    }
-
-    fn enabled(&self, metadata: &Metadata<'_>, _: Context<'_, R>) -> bool {
-        let Some(_guard) = Emitting::enter() else {
-            return false;
-        };
-        self.0.enabled(metadata)
-    }
-
-    fn on_event(&self, event: &Event<'_>, _: Context<'_, R>) {
-        let Some(_guard) = Emitting::enter() else {
-            return;
-        };
-        let mut record = Record {
-            metadata: event.metadata(),
-            message: String::new(),
-            fields: Map::new(),
-        };
-        event.record(&mut record);
-        self.0.emit(&record);
-    }
-}
-
 impl Record {
     fn field(&mut self, field: &Field, value: Value) {
-        if field.name() == "message" {
+        if field.name() == "message" && self.metadata.is_event() {
             self.message = match value {
                 Value::String(message) => message,
                 value => value.to_string(),

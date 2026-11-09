@@ -1,6 +1,8 @@
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import { renderWithProviders, screen } from "../../../tests/test-utils";
+import { fireEvent, renderWithProviders, screen } from "../../../tests/test-utils";
 import { MODEL_MAX_BUDGET_PREMIUM_HINT, ModelMaxBudgetEditor, type ModelMaxBudget } from "./ModelMaxBudgetEditor";
+import i18n from "@/i18n/i18n";
 
 const STORED: ModelMaxBudget = { "gpt-4o": { budget_limit: 5, time_period: "30d" } };
 
@@ -36,14 +38,14 @@ describe("ModelMaxBudgetEditor without an enterprise license", () => {
   it("says why the controls are locked instead of failing silently", () => {
     renderEditor(false);
 
-    expect(screen.getByText(MODEL_MAX_BUDGET_PREMIUM_HINT)).toBeInTheDocument();
+    expect(screen.getByText(i18n.t(MODEL_MAX_BUDGET_PREMIUM_HINT))).toBeInTheDocument();
   });
 
   it("locks the empty state too, so no row can be started", () => {
     renderEditor(false, {});
 
     expect(addButton()).toBeDisabled();
-    expect(screen.getByText(MODEL_MAX_BUDGET_PREMIUM_HINT)).toBeInTheDocument();
+    expect(screen.getByText(i18n.t(MODEL_MAX_BUDGET_PREMIUM_HINT))).toBeInTheDocument();
   });
 });
 
@@ -58,12 +60,74 @@ describe("ModelMaxBudgetEditor with an enterprise license", () => {
   it("does not tell a licensed operator to upgrade", () => {
     renderEditor(true);
 
-    expect(screen.queryByText(MODEL_MAX_BUDGET_PREMIUM_HINT)).not.toBeInTheDocument();
+    expect(screen.queryByText(i18n.t(MODEL_MAX_BUDGET_PREMIUM_HINT))).not.toBeInTheDocument();
   });
 
   it("leaves the empty state usable", () => {
     renderEditor(true, {});
 
     expect(addButton()).toBeEnabled();
+  });
+});
+
+describe("ModelMaxBudgetEditor model families", () => {
+  it("stores a typed pattern that matches no listed model as one budget entry", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    renderWithProviders(
+      <ModelMaxBudgetEditor
+        value={{}}
+        onChange={onChange}
+        availableModels={["gpt-4o", "claude-opus-4-8"]}
+        premiumUser={true}
+      />,
+    );
+
+    await user.click(addButton());
+    const modelField = screen.getByPlaceholderText("Select model");
+    await user.type(modelField, "claude-opus*");
+    await user.click(await screen.findByRole("option", { name: /claude-opus\*/ }));
+    fireEvent.change(screen.getByPlaceholderText("Max spend ($)"), { target: { value: "10" } });
+
+    expect(onChange).toHaveBeenLastCalledWith({ "claude-opus*": { budget_limit: 10, time_period: "30d" } });
+  });
+
+  it("does not offer a typed pattern that another row already budgets", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <ModelMaxBudgetEditor
+        value={{ "claude-opus*": { budget_limit: 10, time_period: "1d" } }}
+        onChange={vi.fn()}
+        availableModels={["gpt-4o", "claude-opus-4-8"]}
+        premiumUser={true}
+      />,
+    );
+
+    await user.click(addButton());
+    const [, newRowModelField] = screen.getAllByPlaceholderText("Select model");
+    await user.type(newRowModelField, "claude-opus*");
+
+    expect(screen.queryByRole("option", { name: /claude-opus\*/ })).not.toBeInTheDocument();
+    await user.clear(newRowModelField);
+    await user.type(newRowModelField, "claude-sonnet*");
+    expect(await screen.findByRole("option", { name: /claude-sonnet\*/ })).toBeInTheDocument();
+  });
+
+  it("does not offer a typed name that is neither listed nor a pattern", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <ModelMaxBudgetEditor
+        value={{}}
+        onChange={vi.fn()}
+        availableModels={["gpt-4o", "claude-opus-4-8"]}
+        premiumUser={true}
+      />,
+    );
+
+    await user.click(addButton());
+    await user.type(screen.getByPlaceholderText("Select model"), "claude-opsu-4-8");
+
+    expect(screen.queryByRole("option", { name: /claude-opsu-4-8/ })).not.toBeInTheDocument();
+    expect(screen.getByText("No models found")).toBeInTheDocument();
   });
 });

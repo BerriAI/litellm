@@ -9,7 +9,7 @@ custom_auth_settings: Optional[CustomAuthSettings] = None
 class EnterpriseProxyConfig:
     async def load_custom_auth_settings(
         self, general_settings: dict
-    ) -> CustomAuthSettings:
+    ) -> Optional[CustomAuthSettings]:
         custom_auth_settings = general_settings.get("custom_auth_settings", None)
         if custom_auth_settings is not None:
             custom_auth_settings = CustomAuthSettings(

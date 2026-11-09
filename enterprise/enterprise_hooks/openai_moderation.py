@@ -24,7 +24,7 @@ from litellm.proxy.guardrails._content_utils import iter_message_text
 from litellm.types.utils import CallTypesLiteral
 
 
-class _ENTERPRISE_OpenAI_Moderation(CustomLogger):
+class ENTERPRISE_OpenAI_Moderation(CustomLogger):
     @property
     def model_name(self) -> str:
         return litellm.openai_moderations_model_name or DEFAULT_OPENAI_MODERATIONS_MODEL
@@ -55,3 +55,4 @@ class _ENTERPRISE_OpenAI_Moderation(CustomLogger):
                 status_code=403, detail={"error": "Violated content safety policy"}
             )
         pass
+_ENTERPRISE_OpenAI_Moderation = ENTERPRISE_OpenAI_Moderation

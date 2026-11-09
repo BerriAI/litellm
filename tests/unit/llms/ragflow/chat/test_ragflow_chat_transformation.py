@@ -382,13 +382,11 @@ class TestRAGFlowChatTransformation:
         api_base = "http://localhost:9380"
         api_key = "test-key"
 
-        result_api_base, result_api_key, result_provider = (
-            config._get_openai_compatible_provider_info(
-                model=model,
-                api_base=api_base,
-                api_key=api_key,
-                custom_llm_provider="ragflow",
-            )
+        result_api_base, result_api_key, result_provider = config.get_openai_compatible_provider_info(
+            model=model,
+            api_base=api_base,
+            api_key=api_key,
+            custom_llm_provider="ragflow",
         )
 
         assert result_api_base == api_base
@@ -405,13 +403,11 @@ class TestRAGFlowChatTransformation:
 
         model = "ragflow/agent/my-agent-id/gpt-4o-mini"
 
-        result_api_base, result_api_key, result_provider = (
-            config._get_openai_compatible_provider_info(
-                model=model,
-                api_base=None,
-                api_key=None,
-                custom_llm_provider="ragflow",
-            )
+        result_api_base, result_api_key, result_provider = config.get_openai_compatible_provider_info(
+            model=model,
+            api_base=None,
+            api_key=None,
+            custom_llm_provider="ragflow",
         )
 
         assert result_api_base == "http://env-base:9380"

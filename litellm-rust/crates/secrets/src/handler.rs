@@ -5,7 +5,15 @@ use litellm_core_utils::settings::Lookup;
 use crate::{Error, KeyManagementSettings, KeyManagementSystem, Secret};
 
 #[cfg(any(feature = "aws", feature = "google"))]
-use crate::SecretValue;
+use litellm_secret_value::SecretValue;
+
+#[cfg(any(
+    feature = "google",
+    feature = "hashicorp",
+    feature = "azure",
+    feature = "cyberark"
+))]
+use litellm_secrets_types::BaseSecretManager;
 
 pub trait ExternalSecretManager: Send + Sync {
     fn system(&self) -> KeyManagementSystem;
@@ -79,7 +87,8 @@ pub async fn get_secret_from_manager(
             let plaintext = client
                 .decrypt(decode_ciphertext(&ciphertext, Base64Mode::Permissive)?)
                 .await?;
-            let value = String::from_utf8(plaintext).map_err(|_| Error::Utf8)?;
+            let value =
+                String::from_utf8(plaintext).map_err(|error| Error::Utf8(error.utf8_error()))?;
             Ok(Some(Secret::String(SecretValue::new(value.trim()))))
         }
         #[cfg(feature = "google")]
@@ -90,7 +99,8 @@ pub async fn get_secret_from_manager(
             let plaintext = client
                 .decrypt(decode_ciphertext(&ciphertext, Base64Mode::Canonical)?)
                 .await?;
-            let value = String::from_utf8(plaintext).map_err(|_| Error::Utf8)?;
+            let value =
+                String::from_utf8(plaintext).map_err(|error| Error::Utf8(error.utf8_error()))?;
             Ok(Some(Secret::String(SecretValue::new(value))))
         }
         #[cfg(feature = "aws")]
@@ -103,26 +113,13 @@ pub async fn get_secret_from_manager(
             .await
             .map_err(Error::from),
         #[cfg(feature = "google")]
-        SecretManager::GoogleSecretManager(client) => client
-            .get_secret_from_google_secret_manager(secret_name)
-            .await
-            .map_err(Error::from),
+        SecretManager::GoogleSecretManager(client) => read_manager(client, secret_name).await,
         #[cfg(feature = "hashicorp")]
-        SecretManager::HashicorpVault(client) => client
-            .async_read_secret(secret_name)
-            .await
-            .map(|value| value.map(Secret::String))
-            .map_err(Error::from),
+        SecretManager::HashicorpVault(client) => read_manager(client, secret_name).await,
         #[cfg(feature = "azure")]
-        SecretManager::AzureKeyVault(client) => {
-            client.get_secret(secret_name).await.map_err(Error::from)
-        }
+        SecretManager::AzureKeyVault(client) => read_manager(client, secret_name).await,
         #[cfg(feature = "cyberark")]
-        SecretManager::Cyberark(client) => client
-            .async_read_secret(secret_name)
-            .await
-            .map(|value| value.map(Secret::String))
-            .map_err(Error::from),
+        SecretManager::Cyberark(client) => read_manager(client, secret_name).await,
     }
 }
 
@@ -154,9 +151,29 @@ fn decode_ciphertext(value: &str, mode: Base64Mode) -> Result<Vec<u8>, Error> {
     };
     let ciphertext = STANDARD
         .decode(&encoded)
-        .map_err(|_| Error::InvalidCiphertext)?;
+        .map_err(|error| Error::InvalidCiphertext(Some(error)))?;
     if canonical && STANDARD.encode(&ciphertext) != encoded {
-        return Err(Error::InvalidCiphertext);
+        return Err(Error::InvalidCiphertext(None));
     }
     Ok(ciphertext)
+}
+
+#[cfg(any(
+    feature = "google",
+    feature = "hashicorp",
+    feature = "azure",
+    feature = "cyberark"
+))]
+async fn read_manager<M: BaseSecretManager>(
+    manager: &M,
+    name: &str,
+) -> Result<Option<Secret>, Error>
+where
+    Error: From<M::Error>,
+{
+    manager
+        .async_read_secret(name, &M::Context::default())
+        .await
+        .map(|value| value.map(Secret::String))
+        .map_err(Error::from)
 }
