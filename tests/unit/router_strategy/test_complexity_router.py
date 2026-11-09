@@ -7911,6 +7911,23 @@ class TestClaudeCodeTierPins:
         finally:
             router.discard()
 
+    @pytest.mark.asyncio
+    async def test_the_auxiliary_hint_routes_housekeeping_when_no_sentinel_matches(self) -> None:
+        router: Final = self._router()
+        try:
+            for messages, request_class, expected in (
+                (self._ask("reason carefully"), "subagent", ("REASONING", "literal_keyword_match")),
+                (
+                    self._side_request("Summarize what you just did in a few words."),
+                    "auxiliary",
+                    ("SIMPLE", "housekeeping"),
+                ),
+                (self._continuation(), "subagent", ("REASONING", "user_turn_continuation")),
+            ):
+                assert await self._route(router, messages, self.AGENT_A, request_class) == expected
+        finally:
+            router.discard()
+
 
 class TestClassificationMode:
     """Test classification_mode='user_turn': classify only requests whose newest turn is a new
