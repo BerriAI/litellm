@@ -2747,6 +2747,12 @@ async def user_api_key_auth_builder(
         # note: never string compare api keys, this is vulenerable to a time attack. Use secrets.compare_digest instead
         ### CHECK IF ADMIN ###
         # note: never string compare api keys, this is vulenerable to a time attack. Use secrets.compare_digest instead
+        from litellm.proxy.workflows.auth import workflow_child_identity
+
+        workflow_identity: Final = await workflow_child_identity(request, request_data)
+        if workflow_identity is not None:
+            valid_token = workflow_identity  # rebind-ok: Existing auth state must use the verified child identity
+            api_key = workflow_identity.token or ""  # rebind-ok: Pass the trusted principal to existing auth checks
         if valid_token is None:
             ## Check CACHE
             try:

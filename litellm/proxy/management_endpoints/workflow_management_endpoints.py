@@ -15,9 +15,11 @@ GET    /v1/workflows/runs/{run_id}/messages     - Fetch conversation history
 
 import json
 from collections.abc import Mapping, Sequence
+from datetime import datetime
 from typing import Final, Literal, Protocol, TypedDict
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import ConfigDict, JsonValue
 
 try:
     from prisma.errors import UniqueViolationError
@@ -102,9 +104,52 @@ class WorkflowMessageCreateRequest(LiteLLMBaseModel):
     session_id: str | None = None
 
 
+class WorkflowRunResponse(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    run_id: str
+    session_id: str
+    workflow_type: str
+    status: str
+    created_by: str | None
+    created_at: datetime
+    updated_at: datetime
+    input: JsonValue
+    output: JsonValue
+    metadata: JsonValue
+    engine_owned: bool
+
+
+class WorkflowEventResponse(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    event_id: str
+    run_id: str
+    event_type: str
+    step_name: str
+    sequence_number: int
+    data: JsonValue
+    created_at: datetime
+
+
+class WorkflowMessageResponse(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    message_id: str
+    run_id: str
+    role: str
+    content: str
+    sequence_number: int
+    session_id: str | None
+    created_at: datetime
+
+
 class _RunRow(Protocol):
     @property
     def created_by(self) -> str | None: ...
+
+    @property
+    def engine_owned(self) -> bool: ...
 
 
 class _SeqRow(Protocol):
@@ -201,6 +246,8 @@ async def _require_run(
     prisma_client: object,
     run_id: str,
     user_api_key_dict: UserAPIKeyAuth | None = None,
+    *,
+    mutation: bool = False,
 ) -> _RunRow:
     """Return the run or raise 404. For non-admin callers, also enforce key ownership."""
     run: Final[_RunRow | None] = await WorkflowRunRepository(prisma_client).table.find_unique(where={"run_id": run_id})
@@ -210,6 +257,8 @@ async def _require_run(
         caller: Final = _caller_key(user_api_key_dict)
         if not caller or run.created_by != caller:
             raise HTTPException(status_code=404, detail=f"Run '{run_id}' not found")
+    if mutation and run.engine_owned:
+        raise HTTPException(status_code=409, detail="Engine-owned runs cannot be modified through tracking APIs")
     return run
 
 
@@ -220,6 +269,7 @@ async def _require_run(
 
 @router.post(
     "/v1/workflows/runs",
+    responses={200: {"model": WorkflowRunResponse}},
     tags=["workflow management"],
     dependencies=[Depends(user_api_key_auth)],
 )
@@ -359,8 +409,7 @@ async def update_workflow_run(
     if not update:
         raise HTTPException(status_code=400, detail="No fields to update")
 
-    # Enforce ownership before writing.
-    await _require_run(prisma_client, run_id, user_api_key_dict)
+    await _require_run(prisma_client, run_id, user_api_key_dict, mutation=True)
 
     try:
         run: Final[_RunRow | None] = await WorkflowRunRepository(prisma_client).table.update(
@@ -379,6 +428,7 @@ async def update_workflow_run(
 
 @router.post(
     "/v1/workflows/runs/{run_id}/events",
+    responses={200: {"model": WorkflowEventResponse}},
     tags=["workflow management"],
     dependencies=[Depends(user_api_key_auth)],
 )
@@ -398,7 +448,7 @@ async def append_workflow_event(
     if prisma_client is None:
         raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
 
-    await _require_run(prisma_client, run_id, user_api_key_dict)
+    await _require_run(prisma_client, run_id, user_api_key_dict, mutation=True)
 
     new_status: Final = _EVENT_STATUS_MAP.get(data.event_type)
 
@@ -470,6 +520,7 @@ async def list_workflow_events(
 
 @router.post(
     "/v1/workflows/runs/{run_id}/messages",
+    responses={200: {"model": WorkflowMessageResponse}},
     tags=["workflow management"],
     dependencies=[Depends(user_api_key_auth)],
 )
@@ -487,7 +538,7 @@ async def append_workflow_message(
     if prisma_client is None:
         raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
 
-    await _require_run(prisma_client, run_id, user_api_key_dict)
+    await _require_run(prisma_client, run_id, user_api_key_dict, mutation=True)
 
     for attempt in range(_MAX_SEQUENCE_RETRIES):
         try:

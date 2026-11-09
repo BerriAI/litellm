@@ -5401,7 +5401,7 @@ async def team_info(
 
     ```
     curl --location 'http://localhost:4000/team/info?team_id=your_team_id_here' \
-    --header 'Authorization: Bearer your_api_key_here'
+    -H "Authorization: Bearer ${YOUR_VIRTUAL_KEY}"
     ```
     """
     from litellm.proxy._types import TeamInfoResponseObjectTeamTable
@@ -5568,7 +5568,7 @@ async def team_member_me(
 
     ```
     curl --location 'http://localhost:4000/team/your_team_id/members/me' \
-    --header 'Authorization: Bearer your_api_key_here'
+    -H "Authorization: Bearer ${YOUR_VIRTUAL_KEY}"
     ```
     """
     from litellm.proxy.proxy_server import prisma_client, user_api_key_cache

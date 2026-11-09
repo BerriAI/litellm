@@ -5021,6 +5021,9 @@ def _can_object_call_model(
     from litellm.router_strategy.complexity_router.context_compaction import native_compaction_parent
 
     compaction_parent: Final = native_compaction_parent(model)
+    from litellm.proxy.workflows.auth import workflow_parent
+
+    workflow_model: Final = workflow_parent(model)
     global_or_router_alias_target: Final = (
         litellm.model_alias_map[model]
         if model in litellm.model_alias_map
@@ -5044,6 +5047,7 @@ def _can_object_call_model(
         if key_alias_applied
         else (
             *((model, compaction_parent) if compaction_parent is not None else (model,)),
+            *((workflow_model,) if workflow_model is not None else ()),
             *((global_or_router_alias_target,) if global_or_router_alias_target else ()),
         )
     )

@@ -7,12 +7,21 @@ from litellm.models.gateway_activity import GatewayActivityStore
 from litellm.models.plugin_upload import PluginUploadStore
 from litellm.models.skill_submission import SkillSubmissionStore
 from litellm.models.user_banner import UserBannerStore
+from litellm.models.workflow import WorkflowStore
 from litellm.proxy.deps.database import DatabaseDep
 from litellm.repositories.deployment_warning_ignore_repository import DeploymentWarningIgnoreRepository
 from litellm.repositories.gateway_activity_repository import GatewayActivityRepository
 from litellm.repositories.plugin_upload_repository import PluginUploadRepository
 from litellm.repositories.skill_submission_repository import SkillSubmissionRepository
 from litellm.repositories.user_banner_repository import UserBannerRepository
+from litellm.repositories.workflow_repository import WorkflowRepository
+
+
+async def get_workflow_repository(database: DatabaseDep) -> WorkflowStore | None:
+    return None if database is None else WorkflowRepository(database.prisma)
+
+
+WorkflowRepositoryDep: TypeAlias = Annotated[WorkflowStore | None, Depends(get_workflow_repository)]
 
 
 async def get_user_banner_repository(database: DatabaseDep) -> UserBannerStore | None:
