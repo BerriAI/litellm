@@ -103,7 +103,7 @@ def build_model_usage_transaction(payload: SpendLogsPayload) -> ModelUsageTransa
         return None
     model: Final = payload["model"] or "unknown"
     successful: Final = payload["status"] == "success"
-    duration: Final = payload["request_duration_ms"] if "request_duration_ms" in payload else None
+    duration: Final = payload["request_duration_ms"]
     return ModelUsageTransaction(
         key=ModelUsageKey(
             date=date,

@@ -51,6 +51,7 @@ def _payload(**overrides: Any) -> dict[str, Any]:
         "request_tags": "[]",
         "custom_llm_provider": "openai",
         "status": "success",
+        "request_duration_ms": None,
         **overrides,
     }
 

@@ -1,11 +1,11 @@
 import hashlib
 import json
 from collections.abc import Sequence
-from typing import (  # noqa: TID251  # Prisma exposes generated table actions dynamically
+from typing import (
     TYPE_CHECKING,
     Final,
     Protocol,
-    cast,
+    cast,  # noqa: TID251  # Prisma exposes generated table actions dynamically
 )
 
 from litellm.models.alert import Alert, AlertDetection, AlertPage, AlertStatus
