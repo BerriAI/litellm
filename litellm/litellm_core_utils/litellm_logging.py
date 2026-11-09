@@ -2761,6 +2761,8 @@ class Logging(LiteLLMLoggingBaseClass):
     def carry_failed_attempt_usage(self) -> None:
         """Move what a failed earlier attempt stashed off the retry sharing this logging object, so the retry logs its
         own usage while the request's failure log still bills every attempt."""
+        if self._carry_parked_success():
+            return
         usage: Final = self._model_call_details_view.get("combined_usage_object")
         response_cost: Final = self._model_call_details_view.get("response_cost")
         billed_by_continuation: Final = self._stash_billed_by_continuation
@@ -2782,6 +2784,25 @@ class Logging(LiteLLMLoggingBaseClass):
         if not owed_on_success or billed_by_continuation:
             return
         self._failed_attempts_owed_on_success = (*self._failed_attempts_owed_on_success, attempt)
+
+    def _carry_parked_success(self) -> bool:
+        """A billed response the router discards after its success log was parked (a safeguard refusal it falls
+        back from) is owed by whichever attempt ends the request, instead of being logged in its place."""
+        parked: Final = self.deferred_success_result
+        if parked is None or self.enqueue_deferred_logging is None:
+            return False
+        self.deferred_success_result = None
+        self.enqueue_deferred_logging = None
+        self._async_success_scheduled = False
+        served: Final = self.served_round(parked[0])
+        if served is None:
+            return True
+        self.model_call_details["failed_attempts_usage"] = (
+            *self.model_call_details.get("failed_attempts_usage", ()),
+            served,
+        )
+        self._failed_attempts_owed_on_success = (*self._failed_attempts_owed_on_success, served)
+        return True
 
     def mark_stash_billed_by_continuation(self) -> None:
         self._stash_billed_by_continuation = True
