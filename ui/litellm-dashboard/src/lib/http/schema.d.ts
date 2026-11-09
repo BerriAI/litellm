@@ -27090,7 +27090,7 @@ export interface components {
             id: string;
             /**
              * Resource Id
-             * @description Resource ID. Keys use their SHA-256 hash, never a secret.
+             * @description Resource ID. Whole-gateway alerts use 'gateway'. Keys use their SHA-256 hash, never a secret.
              */
             resource_id: string;
             /**
@@ -27098,7 +27098,7 @@ export interface components {
              * @description Kind of affected resource.
              * @enum {string}
              */
-            resource_type: "key" | "team" | "user" | "model";
+            resource_type: "gateway" | "key" | "team" | "user" | "model";
             /**
              * Status
              * @description Current review status.

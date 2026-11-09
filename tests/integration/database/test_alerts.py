@@ -87,6 +87,37 @@ async def test_each_alert_type_round_trips_through_api_and_status_changes(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ("spend", "traffic", "latency", "reliability"))
+async def test_gateway_alert_round_trips_without_colliding_with_resource_alerts(
+    alerts: Alerts, gateway: Gateway, kind: AlertType
+) -> None:
+    detection: Final = AlertDetection.model_validate(
+        {**alerts.detection(kind).model_dump(), "resource_type": "gateway", "resource_id": "gateway"}
+    )
+    try:
+        saved: Final = await alerts.repository.record(detection)
+        scoped: Final = await alerts.repository.record(detection.model_copy(update={"resource_type": "model"}))
+        assert scoped.id != saved.id
+        detail: Final = gateway.request("GET", f"/alerts/{saved.id}")
+        assert detail.status_code == 200, detail.text
+        assert Alert.model_validate_json(detail.content) == saved
+        listed: Final = gateway.request("GET", "/alerts", params={"limit": "2"})
+        assert listed.status_code == 200, listed.text
+        assert AlertPage.model_validate_json(listed.content).data == (scoped, saved)
+        update: Final = gateway.request("PATCH", f"/alerts/{saved.id}", {"status": "dismissed"})
+        assert update.status_code == 200, update.text
+        dismissed: Final = Alert.model_validate_json(update.content)
+        assert dismissed.status == "dismissed"
+        assert await alerts.repository.record(detection) == dismissed
+        assert await alerts.repository.get(int(scoped.id)) == scoped
+    finally:
+        write_rows(
+            'DELETE FROM "LiteLLM_Alert" WHERE resource_id=%s AND type=%s AND window_start=%s AND window_end=%s',
+            ("gateway", kind, detection.window_start, detection.window_end),
+        )
+
+
+@pytest.mark.asyncio
 async def test_concurrent_detection_retries_preserve_dismissal_and_original_evidence(alerts: Alerts) -> None:
     detection: Final = alerts.detection()
     duplicates: Final = await asyncio.gather(*(alerts.repository.record(detection) for _ in range(10)))

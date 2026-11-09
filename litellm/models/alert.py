@@ -6,7 +6,7 @@ from typing_extensions import Self
 
 AlertType: TypeAlias = Literal["spend", "traffic", "latency", "reliability", "model_deprecation"]
 AlertStatus: TypeAlias = Literal["open", "resolved", "dismissed"]
-AlertResourceType: TypeAlias = Literal["key", "team", "user", "model"]
+AlertResourceType: TypeAlias = Literal["gateway", "key", "team", "user", "model"]
 MAX_ALERT_ID: Final = 2**63 - 1
 
 
@@ -45,7 +45,9 @@ class AlertDetection(BaseModel):
     type: AlertType = Field(description="Built-in alert category.")
     resource_type: AlertResourceType = Field(description="Kind of affected resource.")
     resource_id: str = Field(
-        min_length=1, max_length=1024, description="Resource ID. Keys use their SHA-256 hash, never a secret."
+        min_length=1,
+        max_length=1024,
+        description="Resource ID. Whole-gateway alerts use 'gateway'. Keys use their SHA-256 hash, never a secret.",
     )
     window_start: AwareDatetime = Field(
         description="Inclusive start of the observed window, normalized to UTC milliseconds."
@@ -64,6 +66,8 @@ class AlertDetection(BaseModel):
     def validate_detection(self) -> Self:
         if self.window_end <= self.window_start:
             raise ValueError("window_end must be after window_start")
+        if self.resource_type == "gateway" and self.resource_id != "gateway":
+            raise ValueError("Whole-gateway alerts must use resource_id 'gateway'")
         if self.resource_type == "key" and (
             len(self.resource_id) != 64 or any(c not in "0123456789abcdef" for c in self.resource_id)
         ):

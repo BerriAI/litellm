@@ -23,6 +23,13 @@ DETECTION: Final = {
         {"resource_id": "x" * 1025},
         {"resource_id": ""},
         {"resource_type": "key", "resource_id": "sk-example-not-a-real-key"},
+        {"resource_type": "gateway", "resource_id": "another-gateway"},
+        {
+            "resource_type": "gateway",
+            "resource_id": "gateway",
+            "type": "model_deprecation",
+            "evidence": {"deprecation_date": "2026-02-01"},
+        },
         {"window_start": "2026-01-08T00:00:00"},
         {"window_start": "2026-01-08T00:00:00.123456Z", "window_end": "2026-01-08T00:00:00.123457Z"},
         {"window_end": "2026-01-08T00:00:00Z"},
