@@ -5,11 +5,15 @@ from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
+import respx
+from httpx import Response
 
+import litellm
 from litellm.constants import (
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
 )
+from litellm.exceptions import UnsupportedParamsError
 from litellm.llms.hosted_vllm.chat.transformation import HostedVLLMChatConfig
 from litellm.types.utils import ModelResponse
 
@@ -498,3 +502,99 @@ def test_hosted_vllm_tools_are_rewritten_without_touching_the_callers_tool() -> 
         }
     ]
     assert tools == tools_before
+
+
+def _legacy_weather_function() -> dict[str, object]:
+    return {
+        "name": "get_weather",
+        "parameters": {"type": "object", "properties": {"city": {"type": "string"}}},
+    }
+
+
+def _weather_tool() -> dict[str, object]:
+    return {
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "parameters": {"type": "object", "properties": {"city": {"type": "string"}}},
+        },
+    }
+
+
+_VLLM_CHAT_URL: Final = "https://vllm.legacy.test/v1/chat/completions"
+_VLLM_CHAT_REPLY: Final = {
+    "id": "chatcmpl-legacy",
+    "object": "chat.completion",
+    "created": 1,
+    "model": "glm",
+    "choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+}
+
+
+@pytest.mark.parametrize(
+    "legacy_params",
+    [
+        {"functions": [_legacy_weather_function()]},
+        {"function_call": {"name": "get_weather"}},
+        {"functions": [_legacy_weather_function()], "function_call": {"name": "get_weather"}},
+        {"functions": [_legacy_weather_function()], "function_call": "auto"},
+    ],
+)
+@pytest.mark.parametrize("drop_params", [False, True])
+@pytest.mark.respx(assert_all_called=False)
+def test_hosted_vllm_rejects_legacy_functions_without_calling_the_backend(
+    respx_mock: respx.MockRouter, legacy_params: dict[str, object], drop_params: bool
+) -> None:
+    chat: Final = respx_mock.post(_VLLM_CHAT_URL).mock(return_value=Response(200, json=_VLLM_CHAT_REPLY))
+
+    with pytest.raises(UnsupportedParamsError) as error:
+        litellm.completion(
+            model="hosted_vllm/glm",
+            messages=[{"role": "user", "content": "What is the weather in Paris?"}],
+            api_base="https://vllm.legacy.test/v1",
+            api_key="fake-key",
+            drop_params=drop_params,
+            **legacy_params,
+        )
+
+    assert error.value.status_code == 400
+    assert not chat.called, "a legacy function request must not reach the backend"
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_hosted_vllm_sends_modern_tools_and_tool_choice_unchanged(respx_mock: respx.MockRouter) -> None:
+    chat: Final = respx_mock.post(_VLLM_CHAT_URL).mock(return_value=Response(200, json=_VLLM_CHAT_REPLY))
+    tool_choice: Final = {"type": "function", "function": {"name": "get_weather"}}
+
+    litellm.completion(
+        model="hosted_vllm/glm",
+        messages=[{"role": "user", "content": "What is the weather in Paris?"}],
+        api_base="https://vllm.legacy.test/v1",
+        api_key="fake-key",
+        tools=[_weather_tool()],
+        tool_choice=tool_choice,
+    )
+
+    sent: Final = json.loads(chat.calls.last.request.content)
+    assert sent["tools"] == [_weather_tool()]
+    assert sent["tool_choice"] == tool_choice
+    assert "functions" not in sent
+    assert "function_call" not in sent
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_hosted_vllm_sends_an_ordinary_request_unchanged(respx_mock: respx.MockRouter) -> None:
+    chat: Final = respx_mock.post(_VLLM_CHAT_URL).mock(return_value=Response(200, json=_VLLM_CHAT_REPLY))
+
+    litellm.completion(
+        model="hosted_vllm/glm",
+        messages=[{"role": "user", "content": "hi"}],
+        api_base="https://vllm.legacy.test/v1",
+        api_key="fake-key",
+    )
+
+    sent: Final = json.loads(chat.calls.last.request.content)
+    assert sent["messages"] == [{"role": "user", "content": "hi"}]
+    assert "functions" not in sent
+    assert "function_call" not in sent

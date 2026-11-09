@@ -24,8 +24,11 @@ from litellm.types.llms.openai import (
     ChatCompletionVideoUrlObject,
 )
 
+from ....exceptions import UnsupportedParamsError
 from ....utils import remove_additional_properties, remove_strict_from_schema
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
+
+LEGACY_FUNCTION_PARAMS: Final = ("functions", "function_call")
 
 
 class HostedVLLMChatConfig(OpenAIGPTConfig):
@@ -87,6 +90,19 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
+        legacy_params: Final = [param for param in LEGACY_FUNCTION_PARAMS if param in non_default_params]
+        if legacy_params:
+            # vLLM's schema lacks these fields and drops unknown extras, so forwarding them returns plain text
+            raise UnsupportedParamsError(
+                status_code=400,
+                llm_provider="hosted_vllm",
+                model=model,
+                message=(
+                    f"hosted_vllm does not support the legacy parameter(s) {', '.join(legacy_params)}. "
+                    "Use `tools` and `tool_choice` instead."
+                ),
+            )
+
         _tools = non_default_params.pop("tools", None)
         if _tools is not None:
             _tools = remove_additional_properties(copy.deepcopy(_tools))  # pyright: ignore[reportUnknownArgumentType]  # tools arrive untyped through the bare-dict params
