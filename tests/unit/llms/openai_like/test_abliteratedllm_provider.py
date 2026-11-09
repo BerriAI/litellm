@@ -116,6 +116,39 @@ def test_abliteratedllm_uses_native_responses_endpoint() -> None:
     assert response.output[0].content[0].text == "hello"
 
 
+def test_abliteratedllm_never_sends_the_openai_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("ABLITERATEDLLM_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "fake-openai-key-must-not-leak")
+    monkeypatch.setenv("OPENAI_ORGANIZATION", "org-must-not-leak")
+    with respx.mock(assert_all_called=False) as upstream:
+        route: Final = upstream.post(f"{_API_BASE}/chat/completions").respond(200, json={})
+        with pytest.raises(litellm.AuthenticationError, match="ABLITERATEDLLM_API_KEY"):
+            _ = litellm.completion(model=_MODEL, messages=[{"role": "user", "content": "hi"}])
+    assert not route.called
+
+
+def test_abliteratedllm_never_sends_the_openai_organization(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OPENAI_ORGANIZATION", "org-must-not-leak")
+    with respx.mock() as upstream:
+        route: Final = upstream.post(f"{_API_BASE}/chat/completions").respond(
+            200,
+            json={
+                "id": "chatcmpl-test",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "glm-5.3-flash-abliterated",
+                "choices": [
+                    {"index": 0, "message": {"role": "assistant", "content": "hello"}, "finish_reason": "stop"}
+                ],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+        _ = litellm.completion(model=_MODEL, api_key="fake-test-key", messages=[{"role": "user", "content": "hi"}])
+    request: Final = route.calls.last.request
+    assert request.headers["authorization"] == "Bearer fake-test-key"
+    assert "openai-organization" not in request.headers
+
+
 @pytest.mark.parametrize("model", PRIORITY_TIER_MODELS)
 def test_abliteratedllm_priority_requests_bill_at_priority_rates(model: str, local_model_cost_map: None) -> None:
     rates: Final = litellm.model_cost[model]
