@@ -598,6 +598,7 @@ jobs:
               tests/unit/proxy/ui_crud_endpoints
               tests/unit/proxy/deps
               tests/unit/proxy/config_resolvers
+              tests/unit/proxy/workflows
               tests/unit/proxy/utils
             python-version: "3.12"
             workers: 4

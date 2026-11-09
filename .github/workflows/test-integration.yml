@@ -2,7 +2,7 @@ name: integration
 
 on:
   pull_request:
-    types: [labeled]
+    types: [opened, synchronize, reopened, labeled]
   schedule:
     - cron: "5 8-20/3 * * 1-6"
       timezone: America/Los_Angeles
@@ -25,6 +25,7 @@ on:
           - cost
           - sdk
           - browser
+          - monty
         default: all
       workers:
         description: Workers per group, blank keeps each group's default
@@ -39,9 +40,31 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  monty:
+    name: Monty sandbox
+    if: github.event_name != 'workflow_dispatch' || inputs.suite == 'all' || inputs.suite == 'monty'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      LITELLM_LOCAL_MODEL_COST_MAP: "True"
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+      - uses: ./.github/actions/setup-uv-with-retries
+        with:
+          version: "0.10.9"
+      - name: Install proxy test dependencies
+        run: .github/scripts/uv_sync_with_retries.sh --frozen --extra proxy --group dev --group proxy-dev --group e2e-dev
+      - name: Run real Monty and validator workers
+        run: uv run --no-sync pytest tests/integration/sandbox/test_monty_runtime.py -q
+
   integration:
     name: integration ${{ matrix.suite }}
-    if: github.event_name != 'pull_request' || github.event.label.name == 'run-ci'
+    if: inputs.suite != 'monty' && (github.event_name != 'pull_request' || github.event.label.name == 'run-ci')
     environment: integration-license
     runs-on: ${{ fromJSON('{"providers":"ubuntu-latest-64-cores","extensions":"ubuntu-latest-64-cores","accounting":"ubuntu-latest-32-cores","management":"ubuntu-latest-32-cores","management-replica":"ubuntu-latest-32-cores"}')[matrix.suite] || 'ubuntu-latest-16-cores' }}
     timeout-minutes: 60

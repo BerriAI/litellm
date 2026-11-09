@@ -32,7 +32,9 @@ IGNORE_ARG_RE: Final = re.compile(r"--ignore(?:-glob)?[= ](\S+)")
 DOCKERFILE_TOKEN_RE = re.compile(r"[A-Za-z0-9_./-]*Dockerfile[A-Za-z0-9_.-]*")
 COMMENT_RE = re.compile(r"^\s*#.*$", re.MULTILINE)
 GLOB_CHARS = frozenset("*?")
-DEDICATED_INTEGRATION_WORKFLOWS: Final = MappingProxyType({"image-scan.yml": "tests/integration/database/image/"})
+DEDICATED_INTEGRATION_WORKFLOWS: Final = MappingProxyType(
+    {"image-scan.yml": "tests/integration/database/image/", "test-integration.yml": "tests/integration/sandbox/"}
+)
 
 # Trees whose jobs are sharded with no catch-all bucket, so every child that holds
 # tests has to be named by some shard or it runs nowhere. A child listed here is
