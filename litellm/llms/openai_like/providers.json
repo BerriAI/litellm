@@ -71,6 +71,14 @@
       "max_completion_tokens": "max_tokens"
     }
   },
+  "abliteratedllm": {
+    "base_url": "https://api.abliteratedllm.dev/v1",
+    "api_key_env": "ABLITERATEDLLM_API_KEY",
+    "supported_endpoints": [
+      "/v1/chat/completions",
+      "/v1/responses"
+    ]
+  },
   "abliteration": {
     "base_url": "https://api.abliteration.ai/v1",
     "api_key_env": "ABLITERATION_API_KEY"
