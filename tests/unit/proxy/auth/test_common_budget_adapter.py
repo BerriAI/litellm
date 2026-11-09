@@ -20,12 +20,11 @@ from litellm.proxy._types import (
     LiteLLM_TeamTable,
     UserAPIKeyAuth,
 )
-from litellm.proxy.auth import auth_checks as reference
-from litellm.proxy.auth import budget_windows_adapter
+from litellm.proxy.auth import budget_windows_adapter, common_budget_lookups
 from litellm.proxy.auth import common_budget_adapter as native
-from litellm.proxy.auth import common_budget_lookups
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.utils import ProxyLogging
+from tests.unit.proxy.auth import phase1_budget_auth_reference as reference
 
 
 @dataclass(frozen=True, slots=True)

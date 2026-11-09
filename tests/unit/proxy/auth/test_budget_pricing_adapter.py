@@ -6,8 +6,8 @@ import pytest
 
 import litellm
 from litellm._auth.budget_pricing import ModelPriceFacts
-from litellm.proxy.auth import auth_checks as reference
 from litellm.proxy.auth import budget_pricing_adapter as native
+from tests.unit.proxy.auth import phase1_budget_auth_reference as reference
 
 
 def router(input_price: float | None, output_price: float | None, deployments: tuple[object, ...] = ()) -> Mock:

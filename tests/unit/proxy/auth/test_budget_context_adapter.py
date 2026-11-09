@@ -11,8 +11,9 @@ from litellm.models.budget import LiteLLM_BudgetTable
 from litellm.proxy._types import LiteLLM_EndUserTable, LiteLLM_TeamMembership, LiteLLM_TeamTable, UserAPIKeyAuth
 from litellm.proxy.auth import auth_checks
 from litellm.proxy.auth import budget_context_adapter as adapter
-from litellm.proxy.auth import user_api_key_auth as legacy
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from tests.unit.proxy.auth import phase1_budget_auth_reference as auth_reference
+from tests.unit.proxy.auth import phase1_budget_context_reference as legacy
 
 
 @pytest.fixture(params=(False, True), ids=("reference", "native"))
@@ -185,6 +186,7 @@ async def test_end_user_source_read_order_and_identity(
     )
     read: Final = AsyncMock(side_effect=(budget,) if key_found else (None, budget))
     monkeypatch.setattr(auth_checks, "get_default_end_user_budget", read)
+    monkeypatch.setattr(auth_reference, "get_default_end_user_budget", read)
     monkeypatch.setattr(litellm, "max_end_user_budget_id", "proxy")
     fn: Final = adapter.end_user_model_max_budget if native else legacy._end_user_model_max_budget  # pyright: ignore[reportPrivateUsage]  # Phase 1 leaf is the unchanged reference implementation
     value: Final = await fn(identity, end_user, "key", Mock(), UserApiKeyCache(), None)
@@ -246,8 +248,10 @@ async def test_member_default_read_and_mutation_order(
     member_read: Final = AsyncMock(return_value=membership)
     default_read: Final = AsyncMock(return_value=default_budget)
     monkeypatch.setattr(auth_checks, "get_team_membership", member_read)
+    monkeypatch.setattr(auth_reference, "get_team_membership", member_read)
     monkeypatch.setattr(legacy, "get_team_membership", member_read)
     monkeypatch.setattr(auth_checks, "get_team_member_default_budget", default_read)
+    monkeypatch.setattr(auth_reference, "get_team_member_default_budget", default_read)
     monkeypatch.setattr(legacy, "get_team_member_default_budget", default_read)
     token: Final = UserAPIKeyAuth(user_id="", team_id="", team_member_model_max_budget={"old": {}})
     prior: Final = token.team_member_model_max_budget
@@ -279,8 +283,10 @@ async def test_member_lookup_error_policy(
     member_read: Final = AsyncMock(return_value=None, side_effect=None if during_default else error)
     default_read: Final = AsyncMock(side_effect=error)
     monkeypatch.setattr(auth_checks, "get_team_membership", member_read)
+    monkeypatch.setattr(auth_reference, "get_team_membership", member_read)
     monkeypatch.setattr(legacy, "get_team_membership", member_read)
     monkeypatch.setattr(auth_checks, "get_team_member_default_budget", default_read)
+    monkeypatch.setattr(auth_reference, "get_team_member_default_budget", default_read)
     monkeypatch.setattr(legacy, "get_team_member_default_budget", default_read)
     token: Final = UserAPIKeyAuth(user_id="u", team_id="t", team_member_model_max_budget={"old": {}})
     prior: Final = token.team_member_model_max_budget
@@ -303,6 +309,7 @@ async def test_member_native_failure_never_becomes_skippable_lookup_error(monkey
     error: Final = NativeAuthRuntimeError("native planner failed")
     read: Final = AsyncMock(side_effect=error)
     monkeypatch.setattr(auth_checks, "get_team_membership", read)
+    monkeypatch.setattr(auth_reference, "get_team_membership", read)
     with pytest.raises(NativeAuthRuntimeError, match="native planner failed") as raised:
         await adapter.load_team_member_default_model_budget(
             UserAPIKeyAuth(user_id="u", team_id="t"), None, Mock(), UserApiKeyCache(), True, None
@@ -319,6 +326,7 @@ async def test_member_planner_failure_stops_before_io(monkeypatch: pytest.Monkey
     read: Final = AsyncMock()
     monkeypatch.setattr(_native, "request_auth_context_member", native)
     monkeypatch.setattr(auth_checks, "get_team_membership", read)
+    monkeypatch.setattr(auth_reference, "get_team_membership", read)
     with pytest.raises(NativeAuthRuntimeError, match="decode failed"):
         await adapter.load_team_member_default_model_budget(
             UserAPIKeyAuth(user_id="u", team_id="t"), None, Mock(), UserApiKeyCache(), True, None
