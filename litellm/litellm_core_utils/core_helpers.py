@@ -6,6 +6,7 @@ import math
 import re
 import sys
 from collections.abc import Collection, Iterable, Iterator, Mapping, Sequence
+from functools import cache
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeVar, cast, runtime_checkable
 
@@ -771,8 +772,17 @@ def _upstream_non_openai_keys(response_type: type[BaseModel], original_chunk: Ba
     return tuple(
         key
         for key in (*type(original_chunk).model_fields, *(original_chunk.__pydantic_extra__ or {}))
-        if key not in expected_keys
+        if key not in expected_keys and _is_public_data_name(response_type, key)
     )
+
+
+def _is_public_data_name(response_type: type[BaseModel], key: str) -> bool:
+    return not key.startswith("_") and key not in _class_attribute_names(response_type)
+
+
+@cache
+def _class_attribute_names(response_type: type[BaseModel]) -> frozenset[str]:
+    return frozenset(dir(response_type))
 
 
 def _dump_keys(original_chunk: BaseModel, keys: tuple[str, ...]) -> Mapping[str, object]:
