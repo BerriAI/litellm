@@ -302,7 +302,8 @@ def calculate_request_duration(file: FileTypes) -> float | None:
                 if isinstance(content, bytes):
                     file_content = content
                 elif isinstance(content, os.PathLike):
-                    return calculate_request_duration(content)
+                    with open(str(content), "rb") as f:
+                        file_content = f.read()
                 elif hasattr(content, "read") and not isinstance(content, str):
                     # File-like object in tuple
                     current_pos: Final = getattr(content, "tell", lambda: None)()
