@@ -44019,7 +44019,7 @@ export interface components {
             heuristic_v2_success_threshold?: number | null;
             /**
              * Housekeeping Patterns
-             * @description Additional case-sensitive literal sentinels that mark a request as client housekeeping, on top of the built-in conversation-title ones. For clients whose wording the built-ins don't cover, or after a client release changes its strings.
+             * @description Additional case-sensitive literal sentinels that mark a request as client housekeeping, on top of the built-in conversation-title, agent-summary and prompt-suggestion ones. For clients whose wording the built-ins don't cover, or after a client release changes its strings.
              */
             housekeeping_patterns?: string[] | null;
             /**
