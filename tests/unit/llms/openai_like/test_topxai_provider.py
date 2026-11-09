@@ -111,7 +111,16 @@ class TestTopxAIProviderConfig:
         )
         assert url == f"{TOPXAI_BASE_URL}/chat/completions"
 
-    @pytest.mark.parametrize("model", ("gpt-6.1-sol", "kimi-k3.1-pro", "deepseek-flash-Abliterated"))
+    @pytest.mark.parametrize(
+        "model",
+        (
+            "gpt-6.1-sol",
+            "kimi-k3.1-pro",
+            "deepseek-flash-Abliterated",
+            "deepseek-flash-fast",
+            "GLM-5.3-Flash-Abliterated",
+        ),
+    )
     @pytest.mark.parametrize("api_base", (None, "https://relay.example.com/v1/"))
     def test_topxai_responses_routes_and_transforms(
         self, monkeypatch: pytest.MonkeyPatch, api_base: str | None, model: str
@@ -180,7 +189,7 @@ class TestTopxAIProviderConfig:
 
 
 class TestTopxAIModelMetadata:
-    # Catalog and capabilities: https://ai.topxea.com/api/pricing (verified 2026-10-25)
+    # Catalog and capabilities: https://ai.topxea.com/api/pricing (verified 2026-11-08)
     TOPXAI_MODELS: Final = (
         "topxai/claude-sonnet-5-5",
         "topxai/claude-opus-5-5",
@@ -190,17 +199,19 @@ class TestTopxAIModelMetadata:
         "topxai/grok-4.7",
         "topxai/kimi-k3.1-pro",
         "topxai/GLM-5.3-Abliterated",
+        "topxai/GLM-5.3-Flash-Abliterated",
         "topxai/deepseek-flash-Abliterated",
+        "topxai/deepseek-flash-fast",
     )
     TEXT_ONLY_MODELS: Final = ("topxai/GLM-5.3-Abliterated",)
-    # Only these routes publish a cache-write price; the rest bill cache writes as input
+    # Only these routes publish a cache-write price; the rest bill cache writes as input.
+    # The GLM, Kimi and DeepSeek private deployments have none (2026-11-08).
     CACHE_WRITE_MODELS: Final = (
         "topxai/claude-sonnet-5-5",
         "topxai/claude-opus-5-5",
         "topxai/claude-fable-5-1",
         "topxai/gpt-6.1-sol",
         "topxai/gpt-6-astra",
-        "topxai/kimi-k3.1-pro",
     )
     # The catalogue publishes no output limit for these
     NO_OUTPUT_LIMIT_MODELS: Final = ("topxai/grok-4.7",)
@@ -213,7 +224,10 @@ class TestTopxAIModelMetadata:
         ("topxai/gpt-6-astra", 272_001, 1.5),
         ("topxai/grok-4.7", 200_000, 2.0),
     )
-    # Fixed retail prices at https://ai.topxea.com/pricing/deepseek-flash-abliterated (2026-10-25).
+    # Fixed prices at all hours (2026-11-08):
+    # https://ai.topxea.com/pricing/deepseek-flash-abliterated
+    # https://ai.topxea.com/pricing/deepseek-flash-fast
+    DEEPSEEK_MODELS: Final = ("topxai/deepseek-flash-Abliterated", "topxai/deepseek-flash-fast")
     DEEPSEEK_MOMENTS: Final = (
         pytest.param(datetime(2026, 10, 26, 1, 0, tzinfo=timezone.utc), id="monday-01:00"),
         pytest.param(datetime(2026, 10, 26, 9, 59, tzinfo=timezone.utc), id="monday-09:59"),
@@ -293,13 +307,14 @@ class TestTopxAIModelMetadata:
         assert prompt_cost == pytest.approx(expected_input)
         assert completion_cost == pytest.approx(expected_output)
 
+    @pytest.mark.parametrize("model", DEEPSEEK_MODELS)
     @pytest.mark.parametrize("moment", DEEPSEEK_MOMENTS)
-    def test_topxai_deepseek_abliterated_uses_fixed_prices_at_all_hours(
+    def test_topxai_deepseek_uses_fixed_prices_at_all_hours(
         self,
         monkeypatch: pytest.MonkeyPatch,
+        model: str,
         moment: datetime,
     ) -> None:
-        model: Final = "topxai/deepseek-flash-Abliterated"
         info: Final = self._load(("model_prices_and_context_window.json",))[model]
         monkeypatch.setitem(litellm.model_cost, model, info)
         with pinned_billing_time(moment):
