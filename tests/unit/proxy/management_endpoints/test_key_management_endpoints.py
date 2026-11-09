@@ -19793,6 +19793,150 @@ async def test_bulk_key_update_batch_enqueued_token_limit_rejected_for_non_admin
     assert "Only proxy admins can set" in str(exc.value.detail)
 
 
+
+_INDEX_GRANT = [{"index_name": "docs", "index_permissions": ["read", "write"]}]
+
+
+@pytest.mark.parametrize(
+    "label, top_level, sent, stored, allowed",
+    [
+        ("granted top-level on a key with none stored", _INDEX_GRANT, _UNTOUCHED, None, False),
+        ("granted in metadata on a key with none stored", None, _INDEX_GRANT, None, False),
+        ("widened from read to read and write", None, _INDEX_GRANT, [{"index_name": "docs", "index_permissions": ["read"]}], False),
+        ("cleared by replacing the blob", None, None, _INDEX_GRANT, False),
+        ("resent unchanged in metadata", None, _INDEX_GRANT, _INDEX_GRANT, True),
+        ("resent unchanged top-level", _INDEX_GRANT, _UNTOUCHED, _INDEX_GRANT, True),
+        ("left untouched", None, _UNTOUCHED, _INDEX_GRANT, True),
+        ("cleared top-level with an empty list", [], _UNTOUCHED, _INDEX_GRANT, False),
+        ("empty top-level list on a key with none stored", [], _UNTOUCHED, None, True),
+    ],
+)
+def test_vector_store_index_grants_admin_gate_matrix(
+    label: str,
+    top_level: list[dict[str, object]] | None,
+    sent: object,
+    stored: list[dict[str, object]] | None,
+    allowed: bool,
+) -> None:
+    from litellm.proxy.auth.auth_utils import (
+        enforce_vector_store_index_grants_are_admin_only,
+    )
+
+    request_body = {} if sent is _UNTOUCHED else {"metadata": {} if sent is None else {"allowed_vector_store_indexes": sent}}
+    if top_level is not None:
+        request_body["allowed_vector_store_indexes"] = top_level
+    data = UpdateKeyRequest(key="sk-1", **request_body)
+    existing_metadata = None if stored is None else {"allowed_vector_store_indexes": stored}
+
+    def _call(caller: UserAPIKeyAuth) -> None:
+        enforce_vector_store_index_grants_are_admin_only(
+            data=data,
+            top_level_grants=data.allowed_vector_store_indexes,
+            existing_metadata=existing_metadata,
+            user_api_key_dict=caller,
+            entity="key",
+        )
+
+    non_admin = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, api_key="sk-non-admin", user_id="alice")
+    if allowed:
+        _call(non_admin)
+    else:
+        with pytest.raises(HTTPException) as exc:
+            _call(non_admin)
+        assert exc.value.status_code == 403
+        assert "Only proxy admins can set allowed_vector_store_indexes" in str(exc.value.detail)
+
+    _call(UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-admin", user_id="admin"))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "request_fields",
+    [{"allowed_vector_store_indexes": _INDEX_GRANT}, {"metadata": {"allowed_vector_store_indexes": _INDEX_GRANT}}],
+    ids=["top-level", "metadata"],
+)
+async def test_generate_key_vector_store_index_grants_rejected_for_non_admin(request_fields: dict[str, object]) -> None:
+    """An index grant on a key opens document reads and writes on that index, so a
+    non-admin minting their own key cannot pick its grants."""
+    with patch("litellm.proxy.proxy_server.prisma_client", AsyncMock()):
+        with pytest.raises(HTTPException) as exc:
+            await _common_key_generation_helper(
+                data=GenerateKeyRequest(**request_fields),
+                user_api_key_dict=UserAPIKeyAuth(
+                    user_role=LitellmUserRoles.INTERNAL_USER,
+                    api_key="sk-alice",
+                    user_id="alice",
+                ),
+                litellm_changed_by=None,
+                team_table=None,
+            )
+    assert int(getattr(exc.value, "status_code", 0)) == 403
+    assert "Only proxy admins can set allowed_vector_store_indexes" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_update_key_vector_store_index_grants_unchanged_allows_non_admin_edit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A key owner renaming a key that carries admin-set index grants resends them
+    with the rest of the form, which must not count as setting them."""
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        update_key_fn,
+    )
+
+    token = "b3b2c3d4e5f6789012345678901234567890123456789012345678901234abcd"
+    _wire_update_key_fn(monkeypatch, _estimate_key_row(token, {"allowed_vector_store_indexes": _INDEX_GRANT}))
+
+    mock_request = MagicMock()
+    mock_request.query_params = {}
+
+    result = await update_key_fn(
+        request=mock_request,
+        data=UpdateKeyRequest(key=token, key_alias="my-alias", metadata={"allowed_vector_store_indexes": _INDEX_GRANT}),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.INTERNAL_USER,
+            api_key="sk-internal",
+            user_id="internal_user",
+        ),
+        litellm_changed_by=None,
+    )
+
+    assert result is not None
+
+
+@pytest.mark.asyncio
+async def test_update_key_vector_store_index_grants_widened_rejected_for_non_admin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        update_key_fn,
+    )
+
+    token = "c3b2c3d4e5f6789012345678901234567890123456789012345678901234abcd"
+    _wire_update_key_fn(
+        monkeypatch,
+        _estimate_key_row(token, {"allowed_vector_store_indexes": [{"index_name": "docs", "index_permissions": ["read"]}]}),
+    )
+
+    mock_request = MagicMock()
+    mock_request.query_params = {}
+
+    with pytest.raises(ProxyException) as exc:
+        await update_key_fn(
+            request=mock_request,
+            data=UpdateKeyRequest(key=token, allowed_vector_store_indexes=_INDEX_GRANT),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.INTERNAL_USER,
+                api_key="sk-internal",
+                user_id="internal_user",
+            ),
+            litellm_changed_by=None,
+        )
+
+    assert str(exc.value.code) == "403"
+    assert "Only proxy admins can set allowed_vector_store_indexes" in str(exc.value.message)
+
+
 @pytest.mark.asyncio
 async def test_execute_virtual_key_regeneration_stamps_settings_updated_at():
     """Regenerate rewrites the key's config, so it must move settings_updated_at."""

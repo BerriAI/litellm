@@ -108,6 +108,7 @@ PROTOCOL_CONSTRAINED_PASS_THROUGH_ROUTES: Final = MappingProxyType(
         "/laya/v1/systemone": frozenset({"POST"}),
         "/bespoke/v1/systemone": frozenset({"POST"}),
         "/eu_jev/v1/systemone": frozenset({"POST"}),
+        "/opensearch/{endpoint:path}": frozenset({"GET", "HEAD", "POST", "PUT", "DELETE", "PATCH"}),
     }
 )
 
