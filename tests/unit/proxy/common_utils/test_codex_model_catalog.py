@@ -191,6 +191,7 @@ def test_a_model_codex_knows_keeps_its_own_reasoning_levels(levels):
     [
         ("0.153.0", "GPT-6.1 Terra", ["low", "max"]),
         ("0.166.0", "GPT-6.1 Terra", ["low", "max"]),
+        ("0.166.0-alpha.5.1", "GPT-6.1 Terra", ["low", "max"]),
         (None, "GPT-6.1 Terra", ["low", "max"]),
         ("0.152.9", "gpt-6.1-terra", ["low", "max"]),
         ("0.137.0", "gpt-6.1-terra", ["low"]),
@@ -787,6 +788,7 @@ _UNLIMITED_CODEX: Final = "a codex that reads any size gets every model"
         pytest.param("0.166.0-alpha.1", False, id=f"0.166.0-alpha.1, {_UNLIMITED_CODEX}"),
         pytest.param("0.166.0", False, id=f"0.166.0, {_UNLIMITED_CODEX}"),
         pytest.param("0.169.0-alpha.7", False, id=f"0.169.0-alpha.7, {_UNLIMITED_CODEX}"),
+        pytest.param("0.166.0-alpha.5.1", False, id=f"0.166.0-alpha.5.1, {_UNLIMITED_CODEX}"),
         pytest.param("0.165.0", True, id=f"0.165.0, {_LIMITED_CODEX}"),
         pytest.param("0.165.0-alpha.1.2", True, id=f"0.165.0-alpha.1.2, {_LIMITED_CODEX}"),
         pytest.param("0.164.0", True, id=f"0.164.0, {_LIMITED_CODEX}"),

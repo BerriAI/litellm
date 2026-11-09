@@ -34,7 +34,6 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, TypeAlias
 
-from packaging.version import Version
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
@@ -60,7 +59,7 @@ if TYPE_CHECKING:
 CODEX_BASE_INSTRUCTIONS_PATH: Final = Path(__file__).with_name("codex_base_instructions.md")
 CODEX_BUNDLED_MODELS_PATH: Final = Path(__file__).with_name("codex_bundled_models_0.166.0.json")
 CODEX_CATALOG_BYTE_LIMIT: Final = 1024 * 1024
-_FIRST_CODEX_WITHOUT_CATALOG_BYTE_LIMIT: Final = Version("0.166.0-alpha.1")
+_FIRST_CODEX_WITHOUT_CATALOG_BYTE_LIMIT: Final = "0.166.0-alpha.1"
 CODEX_CHAT_MODES: Final = frozenset({"chat", "responses"})
 
 _BODY_PREFIX: Final = '{"models":['
@@ -294,10 +293,7 @@ def _readable_by(stock_model: CodexStockModel, client_version: str | None) -> bo
     minimum: Final = stock_model.minimal_client_version
     if minimum is None or client_version is None:
         return True
-    try:
-        return Version(client_version) >= Version(minimum if isinstance(minimum, str) else ".".join(map(str, minimum)))
-    except ValueError:
-        return False
+    return codex_release_at_least(client_version, minimum if isinstance(minimum, str) else ".".join(map(str, minimum)))
 
 
 def _tier_fields(stock_model: CodexStockModel, tiers: tuple[CodexServiceTier, ...]) -> Mapping[str, object]:
