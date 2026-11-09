@@ -86,8 +86,10 @@ from litellm.constants import (
 from litellm.litellm_core_utils.agentic_followup_failure import is_agentic_followup_failure
 from litellm.litellm_core_utils.allowed_tools_tool_choice import (
     CHAT_ALLOWED_TOOLS_LAYOUT,
+    HOSTED_TOOL_CHOICE_TYPES,
     parse_chat_allowed_tools_tool_choice,
 )
+from litellm.litellm_core_utils.attempt_settlement import mark_attempt_answered
 from litellm.litellm_core_utils.core_helpers import (
     as_str_mapping,
     bind_budget_reservation_to_callbacks,
@@ -2536,7 +2538,9 @@ def client(original_function):
                         exception=deployment_error,
                         call_type=call_type,
                     )
-                except BaseException:  # noqa: S110, BLE001  # hook dispatch - including cancellation mid-await - must never replace the real deployment failure, so there is nothing to do with what it raises
+                except asyncio.CancelledError:
+                    raise
+                except BaseException:  # noqa: S110, BLE001  # a failing hook must never replace the real deployment failure, so there is nothing to do with what it raises
                     pass
                 raise
             end_time = datetime.datetime.now()
@@ -2578,6 +2582,7 @@ def client(original_function):
                     )
             elif call_type in (CallTypes.arealtime.value, CallTypes.aresponses_websocket.value):
                 return result
+            mark_attempt_answered()
             ### POST-CALL RULES ###
             post_call_processing(
                 original_response=result,
@@ -5397,18 +5402,30 @@ def pre_process_non_default_params(
     return non_default_params
 
 
-def remove_sensitive_keys_from_dict(d: dict) -> dict:
+def remove_sensitive_keys_from_dict(d: Mapping[str, object]) -> dict[str, object]:
     """
     Remove sensitive keys from a dictionary
     """
-    sensitive_key_phrases: Final = ["key", "secret", "access", "credential"]
-    remove_keys: Final = []
-    for key in d:
-        if any(phrase in key.lower() for phrase in sensitive_key_phrases):
-            remove_keys.append(key)
-    for key in remove_keys:
-        d.pop(key)
-    return d
+    sensitive_key_phrases: Final = ("key", "secret", "access", "credential")
+    result: Final = dict[str, object]()
+    pending: Final = [(d, result)]
+    while pending:
+        source, target = pending.pop()
+        for key, value in source.items():
+            if (
+                any(phrase in key.lower() for phrase in sensitive_key_phrases)
+                or key.lower() == "token"
+                or key.lower().endswith("_token")
+            ):
+                continue
+            mapping = as_str_mapping(value) if isinstance(value, dict) else None
+            if mapping is not None:
+                nested = dict[str, object]()
+                target[key] = nested
+                pending.append((mapping, nested))
+            else:
+                target[key] = value
+    return result
 
 
 _TOOL_LIST: Final = TypeAdapter(list[object])
@@ -9780,7 +9797,14 @@ def validate_chat_completion_tool_choice(
             )
 
         # Standard OpenAI format: {"type": "function", "function": {...}}
-        if tool_choice_type != "allowed_tools" and (tool_choice_type is None or tool_choice.get("function") is None):
+        forces_hosted_tool: Final[bool] = (
+            isinstance(tool_choice_type, str) and tool_choice_type in HOSTED_TOOL_CHOICE_TYPES
+        )
+        if (
+            tool_choice_type != "allowed_tools"
+            and not forces_hosted_tool
+            and (tool_choice_type is None or tool_choice.get("function") is None)
+        ):
             raise BadRequestError(
                 message=f"Invalid tool choice, tool_choice={tool_choice}. Please ensure tool_choice follows the OpenAI spec",
                 model=model,
