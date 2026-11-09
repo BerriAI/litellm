@@ -213,10 +213,16 @@ pub fn candidate_names(
     if !registry.present || !model.starts_with(&format!("model_name_{team}_")) {
         return (candidates, vec![]);
     }
-    let record = registry.records.get(model);
-    let public = record
+    let Some(record) = registry
+        .records
+        .get(model)
         .filter(|record| record.deployment_team.as_deref() == Some(team))
-        .and_then(|record| record.deployment_public_name.clone())
+    else {
+        return (candidates, vec![]);
+    };
+    let public = record
+        .deployment_public_name
+        .clone()
         .filter(|name| !name.is_empty());
     let ordered: Vec<&String> = aliases.team_order.as_ref().map_or_else(
         || aliases.team.keys().collect(),
@@ -454,6 +460,9 @@ pub fn decide(request: Request) -> Result<Response, Error> {
             }
         }
         Request::Customer(facts) => {
+            if facts.registry.evaluations.is_some() {
+                return Ok(Response::Decision(check(&facts)?));
+            }
             for name in &facts.requested {
                 let target = live_team_target(name, &facts);
                 if target != *name && facts.grants.contains(name) {
@@ -633,6 +642,49 @@ pub fn decide(request: Request) -> Result<Response, Error> {
 mod tests {
     use super::*;
     use rstest::rstest;
+
+    #[rstest]
+    #[case::missing(None, false)]
+    #[case::foreign(Some("other"), false)]
+    #[case::owned(Some("team"), true)]
+    fn ownership_aliases_require_matching_deployment(
+        #[case] owner: Option<&str>,
+        #[case] owned: bool,
+    ) {
+        let model = "model_name_team_private";
+        let aliases = Aliases {
+            team: BTreeMap::from([
+                ("z-last".into(), model.into()),
+                ("a-first".into(), model.into()),
+            ]),
+            team_order: Some(vec!["z-last".into(), "a-first".into()]),
+            ..Default::default()
+        };
+        let records = owner
+            .map(|team| {
+                BTreeMap::from([(
+                    model.into(),
+                    ModelRecord {
+                        deployment_team: Some(team.into()),
+                        deployment_public_name: Some("public".into()),
+                        ..Default::default()
+                    },
+                )])
+            })
+            .unwrap_or_default();
+        let registry = Registry {
+            present: true,
+            records,
+            ..Default::default()
+        };
+        let (_, names) = candidate_names(model, &aliases, &registry, Some("team"));
+        let expected: Vec<String> = if owned {
+            vec!["public".into(), "z-last".into(), "a-first".into()]
+        } else {
+            vec![]
+        };
+        assert_eq!(names, expected);
+    }
 
     #[rstest]
     #[case::absent(false, vec!["no-default-models"], Decision::Allow)]

@@ -56,6 +56,11 @@ class RouteEnableReaders:
 _READERS: Final = RouteEnableReaders()
 
 
+def read_route_enable_facts(route: str) -> RouteEnableFacts:
+    facts, _error = _read(RouteEnableFacts(route_context(route)), _READERS)
+    return facts
+
+
 def _answer(
     facts: RouteEnableFacts, decision: RouteEnableDecision, readers: RouteEnableReaders, enterprise: object
 ) -> tuple[RouteEnableFacts, object]:

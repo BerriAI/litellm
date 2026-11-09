@@ -315,6 +315,51 @@ fn map_error(error: core::Error) -> PyErr {
     }
 }
 
+#[pyfunction]
+pub(crate) fn request_auth_codex_normalization(
+    py: Python<'_>,
+    facts: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    let facts: core::codex_normalization::Facts = from_py(facts)?;
+    let decision = py
+        .detach(move || core::codex_normalization::decide(&facts))
+        .map_err(map_error)?;
+    to_py(py, &decision)
+}
+
+#[pyfunction]
+pub(crate) fn request_auth_codex_turn(
+    py: Python<'_>,
+    facts: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    let facts: core::codex_turn::Request = from_py(facts)?;
+    let decision = py
+        .detach(move || core::codex_turn::decide(facts))
+        .map_err(map_error)?;
+    to_py(py, &decision)
+}
+
+#[pyfunction]
+pub(crate) fn request_auth_route_scope(
+    py: Python<'_>,
+    facts: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    let facts: core::route_scope::Facts = from_py(facts)?;
+    to_py(py, &py.detach(move || core::route_scope::decide(&facts)))
+}
+
+#[pyfunction]
+pub(crate) fn request_auth_codex_model(
+    py: Python<'_>,
+    facts: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    let facts: core::codex_models::Facts = from_py(facts)?;
+    let decision = py
+        .detach(move || core::codex_models::decide(&facts))
+        .map_err(map_error)?;
+    to_py(py, &decision)
+}
+
 fn project(py: Python<'_>, step: Result<Step, core::Error>) -> PyResult<ProjectedStep> {
     let step = step.map_err(map_error)?;
     Ok((

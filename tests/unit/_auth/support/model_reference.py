@@ -66,6 +66,8 @@ def _single(model: str, facts: ModelAccessFacts) -> ModelAccessDecision:
         and facts.registry.present
         and facts.team_id is not None
         and model.startswith(f"model_name_{facts.team_id}_")
+        and record is not None
+        and record.deployment_team == facts.team_id
         else ()
     )
     if any(helper(candidate, facts, team_aliases=False) for candidate in owning):

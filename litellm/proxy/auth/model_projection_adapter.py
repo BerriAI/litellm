@@ -39,7 +39,7 @@ def project_scope(
         decision: Final = state.decision
         if decision.read is None or decision.model is None:
             raise NativeAuthRuntimeError("incomplete model registry read")
-        reading: Final = read_registry(decision.read, decision.model, facts.team_id, router)
+        reading: Final = read_registry(decision.read, decision.model, decision.team_id, router)
         updated: Final = (*state.reads, reading)
         return _Projection(updated, model_projection(facts, updated))
 

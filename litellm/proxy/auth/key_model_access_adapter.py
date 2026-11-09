@@ -10,6 +10,10 @@ from litellm._auth.fallback_access import GroupedModelScope
 from litellm._auth.key_model_access import KeyAndFallbackModelAccessFacts, key_and_fallback_model_access
 from litellm._auth.model_access import key_model_grants
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.auth.codex_normalization_adapter import (
+    resolve_codex_native_chatgpt_model,
+    resolve_router_settings_model_group_alias,
+)
 from litellm.proxy.auth.model_access_adapter import object_model_grants, project_model_facts
 from litellm.proxy.auth.model_projection_adapter import read_grouped_scope
 from litellm.router import Router
@@ -39,11 +43,11 @@ async def read_key_and_fallback_model_access_facts(
 ) -> KeyAndFallbackModelAccessFacts:
     from litellm.proxy.auth.user_api_key_auth import (
         _normalize_claude_model,  # pyright: ignore[reportPrivateUsage, reportUnknownVariableType]  # legacy helper takes the mutable request body
-        _resolve_router_settings_model_group_alias,  # pyright: ignore[reportPrivateUsage]  # preserve request-local router alias normalization
     )
 
     await _normalize_claude_model(request_data, valid_token, request, route)
-    await _resolve_router_settings_model_group_alias(request_data, valid_token, request, route)
+    await resolve_router_settings_model_group_alias(request_data, valid_token, request, route)
+    resolve_codex_native_chatgpt_model(request_data, valid_token, request, route)
     facts: Final = KeyAndFallbackModelAccessFacts(
         config_nonempty=bool(_Config.model_validate(valid_token, from_attributes=True).config),
         key_models=object_model_grants(valid_token),

@@ -1,4 +1,4 @@
-"""Model authorization and registry ordering frozen from Phase 1, 8bd7f5089a75."""
+"""Phase 1 model policy, with ownership guard updated from main 2f430873aead."""
 
 import re
 from collections.abc import Mapping, Sequence
@@ -64,6 +64,8 @@ def _owning(
     if router is None or team is None or not model.startswith(f"model_name_{team}_"):
         return ()
     deployment: Final = router.registry().deployments(model, source="first_in_group")
+    if deployment is None or deployment.model_info.team_id != team:
+        return ()
     public: Final = (
         deployment.model_info.team_public_model_name
         if deployment is not None and deployment.model_info.team_id == team
