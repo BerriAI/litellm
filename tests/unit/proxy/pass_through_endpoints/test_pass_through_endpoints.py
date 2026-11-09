@@ -9696,14 +9696,14 @@ async def _track_cost_for_passthrough_kwargs(kwargs: dict) -> AsyncMock:
 
 @pytest.mark.asyncio
 async def test_passthrough_charge_moves_the_committed_spend_of_the_entities_auth_named_budgeted():
-    """A forged body value stays out, and loggers that dump the row's metadata never get the auth object."""
+    """A forged body value stays out, and loggers that dump the row never get the auth object or the spend it read."""
     counter_keys: Final = EntitySpendCounterKeys.of(
         token="hashed-token", team_id="t1", user_id="u1", org_id=None, end_user_id=None
     )
     user_api_key_dict: Final = UserAPIKeyAuth(
         api_key="hashed-token",
         user_id="u1",
-        committed_budget_spend=CommittedBudgetSpend(counter_keys=counter_keys),
+        committed_budget_spend=CommittedBudgetSpend(counter_keys=counter_keys, key=0.123456),
         metadata={"logging": [{"callback_name": "langfuse"}], "kept": "yes"},
     )
 
@@ -9716,6 +9716,7 @@ async def test_passthrough_charge_moves_the_committed_spend_of_the_entities_auth
     assert increment_spend_counters.await_args.kwargs["committed_spend_scope"] == counter_keys
     assert "user_api_key_auth" not in kwargs["litellm_params"]["metadata"]
     assert "committed_budget_spend" not in repr(kwargs["litellm_params"]["metadata"])
+    assert "0.123456" not in json.dumps(kwargs, default=str)
 
 
 @pytest.mark.asyncio

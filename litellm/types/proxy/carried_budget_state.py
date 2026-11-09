@@ -114,9 +114,9 @@ class CommittedBudgetSpend(LiteLLMBaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    counter_keys: EntitySpendCounterKeys = EntitySpendCounterKeys()
-    key: float | None = None
-    team: float | None = None
-    user: float | None = None
-    org: float | None = None
-    end_user: float | None = None
+    counter_keys: EntitySpendCounterKeys = Field(default=EntitySpendCounterKeys(), repr=False)
+    key: float | None = Field(default=None, repr=False)
+    team: float | None = Field(default=None, repr=False)
+    user: float | None = Field(default=None, repr=False)
+    org: float | None = Field(default=None, repr=False)
+    end_user: float | None = Field(default=None, repr=False)
