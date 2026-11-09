@@ -5,7 +5,7 @@ use std::{collections::VecDeque, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use litellm_router_core::{
-    Attempt, AttemptError, Deployment, Error, FailureKind, FailureReport, Host,
+    Attempt, AttemptError, CallbackFiltered, Deployment, Error, FailureKind, FailureReport, Host,
     InMemoryRouterCache, Op, Output, Payload, Router, RouterCache, RouterConfig,
     RouterDynamicConfig, RouterEvent, RouterRequest, RoutingContext, SeededRandomness, SelectStage,
     SuccessReport,
@@ -37,6 +37,9 @@ struct ScriptedHost {
     pick_failures: Mutex<VecDeque<AttemptError>>,
     /// The next attempt's failure, whatever group it serves.
     first_failure: Mutex<Option<AttemptError>>,
+    /// The callback filters pin to this deployment until an attempt of the request failed on it,
+    /// as `encrypted_content_affinity` does.
+    pinned: Option<&'static str>,
 }
 
 impl ScriptedHost {
@@ -110,6 +113,24 @@ impl Host for ScriptedHost {
             Some(failure) => Err(failure.into()),
             None => Ok(candidates),
         }
+    }
+
+    async fn callback_filters(
+        &self,
+        ctx: &RoutingContext<'_>,
+        candidates: Vec<Arc<Deployment>>,
+    ) -> Result<CallbackFiltered, Error> {
+        let kept = match self.pinned {
+            Some(pin) if !ctx.skipped_ids.iter().any(|id| id == pin) => {
+                candidates.into_iter().filter(|d| d.id == pin).collect()
+            }
+            Some(pin) => candidates.into_iter().filter(|d| d.id != pin).collect(),
+            None => candidates,
+        };
+        Ok(CallbackFiltered {
+            kept,
+            preferred: None,
+        })
     }
 
     async fn allow_fallback(
@@ -220,6 +241,32 @@ async fn a_rate_limit_retries_in_the_same_group(config: RouterConfig) {
             response.attempted_fallbacks
         ),
         ("primary", 1, 0)
+    );
+}
+
+#[rstest]
+#[case::server_error(server_error())]
+#[case::rate_limit(failure(FailureKind::RateLimit, 429))]
+#[case::connection_error(AttemptError::new(FailureKind::ApiConnection, None))]
+#[tokio::test]
+async fn a_retry_leaves_a_pinned_deployment_that_failed_the_request(
+    mut config: RouterConfig,
+    #[case] origin_failure: AttemptError,
+) {
+    config.callback_filters = true;
+    let host = Arc::new(ScriptedHost {
+        first_failure: Mutex::new(Some(origin_failure)),
+        pinned: Some("a1"),
+        ..ScriptedHost::default()
+    });
+    let router = router(config, json!({"num_retries": 3}), host.clone());
+    let response = router
+        .call(Op::from("acompletion"), request())
+        .await
+        .unwrap();
+    assert_eq!(
+        (host.selected(), response.attempted_retries),
+        (vec!["a1".to_owned(), "a2".to_owned()], 1)
     );
 }
 
