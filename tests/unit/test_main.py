@@ -8,7 +8,7 @@ import logging
 import os
 import threading
 import urllib.parse
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime
@@ -669,6 +669,69 @@ async def test_a_malformed_allowed_tools_tool_choice_is_a_400_on_mcp_gateway_too
             api_key="fake_api_key",
         )
 
+    assert exc.value.status_code == 400
+    assert not respx_mock.calls
+
+
+_HOSTED_TOOL_CHOICE: Final = {"type": "web_search"}
+_HOSTED_TOOLS: Final[list[dict[str, object]]] = [*_TWO_TOOLS, {"type": "web_search"}]
+
+
+def test_completion_forwards_a_hosted_tool_choice_to_the_responses_api_unchanged(respx_mock: respx.MockRouter):
+    route: Final = respx_mock.post("https://api.openai.com/v1/responses").respond(
+        json={
+            "id": "resp_hosted",
+            "object": "response",
+            "created_at": 1,
+            "status": "completed",
+            "model": "gpt-5.6",
+            "output": [
+                {
+                    "type": "message",
+                    "id": "msg_hosted",
+                    "role": "assistant",
+                    "status": "completed",
+                    "content": [{"type": "output_text", "text": "18C and foggy", "annotations": []}],
+                }
+            ],
+            "usage": {"input_tokens": 40, "output_tokens": 5, "total_tokens": 45},
+        }
+    )
+
+    response: Final = litellm.completion(
+        model="openai/responses/gpt-5.6",
+        api_key="sk-test",
+        api_base="https://api.openai.com/v1",
+        messages=[{"role": "user", "content": "What is the weather in Paris right now?"}],
+        tools=_HOSTED_TOOLS,
+        tool_choice=_HOSTED_TOOL_CHOICE,
+    )
+
+    sent: Final = json.loads(route.calls.last.request.content)
+    assert sent["tool_choice"] == _HOSTED_TOOL_CHOICE
+    assert {"type": "web_search"} in sent["tools"]
+    assert response.choices[0].message.content == "18C and foggy"
+
+
+@pytest.mark.parametrize("drop_params", [False, True])
+@pytest.mark.parametrize("model", ["anthropic/claude-sonnet-4-5", "gemini/gemini-2.5-flash", "bedrock/converse/x"])
+def test_completion_hosted_tool_choice_is_a_400_where_the_provider_cannot_run_it(
+    respx_mock: respx.MockRouter, model: str, drop_params: bool
+):
+    with pytest.raises(
+        litellm.BadRequestError, match=r"tool_choice type 'web_search'.*only supported for azure, litellm_proxy, openai"
+    ) as exc:
+        litellm.completion(
+            model=model,
+            messages=[{"role": "user", "content": "What is the weather in Paris right now?"}],
+            tools=_TWO_TOOLS,
+            tool_choice=_HOSTED_TOOL_CHOICE,
+            drop_params=drop_params,
+            api_key="fake_api_key",
+            aws_access_key_id="fake",
+            aws_secret_access_key="fake",
+            aws_region_name="us-east-1",
+        )
     assert exc.value.status_code == 400
     assert not respx_mock.calls
 
@@ -2624,9 +2687,7 @@ def non_openai_responses_bridge(
         json.dumps({"access_token": "token", "account_id": "acct", "expires_at": 4102444800})
     )
     monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(tmp_path))
-    (tmp_path / "api-key.json").write_text(
-        json.dumps({"token": "token", "expires_at": 4102444800, "endpoints": {"api": "https://api.githubcopilot.com"}})
-    )
+    (tmp_path / "access-token").write_text("gho_test")
     litellm.register_model(
         {
             **{
@@ -2670,7 +2731,11 @@ def non_openai_responses_bridge(
             {"api_base": _FOUNDRY_API_BASE, "api_key": "fake-key"},
         ),
         "chatgpt": ("chatgpt/gpt-6.1-bridge-test", "https://chatgpt.com/backend-api/codex/responses", {}),
-        "github_copilot": ("github_copilot/gpt-6.1-bridge-test", "https://api.githubcopilot.com/responses", {}),
+        "github_copilot": (
+            "github_copilot/gpt-6.1-bridge-test",
+            "https://api.githubcopilot.com/responses",
+            {"api_base": "https://api.githubcopilot.com"},
+        ),
         "databricks": (
             "databricks/responses/databricks-gpt-bridge-test",
             "https://dbx.example/serving-endpoints/responses",
@@ -4305,6 +4370,41 @@ def test_anthropic_text_disable_url_suffix_env_var(
     assert disabled_response.choices[0].text == "test response"
     assert disabled_route.called
     assert str(disabled_route.calls.last.request.url) == "https://api.example.com/custom/complete"
+
+
+def test_huggingface_text_completion_sends_each_token_prompt_with_the_callers_params(
+    respx_mock: respx.MockRouter,
+) -> None:
+    from litellm.rust_bridge.tokenizer import get_encoding
+
+    encoding: Final = get_encoding("p50k_base")
+    respx_mock.get(url__startswith="https://huggingface.co/").respond(404)
+    endpoint: Final = respx_mock.post("https://hf.example.com/v1/chat/completions").respond(
+        json={
+            "id": "chatcmpl-hf",
+            "object": "chat.completion",
+            "created": 1,
+            "model": "tgi",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "OK"}, "finish_reason": "stop"}],
+        }
+    )
+
+    response: Final = litellm.text_completion(
+        model="huggingface/tgi",
+        prompt=[list(encoding.encode("Hello")), list(encoding.encode("world"))],
+        api_key="hf-test-key",
+        api_base="https://hf.example.com",
+        max_tokens=7,
+    )
+
+    assert [choice.text for choice in response.choices] == ["OK", "OK"]
+    sent: Final = sorted(
+        (json.loads(call.request.content) for call in endpoint.calls), key=lambda body: body["messages"][0]["content"]
+    )
+    assert [(body["messages"], body["max_tokens"]) for body in sent] == [
+        ([{"role": "user", "content": "Hello"}], 7),
+        ([{"role": "user", "content": "world"}], 7),
+    ]
 
 
 def test_image_edit_merges_headers_and_extra_headers():
@@ -6444,7 +6544,9 @@ def test_aiohttp_openai_warns_only_when_http2_enabled(
     assert warned is http2_on
 
 
-@pytest.mark.parametrize("tool_choice", [{"type": "bogus"}, {"name": "lookup_fruit"}, {"type": "file_search"}])
+@pytest.mark.parametrize(
+    "tool_choice", [{"type": "bogus"}, {"name": "lookup_fruit"}, {"type": "function", "name": "lookup_fruit"}]
+)
 def test_completion_rejects_untranslatable_tool_choice_with_a_400(tool_choice):
     with pytest.raises(litellm.BadRequestError) as exc_info:
         litellm.completion(
@@ -9447,6 +9549,19 @@ async def test_responses_with_retries(sync_mode):
         mock_responses.assert_called_once()
         assert mock_responses.call_args.kwargs["num_retries"] == 0
         assert mock_responses.call_args.kwargs["max_retries"] == 0
+
+
+@pytest.mark.parametrize("retry_function", [acompletion_with_retries, aresponses_with_retries])
+@pytest.mark.asyncio
+async def test_async_retry_helpers_stop_when_the_call_is_cancelled(
+    retry_function: Callable[..., Awaitable[object]],
+) -> None:
+    upstream: Final = AsyncMock(side_effect=[asyncio.CancelledError(), MagicMock()])
+
+    with pytest.raises(asyncio.CancelledError):
+        await retry_function(model="gpt-4o", num_retries=3, original_function=upstream)
+
+    assert upstream.await_count == 1
 
 
 def test_azure_embedding_exceptions():

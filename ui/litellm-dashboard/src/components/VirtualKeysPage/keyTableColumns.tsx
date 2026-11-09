@@ -3,9 +3,9 @@
 import type { ReactNode } from "react";
 import { Info } from "lucide-react";
 import { ColumnDef } from "@tanstack/react-table";
-import type { TFunction } from "i18next";
+import type { ParseKeys, TFunction } from "i18next";
 
-import { DataTableMultiSortHeader, DataTableSortHeader, type DataTableSortField } from "@/components/shared/DataTable";
+import { DataTableMultiSortHeader, DataTableSortHeader } from "@/components/shared/DataTable";
 import {
   inheritedBudgetGates,
   keyOwnerBudgetSource,
@@ -38,9 +38,9 @@ interface KeyStatus {
   tooltip?: string;
 }
 
-const SPEND_BUDGET_SORT_FIELDS: DataTableSortField[] = [
-  { id: "spend", label: "Spend" },
-  { id: "max_budget", label: "Budget" },
+const SPEND_BUDGET_SORT_FIELDS: readonly { id: string; labelKey: ParseKeys }[] = [
+  { id: "spend", labelKey: "apiKeys.keyTableColumns.sortFields.spend" },
+  { id: "max_budget", labelKey: "apiKeys.keyTableColumns.sortFields.budget" },
 ];
 
 export const KEY_TABLE_SORT_FIELDS: readonly string[] = [
@@ -328,7 +328,12 @@ export const getKeyTableColumns = (
     id: "spend",
     accessorKey: "spend",
     meta: { title: t("apiKeys.keyTableColumns.columns.spendBudget"), skeleton: "meter", numeric: true },
-    header: ({ table }) => <DataTableMultiSortHeader table={table} fields={SPEND_BUDGET_SORT_FIELDS} />,
+    header: ({ table }) => (
+      <DataTableMultiSortHeader
+        table={table}
+        fields={SPEND_BUDGET_SORT_FIELDS.map(({ id, labelKey }) => ({ id, label: t(labelKey) }))}
+      />
+    ),
     size: 240,
     enableSorting: true,
     cell: ({ row }) => {
@@ -384,11 +389,15 @@ export const getKeyTableColumns = (
     header: ({ column }) => (
       <DataTableSortHeader column={column} title={t("apiKeys.keyTableColumns.columns.budgetReset")} />
     ),
-    size: 130,
+    size: 160,
     enableSorting: true,
     sortDescFirst: false,
     cell: (info) => (
-      <DateCell value={info.getValue() as string | null} fallback={t("apiKeys.keyTableColumns.cells.never")} />
+      <DateCell
+        value={info.getValue() as string | null}
+        fallback={t("apiKeys.keyTableColumns.cells.never")}
+        timeZone="UTC"
+      />
     ),
   },
   {

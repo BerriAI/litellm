@@ -17,7 +17,6 @@ from pydantic import ValidationError as PydanticValidationError
 from starlette.datastructures import Headers
 
 import litellm
-from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 from litellm.constants import (
     CALLER_SESSION_ID_METADATA_KEY,
     COMPLEXITY_ROUTER_CHILD_SESSION_ID_METADATA_KEY,
@@ -39,6 +38,7 @@ from litellm.litellm_core_utils.redact_messages import _get_turn_off_message_log
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.fireworks_ai.common_utils import get_fireworks_session_id
 from litellm.proxy._types import AddTeamCallback, ProxyException, TeamCallbackMetadata, UserAPIKeyAuth
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.litellm_pre_call_utils import (
     KeyAndTeamLoggingSettings,
     LiteLLMProxyRequestSetup,
@@ -63,6 +63,7 @@ from litellm.proxy.litellm_pre_call_utils import (
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 from litellm.types.litellm_params import AGENTIC_LOOP_KWARG_NAMES
 from litellm.types.utils import CredentialItem
+from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 
 
 def test_check_if_token_is_service_account():
@@ -111,7 +112,8 @@ class TestGetMetadataVariableName:
         assert get_metadata_variable_name(request) == "litellm_metadata"
 
     @pytest.mark.parametrize(
-        "path", ["/v1beta/interactions", "/interactions", "/v1beta/interactions/v1_abc123", "/interactions/v1_abc123/cancel"]
+        "path",
+        ["/v1beta/interactions", "/interactions", "/v1beta/interactions/v1_abc123", "/interactions/v1_abc123/cancel"],
     )
     def test_returns_litellm_metadata_for_interactions_routes(self, path):
         request = self._make_request(path)
@@ -807,7 +809,9 @@ async def test_interactions_spend_logs_metadata_survives_the_router_metadata_buc
 
     # The router then adds its deployment fields to the same bucket, and the spend log
     # resolves that bucket.
-    data["litellm_metadata"].update({"model_group": "gemini-3.1-flash-lite", "deployment": "gemini/gemini-3.1-flash-lite"})
+    data["litellm_metadata"].update(
+        {"model_group": "gemini-3.1-flash-lite", "deployment": "gemini/gemini-3.1-flash-lite"}
+    )
     resolved = get_litellm_metadata_from_kwargs(
         {"litellm_params": {"metadata": data.get("metadata") or {}, "litellm_metadata": data["litellm_metadata"]}}
     )
@@ -3758,53 +3762,87 @@ async def test_spend_log_caller_session_stays_out_of_requester_metadata(monkeypa
     "surface,headers,body,child_id,trace_id",
     [
         (
-            "chat/completions", {"X-Session-Id": "child-01"}, {"metadata": {"session_id": "body-001"}},
-            "child-01", "parent-01",
+            "chat/completions",
+            {"X-Session-Id": "child-01"},
+            {"metadata": {"session_id": "body-001"}},
+            "child-01",
+            "parent-01",
         ),
         ("responses", {"x-vendor-session-id": "child-01"}, {}, "child-01", "parent-01"),
         ("messages", {"session-id": "child-01", "user-agent": "codex_cli_rs/1.0"}, {}, "child-01", "parent-01"),
         ("chat/completions", {"x-litellm-session-id": "short", "x-session-id": "child-01"}, {}, "short", "short"),
         ("responses", {"x-litellm-trace-id": "trace-01", "x-session-id": "child-01"}, {}, "child-01", "trace-01"),
         (
-            "messages", {"x-litellm-trace-id": "trace-01", "x-litellm-session-id": "child-01"},
-            {}, "child-01", "trace-01",
+            "messages",
+            {"x-litellm-trace-id": "trace-01", "x-litellm-session-id": "child-01"},
+            {},
+            "child-01",
+            "trace-01",
         ),
         ("responses", {}, {"metadata": {"session_id": "body-001"}}, "body-001", "parent-01"),
         ("messages", {}, {"litellm_metadata": {"session_id": "body-001"}}, "body-001", "parent-01"),
         ("chat/completions", {}, {"litellm_metadata": {"session_id": "body-001"}}, "body-001", "parent-01"),
         ("messages", {"baggage": "session.id=child-01"}, {}, "child-01", "parent-01"),
         (
-            "responses", {"baggage": "session.id=child-01"}, {"metadata": {"session_id": "body-001"}},
-            "body-001", "parent-01",
+            "responses",
+            {"baggage": "session.id=child-01"},
+            {"metadata": {"session_id": "body-001"}},
+            "body-001",
+            "parent-01",
         ),
         (
-            "chat/completions", {}, {"litellm_session_id": "root-001", "metadata": {"session_id": "body-001"}},
-            "root-001", "parent-01",
+            "chat/completions",
+            {},
+            {"litellm_session_id": "root-001", "metadata": {"session_id": "body-001"}},
+            "root-001",
+            "parent-01",
         ),
         (
-            "responses", {}, {"metadata": {"session_id": "body-001"}, "litellm_metadata": {"session_id": "active-1"}},
-            "active-1", "parent-01",
+            "responses",
+            {},
+            {"metadata": {"session_id": "body-001"}, "litellm_metadata": {"session_id": "active-1"}},
+            "active-1",
+            "parent-01",
         ),
         (
-            "chat/completions", {},
+            "chat/completions",
+            {},
             {"metadata": {"session_id": "active-1"}, "litellm_metadata": {"session_id": "body-001"}},
-            "active-1", "parent-01",
+            "active-1",
+            "parent-01",
         ),
         (
-            "chat/completions", {}, {"metadata": {"session_id": ""}, "litellm_metadata": {"session_id": "body-001"}},
-            None, "parent-01",
+            "chat/completions",
+            {},
+            {"metadata": {"session_id": ""}, "litellm_metadata": {"session_id": "body-001"}},
+            None,
+            "parent-01",
         ),
         (
-            "messages", {}, {"metadata": {"session_id": "body-001"}, "litellm_metadata": {"session_id": ""}},
-            None, "parent-01",
+            "messages",
+            {},
+            {"metadata": {"session_id": "body-001"}, "litellm_metadata": {"session_id": ""}},
+            None,
+            "parent-01",
         ),
         (
-            "messages", {}, {"litellm_session_id": "root-001", "litellm_metadata": {"session_id": "active-1"},
-            "metadata": {"session_id": "body-001", "user_id": "user_abc_account__session_anthro-1"}},
-            "anthro-1", "parent-01",
+            "messages",
+            {},
+            {
+                "litellm_session_id": "root-001",
+                "litellm_metadata": {"session_id": "active-1"},
+                "metadata": {"session_id": "body-001", "user_id": "user_abc_account__session_anthro-1"},
+            },
+            "anthro-1",
+            "parent-01",
         ),
-        ("messages", {"x-session-id": "child-01"}, {"metadata": {"user_id": {"session_id": "body-001"}}},
-         "child-01", "parent-01"),
+        (
+            "messages",
+            {"x-session-id": "child-01"},
+            {"metadata": {"user_id": {"session_id": "body-001"}}},
+            "child-01",
+            "parent-01",
+        ),
         ("chat/completions", {}, {}, None, "parent-01"),
         ("responses", {"x-session-id": "bad"}, {}, None, "parent-01"),
         ("messages", {}, {"metadata": {"session_id": 123}}, None, "parent-01"),
@@ -4346,9 +4384,7 @@ def _bedrock_passthrough_data(
         ),
     ],
 )
-def test_bedrock_request_metadata_thread_id_becomes_session_id(
-    headers: dict[str, str], client_body: dict[str, object]
-):
+def test_bedrock_request_metadata_thread_id_becomes_session_id(headers: dict[str, str], client_body: dict[str, object]):
     sent_body: Final = copy.deepcopy(client_body)
     data: Final = _bedrock_passthrough_data(client_body)
 
@@ -4428,7 +4464,9 @@ def test_bedrock_request_metadata_without_usable_session_id_sets_no_session(
 @pytest.mark.parametrize(
     ("body_tags", "header_tags", "expected"),
     [
-        pytest.param({"team": "search"}, {"threadId": "thread-abc-123"}, "thread-abc-123", id="body_without_session_key"),
+        pytest.param(
+            {"team": "search"}, {"threadId": "thread-abc-123"}, "thread-abc-123", id="body_without_session_key"
+        ),
         pytest.param({"sessionId": "body-session"}, {"sessionId": "header-session"}, "body-session", id="body_wins"),
     ],
 )
@@ -8045,6 +8083,7 @@ async def test_add_litellm_data_to_request_refuses_a_model_config_credential_hol
         ("API-Key", True),
         ("Cookie", True),
         ("Proxy-Authorization", True),
+        ("X-Amz-Security-Token", True),
         ("anthropic-version", False),
         ("user-agent", False),
     ],
@@ -9213,7 +9252,9 @@ async def test_add_litellm_data_to_request_strips_router_reserved_stamps_on_resp
 
 
 @pytest.mark.asyncio
-async def test_router_keeps_proxy_metadata_bucket_identity_after_reserved_stamp_strip():
+async def test_router_keeps_proxy_metadata_bucket_identity_after_reserved_stamp_strip(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """Regression for the #38586 break: a client that planted a reserved key in
     litellm_metadata made the router hand downstream a scrubbed copy, so the proxy's
     post_call write-backs (guardrail telemetry, applied guardrails) landed in a dict the
@@ -9247,13 +9288,13 @@ async def test_router_keeps_proxy_metadata_bucket_identity_after_reserved_stamp_
         ]
     )
     forwarded_buckets = []
-    original_acompletion = router._acompletion
+    original_acompletion = litellm.acompletion
 
     async def _spy(*args, **spy_kwargs):
         forwarded_buckets.append(spy_kwargs["metadata"])
         return await original_acompletion(*args, **spy_kwargs)
 
-    router._acompletion = _spy
+    monkeypatch.setattr(litellm, "acompletion", _spy)
 
     await router.acompletion(**request_data)
 
@@ -10219,7 +10260,6 @@ class TestResolveUserProviderCredentials:
         )
 
     def _env(self, monkeypatch):
-        from litellm.caching.dual_cache import DualCache
 
         monkeypatch.setattr(
             litellm,
@@ -10239,7 +10279,7 @@ class TestResolveUserProviderCredentials:
         prisma_client.db.litellm_userprovidercredentials = table
         prisma_client.writer_db = prisma_client.db
         monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma_client)
-        monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", DualCache())
+        monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", UserApiKeyCache())
         return table
 
     @pytest.mark.asyncio
@@ -11057,7 +11097,6 @@ class TestResolveUserProviderCredentials:
 
 
 def _per_user_env(monkeypatch, credential_names=("copilot-cred",)):
-    from litellm.caching.dual_cache import DualCache
 
     monkeypatch.setattr(
         litellm,
@@ -11077,7 +11116,7 @@ def _per_user_env(monkeypatch, credential_names=("copilot-cred",)):
     prisma_client.db.litellm_userprovidercredentials = table
     prisma_client.writer_db = prisma_client.db
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma_client)
-    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", DualCache())
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", UserApiKeyCache())
     monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "sk-test-master")
     return table
 
@@ -11221,14 +11260,11 @@ async def test_header_mapped_user_id_cannot_load_another_users_connection(monkey
     request header. Per-user token resolution is bound to the key-authenticated identity,
     so a header naming user B still loads only user A's connections."""
     from litellm import Router
-    from litellm.caching.dual_cache import DualCache
     from litellm.proxy.credential_endpoints import user_provider_credentials as upc
     from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 
     _per_user_env(monkeypatch)
-    load = AsyncMock(
-        return_value={"copilot-cred": {"access_token": "gho_user_a_token", "github_host": "github.com"}}
-    )
+    load = AsyncMock(return_value={"copilot-cred": {"access_token": "gho_user_a_token", "github_host": "github.com"}})
     monkeypatch.setattr(upc, "aget_user_provider_credentials", load)
     router = Router(
         model_list=[
@@ -11242,7 +11278,7 @@ async def test_header_mapped_user_id_cannot_load_another_users_connection(monkey
         ]
     )
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
-    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", DualCache())
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", UserApiKeyCache())
 
     request_mock = MagicMock(spec=Request)
     request_mock.url = MagicMock()
@@ -11277,14 +11313,11 @@ async def test_header_mapped_user_id_cannot_load_another_users_connection(monkey
 async def test_per_user_token_resolution_uses_key_identity_without_header_mapping(monkeypatch):
     """Control: with no user_header_mappings configured the key's user_id is used as before."""
     from litellm import Router
-    from litellm.caching.dual_cache import DualCache
     from litellm.proxy.credential_endpoints import user_provider_credentials as upc
     from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 
     _per_user_env(monkeypatch)
-    load = AsyncMock(
-        return_value={"copilot-cred": {"access_token": "gho_user_a_token", "github_host": "github.com"}}
-    )
+    load = AsyncMock(return_value={"copilot-cred": {"access_token": "gho_user_a_token", "github_host": "github.com"}})
     monkeypatch.setattr(upc, "aget_user_provider_credentials", load)
     router = Router(
         model_list=[
@@ -11298,7 +11331,7 @@ async def test_per_user_token_resolution_uses_key_identity_without_header_mappin
         ]
     )
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
-    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", DualCache())
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", UserApiKeyCache())
 
     request_mock = MagicMock(spec=Request)
     request_mock.url = MagicMock()

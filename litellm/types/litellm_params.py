@@ -207,6 +207,7 @@ class DeploymentOptions:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class SpecializedRouterOptions:
+    switchyard_router_config: Mapping[str, object] | None = None
     auto_router_config_path: str | None = None
     auto_router_config: str | None = None
     auto_router_default_model: str | None = None

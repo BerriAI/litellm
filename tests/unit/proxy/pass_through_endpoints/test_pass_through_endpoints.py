@@ -61,6 +61,7 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     WebsocketFrameModelRefused,
     WebsocketFrameModelVerdict,
     _build_passthrough_failure_request_payload,
+    _parse_request_data_by_content_type,
     _registered_pass_through_routes,
     _truncate_upstream_error_body,
     _update_metadata_with_tags_in_header,
@@ -107,6 +108,7 @@ PROTOCOL_CONSTRAINED_PASS_THROUGH_ROUTES: Final = MappingProxyType(
         "/laya/v1/systemone": frozenset({"POST"}),
         "/bespoke/v1/systemone": frozenset({"POST"}),
         "/eu_jev/v1/systemone": frozenset({"POST"}),
+        "/opensearch/{endpoint:path}": frozenset({"GET", "HEAD", "POST", "PUT", "DELETE", "PATCH"}),
     }
 )
 
@@ -13242,3 +13244,106 @@ async def test_passthrough_header_and_callback_share_finalized_cost(
     finally:
         cleanup()
         await client.aclose()
+
+
+def _stub_adapter_proxy(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
+    proxy_logging: Final = MagicMock()
+    proxy_logging.pre_call_hook = AsyncMock(side_effect=lambda **kwargs: kwargs["data"])
+    proxy_logging.post_call_failure_hook = AsyncMock()
+
+    async def fake_add_litellm_data_to_request(**kwargs: object) -> object:
+        return kwargs["data"]
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging)
+    monkeypatch.setattr("litellm.proxy.proxy_server.add_litellm_data_to_request", fake_add_litellm_data_to_request)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_model", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+    return proxy_logging
+
+
+@pytest.mark.asyncio
+async def test_chat_completion_pass_through_endpoint_reads_a_body_only_json_can_parse(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    proxy_logging: Final = _stub_adapter_proxy(monkeypatch)
+    request: Final = MagicMock(spec=Request)
+    request.body = AsyncMock(
+        return_value=b'{"model": "unknown-model", "stream": false, "user": null, "messages": [{"role": "user", "content": "hi"}]}'
+    )
+
+    with pytest.raises(ProxyException):
+        await chat_completion_pass_through_endpoint(
+            fastapi_response=Response(),
+            request=request,
+            adapter_id="anthropic",
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+        )
+
+    forwarded: Final = proxy_logging.pre_call_hook.call_args.kwargs["data"]
+    assert (forwarded["model"], forwarded["stream"], forwarded["user"], forwarded["adapter_id"]) == (
+        "unknown-model",
+        False,
+        None,
+        "anthropic",
+    )
+    assert forwarded["messages"] == [{"role": "user", "content": "hi"}]
+
+
+@pytest.mark.asyncio
+async def test_chat_completion_pass_through_endpoint_rejects_a_body_that_is_not_an_object(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    proxy_logging: Final = _stub_adapter_proxy(monkeypatch)
+    request: Final = MagicMock(spec=Request)
+    request.body = AsyncMock(return_value=b'["not", "an", "object"]')
+
+    with pytest.raises(ProxyException) as raised:
+        await chat_completion_pass_through_endpoint(
+            fastapi_response=Response(),
+            request=request,
+            adapter_id="anthropic",
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+        )
+
+    assert raised.value.message
+    proxy_logging.pre_call_hook.assert_not_awaited()
+
+
+def _request_with_body(content_type: str, body: bytes) -> Request:
+    async def receive() -> dict[str, object]:
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    return Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/pass-through",
+            "query_string": b"",
+            "headers": [(b"content-type", content_type.encode())],
+        },
+        receive,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [
+        (b'{"model": "m", "stream": true}', (None, {"model": "m", "stream": True}, None, True)),
+        (
+            b'{"query_params": {"a": "1"}, "custom_body": {"b": 2}, "stream": false}',
+            ({"a": "1"}, {"b": 2}, None, False),
+        ),
+        (b"{}", (None, None, None, None)),
+        (b"[1, 2]", (None, None, None, None)),
+        (b'--x\r\nContent-Disposition: form-data; name="f"\r\n\r\nv\r\n--x--\r\n', (None, None, None, None)),
+    ],
+    ids=["json_body_is_the_custom_body", "explicit_envelope", "empty_object", "json_array", "real_multipart"],
+)
+async def test_parse_request_data_by_content_type_reads_json_sent_as_multipart(
+    body: bytes, expected: tuple[object, object, None, object]
+):
+    request: Final = _request_with_body("multipart/form-data; boundary=x", body)
+
+    assert await _parse_request_data_by_content_type(request) == expected

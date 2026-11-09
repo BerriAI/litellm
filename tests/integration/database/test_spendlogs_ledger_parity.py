@@ -63,10 +63,10 @@ _DAILY_TABLES: Final = (
 )
 
 
-@pytest.mark.parametrize("batch_size,row_count,expected,distinct_models", [(None, 251, 251, False), ("200", 251, 200, False), (None, 10001, 10000, False), (None, 3001, 3001, True)])
+@pytest.mark.parametrize("batch_size,row_count,transactions,distinct_models", [(None, 251, 1, False), (None, 1001, 3, False), ("200", 251, 2, False), ("3001", 3001, 1, True)])
 @pytest.mark.asyncio
-async def test_worker_applies_the_configured_backlog_in_one_transaction(
-    parity_database: str, monkeypatch: pytest.MonkeyPatch, batch_size: str | None, row_count: int, expected: int, distinct_models: bool
+async def test_worker_drains_a_backlog_in_one_run_one_configured_batch_per_transaction(
+    parity_database: str, monkeypatch: pytest.MonkeyPatch, batch_size: str | None, row_count: int, transactions: int, distinct_models: bool
 ):
     from litellm.accounting.worker import flush_accounting_deliveries
 
@@ -92,15 +92,99 @@ async def test_worker_applies_the_configured_backlog_in_one_transaction(
         )) == row_count - 1
         started = time.monotonic()
         await flush_accounting_deliveries(writer, client, proxy_server.proxy_logging_obj)
-        print(f"Ledger batch applied={expected} queued={row_count} seconds={time.monotonic() - started:.3f}")
+        print(f"Ledger backlog queued={row_count} seconds={time.monotonic() - started:.3f}")
         with psycopg.connect(parity_database) as connection:
-            assert connection.execute('SELECT COUNT(*) FROM "LiteLLM_SpendLogDelivery" WHERE state=\'applied\'').fetchone() == (expected,)
-            assert connection.execute('SELECT COUNT(*) FROM "LiteLLM_SpendLogDelivery" WHERE state=\'pending\'').fetchone() == (row_count - expected,)
-            assert connection.execute('SELECT COUNT(DISTINCT applied_at) FROM "LiteLLM_SpendLogDelivery"').fetchone() == (1,)
-            assert connection.execute('SELECT spend FROM "LiteLLM_UserTable" WHERE user_id=\'user\'').fetchone() == (expected * 0.25,)
-            assert connection.execute('SELECT COUNT(*) FROM "LiteLLM_DailyUserSpend"').fetchone() == (expected if distinct_models else 1,)
+            assert connection.execute('SELECT COUNT(*) FROM "LiteLLM_SpendLogDelivery" WHERE state=\'applied\'').fetchone() == (row_count,)
+            assert connection.execute('SELECT COUNT(*) FROM "LiteLLM_SpendLogDelivery" WHERE state=\'pending\'').fetchone() == (0,)
+            assert connection.execute('SELECT COUNT(DISTINCT applied_at) FROM "LiteLLM_SpendLogDelivery"').fetchone() == (transactions,)
+            assert connection.execute('SELECT spend FROM "LiteLLM_UserTable" WHERE user_id=\'user\'').fetchone() == (row_count * 0.25,)
+            assert connection.execute('SELECT COUNT(*) FROM "LiteLLM_DailyUserSpend"').fetchone() == (row_count if distinct_models else 1,)
     finally:
         await client.db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_worker_removes_more_expired_receipts_than_one_cleanup_batch_in_one_run(
+    parity_database: str, monkeypatch: pytest.MonkeyPatch
+):
+    from litellm.accounting.worker import flush_accounting_deliveries
+
+    monkeypatch.setenv("DATABASE_URL", parity_database)
+    monkeypatch.setenv("LITELLM_ACCOUNTING_DELIVERY_BATCH_SIZE", "100")
+    client = PrismaClient(database_url=parity_database, proxy_logging_obj=proxy_server.proxy_logging_obj)
+    with psycopg.connect(parity_database, autocommit=True) as connection:
+        connection.execute(
+            'INSERT INTO "LiteLLM_SpendLogDelivery" (request_id, accounting_payload, is_batch, state, applied_at) '
+            "SELECT 'expired-' || n, '{}'::jsonb, false, 'applied', CURRENT_TIMESTAMP - INTERVAL '2 days' "
+            "FROM generate_series(1, 501) AS n"
+        )
+    await client.db.connect()
+    try:
+        await flush_accounting_deliveries(DBSpendUpdateWriter(), client, proxy_server.proxy_logging_obj)
+        with psycopg.connect(parity_database) as connection:
+            assert connection.execute('SELECT COUNT(*) FROM "LiteLLM_SpendLogDelivery"').fetchone() == (0,)
+    finally:
+        await client.db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_worker_checks_storage_and_repeats_delay_alerts_once_per_interval(
+    parity_database: str, monkeypatch: pytest.MonkeyPatch
+):
+    from litellm.accounting.worker import flush_accounting_deliveries
+
+    class _Alerts:
+        def __init__(self) -> None:
+            self.messages: list[str] = []  # mutable-ok: alert sink the worker appends to
+
+        async def alerting_handler(self, message: str, level: str, alert_type: object) -> None:
+            self.messages.append(message)
+
+    class _Clock:
+        def __init__(self) -> None:
+            self.now = 0.0
+
+        def __call__(self) -> float:
+            return self.now
+
+    monkeypatch.setenv("DATABASE_URL", parity_database)
+    monkeypatch.setenv("LITELLM_ACCOUNTING_DELIVERY_ALERT_BYTES", "1")
+    with psycopg.connect(parity_database, autocommit=True) as connection:
+        connection.execute(
+            'INSERT INTO "LiteLLM_SpendLogDelivery" '
+            "(delivery_id, request_id, accounting_payload, is_batch, attempts, created_at, next_attempt_at) "
+            "VALUES ('stuck', 'stuck', '{}'::jsonb, false, 1, CURRENT_TIMESTAMP - INTERVAL '1 hour', "
+            "CURRENT_TIMESTAMP + INTERVAL '1 hour')"
+        )
+    client: Final = PrismaClient(database_url=parity_database, proxy_logging_obj=proxy_server.proxy_logging_obj)
+    clock: Final = _Clock()
+    writer: Final = DBSpendUpdateWriter(accounting_clock=clock)
+    alerts: Final = _Alerts()
+    monkeypatch.setenv("LITELLM_ACCOUNTING_DELIVERY_CHECK_INTERVAL_SECONDS", "100")
+
+    async def flush_at(moment: float) -> tuple[str, ...]:
+        clock.now = moment
+        before: Final = len(alerts.messages)
+        await flush_accounting_deliveries(writer, client, alerts)
+        return tuple(message.split(",")[0] for message in alerts.messages[before:])
+
+    await client.db.connect()
+    try:
+        first: Final = await flush_at(0.0)
+        with psycopg.connect(parity_database, autocommit=True) as connection:
+            connection.execute(
+                'INSERT INTO "LiteLLM_SpendLogDelivery" (delivery_id, request_id, accounting_payload, is_batch, state) '
+                "VALUES ('batch', 'batch', '{}'::jsonb, true, 'applied')"
+            )
+        within: Final = (await flush_at(10.0), await flush_at(99.0))
+        after: Final = await flush_at(100.0)
+    finally:
+        await client.db.disconnect()
+
+    delayed: Final = "Accounting deliveries are delayed. Pending=1"
+    assert first == ("Accounting delivery storage requires review. Retained batches=0", delayed)
+    assert within == ((), ())
+    assert after == ("Accounting delivery storage requires review. Retained batches=1", delayed)
 
 
 @pytest.mark.parametrize("ledger", [False, True])
@@ -404,6 +488,7 @@ async def _assert_legacy_database_parity(
             assert len(rows) == 1
             if path == "ledger" and retention == "lean":
                 assert rows[0]["accounting_log_disabled"] is True
+                assert not {"messages", "response", "proxy_server_request", "metadata"}.intersection(rows[0])
                 frozen = rows[0]["accounting_payload"]
                 if isinstance(frozen, str):
                     frozen = json.loads(frozen)

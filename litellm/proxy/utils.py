@@ -6,6 +6,7 @@ import inspect
 import json
 import math
 import os
+import re
 import smtplib
 import ssl
 import sys
@@ -24,10 +25,12 @@ from collections.abc import (
     Mapping,
     Sequence,
 )
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from email.utils import formatdate
 from functools import partial, reduce
 from itertools import takewhile
 from operator import attrgetter
@@ -72,6 +75,7 @@ from litellm.constants import (
     VLLM_CHOICE_FIELDS,
 )
 from litellm.cost_calculator import BaseTokenUsageProcessor
+from litellm.integrations.otel.runtime import seed_request_identity
 from litellm.litellm_core_utils.bug_report import (
     bug_report_notice,
     should_report_bug,
@@ -84,7 +88,9 @@ from litellm.proxy._types import (
     SpendLogsMetadata,
     SpendLogsPayload,
 )
+from litellm.proxy.auth.password_policy import MIN_ALLOWED_LENGTH
 from litellm.proxy.bug_report_config import build_proxy_bug_report
+from litellm.proxy.common_utils.fips import fips_mode_active
 from litellm.proxy.common_utils.openai_error_payload import (
     attribute_of,
     error_status_code,
@@ -157,10 +163,12 @@ from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.integrations.SlackAlerting.utils import add_langfuse_trace_id_to_alert
 from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
 from litellm.litellm_core_utils.core_helpers import (
+    attribute_or_none,
     coerce_token_limit,
     get_or_create_metadata_bucket,
     independent_snapshot,
     is_expected_client_error,
+    require_attributes,
 )
 from litellm.litellm_core_utils.deployment_pricing import pricing_models
 from litellm.litellm_core_utils.duration_parser import get_budget_window_start
@@ -180,6 +188,7 @@ from litellm.litellm_core_utils.served_output_texts import (
     served_stream_output_texts,
 )
 from litellm.litellm_core_utils.token_counter import offload_token_count, usage_tokenizer_model
+from litellm.litellm_core_utils.total_deadline import TotalTimeoutExpired
 from litellm.llms import load_guardrail_translation_mappings
 from litellm.llms.base_llm.guardrail_translation.utils import stream_item_field, stream_item_items
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
@@ -310,8 +319,8 @@ if TYPE_CHECKING:
     from mcp.types import CallToolResult
     from opentelemetry.trace import Span as _Span
     from prisma import models as prisma_models
-    from prisma.actions import LiteLLM_DeprecatedVerificationTokenActions
     from prisma.client import TransactionManager
+    from prisma.errors import UniqueViolationError
     from prisma.models import LiteLLM_DeprecatedVerificationToken
     from prisma.types import HttpConfig, LiteLLM_VerificationTokenInclude
 
@@ -358,6 +367,7 @@ _VIEW_SETUP_DEADLINE_SECONDS: Final = 15 * 60.0
 _VIEW_SETUP_GATE_TABLE: Final = '"LiteLLM_SpendLogs"'
 _VIEW_SETUP_GATE_PROBE_ROWS: Final = TypeAdapter(tuple[Mapping[str, bool], ...])
 _DELEGATED_ATTRIBUTE: Final = TypeAdapter(object)
+_DECODED_JSON: Final = TypeAdapter(object)
 
 _ViewSetupOutcome: TypeAlias = Literal["ready", "timed_out"]
 _ViewSetupAttempt: TypeAlias = Literal["ready", "table_missing"] | Exception
@@ -399,7 +409,7 @@ def _update_many_batch(db: PrismaWrapper | RoutingPrismaWrapper) -> _UpdateManyB
     return db.batch_()
 
 
-def _query_raw_rows(
+def query_raw_rows(
     db: PrismaWrapper | RoutingPrismaWrapper, query: str, *args: object
 ) -> Awaitable[Sequence[Mapping[str, object]]]:
     return db.query_raw(query, *args)
@@ -639,6 +649,24 @@ class _StreamIteratorHook(Protocol[_T]):
     def __call__(self, *, response: AsyncIterator[_T]) -> AsyncIterator[_T]: ...
 
 
+class _BudgetAlertEmailer(Protocol):
+    async def budget_alerts(
+        self,
+        type: Literal[
+            "token_budget",
+            "user_budget",
+            "soft_budget",
+            "max_budget_alert",
+            "team_budget",
+            "organization_budget",
+            "proxy_budget",
+            "projected_limit_exceeded",
+            "project_budget",
+        ],
+        user_info: CallInfo,
+    ) -> object: ...
+
+
 def _is_client_error_exception(exc: Exception) -> bool:
     if isinstance(exc, HTTPException):
         return exc.status_code < 500
@@ -732,6 +760,7 @@ def _drop_token_ids_ahead_of_chunk_check(
 
 
 _PLAIN_STREAM_FIELDS: Final = TypeAdapter(dict[str, object])
+_REQUEST_FIELDS: Final = TypeAdapter(Mapping[str, object])
 _EMPTY_STREAM_VALUES: Final[tuple[object, ...]] = (None, "", [], {})
 
 
@@ -1709,8 +1738,17 @@ def _client_disconnected(exception: Exception) -> bool:
     return isinstance(exception, HTTPException) and exception.status_code == LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED
 
 
+def _ran_out_of_total_timeout(exception: Exception) -> bool:
+    """The request's ``total_timeout`` ran out while the provider was working on it, like a disconnect."""
+    return any(isinstance(cause, TotalTimeoutExpired) for cause in _exception_chain(exception))
+
+
 def _provider_billed_the_failure(exception: Exception) -> bool:
-    return _timed_out_reading_from_provider(exception) or _client_disconnected(exception)
+    return (
+        _timed_out_reading_from_provider(exception)
+        or _client_disconnected(exception)
+        or _ran_out_of_total_timeout(exception)
+    )
 
 
 def _as_str_mapping(value: object) -> Mapping[str, object]:
@@ -1935,7 +1973,7 @@ class ProxyLogging:
             alerting=self.alerting,
             internal_usage_cache=self.internal_usage_cache.dual_cache,
         )
-        self.email_logging_instance: Any | None = None
+        self.email_logging_instance: _BudgetAlertEmailer | None = None
         if BaseEmailLogger is not None:
             email_logger_class: Final = _get_email_logger_class()
             if email_logger_class is not None:
@@ -1952,6 +1990,7 @@ class ProxyLogging:
         self.daily_report_started: bool = False
         self.hanging_requests_check_started: bool = False
         self.deprecation_check_started: bool = False
+        self.deprecation_email_check_started: bool = False
 
     def startup_event(
         self,
@@ -1995,6 +2034,20 @@ class ProxyLogging:
             self.hanging_requests_check_started = True
 
         self._ensure_deprecation_check_scheduled()
+        self._ensure_deprecation_email_check_scheduled()
+
+    def _ensure_deprecation_email_check_scheduled(self) -> None:
+        """The email event opt-in controls reminders independently of Slack integration settings."""
+        if self.deprecation_email_check_started:
+            return
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        from litellm.integrations.model_deprecation_email import run_scheduled_model_deprecation_emails
+
+        asyncio.create_task(run_scheduled_model_deprecation_emails())
+        self.deprecation_email_check_started = True
 
     def _ensure_deprecation_check_scheduled(self) -> None:
         """Alerting can be configured at startup or by a later config reload, so schedule from either path"""
@@ -2041,6 +2094,7 @@ class ProxyLogging:
 
         if updated_slack_alerting is True:
             self._ensure_deprecation_check_scheduled()
+            self._ensure_deprecation_email_check_scheduled()
             self.slack_alerting_instance.update_values(
                 alerting=self.alerting,
                 alerting_threshold=self.alerting_threshold,
@@ -2638,14 +2692,18 @@ class ProxyLogging:
         if callback is None:
             raise ValueError(f"No callback found for guardrail: {guardrail_name}")
 
-        return await self._execute_guardrail_hook(
-            callback=callback,
-            hook_type=hook_type,
-            data=data,
-            user_api_key_dict=user_api_key_dict,
-            call_type=call_type,
-            response=response,
-        )
+        try:
+            return await self._execute_guardrail_hook(
+                callback=callback,
+                hook_type=hook_type,
+                data=data,
+                user_api_key_dict=user_api_key_dict,
+                call_type=call_type,
+                response=response,
+            )
+        except Exception as e:
+            enrich_http_exception_with_guardrail_context(e, callback)
+            raise
 
     async def _process_guardrail_callback(
         self,
@@ -3178,6 +3236,12 @@ class ProxyLogging:
 
         if data is None:
             return None
+
+        if not guardrails_only:
+            seed_request_identity(
+                user_api_key_dict,
+                request_data=cast("Mapping[str, object]", data),  # cast-ok: untyped request body, read with .get
+            )
 
         litellm_logging_obj: Final = cast(Optional["LiteLLMLoggingObj"], data.get("litellm_logging_obj", None))
         prompt_id: Final[str | None] = data.get("prompt_id", None)
@@ -4204,7 +4268,12 @@ class ProxyLogging:
             )
             request_data["litellm_logging_obj"] = litellm_logging_obj  # rebind-ok: lifted then popped by the caller
             request_data.update({REJECTED_BEFORE_REQUEST_SETUP_KEY: REJECTED_BEFORE_REQUEST_SETUP})
-            normalized_metadata_slot(request_data, "metadata").update(user_api_key_logged_metadata)
+            normalized_metadata_slot(request_data, "metadata").update(
+                {
+                    **user_api_key_logged_metadata,
+                    **LiteLLMProxyRequestSetup.get_tenant_logging_metadata(user_api_key_dict),
+                }
+            )
 
         if litellm_logging_obj is not None:
             ## UPDATE LOGGING INPUT
@@ -4372,6 +4441,7 @@ class ProxyLogging:
             response = pipeline_response  # rebind-ok: adopt the pipeline's replacement response, same contract as the callback loops below
 
         pipeline_managed: Final = pipeline_managed_guardrail_names(data, "post_call")
+        request_view: Final = _REQUEST_FIELDS.validate_python(data)
         guardrail_callbacks, other_callbacks = _partition_post_call_callbacks()
         try:
             # Merge model-level guardrails before checking which guardrails to run
@@ -4400,6 +4470,9 @@ class ProxyLogging:
                     )
                     is not True
                 ):
+                    continue
+
+                if callback.post_call_already_checked(request_view, response) is True:
                     continue
 
                 guardrail_response: Any | None = None
@@ -4475,9 +4548,12 @@ class ProxyLogging:
         immediately before awaiting, and the unified hook pops it before its first
         suspension point, so concurrent guardrails never race on that key.
         """
+        request_view: Final = _REQUEST_FIELDS.validate_python(data)
 
         async def _run_one(callback: CustomGuardrail) -> None:
             if callback.should_run_guardrail(data=guardrail_data, event_type=GuardrailEventHooks.post_call) is not True:
+                return
+            if callback.post_call_already_checked(request_view, response) is True:
                 return
             if "apply_guardrail" in type(callback).__dict__ and not callback.use_native_lifecycle_hooks:
                 data["guardrail_to_apply"] = callback
@@ -5336,9 +5412,9 @@ async def _lookup_deprecated_key(
         _deprecated_key_cache.pop(hashed_token, None)
 
     try:
-        deprecated_keys_table: Final[
-            LiteLLM_DeprecatedVerificationTokenActions[LiteLLM_DeprecatedVerificationToken]
-        ] = db.litellm_deprecatedverificationtoken
+        deprecated_keys_table: Final[TableActions[LiteLLM_DeprecatedVerificationToken]] = (
+            db.litellm_deprecatedverificationtoken
+        )
         deprecated_row: Final = await deprecated_keys_table.find_first(
             where={
                 "token": hashed_token,
@@ -5389,11 +5465,20 @@ def _config_cache_key(param_name: str) -> str:
     return f"litellm_config:param:{param_name}"
 
 
-def _pack_config_row(row: Any) -> dict[str, object]:
+class _PackableConfigRow(Protocol):
+    @property
+    def param_name(self) -> object: ...
+
+    @property
+    def param_value(self) -> object: ...
+
+
+def _pack_config_row(row: object) -> dict[str, object]:
+    config_row: Final = require_attributes(row, _PackableConfigRow, "param_name", "param_value")
     return {
-        "param_name": row.param_name,
-        "param_value": row.param_value,
-        "reload_revision": getattr(row, "reload_revision", None),
+        "param_name": config_row.param_name,
+        "param_value": config_row.param_value,
+        "reload_revision": attribute_or_none(row, "reload_revision"),
     }
 
 
@@ -5526,6 +5611,39 @@ class _StaleReadEngine:
         conjunct underneath it still expires and lets a later caller retry.
         """
         return self.wrapper is current and self.generation == current.engine_generation
+
+
+_LOCK_KEYS_BY_TOKEN_SQL: Final = (
+    'SELECT 1 AS locked FROM "LiteLLM_VerificationToken" WHERE token = ANY($1::text[]) '
+    'ORDER BY token COLLATE "C" FOR UPDATE'
+)
+_LOCK_KEYS_BY_TEAM_SQL: Final = (
+    'SELECT 1 AS locked FROM "LiteLLM_VerificationToken" WHERE team_id = ANY($1::text[]) '
+    'ORDER BY token COLLATE "C" FOR UPDATE'
+)
+_LOCK_TEAMS_BY_ID_SQL: Final = (
+    'SELECT 1 AS locked FROM "LiteLLM_TeamTable" WHERE team_id = ANY($1::text[]) '
+    'ORDER BY team_id COLLATE "C" FOR UPDATE'
+)
+
+
+def _user_unique_conflict_message(metadata: object, user_id: object) -> str:
+    match metadata:
+        case {"target": ["user_id"]}:
+            return f"User with id {user_id} already exists"
+        case {"target": ["sso_user_id"]}:
+            return "User with this sso_user_id already exists"
+        case _:
+            return "User conflicts with an existing unique value"
+
+
+def _raise_user_unique_conflict(error: "UniqueViolationError", user_id: object, *, allow_existing: bool) -> NoReturn:
+    if allow_existing:
+        raise error
+    raise HTTPException(
+        status_code=409,
+        detail={"error": _user_unique_conflict_message(error.meta, user_id)},
+    ) from error
 
 
 class PrismaClient:
@@ -6188,7 +6306,7 @@ class PrismaClient:
                         LIMIT $1
                         OFFSET $2
                         """
-                        response = await _query_raw_rows(self.db, sql_query, limit, offset)
+                        response = await query_raw_rows(self.db, sql_query, limit, offset)
                 return response
             elif table_name == "spend":
                 verbose_proxy_logger.debug("PrismaClient: get_data: table_name == 'spend'")
@@ -6415,12 +6533,15 @@ class PrismaClient:
         max_tries=3,  # maximum number of retries
         max_time=10,  # maximum total time to retry for
         on_backoff=on_backoff,  # specifying the function to call on backoff
+        giveup=lambda exc: isinstance(exc, HTTPException) and exc.status_code == 409,
     )
     @log_db_metrics
     async def insert_data(
         self,
         data: Mapping[str, object],
         table_name: Literal["user", "key", "config", "spend", "team", "user_notification"],
+        *,
+        allow_existing_user: bool = True,
     ):
         """
         Add a key to the database. If it already exists, do nothing.
@@ -6456,14 +6577,20 @@ class PrismaClient:
                 verbose_proxy_logger.info("Data Inserted into Keys Table")
                 return new_verification_token
             elif table_name == "user":
+                from prisma.errors import UniqueViolationError
+
                 db_data = self.jsonify_object(data=data)
                 try:
-                    new_user_row: Final = await UserRepository(self).upsert_user(db_data)
+                    new_user_row: Final = await UserRepository(self).upsert_user(
+                        db_data, allow_existing=allow_existing_user
+                    )
                     if new_user_row is None:
                         raise HTTPException(
                             status_code=403,
                             detail="SSO for more than 5 users requires a LiteLLM Enterprise license. Existing users can still sign in.",
                         )
+                except UniqueViolationError as e:
+                    _raise_user_unique_conflict(e, db_data["user_id"], allow_existing=allow_existing_user)
                 except Exception as e:
                     if (
                         "Foreign key constraint failed on the field: `LiteLLM_UserTable_organization_id_fkey (index)`"
@@ -6828,24 +6955,26 @@ class PrismaClient:
                     else:
                         hashed_token = token
                     hashed_tokens.append(hashed_token)
-                filter_query: dict[str, object] = {}
-                if user_id is not None:
-                    filter_query = {"AND": [{"token": {"in": hashed_tokens}}, {"user_id": user_id}]}
-                else:
-                    filter_query = {"token": {"in": hashed_tokens}}
-
-                deleted_tokens: Final[int] = await VerificationTokenRepository(self).table.delete_many(
-                    where=filter_query
-                )
+                async with self.tx() as transaction:
+                    _ = await transaction.query_raw(_LOCK_KEYS_BY_TOKEN_SQL, hashed_tokens)
+                    deleted_tokens: Final[int] = await transaction.litellm_verificationtoken.delete_many(
+                        where={"token": {"in": hashed_tokens}, "user_id": user_id}
+                        if user_id is not None
+                        else {"token": {"in": hashed_tokens}}
+                    )
                 verbose_proxy_logger.debug("deleted_tokens: %s", deleted_tokens)
                 return {"deleted_keys": deleted_tokens}
             elif table_name == "team" and team_id_list is not None and isinstance(team_id_list, list):
                 # admin only endpoint -> `/team/delete`
-                await TeamRepository(self).table.delete_many(where={"team_id": {"in": team_id_list}})
+                async with self.tx() as transaction:
+                    _ = await transaction.query_raw(_LOCK_TEAMS_BY_ID_SQL, team_id_list)
+                    _ = await transaction.litellm_teamtable.delete_many(where={"team_id": {"in": team_id_list}})
                 return {"deleted_teams": team_id_list}
             elif table_name == "key" and team_id_list is not None and isinstance(team_id_list, list):
                 # admin only endpoint -> `/team/delete`
-                await VerificationTokenRepository(self).table.delete_many(where={"team_id": {"in": team_id_list}})
+                async with self.tx() as transaction:
+                    _ = await transaction.query_raw(_LOCK_KEYS_BY_TEAM_SQL, team_id_list)
+                    _ = await transaction.litellm_verificationtoken.delete_many(where={"team_id": {"in": team_id_list}})
         except Exception as e:
             import traceback
 
@@ -7487,7 +7616,7 @@ class PrismaClient:
                 # caller's own retried query, a stronger check than SELECT 1,
                 # and a reader that fails to come back sets `_reader_unavailable`
                 # so reads fall through to the writer just recreated here.
-                await _query_raw_rows(self.writer_db, "SELECT 1")
+                await query_raw_rows(self.writer_db, "SELECT 1")
                 # A recreate can decline: the optimistic-lock guard no-ops when
                 # the writer generation moved since cycle entry, and the routing
                 # wrapper then leaves the reader untouched as well. Callers that
@@ -7837,7 +7966,7 @@ class PrismaClient:
 
     async def _view_setup_gate_table_present(self) -> bool:
         rows: Final = _VIEW_SETUP_GATE_PROBE_ROWS.validate_python(
-            await _query_raw_rows(self.db, "SELECT to_regclass($1) IS NOT NULL AS present", _VIEW_SETUP_GATE_TABLE)
+            await query_raw_rows(self.db, "SELECT to_regclass($1) IS NOT NULL AS present", _VIEW_SETUP_GATE_TABLE)
         )
         return rows[0]["present"]
 
@@ -7847,7 +7976,7 @@ class PrismaClient:
                 await asyncio.sleep(self._db_health_watchdog_interval_seconds)
                 async with db_span("db_health_watchdog", None):
                     await asyncio.wait_for(
-                        _query_raw_rows(self.db, "SELECT 1"),
+                        query_raw_rows(self.db, "SELECT 1"),
                         timeout=self._db_health_watchdog_probe_timeout_seconds,
                     )
                 if isinstance(self.db, RoutingPrismaWrapper) and self.db.writer_unavailable:
@@ -7907,7 +8036,7 @@ class PrismaClient:
     async def _writer_is_read_only(self, writer: PrismaWrapper) -> bool:
         """True iff the pooled writer session answers reads but rejects writes (SQLSTATE 25006)."""
         rows: Final = _WRITER_WRITABILITY_PROBE_ROWS.validate_python(
-            await _query_raw_rows(writer, _WRITER_WRITABILITY_PROBE_SQL)
+            await query_raw_rows(writer, _WRITER_WRITABILITY_PROBE_SQL)
         )
         return any(row.get("transaction_read_only") == "on" for row in rows)
 
@@ -7934,7 +8063,7 @@ class PrismaClient:
         """
         sql_query: Final = "SELECT 1"
         async with db_span("health_check", None):
-            response: Final[object] = await _query_raw_rows(wrapper, sql_query)
+            response: Final[object] = await query_raw_rows(wrapper, sql_query)
         return response
 
     async def _probe_answers_now(self, wrapper: PrismaWrapper) -> bool:
@@ -8102,12 +8231,12 @@ class PrismaClient:
             verbose_proxy_logger.warning("Invalid response_time_ms value: %s", response_time_ms)
             return None
 
-    def _clean_details(self, details: dict | None) -> dict | None:
+    def _clean_details(self, details: dict | None) -> object:
         """Clean and validate details JSON"""
         if not isinstance(details, dict):
             return None
         try:
-            return safe_json_loads(safe_dumps(details))
+            return _DECODED_JSON.validate_python(safe_json_loads(safe_dumps(details)))
         except Exception as e:
             verbose_proxy_logger.warning("Failed to clean details JSON: %s", e)
             return None
@@ -8263,7 +8392,9 @@ async def send_email(
     receiver_email: str | None = None,
     subject: str | None = None,
     html: str | None = None,
-):
+    text: str | None = None,
+    message_id: str | None = None,
+) -> bool:
     """
     smtp_host,
     smtp_port,
@@ -8289,16 +8420,21 @@ async def send_email(
         raise ValueError(f"No HTML body provided for SMTP email. {html}")
 
     ## EMAIL SETUP ##
-    email_message: Final = MIMEMultipart()
+    email_message: Final = MIMEMultipart("alternative" if text is not None else "mixed")
     email_message["From"] = sender_email
     email_message["To"] = receiver_email
     email_message["Subject"] = subject
+    if message_id is not None:
+        email_message["Message-ID"] = message_id
+        email_message["Date"] = formatdate(usegmt=True)
     verbose_proxy_logger.debug("sending email from %s to %s", sender_email, receiver_email)
 
     if smtp_host is None:
         raise ValueError("Trying to use SMTP, but SMTP_HOST is not set")
 
     # Attach the body to the email
+    if text is not None:
+        email_message.attach(MIMEText(text, "plain"))
     email_message.attach(MIMEText(html, "html"))
 
     try:
@@ -8317,6 +8453,8 @@ async def send_email(
 
     except Exception as e:
         verbose_proxy_logger.exception("An error occurred while sending the email:" + str(e))
+        return False
+    return True
 
 
 def hash_token(token: str):
@@ -8328,23 +8466,42 @@ def hash_token(token: str):
     return hashed_token
 
 
+def _is_pbkdf2_row(stored: str) -> bool:
+    return re.fullmatch(r"pbkdf2:[A-Za-z0-9+/]{64}", stored) is not None
+
+
 def hash_password(password: str) -> str:
-    """Hash a password using scrypt with a random salt."""
+    """Hash a password using scrypt with a random salt, or PBKDF2 in FIPS mode."""
     import base64
     import hashlib
     import os
 
+    if fips_mode_active():
+        fips_salt: Final = ssl.RAND_bytes(16)
+        fips_dk: Final = hashlib.pbkdf2_hmac("sha256", password.encode(), fips_salt, iterations=600_000, dklen=32)
+        return "pbkdf2:" + base64.b64encode(fips_salt + fips_dk).decode()
     salt: Final = os.urandom(16)
     dk: Final = hashlib.scrypt(password.encode(), salt=salt, n=16384, r=8, p=1, dklen=32)
     return "scrypt:" + base64.b64encode(salt + dk).decode()
 
 
 def verify_password(password: str, stored: str) -> bool:
-    """Verify a password against a stored hash. Supports scrypt and SHA256."""
+    """Verify a password against a stored hash. Supports scrypt and SHA256, or only PBKDF2 in FIPS mode."""
     import base64
     import hashlib
     import secrets
 
+    if fips_mode_active():
+        if not _is_pbkdf2_row(stored):
+            verbose_proxy_logger.error("FIPS mode refuses a non-PBKDF2 password row. Reset it with /user/update.")
+            return False
+        if len(password) < MIN_ALLOWED_LENGTH:
+            return False
+        fips_row: Final = base64.b64decode(stored[7:])
+        fips_dk: Final = hashlib.pbkdf2_hmac(
+            "sha256", password.encode(errors="surrogatepass"), fips_row[:16], iterations=600_000, dklen=32
+        )
+        return secrets.compare_digest(fips_row[16:], fips_dk)
     if stored.startswith("scrypt:"):
         try:
             raw: Final = base64.b64decode(stored[7:])
@@ -8359,12 +8516,24 @@ def verify_password(password: str, stored: str) -> bool:
     return False
 
 
+_FIPS_KDF_POOL: Final = ThreadPoolExecutor(max_workers=1, thread_name_prefix="fips-password-kdf")
+
+
+async def run_off_loop_if_fips(kdf: Callable[..., _T], *args: str) -> _T:
+    """Run a password KDF inline, or on the single KDF thread in FIPS mode."""
+    if not fips_mode_active():
+        return kdf(*args)
+    return await asyncio.get_running_loop().run_in_executor(_FIPS_KDF_POOL, kdf, *args)
+
+
 async def migrate_passwords_to_scrypt_async(prisma_client) -> str:
     """
     Migrate plaintext passwords in the DB to scrypt. SHA256 passwords
     are left alone (they migrate on next login via the SHA256 fallback).
     Skips quickly if no plaintext passwords exist.
     """
+    if fips_mode_active():
+        return "Skipped, FIPS mode has no password migration"
     all_with_pw: Final = await UserRepository(prisma_client).table.find_many(
         where={"password": {"not": None}},
     )
@@ -8375,7 +8544,10 @@ async def migrate_passwords_to_scrypt_async(prisma_client) -> str:
     plaintext_users: Final = [
         (u.user_id, u.password)
         for u in all_with_pw
-        if u.password and not u.password.startswith("scrypt:") and not _is_sha256_hex(u.password)
+        if u.password
+        and not u.password.startswith("scrypt:")
+        and not _is_sha256_hex(u.password)
+        and not _is_pbkdf2_row(u.password)
     ]
     if not plaintext_users:
         return "No plaintext passwords found"

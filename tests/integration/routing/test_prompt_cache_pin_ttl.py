@@ -387,7 +387,7 @@ def _responses_id(rig: _Rig, body: Mapping[str, JsonValue], *, stream: bool) -> 
 
 
 @pytest.mark.parametrize("stream", [False, True], ids=["non-stream", "stream"])
-def test_responses_api_one_hour_breakpoint_answers_and_writes_no_pin(rig: _Rig, stream: bool) -> None:
+def test_responses_api_one_hour_breakpoint_pins_the_served_deployment_for_an_hour(rig: _Rig, stream: bool) -> None:
     before: Final = _before(rig)
     marker: Final = new_marker()
     user: Final = f"pin-responses-{marker}"
@@ -404,9 +404,12 @@ def test_responses_api_one_hour_breakpoint_answers_and_writes_no_pin(rig: _Rig, 
         ],
     }
     assert _responses_id(rig, body, stream=stream).startswith("resp_")
-    assert rig.served_by(marker) in {_LEFT, _RIGHT}
+    served: Final = rig.served_by(marker)
+    assert served in {_LEFT, _RIGHT}
     end_user_row_lands(user)
-    held(lambda: pins_since(rig.redis, before), lambda found: not found, holding=3, seconds=20)
+    _, pin = one_new_pin(rig.redis, before)
+    assert pin.model_id == served, pin
+    assert lives_one_hour(pin), pin
 
 
 def _ask_surface(rig: _Rig, surface: str, session: str, marker: str) -> str:

@@ -9,16 +9,20 @@ from litellm.integrations.anthropic_cache_control_hook import deployment_prompt_
 from litellm.litellm_core_utils.allowed_tools_tool_choice import azure_api_version_takes_tool_choice
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
-    chat_completion_prompt_cache_breakpoints_for_wire,
     drop_tool_reference_parts_from_tool_messages,
-    flatten_combinators_and_drop_non_python_regex_patterns,
     hoist_images_from_tool_messages,
     system_messages_first,
-    tool_with_sanitized_parameters,
-    without_prompt_cache_breakpoints,
 )
 from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_to_azure_openai_messages,
+)
+from litellm.litellm_core_utils.prompt_templates.json_schema_utils import (
+    flatten_combinators_and_drop_non_python_regex_patterns,
+    tool_with_sanitized_parameters,
+)
+from litellm.litellm_core_utils.prompt_templates.prompt_cache_breakpoint_utils import (
+    chat_completion_prompt_cache_breakpoints_for_wire,
+    without_prompt_cache_breakpoints,
 )
 from litellm.llms.base_llm.base_utils import map_developer_role_to_system_role
 from litellm.llms.base_llm.chat.transformation import BaseLLMException

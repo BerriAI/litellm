@@ -168,6 +168,7 @@ OPTION_NAMES: Final = (
     "tag_regex",
     "max_file_size_mb",
     "silent_model",
+    "switchyard_router_config",
     "auto_router_config_path",
     "auto_router_config",
     "auto_router_default_model",

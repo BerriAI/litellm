@@ -18,6 +18,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from functools import partial
 from pathlib import Path, PurePath
+from types import MappingProxyType
 from typing import Final, SupportsIndex, cast
 from unittest import mock
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
@@ -104,6 +105,7 @@ from litellm.utils import (
     _snapshot_exception_for_hook,
     async_post_call_failure_deployment_hook,
     async_post_call_success_deployment_hook,
+    async_pre_call_deployment_hook,
     calculate_max_parallel_requests,
     client,
     get_non_default_completion_params,
@@ -1027,6 +1029,8 @@ _COST_MAP_ROW_SCHEMA: Final = {
             "audio_transcription_config": {"type": "string"},
             "deprecation_date": {"type": "string"},
             "successor_model": {"type": "string"},
+            "aliases": {"type": "array", "items": {"type": "string"}},
+            "alias_of": {"type": "string"},
             "deprecation_source": {"type": "string"},
             "input_cost_per_audio_per_second": {"type": "number"},
             "input_cost_per_audio_per_second_above_128k_tokens": {"type": "number"},
@@ -1057,6 +1061,7 @@ _COST_MAP_ROW_SCHEMA: Final = {
             "cache_read_input_token_cost_balanced": {"type": "number"},
             "cache_read_input_token_cost_ultrafast": {"type": "number"},
             "cache_read_input_token_cost_above_200k_tokens_priority": {"type": "number"},
+            "cache_read_input_token_cost_above_200k_tokens_flex": {"type": "number"},
             "cache_read_input_token_cost_above_272k_tokens_priority": {"type": "number"},
             "input_cost_per_token_flex": {"type": "number"},
             "input_cost_per_token_priority": {"type": "number"},
@@ -1353,6 +1358,7 @@ _COST_MAP_ROW_SCHEMA: Final = {
             "supports_image_size": {"type": "boolean"},
             "supports_native_structured_output": {"type": "boolean"},
             "supports_bedrock_native_structured_output": {"type": "boolean"},
+            "supports_bedrock_native_structured_output_by_default": {"type": "boolean"},
             "use_openai_responses_path": {"type": "boolean"},
             "off_peak_pricing": {
                 "type": "object",
@@ -3010,52 +3016,37 @@ if __name__ == "__main__":
 class TestGetValidModelsWithCLI:
     """Test get_valid_models function as used in CLI token usage"""
 
-    def test_get_valid_models_with_cli_pattern(self):
+    @respx.mock
+    def test_get_valid_models_with_cli_pattern(self, reset_mock_cache: None) -> None:
         """Test get_valid_models with litellm_proxy provider and CLI token pattern"""
 
-        # Mock the HTTP request that get_valid_models makes to the proxy
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.json.return_value = {
-            "data": [
-                {"id": "gpt-3.5-turbo", "object": "model"},
-                {"id": "gpt-4", "object": "model"},
-                {"id": "litellm_proxy/gemini/gemini-2.5-flash", "object": "model"},
-                {"id": "claude-3-sonnet", "object": "model"},
-            ]
-        }
+        route: Final = respx.get("https://gateway-cli.example.test/v1/models").respond(
+            200,
+            json={
+                "data": [
+                    {"id": "gpt-3.5-turbo", "object": "model"},
+                    {"id": "gpt-4", "object": "model"},
+                    {"id": "litellm_proxy/gemini/gemini-2.5-flash", "object": "model"},
+                    {"id": "claude-3-sonnet", "object": "model"},
+                ]
+            },
+        )
 
-        with patch.object(litellm.module_level_client, "get", return_value=mock_response) as mock_get:
-            # Test the exact pattern used in cli_token_usage.py
-            result = litellm.get_valid_models(
-                check_provider_endpoint=True,
-                custom_llm_provider="litellm_proxy",
-                api_key="sk-test-cli-key-123",
-                api_base="http://localhost:4000/",
-            )
+        result: Final = litellm.get_valid_models(
+            check_provider_endpoint=True,
+            custom_llm_provider="litellm_proxy",
+            api_key="sk-test-cli-key-123",
+            api_base="https://gateway-cli.example.test/",
+        )
 
-            # Verify the function returns a list of model names
-            assert isinstance(result, list)
-            assert len(result) == 4
-            # All models get prefixed with "litellm_proxy/" by the get_models method
-            assert "litellm_proxy/gpt-3.5-turbo" in result
-            assert "litellm_proxy/gpt-4" in result
-            # Note: This model already had the prefix, so it gets double-prefixed
-            assert "litellm_proxy/litellm_proxy/gemini/gemini-2.5-flash" in result
-            assert "litellm_proxy/claude-3-sonnet" in result
-
-            # Verify the HTTP request was made with correct parameters
-            mock_get.assert_called_once()
-            _, call_kwargs = mock_get.call_args
-
-            # Check that the request was made to the correct endpoint
-            assert call_kwargs["url"].startswith("http://localhost:4000/")
-            assert call_kwargs["url"].endswith("/v1/models")
-
-            # Check that the API key was included in headers
-            assert "headers" in call_kwargs
-            headers = call_kwargs["headers"]
-            assert headers.get("Authorization") == "Bearer sk-test-cli-key-123"
+        assert result == [
+            "litellm_proxy/gpt-3.5-turbo",
+            "litellm_proxy/gpt-4",
+            "litellm_proxy/litellm_proxy/gemini/gemini-2.5-flash",
+            "litellm_proxy/claude-3-sonnet",
+        ]
+        assert route.call_count == 1
+        assert route.calls.last.request.headers["Authorization"] == "Bearer sk-test-cli-key-123"
 
 
 @respx.mock
@@ -3881,6 +3872,124 @@ class TestGetOptionalParamsSpeedGate:
             model=fast_mode_model, custom_llm_provider="anthropic", speed="fast", drop_params=True
         )
         assert result.get("speed") == "fast"
+
+
+class TestGetOptionalParamsOutputConfigGate:
+    """Regression for the issue 24549 follow-up (SLP-2948): Anthropic's ``output_config`` is not a named
+    OpenAI param, so it rode the provider-specific pass-through into ``extra_body`` and ``drop_params`` never
+    saw it."""
+
+    UNREAD_LEGS: Final = (
+        ("openai", "gpt-5.6"),
+        ("azure", "gpt-5.6"),
+        ("xiaomi_mimo", "mimo-v2.6-pro"),
+        ("hosted_vllm", "my-model"),
+        ("gemini", "gemini-3-pro-preview"),
+        ("bedrock", "us.amazon.nova-pro-v1:0"),
+    )
+    CLAUDE_LEGS: Final = (
+        ("anthropic", "claude-opus-4-8"),
+        ("vertex_ai", "claude-opus-4-8"),
+        ("azure_ai", "claude-opus-4-8"),
+        ("bedrock", "converse/anthropic.claude-opus-4-8-v1:0"),
+        ("bedrock", "invoke/anthropic.claude-opus-4-8-v1:0"),
+    )
+    OUTPUT_CONFIG: Final = MappingProxyType({"effort": "medium"})
+
+    @staticmethod
+    def _output_config_anywhere(optional_params: Mapping[str, object]) -> bool:
+        extra_body: Final = optional_params.get("extra_body")
+        return "output_config" in optional_params or (isinstance(extra_body, dict) and "output_config" in extra_body)
+
+    @pytest.mark.parametrize("global_drop_params", [True, False])
+    @pytest.mark.parametrize(("custom_llm_provider", "model"), UNREAD_LEGS)
+    def test_drop_params_strips_output_config_on_providers_that_do_not_read_it(
+        self, monkeypatch: pytest.MonkeyPatch, custom_llm_provider: str, model: str, global_drop_params: bool
+    ) -> None:
+        monkeypatch.setattr(litellm, "drop_params", global_drop_params)
+        result: Final = litellm.get_optional_params(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            output_config=dict(self.OUTPUT_CONFIG),
+            drop_params=not global_drop_params,
+        )
+        assert not self._output_config_anywhere(result), result
+
+    def test_drop_params_keeps_the_mapped_reasoning_effort_beside_the_dropped_output_config(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(litellm, "drop_params", False)
+        result: Final = litellm.get_optional_params(
+            model="gpt-5.6",
+            custom_llm_provider="openai",
+            output_config=dict(self.OUTPUT_CONFIG),
+            reasoning_effort="low",
+            drop_params=True,
+        )
+        assert result.get("reasoning_effort") == "low"
+        assert not self._output_config_anywhere(result), result
+
+    @pytest.mark.parametrize(("custom_llm_provider", "model"), [("openai", "gpt-5.6"), ("hosted_vllm", "my-model")])
+    def test_output_config_is_forwarded_untouched_without_drop_params(
+        self, monkeypatch: pytest.MonkeyPatch, custom_llm_provider: str, model: str
+    ) -> None:
+        monkeypatch.setattr(litellm, "drop_params", False)
+        result: Final = litellm.get_optional_params(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            output_config=dict(self.OUTPUT_CONFIG),
+            drop_params=False,
+        )
+        assert self._output_config_anywhere(result), result
+
+    @pytest.mark.parametrize(("custom_llm_provider", "model"), CLAUDE_LEGS)
+    def test_drop_params_keeps_output_config_for_claude_transformations(
+        self, monkeypatch: pytest.MonkeyPatch, custom_llm_provider: str, model: str
+    ) -> None:
+        monkeypatch.setattr(litellm, "drop_params", False)
+        result: Final = litellm.get_optional_params(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            output_config=dict(self.OUTPUT_CONFIG),
+            drop_params=True,
+        )
+        assert self._output_config_anywhere(result), result
+
+    def test_drop_params_keeps_output_config_for_a_downstream_litellm_proxy(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(litellm, "drop_params", False)
+        result: Final = litellm.get_optional_params(
+            model="claude-opus-4-8",
+            custom_llm_provider="litellm_proxy",
+            output_config=dict(self.OUTPUT_CONFIG),
+            drop_params=True,
+        )
+        assert self._output_config_anywhere(result), result
+
+    def test_drop_params_keeps_output_config_for_a_deployment_that_declares_reasoning_effort_levels(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(litellm, "drop_params", False)
+        result: Final = litellm.get_optional_params(
+            model="my-kimi",
+            custom_llm_provider="hosted_vllm",
+            output_config=dict(self.OUTPUT_CONFIG),
+            model_info={"id": "kimi-vllm-1", "reasoning_effort_levels": ["low", "medium", "high"]},
+            drop_params=True,
+        )
+        assert self._output_config_anywhere(result), result
+
+    def test_allowed_openai_params_overrides_the_drop(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(litellm, "drop_params", False)
+        result: Final = litellm.get_optional_params(
+            model="gpt-5.6",
+            custom_llm_provider="openai",
+            output_config=dict(self.OUTPUT_CONFIG),
+            allowed_openai_params=["output_config"],
+            drop_params=True,
+        )
+        assert self._output_config_anywhere(result), result
 
 
 class TestGetOptionalParamsDeepSeek:
@@ -6403,6 +6512,34 @@ async def test_wrapper_async_raises_original_exception_even_if_hook_callback_err
 
 
 @pytest.mark.asyncio
+async def test_wrapper_async_lets_a_cancellation_during_the_failure_hook_cancel_the_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    hook_entered: Final = asyncio.Event()
+
+    class HangingLogger(CustomLogger):
+        async def async_post_call_failure_deployment_hook(
+            self, request_data, exception, call_type, fallback_depth=None
+        ):
+            hook_entered.set()
+            await asyncio.Event().wait()
+
+    monkeypatch.setattr(litellm, "callbacks", [HangingLogger()])
+    call: Final = asyncio.create_task(
+        litellm.acompletion(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response=litellm.AuthenticationError(message="bad key", llm_provider="openai", model="gpt-4o-mini"),
+        )
+    )
+    await hook_entered.wait()
+    call.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await call
+
+
+@pytest.mark.asyncio
 async def test_router_fallback_chain_reports_increasing_fallback_depth(monkeypatch: pytest.MonkeyPatch) -> None:
     """Regression: a real Router fallback chain must report fallback_depth=None on the
     first, pre-fallback attempt and fallback_depth=1 on the first fallback hop - the
@@ -6787,41 +6924,6 @@ async def test_router_fallback_not_skipped_when_failure_hook_callback_touches_at
     )
 
     assert response.choices[0].message.content == "fallback worked"
-
-
-@pytest.mark.asyncio
-async def test_wrapper_async_preserves_original_exception_when_hook_await_is_cancelled(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Regression: if the caller's own timeout (e.g. asyncio.wait_for) fires while the
-    failure hook is still being awaited, the real deployment exception must still reach
-    the caller - not get replaced by CancelledError/TimeoutError from the hook's own
-    await getting cancelled."""
-
-    hook_entered: Final = asyncio.Event()
-    hook_released: Final = asyncio.Event()
-
-    class SlowLogger(CustomLogger):
-        async def async_post_call_failure_deployment_hook(
-            self, request_data, exception, call_type, fallback_depth=None
-        ):
-            hook_entered.set()
-            await hook_released.wait()
-
-    monkeypatch.setattr(litellm, "callbacks", [SlowLogger()])
-
-    call: Final = asyncio.create_task(
-        litellm.acompletion(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": "hi"}],
-            mock_response=litellm.AuthenticationError(message="bad key", llm_provider="openai", model="gpt-4o-mini"),
-        )
-    )
-    assert await asyncio.wait_for(hook_entered.wait(), timeout=5)
-    call.cancel()
-
-    with pytest.raises(litellm.AuthenticationError):
-        await call
 
 
 @pytest.mark.asyncio
@@ -8393,6 +8495,7 @@ def test_get_model_info_gemini(monkeypatch):
             and "veo" not in model
             and "lyria" not in model
             and "robotics" not in model
+            and "omni" not in model
             and "3.8-flash-tts" not in model
             and "3.8-flash-lite-tts" not in model
         ):
@@ -8699,7 +8802,8 @@ def test_validate_tool_choice_cursor_format():
         {"type": "invalid"},
         {"type": "function"},
         {"name": "lookup_fruit"},
-        {"type": "file_search"},
+        {"type": "web_search_tool"},
+        {"type": ["web_search"]},
     ],
 )
 def test_validate_tool_choice_invalid_dict_is_a_400(tool_choice):
@@ -8711,6 +8815,24 @@ def test_validate_tool_choice_invalid_dict_is_a_400(tool_choice):
         validate_chat_completion_tool_choice(tool_choice, model=MODEL)
     assert exc_info.value.status_code == 400
     assert exc_info.value.model == MODEL
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+@pytest.mark.parametrize(
+    "tool_choice",
+    [
+        {"type": "web_search"},
+        {"type": "web_search_preview"},
+        {"type": "file_search"},
+        {"type": "tool_search"},
+        {"type": "code_interpreter"},
+        {"type": "mcp", "server_label": "docs", "name": "search"},
+    ],
+    ids=lambda choice: str(choice["type"]),
+)
+def test_validate_tool_choice_forcing_a_hosted_tool_passes_through(tool_choice: dict[str, object]):
+    """Forcing an OpenAI hosted tool is a Responses API choice the bridge sends as is, so validation leaves it alone."""
+    assert validate_chat_completion_tool_choice(tool_choice, model=MODEL) is tool_choice
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
@@ -10324,36 +10446,33 @@ def test_logprobs_type():
     assert logprobs.top_logprobs is None
 
 
-def test_get_valid_models_openai_proxy(monkeypatch):
-    from litellm.utils import get_valid_models
-    import litellm
-
-    litellm.turn_on_debug()
-
+@respx.mock
+def test_get_valid_models_openai_proxy(monkeypatch: pytest.MonkeyPatch, reset_mock_cache: None) -> None:
     monkeypatch.setenv("LITELLM_PROXY_API_KEY", "sk-9876")
-    monkeypatch.setenv("LITELLM_PROXY_API_BASE", "https://litellm-api.up.railway.app/")
+    monkeypatch.setenv("LITELLM_PROXY_API_BASE", "https://gateway-env.example.test/")
     monkeypatch.delenv("FIREWORKS_AI_ACCOUNT_ID", None)
     monkeypatch.delenv("FIREWORKS_AI_API_KEY", None)
 
-    mock_response_data = {
-        "object": "list",
-        "data": [
-            {
-                "id": "gpt-5.5",
-                "object": "model",
-                "created": 1686935002,
-                "owned_by": "organization-owner",
-            },
-        ],
-    }
+    route: Final = respx.get("https://gateway-env.example.test/v1/models").respond(
+        200,
+        json={
+            "object": "list",
+            "data": [
+                {
+                    "id": "gpt-5.5",
+                    "object": "model",
+                    "created": 1686935002,
+                    "owned_by": "organization-owner",
+                },
+            ],
+        },
+    )
 
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = mock_response_data
+    valid_models: Final = litellm.get_valid_models(check_provider_endpoint=True)
 
-    with patch.object(litellm.module_level_client, "get", return_value=mock_response) as mock_post:
-        valid_models = get_valid_models(check_provider_endpoint=True)
-        assert "litellm_proxy/gpt-5.5" in valid_models
+    assert "litellm_proxy/gpt-5.5" in valid_models
+    assert route.call_count == 1
+    assert route.calls.last.request.headers["Authorization"] == "Bearer sk-9876"
 
 
 def test_pick_cheapest_chat_model_from_llm_provider():
@@ -11644,3 +11763,54 @@ async def test_success_enqueue_is_tracked_without_starting_callbacks_synchronous
     assert GLOBAL_LOGGING_WORKER.pending_count > 0, "Tracked enqueue must finish before worker draining starts"
     await GLOBAL_LOGGING_WORKER.flush()
     assert logging_obj.model_call_details["has_logged_async_success"] is True
+
+
+def test_get_response_string_joins_the_text_parts_of_a_completed_responses_event() -> None:
+    from litellm.types.llms.openai import ResponseCompletedEvent
+    from litellm.utils import get_response_string
+
+    response: Final = ResponsesAPIResponse(
+        id="resp_1",
+        created_at=1700000000,
+        model="gpt-5.6",
+        object="response",
+        status="completed",
+        output=[
+            {
+                "type": "message",
+                "id": "msg_1",
+                "role": "assistant",
+                "status": "completed",
+                "content": [
+                    {"type": "output_text", "text": "Hello ", "annotations": []},
+                    {"type": "refusal", "refusal": "not this part"},
+                    {"type": "output_text", "text": "world", "annotations": []},
+                ],
+            },
+            {"type": "function_call", "id": "fc_1", "call_id": "call_1", "name": "lookup", "arguments": "{}"},
+        ],
+    )
+
+    assert get_response_string(ResponseCompletedEvent(type="response.completed", response=response)) == "Hello world"
+
+
+class _RecordingPreCallDeploymentHook(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.seen_call_types: tuple[CallTypes | None, ...] = ()
+
+    async def async_pre_call_deployment_hook(
+        self, kwargs: dict[str, object], call_type: CallTypes | None
+    ) -> dict[str, object] | None:
+        self.seen_call_types = (*self.seen_call_types, call_type)
+        return None
+
+
+@pytest.mark.asyncio
+async def test_pre_call_deployment_hook_hands_responses_compact_its_call_type(monkeypatch: pytest.MonkeyPatch) -> None:
+    hook: Final = _RecordingPreCallDeploymentHook()
+    monkeypatch.setattr(litellm, "callbacks", [hook])
+
+    await async_pre_call_deployment_hook({"model": "gpt-5.4-mini"}, "acompact_responses")
+
+    assert hook.seen_call_types == (CallTypes.acompact_responses,)
