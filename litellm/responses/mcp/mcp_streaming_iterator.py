@@ -3,7 +3,11 @@ from typing import TYPE_CHECKING, Any, Final, cast
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
-from litellm.litellm_core_utils.allowed_tools_tool_choice import NO_GATEWAY_TOOLS, GatewayTools
+from litellm.litellm_core_utils.allowed_tools_tool_choice import (
+    NO_GATEWAY_TOOLS,
+    GatewayTools,
+    allowed_tools_tool_choice_kept_on_follow_up,
+)
 from litellm.responses.mcp.request_context import MCPRequestContext
 from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
 from litellm.types.llms.openai import (
@@ -936,7 +940,6 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                 )
             else:
                 return
-            # Remove tool_choice to avoid forcing more tool calls
             follow_up_params.pop("tool_choice", None)
 
             if self.tool_call_round >= MAX_MCP_TOOL_CALL_ROUNDS:
@@ -947,6 +950,10 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                 verbose_logger.warning(
                     "MCP auto-execute hit MAX_MCP_TOOL_CALL_ROUNDS=%s; forcing a text-only follow-up.",
                     MAX_MCP_TOOL_CALL_ROUNDS,
+                )
+            else:
+                follow_up_params.update(
+                    allowed_tools_tool_choice_kept_on_follow_up(self.original_request_params.get("tool_choice"))
                 )
 
             follow_up_response: Final = await aresponses(**follow_up_params)
