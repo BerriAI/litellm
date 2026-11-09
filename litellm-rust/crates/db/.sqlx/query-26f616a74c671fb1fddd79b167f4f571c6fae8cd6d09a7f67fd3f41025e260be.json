@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT to_jsonb(v) AS \"data!: AuthData\"\nFROM \"LiteLLM_ManagedVectorStoresTable\" v\nWHERE v.vector_store_id = ANY($1::text[])\nORDER BY v.vector_store_id\n",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "data!: AuthData",
+        "type_info": "Jsonb",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "TextArray"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "26f616a74c671fb1fddd79b167f4f571c6fae8cd6d09a7f67fd3f41025e260be"
+}

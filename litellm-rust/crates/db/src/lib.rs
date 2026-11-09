@@ -10,6 +10,7 @@ mod auth;
 mod daily_spend;
 mod end_user;
 mod error;
+mod executor;
 mod failure;
 mod pool;
 mod spend;

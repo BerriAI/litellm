@@ -10,6 +10,7 @@ veil.workspace = true
 litellm-secret-value.workspace = true
 tokio.workspace = true
 chrono.workspace = true
+futures-util.workspace = true
 macro_rules_attribute.workspace = true
 serde.workspace = true
 serde_json.workspace = true

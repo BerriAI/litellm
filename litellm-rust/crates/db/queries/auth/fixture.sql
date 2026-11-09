@@ -37,8 +37,10 @@ INSERT INTO "LiteLLM_ModelAccessGroupBudgetTable" (access_group_name, budget_id,
 VALUES ('auth-model-group', 'auth-b', 12.5);
 INSERT INTO "LiteLLM_AccessGroupTable" (access_group_id, access_group_name, access_model_names, access_agent_ids, access_mcp_server_ids)
 VALUES ('auth-access', 'Auth Access', ARRAY['group-model'], ARRAY['auth-agent'], NULL);
-INSERT INTO "LiteLLM_AgentsTable" (agent_id, agent_name, agent_card_params, object_permission_id, identity_managed, enabled, extra_headers, created_by, updated_by)
-VALUES ('auth-agent', 'Auth Agent', '{}', 'auth-op', true, false, NULL, 'auth-test', 'auth-test');
+INSERT INTO "LiteLLM_AgentsTable" (agent_id, agent_name, agent_card_params, object_permission_id, identity_managed, enabled, extra_headers, agent_access_groups, created_by, updated_by)
+VALUES ('auth-agent', 'Auth Agent', '{}', 'auth-op', true, false, NULL, ARRAY['auth-group'], 'auth-test', 'auth-test');
+INSERT INTO "LiteLLM_ManagedVectorStoresTable" (vector_store_id, custom_llm_provider, litellm_params, team_id, updated_at)
+VALUES ('auth-vector', 'openai', '{"api_base":"https://example.com"}', 'auth-team', now());
 INSERT INTO "LiteLLM_AgentIdentity" (agent_id, provider, issuer, tenant_id, client_id, revision, active, required_roles, required_scopes)
 VALUES ('auth-agent', 'microsoft_entra', 'auth-issuer', 'auth-tenant', 'auth-client', 'auth-revision', false, NULL, ARRAY['read']);
 INSERT INTO "LiteLLM_RetiredAgentIdentity" (binding_id, provider, issuer, tenant_id, client_id)

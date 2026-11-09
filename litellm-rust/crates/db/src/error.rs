@@ -17,6 +17,25 @@ pub enum Error {
 }
 
 impl Error {
+    pub fn is_database_failure(&self) -> bool {
+        match self {
+            Self::ConnectTimeout(_) => true,
+            Self::Query(error) => matches!(
+                error,
+                sqlx::Error::Database(_)
+                    | sqlx::Error::Io(_)
+                    | sqlx::Error::Tls(_)
+                    | sqlx::Error::PoolTimedOut
+                    | sqlx::Error::PoolClosed
+            ),
+            Self::InvalidSetting(_)
+            | Self::InvalidAuthArguments
+            | Self::NotConfigured
+            | Self::InvalidSpendBatch { .. }
+            | Self::InvalidTimestamp(_) => false,
+        }
+    }
+
     pub fn is_retryable(&self) -> bool {
         match self {
             Self::Query(sqlx::Error::Database(error)) => {
@@ -51,6 +70,24 @@ mod tests {
     }
 
     #[rstest]
+    #[case::closed_pool(sqlx::Error::PoolClosed, true)]
+    #[case::pool_timeout(sqlx::Error::PoolTimedOut, true)]
+    #[case::io(sqlx::Error::Io(std::io::ErrorKind::ConnectionReset.into()), true)]
+    #[case::tls(
+        sqlx::Error::Tls(Box::new(std::io::Error::from(std::io::ErrorKind::ConnectionReset))),
+        true
+    )]
+    #[case::decode(
+        sqlx::Error::Decode(Box::new(std::io::Error::from(std::io::ErrorKind::InvalidData))),
+        false
+    )]
+    #[case::missing_column(sqlx::Error::ColumnNotFound("spend".into()), false)]
+    #[case::missing_row(sqlx::Error::RowNotFound, false)]
+    fn distinguishes_io_from_native_invariants(#[case] error: sqlx::Error, #[case] io: bool) {
+        assert_eq!(Error::from(error).is_database_failure(), io);
+    }
+
+    #[rstest]
     #[case::connection_capacity("53300", true)]
     #[case::deadlock("40P01", true)]
     #[case::lock_unavailable("55P03", true)]
@@ -80,7 +117,9 @@ mod tests {
             error.as_database_error().and_then(|error| error.code()),
             Some(code.into())
         );
-        assert_eq!(Error::from(error).is_retryable(), retryable);
+        let error = Error::from(error);
+        assert!(error.is_database_failure());
+        assert_eq!(error.is_retryable(), retryable);
         tx.rollback().await?;
         Ok(())
     }
