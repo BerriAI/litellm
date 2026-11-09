@@ -891,3 +891,12 @@ pub(crate) fn request_auth_route_role_listed(
         .map_err(map_error)?;
     to_py(py, &decision)
 }
+
+#[pyfunction]
+pub(crate) fn request_auth_org_admin_raw(
+    py: Python<'_>,
+    facts: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    let facts: core::org_routes::AdminFacts = from_py(facts)?;
+    to_py(py, &py.detach(move || core::org_routes::admin(&facts)))
+}

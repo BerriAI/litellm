@@ -207,7 +207,10 @@ async def _apply_over_budget_reservation_policy(
     decision: Final = spend_counter_policy.decide(
         spend_counter_policy.OverBudget(
             _key_reservation_should_release_for_throttle(counter.counter_key, valid_token),
-            current_spend, counter.max_budget, reservation_cost, fail_closed_budget_enforcement,
+            current_spend,
+            counter.max_budget,
+            reservation_cost,
+            fail_closed_budget_enforcement,
         )
     )
     match decision:
@@ -984,9 +987,10 @@ async def _reservation_counter_loaded(counter: _BudgetCounter, fail_closed_budge
     try:
         await _initialize_reservation_counter(counter=counter)
     except _CounterReservationUnavailable:
-        if spend_counter_policy.decide(
-            spend_counter_policy.ReservationFailure(fail_closed_budget_enforcement)
-        ).kind == "Unavailable":
+        if (
+            spend_counter_policy.decide(spend_counter_policy.ReservationFailure(fail_closed_budget_enforcement)).kind
+            == "Unavailable"
+        ):
             _raise_reservation_unavailable(counter_key=counter.counter_key)
         return False
     return True
@@ -1062,9 +1066,12 @@ async def _reserve_reservable_counters(
         if reserved_values is None:
             for entry in entries:
                 applied_entries.remove(entry)
-            if spend_counter_policy.decide(
-                spend_counter_policy.ReservationFailure(fail_closed_budget_enforcement)
-            ).kind == "Unavailable":
+            if (
+                spend_counter_policy.decide(
+                    spend_counter_policy.ReservationFailure(fail_closed_budget_enforcement)
+                ).kind
+                == "Unavailable"
+            ):
                 _raise_reservation_unavailable(counter_key=group[0].counter_key)
             continue
         for counter, entry, reserved_value in zip(group, entries, reserved_values):
@@ -1074,9 +1081,10 @@ async def _reserve_reservable_counters(
                 current_spend = reserved_value - (charged_cost - reservation_cost)
             else:
                 current_spend = current_spend_by_counter_key[counter.counter_key] + reservation_cost
-            if spend_counter_policy.decide(
-                spend_counter_policy.Overflow(current_spend, counter.max_budget)
-            ).kind == "CheckOverflow":
+            if (
+                spend_counter_policy.decide(spend_counter_policy.Overflow(current_spend, counter.max_budget)).kind
+                == "CheckOverflow"
+            ):
                 reservation_cost = await _apply_over_budget_reservation_policy(
                     counter=counter,
                     valid_token=valid_token,
@@ -1218,9 +1226,12 @@ async def _set_reserved_entries_actual_cost(
             )
         )
         inconsistent: Final = tuple(item for item, ok in zip(adjustments, consistent) if not ok)
-        if spend_counter_policy.decide(
-            spend_counter_policy.ResizeConsistency(bool(inconsistent), reseed_on_inconsistent)
-        ).kind == "RejectResize":
+        if (
+            spend_counter_policy.decide(
+                spend_counter_policy.ResizeConsistency(bool(inconsistent), reseed_on_inconsistent)
+            ).kind
+            == "RejectResize"
+        ):
             # Pre-call admission resize: the in-flight reservation cost is not yet
             # persisted, so the DB floor would discard it. Keep the original
             # fail-closed behavior (raise -> reserve_budget_for_request releases and
@@ -1263,9 +1274,7 @@ async def _counter_can_apply_adjustment(
         current_value, _ = await read_spend_counter_cache_value(counter_key=counter_key)
     except (TypeError, ValueError):
         return False
-    return spend_counter_policy.decide(
-        spend_counter_policy.Adjustment(current_value, adjustment)
-    ).kind == "Compatible"
+    return spend_counter_policy.decide(spend_counter_policy.Adjustment(current_value, adjustment)).kind == "Compatible"
 
 
 async def _release_applied_entries_best_effort(

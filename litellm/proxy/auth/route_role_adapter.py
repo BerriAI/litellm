@@ -138,12 +138,8 @@ def allowed_routes_check(
             raise AssertionError(f"Unexpected JWT route directive: {decision}")
 
 
-def allowed_route_check_inside_route(
-    user_api_key_dict: UserAPIKeyAuth, requested_user_id: str | None
-) -> bool:
-    return core.inside(
-        core.InsideFacts(user_api_key_dict.user_role, user_api_key_dict.user_id, requested_user_id)
-    )
+def allowed_route_check_inside_route(user_api_key_dict: UserAPIKeyAuth, requested_user_id: str | None) -> bool:
+    return core.inside(core.InsideFacts(user_api_key_dict.user_role, user_api_key_dict.user_id, requested_user_id))
 
 
 def _expanded(raw: object) -> tuple[object, ...]:
@@ -161,5 +157,7 @@ def _expanded(raw: object) -> tuple[object, ...]:
             raise AssertionError(f"Unexpected route expansion directive: {decision.action}")
 
 
-def get_actual_routes(allowed_routes: Iterable[object]) -> list[object]:  # mutable-ok: preserve the public list projection
+def get_actual_routes(
+    allowed_routes: Iterable[object],
+) -> list[object]:  # mutable-ok: preserve the public list projection
     return list(chain.from_iterable(_expanded(raw) for raw in allowed_routes))

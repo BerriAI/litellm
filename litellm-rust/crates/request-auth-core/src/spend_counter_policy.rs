@@ -217,7 +217,7 @@ mod tests {
     #[case::positive(Some(1.0), 1.0, Decision::Compatible)]
     #[case::negative(Some(1.0), -2.0, Decision::Inconsistent)]
     #[case::zero(Some(1.0), -1.0, Decision::Compatible)]
-    fn adjustment(
+    fn counter_adjustment(
         #[case] current: Option<f64>,
         #[case] adjustment: f64,
         #[case] expected: Decision,

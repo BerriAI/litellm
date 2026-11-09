@@ -75,7 +75,6 @@ from litellm.proxy._types import (
     LiteLLM_UserTable,
     LiteLLMRoutes,
     LitellmUserRoles,
-    ModelAccessDeniedProxyException,
     NewTeamRequest,
     ProxyErrorTypes,
     ProxyException,
@@ -89,13 +88,8 @@ from litellm.proxy.agent_endpoints.auth.agent_access_groups import (
     resolve_agent_access_group_ceiling,
 )
 from litellm.proxy.agent_endpoints.auth.agent_caller import (
-    agent_caller_auth,
     load_agent_caller_team,
     load_agent_caller_user,
-)
-from litellm.proxy.agent_endpoints.auth.managed_authorization import managed_agent_policy
-from litellm.proxy.auth.model_access_denied import (
-    model_access_denied_client_message,
 )
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
@@ -1349,20 +1343,17 @@ async def common_checks(
 
 
 def effective_user_role(user_role: str | None) -> LitellmUserRoles:
-    try:
-        return LitellmUserRoles(user_role)
-    except NativeAuthFailure:
-        raise
-    except ValueError:
-        return LitellmUserRoles.INTERNAL_USER
+    from litellm.proxy.auth import route_role_adapter
+
+    return route_role_adapter.effective_user_role(user_role)
 
 
 def get_user_role(
     user_obj: LiteLLM_UserTable | None,
 ) -> LitellmUserRoles | None:
-    if user_obj is None:
-        return None
-    return effective_user_role(user_obj.user_role)
+    from litellm.proxy.auth import route_role_adapter
+
+    return route_role_adapter.get_user_role(user_obj)
 
 
 _get_user_role: Final = get_user_role
@@ -1375,59 +1366,24 @@ def _is_api_route_allowed(
     valid_token: UserAPIKeyAuth | None,
     user_obj: LiteLLM_UserTable | None = None,
 ) -> bool:
-    """
-    - Route b/w api token check and normal token check
-    """
-    _user_role: Final = get_user_role(user_obj=user_obj)
+    from litellm.proxy.auth import route_role_adapter
 
-    if valid_token is None:
-        raise Exception("Invalid proxy server token passed. valid_token=None.")
-
-    if not is_user_proxy_admin(user_obj=user_obj):  # if non-admin
-        RouteChecks.non_proxy_admin_allowed_routes_check(
-            user_obj=user_obj,
-            _user_role=_user_role,
-            route=route,
-            request=request,
-            request_data=request_data,
-            valid_token=valid_token,
-        )
-    return True
+    return route_role_adapter.is_api_route_allowed(route, request, request_data, valid_token, user_obj)
 
 
 def is_user_proxy_admin(user_obj: LiteLLM_UserTable | None) -> bool:
-    if user_obj is None:
-        return False
+    from litellm.proxy.auth import route_role_adapter
 
-    if user_obj.user_role is not None and user_obj.user_role == LitellmUserRoles.PROXY_ADMIN.value:
-        return True
-
-    return False
+    return route_role_adapter.is_user_proxy_admin(user_obj)
 
 
 _is_user_proxy_admin: Final = is_user_proxy_admin
 
 
-def _allowed_routes_check(user_route: str, allowed_routes: list) -> bool:
-    """
-    Return if a user is allowed to access route. Helper function for `allowed_routes_check`.
+def _allowed_routes_check(user_route: str, allowed_routes: list) -> bool:  # pyright: ignore[reportUnusedFunction]  # backwards-compatible auth helper entrypoint
+    from litellm.proxy.auth import route_role_adapter
 
-    Parameters:
-    - user_route: str - the route the user is trying to call
-    - allowed_routes: List[str|LiteLLMRoutes] - the list of allowed routes for the user. Entries are a route group name
-      (e.g. "openai_routes"), an exact route, or a trailing-wildcard prefix (e.g. "/internal-models/*").
-    """
-    from starlette.routing import compile_path
-
-    for allowed_route in allowed_routes:
-        if allowed_route in LiteLLMRoutes.__members__:
-            for template in LiteLLMRoutes[allowed_route].value:
-                regex, _, _ = compile_path(template)
-                if regex.match(user_route):
-                    return True
-        elif RouteChecks.route_matches_wildcard_pattern(route=user_route, pattern=allowed_route):
-            return True
-    return False
+    return route_role_adapter.allowed_routes_list_check(user_route, allowed_routes)
 
 
 def allowed_routes_check(
@@ -1435,62 +1391,24 @@ def allowed_routes_check(
     user_route: str,
     litellm_proxy_roles: LiteLLM_JWTAuth,
 ) -> bool:
-    """
-    Check if user -> not admin - allowed to access these routes
-    """
+    from litellm.proxy.auth import route_role_adapter
 
-    if user_role == LitellmUserRoles.PROXY_ADMIN:
-        is_allowed = _allowed_routes_check(
-            user_route=user_route,
-            allowed_routes=litellm_proxy_roles.admin_allowed_routes,
-        )
-        return is_allowed
-
-    elif user_role == LitellmUserRoles.TEAM:
-        if litellm_proxy_roles.team_allowed_routes is None:
-            """
-            By default allow a team to call openai + info routes
-            """
-            is_allowed = _allowed_routes_check(user_route=user_route, allowed_routes=["openai_routes", "info_routes"])
-            return is_allowed
-        elif litellm_proxy_roles.team_allowed_routes is not None:
-            is_allowed = _allowed_routes_check(
-                user_route=user_route,
-                allowed_routes=litellm_proxy_roles.team_allowed_routes,
-            )
-            return is_allowed
-    return False
+    return route_role_adapter.allowed_routes_check(user_role, user_route, litellm_proxy_roles)
 
 
 def allowed_route_check_inside_route(
     user_api_key_dict: UserAPIKeyAuth,
     requested_user_id: str | None,
 ) -> bool:
-    ret_val = True
-    if (
-        user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN
-        and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY
-    ):
-        ret_val = False
-    if requested_user_id is not None and user_api_key_dict.user_id is not None:
-        if user_api_key_dict.user_id == requested_user_id:
-            ret_val = True
-    return ret_val
+    from litellm.proxy.auth import route_role_adapter
+
+    return route_role_adapter.allowed_route_check_inside_route(user_api_key_dict, requested_user_id)
 
 
 def get_actual_routes(allowed_routes: list) -> list:
-    actual_routes: Final[list] = []
-    for route_name in allowed_routes:
-        try:
-            route_value = LiteLLMRoutes[route_name].value
-            if isinstance(route_value, set):
-                actual_routes.extend(list(route_value))
-            else:
-                actual_routes.extend(route_value)
+    from litellm.proxy.auth import route_role_adapter
 
-        except KeyError:
-            actual_routes.append(route_name)
-    return actual_routes
+    return route_role_adapter.get_actual_routes(allowed_routes)
 
 
 KEY_END_USER_BUDGET_ID_METADATA_FIELD: Final = "end_user_budget_id"
@@ -4496,31 +4414,15 @@ def _can_object_call_model(
 can_object_call_model: Final = _can_object_call_model
 
 
-def _resolve_team_alias(
+def _resolve_team_alias(  # pyright: ignore[reportUnusedFunction]  # backwards-compatible auth helper entrypoint
     model: str | list[str],
     team_model_aliases: Mapping[str, str] | None,
     team_id: str | None,
     llm_router: Router | None,
 ) -> str | list[str]:
-    if not team_model_aliases:
-        return model
-    if isinstance(model, str):
-        return _live_team_alias_target(model, team_model_aliases, team_id, llm_router)
-    return [_live_team_alias_target(name, team_model_aliases, team_id, llm_router) for name in model]
+    from litellm.proxy.auth import team_alias_adapter
 
-
-def _live_team_alias_target(
-    model: str, team_model_aliases: Mapping[str, str], team_id: str | None, llm_router: RegistryReader | None
-) -> str:
-    target: Final = team_model_aliases.get(model)
-    if target is None:
-        return model
-    deleted_team_deployment: Final = (
-        llm_router is not None
-        and target.startswith(f"model_name_{team_id}_")
-        and target not in llm_router.registry().index("model_name")
-    )
-    return model if deleted_team_deployment else target
+    return team_alias_adapter.resolve_team_alias(model, team_model_aliases, team_id, llm_router)
 
 
 async def can_agent_call_model(
@@ -4531,93 +4433,46 @@ async def can_agent_call_model(
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
 ) -> None:
-    managed_policy: Final = managed_agent_policy(valid_token)
-    if model and valid_token is not None and managed_policy is not None:
-        managed_models: Final = (managed_policy.object_permission or {}).get("models", ())
-        if not isinstance(managed_models, (list, tuple)) or not managed_models:
-            raise HTTPException(403, "This agent has no model grants")
-        can_object_call_model(
-            model=_resolve_team_alias(
-                model, team_model_aliases_for_auth_check(valid_token), valid_token.team_id, llm_router
-            ),
-            llm_router=llm_router,
-            models=list(managed_models),
-            team_id=valid_token.team_id,
-            object_type="agent",
-            key_model_aliases=key_model_aliases_for_auth_check(valid_token),
-        )
-    await _check_agent_access_group_model_access(model=model, valid_token=valid_token, llm_router=llm_router)
-    await _check_agent_caller_model_access(
-        model=model,
-        valid_token=valid_token,
-        llm_router=llm_router,
-        prisma_client=prisma_client,
-        user_api_key_cache=user_api_key_cache,
-        proxy_logging_obj=proxy_logging_obj,
+    from litellm.proxy.auth import managed_model_adapter
+
+    return await managed_model_adapter.can_agent_call_model(
+        model, valid_token, llm_router, prisma_client, user_api_key_cache, proxy_logging_obj
     )
 
 
-async def _agent_access_group_ceilings(
+async def _agent_access_group_ceilings(  # pyright: ignore[reportUnusedFunction]  # backwards-compatible auth helper entrypoint
     valid_token: UserAPIKeyAuth, resolve_ceiling: CeilingResolver
 ) -> tuple[AgentAccessGroupCeiling, ...]:
-    if not valid_token.agent_id:
-        return ()
+    from litellm.proxy.auth import managed_model_adapter
 
-    from litellm.proxy.agent_endpoints.auth.agent_access_groups import resolve_managed_agent_ceilings
-
-    managed: Final = managed_agent_policy(valid_token)
-    if managed is not None:
-        return await resolve_managed_agent_ceilings(managed)
-    unmanaged: Final = await resolve_ceiling(valid_token.agent_id)
-    return (unmanaged,) if unmanaged is not None else ()
+    return await managed_model_adapter.agent_access_group_ceilings(valid_token, resolve_ceiling)
 
 
-def _managed_agent_model_grants(valid_token: UserAPIKeyAuth) -> frozenset[str]:
-    managed: Final = managed_agent_policy(valid_token)
-    granted: Final = (managed.object_permission or {}).get("models") if managed is not None else None
-    if not isinstance(granted, (list, tuple)):
-        return frozenset()
-    return frozenset(name for name in _OBJECTS_ADAPTER.validate_python(granted) if isinstance(name, str))
+def _managed_agent_model_grants(valid_token: UserAPIKeyAuth) -> frozenset[str]:  # pyright: ignore[reportUnusedFunction]  # backwards-compatible auth helper entrypoint
+    from litellm.proxy.auth import managed_model_adapter
+
+    return managed_model_adapter.managed_agent_model_grants(valid_token)
 
 
 async def agent_model_grants(
     valid_token: UserAPIKeyAuth, resolve_ceiling: CeilingResolver = resolve_agent_access_group_ceiling
 ) -> frozenset[str]:
-    ceilings: Final = await _agent_access_group_ceilings(valid_token, resolve_ceiling)
-    return _managed_agent_model_grants(valid_token).union(*(ceiling.models for ceiling in ceilings))
+    from litellm.proxy.auth import managed_model_adapter
+
+    return await managed_model_adapter.agent_model_grants(valid_token, resolve_ceiling)
 
 
-async def _check_agent_access_group_model_access(
+async def _check_agent_access_group_model_access(  # pyright: ignore[reportUnusedFunction]  # backwards-compatible auth helper entrypoint
     model: str | list[str] | None,  # mutable-ok: _can_object_call_model and the client message helper take list[str]
     valid_token: UserAPIKeyAuth | None,
     llm_router: Router | None,
     resolve_ceiling: CeilingResolver = resolve_agent_access_group_ceiling,
 ) -> Literal[True]:
-    """Attached groups naming no model deny every model; the empty allowlist in ``_can_object_call_model`` allows."""
-    if not model or valid_token is None:
-        return True
-    ceilings: Final = await _agent_access_group_ceilings(valid_token, resolve_ceiling)
-    dispatched: Final = _resolve_team_alias(
-        model, team_model_aliases_for_auth_check(valid_token), valid_token.team_id, llm_router
+    from litellm.proxy.auth import managed_model_adapter
+
+    return await managed_model_adapter.check_agent_access_group_model_access(
+        model, valid_token, llm_router, resolve_ceiling
     )
-    for ceiling in ceilings:
-        if not ceiling.models:
-            raise ModelAccessDeniedProxyException(
-                message=model_access_denied_client_message(model=model),
-                internal_message=f"agent {valid_token.agent_id} access groups grant no models",
-                type=ProxyErrorTypes.agent_model_access_denied,
-                param="model",
-                code=status.HTTP_403_FORBIDDEN,
-            )
-        can_object_call_model(
-            model=dispatched,
-            llm_router=llm_router,
-            models=sorted(ceiling.models),
-            team_id=valid_token.team_id,
-            object_type="agent",
-            key_model_aliases=key_model_aliases_for_auth_check(valid_token),
-        )
-    return True
 
 
 LoadedCallerTeam: TypeAlias = LiteLLM_TeamTable | None
@@ -4626,7 +4481,7 @@ CallerTeamLoader: TypeAlias = Callable[[UserAPIKeyAuth], Awaitable[LoadedCallerT
 CallerUserLoader: TypeAlias = Callable[[UserAPIKeyAuth], Awaitable[LoadedCallerUser]]
 
 
-async def _check_agent_caller_model_access(
+async def _check_agent_caller_model_access(  # pyright: ignore[reportUnusedFunction]  # backwards-compatible auth helper entrypoint
     model: str | list[str] | None,  # mutable-ok: the model checks it delegates to take list[str]
     valid_token: UserAPIKeyAuth | None,
     llm_router: Router | None,
@@ -4636,42 +4491,10 @@ async def _check_agent_caller_model_access(
     load_team: CallerTeamLoader = load_agent_caller_team,
     load_user: CallerUserLoader = load_agent_caller_user,
 ) -> None:
-    """An agent key acting for an invoking user may call only what that user's own key could: the
-    invoking team's models (and per-member scope) when a team was echoed, else the user's models."""
-    if not model or valid_token is None:
-        return
-    caller_auth: Final = agent_caller_auth(valid_token)
-    if caller_auth is None:
-        return
-    caller_team: Final = await load_team(valid_token)
-    caller_key_model_aliases: Final = key_model_aliases_for_auth_check(valid_token)
-    if caller_team is not None:
-        await can_team_access_model(
-            model=model,
-            team_object=caller_team,
-            llm_router=llm_router,
-            prisma_client=prisma_client,
-            key_model_aliases=caller_key_model_aliases,
-        )
-        await check_team_member_model_access(
-            model=model,
-            team_object=caller_team,
-            valid_token=caller_auth,
-            llm_router=llm_router,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            proxy_logging_obj=proxy_logging_obj,
-            key_model_aliases=caller_key_model_aliases,
-        )
-        return
-    caller_user: Final = await load_user(valid_token)
-    if caller_user is None:
-        return
-    await can_user_call_model(
-        model=model,
-        llm_router=llm_router,
-        user_object=caller_user,
-        key_model_aliases=caller_key_model_aliases,
+    from litellm.proxy.auth import managed_model_adapter
+
+    return await managed_model_adapter.check_agent_caller_model_access(
+        model, valid_token, llm_router, prisma_client, user_api_key_cache, proxy_logging_obj, load_team, load_user
     )
 
 

@@ -1,11 +1,11 @@
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
-from typing import (  # noqa: TID251  # preserve identity of existing JSON mappings
+from typing import (
     Final,
     Literal,
     Protocol,
     assert_never,
-    cast,
+    cast,  # noqa: TID251  # preserve identity of validated legacy JSON mappings
 )
 
 from opentelemetry.trace import Span
