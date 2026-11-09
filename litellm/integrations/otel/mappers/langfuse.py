@@ -30,6 +30,8 @@ from litellm.integrations.otel.model.payloads import (
     LLMCallSpanData,
     LLMRequestParams,
     LLMUsage,
+    MCPListToolsSpanData,
+    MCPToolCallSpanData,
 )
 from litellm.integrations.otel.model.trace_controls import TraceControls
 
@@ -119,6 +121,8 @@ class LangfuseMapper:
         match data:
             case LLMCallSpanData():
                 return self._llm_call(data)
+            case MCPToolCallSpanData() | MCPListToolsSpanData():
+                return self.trace_attributes(data.trace)
             case _:
                 return {}
 
