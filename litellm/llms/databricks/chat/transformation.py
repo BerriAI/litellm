@@ -452,21 +452,28 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
                     message=f"Request-supplied {secret_param} cannot be an os.environ/ or oidc/ secret reference",
                 )
 
+        # Unconditionally remove all credential fields from optional_params so they never leak into model payloads
+        opt_client_id: Final = optional_params.pop("client_id", None)
+        opt_db_client_id: Final = optional_params.pop("databricks_client_id", None)
+        opt_client_secret: Final = optional_params.pop("client_secret", None)
+        opt_db_client_secret: Final = optional_params.pop("databricks_client_secret", None)
+        opt_api_key: Final = optional_params.pop("api_key", None)
+
         client_id: Final = (
             litellm_params.get("client_id")
             or litellm_params.get("databricks_client_id")
-            or optional_params.pop("client_id", None)
-            or optional_params.pop("databricks_client_id", None)
+            or opt_client_id
+            or opt_db_client_id
         )
         client_secret: Final = (
             litellm_params.get("client_secret")
             or litellm_params.get("databricks_client_secret")
-            or optional_params.pop("client_secret", None)
-            or optional_params.pop("databricks_client_secret", None)
+            or opt_client_secret
+            or opt_db_client_secret
         )
         api_base, headers = self.databricks_validate_environment(
             api_base=api_base,
-            api_key=api_key,
+            api_key=api_key or opt_api_key,
             endpoint_type="chat_completions",
             custom_endpoint=False,
             headers=headers,

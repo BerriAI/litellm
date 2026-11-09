@@ -140,22 +140,29 @@ class DatabricksAnthropicMessagesConfig(DatabricksBase, AnthropicMessagesConfig)
                     message=f"Request-supplied {secret_param} cannot be an os.environ/ or oidc/ secret reference",
                 )
 
+        # Unconditionally remove all credential fields from optional_params so they never leak into model payloads
+        opt_client_id: Final = optional_params.pop("client_id", None)
+        opt_db_client_id: Final = optional_params.pop("databricks_client_id", None)
+        opt_client_secret: Final = optional_params.pop("client_secret", None)
+        opt_db_client_secret: Final = optional_params.pop("databricks_client_secret", None)
+        opt_api_key: Final = optional_params.pop("api_key", None)
+
         client_id: Final = (
             litellm_params.get("client_id")
             or litellm_params.get("databricks_client_id")
-            or optional_params.pop("client_id", None)
-            or optional_params.pop("databricks_client_id", None)
+            or opt_client_id
+            or opt_db_client_id
         )
         client_secret: Final = (
             litellm_params.get("client_secret")
             or litellm_params.get("databricks_client_secret")
-            or optional_params.pop("client_secret", None)
-            or optional_params.pop("databricks_client_secret", None)
+            or opt_client_secret
+            or opt_db_client_secret
         )
         has_deployment_oauth: Final = bool(client_id or client_secret)
         deployment_api_key: Final = (
             litellm_params.get("api_key") if isinstance(litellm_params, Mapping) else None
-        ) or optional_params.pop("api_key", None)
+        ) or opt_api_key
         resolved_api_key: Final = (
             deployment_api_key or api_key or (None if has_deployment_oauth else self.resolve_api_key(api_key))
         )

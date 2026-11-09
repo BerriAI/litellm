@@ -6,6 +6,7 @@ Tests for security hardening of Databricks OAuth M2M credentials:
 """
 
 import pytest
+from unittest.mock import MagicMock, patch
 
 from litellm.litellm_core_utils.clientside_credential_handler import (
     get_dynamic_litellm_params,
@@ -149,3 +150,95 @@ class TestDatabricksOAuthSecretReferenceRejection:
                 optional_params={"databricks_client_id": "os.environ/LEAK_KEY"},
                 litellm_params={},
             )
+
+    @patch("litellm.llms.databricks.common_utils.DatabricksBase.get_oauth_m2m_token", return_value="mock_token")
+    def test_chat_transformation_unconditionally_pops_credentials(self, mock_get_token):
+        config = DatabricksConfig()
+        optional_params = {
+            "client_id": "req-id",
+            "databricks_client_id": "req-db-id",
+            "client_secret": "req-secret",
+            "databricks_client_secret": "req-db-secret",
+            "temperature": 0.7,
+        }
+        config.validate_environment(
+            headers={},
+            model="databricks/dbrx",
+            messages=[{"role": "user", "content": "hi"}],
+            optional_params=optional_params,
+            litellm_params={"client_id": "dep-id", "client_secret": "dep-secret"},
+            api_base="https://workspace.databricks.net",
+        )
+        assert "client_id" not in optional_params
+        assert "databricks_client_id" not in optional_params
+        assert "client_secret" not in optional_params
+        assert "databricks_client_secret" not in optional_params
+        assert optional_params["temperature"] == 0.7
+
+    @patch("litellm.llms.databricks.common_utils.DatabricksBase.get_oauth_m2m_token", return_value="mock_token")
+    def test_embed_handler_unconditionally_pops_credentials(self, mock_get_token):
+        from unittest.mock import MagicMock
+
+        handler = DatabricksEmbeddingHandler()
+        optional_params = {
+            "client_id": "opt-id",
+            "databricks_client_id": "opt-db-id",
+            "client_secret": "opt-secret",
+            "databricks_client_secret": "opt-db-secret",
+            "dimensions": 512,
+        }
+        kwargs = {
+            "client_id": "kw-id",
+            "databricks_client_id": "kw-db-id",
+            "client_secret": "kw-secret",
+            "databricks_client_secret": "kw-db-secret",
+        }
+        with patch(
+            "litellm.llms.openai_like.embedding.handler.OpenAILikeEmbeddingHandler.embedding",
+            return_value=MagicMock(),
+        ) as mock_super_embed:
+            handler.embedding(
+                model="databricks/bge-large-en",
+                input=["hello"],
+                timeout=10,
+                logging_obj=MagicMock(),
+                api_key=None,
+                api_base="https://x.databricks.net",
+                optional_params=optional_params,
+                litellm_params={"client_id": "dep-id", "client_secret": "dep-secret"},
+                **kwargs,
+            )
+        assert "client_id" not in optional_params
+        assert "databricks_client_id" not in optional_params
+        assert "client_secret" not in optional_params
+        assert "databricks_client_secret" not in optional_params
+        assert optional_params["dimensions"] == 512
+        passed_kwargs = mock_super_embed.call_args.kwargs
+        assert "client_id" not in passed_kwargs
+        assert "databricks_client_id" not in passed_kwargs
+        assert "client_secret" not in passed_kwargs
+        assert "databricks_client_secret" not in passed_kwargs
+
+    @patch("litellm.llms.databricks.common_utils.DatabricksBase.get_oauth_m2m_token", return_value="mock_token")
+    def test_messages_transformation_unconditionally_pops_credentials(self, mock_get_token):
+        config = DatabricksAnthropicMessagesConfig()
+        optional_params = {
+            "client_id": "req-id",
+            "databricks_client_id": "req-db-id",
+            "client_secret": "req-secret",
+            "databricks_client_secret": "req-db-secret",
+            "max_tokens": 100,
+        }
+        config.validate_anthropic_messages_environment(
+            headers={},
+            model="databricks/claude-3-5-sonnet",
+            messages=[{"role": "user", "content": "hi"}],
+            optional_params=optional_params,
+            litellm_params={"client_id": "dep-id", "client_secret": "dep-secret"},
+            api_base="https://workspace.databricks.net",
+        )
+        assert "client_id" not in optional_params
+        assert "databricks_client_id" not in optional_params
+        assert "client_secret" not in optional_params
+        assert "databricks_client_secret" not in optional_params
+        assert optional_params["max_tokens"] == 100

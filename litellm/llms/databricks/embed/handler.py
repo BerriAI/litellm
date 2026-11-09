@@ -54,23 +54,34 @@ class DatabricksEmbeddingHandler(OpenAILikeEmbeddingHandler, DatabricksBase):
                     message=f"Request-supplied {secret_param} cannot be an os.environ/ or oidc/ secret reference",
                 )
 
+        # Unconditionally remove all credential fields from optional_params and kwargs so they never leak into model payloads
+        opt_client_id: Final = optional_params.pop("client_id", None)
+        opt_db_client_id: Final = optional_params.pop("databricks_client_id", None)
+        kw_client_id: Final = kwargs.pop("client_id", None)
+        kw_db_client_id: Final = kwargs.pop("databricks_client_id", None)
+
+        opt_client_secret: Final = optional_params.pop("client_secret", None)
+        opt_db_client_secret: Final = optional_params.pop("databricks_client_secret", None)
+        kw_client_secret: Final = kwargs.pop("client_secret", None)
+        kw_db_client_secret: Final = kwargs.pop("databricks_client_secret", None)
+
         resolved_client_id: Final = (
             client_id
             or (litellm_params.get("client_id") if isinstance(litellm_params, Mapping) else None)
             or (litellm_params.get("databricks_client_id") if isinstance(litellm_params, Mapping) else None)
-            or optional_params.pop("client_id", None)
-            or optional_params.pop("databricks_client_id", None)
-            or kwargs.pop("client_id", None)
-            or kwargs.pop("databricks_client_id", None)
+            or opt_client_id
+            or opt_db_client_id
+            or kw_client_id
+            or kw_db_client_id
         )
         resolved_client_secret: Final = (
             client_secret
             or (litellm_params.get("client_secret") if isinstance(litellm_params, Mapping) else None)
             or (litellm_params.get("databricks_client_secret") if isinstance(litellm_params, Mapping) else None)
-            or optional_params.pop("client_secret", None)
-            or optional_params.pop("databricks_client_secret", None)
-            or kwargs.pop("client_secret", None)
-            or kwargs.pop("databricks_client_secret", None)
+            or opt_client_secret
+            or opt_db_client_secret
+            or kw_client_secret
+            or kw_db_client_secret
         )
 
         api_base, headers = self.databricks_validate_environment(
