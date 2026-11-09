@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping, Sequence
+from datetime import datetime
 from typing import TYPE_CHECKING, Final, Protocol, cast
 
 if TYPE_CHECKING:
@@ -34,6 +35,8 @@ class _ConfigTable(Protocol):
     async def upsert(self, *, where: Mapping[str, str], data: Mapping[str, Mapping[str, str]]) -> _ConfigRow: ...
 
     async def delete(self, *, where: Mapping[str, str]) -> _ConfigRow | None: ...
+
+    async def delete_many(self, *, where: Mapping[str, object]) -> int: ...
 
 
 class _ConfigDatabase(Protocol):
@@ -130,3 +133,9 @@ class ConfigRepository:
                 param_value = _decoded_json(param_value)
             result[record.param_name] = param_value
         return result
+
+    async def delete_params_older_than(self, prefix: str, before: datetime) -> int:
+        """Expire operational config records using the timestamp written by revision claims."""
+        return await self._config_table.delete_many(
+            where={"param_name": {"startswith": prefix}, "last_run_at": {"lt": before}}
+        )

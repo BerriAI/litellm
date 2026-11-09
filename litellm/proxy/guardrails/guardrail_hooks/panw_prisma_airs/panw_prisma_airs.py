@@ -12,6 +12,7 @@ import os
 import re
 from collections.abc import AsyncIterable, Mapping, Sequence
 from datetime import datetime
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypeAlias
 from urllib.parse import urlparse
 
@@ -26,6 +27,13 @@ from litellm.caching import DualCache
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
+)
+from litellm.litellm_core_utils.core_helpers import decoded_json_object
+from litellm.llms.anthropic.common_utils import (
+    anthropic_server_tool_call_params,
+    tool_calls_with_server_tool_calls,
+    with_server_tool_call_arguments,
+    write_anthropic_server_tool_calls,
 )
 from litellm.llms.base_llm.guardrail_translation.utils import (
     effective_scan_only_tool_results_for_guardrail,
@@ -137,6 +145,7 @@ class _ResponsesInputItem(LiteLLMBaseModel):
 _ResponsesInput: TypeAlias = str | tuple[_ResponsesInputItem, ...] | None
 _RESPONSES_INPUT: Final[TypeAdapter[_ResponsesInput]] = TypeAdapter(_ResponsesInput)
 _DECODED_ARGUMENTS: Final = TypeAdapter(object)
+_NO_METADATA: Final[Mapping[str, object]] = MappingProxyType({})
 
 
 class _AirsToolEvent(TypedDict):
@@ -364,10 +373,9 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                             text_parts.append(str(choice.message.content))
 
                         # Extract tool call arguments
-                        if hasattr(choice.message, "tool_calls") and choice.message.tool_calls:
-                            for tool_call in choice.message.tool_calls:
-                                if hasattr(tool_call, "function") and hasattr(tool_call.function, "arguments"):
-                                    text_parts.append(str(tool_call.function.arguments))
+                        for tool_call in tool_calls_with_server_tool_calls(choice.message):
+                            if hasattr(tool_call, "function") and hasattr(tool_call.function, "arguments"):
+                                text_parts.append(str(tool_call.function.arguments))
 
                         # Extract function call arguments (legacy)
                         if hasattr(choice.message, "function_call") and choice.message.function_call:
@@ -756,6 +764,14 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                     elif isinstance(content, list):
                         choice.message.content = self._mask_content_list(content, masked_text)
 
+                write_anthropic_server_tool_calls(
+                    choice.message,
+                    tuple(
+                        with_server_tool_call_arguments(server_tool_call, masked_text)
+                        for server_tool_call in anthropic_server_tool_call_params(choice.message)
+                    ),
+                )
+
                 # Mask tool call arguments
                 if hasattr(choice.message, "tool_calls") and choice.message.tool_calls:
                     for tool_call in choice.message.tool_calls:
@@ -888,7 +904,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             },
         )
 
-    def _prepare_metadata_from_request(self, data: dict[str, Any]) -> dict[str, object]:
+    def _prepare_metadata_from_request(self, data: Mapping[str, object]) -> dict[str, object]:
         """
         Extract and prepare metadata from request data for PANW API call.
 
@@ -902,8 +918,8 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         the profile linked to the API key (configured in Strata Cloud Manager).
         If both are provided, PANW API uses profile_id (profile_id takes precedence).
         """
-        user_metadata: Final = data.get("metadata", {}) or {}
-        requester_meta: Final = user_metadata.get("requester_metadata", {}) or {}
+        user_metadata: Final = decoded_json_object(data.get("metadata") or _NO_METADATA)
+        requester_meta: Final = user_metadata.get("requester_metadata") or _NO_METADATA
         metadata: Final[dict[str, object]] = {
             "user": data.get("user") or "litellm_user",
             "model": data.get("model") or "unknown",
@@ -911,7 +927,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
 
         # Pass through PANW API fields (check requester_metadata fallback for /v1/messages routes)
         for key in ("profile_name", "profile_id", "user_ip", "app_name", "app_user"):
-            val = user_metadata.get(key) or requester_meta.get(key)
+            val = user_metadata.get(key) or decoded_json_object(requester_meta).get(key)
             if val:
                 metadata[key] = val
 
@@ -926,7 +942,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             data.get("litellm_trace_id")
             or user_metadata.get("litellm_trace_id")
             or user_metadata.get("trace_id")
-            or requester_meta.get("litellm_trace_id")
+            or decoded_json_object(requester_meta).get("litellm_trace_id")
         )
         if trace_id:
             metadata["litellm_trace_id"] = trace_id

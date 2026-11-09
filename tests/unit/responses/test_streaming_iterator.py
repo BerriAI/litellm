@@ -25,6 +25,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import UPSTREAM_USAGE_COST, billed_usage_cost
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
+from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.responses.streaming_iterator import (
     CachedResponsesAPIStreamingIterator,
     MockResponsesAPIStreamingIterator,
@@ -413,6 +414,20 @@ async def test_complete_stream_still_ends_normally(trailer):
 
     assert seen[-1] == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
     assert logging_obj.async_failure_handler.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_event_without_a_type_reaches_the_caller_instead_of_ending_the_stream():
+    iterator: Final = _make_iterator(
+        sse_events=[_CREATED_EVENT, _sse_event({"note": "hook output without a type"})],
+        logging_obj=_failure_tracking_logging_obj(),
+        config=OpenAIResponsesAPIConfig(),
+    )
+
+    await iterator.__anext__()
+    untyped: Final = await iterator.__anext__()
+
+    assert untyped.model_extra == {"note": "hook output without a type"}
 
 
 @pytest.mark.parametrize("trailing_error", _TRAILING_ERRORS, ids=type)
@@ -2867,3 +2882,54 @@ async def test_websocket_turns_logging_survives_garbage_collection(terminal_even
     await _run_websocket_turn(logger, terminal_event)
 
     assert await _logging_tasks_left_after_garbage_collection(logger) == 1
+
+
+@pytest.mark.parametrize(
+    "output",
+    [
+        [
+            {
+                "type": "message",
+                "id": "msg_seq",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "hello world", "annotations": []}],
+            }
+        ],
+        [
+            {
+                "type": "reasoning",
+                "id": "rs_seq",
+                "summary": [{"type": "summary_text", "text": "thinking about it"}],
+            },
+            {
+                "type": "function_call",
+                "id": "fc_seq",
+                "call_id": "call_seq",
+                "name": "lookup",
+                "arguments": '{"id":1}',
+            },
+        ],
+    ],
+    ids=["message", "reasoning_and_tool"],
+)
+def test_synthetic_stream_serializes_every_event_position_from_zero(output: list[dict[str, object]]):
+    transformed: Final = ResponsesAPIResponse.model_validate(
+        {
+            "id": "resp_seq",
+            "created_at": 1741476542,
+            "status": "completed",
+            "model": "claude-sonnet-5-5",
+            "object": "response",
+            "output": output,
+        }
+    )
+
+    events: Final = streaming_module.build_synthetic_response_events(
+        transformed=transformed,
+        logging_obj=None,
+        chunk_size=5,
+    )
+
+    payloads: Final = tuple(json.loads(event.model_dump_json()) for event in events)
+    assert [payload.get("sequence_number") for payload in payloads] == list(range(len(payloads)))

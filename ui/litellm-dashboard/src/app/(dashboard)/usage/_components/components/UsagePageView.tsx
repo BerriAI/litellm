@@ -10,6 +10,7 @@ import { Download, Link2, Search, X } from "lucide-react";
 import { useQueryStates } from "nuqs";
 import type { DateRangePickerValue } from "@/components/shared/date_picker_types";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Trans, useTranslation } from "react-i18next";
 
 import { StackedUsageChart } from "@/components/shared/charts";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/shared/Alert";
@@ -23,6 +24,7 @@ import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import useIsOrgAdmin from "@/app/(dashboard)/hooks/useIsOrgAdmin";
 import { useCurrentUser } from "@/app/(dashboard)/hooks/users/useCurrentUser";
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
+import i18n from "@/i18n/i18n";
 import { toast } from "@/lib/toast";
 import { hasCapability } from "@/utils/capabilities";
 import { copyToClipboard } from "@/utils/dataUtils";
@@ -71,7 +73,7 @@ import EntityUsage, { EntityList } from "./EntityUsage/EntityUsage";
 import ModelViewToggle, { ModelViewType } from "./ModelViewToggle";
 import TopKeyView, { type TopKeyItem } from "@/components/UsagePage/components/EntityUsage/TopKeyView";
 import { getGlobalTopKeys } from "./EntityUsage/entityUsageAggregations";
-import { AriaUsageComposer, AriaUsageTrigger } from "@/components/liteadmin/LiteAdmin";
+import { AriaUsageTrigger } from "@/components/liteadmin/LiteAdmin";
 import { allowedUsageOptions, UsageViewSelect } from "./UsageViewSelect/UsageViewSelect";
 import UserRecordLink from "./UserRecordLink";
 import {
@@ -105,6 +107,8 @@ import { useTagSummary } from "@/app/(dashboard)/hooks/tags/useTagSummary";
 import { Panel } from "./overview/Primitives";
 import UsageOverview from "./overview/UsageOverview";
 
+const GATEWAY_ENDPOINT_COLORS = ["#2b3fd6", "#ef4444"];
+
 interface UsagePageProps {
   teams: Team[];
   organizations: Organization[];
@@ -113,6 +117,7 @@ interface UsagePageProps {
 }
 
 const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoading = false, defaultTimeRange }) => {
+  const { t } = useTranslation();
   const { accessToken, userRole, userId: userID, premiumUser, isViewOnly, isLoading: authLoading } = useAuthorized();
   const [gatewayActivityData, setGatewayActivityData] = useState<FetchedGatewayActivity | null>(null);
 
@@ -194,8 +199,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
     if (!accessSettled) return;
     const cleanup = cleanUsageUrl(urlParams, { allowedViews, isAdmin, canViewTeamClients });
     if (!cleanup) return;
-    if (cleanup.deniedAccess)
-      toast.warning("You don't have access to that usage view", { id: "usage-url-access-denied" });
+    if (cleanup.deniedAccess) toast.warning(i18n.t("usage.pageView.accessDenied"), { id: "usage-url-access-denied" });
     void setUrlParams(cleanup.patch);
   }, [accessSettled, urlParams, allowedViews, isAdmin, canViewTeamClients, setUrlParams]);
 
@@ -482,16 +486,18 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
               onValueChange={handleDateChange}
               presetShortLabel={presetShortLabel}
             />
-            <Button variant="outline" onClick={() => void copyToClipboard(window.location.href, "Link copied")}>
+            <Button
+              variant="outline"
+              onClick={() => void copyToClipboard(window.location.href, t("usage.pageView.linkCopied"))}
+            >
               <Link2 />
-              Copy Share Link
+              {t("usage.pageView.copyShareLink")}
             </Button>
           </div>
         </div>
       </header>
-      <AriaUsageComposer />
       {aggregatedFailed && (
-        <ErrorState title="Failed to load spend data" message={aggregatedError} onRetry={reloadAggregated} />
+        <ErrorState title={t("usage.pageView.spendLoadFailed")} message={aggregatedError} onRetry={reloadAggregated} />
       )}
       <div>
         <div>
@@ -506,26 +512,26 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <TabsList variant="line">
                     <TabsTrigger value="cost" className="flex-none px-3">
-                      Overview
+                      {t("usage.pageView.tabs.overview")}
                     </TabsTrigger>
                     <TabsTrigger value="models" className="flex-none px-3">
-                      Model Activity
+                      {t("usage.pageView.tabs.modelActivity")}
                     </TabsTrigger>
                     <TabsTrigger value="keys" className="flex-none px-3">
-                      Key Activity
+                      {t("usage.pageView.tabs.keyActivity")}
                     </TabsTrigger>
                     <TabsTrigger value="users" className="flex-none px-3">
-                      User Activity
+                      {t("usage.pageView.tabs.userActivity")}
                     </TabsTrigger>
                     <TabsTrigger value="mcp" className="flex-none px-3">
-                      MCP Server Activity
+                      {t("usage.pageView.tabs.mcpServerActivity")}
                     </TabsTrigger>
                     <TabsTrigger value="endpoints" className="flex-none px-3">
-                      Endpoint Activity
+                      {t("usage.pageView.tabs.endpointActivity")}
                     </TabsTrigger>
                     {isAdmin && (
                       <TabsTrigger value="errors" className="flex-none px-3">
-                        Errors
+                        {t("usage.pageView.tabs.errors")}
                       </TabsTrigger>
                     )}
                   </TabsList>
@@ -533,7 +539,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
                     <AriaUsageTrigger />
                     <Button variant="outline" size="sm" onClick={() => setIsGlobalExportModalOpen(true)}>
                       <Download />
-                      Export Data
+                      {t("usage.pageView.exportData")}
                     </Button>
                   </div>
                 </div>
@@ -567,18 +573,21 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
                       gatewayActivity && gatewayActivity.by_route.length > 0 ? (
                         <Panel
                           testId="gateway-requests-by-endpoint"
-                          title="Gateway Requests by Endpoint"
-                          subtitle="Successful and failed requests per route"
+                          title={t("usage.pageView.gatewayByEndpoint.title")}
+                          subtitle={t("usage.pageView.gatewayByEndpoint.subtitle")}
                           bodyClassName="px-2 pt-4"
                         >
                           <StackedUsageChart
                             data={gatewayRequestsByRoute.map((row) => ({
                               route: row.route,
-                              Successful: row.successful_requests,
-                              Failed: row.failed_requests,
+                              [t("usage.pageView.gatewayByEndpoint.successful")]: row.successful_requests,
+                              [t("usage.pageView.gatewayByEndpoint.failed")]: row.failed_requests,
                             }))}
-                            series={["Successful", "Failed"]}
-                            colors={["#2b3fd6", "#ef4444"]}
+                            series={[
+                              t("usage.pageView.gatewayByEndpoint.successful"),
+                              t("usage.pageView.gatewayByEndpoint.failed"),
+                            ]}
+                            colors={GATEWAY_ENDPOINT_COLORS}
                             xKey="route"
                             format={(value) => value.toLocaleString()}
                             className="h-64"
@@ -611,8 +620,8 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
                         <Search className="size-4 text-muted-foreground" />
                       </InputGroupAddon>
                       <InputGroupInput
-                        aria-label="Search models"
-                        placeholder="Search by model name"
+                        aria-label={t("usage.pageView.modelSearch.label")}
+                        placeholder={t("usage.pageView.modelSearch.placeholder")}
                         value={modelQuery}
                         onChange={(event) => setModelQuery(event.target.value)}
                       />
@@ -620,7 +629,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
                         <InputGroupAddon align="inline-end">
                           <InputGroupButton
                             size="icon-xs"
-                            aria-label="Clear model search"
+                            aria-label={t("usage.pageView.modelSearch.clear")}
                             onClick={() => setModelQuery("")}
                           >
                             <X />
@@ -634,7 +643,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
                   Object.keys(modelMetrics).length > 0 &&
                   Object.keys(filteredModelMetrics).length === 0 ? (
                     <p className="rounded-lg border p-6 text-center text-sm text-muted-foreground">
-                      No models match &quot;{trimmedModelQuery}&quot; in this date range
+                      {t("usage.pageView.modelSearch.noMatch", { query: trimmedModelQuery })}
                     </p>
                   ) : (
                     <ActivityMetrics
@@ -733,17 +742,20 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
             <>
               {showCredentialBanner && (
                 <Alert variant="info" className="mb-5">
-                  <AlertTitle>Reusable credentials are automatically tracked as tags</AlertTitle>
+                  <AlertTitle>{t("usage.pageView.credentialBanner.title")}</AlertTitle>
                   <AlertDescription className="text-inherit">
-                    When a reusable credential is used, it will appear as a tag prefixed with{" "}
-                    <code className="rounded bg-black/5 px-1 py-0.5 font-mono text-xs">Credential: </code>
-                    in this view.
+                    <Trans
+                      i18nKey="usage.pageView.credentialBanner.description"
+                      components={{
+                        prefix: <code className="rounded bg-black/5 px-1 py-0.5 font-mono text-xs">Credential: </code>,
+                      }}
+                    />
                   </AlertDescription>
                   <AlertAction>
                     <Button
                       variant="ghost"
                       size="icon-xs"
-                      aria-label="Close"
+                      aria-label={t("usage.pageView.credentialBanner.close")}
                       onClick={() => setShowCredentialBanner(false)}
                     >
                       <X />
@@ -812,7 +824,9 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
           scopeError={clientScope.error}
           teams={usageView === "my-usage" ? [] : clientScope.administeredTeams}
           members={clientScope.members}
-          defaultScopeLabel={isAdmin ? "All users" : "My usage"}
+          defaultScopeLabel={
+            isAdmin ? t("usage.pageView.clientScope.allUsers") : t("usage.pageView.clientScope.myUsage")
+          }
           onTeamChange={(teamId) => void setUrlParams({ client_team: teamId, client_user: "" }, { scroll: false })}
           onUserChange={(userId) => void setUrlParams({ client_user: userId ?? "" }, { scroll: false })}
           onClose={() => void setUrlParams(clientPanelPatch(null), { scroll: false })}
@@ -850,7 +864,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
         }
         dateRange={dateValue}
         selectedFilters={[]}
-        customTitle="Export Usage Data"
+        customTitle={t("usage.pageView.exportTitle")}
       />
     </div>
   );

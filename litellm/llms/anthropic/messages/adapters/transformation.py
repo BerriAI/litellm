@@ -2,13 +2,14 @@ import copy
 import hashlib
 import json
 from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
+from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, TypeVar, cast
 
 from pydantic import JsonValue, TypeAdapter
 
 import litellm
-from litellm.litellm_core_utils.core_helpers import normalize_drop_params
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_items, normalize_drop_params
 from litellm.litellm_core_utils.hidden_params import get_hidden_params
 from litellm.llms.anthropic.messages.convertible_blocks import tool_result_text_part
 from litellm.llms.anthropic.messages.utils import (
@@ -44,6 +45,25 @@ def _thought_signature(provider_specific_fields: object) -> str | None:
         return None
     signature: Final = fields.get("thought_signature")
     return signature if isinstance(signature, str) else None
+
+
+def _object_sequence(value: object) -> Sequence[object] | None:
+    return value if isinstance(value, (list, tuple)) else None
+
+
+def _server_tool_blocks(message: object) -> tuple[Mapping[str, object], ...]:
+    server_tool_calls: Final = anthropic_server_tool_call_params(message)
+    if not server_tool_calls:
+        return ()
+    fields: Final = _as_string_mapping(_optional_attr(message, "provider_specific_fields")) or {}
+    return tuple(
+        convert_to_anthropic_tool_invoke(
+            server_tool_calls,
+            web_search_results=_object_sequence(fields.get("web_search_results")),
+            tool_results=_object_sequence(fields.get("tool_results")),
+            server_tool_call_ids=frozenset(tool_call["id"] for tool_call in server_tool_calls),
+        )
+    )
 
 
 def _compaction_blocks(provider_specific_fields: object) -> tuple[Mapping[str, object], ...]:
@@ -123,20 +143,31 @@ def create_tool_name_mapping(
 from openai.types.chat.chat_completion_chunk import Choice as OpenAIStreamingChoice
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
-    anthropic_image_source_to_openai_url,
     anthropic_inline_document,
-    parse_tool_call_arguments,
-    reasoning_content_from_thinking_blocks,
-    with_prompt_cache_breakpoint,
 )
 from litellm.litellm_core_utils.prompt_templates.factory import (
     THOUGHT_SIGNATURE_SEPARATOR,
+    convert_to_anthropic_tool_invoke,
+)
+from litellm.litellm_core_utils.prompt_templates.prompt_cache_breakpoint_utils import (
+    with_prompt_cache_breakpoint,
+)
+from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
+    reasoning_content_from_thinking_blocks,
+    thinking_blocks_with_encrypted_reasoning,
+)
+from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import (
+    parse_tool_call_arguments,
+)
+from litellm.litellm_core_utils.prompt_templates.tpm_media_utils import (
+    anthropic_image_source_to_openai_url,
 )
 from litellm.litellm_core_utils.reasoning_effort_utils import (
     reasoning_effort_from_thinking,
     reasoning_effort_from_thinking_silently,
 )
 from litellm.llms.anthropic.common_utils import (
+    anthropic_server_tool_call_params,
     eager_input_streaming_flag,
     is_empty_unsigned_thinking_block,
     normalize_anthropic_tool_use_id,
@@ -229,6 +260,74 @@ def target_supports_mid_conversation_system(model: str | None, custom_llm_provid
     return supports_mid_conversation_system(model=model, custom_llm_provider=custom_llm_provider)
 
 
+@dataclass(frozen=True, slots=True)
+class ChatRouteInputs:
+    tools: Sequence[Mapping[str, object]] | None = None
+    reasoning_effort: str | Mapping[str, object] | None = None
+    api_base: str | None = None
+    thinking: Mapping[str, object] | None = None
+    reasoning_summary: object | None = None
+
+
+_NO_ROUTE_INPUTS: Final = ChatRouteInputs()
+
+
+def _inferred_provider(model: str) -> str | None:
+    try:
+        return litellm.utils.get_llm_provider(model=model)[1]
+    except Exception:
+        return None
+
+
+def openai_thinking_routes_to_responses(
+    model: str | None,
+    custom_llm_provider: str | None,
+    thinking: Mapping[str, object] | None,
+) -> bool:
+    if not model or thinking is None or thinking.get("type") != "enabled":
+        return False
+    provider: Final = custom_llm_provider if custom_llm_provider is not None else _inferred_provider(model)
+    if provider != "openai":
+        return False
+    try:
+        model_info: Final = litellm.get_model_info(model=model, custom_llm_provider=provider)
+    except Exception:
+        return True
+    return model_info.get("supports_reasoning") is not False
+
+
+def _keeps_encrypted_reasoning_for_responses(
+    model: str | None,
+    custom_llm_provider: str | None,
+    deployment_model_info: Mapping[str, object] | None,
+    route: ChatRouteInputs,
+) -> bool:
+    from litellm.responses.bridge_check import chat_completion_ends_in_responses_api
+
+    return openai_thinking_routes_to_responses(
+        model, custom_llm_provider, route.thinking
+    ) or chat_completion_ends_in_responses_api(
+        model,
+        custom_llm_provider,
+        deployment_model_info,
+        tools=route.tools,
+        reasoning_effort=route.reasoning_effort,
+        reasoning_summary=route.reasoning_summary,
+        api_base=route.api_base,
+    )
+
+
+def _anthropic_thinking_blocks(source: object) -> tuple[Mapping[str, object], ...]:
+    return thinking_blocks_with_encrypted_reasoning(
+        getattr(source, "thinking_blocks", None),
+        getattr(source, "reasoning_items", None),
+    )
+
+
+def _streamed_thinking_blocks(delta: object) -> tuple[Mapping[str, object], ...]:
+    return tuple(block for item in attribute_items(delta, "thinking_blocks") if (block := as_str_mapping(item)))
+
+
 def _chat_tool_param(function_chunk: ChatCompletionToolParamFunctionChunk, tool: object) -> ChatCompletionToolParam:
     eager_input_streaming: Final = eager_input_streaming_flag(tool)
     if eager_input_streaming is None:
@@ -264,6 +363,8 @@ class AnthropicAdapter:
         *,
         custom_llm_provider: str | None = None,
         api_base: str | None = None,
+        deployment_model_info: Mapping[str, object] | None = None,
+        reasoning_summary: object | None = None,
         drop_params: bool = True,
     ) -> tuple[ChatCompletionRequest | None, dict[str, str]]:
         """
@@ -299,6 +400,8 @@ class AnthropicAdapter:
             anthropic_message_request=request_body,
             custom_llm_provider=custom_llm_provider,
             api_base=api_base,
+            deployment_model_info=deployment_model_info,
+            reasoning_summary=reasoning_summary,
             drop_params=drop_params,
             report_reasoning_drops=True,
         )
@@ -380,8 +483,9 @@ _CLAUDE_OVER_REASONING_EFFORT_PROVIDERS: Final = frozenset({LlmProviders.KYMA.va
 
 
 class LiteLLMAnthropicMessagesAdapter:
-    def __init__(self):
-        pass
+    def __init__(self, *, keep_cache_control: bool = False, keep_tool_errors: bool = False) -> None:
+        self.keep_cache_control: Final = keep_cache_control
+        self.keep_tool_errors: Final = keep_tool_errors
 
     ### FOR [BETA] `/v1/messages` endpoint support
 
@@ -437,7 +541,7 @@ class LiteLLMAnthropicMessagesAdapter:
         cache_control: Final = (
             source.get("cache_control") if isinstance(source, dict) else getattr(source, "cache_control", None)
         )
-        if cache_control and model and self.target_consumes_cache_control(model):
+        if cache_control and (self.keep_cache_control or (model and self.target_consumes_cache_control(model))):
             # TypedDict objects support dict operations at runtime
             # Use type ignore consistent with codebase pattern (see anthropic/chat/transformation.py:432)
             if isinstance(target, dict):
@@ -494,10 +598,16 @@ class LiteLLMAnthropicMessagesAdapter:
         model: str | None = None,
         *,
         custom_llm_provider: str | None = None,
+        deployment_model_info: Mapping[str, object] | None = None,
         preserve_midturn_system: bool = False,
+        route: ChatRouteInputs = _NO_ROUTE_INPUTS,
     ) -> list[AllMessageValues]:
         new_messages: Final[list[AllMessageValues]] = []
-        replayable_messages: Final = strip_encrypted_reasoning_blocks_from_anthropic_messages(messages)
+        replayable_messages: Final = (
+            messages
+            if _keeps_encrypted_reasoning_for_responses(model, custom_llm_provider, deployment_model_info, route)
+            else strip_encrypted_reasoning_blocks_from_anthropic_messages(messages)
+        )
         leading_count: Final = next(
             (i for i, m in enumerate(replayable_messages) if not is_system_role_message(m)),
             len(replayable_messages),
@@ -556,11 +666,7 @@ class LiteLLMAnthropicMessagesAdapter:
                                 self._add_cache_control_if_applicable(content, doc_obj, model)
                                 new_user_content_list.append(doc_obj)
                         elif content.get("type") == "tool_result":
-                            tool_result = ChatCompletionToolMessage(
-                                role="tool",
-                                tool_call_id=content.get("tool_use_id", ""),
-                                content=self._tool_result_content(content.get("content")),
-                            )
+                            tool_result = self._tool_message(content)
                             self._add_cache_control_if_applicable(content, tool_result, model)
                             tool_message_list.append(tool_result)
 
@@ -1281,6 +1387,8 @@ class LiteLLMAnthropicMessagesAdapter:
         *,
         custom_llm_provider: str | None = None,
         api_base: str | None = None,
+        deployment_model_info: Mapping[str, object] | None = None,
+        reasoning_summary: object | None = None,
         preserve_midturn_system: bool = False,
         drop_params: bool = True,
         report_reasoning_drops: bool = False,
@@ -1294,26 +1402,15 @@ class LiteLLMAnthropicMessagesAdapter:
               for tools that exceeded OpenAI's 64-char limit
         """
         # Debug: Processing Anthropic message request
-        new_messages: list[AllMessageValues] = []
         tool_name_mapping: dict[str, str] = {}
 
-        ## CONVERT ANTHROPIC MESSAGES TO OPENAI
         messages_list: Final[list[AllAnthropicPassThroughMessageValues]] = cast(
             list[AllAnthropicPassThroughMessageValues],
             anthropic_message_request["messages"],
         )
-        new_messages = self.translate_anthropic_messages_to_openai(
-            messages=messages_list,
-            model=anthropic_message_request.get("model"),
-            custom_llm_provider=custom_llm_provider,
-            preserve_midturn_system=preserve_midturn_system,
-        )
-        ## ADD SYSTEM MESSAGE TO MESSAGES
-        self._add_system_message_to_messages(new_messages, anthropic_message_request)
-
         new_kwargs: Final[ChatCompletionRequest] = {
             "model": anthropic_message_request["model"],
-            "messages": new_messages,
+            "messages": [],
         }
         ## CONVERT METADATA (user_id + litellm metadata)
         self._translate_metadata_to_openai(
@@ -1340,6 +1437,24 @@ class LiteLLMAnthropicMessagesAdapter:
             drop_params=drop_params,
             report_reasoning_drops=report_reasoning_drops,
         )
+        ## CONVERT ANTHROPIC MESSAGES TO OPENAI, after tools and thinking pick the route
+        new_messages: Final = self.translate_anthropic_messages_to_openai(
+            messages=messages_list,
+            model=anthropic_message_request.get("model"),
+            custom_llm_provider=custom_llm_provider,
+            deployment_model_info=deployment_model_info,
+            preserve_midturn_system=preserve_midturn_system,
+            route=ChatRouteInputs(
+                tools=new_kwargs.get("tools"),
+                reasoning_effort=new_kwargs.get("reasoning_effort"),
+                api_base=api_base,
+                thinking=anthropic_message_request.get("thinking"),
+                reasoning_summary=reasoning_summary,
+            ),
+        )
+        ## ADD SYSTEM MESSAGE TO MESSAGES
+        self._add_system_message_to_messages(new_messages, anthropic_message_request)
+        new_kwargs["messages"] = new_messages
         ## CONVERT STOP_SEQUENCES
         self._translate_stop_sequences_to_openai(
             anthropic_message_request=anthropic_message_request,
@@ -1370,6 +1485,15 @@ class LiteLLMAnthropicMessagesAdapter:
         if not isinstance(image_source, dict):
             return None
         return anthropic_image_source_to_openai_url(image_source)
+
+    def _tool_message(self, block: object) -> ChatCompletionToolMessage:
+        fields: Final = as_str_mapping(block) or {}
+        is_error: Final = fields.get("is_error")
+        tool_call_id: Final = tool_use_id if isinstance(tool_use_id := fields.get("tool_use_id"), str) else ""
+        content: Final = self._tool_result_content(fields.get("content"))
+        if self.keep_tool_errors and isinstance(is_error, bool):
+            return ChatCompletionToolMessage(role="tool", tool_call_id=tool_call_id, content=content, is_error=is_error)
+        return ChatCompletionToolMessage(role="tool", tool_call_id=tool_call_id, content=content)
 
     def _tool_result_content(self, raw_content: object) -> ToolResultContent:
         if isinstance(raw_content, str):
@@ -1435,9 +1559,9 @@ class LiteLLMAnthropicMessagesAdapter:
             for choice in choices
         ):
             new_content.extend(dict(_COMPACTION_BLOCK.validate_python(block)) for block in compaction_blocks)
-            # Handle thinking blocks first
-            if hasattr(choice.message, "thinking_blocks") and choice.message.thinking_blocks:
-                for thinking_block in choice.message.thinking_blocks:
+            signed_thinking_blocks = _anthropic_thinking_blocks(choice.message)
+            if signed_thinking_blocks:
+                for thinking_block in signed_thinking_blocks:
                     if thinking_block.get("type") == "thinking":
                         if is_empty_unsigned_thinking_block(thinking_block):
                             continue
@@ -1468,6 +1592,7 @@ class LiteLLMAnthropicMessagesAdapter:
                     ).model_dump()
                 )
 
+            new_content.extend(dict(block) for block in _server_tool_blocks(choice.message))
             # Handle text content
             if choice.message.content is not None and (choice.message.content != "" or not compaction_blocks):
                 new_content.append(
@@ -1748,24 +1873,24 @@ class LiteLLMAnthropicMessagesAdapter:
                 choice.delta
             ) is not None:
                 return "text", TextBlock(type="text", text="")
-            elif isinstance(choice, StreamingChoices) and hasattr(choice.delta, "thinking_blocks"):
-                thinking_blocks = choice.delta.thinking_blocks or []
-                if len(thinking_blocks) > 0:
-                    thinking_block = thinking_blocks[0]
-                    if thinking_block["type"] == "redacted_thinking":
-                        return "redacted_thinking", ChatCompletionRedactedThinkingBlock(
-                            type="redacted_thinking", data=thinking_block.get("data") or ""
-                        )
-                    if thinking_block["type"] == "thinking":
-                        thinking = thinking_block.get("thinking") or ""
-                        signature = thinking_block.get("signature") or ""
+            elif isinstance(choice, StreamingChoices) and (thinking_blocks := _streamed_thinking_blocks(choice.delta)):
+                thinking_block = thinking_blocks[0]
+                if thinking_block["type"] == "redacted_thinking":
+                    redacted_data = thinking_block.get("data")
+                    return "redacted_thinking", ChatCompletionRedactedThinkingBlock(
+                        type="redacted_thinking",
+                        data=redacted_data if isinstance(redacted_data, str) else "",
+                    )
+                if thinking_block["type"] == "thinking":
+                    thinking = thinking_block.get("thinking") or ""
+                    signature = thinking_block.get("signature") or ""
 
-                        assert isinstance(thinking, str)
-                        assert isinstance(signature, str)
+                    assert isinstance(thinking, str)
+                    assert isinstance(signature, str)
 
-                        return "thinking", ChatCompletionThinkingBlock(
-                            type="thinking", thinking=thinking if signature else "", signature=signature
-                        )
+                    return "thinking", ChatCompletionThinkingBlock(
+                        type="thinking", thinking=thinking if signature else "", signature=signature
+                    )
             # OpenAI-compatible reasoning backends (e.g. vLLM/SGLang reasoning
             # parsers) populate ``reasoning_content`` without ``thinking_blocks``.
             # ``Delta`` deletes the ``thinking_blocks`` attribute when unset, so the
@@ -1798,19 +1923,17 @@ class LiteLLMAnthropicMessagesAdapter:
                 for tool in choice.delta.tool_calls:
                     if tool.function is not None and tool.function.arguments is not None:
                         partial_json = (partial_json or "") + tool.function.arguments
-            elif isinstance(choice, StreamingChoices) and hasattr(choice.delta, "thinking_blocks"):
-                thinking_blocks = choice.delta.thinking_blocks or []
-                if len(thinking_blocks) > 0:
-                    for thinking_block in thinking_blocks:
-                        if thinking_block["type"] == "thinking":
-                            thinking = thinking_block.get("thinking") or ""
-                            signature = thinking_block.get("signature") or ""
+            elif isinstance(choice, StreamingChoices) and (thinking_blocks := _streamed_thinking_blocks(choice.delta)):
+                for thinking_block in thinking_blocks:
+                    if thinking_block["type"] == "thinking":
+                        thinking = thinking_block.get("thinking") or ""
+                        signature = thinking_block.get("signature") or ""
 
-                            assert isinstance(thinking, str)
-                            assert isinstance(signature, str)
+                        assert isinstance(thinking, str)
+                        assert isinstance(signature, str)
 
-                            reasoning_content += thinking
-                            reasoning_signature += signature
+                        reasoning_content += thinking
+                        reasoning_signature += signature
             # Handle reasoning_content when thinking_blocks is not present
             # This handles providers like OpenRouter that return reasoning_content
             elif isinstance(choice, StreamingChoices) and hasattr(choice.delta, "reasoning_content"):
