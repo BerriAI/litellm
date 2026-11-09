@@ -13775,6 +13775,7 @@ async def _audio_chunks_or_error(chunks: AsyncIterator[bytes]) -> AsyncGenerator
 async def _audio_speech_chunk_generator(
     _response: HttpxBinaryResponseContent,
     on_upstream_error: Callable[[Exception], Awaitable[None]],
+    on_complete: Callable[[], Awaitable[None]],
 ) -> AsyncGenerator[bytes, None]:
     upstream_still_streaming: Final = not _response.response.is_stream_consumed
     _generator: Final = await _response.aiter_bytes(
@@ -13787,6 +13788,8 @@ async def _audio_speech_chunk_generator(
                     await on_upstream_error(chunk)
                     raise AudioSpeechStreamCutOff(f"The provider stopped sending audio mid-clip: {chunk}")
                 yield chunk
+        with anyio.CancelScope(shield=True):
+            await on_complete()
     finally:
         await _close_audio_speech_response(_response)
 
@@ -13933,6 +13936,7 @@ async def audio_speech(
                         user_api_key_dict=user_api_key_dict,
                         response_cost=float(hidden_params.get("response_cost") or 0.0),
                     ),
+                    on_complete=partial(proxy_logging_obj.arelease_max_parallel_requests, user_api_key_dict),
                 ),
                 media_type=media_type,
                 headers=custom_headers,

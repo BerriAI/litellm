@@ -600,8 +600,7 @@ def test_a_key_max_parallel_requests_slot_is_freed_after_each_completed_clip(
     with wire_server(_audio_peer()) as wire, gateway.scenario() as scenario:
         model: Final = _deployment(scenario, wire, PROVIDERS["openai"])
         key: Final = scenario.key(max_parallel_requests=1)
-        for _ in range(3):
-            eventually(lambda: _admitted(gateway, model, key), lambda status: status == 200)
+        assert [_admitted(gateway, model, key) for _ in range(3)] == [200, 200, 200]
         assert len(wire.drain()) == 3
 
 

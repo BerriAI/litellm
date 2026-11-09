@@ -65,6 +65,7 @@ def patched_speech(monkeypatch, request):
             post_call_failure_hook=AsyncMock(),
             post_call_response_headers_hook=AsyncMock(return_value={}),
             update_request_status=AsyncMock(),
+            arelease_max_parallel_requests=AsyncMock(),
         ),
     )
 
@@ -454,7 +455,9 @@ async def test_audio_speech_chunk_generator_forwards_an_unread_upstream_stream()
         httpx.Response(status_code=200, headers={"content-type": "audio/mpeg"}, stream=stream)
     )
 
-    chunks: Final = proxy_server._audio_speech_chunk_generator(response, on_upstream_error=AsyncMock())
+    chunks: Final = proxy_server._audio_speech_chunk_generator(
+        response, on_upstream_error=AsyncMock(), on_complete=AsyncMock()
+    )
 
     assert await anext(chunks) == first
     assert produced == [first]
@@ -515,6 +518,7 @@ def _route_speech_to(
             post_call_failure_hook=failure_hook,
             post_call_response_headers_hook=response_headers_hook or AsyncMock(return_value={}),
             update_request_status=AsyncMock(),
+            arelease_max_parallel_requests=AsyncMock(),
         ),
     )
 
@@ -551,7 +555,9 @@ async def test_audio_speech_releases_its_upstream_when_the_client_walks_away():
 
     await _serve_until_disconnect(
         StreamingResponse(
-            proxy_server._audio_speech_chunk_generator(response, on_upstream_error=AsyncMock()),
+            proxy_server._audio_speech_chunk_generator(
+                response, on_upstream_error=AsyncMock(), on_complete=AsyncMock()
+            ),
             media_type="audio/mpeg",
             background=BackgroundTask(proxy_server._close_audio_speech_response, response),
         )
@@ -561,6 +567,35 @@ async def test_audio_speech_releases_its_upstream_when_the_client_walks_away():
     await asyncio.sleep(0.1)
 
     assert stream.closed is True
+
+
+@pytest.mark.asyncio
+async def test_audio_speech_route_frees_the_key_slot_before_the_caller_sees_the_clip_end(monkeypatch):
+    """A caller may send its next clip to another instance the moment this one ends, so the key's
+    max_parallel_requests slot has to be free by then, not whenever a logging task gets to it."""
+    events: Final[list[str]] = []
+    _route_speech_to(monkeypatch, _audio_response(_RecordingAudioStream([b"a" * AUDIO_SPEECH_CHUNK_SIZE], [])))
+    release: Final = proxy_server.proxy_logging_obj.arelease_max_parallel_requests
+    release.side_effect = lambda _key: events.append("slot released")
+    caller: Final = UserAPIKeyAuth(api_key="sk-test", max_parallel_requests=1)
+
+    response: Final = await proxy_server.audio_speech(
+        request=_speech_request({"model": "tts-1", "input": "Hi", "voice": "alloy", "stream": True}),
+        fastapi_response=Response(),
+        user_api_key_dict=caller,
+    )
+
+    async def _send(message):
+        if message["type"] == "http.response.body" and not message.get("more_body", False):
+            events.append("clip end sent")
+
+    async def _receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    await response({"type": "http", "asgi": {"spec_version": "2.4"}}, _receive, _send)
+
+    assert events == ["slot released", "clip end sent"]
+    release.assert_awaited_once_with(caller)
 
 
 @pytest.mark.asyncio
