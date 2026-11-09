@@ -98,6 +98,13 @@ def test_adaptive_thinking_detected_for_fable_5_1(local_model_cost_map, model):
 
 FABLE_5_2_VARIANTS = (
     "claude-fable-5-2",
+    "anthropic.claude-fable-5-2",
+    "global.anthropic.claude-fable-5-2",
+    "us.anthropic.claude-fable-5-2",
+    "eu.anthropic.claude-fable-5-2",
+    "us-gov.anthropic.claude-fable-5-2",
+    "bedrock/us-gov-west-1/anthropic.claude-fable-5-2",
+    "bedrock/us-gov-east-1/anthropic.claude-fable-5-2",
     "vertex_ai/claude-fable-5-2",
     "vertex_ai/claude-fable-5-2@default",
     "bedrock/claude_platform/claude-fable-5-2",
@@ -118,6 +125,11 @@ def test_fable_5_2_present_in_bundled_backup() -> None:
         "claude-fable-5-2",
         "anthropic/claude-fable-5-2",
         "claude-fable-latest",
+        "anthropic.claude-fable-5-2",
+        "bedrock/us.anthropic.claude-fable-5-2",
+        "bedrock/invoke/eu.anthropic.claude-fable-5-2",
+        "bedrock/global.anthropic.claude-fable-5-2",
+        "bedrock/claude-fable-latest",
         "vertex_ai/claude-fable-5-2",
         "vertex_ai/claude-fable-5-2@default",
         "bedrock/claude_platform/claude-fable-5-2",
@@ -127,6 +139,10 @@ def test_adaptive_thinking_detected_for_fable_5_2(local_model_cost_map, model: s
     from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
     assert AnthropicModelInfo.is_adaptive_thinking_model(model, "anthropic") is True
+
+
+def test_fable_5_2_registered_for_bedrock_converse() -> None:
+    assert "anthropic.claude-fable-5-2" in BEDROCK_CONVERSE_MODELS
 
 
 def test_fable_5_2_fast_mode_doubles_every_token_price_on_the_anthropic_api(local_model_cost_map) -> None:
