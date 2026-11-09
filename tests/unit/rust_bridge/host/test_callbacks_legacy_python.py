@@ -101,6 +101,22 @@ def _kwargs_with_a_budget_reservation(reservation: dict) -> dict[str, object]:
     return {**_OCR_KWARGS, "metadata": {"user_api_key_budget_reservation": reservation}}
 
 
+def test_a_deferred_success_waits_for_the_proxy_release() -> None:
+    logger: Final = _supplied_logger()
+    released: Final[list[str]] = []
+    start: Final = datetime.datetime.now()
+    end: Final = start + datetime.timedelta(seconds=1)
+
+    legacy.defer_success(logger, lambda: released.append("released"), "response", start, end)
+
+    assert logger.deferred_success_result == ("response", start, end)
+    assert released == []
+    release: Final = logger.enqueue_deferred_logging
+    assert release is not None
+    release()
+    assert released == ["released"]
+
+
 def test_setup_claims_the_budget_reservation_for_an_async_call() -> None:
     reservation: Final = _budget_reservation()
 
