@@ -624,7 +624,8 @@ class TestContentFilterGuardrail:
         """
         Regression: the masked text held back for cross-chunk patterns was only released
         at finish_reason, so it reached the client after the tool call chunk and agent
-        clients dropped it. The held-back text must now arrive, masked, before the tool call.
+        clients dropped it. All text must now arrive, masked, before the tool call, and
+        the finish chunk last.
         """
         from litellm.types.utils import (
             ChatCompletionDeltaToolCall,
@@ -675,7 +676,7 @@ class TestContentFilterGuardrail:
                 choices=[StreamingChoices(delta=tool_delta, index=0)],
                 model="gpt-4",
             )
-            for i, content in enumerate(("Found it, ssn 123-45", "-6789 on file")):
+            for i, content in enumerate((" Found it, ssn 123-45", "-6789 on file")):
                 yield ModelResponseStream(
                     id=f"after{i}",
                     choices=[StreamingChoices(delta=Delta(content=content), index=0)],
@@ -699,15 +700,86 @@ class TestContentFilterGuardrail:
                 events.append(("text", delta.content))
             if delta.tool_calls or delta.function_call:
                 events.append(("tool", ""))
+            if chunk.choices[0].finish_reason:
+                events.append(("finish", ""))
 
-        tool_positions: Final = [i for i, (kind, _) in enumerate(events) if kind == "tool"]
-        assert len(tool_positions) == 1
-        text_before: Final = "".join(text for _, text in events[: tool_positions[0]])
-        text_after: Final = "".join(text for _, text in events[tool_positions[0] + 1 :])
-        assert text_before == "I will look that up for you right now. Write to [EMAIL_REDACTED]"
-        assert text_after == "Found it, ssn [US_SSN_REDACTED] on file"
+        assert [kind for kind, _ in events if kind != "text"] == ["tool", "finish"]
+        tool_position: Final = events.index(("tool", ""))
+        text_before: Final = "".join(text for _, text in events[:tool_position])
+        assert text_before == (
+            "I will look that up for you right now. Write to [EMAIL_REDACTED] Found it, ssn [US_SSN_REDACTED] on file"
+        )
+        assert all(kind != "text" for kind, _ in events[tool_position:])
         entry: Final = metadata["standard_logging_guardrail_information"][0]
         assert entry.get("masked_entity_count") == {"email": 1, "us_ssn": 1}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("tool_field", ["tool_calls", "function_call"])
+    @pytest.mark.parametrize("action", [ContentFilterAction.MASK, ContentFilterAction.BLOCK])
+    async def test_streaming_hook_matches_a_value_split_around_a_tool_call(
+        self, tool_field: Literal["tool_calls", "function_call"], action: ContentFilterAction
+    ) -> None:
+        """
+        A tool call chunk between two halves of a value must not split the scan, so the
+        value is still masked or blocked as one.
+        """
+        from litellm.types.utils import (
+            ChatCompletionDeltaToolCall,
+            Delta,
+            Function,
+            FunctionCall,
+            ModelResponseStream,
+            StreamingChoices,
+        )
+
+        tool_delta: Final = (
+            Delta(
+                tool_calls=[
+                    ChatCompletionDeltaToolCall(
+                        id="call_1", type="function", function=Function(name="lookup", arguments="{}"), index=0
+                    )
+                ]
+            )
+            if tool_field == "tool_calls"
+            else Delta(function_call=FunctionCall(name="lookup", arguments="{}"))
+        )
+        guardrail: Final = ContentFilterGuardrail(
+            guardrail_name="test-streaming-split-around-tool-call",
+            patterns=[ContentFilterPattern(pattern_type="prebuilt", pattern_name="us_ssn", action=action)],
+            event_hook=GuardrailEventHooks.post_call,
+        )
+
+        async def mock_stream() -> AsyncIterator[ModelResponseStream]:
+            yield ModelResponseStream(
+                id="c0", choices=[StreamingChoices(delta=Delta(content="SSN: 123-45"), index=0)], model="gpt-4"
+            )
+            yield ModelResponseStream(id="tool", choices=[StreamingChoices(delta=tool_delta, index=0)], model="gpt-4")
+            yield ModelResponseStream(
+                id="c1", choices=[StreamingChoices(delta=Delta(content="-6789"), index=0)], model="gpt-4"
+            )
+            yield ModelResponseStream(
+                id="final",
+                choices=[StreamingChoices(delta=Delta(content=""), index=0, finish_reason="tool_calls")],
+                model="gpt-4",
+            )
+
+        async def collect_text() -> str:
+            return "".join(
+                [
+                    chunk.choices[0].delta.content or ""
+                    async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+                        user_api_key_dict=MagicMock(),
+                        response=mock_stream(),
+                        request_data={"messages": [], "model": "gpt-4o", "metadata": {}},
+                    )
+                ]
+            )
+
+        if action == ContentFilterAction.BLOCK:
+            with pytest.raises(HTTPException):
+                await collect_text()
+        else:
+            assert await collect_text() == "SSN: [US_SSN_REDACTED]"
 
     @pytest.mark.asyncio
     async def test_streaming_hook_block(self):
