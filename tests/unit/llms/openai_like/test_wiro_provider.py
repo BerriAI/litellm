@@ -1,12 +1,16 @@
+import asyncio
 import json
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Final
 
+import httpx
 import pytest
 import respx
 
 import litellm
 from litellm.caching.llm_caching_handler import LLMClientCache
+from litellm.integrations.custom_logger import CustomLogger
 
 _CHAT_COMPLETION: Final = {
     "id": "chatcmpl_wiro",
@@ -22,6 +26,46 @@ _CHAT_COMPLETION: Final = {
     ],
     "usage": {"prompt_tokens": 12, "completion_tokens": 11, "total_tokens": 23, "cost": 0.00001615},
 }
+_MESSAGES_USAGE: Final = {"input_tokens": 12, "output_tokens": 11, "cost": 0.00001615, "cost_usd": 0.00001615}
+_MESSAGE: Final = {
+    "id": "msg_wiro",
+    "type": "message",
+    "role": "assistant",
+    "model": "openai/gpt-5-4-nano",
+    "content": [{"type": "text", "text": "Hello from Wiro"}],
+    "stop_reason": "end_turn",
+    "stop_sequence": None,
+    "usage": _MESSAGES_USAGE,
+}
+
+
+def _sse(*events: Mapping[str, object]) -> str:
+    return "".join(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n" for event in events)
+
+
+_MESSAGE_STREAM: Final = _sse(
+    {
+        "type": "message_start",
+        "message": {**_MESSAGE, "content": [], "stop_reason": None, "usage": {"input_tokens": 0, "output_tokens": 0}},
+    },
+    {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+    {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Hello from Wiro"}},
+    {"type": "content_block_stop", "index": 0},
+    {"type": "message_delta", "delta": {"stop_reason": "end_turn", "stop_sequence": None}, "usage": _MESSAGES_USAGE},
+    {"type": "message_stop"},
+)
+
+
+class _CostRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.cost: Final[asyncio.Future[object]] = asyncio.get_running_loop().create_future()
+
+    async def async_log_success_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        if not self.cost.done():
+            self.cost.set_result(kwargs.get("response_cost"))
 
 
 def test_wiro_is_a_registered_provider():
@@ -178,19 +222,7 @@ async def test_wiro_anthropic_messages_request(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
     with respx.mock() as upstream:
-        route: Final = upstream.post("https://llm.wiro.ai/v1/messages").respond(
-            200,
-            json={
-                "id": "msg_wiro",
-                "type": "message",
-                "role": "assistant",
-                "model": "openai/gpt-5-4-nano",
-                "content": [{"type": "text", "text": "Hello from Wiro"}],
-                "stop_reason": "end_turn",
-                "stop_sequence": None,
-                "usage": {"input_tokens": 12, "output_tokens": 11},
-            },
-        )
+        route: Final = upstream.post("https://llm.wiro.ai/v1/messages").respond(200, json=_MESSAGE)
         response: Final = await litellm.anthropic.messages.acreate(
             model="wiro/openai/gpt-5-4-nano",
             messages=[{"role": "user", "content": "Say hello"}],
@@ -207,3 +239,30 @@ async def test_wiro_anthropic_messages_request(monkeypatch: pytest.MonkeyPatch):
     assert body["model"] == "openai/gpt-5-4-nano"
     assert body["messages"] == [{"role": "user", "content": "Say hello"}]
     assert response["content"][0]["text"] == "Hello from Wiro"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True], ids=["non-stream", "stream"])
+async def test_wiro_anthropic_messages_bill_the_cost_wiro_reports(monkeypatch: pytest.MonkeyPatch, stream: bool):
+    recorder: Final = _CostRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
+    reply: Final = (
+        httpx.Response(200, headers={"content-type": "text/event-stream"}, text=_MESSAGE_STREAM)
+        if stream
+        else httpx.Response(200, json=_MESSAGE)
+    )
+    with respx.mock() as upstream:
+        upstream.post("https://llm.wiro.ai/v1/messages").mock(return_value=reply)
+        response: Final = await litellm.anthropic.messages.acreate(
+            model="wiro/openai/gpt-5-4-nano",
+            messages=[{"role": "user", "content": "Say hello"}],
+            max_tokens=32,
+            api_key="wiro-test-key",
+            stream=stream,
+        )
+        if stream:
+            assert b"Hello from Wiro" in b"".join([chunk async for chunk in response])
+
+    assert await asyncio.wait_for(recorder.cost, timeout=5) == pytest.approx(_MESSAGES_USAGE["cost"])
