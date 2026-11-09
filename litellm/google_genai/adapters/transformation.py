@@ -1,7 +1,7 @@
 import json
 from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from itertools import accumulate, chain, count, groupby
+from itertools import accumulate, chain, groupby
 from types import MappingProxyType
 from typing import Any, Final, Literal, TypeAlias, TypeVar, cast
 
@@ -65,14 +65,14 @@ class _GenAIPart(TypedDict, total=False):
 
 
 class _GenAIFunctionResponse(TypedDict, total=False):
-    id: ReadOnly[str]
+    id: ReadOnly[JsonValue]
     name: ReadOnly[str]
     response: ReadOnly[object]
     parts: ReadOnly[object]
 
 
 class _GenAIRequestFunctionCall(TypedDict, total=False):
-    id: ReadOnly[str]
+    id: ReadOnly[JsonValue]
     name: ReadOnly[str]
     args: ReadOnly[object]
 
@@ -285,39 +285,36 @@ def _function_name(item: _GenAIRequestFunctionCall | _GenAIFunctionResponse) -> 
     return item.get("name", "unknown")
 
 
-def _free_call_ids(name: str, caller_ids: frozenset[str], reserved: frozenset[str]) -> Iterator[str]:
-    first: Final = f"call_{name}"
-    repeats: Final = (call_id for number in count(1) if (call_id := f"call_{name}_{number}") not in reserved)
-    return chain(() if first in caller_ids else (first,), repeats)
+def _caller_id(item: _GenAIRequestFunctionCall | _GenAIFunctionResponse) -> str | None:
+    caller_id: Final = item.get("id")
+    return caller_id if isinstance(caller_id, str) and caller_id else None
 
 
 def _genai_call_ids(calls: Sequence[_GenAIRequestFunctionCall]) -> tuple[str, ...]:
-    caller_ids: Final = frozenset(call_id for call in calls if (call_id := call.get("id")))
-    reserved: Final = caller_ids | frozenset(f"call_{_function_name(call)}" for call in calls)
-    without_id: Final = sorted(
-        (index for index, call in enumerate(calls) if not call.get("id")),
-        key=lambda index: _function_name(calls[index]),
+    first_call_by_name: Final = MappingProxyType(
+        {_function_name(call): index for index, call in reversed(tuple(enumerate(calls)))}
     )
-    generated: Final = MappingProxyType(
-        dict(
-            chain.from_iterable(
-                zip(indexes, _free_call_ids(name, caller_ids, reserved))
-                for name, indexes in groupby(without_id, key=lambda index: _function_name(calls[index]))
-            )
-        )
+    return tuple(
+        f"call_{name}" if first_call_by_name[name] == index else f"call{index}"
+        for index, name in enumerate(map(_function_name, calls))
     )
-    return tuple(call.get("id") or generated[index] for index, call in enumerate(calls))
+
+
+def _call_answered_by_id(response: _GenAIFunctionResponse, call_by_caller_id: Mapping[str, int]) -> int | None:
+    caller_id: Final = _caller_id(response)
+    return None if caller_id is None else call_by_caller_id.get(caller_id)
 
 
 def _genai_response_ids(
     responses: Sequence[_GenAIFunctionResponse], calls: Sequence[_GenAIRequestFunctionCall], call_ids: Sequence[str]
 ) -> tuple[str, ...]:
-    known: Final = frozenset(call_ids)
-    answered_by_id: Final = frozenset(
-        response_id for response in responses if (response_id := response.get("id")) in known
+    call_by_caller_id: Final = MappingProxyType(
+        {caller_id: index for index, call in reversed(tuple(enumerate(calls))) if (caller_id := _caller_id(call))}
     )
+    answered_call: Final = tuple(_call_answered_by_id(response, call_by_caller_id) for response in responses)
+    answered_by_id: Final = frozenset(index for index in answered_call if index is not None)
     open_calls: Final = sorted(
-        (index for index, call_id in enumerate(call_ids) if call_id not in answered_by_id),
+        (index for index in range(len(calls)) if index not in answered_by_id),
         key=lambda index: _function_name(calls[index]),
     )
     open_ids_by_name: Final = MappingProxyType(
@@ -327,7 +324,7 @@ def _genai_response_ids(
         }
     )
     unpaired: Final = sorted(
-        (index for index, response in enumerate(responses) if response.get("id") not in known),
+        (index for index, call_index in enumerate(answered_call) if call_index is None),
         key=lambda index: _function_name(responses[index]),
     )
     paired: Final = MappingProxyType(
@@ -339,9 +336,9 @@ def _genai_response_ids(
         )
     )
     return tuple(
-        own_id
-        if (own_id := response.get("id")) in known
-        else paired.get(index) or own_id or f"call_{_function_name(response)}"
+        call_ids[call_index]
+        if (call_index := answered_call[index]) is not None
+        else paired.get(index, f"call_{_function_name(response)}")
         for index, response in enumerate(responses)
     )
 

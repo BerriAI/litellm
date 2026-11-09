@@ -64,9 +64,13 @@ def _google_part_has_non_text_content(part: Mapping[str, JsonValue]) -> bool:
     return any(field is not None for key, field in part.items() if key not in _GOOGLE_PART_TEXT_AND_METADATA_FIELDS)
 
 
+def _is_media_only_part(part: JsonValue) -> bool:
+    return isinstance(part, dict) and part.get("text") is None and _google_part_has_non_text_content(part)
+
+
 def _google_system_part(value: JsonValue) -> JsonValue:
     match value:
-        case dict() if value.get("text") is None and _google_part_has_non_text_content(value):
+        case dict() if _is_media_only_part(value):
             return {key: field for key, field in value.items() if key != "text"}
         case dict():
             return {"text": None, **value}
@@ -216,6 +220,14 @@ class _TokenCountExtras(BaseModel):
     system: JsonValue = None
 
 
+def _countable_system_instruction(value: JsonValue) -> JsonValue:
+    match value:
+        case {"parts": parts} if isinstance(items := _google_repeated_field(parts), list):
+            return {**value, "parts": [part for part in items if not _is_media_only_part(part)]}
+        case _:
+            return value
+
+
 def google_token_count_request(request: TokenCountRequest) -> TokenCountRequest | ProxyException:
     if request.contents is None or request.messages is not None:
         return request
@@ -225,7 +237,7 @@ def google_token_count_request(request: TokenCountRequest) -> TokenCountRequest 
             request.model,
             {
                 "contents": request.contents,
-                "systemInstruction": request.system_instruction,
+                "systemInstruction": _countable_system_instruction(request.system_instruction),
                 "tools": caller.tools or (),
             },
         )

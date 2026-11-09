@@ -2312,6 +2312,38 @@ async def test_utils_token_counter_counts_system_instruction_and_google_tools_li
     assert from_utils.total_tokens == from_google.total_tokens > contents_only.total_tokens
 
 
+_SYSTEM_TEXT: Final = {"text": "Answer in one short sentence."}
+_SYSTEM_IMAGE: Final = {"inlineData": {"mimeType": "image/png", "data": "aGVsbG8="}}
+_SYSTEM_PDF: Final = {"text": None, "fileData": {"mimeType": "application/pdf", "fileUri": "gs://bucket/rules.pdf"}}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("parts", "countable_parts"),
+    [
+        pytest.param([_SYSTEM_TEXT, _SYSTEM_IMAGE], [_SYSTEM_TEXT], id="text_and_image"),
+        pytest.param([_SYSTEM_PDF, _SYSTEM_TEXT], [_SYSTEM_TEXT], id="pdf_and_text"),
+        pytest.param(_SYSTEM_IMAGE, [], id="image_alone"),
+    ],
+)
+async def test_utils_token_counter_counts_the_system_text_beside_a_system_part_it_cannot_translate(
+    monkeypatch: pytest.MonkeyPatch, parts: object, countable_parts: list[object]
+):
+    _local_luna(monkeypatch)
+    contents: Final = list(_WEATHER_CONTENTS)
+
+    with_media: Final = await token_counter(
+        request=TokenCountRequest(model="kimi", contents=contents, systemInstruction={"parts": parts}),
+        call_endpoint=False,
+    )
+    countable: Final = await token_counter(
+        request=TokenCountRequest(model="kimi", contents=contents, systemInstruction={"parts": countable_parts}),
+        call_endpoint=False,
+    )
+
+    assert with_media.total_tokens == countable.total_tokens
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "tool",

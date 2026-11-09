@@ -486,11 +486,11 @@ def test_function_response_message_transformation():
     assert response_content["humidity"] == "45%"
 
 
-def _tagged_call(name: str, tag: str, **extra: str) -> dict[str, object]:
+def _tagged_call(name: str, tag: str, **extra: object) -> dict[str, object]:
     return {"functionCall": {"name": name, "args": {"tag": tag}, **extra}}
 
 
-def _tagged_response(name: str, tag: str, **extra: str) -> dict[str, object]:
+def _tagged_response(name: str, tag: str, **extra: object) -> dict[str, object]:
     return {"functionResponse": {"name": name, "response": {"tag": tag}, **extra}}
 
 
@@ -580,20 +580,117 @@ def _tagged_response(name: str, tag: str, **extra: str) -> dict[str, object]:
             ],
             id="caller_id_shaped_like_a_generated_one",
         ),
+        pytest.param(
+            [
+                {
+                    "role": "model",
+                    "parts": [
+                        _tagged_call("get_weather", "paris", id=None),
+                        _tagged_call("get_weather", "rome", id=None),
+                    ],
+                },
+                {
+                    "role": "user",
+                    "parts": [
+                        _tagged_response("get_weather", "paris", id=None),
+                        _tagged_response("get_weather", "rome", id=None),
+                    ],
+                },
+            ],
+            id="null_ids_as_the_google_genai_sdk_dumps_them",
+        ),
+        pytest.param(
+            [
+                {"role": "model", "parts": [_tagged_call("get_weather", "paris", id=123)]},
+                {"role": "user", "parts": [_tagged_response("get_weather", "paris", id=123)]},
+            ],
+            id="non_string_ids",
+        ),
     ],
 )
 def test_each_function_response_answers_the_call_it_was_sent_for(contents: list[dict[str, object]]):
-    messages = GoogleGenAIAdapter().translate_generate_content_to_completion(model="gpt-6-luna", contents=contents)[
-        "messages"
-    ]
+    messages: Final = GoogleGenAIAdapter().translate_generate_content_to_completion(
+        model="gpt-6-luna", contents=contents
+    )["messages"]
 
-    calls = list(chain.from_iterable(message.get("tool_calls") or () for message in messages))
-    tag_by_call_id = {call["id"]: json.loads(call["function"]["arguments"])["tag"] for call in calls}
-    answers = [message for message in messages if message["role"] == "tool"]
-    assert len(tag_by_call_id) == len(calls) == len(answers)
+    calls: Final = list(chain.from_iterable(message.get("tool_calls") or () for message in messages))
+    tag_by_call_id: Final = {call["id"]: json.loads(call["function"]["arguments"])["tag"] for call in calls}
+    answers: Final = [message for message in messages if message["role"] == "tool"]
+    sent_responses: Final = sum(
+        "functionResponse" in part for part in chain.from_iterable(content["parts"] for content in contents)
+    )
+    assert len(tag_by_call_id) == len(calls) == len(answers) == sent_responses
     assert [tag_by_call_id[answer["tool_call_id"]] for answer in answers] == [
         json.loads(answer["content"])["tag"] for answer in answers
     ]
+
+
+def _two_weather_calls(**ids: object) -> list[dict[str, object]]:
+    paris: Final = {"id": ids["paris"]} if "paris" in ids else {}
+    rome: Final = {"id": ids["rome"]} if "rome" in ids else {}
+    return [
+        {"role": "model", "parts": [_tagged_call("get_weather", "paris", **paris)]},
+        {"role": "user", "parts": [_tagged_response("get_weather", "paris", **paris)]},
+        {"role": "model", "parts": [_tagged_call("get_weather", "rome", **rome)]},
+        {"role": "user", "parts": [_tagged_response("get_weather", "rome", **rome)]},
+    ]
+
+
+@pytest.mark.parametrize(
+    "ids",
+    [
+        pytest.param({"paris": "toolu_01A09q90qw90lq917835lq9", "rome": "toolu_01B19q90qw90lq917835lq9"}, id="provider"),
+        pytest.param({"paris": "p" * 77, "rome": "r" * 77}, id="longer_than_providers_accept"),
+        pytest.param({"paris": "call_get_weather"}, id="one_call_with_an_id"),
+    ],
+)
+def test_tool_call_ids_sent_upstream_do_not_depend_on_the_ids_the_caller_sent(ids: dict[str, str]):
+    adapter: Final = GoogleGenAIAdapter()
+
+    with_caller_ids: Final = adapter.translate_generate_content_to_completion(
+        model="gpt-6-luna", contents=_two_weather_calls(**ids)
+    )
+    without_caller_ids: Final = adapter.translate_generate_content_to_completion(
+        model="gpt-6-luna", contents=_two_weather_calls()
+    )
+
+    assert with_caller_ids == without_caller_ids
+
+
+def test_earlier_turns_translate_the_same_once_the_conversation_grows():
+    earlier: Final = [
+        {"role": "model", "parts": [_tagged_call("foo", "first"), _tagged_call("foo", "second")]},
+        {"role": "user", "parts": [_tagged_response("foo", "first"), _tagged_response("foo", "second")]},
+    ]
+    later: Final = [
+        {"role": "model", "parts": [_tagged_call("foo_1", "other"), _tagged_call("foo", "third")]},
+        {"role": "user", "parts": [_tagged_response("foo_1", "other"), _tagged_response("foo", "third")]},
+    ]
+    adapter: Final = GoogleGenAIAdapter()
+
+    before: Final = adapter.translate_generate_content_to_completion(model="gpt-6-luna", contents=earlier)["messages"]
+    grown: Final = adapter.translate_generate_content_to_completion(
+        model="gpt-6-luna", contents=[*earlier, *later]
+    )["messages"]
+
+    assert grown[: len(before)] == before
+
+
+def test_a_repeat_call_of_a_long_function_name_gets_an_id_no_longer_than_the_first_call():
+    name: Final = "look_up_the_weather_forecast_for_the_city_the_user_named_now"
+    messages: Final = GoogleGenAIAdapter().translate_generate_content_to_completion(
+        model="gpt-6-luna",
+        contents=[
+            {"role": "model", "parts": [_tagged_call(name, "paris")]},
+            {"role": "user", "parts": [_tagged_response(name, "paris")]},
+            {"role": "model", "parts": [_tagged_call(name, "rome")]},
+            {"role": "user", "parts": [_tagged_response(name, "rome")]},
+        ],
+    )["messages"]
+
+    first, repeat = (call["id"] for call in chain.from_iterable(message.get("tool_calls") or () for message in messages))
+    assert first != repeat
+    assert len(repeat) <= len(first)
 
 
 def test_completion_to_generate_content_with_tool_calls():
