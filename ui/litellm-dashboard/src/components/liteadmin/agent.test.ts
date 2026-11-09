@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatCompletion, ChatCompletionCreateParamsNonStreaming } from "openai/resources/chat/completions";
 import { createGatewayClient } from "@/components/llm_calls/gateway_client";
 import { registerAuthHeaderNameGetter } from "@/lib/http/runtime";
+import i18n from "@/i18n/i18n";
 import {
   getPreferredLiteAdminModel,
   MAX_INPUT_LENGTH,
@@ -102,6 +103,7 @@ function chartSourceId(request: ChatCompletionCreateParamsNonStreaming): string 
 const options = () =>
   ({
     access: { mode: "admin" as const },
+    userId: "signed-in-user",
     model: "selected-model",
     accessToken: "test-session",
     inferenceBaseUrl: "https://inference.example",
@@ -886,6 +888,42 @@ describe("SDK conversation and action lifecycle", () => {
       if (header !== "Authorization") expect(new Headers(init?.headers).has("Authorization")).toBe(false);
     },
   );
+});
+
+describe("LiteAdmin replies sent back to the model when the UI language is not English", () => {
+  beforeEach(async () => {
+    i18n.addResourceBundle(
+      "de",
+      "translation",
+      { aria: { agent: { stepLimit: "Schrittlimit", noAnswer: "Keine Antwort" } } },
+      true,
+      true,
+    );
+    await i18n.changeLanguage("de");
+  });
+
+  afterEach(async () => {
+    await i18n.changeLanguage("en");
+    i18n.removeResourceBundle("de", "translation");
+  });
+
+  it("keeps the step limit reply in English", async () => {
+    const input = options();
+    const model = transport(Array.from({ length: 6 }, () => completion([call("teams_list", teamsArgs)])));
+    await runLiteAdmin(input, model.client);
+    expect(input.onMessage).toHaveBeenCalledExactlyOnceWith(
+      "I reached the step limit. Any completed actions remain applied; check the relevant page before continuing.",
+    );
+  });
+
+  it("keeps the no answer reply in English", async () => {
+    const input = options();
+    const model = transport([completion([], null)]);
+    await runLiteAdmin(input, model.client);
+    expect(input.onMessage).toHaveBeenCalledExactlyOnceWith(
+      "The model returned no answer. Try another request or model.",
+    );
+  });
 });
 
 describe("inference destination", () => {

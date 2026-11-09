@@ -249,6 +249,29 @@ def test_delete_customer_not_found(mock_prisma_client, mock_user_api_key_auth):
     assert response_json["error"]["code"] == "404"
 
 
+def test_delete_customer_drops_its_committed_spend_so_a_recreated_customer_starts_from_its_own_row(
+    monkeypatch, mock_prisma_client, mock_user_api_key_auth
+):
+    from types import SimpleNamespace
+
+    from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
+
+    spend: Final = FakeSpendCounters(
+        redis=None,
+        memory={"spend:committed:end_user:cust-gone": 7.0, "spend:committed:end_user:cust-stays": 3.0},
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.spend_counter_store", spend.store())
+    mock_prisma_client.db.litellm_endusertable.find_many = AsyncMock(return_value=[SimpleNamespace(user_id="cust-gone")])
+    mock_prisma_client.db.litellm_endusertable.delete_many = AsyncMock(return_value=1)
+
+    response: Final = client.post(
+        "/customer/delete", json={"user_ids": ["cust-gone"]}, headers={"Authorization": "Bearer test-key"}
+    )
+
+    assert response.status_code == 200
+    assert spend.memory == {"spend:committed:end_user:cust-stays": 3.0}
+
+
 def test_error_schema_consistency(mock_prisma_client, mock_user_api_key_auth):
     """
     Test that all customer endpoints return the same error schema format.

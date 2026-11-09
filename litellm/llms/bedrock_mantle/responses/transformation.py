@@ -15,13 +15,18 @@ role / access key / profile / web identity), signed via the shared
 BaseAWSLLM._sign_request after the request body is finalized.
 """
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from functools import partial
 from typing import Final, cast  # noqa: TID251  # map_openai_params returns the filtered params as a bare dict
 
 import httpx
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
+from litellm.litellm_core_utils.prompt_templates.prompt_cache_breakpoint_utils import (
+    chat_completion_prompt_cache_breakpoint_for_wire,
+)
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.responses.codex_compat import drop_unsupported_tools, normalize_codex_input_items
@@ -61,15 +66,21 @@ _BEDROCK_MANTLE_SUPPORTED_SERVICE_TIERS: Final = frozenset({"auto", "default"})
 _BEDROCK_MANTLE_OPENAI_PATH_SUPPORTED_REASONING_SUMMARIES: Final = frozenset({"auto"})
 
 
+def _prompt_cache_breakpoint_as_sent_or_none(marker: object) -> object:
+    return marker if chat_completion_prompt_cache_breakpoint_for_wire(marker, drop_params=True) == marker else None
+
+
 class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPIConfig):
     def __init__(
         self,
         aws_signer: BaseAWSLLM | None = None,
         use_openai_path: bool = True,
+        encrypted_agent_messages: bool = False,
     ):
         super().__init__()
         self._aws_signer = aws_signer or BaseAWSLLM()
         self.use_openai_path = use_openai_path
+        self.encrypted_agent_messages = encrypted_agent_messages
 
     @property
     def custom_llm_provider(self) -> LlmProviders:
@@ -77,6 +88,9 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
 
     def auto_reasoning_summary(self) -> ReasoningSummaryLevel:
         return "auto" if self.use_openai_path else super().auto_reasoning_summary()
+
+    def supports_encrypted_agent_messages(self) -> bool:
+        return self.use_openai_path and self.encrypted_agent_messages
 
     def get_error_class(
         self, error_message: str, status_code: int, headers: dict[str, object] | httpx.Headers
@@ -111,6 +125,13 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
         if litellm_params.aws_bedrock_project_id:
             headers["OpenAI-Project"] = litellm_params.aws_bedrock_project_id
         return headers
+
+    def _prompt_cache_breakpoint_to_wire(
+        self, litellm_params: GenericLiteLLMParams, reads_breakpoints: bool, known_support: bool | None
+    ) -> Callable[[object], object]:
+        if reads_breakpoints or known_support is True:
+            return partial(chat_completion_prompt_cache_breakpoint_for_wire, drop_params=True)
+        return _prompt_cache_breakpoint_as_sent_or_none
 
     def supports_native_file_search(self) -> bool:
         return False
@@ -196,8 +217,12 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
         params: Final = cast(  # cast-ok: the base signature leaves the params dict untyped
             "ResponsesAPIOptionalRequestParams", response_api_optional_request_params
         )
-        hoisted: Final = hoist_additional_tools(input, params.get("tools"))
-        normalized_input, rewritten_types = normalize_codex_input_items(hoisted.input)
+        hoisted: Final = hoist_additional_tools(
+            input, params.get("tools"), drop_params=drops_unsupported_params(litellm_params.drop_params)
+        )
+        normalized_input, rewritten_types = normalize_codex_input_items(
+            hoisted.input, keep_encrypted_agent_messages=self.supports_encrypted_agent_messages()
+        )
         if rewritten_types:
             verbose_logger.warning(
                 "Bedrock Mantle Responses API: rewrote Codex input item type(s) %s that Mantle rejects.",
