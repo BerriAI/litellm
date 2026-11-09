@@ -17071,6 +17071,7 @@
         "supports_web_search": true,
         "supports_xhigh_reasoning_effort": true,
         "supports_max_reasoning_effort": true,
+        "supports_mid_conversation_system": true,
         "source": "https://platform.claude.com/docs/en/about-claude/pricing"
     },
     "claude-fable-5-1": {
