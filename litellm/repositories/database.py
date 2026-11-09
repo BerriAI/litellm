@@ -83,17 +83,22 @@ async def _refresh_password(native: NativeDatabase, settings: NativeDatabaseSett
         return
     await asyncio.sleep(_refresh_delay(settings, settings.password))
     while True:
-        try:
-            password: Final = await asyncio.to_thread(settings.password_provider)
-            if reader:
-                native.set_passwords(reader_password=password)
-            else:
-                native.set_passwords(writer_password=password)
-        except Exception:
-            verbose_proxy_logger.warning("Native database credential refresh failed")
-            await asyncio.sleep(30.0)
+        await asyncio.sleep(await _rotate_password(native, settings, reader))
+
+
+async def _rotate_password(native: NativeDatabase, settings: NativeDatabaseSettings, reader: bool) -> float:
+    if settings.password_provider is None:
+        return 600.0
+    try:
+        password: Final = await asyncio.to_thread(settings.password_provider)
+        if reader:
+            native.set_passwords(reader_password=password)
         else:
-            await asyncio.sleep(_refresh_delay(settings, password))
+            native.set_passwords(writer_password=password)
+    except Exception:
+        verbose_proxy_logger.warning("Native database credential refresh failed")
+        return 30.0
+    return _refresh_delay(settings, password)
 
 
 @asynccontextmanager

@@ -20,6 +20,7 @@ import pytest
 from fastapi import Request, status
 
 import litellm
+from litellm.caching.dual_cache import DualCache
 from litellm.proxy._types import (
     CallInfo,
     Litellm_EntityType,
@@ -881,7 +882,7 @@ class TestAuthCacheRedisWritePolicy:
     """
 
     @pytest.mark.asyncio
-    async def test_get_key_object_db_load_publishes_to_redis(self):
+    async def test_get_key_object_db_load_stays_local_and_is_reused_without_redis_publication(self):
         mock_prisma_client = MagicMock()
         mock_prisma_client.get_data = AsyncMock(return_value=UserAPIKeyAuth(token="hashed-token-db"))
 
@@ -896,10 +897,14 @@ class TestAuthCacheRedisWritePolicy:
         )
 
         assert key_obj.token == "hashed-token-db"
-        fake_redis.async_set_cache.assert_awaited_once()
-        assert (
-            fake_redis.async_set_cache.await_args.kwargs.get("key") or fake_redis.async_set_cache.await_args.args[0]
-        ) == "hashed-token-db"
+        cached: Final = await get_key_object(
+            hashed_token="hashed-token-db",
+            prisma_client=mock_prisma_client,
+            user_api_key_cache=cache,
+        )
+        assert cached.token == key_obj.token
+        mock_prisma_client.get_data.assert_awaited_once()
+        fake_redis.async_set_cache.assert_not_awaited()
 
 
 def test_get_cli_jwt_auth_token_default_expiration(valid_sso_user_defined_values):
@@ -7409,7 +7414,7 @@ class TestManagementObjectTTLHonored:
     @pytest.mark.asyncio
     async def test_uses_configured_user_api_key_cache_ttl(self):
         mem = _TTLCapturingInMemoryCache()
-        cache = UserApiKeyCache(in_memory_cache=mem, default_in_memory_ttl=300)
+        cache = DualCache(in_memory_cache=mem, default_in_memory_ttl=300)
 
         await _cache_management_object(
             key="team_id:lit-3338",
@@ -7424,7 +7429,7 @@ class TestManagementObjectTTLHonored:
     @pytest.mark.asyncio
     async def test_falls_back_to_management_default_when_unconfigured(self):
         mem = _TTLCapturingInMemoryCache()
-        cache = UserApiKeyCache(in_memory_cache=mem)
+        cache = DualCache(in_memory_cache=mem)
         assert cache.default_in_memory_ttl is None
 
         await _cache_management_object(

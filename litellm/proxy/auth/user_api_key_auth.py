@@ -2355,11 +2355,18 @@ class _BuilderEffects:
         return TeamMemberBudget(spend=spend, max_budget=max_budget)
 
     async def _load_team_membership(self, user_id: str, team_id: str) -> LiteLLM_TeamMembership | None:
+        from litellm.repositories.native_auth_repository import native_auth_repository
+
         if self._prisma_client is None:
             return None
-        row: Final = await TeamMembershipRepository(self._prisma_client).table.find_first(
-            where={"user_id": user_id, "team_id": team_id},
-            include={"litellm_budget_table": True},
+        native: Final = native_auth_repository(self._prisma_client)
+        row: Final = (
+            await native.one("member", [user_id, team_id], LiteLLM_TeamMembership)
+            if native is not None
+            else await TeamMembershipRepository(self._prisma_client).table.find_first(
+                where={"user_id": user_id, "team_id": team_id},
+                include={"litellm_budget_table": True},
+            )
         )
         if row is None:
             return None

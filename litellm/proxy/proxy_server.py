@@ -8305,6 +8305,9 @@ class ProxyConfig:
         Returns:
             dict: router_settings, or None if no settings found
         """
+        from litellm._auth.failure import NativeAuthFailure
+        from litellm.repositories.native_auth_repository import NativeAuthDatabaseError
+
         # 1. Try key-level router_settings
         # user_api_key_dict is already the cached/authenticated key object —
         # no DB call needed.
@@ -8327,6 +8330,10 @@ class ProxyConfig:
                 team_settings: Final = self._parse_router_settings_value(getattr(team_obj, "router_settings", None))
                 if team_settings is not None:
                     return team_settings
+            except NativeAuthDatabaseError:
+                pass
+            except NativeAuthFailure:
+                raise
             except Exception:
                 # If team lookup fails, no team-level settings available
                 pass

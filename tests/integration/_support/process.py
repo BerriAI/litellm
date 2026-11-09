@@ -1,18 +1,18 @@
 import json
-import threading
 import os
 import re
 import signal
 import subprocess
 import sys
+import threading
 import time
 import uuid
 from collections.abc import Callable, Generator, Iterable, Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import AbstractContextManager, contextmanager, suppress
+from contextlib import AbstractContextManager, ExitStack, contextmanager, suppress
 from dataclasses import dataclass
-from enum import Enum
 from datetime import UTC, datetime, timedelta
+from enum import Enum
 from ipaddress import IPv4Address
 from itertools import accumulate
 from pathlib import Path
@@ -417,7 +417,7 @@ def kill_stray_process(pid: int) -> None:
 
 
 @contextmanager
-def paused(process: subprocess.Popen[bytes] | subprocess.Popen[str]) -> Iterator[None]:
+def paused(process: subprocess.Popen[bytes] | subprocess.Popen[str] | psutil.Process) -> Iterator[None]:
     target: Final = psutil.Process(process.pid)
     _suspend(target)
     try:
@@ -425,6 +425,20 @@ def paused(process: subprocess.Popen[bytes] | subprocess.Popen[str]) -> Iterator
     finally:
         with suppress(psutil.NoSuchProcess):
             target.resume()
+
+
+@contextmanager
+def paused_prisma_engines(worker_pid: int) -> Iterator[None]:
+    engines: Final = tuple(
+        child
+        for child in psutil.Process(worker_pid).children(recursive=True)
+        if "query-engine" in child.name()
+    )
+    assert engines, f"No Prisma query engine under worker {worker_pid}"
+    with ExitStack() as resources:
+        for engine in engines:
+            resources.enter_context(paused(engine))
+        yield
 
 
 @contextmanager
