@@ -41,7 +41,12 @@ export function useHomeUsage(): HomeUsage {
   const request = useMemo<DailyActivityRequest | null>(
     () =>
       accessToken && (isAdmin || userId)
-        ? { accessToken, ...range, entityIds: isAdmin ? null : [userId as string] }
+        ? {
+            accessToken,
+            ...range,
+            entityIds: isAdmin ? null : [userId as string],
+            includeCurrentUtcDay: true,
+          }
         : null,
     [accessToken, isAdmin, range, userId],
   );

@@ -103,6 +103,7 @@ const UsagePanel: React.FC<Props> = ({ accessToken, userId }) => {
         startTime: start,
         endTime: end,
         entityIds: userId ? [userId] : null,
+        includeCurrentUtcDay: true,
       };
       return dailyActivityAggregatedCall("user", request);
     },

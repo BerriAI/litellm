@@ -1384,7 +1384,7 @@ const dailyActivityQuery = (
       ? { [excludeParam]: excludeEntityIds && excludeEntityIds.length > 0 ? excludeEntityIds.join(",") : undefined }
       : {}),
     timezone: new Date().getTimezoneOffset().toString(),
-    include_current_utc_day: entity === "user" && req.includeCurrentUtcDay ? "true" : undefined,
+    include_current_utc_day: req.includeCurrentUtcDay?.toString(),
     ...extra,
   };
 };
@@ -2270,6 +2270,8 @@ export const gatewayDailyActivityCall = async (accessToken: string, startTime: D
       query: {
         start_date: formatDate(startTime),
         end_date: formatDate(endTime),
+        timezone: new Date().getTimezoneOffset().toString(),
+        include_current_utc_day: "true",
       },
     });
   } catch (error) {
