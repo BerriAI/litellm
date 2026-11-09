@@ -54517,7 +54517,7 @@ export interface operations {
                 /** @description Maximum alerts per page. */
                 limit?: number;
                 /** @description next_cursor from the preceding page. */
-                cursor?: number | null;
+                cursor?: string | null;
             };
             header?: never;
             path?: never;
@@ -54551,7 +54551,7 @@ export interface operations {
             header?: never;
             path: {
                 /** @description Alert ID returned by GET /alerts. */
-                alert_id: number;
+                alert_id: string;
             };
             cookie?: never;
         };
@@ -54583,7 +54583,7 @@ export interface operations {
             header?: never;
             path: {
                 /** @description Alert ID returned by GET /alerts. */
-                alert_id: number;
+                alert_id: string;
             };
             cookie?: never;
         };

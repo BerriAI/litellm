@@ -1,14 +1,24 @@
 from datetime import date, datetime, timezone
 from typing import Annotated, Final, Literal, Protocol, TypeAlias
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import AfterValidator, AwareDatetime, BaseModel, ConfigDict, Field, field_validator, model_validator
 from typing_extensions import Self
 
 AlertType: TypeAlias = Literal["spend", "traffic", "latency", "reliability", "model_deprecation"]
 AlertStatus: TypeAlias = Literal["open", "resolved", "dismissed"]
 AlertResourceType: TypeAlias = Literal["key", "team", "user", "model"]
-AlertID: TypeAlias = Annotated[str, Field(pattern=r"^[1-9][0-9]{0,18}$", max_length=19)]
 MAX_ALERT_ID: Final = 2**63 - 1
+
+
+def _validate_alert_id(value: str) -> str:
+    if int(value) > MAX_ALERT_ID:
+        raise ValueError("Alert ID exceeds the supported range")
+    return value
+
+
+AlertID: TypeAlias = Annotated[
+    str, Field(pattern=r"^[1-9][0-9]{0,18}$", max_length=19), AfterValidator(_validate_alert_id)
+]
 
 
 class MetricEvidence(BaseModel):

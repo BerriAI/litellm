@@ -1,4 +1,6 @@
-CREATE TABLE "LiteLLM_Alert" (
+SET LOCAL lock_timeout = '10s';
+
+CREATE TABLE IF NOT EXISTS "LiteLLM_Alert" (
     "id" BIGSERIAL PRIMARY KEY,
     "detection_key" VARCHAR(64) NOT NULL,
     "type" VARCHAR(32) NOT NULL,
@@ -16,5 +18,5 @@ CREATE TABLE "LiteLLM_Alert" (
     CHECK (octet_length("evidence"::text) <= 8192)
 );
 
-CREATE UNIQUE INDEX "LiteLLM_Alert_detection_key_key" ON "LiteLLM_Alert"("detection_key");
-CREATE INDEX "LiteLLM_Alert_status_id_idx" ON "LiteLLM_Alert"("status", "id");
+CREATE UNIQUE INDEX IF NOT EXISTS "LiteLLM_Alert_detection_key_key" ON "LiteLLM_Alert"("detection_key");
+CREATE INDEX IF NOT EXISTS "LiteLLM_Alert_status_id_idx" ON "LiteLLM_Alert"("status", "id");

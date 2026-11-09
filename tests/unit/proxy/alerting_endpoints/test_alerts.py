@@ -86,6 +86,57 @@ def test_invalid_page_never_reads_database(client: TestClient, table: MagicMock,
     table.find_many.assert_not_awaited()
 
 
+@pytest.mark.parametrize("alert_id", ("0", "-1", "01", "1.0", "oops", "9223372036854775808", "1" * 20))
+@pytest.mark.parametrize("method", ("GET", "PATCH"))
+def test_invalid_id_never_accesses_database(client: TestClient, table: MagicMock, alert_id: str, method: str) -> None:
+    response: Final = client.request(
+        method, f"/alerts/{alert_id}", json={"status": "resolved"} if method == "PATCH" else None
+    )
+    assert response.status_code == 422
+    table.find_unique.assert_not_awaited()
+    table.update.assert_not_awaited()
+
+
+@pytest.mark.parametrize("alert_id", (9007199254740993, 9223372036854775807))
+def test_large_ids_remain_exact_in_reads_updates_and_pagination(
+    client: TestClient, table: MagicMock, alert_id: int
+) -> None:
+    row: Final = StoredAlert(id=alert_id)
+    table.find_unique.return_value = row
+    table.update.return_value = row.model_copy(update={"status": "resolved", "updated_by": "admin-user"})
+    table.find_many.return_value = [row, StoredAlert(id=alert_id - 1)]
+    detail: Final = client.get(f"/alerts/{alert_id}")
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["id"] == str(alert_id)
+    table.find_unique.assert_awaited_once_with(where={"id": alert_id})
+    updated: Final = client.patch(f"/alerts/{alert_id}", json={"status": "resolved"})
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["id"] == str(alert_id)
+    assert updated.json()["status"] == "resolved"
+    table.update.assert_awaited_once_with(
+        where={"id": alert_id}, data={"status": "resolved", "updated_by": "admin-user"}
+    )
+    page: Final = client.get("/alerts?limit=1")
+    assert page.status_code == 200, page.text
+    assert page.json()["next_cursor"] == str(alert_id)
+    following: Final = client.get("/alerts", params={"cursor": page.json()["next_cursor"], "limit": 1})
+    assert following.status_code == 200, following.text
+    table.find_many.assert_awaited_with(where={"status": "open", "id": {"lt": alert_id}}, order={"id": "desc"}, take=2)
+
+
+def test_openapi_keeps_ids_and_cursors_as_strings(client: TestClient) -> None:
+    spec: Final = client.get("/openapi.json").json()
+    paths: Final = spec["paths"]
+    for method in ("get", "patch"):
+        parameter: Final = next(p for p in paths["/alerts/{alert_id}"][method]["parameters"] if p["name"] == "alert_id")
+        assert parameter["schema"]["type"] == "string"
+    cursor: Final = next(p for p in paths["/alerts"]["get"]["parameters"] if p["name"] == "cursor")
+    assert {s["type"] for s in cursor["schema"]["anyOf"]} == {"string", "null"}
+    schemas: Final = spec["components"]["schemas"]
+    assert schemas["Alert"]["properties"]["id"]["type"] == "string"
+    assert {s["type"] for s in schemas["AlertPage"]["properties"]["next_cursor"]["anyOf"]} == {"string", "null"}
+
+
 def test_viewer_reads_saved_alert_with_string_id(app: FastAPI, table: MagicMock) -> None:
     app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
         user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY
