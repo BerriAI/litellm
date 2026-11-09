@@ -2,6 +2,7 @@ import threading
 from collections.abc import Mapping
 from typing import Final
 
+from litellm.llms.custom_httpx.http_handler import exclude_rsa_key_exchange
 from litellm.secret_managers.main import str_to_bool
 
 FIPS_MODE_SETTING: Final = "fips_mode"
@@ -93,6 +94,7 @@ def enforce_fips_mode(general_settings: Mapping[str, object]) -> None:
         _FIPS_MODE_ACTIVE.set()
     else:
         _FIPS_MODE_ACTIVE.clear()
+    exclude_rsa_key_exchange(_FIPS_MODE_ACTIVE.is_set())
 
 
 def fips_mode_active() -> bool:

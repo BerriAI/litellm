@@ -367,7 +367,9 @@ def test_fips_mode_drops_rsa_key_exchange_from_the_outbound_cipher_list(
     configured: Final = ssl.create_default_context()
     configured.set_ciphers(ssl_security_level or DEFAULT_SSL_CIPHERS)
 
-    standard: Final = _offered_ciphers(get_ssl_configuration())
+    # A client built while the config loads holds its context from before FIPS mode is enforced
+    held: Final = get_ssl_configuration()
+    standard: Final = _offered_ciphers(held)
     monkeypatch.setattr(_hashlib, "get_fips_mode", lambda: 1)
     monkeypatch.setattr(
         _hashlib, "scrypt", MagicMock(side_effect=ValueError("[digital envelope routines] unsupported"))
@@ -375,13 +377,19 @@ def test_fips_mode_drops_rsa_key_exchange_from_the_outbound_cipher_list(
     monkeypatch.setattr(rust_openssl, "is_fips_enabled", lambda: True)
     enforce_fips_mode({"fips_mode": True})
     try:
-        fips: Final = _offered_ciphers(get_ssl_configuration())
+        held_in_fips: Final = _offered_ciphers(held)
+        new_in_fips: Final = _offered_ciphers(get_ssl_configuration(http2=True))
     finally:
         enforce_fips_mode({})
-        _ssl_context_cache.clear()
+    held_after_fips: Final = _offered_ciphers(held)
+    _ssl_context_cache.clear()
 
     assert standard == _offered_ciphers(configured)
-    assert fips == tuple(cipher for cipher in standard if cipher[1] != "kx-rsa")
+    without_rsa_key_exchange: Final = tuple(cipher for cipher in standard if cipher[1] != "kx-rsa")
+    assert without_rsa_key_exchange != standard
+    assert held_in_fips == without_rsa_key_exchange
+    assert new_in_fips == without_rsa_key_exchange
+    assert held_after_fips == standard
 
 
 # Session Reuse Tests
