@@ -36,6 +36,8 @@ REDIS_FAMILIES_METADATA_KEY: Final = "families"
 
 _service_caller: Final[ContextVar[str | None]] = ContextVar("service_caller", default=None)
 
+_resent_on: Final[ContextVar[Callable[[Exception], bool] | None]] = ContextVar("resent_on", default=None)
+
 
 @contextmanager
 def post_response_phase() -> Generator[None]:
@@ -111,6 +113,23 @@ def service_caller(caller: str | None) -> Generator[None]:
 
 def current_service_caller() -> str | None:
     return _service_caller.get()
+
+
+@contextmanager
+def resent_on(rejection: Callable[[Exception], bool]) -> Generator[None]:
+    """An attempt its caller sends again when it fails with ``rejection``. That failure is not the request's
+    outcome, so it is neither logged as the request's failure nor retried, and its budget reservation and rate-limit
+    slot stay with the attempt sent again."""
+    token: Final = _resent_on.set(rejection)
+    try:
+        yield
+    finally:
+        _restore(_resent_on, token)
+
+
+def is_resent_failure(error: Exception) -> bool:
+    rejection: Final = _resent_on.get()
+    return rejection is not None and rejection(error)
 
 
 @contextmanager
