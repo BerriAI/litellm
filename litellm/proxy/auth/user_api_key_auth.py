@@ -4338,7 +4338,7 @@ async def _run_post_custom_auth_checks(
         proxy_logging_obj=proxy_logging_obj,
     )
     valid_token.user_model_max_budget = user_budget  # rebind-ok: the spend hook reads it off this token
-    if not skip_budget_checks:
+    if common_flow.read(common_flow.BudgetSkip(skip_budget_checks, False)) == "CheckBudgets":
         await _enforce_model_budgets(
             _AUTH_CORE.check_model_budgets(),
             _ModelBudgetEffects(
@@ -4366,21 +4366,17 @@ async def _run_post_custom_auth_checks(
     )
 
     end_user_mmb: Final = valid_token.end_user_model_max_budget
-    if (
-        not skip_budget_checks
-        and end_user_mmb is not None
-        and isinstance(end_user_mmb, dict)
-        and len(end_user_mmb) > 0
-        and current_models
-        and valid_token.end_user_id is not None
-    ):
-        for model_name in current_models:
-            await model_max_budget_limiter.is_end_user_within_model_budget(
-                end_user_id=valid_token.end_user_id,
-                end_user_model_max_budget=end_user_mmb,
-                model=model_name,
-                team_id=valid_token.team_id,
-            )
+    if common_flow.read(common_flow.BudgetSkip(skip_budget_checks, False)) == "CheckBudgets":
+        from litellm.proxy.auth import budget_context_adapter
+
+        await budget_context_adapter.check_end_user_model_budget(
+            valid_token.end_user_id,
+            end_user_mmb if isinstance(end_user_mmb, dict) else None,
+            model_max_budget_limiter,
+            current_models,
+            valid_token.team_id,
+            scope="CustomEndUser",
+        )
 
     # team / user / end_user / project context objects are fetched by
     # the centralized common_checks gate in user_api_key_auth after

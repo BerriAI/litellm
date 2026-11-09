@@ -46,6 +46,7 @@ from typing import (
     Final,
     Literal,
     NamedTuple,
+    NoReturn,
     Optional,
     Protocol,
     TypeAlias,
@@ -3344,7 +3345,7 @@ def _fail_closed_budget_enforcement() -> bool:
     return general_settings.get("fail_closed_budget_enforcement") is True
 
 
-def _raise_budget_unverifiable(counter_key: str) -> None:
+def _raise_budget_unverifiable(counter_key: str) -> NoReturn:
     verbose_proxy_logger.warning(
         "fail_closed_budget_enforcement: rejecting request — spend for %s could "
         "not be verified against Redis or the database",
@@ -3402,46 +3403,28 @@ async def get_current_spend(
     and cached in-process for a few seconds, so a persistently stale counter
     drives at most one read per counter per window rather than one per request.
     """
+    from functools import partial
+
+    from litellm._auth.spend_counter_policy import Spend
+    from litellm.proxy.auth.spend_counter_adapter import SpendIO, resolve_spend
+
     current, verified = await _read_spend_counter_estimate(counter_key=counter_key, fallback_spend=fallback_spend)
-    if fallback_authoritative:
-        verified = True
-
-    if max_budget is None or current >= max_budget:
-        return current
-
-    # Cheap staleness signal for primary counters: the counter reads below the
-    # spend this caller already knows about. Window counters have no such signal
-    # (fallback is 0), so they always re-check, bounded by the cache. Strict mode
-    # (fail_closed_budget_enforcement) always re-checks against the authoritative
-    # source too, so a counter that is stale-low at the same time as the caller's
-    # cached spend cannot slip through; the 5s cache keeps that bounded.
-    is_window: Final = window_start is not None
-    if fallback_spend > current or is_window or _fail_closed_budget_enforcement():
-        authoritative: Final = await _authoritative_floor_spend(
-            counter_key=counter_key,
-            window_entity_type=window_entity_type,
-            window_entity_id=window_entity_id,
-            window_duration=window_duration,
-            window_start=window_start,
-        )
-        if authoritative is not None:
-            verified = True
-            if authoritative > current:
-                await _repair_stale_spend_counter(counter_key=counter_key, db_spend=authoritative)
-                return authoritative
-        elif fallback_spend > current:
-            # nothing to read (tag counters, an end user without a row or a DB client, a
-            # failed read); fallback_spend is the authoritative recorded value loaded in auth.
-            return fallback_spend
-
-    # Opt-in hard guarantee: when the spend backing this admit decision came
-    # only from a per-pod cache (Redis and DB both unreadable), reject rather
-    # than admit on an unverifiable budget. No-op unless the flag is set, so
-    # default behavior is unchanged.
-    if not verified and _fail_closed_budget_enforcement():
-        _raise_budget_unverifiable(counter_key)
-
-    return current
+    return await resolve_spend(
+        Spend(current, verified, fallback_spend, max_budget, window_start is not None, fallback_authoritative),
+        SpendIO(
+            read_strict=_fail_closed_budget_enforcement,
+            read_floor=partial(
+                _authoritative_floor_spend,
+                counter_key=counter_key,
+                window_entity_type=window_entity_type,
+                window_entity_id=window_entity_id,
+                window_duration=window_duration,
+                window_start=window_start,
+            ),
+            repair=lambda spend: _repair_stale_spend_counter(counter_key=counter_key, db_spend=spend),
+            unavailable=partial(_raise_budget_unverifiable, counter_key),
+        ),
+    )
 
 
 @with_service_target(SPEND_COUNTERS_TARGET)

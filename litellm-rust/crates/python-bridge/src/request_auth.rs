@@ -10,6 +10,18 @@ use pyo3::{
 type ProjectedStep = (Py<PyAny>, Option<NativeAuthContinuation>);
 
 #[pyfunction]
+pub(crate) fn request_auth_spend_counter_policy(
+    py: Python<'_>,
+    facts: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    let facts: core::spend_counter_policy::Facts = from_py(facts)?;
+    to_py(
+        py,
+        &py.detach(move || core::spend_counter_policy::decide(facts)),
+    )
+}
+
+#[pyfunction]
 pub(crate) fn request_auth_common_read(
     py: Python<'_>,
     facts: &Bound<'_, PyAny>,

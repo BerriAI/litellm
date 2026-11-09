@@ -191,7 +191,7 @@ async def project_max_budget_check(
     valid_token: UserAPIKeyAuth | None,
     proxy_logging_obj: ProxyLogging,
 ) -> None:
-    from litellm.proxy.auth.auth_checks import project_spend_counter_key
+    from litellm.proxy.common_utils.user_api_key_cache import project_spend_counter_key
 
     if project_object is None:
         return

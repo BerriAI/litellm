@@ -445,26 +445,15 @@ async def test_should_not_reuse_cached_key_object_for_request_state():
 @pytest.mark.asyncio
 async def test_custom_auth_does_not_enforce_key_model_access_by_default():
     valid_token = UserAPIKeyAuth(token="test_token", models=["gpt-4o-mini"])
-    request_data = {"model": "gpt-4o"}
-
-    with (
-        patch(
-            "litellm.proxy.auth.user_api_key_auth.can_key_call_model",
-            new_callable=AsyncMock,
-        ) as mock_can_key,
-        patch(
-            "litellm.proxy.proxy_server.general_settings",
-            {},
-        ),
-    ):
-        await _run_post_custom_auth_checks(
+    with patch("litellm.proxy.proxy_server.general_settings", {}):
+        result = await _run_post_custom_auth_checks(
             valid_token=valid_token,
             request=None,
-            request_data=request_data,
+            request_data={"model": "gpt-4o"},
             route="/v1/chat/completions",
             parent_otel_span=None,
         )
-        mock_can_key.assert_not_awaited()
+    assert result is valid_token
 
 
 @pytest.mark.asyncio
@@ -536,35 +525,16 @@ async def test_custom_auth_enforces_key_model_access_from_file_route_header_with
 @pytest.mark.asyncio
 async def test_custom_auth_honors_key_level_model_access_restriction_denied_with_opt_in():
     valid_token = UserAPIKeyAuth(token="test_token", models=["gpt-4o-mini"])
-    request_data = {"model": "gpt-4o"}
-
-    with (
-        patch(
-            "litellm.proxy.auth.user_api_key_auth.can_key_call_model",
-            new_callable=AsyncMock,
-        ) as mock_can_key,
-        patch("litellm.proxy.auth.user_api_key_auth.common_checks", new_callable=AsyncMock),
-        patch(
-            "litellm.proxy.proxy_server.general_settings",
-            {"custom_auth_run_common_checks": True},
-        ),
-    ):
-        mock_can_key.side_effect = ProxyException(
-            message="Key not allowed to access model",
-            type=ProxyErrorTypes.key_model_access_denied,
-            param="model",
-            code=401,
-        )
+    with patch("litellm.proxy.proxy_server.general_settings", {"custom_auth_run_common_checks": True}):
         with pytest.raises(ProxyException) as exc:
             await _run_post_custom_auth_checks(
                 valid_token=valid_token,
                 request=None,
-                request_data=request_data,
+                request_data={"model": "gpt-4o"},
                 route="/v1/chat/completions",
                 parent_otel_span=None,
             )
-
-        assert exc.value.type == ProxyErrorTypes.key_model_access_denied
+    assert exc.value.type == ProxyErrorTypes.key_model_access_denied
 
 
 def _proxy_server_attrs_for_custom_auth(*, user_custom_auth):

@@ -62,8 +62,8 @@ mod _native {
         request_auth_personal_model_request, request_auth_personal_models,
         request_auth_personal_owner, request_auth_reservation, request_auth_resolved_models,
         request_auth_route_access, request_auth_scheme_credential, request_auth_select_api_key,
-        request_auth_select_websocket_api_key, request_auth_start, request_auth_team_override,
-        request_auth_unpriced_model,
+        request_auth_select_websocket_api_key, request_auth_spend_counter_policy,
+        request_auth_start, request_auth_team_override, request_auth_unpriced_model,
     };
     #[pymodule_export]
     use crate::router::{RouterCall, RouterCoreHandle};

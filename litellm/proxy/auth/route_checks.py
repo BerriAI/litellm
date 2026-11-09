@@ -21,7 +21,9 @@ from litellm.proxy.auth import route_policy_adapter
 
 from .auth_checks_organization import (  # noqa: F401  # legacy module exports
     _user_is_org_admin,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
-    user_is_org_admin,
+)
+from .auth_checks_organization import (
+    user_is_org_admin as user_is_org_admin,
 )
 
 # Management write routes denied to PROXY_ADMIN_VIEW_ONLY. Adding a new write

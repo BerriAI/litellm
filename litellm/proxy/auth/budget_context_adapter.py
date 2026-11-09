@@ -1,6 +1,12 @@
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
-from typing import Final, Protocol, assert_never, cast  # noqa: TID251  # preserve identity of existing JSON mappings
+from typing import (  # noqa: TID251  # preserve identity of existing JSON mappings
+    Final,
+    Literal,
+    Protocol,
+    assert_never,
+    cast,
+)
 
 from opentelemetry.trace import Span
 
@@ -82,10 +88,12 @@ async def check_end_user_model_budget(
     model_max_budget_limiter: EndUserModelLimiter,
     models: Sequence[str],
     team_id: str | None,
+    *,
+    scope: Literal["EndUser", "CustomEndUser"] = "EndUser",
 ) -> None:
     selected: Final = core.model_checks(
         core.ModelCheckFacts(
-            "EndUser",
+            scope,
             end_user_id,
             len(end_user_model_max_budget) if end_user_model_max_budget is not None else 0,
             len(models),

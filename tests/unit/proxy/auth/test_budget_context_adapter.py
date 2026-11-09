@@ -20,16 +20,16 @@ def native(request: pytest.FixtureRequest) -> bool:
     return request.param is True  # pyright: ignore[reportAny]  # fixture parameters are the two literal booleans above
 
 
-@pytest.mark.parametrize("scope", ("Team", "EndUser"))
+@pytest.mark.parametrize("scope", ("Team", "EndUser", "CustomEndUser"))
 @pytest.mark.parametrize("identity", (None, "", "entity"))
 @pytest.mark.parametrize("budget_count", (0, 1, 2))
 @pytest.mark.parametrize("model_count", (0, 1, 3))
 def test_native_model_read_selection(
-    scope: Literal["Team", "EndUser"], identity: str | None, budget_count: int, model_count: int
+    scope: Literal["Team", "EndUser", "CustomEndUser"], identity: str | None, budget_count: int, model_count: int
 ) -> None:
     facts: Final = core.ModelCheckFacts(scope, identity, budget_count, model_count)
     expected: Final = (
-        tuple(range(model_count)) if budget_count and identity is not None and (scope == "Team" or identity) else ()
+        tuple(range(model_count)) if budget_count and identity is not None and (scope != "EndUser" or identity) else ()
     )
     assert core.model_checks(facts) == expected
 

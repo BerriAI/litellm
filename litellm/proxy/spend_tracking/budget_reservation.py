@@ -14,8 +14,9 @@ from fastapi import HTTPException, status
 from pydantic import ConfigDict, TypeAdapter
 
 import litellm
-from litellm._auth import common_budgets
+from litellm._auth import common_budgets, spend_counter_policy
 from litellm._auth import reservation as reservation_policy
+from litellm._auth.failure import NativeAuthRuntimeError
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
@@ -174,9 +175,16 @@ def _key_reservation_should_release_for_throttle(counter_key: str, valid_token: 
     requests never reach this branch so their concurrent-overspend protection is
     untouched.
     """
-    if valid_token is None:
+    decision: Final = spend_counter_policy.decide(
+        spend_counter_policy.ThrottleKey(
+            counter_key, valid_token is not None, valid_token.token if valid_token is not None else None
+        )
+    )
+    if decision.kind == "Skip":
         return False
-    return counter_key == f"spend:key:{valid_token.token}" and should_throttle_budget_exceeded(valid_token)
+    if decision.kind != "ReadThrottle" or valid_token is None:
+        raise NativeAuthRuntimeError("Unexpected throttle-counter decision")
+    return should_throttle_budget_exceeded(valid_token)
 
 
 async def _apply_over_budget_reservation_policy(
@@ -196,26 +204,26 @@ async def _apply_over_budget_reservation_policy(
     down to what is left, unless strict enforcement is on, because the known
     estimate already does not fit; anything else hard-blocks by raising.
     """
-    if _key_reservation_should_release_for_throttle(counter.counter_key, valid_token):
-        await _release_applied_entries_best_effort(entries=[entry], default_reserved_cost=reservation_cost)
-        applied_entries.remove(entry)
-        return reservation_cost
-
-    remaining_before_reservation: Final = counter.max_budget - (current_spend - reservation_cost)
-    if remaining_before_reservation <= 1e-12:
-        _raise_counter_budget_exceeded(counter=counter, current_cost=current_spend)
-    if fail_closed_budget_enforcement and current_spend - counter.max_budget > 1e-12:
-        _raise_counter_budget_exceeded(
-            counter=counter,
-            current_cost=current_spend - reservation_cost,
-            estimated_cost=reservation_cost,
+    decision: Final = spend_counter_policy.decide(
+        spend_counter_policy.OverBudget(
+            _key_reservation_should_release_for_throttle(counter.counter_key, valid_token),
+            current_spend, counter.max_budget, reservation_cost, fail_closed_budget_enforcement,
         )
-    await _resize_applied_reservation(
-        entries=applied_entries,
-        current_reserved_cost=reservation_cost,
-        new_reserved_cost=remaining_before_reservation,
     )
-    return remaining_before_reservation
+    match decision:
+        case spend_counter_policy.Action(kind="Release"):
+            await _release_applied_entries_best_effort(entries=[entry], default_reserved_cost=reservation_cost)
+            applied_entries.remove(entry)
+            return reservation_cost
+        case spend_counter_policy.Rejected(current=current, estimate=estimate):
+            _raise_counter_budget_exceeded(counter=counter, current_cost=current, estimated_cost=estimate)
+        case spend_counter_policy.Resize(cost=cost):
+            await _resize_applied_reservation(
+                entries=applied_entries, current_reserved_cost=reservation_cost, new_reserved_cost=cost
+            )
+            return cost
+        case _:
+            raise NativeAuthRuntimeError("Unexpected reservation-overflow decision")
 
 
 def _raise_counter_budget_exceeded(
@@ -976,7 +984,9 @@ async def _reservation_counter_loaded(counter: _BudgetCounter, fail_closed_budge
     try:
         await _initialize_reservation_counter(counter=counter)
     except _CounterReservationUnavailable:
-        if fail_closed_budget_enforcement:
+        if spend_counter_policy.decide(
+            spend_counter_policy.ReservationFailure(fail_closed_budget_enforcement)
+        ).kind == "Unavailable":
             _raise_reservation_unavailable(counter_key=counter.counter_key)
         return False
     return True
@@ -1052,7 +1062,9 @@ async def _reserve_reservable_counters(
         if reserved_values is None:
             for entry in entries:
                 applied_entries.remove(entry)
-            if fail_closed_budget_enforcement:
+            if spend_counter_policy.decide(
+                spend_counter_policy.ReservationFailure(fail_closed_budget_enforcement)
+            ).kind == "Unavailable":
                 _raise_reservation_unavailable(counter_key=group[0].counter_key)
             continue
         for counter, entry, reserved_value in zip(group, entries, reserved_values):
@@ -1062,7 +1074,9 @@ async def _reserve_reservable_counters(
                 current_spend = reserved_value - (charged_cost - reservation_cost)
             else:
                 current_spend = current_spend_by_counter_key[counter.counter_key] + reservation_cost
-            if current_spend > counter.max_budget:
+            if spend_counter_policy.decide(
+                spend_counter_policy.Overflow(current_spend, counter.max_budget)
+            ).kind == "CheckOverflow":
                 reservation_cost = await _apply_over_budget_reservation_policy(
                     counter=counter,
                     valid_token=valid_token,
@@ -1083,14 +1097,16 @@ def _reservation_groups(
     """Every counter the batch read says still has room for the estimate is charged in one pipeline. As soon as one
     does not, the counters are charged one at a time so the over-budget policy settles each before the next is
     touched, and a rejection charges nothing after it."""
-    if not counters:
-        return ()
-    if all(
-        current_spend_by_counter_key[counter.counter_key] + reservation_cost <= counter.max_budget
-        for counter in counters
-    ):
-        return (tuple(counters),)
-    return tuple((counter,) for counter in counters)
+    decision: Final = spend_counter_policy.decide(
+        spend_counter_policy.ReservationGroups(
+            tuple(current_spend_by_counter_key[counter.counter_key] for counter in counters),
+            tuple(counter.max_budget for counter in counters),
+            reservation_cost,
+        )
+    )
+    if not isinstance(decision, spend_counter_policy.Groups):
+        raise NativeAuthRuntimeError("Unexpected reservation grouping decision")
+    return tuple(tuple(counters[index] for index in group) for group in decision.groups)
 
 
 async def _reserve_counters(
@@ -1202,7 +1218,9 @@ async def _set_reserved_entries_actual_cost(
             )
         )
         inconsistent: Final = tuple(item for item, ok in zip(adjustments, consistent) if not ok)
-        if inconsistent and not reseed_on_inconsistent:
+        if spend_counter_policy.decide(
+            spend_counter_policy.ResizeConsistency(bool(inconsistent), reseed_on_inconsistent)
+        ).kind == "RejectResize":
             # Pre-call admission resize: the in-flight reservation cost is not yet
             # persisted, so the DB floor would discard it. Keep the original
             # fail-closed behavior (raise -> reserve_budget_for_request releases and
@@ -1245,10 +1263,9 @@ async def _counter_can_apply_adjustment(
         current_value, _ = await read_spend_counter_cache_value(counter_key=counter_key)
     except (TypeError, ValueError):
         return False
-    if current_value is None:
-        return False
-
-    return not (adjustment < 0 and current_value + adjustment < -1e-12)
+    return spend_counter_policy.decide(
+        spend_counter_policy.Adjustment(current_value, adjustment)
+    ).kind == "Compatible"
 
 
 async def _release_applied_entries_best_effort(

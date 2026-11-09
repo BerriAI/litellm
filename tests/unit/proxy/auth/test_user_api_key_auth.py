@@ -1822,57 +1822,30 @@ def test_zero_cost_models_skip_the_user_budget_check_on_every_path():
     )
 
 
-def test_custom_auth_also_skips_budget_checks_for_zero_cost_models():
-    """
-    The custom-auth helper runs its own key, user and end-user per-model budget
-    checks. If it does not honour the zero-cost skip that the JWT and
-    virtual-key paths honour, the same free request is refused under one auth
-    method and served under the others.
-
-    Asserted structurally, on the same reasoning as the sibling test: the defect
-    is a check sitting outside a guard, and it must hold for checks added later
-    rather than only for whichever request a behavioural test happened to drive.
-    """
-    import ast
-    import inspect
-    import textwrap
-
+@pytest.mark.asyncio
+async def test_custom_auth_also_skips_budget_checks_for_zero_cost_models():
     from litellm.proxy.auth import user_api_key_auth as auth_module
 
-    src = textwrap.dedent(inspect.getsource(auth_module._run_post_custom_auth_checks))
-    tree = ast.parse(src)
-
-    assert "skip_budget_checks" in src, "the custom-auth path never computes the zero-cost skip flag"
-
-    budget_calls = (
-        "_enforce_model_budgets",
-        "is_end_user_within_model_budget",
+    router = litellm.Router(model_list=[{
+        "model_name": "free-model",
+        "litellm_params": {
+            "model": "openai/free-model", "api_key": "unused",
+            "input_cost_per_token": 0, "output_cost_per_token": 0,
+        },
+        "model_info": {"id": "free-id"},
+    }])
+    token = UserAPIKeyAuth(
+        token="test-key",
+        model_max_budget={"free-model": {"max_budget": 0}},
     )
-
-    def guarding_ifs(target: ast.AST) -> list[ast.If]:
-        return [
-            node for node in ast.walk(tree) if isinstance(node, ast.If) and any(sub is target for sub in ast.walk(node))
-        ]
-
-    def mentions_skip(node: ast.If) -> bool:
-        return any(isinstance(sub, ast.Name) and sub.id == "skip_budget_checks" for sub in ast.walk(node.test))
-
-    for call_name in budget_calls:
-        calls = [
-            node
-            for node in ast.walk(tree)
-            if isinstance(node, ast.Call)
-            and (
-                (isinstance(node.func, ast.Name) and node.func.id == call_name)
-                or (isinstance(node.func, ast.Attribute) and node.func.attr == call_name)
-            )
-        ]
-        assert calls, f"{call_name} is no longer called here; update this invariant"
-        for call in calls:
-            assert any(mentions_skip(node) for node in guarding_ifs(call)), (
-                f"{call_name} runs even for a zero-cost model, so custom auth refuses "
-                "requests the JWT and virtual-key paths serve"
-            )
+    with (
+        patch("litellm.proxy.proxy_server.llm_router", router),
+        patch("litellm.proxy.proxy_server.general_settings", {}),
+    ):
+        result = await auth_module._run_post_custom_auth_checks(
+            token, None, {"model": "free-model"}, "/v1/chat/completions", None
+        )
+    assert result is token
 
 
 def test_custom_auth_attaches_the_user_budget_even_when_it_does_not_enforce():

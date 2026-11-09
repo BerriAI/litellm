@@ -98,8 +98,12 @@ def test_fallback_reads_preserve_body_binding_guards(
     router: bool, multipart: bool | None, resource: bool | None
 ) -> None:
     expected: Final = (
-        "Continue" if not router or multipart or resource else
-        "ReadContentType" if multipart is None else
-        "ReadResourceBinding" if resource is None else "ReadFallbackSettings"
+        "Continue"
+        if not router or multipart or resource
+        else "ReadContentType"
+        if multipart is None
+        else "ReadResourceBinding"
+        if resource is None
+        else "ReadFallbackSettings"
     )
     assert common_flow.read(common_flow.MemberFallback(router, multipart, resource)) == expected

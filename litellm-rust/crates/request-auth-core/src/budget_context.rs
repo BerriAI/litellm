@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 pub enum ModelScope {
     Team,
     EndUser,
+    CustomEndUser,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -344,6 +345,8 @@ mod tests {
     #[case::team_none(ModelScope::Team, None, vec![])]
     #[case::enduser_empty(ModelScope::EndUser, Some(""), vec![])]
     #[case::enduser(ModelScope::EndUser, Some("user"), vec![0, 1])]
+    #[case::custom_empty(ModelScope::CustomEndUser, Some(""), vec![0, 1])]
+    #[case::custom_absent(ModelScope::CustomEndUser, None, vec![])]
     fn model_identity_gates(
         #[case] scope: ModelScope,
         #[case] identity: Option<&str>,

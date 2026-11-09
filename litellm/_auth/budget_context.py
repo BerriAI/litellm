@@ -9,7 +9,7 @@ from litellm.rust_bridge import _native
 
 @dataclass(frozen=True, slots=True)
 class ModelCheckFacts:
-    scope: Literal["Team", "EndUser"]
+    scope: Literal["Team", "EndUser", "CustomEndUser"]
     entity_id: str | None
     budget_count: int
     model_count: int
