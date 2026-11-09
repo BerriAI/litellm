@@ -2691,13 +2691,13 @@ class ResponsesWebSocketStreaming:
         if not self._open_turns:
             self._start_turn(None)
         turn: Final = self._open_turns[0].with_event(event_obj)
-        if event_obj.get("type") in _RESPONSES_WS_TERMINAL_EVENT_TYPES:
-            self._open_turns = self._open_turns[1:]
-            if event_obj.get("type") in _HISTORY_TERMINAL_EVENT_TYPES:
-                await self._record_turn_usage(turn)
-            self._log_turn(turn)
-            return
         self._open_turns = (turn, *self._open_turns[1:])
+        if event_obj.get("type") not in _RESPONSES_WS_TERMINAL_EVENT_TYPES:
+            return
+        if event_obj.get("type") in _HISTORY_TERMINAL_EVENT_TYPES:
+            await self._record_turn_usage(turn)
+        self._open_turns = self._open_turns[1:]
+        self._log_turn(turn)
 
     async def _record_turn_usage(self, turn: _ResponsesWsTurn) -> None:
         from litellm.cost_calculator import ResponsesWebSocketTokenUsageProcessor
@@ -2707,10 +2707,13 @@ class ResponsesWebSocketStreaming:
         )
         if self.turn_usage_recorder is None or turn_litellm_params is None:
             return
-        usage: Final = ResponsesWebSocketTokenUsageProcessor.collect_and_combine_usage_from_responses_ws_results(
-            turn.events
-        )
-        await self.turn_usage_recorder(turn_litellm_params, usage.total_tokens)
+        try:
+            usage: Final = ResponsesWebSocketTokenUsageProcessor.collect_and_combine_usage_from_responses_ws_results(
+                turn.events
+            )
+            await self.turn_usage_recorder(turn_litellm_params, usage.total_tokens)
+        except Exception as e:  # noqa: BLE001  # a turn not counted early is still counted by its logging
+            verbose_logger.debug("Responses WS turn usage not counted before its terminal event: %s", e)
 
     def _log_open_turns(self) -> None:
         open_turns: Final = self._open_turns
