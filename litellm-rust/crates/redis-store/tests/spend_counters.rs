@@ -642,11 +642,21 @@ async fn every_write_gives_a_committed_twin_the_committed_ttl_and_other_counters
     let store = store(Some(connect(&deployment)));
     store.set_committed_ttl(COMMITTED_TTL);
     let request = RequestRedis::new(Handle::current(), LONG_DEADLINE);
-    let [incremented, pipelined, post_call, seeded, repaired, refreshed] =
-        ["a", "b", "c", "d", "e", "f"].map(|id| counter_of(team(id)));
-    raw.send(commands::set(&refreshed.key(), "1.0", Duration::from_secs(5)))
-        .await
-        .unwrap();
+    let [
+        incremented,
+        pipelined,
+        post_call,
+        seeded,
+        repaired,
+        refreshed,
+    ] = ["a", "b", "c", "d", "e", "f"].map(|id| counter_of(team(id)));
+    raw.send(commands::set(
+        &refreshed.key(),
+        "1.0",
+        Duration::from_secs(5),
+    ))
+    .await
+    .unwrap();
 
     store
         .increment(&incremented, Number::Float(1.0))
@@ -668,18 +678,45 @@ async fn every_write_gives_a_committed_twin_the_committed_ttl_and_other_counters
     assert!(store.refresh_ttl(&refreshed).await.unwrap());
 
     assert!(settlement.is_settled());
-    let remaining = async |counter: &SpendCounter| {
-        match raw.send(commands::ttl(&counter.key())).await.unwrap() {
+    let remaining =
+        async |counter: &SpendCounter| match raw.send(commands::ttl(&counter.key())).await.unwrap()
+        {
             Ttl::Expires(remaining) => remaining,
             other => panic!("{} has no TTL: {other:?}", counter.key()),
-        }
-    };
+        };
     assert!(within(remaining(&incremented).await, ttl_seconds));
     assert!(within(remaining(&pipelined).await, ttl_seconds));
     assert!(within(remaining(&post_call).await, ttl_seconds));
     assert!(within(remaining(&seeded).await, ttl_seconds));
     assert!(within(remaining(&repaired).await, ttl_seconds));
     assert!(within(remaining(&refreshed).await, ttl_seconds));
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_post_call_charge_moves_a_committed_twins_expiry_out_to_the_committed_ttl(
+    #[values(Topology::Standalone, Topology::Cluster)] topology: Topology,
+) {
+    let deployment = RedisDeployment::start(topology).await.unwrap();
+    let raw = connect(&deployment);
+    let store = store(Some(connect(&deployment)));
+    store.set_committed_ttl(COMMITTED_TTL);
+    let request = RequestRedis::new(Handle::current(), LONG_DEADLINE);
+    let counter = committed(team("t"));
+    raw.send(commands::set(&counter.key(), "1.0", Duration::from_secs(5)))
+        .await
+        .unwrap();
+
+    let settlement = store
+        .increment_many_post_call(&request, &[(counter.clone(), Number::Float(1.0))])
+        .unwrap();
+    request.flush_post().await;
+
+    assert!(settlement.is_settled());
+    match raw.send(commands::ttl(&counter.key())).await.unwrap() {
+        Ttl::Expires(remaining) => assert!(within(remaining, COMMITTED_TTL.as_secs())),
+        other => panic!("{} has no TTL: {other:?}", counter.key()),
+    }
 }
 
 #[tokio::test]

@@ -36,7 +36,9 @@ impl SpendCounter {
             None => format!("spend:{scope}:{id}"),
         };
         match self {
-            Self::Committed(counter) => format!("spend:committed:{}", &counter.key()["spend:".len()..]),
+            Self::Committed(counter) => {
+                format!("spend:committed:{}", &counter.key()["spend:".len()..])
+            }
             Self::Key { token, window } => windowed("key", token, window),
             Self::Team { team_id, window } => windowed("team", team_id, window),
             Self::TeamMember { user_id, team_id } => {

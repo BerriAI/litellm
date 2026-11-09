@@ -72,6 +72,16 @@ impl SpendCounters {
         }
     }
 
+    /// A committed twin's expiry moves out on every charge, on a cluster too, so it never expires
+    /// while a charge it holds is still on its way to the DB.
+    fn post_call_expiry(&self, counter: &SpendCounter, default_ttl: Duration) -> Expiry {
+        let ttl = self.ttl(counter, default_ttl);
+        match counter {
+            SpendCounter::Committed(_) => Expiry::Refresh(ttl),
+            _ => Expiry::KeepExisting(ttl),
+        }
+    }
+
     /// `DualCache.attach_redis_cache`: memory stays, and `false` means a Redis was already attached.
     pub fn attach(&self, remote: Remote) -> bool {
         self.cache.redis().attach(remote)
@@ -214,7 +224,7 @@ impl SpendCounters {
                 let total = batch.add(commands::incr_by_float(
                     &counter.key(),
                     (*amount).into(),
-                    Some(Expiry::KeepExisting(self.ttl(counter, remote.default_ttl))),
+                    Some(self.post_call_expiry(counter, remote.default_ttl)),
                 ));
                 (counter.clone(), total)
             })

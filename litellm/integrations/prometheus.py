@@ -396,7 +396,7 @@ def _budgeted_org_counter(org_id: str | None, org: OrgBudgetSnapshot | None) -> 
     return EntitySpendCounterKeys.of(token=None, team_id=None, user_id=None, org_id=org_id, end_user_id=None)
 
 
-async def _committed_spend_now(counter_keys: EntitySpendCounterKeys) -> CommittedBudgetSpend:
+async def _committed_spend_now(counter_keys: EntitySpendCounterKeys, timeout: float) -> CommittedBudgetSpend:
     if not counter_keys.tracked():
         return CommittedBudgetSpend()
     try:
@@ -405,7 +405,7 @@ async def _committed_spend_now(counter_keys: EntitySpendCounterKeys) -> Committe
 
         return await asyncio.wait_for(
             read_committed_budget_spend(spend_counter_store, counter_keys),
-            timeout=_get_budget_metrics_per_request_timeout(),
+            timeout=timeout,
         )
     except Exception as e:  # noqa: BLE001  # a gauge read never fails the request; the gauges keep the stored spend
         verbose_logger.debug("[Non-Blocking] Prometheus: committed spend read failed: %s", e)
@@ -458,10 +458,13 @@ def _committed_spend_before_request(
 
 
 async def _committed_spend_without_own_charge(
-    counter_keys: EntitySpendCounterKeys, at_auth: CommittedBudgetSpend | None, response_cost: float
+    counter_keys: EntitySpendCounterKeys,
+    at_auth: CommittedBudgetSpend | None,
+    response_cost: float,
+    read_timeout: float,
 ) -> CommittedBudgetSpend:
     own_charge_before_read: Final = _own_charge()
-    now: Final = await _committed_spend_now(counter_keys)
+    now: Final = await _committed_spend_now(counter_keys, read_timeout)
     own_charge: Final = own_charge_before_read if _own_charge() == own_charge_before_read else "unknown"
     return _committed_spend_before_request(
         at_auth=now if at_auth is None else at_auth, now=now, response_cost=response_cost, own_charge=own_charge
@@ -2345,6 +2348,7 @@ class PrometheusLogger(CustomLogger):
         # so dropping one slow per-request emission only loses sub-cron real-time
         # detail, not correctness.
         budget_metrics_timeout: Final = _get_budget_metrics_per_request_timeout()
+        committed_read_timeout: Final = budget_metrics_timeout / 2
 
         async def emit_budget_metrics() -> tuple[object, ...]:
             committed: Final = await _committed_spend_without_own_charge(
@@ -2359,6 +2363,7 @@ class PrometheusLogger(CustomLogger):
                 ),
                 at_auth=_committed_at_auth,
                 response_cost=response_cost,
+                read_timeout=committed_read_timeout,
             )
             return await asyncio.gather(
                 self._set_api_key_budget_metrics_after_api_request(
@@ -2937,6 +2942,7 @@ class PrometheusLogger(CustomLogger):
                 )
                 or CommittedBudgetSpend(),
                 response_cost=failure_cost,
+                read_timeout=_get_budget_metrics_per_request_timeout(),
             )
             await self._set_org_budget_metrics_after_api_request(
                 org_id=user_api_key_org_id,

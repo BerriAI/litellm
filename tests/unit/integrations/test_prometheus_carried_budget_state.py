@@ -382,6 +382,30 @@ async def test_slow_committed_read_on_a_failed_request_is_bounded_and_keeps_the_
     prometheus_logger.litellm_remaining_org_budget_metric.labels().set.assert_called_once_with(pytest.approx(440.0))
 
 
+@pytest.mark.asyncio
+async def test_slow_committed_read_on_a_successful_request_still_sets_the_gauges_from_the_auth_time_spend(
+    prometheus_logger, getters, monkeypatch
+):
+    async def never_answers(counter: str) -> None:
+        await asyncio.sleep(30)
+
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.spend_counter_store",
+        FakeSpendCounters(redis={}, batch_reads=False, read_hook=never_answers).store(),
+    )
+    monkeypatch.setenv("PROMETHEUS_BUDGET_METRICS_PER_REQUEST_TIMEOUT", "0.5")
+    _stub_gauges(prometheus_logger)
+
+    await asyncio.wait_for(_emit(prometheus_logger, _request_metadata(_token_committed_at_auth())), timeout=5)
+
+    assert _remaining(prometheus_logger) == {
+        "key": pytest.approx(5.0),
+        "team": pytest.approx(268.0),
+        "user": pytest.approx(40.0),
+        "org": pytest.approx(438.0),
+    }
+
+
 @pytest.fixture
 def redis_spend_counters():
     spend: Final = FakeSpendCounters(redis={})
