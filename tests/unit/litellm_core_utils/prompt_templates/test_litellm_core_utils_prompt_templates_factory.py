@@ -2803,6 +2803,16 @@ async def test_bedrock_converse_s3_pdf_is_a_document_named_after_its_uri(run_asy
 
 
 @pytest.mark.parametrize("run_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("uri", ["s3://media-bucket/docs/notes.md", "s3://media-bucket/docs/NOTES.markdown"])
+async def test_bedrock_converse_s3_markdown_without_a_format_is_an_md_document(uri: str, run_async: bool):
+    content: Final = await _converse_user_content({"type": "file", "file": {"file_id": uri}}, run_async)
+
+    assert [{**block, "document": {**block["document"], "name": "-"}} for block in content] == [
+        {"document": {"format": "md", "name": "-", "source": _s3_source(uri)}}
+    ]
+
+
+@pytest.mark.parametrize("run_async", [False, True], ids=["sync", "async"])
 @pytest.mark.parametrize("uri", ["s3://media-bucket/uploads/7f3a9c", "s3://media-bucket/uploads/blob.unknownext"])
 async def test_bedrock_converse_s3_media_without_a_known_extension_or_format_is_a_bad_request(
     uri: str, run_async: bool

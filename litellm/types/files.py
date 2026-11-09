@@ -29,6 +29,7 @@ class FileType(Enum):
     JSON = "JSON"
     M4A = "M4A"
     M4V = "M4V"
+    MD = "MD"
     MOV = "MOV"
     MP3 = "MP3"
     MP4 = "MP4"
@@ -75,6 +76,7 @@ FILE_EXTENSIONS: Final[Mapping[FileType, list[str]]] = MappingProxyType(
         FileType.JSON: ["json"],
         FileType.M4A: ["m4a"],
         FileType.M4V: ["m4v"],
+        FileType.MD: ["md", "markdown"],
         FileType.MOV: ["mov"],
         FileType.MP3: ["mp3"],
         FileType.MP4: ["mp4"],
@@ -122,6 +124,7 @@ FILE_MIME_TYPES: Final[Mapping[FileType, str]] = MappingProxyType(
         FileType.JSON: "application/json",
         FileType.M4A: "audio/x-m4a",
         FileType.M4V: "video/x-m4v",
+        FileType.MD: "text/markdown",
         FileType.MOV: "video/quicktime",
         FileType.MP3: "audio/mpeg",
         FileType.MP4: "video/mp4",
@@ -238,7 +241,7 @@ def is_audio_file_type(file_type):
 
 
 # Text
-TEXT_FILE_TYPES: Final = {FileType.CSV, FileType.HTML, FileType.RTF, FileType.TXT}
+TEXT_FILE_TYPES: Final = {FileType.CSV, FileType.HTML, FileType.MD, FileType.RTF, FileType.TXT}
 
 
 def is_text_file_type(file_type):
