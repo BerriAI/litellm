@@ -87452,7 +87452,6 @@
         "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json",
         "supports_adaptive_thinking": true,
         "supports_assistant_prefill": false,
-        "supports_bedrock_native_structured_output_by_default": true,
         "supports_computer_use": true,
         "supports_forced_tool_use": false,
         "supports_function_calling": true,
