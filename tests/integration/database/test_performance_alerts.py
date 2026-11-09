@@ -197,3 +197,15 @@ async def test_a_resource_that_cannot_be_read_is_skipped_without_blocking_the_re
 async def test_only_one_of_many_concurrent_workers_gets_each_run(fixture: Fixture) -> None:
     claims: Final = await asyncio.gather(*(fixture.repository.claim(timedelta(minutes=5)) for _ in range(8)))
     assert sum(claim is not None for claim in claims) == 1
+
+
+@pytest.mark.parametrize(("seconds_until_due", "claimed"), ((20, True), (60, False)))
+@pytest.mark.asyncio
+async def test_a_timer_firing_just_before_the_run_is_due_still_takes_it(
+    fixture: Fixture, seconds_until_due: int, claimed: bool
+) -> None:
+    write_rows(
+        'INSERT INTO "LiteLLM_PerformanceAlertState" (id, owner, next_run_at) VALUES (1, %s, now() + %s::interval)',
+        ("earlier-worker", f"{seconds_until_due} seconds"),
+    )
+    assert (await fixture.repository.claim(timedelta(minutes=5)) is not None) is claimed
