@@ -142,6 +142,7 @@ def _vertex_claude_usage(
         },
         "output_tokens": output_tokens,
         "output_tokens_details": {"thinking_tokens": thinking_tokens},
+        "speed": "standard",
     }
 
 
@@ -230,6 +231,7 @@ def _vertex_claude_stream_response(model: str, stop_reason: str, text_deltas: tu
                             "cache_read_input_tokens": 0,
                             "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
                             "output_tokens": 0,
+                            "speed": "standard",
                         },
                     },
                 },
@@ -2916,6 +2918,7 @@ VERTEX_AI_CLAUDE_SONNET_5_5_INPUT_TEXT: Final = CLAUDE_SONNET_5_5_INPUT_TEXT.mod
                     "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
                     "output_tokens": 412,
                     "output_tokens_details": {"thinking_tokens": 0},
+                    "speed": "standard",
                 },
             },
         ),
@@ -2958,6 +2961,7 @@ VERTEX_AI_CLAUDE_OPUS_5_5_INPUT_TEXT: Final = CLAUDE_OPUS_5_5_INPUT_TEXT.model_c
                     "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
                     "output_tokens": 412,
                     "output_tokens_details": {"thinking_tokens": 0},
+                    "speed": "standard",
                 },
             },
         ),
@@ -3001,6 +3005,7 @@ VERTEX_AI_CLAUDE_FABLE_5_1_INPUT_TEXT: Final = CLAUDE_FABLE_5_1_INPUT_TEXT.model
                     "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
                     "output_tokens": 412,
                     "output_tokens_details": {"thinking_tokens": 0},
+                    "speed": "standard",
                 },
             },
         ),

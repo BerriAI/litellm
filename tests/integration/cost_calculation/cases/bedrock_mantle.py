@@ -1012,20 +1012,22 @@ BEDROCK_MANTLE_CLAUDE_OPUS_5_5_STREAM: Final = CLAUDE_OPUS_5_5_STREAM.model_copy
     }
 )
 
-BEDROCK_MANTLE_CLAUDE_OPUS_5_5_MESSAGES_INPUT_TEXT: Final = with_usage(
-    CLAUDE_OPUS_5_5_MESSAGES_INPUT_TEXT,
-    "bedrock_mantle-anthropic.claude-opus-5-5-messages_input_text",
-    _ADAPTIVE_USAGE,
-    _ADAPTIVE_EXPECTED,
-).model_copy(
-    update={
-        "model": _MANTLE_CLAUDE_OPUS_MODEL,
-        "request": {
-            **CLAUDE_OPUS_5_5_MESSAGES_INPUT_TEXT.request,
-            "thinking": {"type": "adaptive"},
-            "output_config": {"effort": "medium"},
-        },
-    }
+BEDROCK_MANTLE_CLAUDE_OPUS_5_5_MESSAGES_INPUT_TEXT: Final = _mantle_without_usage_fields(
+    with_usage(
+        CLAUDE_OPUS_5_5_MESSAGES_INPUT_TEXT,
+        "bedrock_mantle-anthropic.claude-opus-5-5-messages_input_text",
+        _ADAPTIVE_USAGE,
+        _ADAPTIVE_EXPECTED,
+    ).model_copy(
+        update={
+            "model": _MANTLE_CLAUDE_OPUS_MODEL,
+            "request": {
+                **CLAUDE_OPUS_5_5_MESSAGES_INPUT_TEXT.request,
+                "thinking": {"type": "adaptive"},
+                "output_config": {"effort": "medium"},
+            },
+        }
+    )
 )
 
 BEDROCK_MANTLE_CLAUDE_OPUS_5_5_MESSAGES_STREAM: Final = CLAUDE_OPUS_5_5_MESSAGES_STREAM.model_copy(
