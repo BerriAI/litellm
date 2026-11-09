@@ -103,9 +103,6 @@ from litellm.llms.openai.cost_calculation import (
 from litellm.llms.openai.cost_calculation import (
     video_output_cost_per_second,
 )
-from litellm.llms.openai.transcriptions.gpt_transformation import (
-    OpenAIGPTAudioTranscriptionConfig,
-)
 from litellm.llms.perplexity.cost_calculator import (
     cost_per_token as perplexity_cost_per_token,
 )
@@ -381,38 +378,18 @@ def _transcription_uses_token_pricing(
     return (prompt_tokens_val > 0) or (completion_tokens_val > 0)
 
 
-def _bills_transcription_usage_duration(pricing_model: str | None, custom_llm_provider: str | None) -> bool:
-    if pricing_model is None or custom_llm_provider is None:
-        return False
-    transcription_info: Final = _lookup_model_info_or_none(pricing_model, custom_llm_provider)
-    transcription_metadata: Final = (
-        as_str_mapping(transcription_info.get("provider_specific_entry")) if transcription_info is not None else None
-    )
-    return transcription_metadata is not None and transcription_metadata.get("transcription_usage_duration") == 1
-
-
-def _transcription_duration_for_cost(
-    completion_response: object, pricing_model: str | None, model: str | None, custom_llm_provider: str | None
-) -> float:
+def _transcription_duration_for_cost(completion_response: object) -> float:
+    # The seconds the provider says it billed come first, since that is what the provider charges (OpenAI rounds
+    # a 2.4 s clip up to 3 s). The length measured from the upload only fills in when the reply carries none,
+    # as with a `text` reply
+    billed_duration: Final = _get_transcription_usage_duration(completion_response)
+    if billed_duration is not None and billed_duration > 0:
+        return billed_duration
     hidden_params: Final = as_str_mapping(attribute_or_none(completion_response, "_hidden_params")) or {}
     measured_duration: Final = normalized_audio_duration_seconds(
         hidden_params.get("audio_transcription_duration", attribute_or_none(completion_response, "duration"))
     )
-    if measured_duration is not None and measured_duration > 0:
-        return measured_duration
-    provider_duration: Final = _get_transcription_usage_duration(completion_response)
-    if (
-        provider_duration is not None
-        and provider_duration > 0
-        and any(_bills_transcription_usage_duration(name, custom_llm_provider) for name in (pricing_model, model))
-    ):
-        return provider_duration
-    if model is None or custom_llm_provider != LlmProviders.OPENAI.value:
-        return 0.0
-    transcription_config: Final = ProviderConfigManager.get_provider_audio_transcription_config(
-        model=model.removeprefix(f"{LlmProviders.OPENAI.value}/"), provider=LlmProviders.OPENAI
-    )
-    return (provider_duration or 0.0) if isinstance(transcription_config, OpenAIGPTAudioTranscriptionConfig) else 0.0
+    return measured_duration if measured_duration is not None and measured_duration > 0 else 0.0
 
 
 OCRPricingField = Literal["ocr_cost_per_page", "ocr_cost_per_credit", "annotation_cost_per_page"]
@@ -2132,9 +2109,7 @@ def completion_cost(
                         prompt,
                     )
                 elif call_type in _TRANSCRIPTION_CALL_TYPES:
-                    audio_transcription_file_duration = _transcription_duration_for_cost(
-                        completion_response, model, requested_model, custom_llm_provider
-                    )
+                    audio_transcription_file_duration = _transcription_duration_for_cost(completion_response)
                 elif call_type in _RERANK_CALL_TYPES:
                     if completion_response is not None and isinstance(completion_response, RerankResponse):
                         meta_obj = completion_response.meta

@@ -7532,82 +7532,67 @@ def test_whisper_azure():
     assert round(cost, 5) == round(expected_cost, 5)
 
 
-@pytest.mark.parametrize(
-    ("provider", "requested_model", "response_extras", "expected_seconds"),
-    [
-        ("openai", "openai/gpt-fake-transcribe", {}, 2.0),
-        ("openai", "openai/gpt-fake-transcribe", {"_audio_transcription_duration": 1.35}, 1.35),
-        ("openai", "openai/gpt-fake-transcribe", {"duration": 1.34}, 1.34),
-        ("openai", "openai/whisper-fake", {}, 0.0),
-        ("azure", "gpt-fake-transcribe", {}, 0.0),
-    ],
-    ids=[
-        "undecodable_upload_bills_provider_seconds",
-        "measured_duration_still_wins",
-        "provider_duration_still_wins",
-        "whisper_models_never_bill_provider_seconds",
-        "azure_never_bills_provider_seconds",
-    ],
-)
-def test_transcription_cost_falls_back_to_provider_billed_seconds(
-    monkeypatch: pytest.MonkeyPatch,
-    provider: str,
-    requested_model: str,
-    response_extras: Mapping[str, float],
-    expected_seconds: float,
-) -> None:
-    model: Final = requested_model.removeprefix(f"{provider}/")
+def _per_second_transcription(
+    monkeypatch: pytest.MonkeyPatch, provider: str, model: str, response_object: Mapping[str, object]
+) -> TranscriptionResponse:
     monkeypatch.setitem(
         litellm.model_cost,
         model,
         {"input_cost_per_second": 0.01, "litellm_provider": provider, "mode": "audio_transcription"},
     )
-    transcription: Final = convert_to_model_response_object(
-        response_object={
-            "text": "What is the weather in Paris?",
-            "usage": {"type": "duration", "seconds": 2},
-            **response_extras,
-        },
+    return convert_to_model_response_object(
+        response_object={"text": "What is the weather in Paris?", **response_object},
         model_response_object=TranscriptionResponse(),
         hidden_params={"model": model, "custom_llm_provider": provider},
         response_type="audio_transcription",
     )
 
-    cost: Final = completion_cost(
-        completion_response=transcription, model=requested_model, call_type="atranscription"
+
+@pytest.mark.parametrize(
+    ("provider", "model", "measured"),
+    [
+        ("openai", "whisper-fake", {}),
+        ("openai", "whisper-fake", {"_audio_transcription_duration": 2.4}),
+        ("openai", "whisper-fake", {"duration": 2.4}),
+        ("openai", "gpt-fake-transcribe", {"_audio_transcription_duration": 2.4}),
+        ("azure", "whisper-fake", {"_audio_transcription_duration": 2.4}),
+    ],
+    ids=[
+        "unmeasured_upload",
+        "measured_upload",
+        "verbose_json_duration",
+        "gpt_transcribe_model",
+        "azure",
+    ],
+)
+def test_transcription_cost_bills_the_seconds_the_provider_billed(
+    monkeypatch: pytest.MonkeyPatch, provider: str, model: str, measured: Mapping[str, float]
+) -> None:
+    # OpenAI rounds a 2.4 s clip up and reports `"usage": {"type": "duration", "seconds": 3}` (live whisper-1 call,
+    # 2026-11-09), so the reported seconds win over the length measured from the upload
+    transcription: Final = _per_second_transcription(
+        monkeypatch, provider, model, {"usage": {"type": "duration", "seconds": 3}, **measured}
     )
 
-    assert cost == pytest.approx(0.01 * expected_seconds)
+    cost: Final = completion_cost(
+        completion_response=transcription, model=f"{provider}/{model}", call_type="atranscription"
+    )
+
+    assert cost == pytest.approx(0.01 * 3)
 
 
 @pytest.mark.parametrize(
-    ("provider", "measured_seconds", "expected_seconds"),
-    [("openai", 1.0, 1.0), ("azure", 1.0, 1.0), ("azure", None, 7.0)],
-    ids=["openai_measured_upload_wins", "azure_measured_upload_wins", "unmeasured_upload_bills_provider_seconds"],
+    ("measured", "expected_seconds"),
+    [({"_audio_transcription_duration": 2.4}, 2.4), ({"duration": 2.4}, 2.4), ({}, 0.0)],
+    ids=["measured_upload", "reply_duration", "nothing_known"],
 )
-def test_transcription_priced_by_provider_duration_still_bills_the_measured_upload(
-    monkeypatch: pytest.MonkeyPatch, provider: str, measured_seconds: float | None, expected_seconds: float
+def test_transcription_cost_without_provider_seconds_bills_the_measured_length(
+    monkeypatch: pytest.MonkeyPatch, measured: Mapping[str, float], expected_seconds: float
 ) -> None:
-    monkeypatch.setitem(
-        litellm.model_cost,
-        "gpt-fake-transcribe",
-        {
-            "input_cost_per_second": 0.01,
-            "litellm_provider": provider,
-            "mode": "audio_transcription",
-            "provider_specific_entry": {"transcription_usage_duration": 1},
-        },
-    )
-    measured: Final = {} if measured_seconds is None else {"audio_transcription_duration": measured_seconds}
-    transcription: Final = convert_to_model_response_object(
-        response_object={"text": "What is the weather in Paris?", "usage": {"type": "duration", "seconds": 7}},
-        model_response_object=TranscriptionResponse(),
-        hidden_params={"model": "gpt-fake-transcribe", "custom_llm_provider": provider, **measured},
-        response_type="audio_transcription",
-    )
+    transcription: Final = _per_second_transcription(monkeypatch, "openai", "whisper-fake", measured)
 
     cost: Final = completion_cost(
-        completion_response=transcription, model=f"{provider}/gpt-fake-transcribe", call_type="atranscription"
+        completion_response=transcription, model="openai/whisper-fake", call_type="atranscription"
     )
 
     assert cost == pytest.approx(0.01 * expected_seconds)
