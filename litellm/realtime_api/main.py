@@ -409,7 +409,7 @@ async def acreate_realtime_translation_client_secret(
     req: Final = RealtimeClientSecretRequest(
         model=requested_model_name,
         session=session_config,
-        expires_after=RealtimeExpiresAfter.model_validate(expires_after) if expires_after else None,
+        expires_after=RealtimeExpiresAfter(**_ExpiresAfterFields(**expires_after)) if expires_after else None,
     )
     litellm_logging_obj: Final = kwargs.get("litellm_logging_obj")
     if not isinstance(litellm_logging_obj, LiteLLMLogging):
@@ -486,6 +486,10 @@ def _with_upstream_transcription_model(request_data: Mapping[str, object], model
 def _deployment_base_model(kwargs: Mapping[str, object], custom_llm_provider: str) -> str | None:
     base_model: Final = get_base_model_from_metadata(model_call_details={"litellm_params": kwargs})
     return None if base_model is None else base_model.removeprefix(f"{custom_llm_provider}/")
+
+
+class _ExpiresAfterFields(TypedDict, total=False, extra_items=object):
+    pass
 
 
 class _TranscriptionSessionFields(TypedDict, total=False, extra_items=object):
