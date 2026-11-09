@@ -929,9 +929,7 @@ def token_counter(
     if litellm.disable_token_counter is True:
         return 0
 
-    logged_text: Final = (
-        REDACTED_BY_LITELLM if debug_message_redaction_active() and isinstance(text, str) and text != "" else text
-    )
+    logged_text: Final = REDACTED_BY_LITELLM if debug_message_redaction_active() and text else text
     verbose_logger.debug("messages in token_counter: %s, text in token_counter: %s", messages, logged_text)
     if text is not None and messages is not None:
         raise ValueError("text and messages cannot both be set")

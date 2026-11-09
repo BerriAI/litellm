@@ -3625,3 +3625,32 @@ def test_openai_model_check_holds_while_openai_models_are_registered_concurrentl
             registering.result()
     finally:
         litellm.open_ai_chat_completion_models.difference_update(registered)
+
+
+_BATCH_PROMPT: Final = "account-number-42896-batch"
+
+
+def test_token_counter_debug_redacts_a_batch_of_strings(caplog, monkeypatch):
+    from litellm.constants import REDACTED_BY_LITELLM
+    from litellm.litellm_core_utils.token_counter import token_counter
+
+    monkeypatch.setattr(litellm, "turn_off_message_logging", False)
+    caplog.set_level("DEBUG", logger="LiteLLM")
+    counted_open: Final = token_counter(model="gpt-4o-mini", text=[_BATCH_PROMPT])
+    assert _BATCH_PROMPT in caplog.text
+
+    caplog.clear()
+    monkeypatch.setattr(litellm, "turn_off_message_logging", True)
+    counted_private: Final = token_counter(model="gpt-4o-mini", text=[_BATCH_PROMPT])
+
+    assert counted_private == counted_open
+    assert _BATCH_PROMPT not in caplog.text
+    assert REDACTED_BY_LITELLM in caplog.text
+
+    caplog.clear()
+    monkeypatch.setattr(litellm, "turn_off_message_logging", False)
+    from litellm.litellm_core_utils.initialize_dynamic_callback_params import inherit_message_logging_privacy
+
+    with inherit_message_logging_privacy(True):
+        token_counter(model="gpt-4o-mini", text=[_BATCH_PROMPT])
+    assert _BATCH_PROMPT not in caplog.text
