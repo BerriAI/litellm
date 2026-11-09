@@ -132,12 +132,14 @@ def _router_span_fields(
     stall_original_tier: Final = (
         routing_decision.get("stall_escalation_original_tier") if stall_escalated else None
     )
-    managed_fields: Final = {
-        "escalated",
-        "stall_escalated",
-        "stall_escalation_reason",
-        "stall_escalation_original_tier",
-    }
+    managed_fields: Final = frozenset(
+        {
+            "escalated",
+            "stall_escalated",
+            "stall_escalation_reason",
+            "stall_escalation_original_tier",
+        }
+    )
     unmanaged_entries: Final = tuple(
         (key, value) for key, value in routing_decision.items() if key not in managed_fields
     )

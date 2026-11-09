@@ -18,11 +18,11 @@ from __future__ import annotations
 import json
 from collections.abc import Iterator, Mapping, Sequence
 from itertools import islice
-from typing import Final, Literal, NamedTuple
+from typing import Final, Literal, NamedTuple, TypeAlias
 
 from pydantic import TypeAdapter
 
-StallDetectionReason = Literal[
+StallDetectionReason: TypeAlias = Literal[
     "repeated_tool_call",
     "repeated_tool_error",
 ]
@@ -57,6 +57,8 @@ def _tool_call_signature(name: str, raw_arguments: object) -> tuple[str, str]:
 
 def _iter_tool_result_error_pairs(messages: Sequence[Mapping[str, object]]) -> Iterator[tuple[str, bool]]:
     for msg in messages:
+        if not isinstance(msg, Mapping):
+            continue
         content = msg.get("content")
         if msg.get("role") != "user" or not isinstance(content, list):
             continue
@@ -70,6 +72,8 @@ def _iter_tool_result_error_pairs(messages: Sequence[Mapping[str, object]]) -> I
 def _iter_tool_call_events_newest_first(messages: Sequence[Mapping[str, object]]) -> Iterator[_ToolCallEvent]:
     error_by_call_id: Final = dict(_iter_tool_result_error_pairs(messages))
     for msg in reversed(messages):
+        if not isinstance(msg, Mapping):
+            continue
         if msg.get("role") != "assistant":
             continue
         content = msg.get("content")
@@ -112,7 +116,7 @@ def detect_stalled_task(
     escalate a request that already recovered. Anchoring also leaves room between the
     matches, so a retry loop broken up by an unrelated lookup still reads as stuck.
     """
-    if not messages or repeat_threshold <= 0:
+    if not messages or repeat_threshold <= 0 or window <= 0:
         return None
     recent: Final = tuple(islice(_iter_tool_call_events_newest_first(messages), window))
     if len(recent) < repeat_threshold:
