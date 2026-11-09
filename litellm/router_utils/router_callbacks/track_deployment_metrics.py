@@ -46,7 +46,7 @@ async def count_before_callbacks(
     deployment_metadata[marker] = tokens  # rebind-ok: the success callbacks read the marker off this call's metadata
     try:
         await count()
-    except BaseException:
+    except Exception:
         _ = deployment_metadata.pop(marker, None)
         raise
 

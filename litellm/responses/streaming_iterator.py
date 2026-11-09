@@ -222,6 +222,15 @@ def _running_loop() -> asyncio.AbstractEventLoop | None:
         return None
 
 
+async def _finish_even_if_cancelled(work: Awaitable[None]) -> None:
+    task: Final = asyncio.ensure_future(work)
+    try:
+        await asyncio.shield(task)
+    except asyncio.CancelledError:
+        _ = await asyncio.wait((task,))
+        raise
+
+
 def spawn_logging_task(
     running_loop: asyncio.AbstractEventLoop, coroutine: Coroutine[object, object, object], *, task_name: str
 ) -> asyncio.Task[object]:
@@ -2711,7 +2720,7 @@ class ResponsesWebSocketStreaming:
             usage: Final = ResponsesWebSocketTokenUsageProcessor.collect_and_combine_usage_from_responses_ws_results(
                 turn.events
             )
-            await self.turn_usage_recorder(turn_litellm_params, usage.total_tokens)
+            await _finish_even_if_cancelled(self.turn_usage_recorder(turn_litellm_params, usage.total_tokens))
         except Exception as e:  # noqa: BLE001  # a turn not counted early is still counted by its logging
             verbose_logger.debug("Responses WS turn usage not counted before its terminal event: %s", e)
 

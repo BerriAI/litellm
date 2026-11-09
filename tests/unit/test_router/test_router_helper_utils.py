@@ -1,5 +1,4 @@
 import asyncio
-import contextlib
 import gc
 import json
 import os
@@ -476,38 +475,27 @@ async def test_usage_based_routing_counts_an_http_call_once(monkeypatch: pytest.
     assert await router.cache.async_get_cache(key=tpm_keys[0]) == response.usage.total_tokens
 
 
-class _FirstTpmCountInterrupted(DualCache):
-    def __init__(self, interruption: BaseException) -> None:
-        super().__init__(in_memory_cache=InMemoryCache())
-        self.interruption: Final = interruption
-        self.interrupted: bool = False
+class _FirstTpmCountFails(DualCache):
+    failed: bool = False
 
     async def async_increment_cache_post_call(
         self, key: str, value: float, ttl: int | None, parent_otel_span: "Span | None" = None
     ) -> None:
-        if self.interrupted or ":tpm:" not in key:
+        if self.failed or ":tpm:" not in key:
             return await super().async_increment_cache_post_call(key, value, ttl, parent_otel_span)
-        self.interrupted = True
-        raise self.interruption
+        self.failed = True
+        raise RuntimeError("routing cache unavailable")
 
 
-class _HostWhoseFirstTpmCountIsInterrupted(PythonHost):
-    def __init__(self, interruption: BaseException) -> None:
-        self.interruption: Final = interruption
-
+class _HostWhoseFirstTpmCountFails(PythonHost):
     def routing_cache(self, config: RouterConfig) -> DualCache:
-        return _FirstTpmCountInterrupted(self.interruption)
+        return _FirstTpmCountFails(in_memory_cache=InMemoryCache())
 
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("router_minute_pinned")
-@pytest.mark.parametrize(
-    "interruption",
-    [RuntimeError("routing cache unavailable"), asyncio.CancelledError()],
-    ids=["count-fails", "count-cancelled"],
-)
 async def test_usage_based_routing_counts_a_websocket_turn_whose_early_count_fails_when_its_logging_runs(
-    monkeypatch: pytest.MonkeyPatch, interruption: BaseException
+    monkeypatch: pytest.MonkeyPatch,
 ):
     router: Final = _with_success_callbacks_of(
         monkeypatch,
@@ -518,15 +506,14 @@ async def test_usage_based_routing_counts_a_websocket_turn_whose_early_count_fai
                     routing_strategy="usage-based-routing-v2",
                 )
             ),
-            _HostWhoseFirstTpmCountIsInterrupted(interruption),
+            _HostWhoseFirstTpmCountFails(),
         ),
     )
     routed, admit_turn, record_turn = await _websocket_turn_hooks(monkeypatch, router, "ws-tpm-v2-count-fails")
     await admit_turn()
     turn: Final = _open_websocket_turn(routed, "ws-tpm-v2-count-fails-turn")
 
-    with contextlib.suppress(asyncio.CancelledError):
-        await record_turn(turn.litellm_params, 35)
+    await record_turn(turn.litellm_params, 35)
     await admit_turn()
     await _complete_35_token_turn(turn)
 

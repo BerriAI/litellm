@@ -2030,12 +2030,15 @@ class TestWebSocketTurnAdmission:
         assert recorded == []
 
     @pytest.mark.asyncio
-    async def test_native_relay_logs_a_finished_turn_when_the_client_leaves_while_it_is_counted(self):
+    async def test_native_relay_finishes_counting_a_turn_before_logging_it_when_the_client_leaves(self):
         counting: Final = asyncio.Event()
+        count_written: Final = asyncio.Event()
+        counted: Final[list[int]] = []
 
         async def record_turn_usage_slowly(turn_litellm_params: Mapping[str, object], total_tokens: int) -> None:
             counting.set()
-            await asyncio.Event().wait()
+            await count_written.wait()
+            counted.append(total_tokens)
 
         logging_obj: Final = _turn_logged_on_deployment("ws-dep")
         handler: Final = _make_streaming(
@@ -2051,9 +2054,14 @@ class TestWebSocketTurnAdmission:
         await asyncio.wait_for(counting.wait(), timeout=5)
 
         relay.cancel()
+        _ = await asyncio.wait((relay,), timeout=0.1)
+        logged_while_counting: Final = _logged_event_types(logging_obj)
+        count_written.set()
         with pytest.raises(asyncio.CancelledError):
             await relay
 
+        assert logged_while_counting == []
+        assert counted == [35]
         assert _logged_event_types(logging_obj) == [["response.created", "response.completed"]]
 
     @pytest.mark.asyncio
