@@ -19,10 +19,12 @@ from typing import TYPE_CHECKING, Final, Literal, TypeAlias
 
 from pydantic import TypeAdapter, ValidationError
 
+from litellm._auth.failure import NativeAuthFailure
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
+from litellm.repositories.native_auth_repository import native_auth_repository
 
 if TYPE_CHECKING:
     from prisma import models as prisma_models
@@ -106,6 +108,8 @@ class RegistryReadThrough:
                 return False
             try:
                 found: Final = await self._resync(key)
+            except NativeAuthFailure:
+                raise
             except Exception as e:  # noqa: BLE001  # a failed read-through must surface the original miss error, not a 500
                 verbose_proxy_logger.warning("registry read-through for %r failed: %s", key, e)
                 return False
@@ -280,7 +284,6 @@ async def _resync_agents(agent_id_or_name: str) -> bool:
         return True
     prisma_client: Final = proxy_server.prisma_client
     assert prisma_client is not None
-    table: Final = agents_table(prisma_client)
     id_filter: Final[LiteLLM_AgentsTableWhereUniqueInput] = {"agent_id": agent_id_or_name}
     name_filter: Final[LiteLLM_AgentsTableWhereUniqueInput] = {"agent_name": agent_id_or_name}
     include_permission: Final[LiteLLM_AgentsTableInclude] = {
@@ -290,8 +293,13 @@ async def _resync_agents(agent_id_or_name: str) -> bool:
     async with AGENT_RECONCILE_LOCK:
         if _agent_from_registry(agent_id_or_name) is not None:
             return True
-        row: Final = await table.find_unique(where=id_filter, include=include_permission) or await table.find_unique(
-            where=name_filter, include=include_permission
+        native: Final = native_auth_repository(prisma_client)
+        row: Final = (
+            await native.one("agent", [agent_id_or_name], AgentResponse)
+            or await native.one("agent_name", [agent_id_or_name], AgentResponse)
+            if native is not None
+            else await agents_table(prisma_client).find_unique(where=id_filter, include=include_permission)
+            or await agents_table(prisma_client).find_unique(where=name_filter, include=include_permission)
         )
         if row is None:
             return False

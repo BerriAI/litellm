@@ -58,6 +58,32 @@ async def _single_context(user_api_key_auth: UserAPIKeyAuth) -> list[UserAPIKeyA
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("writer", [False, True])
+async def test_native_legacy_agent_group_lookup_reads_selected_pool_without_prisma(writer):
+    from types import SimpleNamespace
+
+    native = SimpleNamespace(auth_read=AsyncMock(return_value=[{"agent_id": "agent-a"}, {"agent_id": "agent-b"}]))
+    ids = await AgentRequestHandler._get_db_agent_ids_for_access_groups(
+        SimpleNamespace(native_auth_database=native), ["legacy-group"], check_db_only=writer
+    )
+    assert ids == {"agent-a", "agent-b"}
+    native.auth_read.assert_awaited_once_with("agent_access_group", ["legacy-group"], writer=writer)
+
+
+@pytest.mark.asyncio
+async def test_native_legacy_agent_group_error_is_not_empty_grants():
+    from types import SimpleNamespace
+
+    from litellm._auth.failure import NativeAuthFailure
+
+    native = SimpleNamespace(auth_read=AsyncMock(side_effect=OSError("offline")))
+    with pytest.raises(NativeAuthFailure):
+        await AgentRequestHandler._get_db_agent_ids_for_access_groups(
+            SimpleNamespace(native_auth_database=native), ["legacy-group"]
+        )
+
+
+@pytest.mark.asyncio
 class TestAgentRequestHandler:
     """
     Test suite for AgentRequestHandler permission logic.

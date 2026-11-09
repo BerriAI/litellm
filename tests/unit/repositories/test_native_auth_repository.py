@@ -59,6 +59,40 @@ async def test_native_rows_keep_null_limits_and_make_request_local_models():
 
 
 @pytest.mark.asyncio
+async def test_native_large_id_batch_is_chunked_deduplicated_and_keeps_missing_rows_absent():
+    async def read(kind, ids, writer=False):
+        assert kind == "budget" and writer is True
+        assert len(ids) <= 1000
+        return [{"budget_id": entity_id} for entity_id in ids if entity_id != "missing"]
+
+    ids = tuple(f"budget-{i}" for i in range(1001))
+    handle = SimpleNamespace(auth_read=AsyncMock(side_effect=read))
+    rows = await NativeAuthRepository(handle).many(
+        "budget", (*ids, ids[0], "missing"), LiteLLM_BudgetTable, writer=True
+    )
+    assert tuple(row.budget_id for row in rows) == ids
+    assert [len(call.args[1]) for call in handle.auth_read.call_args_list] == [1000, 2]
+
+
+@pytest.mark.asyncio
+async def test_native_large_batch_error_never_returns_partial_rows():
+    from litellm.repositories.native_auth_repository import NativeAuthDatabaseError
+
+    handle = SimpleNamespace(auth_read=AsyncMock(side_effect=[[{"budget_id": "first"}], OSError("offline")]))
+    with pytest.raises(NativeAuthDatabaseError):
+        await NativeAuthRepository(handle).many("budget", tuple(str(i) for i in range(1001)), LiteLLM_BudgetTable)
+    assert handle.auth_read.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_native_empty_batch_preserves_native_empty_read_contract():
+    handle = SimpleNamespace(auth_read=AsyncMock(return_value=[]))
+    rows = await NativeAuthRepository(handle).many("budget", (), LiteLLM_BudgetTable)
+    assert rows == ()
+    handle.auth_read.assert_awaited_once_with("budget", [], writer=False)
+
+
+@pytest.mark.asyncio
 async def test_native_missing_row_is_none_and_zero_budget_is_not_missing():
     handle = SimpleNamespace(auth_read=AsyncMock(side_effect=[[], [{"budget_id": "b", "max_budget": 0.0}]]))
     repo = NativeAuthRepository(handle)
@@ -84,6 +118,17 @@ async def test_native_failure_and_cancellation_are_not_clean_misses():
     cancelled = SimpleNamespace(auth_read=AsyncMock(side_effect=asyncio.CancelledError))
     with pytest.raises(asyncio.CancelledError):
         await NativeAuthRepository(cancelled).key("hash")
+
+
+@pytest.mark.asyncio
+async def test_native_timeout_keeps_deadline_identity_and_terminal_native_semantics():
+    from litellm.proxy.db.db_lookup_gate import DBLookupDeadlineExceeded
+
+    handle = SimpleNamespace(auth_read=AsyncMock(side_effect=asyncio.TimeoutError))
+    with pytest.raises(NativeAuthFailure) as raised:
+        await NativeAuthRepository(handle).key("hash")
+    assert isinstance(raised.value, DBLookupDeadlineExceeded)
+    assert raised.value.lookup == "key"
 
 
 @pytest.mark.asyncio

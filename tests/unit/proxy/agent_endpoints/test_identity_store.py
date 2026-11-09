@@ -74,11 +74,45 @@ def setup_store(
         )
     )
     return (
-        AgentIdentityStore(AgentsRepository(db), AgentIdentityRepository(db), VerifiedSubjectRepository(db), cache=cache),
+        AgentIdentityStore(
+            AgentsRepository(db), AgentIdentityRepository(db), VerifiedSubjectRepository(db), cache=cache
+        ),
         agents,
         identities,
         humans,
     )
+
+
+@pytest.mark.asyncio
+async def test_native_agent_policy_reads_writer_and_preserves_binding_without_prisma() -> None:
+    expected: Final = stored_agent(enabled=False, object_permission={"models": ["approved"]})
+    native: Final = SimpleNamespace(auth_read=AsyncMock(return_value=[expected.model_dump()]))
+    store: Final = AgentIdentityStore.from_client(SimpleNamespace(native_auth_database=native))
+    actual: Final = await store.agent("agent-one")
+    assert actual == expected
+    native.auth_read.assert_awaited_once_with("agent", ["agent-one"], writer=True)
+
+
+@pytest.mark.asyncio
+async def test_native_retired_agent_lookup_preserves_missing_and_found_without_prisma() -> None:
+    native: Final = SimpleNamespace(auth_read=AsyncMock(side_effect=[[], [{"original_agent_id": "agent-one"}]]))
+    store: Final = AgentIdentityStore.from_client(SimpleNamespace(native_auth_database=native))
+    assert await store.retired_agent("missing") is False
+    assert await store.retired_agent("agent-one") is True
+    native.auth_read.assert_awaited_with("retired_agent", ["agent-one"], writer=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error", [OSError("offline"), RuntimeError("invalid native state")])
+async def test_native_agent_failure_cannot_enter_legacy_fallback(error: Exception) -> None:
+    from litellm._auth.failure import NativeAuthFailure
+
+    native: Final = SimpleNamespace(auth_read=AsyncMock(side_effect=error))
+    store: Final = AgentIdentityStore.from_client(SimpleNamespace(native_auth_database=native))
+    with pytest.raises(NativeAuthFailure):
+        await store.agent("agent-one")
+    with pytest.raises(NativeAuthFailure):
+        await store.retired_agent("agent-one")
 
 
 @pytest.mark.asyncio

@@ -3,9 +3,11 @@ from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Final
 
+from litellm._auth.failure import NativeAuthFailure
 from litellm._internal_context import with_service_target
 from litellm.proxy.agent_endpoints.managed_identity import classify_agent_subject
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, get_management_object_ttl
+from litellm.repositories.native_auth_repository import NativeAuthRepository, native_auth_repository
 from litellm.repositories.table_repositories import (
     AgentIdentityRepository,
     AgentsRepository,
@@ -48,6 +50,7 @@ class AgentIdentityStore:
             RetiredAgentIdentityRepository(client, use_writer=True),
             RetiredAgentRepository(client, use_writer=True),
             cache=cache,
+            native=native_auth_repository(client),
         )
 
     def __init__(
@@ -59,6 +62,7 @@ class AgentIdentityStore:
         retired_agents: RetiredAgentRepository | None = None,
         *,
         cache: UserApiKeyCache | None = None,
+        native: NativeAuthRepository | None = None,
     ) -> None:
         self.agents = agents
         self.identities = identities
@@ -66,9 +70,12 @@ class AgentIdentityStore:
         self.retired = retired
         self.retired_agents = retired_agents
         self.cache = cache
+        self.native = native
 
     async def agent(self, agent_id: str) -> AgentResponse | AgentIdentityFailure | None:
         try:
+            if self.native is not None:
+                return await self.native.one("agent", [agent_id], AgentResponse, writer=True)
             where: Final[LiteLLM_AgentsTableWhereUniqueInput] = {"agent_id": agent_id}
             include: Final[LiteLLM_AgentsTableInclude] = {
                 "identity": True,
@@ -78,6 +85,8 @@ class AgentIdentityStore:
             if row is None:
                 return None
             return AgentResponse.model_validate(row.model_dump())
+        except NativeAuthFailure:
+            raise
         except Exception:
             return AgentIdentityFailure(code="policy_unavailable", message="Agent policy could not be loaded")
 
@@ -185,6 +194,8 @@ class AgentIdentityStore:
             return AgentIdentityFailure(code="policy_unavailable", message="Subject classification is unavailable")
 
     async def retired_agent(self, agent_id: str) -> bool | AgentIdentityFailure:
+        if self.native is not None:
+            return bool(await self.native.read("retired_agent", [agent_id], writer=True))
         if self.retired_agents is None:
             return AgentIdentityFailure(code="policy_unavailable", message="Agent history is unavailable")
         try:

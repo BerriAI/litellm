@@ -2542,7 +2542,12 @@ async def _backfill_null_user_email(
         user_id=user_row.user_id,
         user_email=user_email,
     )
-    db_row: Final = await user_repo.find_by_id(user_row.user_id)
+    native: Final = native_auth_repository(prisma_client)
+    db_row: Final = (
+        await native.one("user", [user_row.user_id], LiteLLM_UserTable, writer=True)
+        if native is not None
+        else await user_repo.find_by_id(user_row.user_id)
+    )
     if db_row is None:
         return user_row
     email_update: Final = {"user_email": db_row.user_email}
@@ -4155,13 +4160,22 @@ async def get_managed_vector_store_rows_by_uuids(
     if not cache_misses:
         return result
 
-    rows: Final = await _vector_store_table(ManagedVectorStoresRepository(prisma_client)).find_many(
-        where={"vector_store_id": {"in": cache_misses}},
-        take=len(cache_misses),
+    native: Final = native_auth_repository(prisma_client)
+    rows: Final = (
+        await native.many("managed_vector_store", cache_misses, LiteLLM_ManagedVectorStoresTable)
+        if native is not None
+        else await _vector_store_table(ManagedVectorStoresRepository(prisma_client)).find_many(
+            where={"vector_store_id": {"in": cache_misses}},
+            take=len(cache_misses),
+        )
     )
 
     for row in rows:
-        row_dict = row.model_dump() if hasattr(row, "model_dump") else (row.dict() if hasattr(row, "dict") else None)
+        row_dict = (
+            row.model_dump()
+            if isinstance(row, BaseModel) or hasattr(row, "model_dump")
+            else (row.dict() if hasattr(row, "dict") else None)
+        )
         if not isinstance(row_dict, dict) or not row_dict:
             row_dict = dict(row) if hasattr(row, "__dict__") else {}
         if not row_dict:

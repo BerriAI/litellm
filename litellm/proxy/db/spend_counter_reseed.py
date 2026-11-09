@@ -30,7 +30,12 @@ from litellm.proxy.spend_tracking.spend_counter_batch import (
     record_spend_counter_value,
 )
 from litellm.redis.stores.spend_counters import END_USER_COUNTER_PREFIX, SPEND_COUNTERS_TARGET, SpendCounterStore
-from litellm.repositories.native_auth_repository import BudgetWindowRow, SpendRow, native_auth_repository
+from litellm.repositories.native_auth_repository import (
+    BudgetWindowRow,
+    NativeAuthDatabaseError,
+    SpendRow,
+    native_auth_repository,
+)
 from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.project_repository import ProjectRepository
 from litellm.repositories.table_repositories import (
@@ -148,7 +153,11 @@ class SpendCounterReseed:
                 return None
             if kind == "team_member" and ":" not in entity_id:
                 return None
-            return await native.spend("member" if kind == "team_member" else kind, entity_id)
+            try:
+                return await native.spend("member" if kind == "team_member" else kind, entity_id)
+            except NativeAuthDatabaseError:
+                verbose_proxy_logger.exception("SpendCounterReseed.from_db: native read failed for %s", counter_key)
+                return None
         try:
             row: Final = await bounded_db_lookup(
                 SpendCounterReseed._counter_row(prisma_client, counter_key), name="spend_counter"
@@ -198,7 +207,13 @@ class SpendCounterReseed:
             return None
         native: Final = native_auth_repository(prisma_client)
         if native is not None:
-            return await native.spend("end_user", counter_key[len(END_USER_COUNTER_PREFIX) :])
+            try:
+                return await native.spend("end_user", counter_key[len(END_USER_COUNTER_PREFIX) :])
+            except NativeAuthDatabaseError:
+                verbose_proxy_logger.exception(
+                    "SpendCounterReseed.end_user_from_db: native read failed for %s", counter_key
+                )
+                return None
         where: Final[LiteLLM_EndUserTableWhereUniqueInput] = {"user_id": counter_key[len(END_USER_COUNTER_PREFIX) :]}
         try:
             row: Final = await bounded_db_lookup(
@@ -316,9 +331,18 @@ class SpendCounterReseed:
 
         native: Final = native_auth_repository(prisma_client)
         if native is not None:
-            window: Final = await native.one(
-                "budget_window", [entity_type, entity_id, window_duration], BudgetWindowRow
-            )
+            try:
+                window: Final = await native.one(
+                    "budget_window", [entity_type, entity_id, window_duration], BudgetWindowRow
+                )
+            except NativeAuthDatabaseError:
+                verbose_proxy_logger.exception(
+                    "SpendCounterReseed.window_from_table: native read failed for %s=%s window=%s",
+                    entity_type,
+                    entity_id,
+                    window_duration,
+                )
+                return None
             if window is None or _as_utc(window.window_start) < _as_utc(expected_window_start):
                 return None
             return float(window.spend or 0.0)
@@ -396,9 +420,15 @@ class SpendCounterReseed:
             return None
         native: Final = native_auth_repository(prisma_client)
         if native is not None:
-            aggregate: Final = await native.one(
-                "window_spend", [entity_type, entity_id, window_start.isoformat()], SpendRow
-            )
+            try:
+                aggregate: Final = await native.one(
+                    "window_spend", [entity_type, entity_id, window_start.isoformat()], SpendRow
+                )
+            except NativeAuthDatabaseError:
+                verbose_proxy_logger.exception(
+                    "SpendCounterReseed.window_from_spend_logs: native read failed for %s=%s", entity_type, entity_id
+                )
+                return None
             return float(aggregate.spend or 0.0) if aggregate is not None else 0.0
         where: Final = {
             group_field: entity_id,
