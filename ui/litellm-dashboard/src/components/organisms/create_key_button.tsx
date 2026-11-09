@@ -37,6 +37,7 @@ import BudgetDurationDropdown from "../common_components/budget_duration_dropdow
 import SchemaFormFields from "../common_components/check_openapi_schema";
 import KeyLifecycleSettings from "../common_components/KeyLifecycleSettings";
 import ModelAliasManager from "../common_components/ModelAliasManager";
+import { StorePromptsMetadataToggle } from "../common_components/StorePromptsToggle";
 import {
   MountedFormField,
   MountedFormProvider,
@@ -95,6 +96,23 @@ import {
 import { buildKeyCreatePayload, type KeyCreateInput } from "./createKeyPayload";
 import { simplifyKeyGenerateError } from "./utils";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+
+const GENERATE_KEY_EXCLUDED_FIELDS = [
+  "key_alias",
+  "team_id",
+  "organization_id",
+  "models",
+  "duration",
+  "metadata",
+  "tags",
+  "guardrails",
+  "max_budget",
+  "budget_duration",
+  "tpm_limit",
+  "rpm_limit",
+  "tpd_limit",
+];
+const GENERATE_KEY_EXCLUDED_FIELDS_WITH_KEY = [...GENERATE_KEY_EXCLUDED_FIELDS, "key"];
 
 const KEY_TYPE_OPTIONS: { value: string; label: ParseKeys; hint: ParseKeys }[] = [
   { value: "llm_api", label: "createKey.keyTypes.llmApi.label", hint: "createKey.keyTypes.llmApi.hint" },
@@ -1571,12 +1589,18 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                         className="mt-4"
                       >
                         {(control) => (
-                          <Textarea
-                            {...control}
-                            value={(control.value as string | undefined) ?? ""}
-                            rows={4}
-                            placeholder={t("createKey.metadata.placeholder")}
-                          />
+                          <>
+                            <StorePromptsMetadataToggle
+                              value={control.value as string | undefined}
+                              onChange={control.onChange}
+                            />
+                            <Textarea
+                              {...control}
+                              value={(control.value as string | undefined) ?? ""}
+                              rows={4}
+                              placeholder={t("createKey.metadata.placeholder")}
+                            />
+                          </>
                         )}
                       </MountedFormField>
                       <MountedFormField
@@ -1777,6 +1801,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                               key={routerSettingsKey}
                               ref={routerSettingsRef}
                               accessToken={accessToken || ""}
+                              teamId={selectedCreateKeyTeam?.team_id}
                               value={routerSettings || undefined}
                               onChange={setRouterSettings}
                               modelData={
@@ -1869,22 +1894,11 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                           <SchemaFormFields
                             schemaComponent="GenerateKeyRequest"
                             setValue={form.setValue}
-                            excludedFields={[
-                              "key_alias",
-                              "team_id",
-                              "organization_id",
-                              "models",
-                              "duration",
-                              "metadata",
-                              "tags",
-                              "guardrails",
-                              "max_budget",
-                              "budget_duration",
-                              "tpm_limit",
-                              "rpm_limit",
-                              "tpd_limit",
-                              ...(disableCustomApiKeys ? ["key"] : []),
-                            ]}
+                            excludedFields={
+                              disableCustomApiKeys
+                                ? GENERATE_KEY_EXCLUDED_FIELDS_WITH_KEY
+                                : GENERATE_KEY_EXCLUDED_FIELDS
+                            }
                           />
                         </CollapsibleContent>
                       </Collapsible>

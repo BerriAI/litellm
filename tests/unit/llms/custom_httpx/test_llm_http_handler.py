@@ -4253,12 +4253,14 @@ def test_video_generation_with_input_reference_keeps_file_multipart():
 AZURE_AI_BASE = "https://myfoundry.services.ai.azure.com"
 AZURE_AI_CHAT_COMPLETIONS_URL = f"{AZURE_AI_BASE}/models/chat/completions"
 
+
 def _a_tool_with_an_unsupported_field() -> dict:
     return {
         "type": "function",
         "function": {"name": "lookup", "parameters": {"type": "object", "properties": {}}},
         "strict": True,
     }
+
 
 A_COMPLETION = {
     "id": "chatcmpl-1",
@@ -4457,6 +4459,45 @@ async def test_create_file_async_awaits_the_provider_credential_hook_instead_of_
     provider_config.avalidate_environment.assert_awaited_once()
     assert client.post.call_args.kwargs["headers"] == {"x-api-key": "federated"}
     assert client.post.call_args.kwargs["url"] == "https://files.example/v1/files"
+
+
+def test_create_file_sync_sends_a_presigned_upload_with_its_own_method_url_headers_and_body():
+    provider_config = Mock(spec=BaseFilesConfig)
+    provider_config.validate_environment.return_value = {"x-api-key": "unused-for-presigned"}
+    provider_config.get_complete_file_url.return_value = "https://files.example/v1/files"
+    provider_config.transform_create_file_request.return_value = {
+        "method": "PUT",
+        "url": "https://bucket.s3.example/batch.jsonl",
+        "headers": {"Authorization": "AWS4-HMAC-SHA256 signed"},
+        "data": b'{"recordId": "req-1"}',
+    }
+    file_object = object()
+    provider_config.transform_create_file_response.return_value = file_object
+    upload_response = Mock(spec=httpx.Response)
+    client = Mock(spec=HTTPHandler)
+    client.put.return_value = upload_response
+
+    result = BaseLLMHTTPHandler().create_file(
+        create_file_data={"file": b"{}", "purpose": "batch"},
+        litellm_params={},
+        provider_config=provider_config,
+        headers={},
+        api_base=None,
+        api_key=None,
+        logging_obj=Mock(),
+        client=client,
+        timeout=30,
+    )
+
+    assert result is file_object
+    client.post.assert_not_called()
+    client.put.assert_called_once_with(
+        url="https://bucket.s3.example/batch.jsonl",
+        headers={"Authorization": "AWS4-HMAC-SHA256 signed"},
+        data=b'{"recordId": "req-1"}',
+        timeout=30,
+    )
+    assert provider_config.transform_create_file_response.call_args.kwargs["raw_response"] is upload_response
 
 
 @pytest.mark.asyncio
@@ -4888,6 +4929,92 @@ async def test_json_mode_stream_reaches_the_iterator_of_a_config_without_a_reque
         {"sync_stream": True, "json_mode": True},
         {"sync_stream": False, "json_mode": False},
     ]
+
+
+class _PlainStreamRouteConfig(_TransformRecordingConfig):
+    def __init__(self):
+        super().__init__(transform_async=False)
+
+    def get_complete_url(self, api_base, api_key, model, optional_params, litellm_params, stream=None):
+        return f"{api_base}/{'stream' if stream else 'answer'}"
+
+
+class _StreamRouteConfig(_PlainStreamRouteConfig):
+    @property
+    def has_custom_stream_wrapper(self) -> bool:
+        return True
+
+
+def _answers_only_the_non_streaming_route(request: httpx.Request) -> httpx.Response:
+    if request.url.path.endswith("/answer"):
+        return httpx.Response(200, json=json.loads(request.content))
+    return httpx.Response(403, json={"message": "not authorized to stream"})
+
+
+def _fake_streamed_completion(
+    acompletion: bool,
+    client: HTTPHandler | AsyncHTTPHandler,
+    fake_stream: object = True,
+    provider_config: BaseConfig | None = None,
+):
+    return BaseLLMHTTPHandler().completion(
+        model="stub-model",
+        messages=[{"role": "user", "content": "hi"}],
+        api_base="https://llm.example/v1/chat",
+        custom_llm_provider="openai",
+        model_response=ModelResponse(),
+        encoding=None,
+        logging_obj=_streaming_logging_obj(),
+        optional_params={"fake_stream": fake_stream},
+        timeout=10.0,
+        litellm_params={},
+        acompletion=acompletion,
+        stream=True,
+        client=client,
+        provider_config=provider_config or _StreamRouteConfig(),
+    )
+
+
+async def test_a_fake_streamed_completion_is_sent_to_the_non_streaming_route():
+    sync_client: Final = HTTPHandler(
+        client=httpx.Client(transport=httpx.MockTransport(_answers_only_the_non_streaming_route))
+    )
+    async_client: Final = AsyncHTTPHandler()
+    async_client.client = httpx.AsyncClient(transport=httpx.MockTransport(_answers_only_the_non_streaming_route))
+
+    sync_chunks: Final = list(_fake_streamed_completion(acompletion=False, client=sync_client))
+    async_chunks: Final = [
+        chunk async for chunk in await _fake_streamed_completion(acompletion=True, client=async_client)
+    ]
+
+    assert (_streamed_text(sync_chunks), _streamed_text(async_chunks)) == ("sync", "sync")
+
+
+def _answers_only_the_streaming_route(request: httpx.Request) -> httpx.Response:
+    if request.url.path.endswith("/stream"):
+        return _sse_echoing_transformed_by(request)
+    return httpx.Response(403, json={"message": "only streaming is allowed"})
+
+
+@pytest.mark.parametrize("fake_stream", ["true", 1], ids=["string", "int"])
+async def test_a_fake_stream_value_other_than_true_still_streams_from_the_streaming_route(fake_stream: object):
+    sync_client: Final = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_answers_only_the_streaming_route)))
+    async_client: Final = AsyncHTTPHandler()
+    async_client.client = httpx.AsyncClient(transport=httpx.MockTransport(_answers_only_the_streaming_route))
+
+    sync_chunks: Final = list(
+        _fake_streamed_completion(
+            acompletion=False, client=sync_client, fake_stream=fake_stream, provider_config=_PlainStreamRouteConfig()
+        )
+    )
+    async_chunks: Final = [
+        chunk
+        async for chunk in await _fake_streamed_completion(
+            acompletion=True, client=async_client, fake_stream=fake_stream, provider_config=_PlainStreamRouteConfig()
+        )
+    ]
+
+    assert (_streamed_text(sync_chunks), _streamed_text(async_chunks)) == ("sync", "sync")
 
 
 class _ImageEditRecordingConfig(BaseImageEditConfig):

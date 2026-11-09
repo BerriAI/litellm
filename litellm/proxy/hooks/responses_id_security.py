@@ -5,9 +5,9 @@ This hook uses the DBSpendUpdateWriter to batch-write response IDs to the databa
 instead of writing immediately on each request.
 """
 
-from collections.abc import AsyncGenerator, Callable, Mapping
+from collections.abc import AsyncGenerator, AsyncIterable, Callable, Mapping
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, TypeVar
+from typing import TYPE_CHECKING, Final, TypeVar
 
 from fastapi import HTTPException
 from pydantic import TypeAdapter, ValidationError
@@ -16,6 +16,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.base_llm.managed_resources.isolation import resolve_resource_owner_id
 from litellm.proxy._types import LitellmUserRoles
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
@@ -276,7 +277,12 @@ class ResponsesIDSecurity(CustomLogger):
         ):
             return True
 
-        if response_id_user_id and response_id_user_id != user_api_key_dict.user_id:
+        if not response_id_user_id and not response_id_team_id:
+            if general_settings.get("disable_responses_id_security", False):
+                return True
+            raise HTTPException(status_code=403, detail="Forbidden. This response id has no associated owner")
+
+        if response_id_user_id and response_id_user_id != resolve_resource_owner_id(user_api_key_dict):
             if general_settings.get("disable_responses_id_security", False):
                 verbose_proxy_logger.debug(
                     "Responses ID Security is disabled. User %s is accessing response id %s which is not associated with them.",
@@ -394,7 +400,7 @@ class ResponsesIDSecurity(CustomLogger):
 
             managed_id: Final = SpecialEnums.LITELLM_MANAGED_RESPONSE_API_RESPONSE_ID_COMPLETE_STR.value.format(
                 original_id,
-                user_api_key_dict.user_id or "",
+                resolve_resource_owner_id(user_api_key_dict) or "",
                 user_api_key_dict.team_id or "",
             )
             encrypted_id: Final = f"resp_{encrypt_value_helper(value=managed_id)}"
@@ -460,8 +466,8 @@ class ResponsesIDSecurity(CustomLogger):
         return response
 
     async def async_post_call_streaming_iterator_hook(
-        self, user_api_key_dict: "UserAPIKeyAuth", response: Any, request_data: dict[str, object]
-    ) -> AsyncGenerator[BaseLiteLLMOpenAIResponseObject, None]:
+        self, user_api_key_dict: "UserAPIKeyAuth", response: AsyncIterable[object], request_data: dict[str, object]
+    ) -> AsyncGenerator[object, None]:
         advertise: Final = self._streamed_response_id_advertiser(user_api_key_dict, request_data)
         async for chunk in response:
             yield (

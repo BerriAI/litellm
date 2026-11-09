@@ -13,7 +13,7 @@ from litellm import get_model_info
 from litellm.llms.bedrock.common_utils import BedrockModelInfo
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.types.utils import ModelInfoBase
-from litellm.utils import _invalidate_model_cost_lowercase_map
+from litellm.utils import _invalidate_model_cost_lowercase_map, supports_native_structured_output
 import os
 from unittest.mock import MagicMock, patch
 
@@ -386,6 +386,29 @@ def test_get_model_info_bedrock_cross_region_capability_parity():
             ), f"{cap} is {v[cap]} on {k} but {base_value} on {base_model_key}"
 
     assert checked > 0, "no cross-region bedrock profiles found - the filter is inert"
+
+
+def test_bedrock_native_output_default_reaches_only_versions_that_read_its_key(local_model_cost_map):
+    flagged: Final = tuple(
+        key for key, row in litellm.model_cost.items() if row.get("supports_bedrock_native_structured_output_by_default")
+    )
+
+    assert flagged
+    assert [key for key in flagged if litellm.model_cost[key].get("supports_native_structured_output")] == []
+    assert [key for key in flagged if not get_model_info(key)["supports_native_structured_output"]] == []
+
+
+@pytest.mark.parametrize(
+    ("registered", "native"),
+    [({"supports_bedrock_native_structured_output": False}, False), ({"max_output_tokens": 1024}, True)],
+    ids=["bedrock-opt-out", "unrelated-override"],
+)
+def test_a_registered_bedrock_opt_out_beats_the_native_output_default(local_model_cost_map, registered, native):
+    model: Final = "us.anthropic.claude-sonnet-5"
+    litellm.register_model({model: registered}, persist_across_reloads=False)
+
+    assert get_model_info(f"bedrock/{model}")["supports_native_structured_output"] is native
+    assert supports_native_structured_output(f"bedrock/{model}") is native
 
 
 def _is_positive_cost(value: object) -> bool:
