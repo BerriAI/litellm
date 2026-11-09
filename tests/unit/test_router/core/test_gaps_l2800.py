@@ -521,7 +521,11 @@ async def test_default_metadata_tags_do_not_carry_one_request_tags_into_the_next
         ({}, ["admin-guard"]),
         ({"guardrails": [{"admin-guard": {"extra_body": {"threshold": 1}}}]}, ["admin-guard"]),
         (
-            {"guardrails": [{"admin-guard": {"extra_body": {"threshold": 1}}, "caller-guard": {"extra_body": {"k": 2}}}]},
+            {
+                "guardrails": [
+                    {"admin-guard": {"extra_body": {"threshold": 1}}, "caller-guard": {"extra_body": {"k": 2}}}
+                ]
+            },
             [{"caller-guard": {"extra_body": {"k": 2}}}, "admin-guard"],
         ),
     ],
@@ -534,6 +538,19 @@ async def test_a_default_guardrail_stays_on_with_its_own_settings_whatever_the_r
     )
     await core.acompletion(model="g", messages=MESSAGES, metadata=dict(request_metadata))  # pyright: ignore[reportAttributeAccessIssue]  # endpoint method
     assert _metadata(host.calls[0].kwargs)["guardrails"] == sent_guardrails
+
+
+async def test_a_default_guardrail_entry_keeps_the_admins_settings_over_the_callers(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    admin_entry: Final = {"admin-guard": {"extra_body": {"threshold": 0.9}}}
+    core: Final = make_core(
+        model_list=[deployment("g", "d1")], default_litellm_params={"metadata": {"guardrails": [admin_entry]}}
+    )
+    await core.acompletion(  # pyright: ignore[reportAttributeAccessIssue]  # endpoint method
+        model="g", messages=MESSAGES, metadata={"guardrails": [{"admin-guard": {"extra_body": {"threshold": 0}}}]}
+    )
+    assert _metadata(host.calls[0].kwargs)["guardrails"] == [admin_entry]
 
 
 @pytest.mark.parametrize("router_caching_groups", [[("g", "other")], None])
