@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Check, ChevronDown, ImageIcon, MessageSquare, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -30,6 +31,7 @@ export default function ChatModelPicker({
   disabled: boolean;
   onSelect: (model: ModelGroup) => void;
 }) {
+  const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<"all" | ChatMode>("all");
@@ -51,7 +53,7 @@ export default function ChatModelPicker({
       <PopoverTrigger
         render={
           <Button variant="ghost" disabled={disabled} className="moyai-chat-model-picker">
-            <span className="truncate">{selectedModel ?? "Choose a model"}</span>
+            <span className="truncate">{selectedModel ?? t("chat.modelPicker.chooseModel")}</span>
             <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
           </Button>
         }
@@ -59,26 +61,26 @@ export default function ChatModelPicker({
       <PopoverContent align="start" className="chat-theme w-[min(360px,calc(100vw-2rem))] p-0">
         <div className="space-y-3 p-3">
           <div>
-            <p className="text-sm font-medium">Model Hub</p>
-            <p className="text-xs text-muted-foreground">Choose a model to try it here.</p>
+            <p className="text-sm font-medium">{t("chat.modelPicker.title")}</p>
+            <p className="text-xs text-muted-foreground">{t("chat.modelPicker.subtitle")}</p>
           </div>
           <div className="relative">
             <Search className="absolute left-2.5 top-2.5 size-4 text-muted-foreground" />
             <Input
-              aria-label="Search models"
-              placeholder="Search models or providers"
+              aria-label={t("chat.modelPicker.searchLabel")}
+              placeholder={t("chat.modelPicker.searchPlaceholder")}
               value={search}
               onChange={(event) => setSearch(event.target.value)}
               className="pl-8"
             />
           </div>
-          <div className="flex gap-1" aria-label="Model type">
+          <div className="flex gap-1" aria-label={t("chat.modelPicker.modelType")}>
             {(
               [
-                ["all", "All"],
-                ["chat", "Chat"],
-                ["image", "Images"],
-              ] as const
+                ["all", t("chat.modelPicker.filters.all")],
+                ["chat", t("chat.modelPicker.filters.chat")],
+                ["image", t("chat.modelPicker.filters.images")],
+              ] satisfies ReadonlyArray<readonly ["all" | ChatMode, string]>
             ).map(([value, label]) => (
               <Button
                 key={value}
@@ -93,7 +95,9 @@ export default function ChatModelPicker({
           </div>
         </div>
         <ScrollArea className="h-[min(320px,50dvh)] border-t p-1">
-          {visibleModels.length === 0 && <p className="p-4 text-sm text-muted-foreground">No models found.</p>}
+          {visibleModels.length === 0 && (
+            <p className="p-4 text-sm text-muted-foreground">{t("chat.modelPicker.noModels")}</p>
+          )}
           {visibleModels.map((model) => {
             const image = modelChatMode(model) === "image";
             const Icon = image ? ImageIcon : MessageSquare;
@@ -108,7 +112,10 @@ export default function ChatModelPicker({
                 <span className="min-w-0 flex-1 text-left">
                   <span className="block truncate text-sm">{model.model_group}</span>
                   <span className="block truncate text-xs font-normal text-muted-foreground">
-                    {[image ? "Image generation" : "Chat", ...(model.providers ?? [])].join(" · ")}
+                    {[
+                      image ? t("chat.modelPicker.kind.image") : t("chat.modelPicker.kind.chat"),
+                      ...(model.providers ?? []),
+                    ].join(" · ")}
                   </span>
                 </span>
                 {selectedModel === model.model_group && <Check className="size-4 shrink-0 text-primary" />}

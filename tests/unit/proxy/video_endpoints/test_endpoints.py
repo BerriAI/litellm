@@ -51,6 +51,7 @@ from litellm.types.videos.utils import (
 
 from fastapi import Response
 from starlette.datastructures import UploadFile as StarletteUploadFile
+from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 
 # --------------------------------------------------------------------------- #
 # A real model-encoded video id: decodes (for real) to provider "azure",
@@ -142,7 +143,7 @@ class Harness:
 def harness():
     logging = MagicMock(spec=ProxyLogging)
 
-    router = MagicMock(spec=Router)
+    router = route_entry_points_to_stubs(MagicMock(spec=Router))
     resolve_model = MagicMock(
         side_effect=lambda model_id, custom_llm_provider=None: RESOLVED_MODELS.get(model_id)
     )
@@ -257,6 +258,23 @@ async def test_generation__route_type_data_and_no_provider_default(harness):
     # future default custom_llm_provider injection would break this row.
     assert harness.processor_data() == {"model": "sora-2", "prompt": "a sunset"}
     harness.batch_to_bytesio.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_generation_preserves_first_class_video_fields(harness: Harness) -> None:
+    body: Final = {
+        "model": "queue-video/model",
+        "prompt": "a cat",
+        "duration": 8,
+        "aspect_ratio": "16:9",
+        "frame_images": [{"type": "image_url", "image_url": {"url": "https://example.com/first.png"}, "frame_type": "first_frame"}],
+        "input_references": [{"type": "image_url", "image_url": {"url": "https://example.com/ref.png"}}],
+        "generate_audio": False,
+        "seed": 0,
+    }
+    response: Final = await call_generation(harness, body=body)
+    assert response is SENTINEL
+    assert harness.processor_data() == body
 
 
 @pytest.mark.asyncio
