@@ -5343,7 +5343,7 @@
         "supports_tool_choice": true
     },
     "azure/eu/gpt-4o-realtime-preview-2024-12-17": {
-        "cache_read_input_audio_token_cost": 2.5e-06,
+        "cache_read_input_audio_token_cost": 2.75e-06,
         "cache_read_input_token_cost": 2.75e-06,
         "input_cost_per_audio_token": 4.4e-05,
         "input_cost_per_token": 5.5e-06,
@@ -5353,7 +5353,7 @@
         "mode": "realtime",
         "output_cost_per_audio_token": 8.8e-05,
         "output_cost_per_token": 2.2e-05,
-        "source": "https://azure.microsoft.com/en-us/pricing/details/azure-openai/",
+        "source": "https://azure.microsoft.com/en-us/pricing/details/cognitive-services/openai-service/",
         "supported_modalities": [
             "text",
             "audio"
@@ -6691,6 +6691,7 @@
         "supports_tool_choice": true
     },
     "azure/gpt-realtime": {
+        "cache_read_input_image_token_cost": 5e-07,
         "cache_creation_input_audio_token_cost": 4e-06,
         "cache_read_input_audio_token_cost": 4e-07,
         "cache_read_input_token_cost": 4e-07,
@@ -6726,9 +6727,11 @@
         "supports_parallel_function_calling": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
-        "source": "https://learn.microsoft.com/en-us/azure/foundry/foundry-models/concepts/models-sold-directly-by-azure"
+        "source": "https://azure.microsoft.com/en-us/pricing/details/cognitive-services/openai-service/"
     },
     "azure/gpt-realtime-2025-08-28": {
+        "source": "https://azure.microsoft.com/en-us/pricing/details/cognitive-services/openai-service/",
+        "cache_read_input_image_token_cost": 5e-07,
         "cache_creation_input_audio_token_cost": 4e-06,
         "cache_read_input_audio_token_cost": 4e-07,
         "cache_read_input_token_cost": 4e-07,
@@ -6766,6 +6769,7 @@
         "supports_tool_choice": true
     },
     "azure/gpt-realtime-1.5": {
+        "cache_read_input_image_token_cost": 5e-07,
         "cache_creation_input_audio_token_cost": 4e-06,
         "cache_read_input_audio_token_cost": 4e-07,
         "cache_read_input_token_cost": 4e-07,
@@ -6802,9 +6806,11 @@
         "supports_parallel_function_calling": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
-        "source": "https://learn.microsoft.com/en-us/azure/foundry/foundry-models/concepts/models-sold-directly-by-azure"
+        "source": "https://azure.microsoft.com/en-us/pricing/details/cognitive-services/openai-service/"
     },
     "azure/gpt-realtime-1.5-2026-02-23": {
+        "source": "https://azure.microsoft.com/en-us/pricing/details/cognitive-services/openai-service/",
+        "cache_read_input_image_token_cost": 5e-07,
         "cache_creation_input_audio_token_cost": 4e-06,
         "cache_read_input_audio_token_cost": 4e-07,
         "cache_read_input_token_cost": 4e-07,
@@ -6925,6 +6931,8 @@
         "supports_tool_choice": true
     },
     "azure/gpt-realtime-mini": {
+        "source": "https://azure.microsoft.com/en-us/pricing/details/cognitive-services/openai-service/",
+        "cache_read_input_image_token_cost": 8e-08,
         "cache_creation_input_audio_token_cost": 3e-07,
         "cache_read_input_audio_token_cost": 3e-07,
         "cache_read_input_token_cost": 6e-08,
@@ -7033,6 +7041,7 @@
         ]
     },
     "azure/gpt-4o-realtime-preview-2024-12-17": {
+        "cache_read_input_audio_token_cost": 2.5e-06,
         "cache_read_input_token_cost": 2.5e-06,
         "input_cost_per_audio_token": 4e-05,
         "input_cost_per_token": 5e-06,
@@ -7042,7 +7051,7 @@
         "mode": "realtime",
         "output_cost_per_audio_token": 8e-05,
         "output_cost_per_token": 2e-05,
-        "source": "https://learn.microsoft.com/en-us/azure/foundry/foundry-models/concepts/models-sold-directly-by-azure",
+        "source": "https://azure.microsoft.com/en-us/pricing/details/cognitive-services/openai-service/",
         "supported_modalities": [
             "text",
             "audio"
@@ -12430,7 +12439,7 @@
         "supports_tool_choice": true
     },
     "azure/us/gpt-4o-realtime-preview-2024-12-17": {
-        "cache_read_input_audio_token_cost": 2.5e-06,
+        "cache_read_input_audio_token_cost": 2.75e-06,
         "cache_read_input_token_cost": 2.75e-06,
         "input_cost_per_audio_token": 4.4e-05,
         "input_cost_per_token": 5.5e-06,
@@ -12440,7 +12449,7 @@
         "mode": "realtime",
         "output_cost_per_audio_token": 8.8e-05,
         "output_cost_per_token": 2.2e-05,
-        "source": "https://azure.microsoft.com/en-us/pricing/details/azure-openai/",
+        "source": "https://azure.microsoft.com/en-us/pricing/details/cognitive-services/openai-service/",
         "supported_modalities": [
             "text",
             "audio"
@@ -67761,7 +67770,7 @@
     "deepinfra/nvidia/NVIDIA-Nemotron-3-Super-120B-A12B": {
         "max_output_tokens": 262144,
         "max_input_tokens": 262144,
-        "input_cost_per_token": 8.5e-08,
+        "input_cost_per_token": 7.5e-08,
         "output_cost_per_token": 4e-07,
         "litellm_provider": "deepinfra",
         "mode": "chat",
@@ -72924,6 +72933,7 @@
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/gpt-realtime-2": {
+        "cache_read_input_image_token_cost": 5e-07,
         "cache_creation_input_audio_token_cost": 4e-07,
         "cache_read_input_audio_token_cost": 4e-07,
         "cache_read_input_token_cost": 4e-07,
@@ -72942,7 +72952,7 @@
         "provider_specific_entry": {
             "realtime_ga_only": 1
         },
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://azure.microsoft.com/en-us/pricing/details/cognitive-services/openai-service/",
         "supported_endpoints": [
             "/v1/realtime"
         ],
