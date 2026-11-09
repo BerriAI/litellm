@@ -11,6 +11,8 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 
+const pageVisibilityCheckboxId = (page: string) => `page-visibility-${page}`;
+
 interface PageVisibilitySettingsProps {
   enabledPagesInternalUsers: string[] | null | undefined;
   enabledPagesPropertyDescription?: string;
@@ -89,7 +91,7 @@ export default function PageVisibilitySettings({
                 </legend>
                 <div className="ml-4 space-y-2">
                   {pages.map((page) => {
-                    const checkboxId = `page-visibility-${page.page}`;
+                    const checkboxId = pageVisibilityCheckboxId(page.page);
                     return (
                       <label key={page.page} htmlFor={checkboxId} className="flex cursor-pointer items-start gap-2">
                         <Checkbox

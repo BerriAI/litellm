@@ -66,9 +66,10 @@ const checkTimeLabel = (value: string, t: TFunction): string => {
 };
 
 function HealthStatusBadge({ status }: { status: string }) {
+  const { t } = useTranslation();
   const tone = HEALTH_STATUS_TONES[status];
   if (!tone) {
-    return <StatusBadge tone="neutral" label="unknown" />;
+    return <StatusBadge tone="neutral" label={t("modelDashboard.healthChecksTableColumns.unknownStatus")} />;
   }
   return <StatusBadge tone={tone} label={status} />;
 }

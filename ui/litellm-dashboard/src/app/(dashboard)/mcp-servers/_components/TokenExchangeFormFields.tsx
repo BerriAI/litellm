@@ -12,6 +12,7 @@ import { requiredRule } from "@/components/common_components/formRules";
 import { PasswordInput } from "@/components/shared/PasswordInput";
 import { Input } from "@/components/ui/input";
 import { selectControl, selectTriggerControl, tagsControl, textControl } from "./mcpFieldRules";
+import { codeSamples } from "@/i18n/untranslated/codeSamples";
 
 interface TokenExchangeFormFieldsProps {
   isEditing?: boolean;
@@ -193,7 +194,9 @@ const TokenExchangeFormFields: React.FC<TokenExchangeFormFieldsProps> = ({ isEdi
           <MultiSelect
             {...tagsControl(control, t)}
             placeholder={
-              isEntraObo ? "api://<app-id>/.default" : t("mcpServers.tokenExchangeFormFields.scopes.placeholder")
+              isEntraObo
+                ? codeSamples.mcpServers.entraOboScope
+                : t("mcpServers.tokenExchangeFormFields.scopes.placeholder")
             }
             className="rounded-lg"
           />

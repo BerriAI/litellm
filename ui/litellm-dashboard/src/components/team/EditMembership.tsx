@@ -28,6 +28,7 @@ import {
   type MemberFormValues,
 } from "./memberFormValues";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { codeSamples } from "@/i18n/untranslated/codeSamples";
 
 dayjs.extend(utc);
 
@@ -223,7 +224,7 @@ const MemberModal = <T extends BaseMember>({
                   <Input
                     {...rest}
                     ref={ref}
-                    placeholder="user@example.com"
+                    placeholder={codeSamples.teams.memberEmail}
                     value={typeof value === "string" ? value : ""}
                     onChange={(event) => onChange(event.target.value)}
                   />

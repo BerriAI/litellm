@@ -114,6 +114,7 @@ import SearchToolSelector from "../search_tools/SearchToolSelector";
 import SkillSelector from "../skills/SkillSelector";
 import EditLoggingSettings from "./EditLoggingSettings";
 import RouterSettingsAccordion, { RouterSettingsAccordionRef } from "../common_components/RouterSettingsAccordion";
+import { RouterWeightsSummary } from "../common_components/RouterSettingsSummary";
 import { StorePromptsToggle } from "../common_components/StorePromptsToggle";
 import MemberModal from "./EditMembership";
 import MemberPermissions from "./member_permissions";
@@ -139,6 +140,7 @@ import { customBudgetMemberUserIds, shouldPromptMemberBudgetReset } from "./memb
 import { useMemberBudgetReset } from "./useMemberBudgetReset";
 import { fetchClient } from "@/lib/http/api";
 import { BudgetPeriodTooltip } from "@/components/shared/BudgetPeriodTooltip";
+import { codeSamples } from "@/i18n/untranslated/codeSamples";
 
 const UI_MANAGED_METADATA_KEYS: ReadonlySet<string> = new Set([
   "logging",
@@ -1729,7 +1731,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                         {...field}
                         ref={ref}
                         value={typeof value === "string" ? value : ""}
-                        placeholder="example1@test.com, example2@test.com"
+                        placeholder={codeSamples.teams.memberEmails}
                       />
                     )}
                   </FormField>
@@ -2112,7 +2114,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                         ref={ref}
                         value={value ?? ""}
                         rows={4}
-                        placeholder='{"gpt-4": 4096}'
+                        placeholder={codeSamples.models.perModelMaxTokensJson}
                         disabled={!canEditTeamEstimates}
                       />
                     )}
@@ -2407,7 +2409,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                         ref={ref}
                         value={value ?? ""}
                         rows={6}
-                        placeholder='{"namespace": "admin", "mount": "secret", "path_prefix": "litellm"}'
+                        placeholder={codeSamples.teams.vaultConfigJson}
                         disabled={!premiumUser}
                       />
                     )}
@@ -2673,6 +2675,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     {info.router_settings.enable_tag_filtering && (
                       <div>{t("teams.teamInfo.settingsView.router.tagFilteringEnabled")}</div>
                     )}
+                    <RouterWeightsSummary weights={info.router_settings.weights} />
                   </div>
                 ) : (
                   <div className="text-muted-foreground">{t("teams.teamInfo.settingsView.router.none")}</div>
