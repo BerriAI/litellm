@@ -320,7 +320,7 @@
     "api_key_env":"01AI_API_KEY"
   },
   "baichauan": {
-    "base_url": "https://api.baichauan-ai.com/v1",
+    "base_url": "https://api.baichuan-ai.com/v1",
     "api_key_env":"BAICHAUAN_API_KEY"
   }
 }
