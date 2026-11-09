@@ -1,4 +1,6 @@
+import type { ParseKeys } from "i18next";
 import React, { useState, useEffect } from "react";
+import { useTranslation } from "react-i18next";
 import { Bot, Users } from "lucide-react";
 import {
   Combobox,
@@ -24,9 +26,9 @@ type ActivityView = "active-users" | "per-user";
 type ActivePeriod = "dau" | "wau" | "mau";
 
 const VIEW_OPTIONS = [
-  { value: "active-users", label: "Active users" },
-  { value: "per-user", label: "Per user" },
-] as const satisfies readonly { value: ActivityView; label: string }[];
+  { value: "active-users", labelKey: "usage.userAgentActivity.viewOptions.activeUsers" },
+  { value: "per-user", labelKey: "usage.userAgentActivity.viewOptions.perUser" },
+] as const satisfies readonly { value: ActivityView; labelKey: ParseKeys }[];
 
 const PERIOD_OPTIONS = [
   { value: "dau", label: "DAU" },
@@ -92,11 +94,12 @@ interface ActiveUserChart {
 }
 
 function ActiveUsersChart({ chart }: { chart: ActiveUserChart }) {
+  const { t } = useTranslation();
   if (chart.loading) return <ChartSkeleton className="h-72" />;
   if (chart.tags.length === 0) {
     return (
       <div className="flex h-72 items-center justify-center rounded-lg border border-dashed text-sm text-muted-foreground">
-        No active users in this period
+        {t("usage.userAgentActivity.noActiveUsers")}
       </div>
     );
   }
@@ -136,6 +139,7 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
   selectedTags: selectedTagsProp,
   onSelectedTagsChange,
 }) => {
+  const { t } = useTranslation();
   const anchor = useComboboxAnchor();
   // Maximum number of categories to show in charts to prevent color palette overflow
   const MAX_CATEGORIES = 10;
@@ -363,7 +367,7 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
 
     // Generate all 7 weeks (Week 1 through Week 7)
     for (let weekNum = 1; weekNum <= 7; weekNum++) {
-      const weekEntry: any = { week: `Week ${weekNum}` };
+      const weekEntry: any = { week: t("usage.userAgentActivity.weekLabel", { number: weekNum }) };
 
       // Initialize all user agents to 0
       allWauTags.forEach((tag) => {
@@ -380,7 +384,7 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
       // Extract week number from the date field (e.g., "Week 1 (Jul 27)" -> "Week 1")
       const weekMatch = item.date.match(/Week (\d+)/);
       if (weekMatch) {
-        const weekLabel = `Week ${weekMatch[1]}`;
+        const weekLabel = t("usage.userAgentActivity.weekLabel", { number: weekMatch[1] });
         const weekEntry = chartData.find((d) => d.week === weekLabel);
         if (weekEntry) {
           weekEntry[userAgent] = item.active_users;
@@ -399,7 +403,7 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
 
     // Generate all 7 months (Month 1 through Month 7)
     for (let monthNum = 1; monthNum <= 7; monthNum++) {
-      const monthEntry: any = { month: `Month ${monthNum}` };
+      const monthEntry: any = { month: t("usage.userAgentActivity.monthLabel", { number: monthNum }) };
 
       // Initialize all user agents to 0
       allMauTags.forEach((tag) => {
@@ -416,7 +420,7 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
       // Extract month number from the date field (e.g., "Month 1 (Jul)" -> "Month 1")
       const monthMatch = item.date.match(/Month (\d+)/);
       if (monthMatch) {
-        const monthLabel = `Month ${monthMatch[1]}`;
+        const monthLabel = t("usage.userAgentActivity.monthLabel", { number: monthMatch[1] });
         const monthEntry = chartData.find((d) => d.month === monthLabel);
         if (monthEntry) {
           monthEntry[userAgent] = item.active_users;
@@ -432,7 +436,7 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
   const activeUserCharts: readonly ActiveUserChart[] = [
     {
       value: "dau",
-      title: "Daily Active Users - Last 7 Days",
+      title: t("usage.userAgentActivity.charts.dau"),
       loading: dauLoading,
       data: dailyChartData,
       index: "date",
@@ -440,7 +444,7 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
     },
     {
       value: "wau",
-      title: "Weekly Active Users - Last 7 Weeks",
+      title: t("usage.userAgentActivity.charts.wau"),
       loading: wauLoading,
       data: weeklyChartData,
       index: "week",
@@ -448,7 +452,7 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
     },
     {
       value: "mau",
-      title: "Monthly Active Users - Last 7 Months",
+      title: t("usage.userAgentActivity.charts.mau"),
       loading: mauLoading,
       data: monthlyChartData,
       index: "month",
@@ -462,11 +466,13 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
     <div className="grid gap-3">
       <Panel
         icon={Bot}
-        title="Summary by User Agent"
-        subtitle="Performance metrics for different user agents"
+        title={t("usage.userAgentActivity.summary.title")}
+        subtitle={t("usage.userAgentActivity.summary.subtitle")}
         action={
           <div className="flex w-full items-center gap-2 sm:w-96">
-            <label className="shrink-0 text-xs text-muted-foreground">Filter by User Agents</label>
+            <label className="shrink-0 text-xs text-muted-foreground">
+              {t("usage.userAgentActivity.filter.label")}
+            </label>
             <Combobox multiple items={availableTags} value={[...selectedTags]} onValueChange={updateSelectedTags}>
               <ComboboxChips render={<div ref={anchor} />} className="min-w-0 flex-1" aria-busy={tagsLoading}>
                 <ComboboxValue>
@@ -478,11 +484,14 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
                     ))
                   }
                 </ComboboxValue>
-                <ComboboxChipsInput placeholder="All User Agents" aria-label="All User Agents" />
-                {selectedTags.length > 0 && <ComboboxClear aria-label="Clear user agent filter" />}
+                <ComboboxChipsInput
+                  placeholder={t("usage.userAgentActivity.filter.placeholder")}
+                  aria-label={t("usage.userAgentActivity.filter.placeholder")}
+                />
+                {selectedTags.length > 0 && <ComboboxClear aria-label={t("usage.userAgentActivity.filter.clear")} />}
               </ComboboxChips>
               <ComboboxContent anchor={anchor}>
-                <ComboboxEmpty>No user agents found</ComboboxEmpty>
+                <ComboboxEmpty>{t("usage.userAgentActivity.filter.empty")}</ComboboxEmpty>
                 <ComboboxList>
                   {(tag: string) => {
                     const userAgent = extractUserAgent(tag);
@@ -528,7 +537,11 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
             {Array.from({ length: Math.max(0, SUMMARY_SLOTS - summaryRows.length) }).map((_, index) => (
               <SummaryCell
                 key={`empty-${index}`}
-                name={<h4 className="truncate text-sm font-medium text-muted-foreground">No Data</h4>}
+                name={
+                  <h4 className="truncate text-sm font-medium text-muted-foreground">
+                    {t("usage.userAgentActivity.summary.noData")}
+                  </h4>
+                }
                 successRequests="-"
                 totalTokens="-"
                 totalCost="-"
@@ -541,14 +554,32 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
       {/* DAU/WAU/MAU vs Per User Usage. Every view stays mounted so switching does not reset its state. */}
       <Panel
         icon={Users}
-        title={activityView === "active-users" ? "DAU, WAU & MAU per Agent" : "Per User Usage (Last 30 Days)"}
-        subtitle={activityView === "active-users" ? "Active users across different time periods" : "Usage per end user"}
+        title={
+          activityView === "active-users"
+            ? t("usage.userAgentActivity.activity.activeUsersTitle")
+            : t("usage.userAgentActivity.activity.perUserTitle")
+        }
+        subtitle={
+          activityView === "active-users"
+            ? t("usage.userAgentActivity.activity.activeUsersSubtitle")
+            : t("usage.userAgentActivity.activity.perUserSubtitle")
+        }
         action={
           <>
             {activityView === "active-users" && (
-              <Segmented label="Active users period" value={period} options={PERIOD_OPTIONS} onChange={setPeriod} />
+              <Segmented
+                label={t("usage.userAgentActivity.activity.periodLabel")}
+                value={period}
+                options={PERIOD_OPTIONS}
+                onChange={setPeriod}
+              />
             )}
-            <Segmented label="Activity view" value={activityView} options={VIEW_OPTIONS} onChange={setActivityView} />
+            <Segmented
+              label={t("usage.userAgentActivity.activity.viewLabel")}
+              value={activityView}
+              options={VIEW_OPTIONS.map(({ value, labelKey }) => ({ value, label: t(labelKey) }))}
+              onChange={setActivityView}
+            />
           </>
         }
       >
@@ -583,10 +614,11 @@ function SummaryCell({
   totalTokens: string;
   totalCost: string;
 }) {
+  const { t } = useTranslation();
   const rows = [
-    { label: "Success Requests", value: successRequests },
-    { label: "Total Tokens", value: totalTokens },
-    { label: "Total Cost", value: totalCost },
+    { label: t("usage.userAgentActivity.summary.successRequests"), value: successRequests },
+    { label: t("usage.userAgentActivity.summary.totalTokens"), value: totalTokens },
+    { label: t("usage.userAgentActivity.summary.totalCost"), value: totalCost },
   ];
   return (
     <div className="min-w-0 border-b px-4 py-3.5 last:border-b-0 lg:border-b-0">

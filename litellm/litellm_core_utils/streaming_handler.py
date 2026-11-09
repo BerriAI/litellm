@@ -7,7 +7,7 @@ import logging
 import threading
 import time
 import traceback
-from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Mapping, Sequence, Sized
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, NoReturn, Protocol, TypeVar, cast
@@ -17,29 +17,40 @@ import httpx
 from openai.types.chat import ChatCompletionChunk
 from openai.types.chat.chat_completion_chunk import Choice as ChunkChoice
 from openai.types.chat.chat_completion_chunk import ChoiceDelta
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 from typing_extensions import NotRequired, TypedDict
 
 import litellm
 from litellm import verbose_logger
 from litellm._uuid import uuid
+from litellm.constants import STREAM_CHUNK_CHOICE_FIELDS, STREAM_FINISH_CHOICE_FIELDS
 from litellm.litellm_core_utils.asyncify import asyncify
-from litellm.litellm_core_utils.core_helpers import chunk_usage, provider_reported_usage_cost
+from litellm.litellm_core_utils.core_helpers import (
+    UPSTREAM_USAGE_COST,
+    attribute_or_none,
+    chunk_usage,
+    decoded_json_object,
+    provider_reported_usage_cost,
+    stamp_litellm_bill_on_usage,
+)
 from litellm.litellm_core_utils.hidden_params import (
     HIDDEN_PARAMS_ATTR,
     get_hidden_params,
+    set_extra_attribute,
     set_hidden_param,
     stored_attribute,
 )
+from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import object_items
 from litellm.litellm_core_utils.model_response_utils import (
     is_model_response_stream_empty,
 )
-from litellm.litellm_core_utils.redact_messages import LiteLLMLoggingObject
+from litellm.litellm_core_utils.redact_messages import LiteLLMLoggingObject, drop_token_ids
 from litellm.litellm_core_utils.thread_pool_executor import executor
 from litellm.llms.ollama.common_utils import OllamaResponseIdNormalizer
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
+    CHOICE_LOGPROBS_OR_JSON,
     CacheCreationTokenDetails,
     CompletionTokensDetailsWrapper,
     Delta,
@@ -96,12 +107,17 @@ def _stamp_usage_cost(
     usage_chunk: ModelResponse | TextCompletionResponse | ModelResponseStream,
     complete_response: ModelResponse | TextCompletionResponse | ModelResponseStream,
 ) -> None:
-    bill: Final = (get_hidden_params(complete_response) or {}).get("response_cost")
+    complete_hidden: Final = get_hidden_params(complete_response) or {}
+    bill: Final = complete_hidden.get("response_cost")
     usage: Final[object] = getattr(usage_chunk, "usage", None)
     if usage is None or isinstance(bill, bool) or not isinstance(bill, (int, float)):
         return
-    if bill > 0 or isinstance(getattr(usage, "cost", None), (int, float)):
-        setattr(usage, "cost", float(bill))  # noqa: B010  # cost is an optional extra on the usage model
+    if bill <= 0 and not isinstance(getattr(usage, "cost", None), (int, float)):
+        return
+    chunk_hidden: Final = get_hidden_params(usage_chunk)
+    if chunk_hidden is not None and UPSTREAM_USAGE_COST in complete_hidden:
+        chunk_hidden[UPSTREAM_USAGE_COST] = complete_hidden[UPSTREAM_USAGE_COST]
+    stamp_litellm_bill_on_usage(usage_chunk, usage, float(bill))
 
 
 def _stamp_served_service_tier(response: ModelResponseStream, complete_streaming_response: ModelResponse) -> None:
@@ -115,6 +131,13 @@ def _apply_provider_fields(response: ModelResponseStream, fields: Mapping[str, o
         setattr(response, key, value)
 
 
+def _entry_len(entries: Mapping[str, object], key: str) -> int:
+    value: Final = entries[key]
+    if isinstance(value, Sized):
+        return len(value)
+    raise TypeError(f"object of type '{type(value).__name__}' has no len()")
+
+
 def _prepend_upstream_choice_extras(
     choice: StreamingChoices, upstream_choice: ChunkChoice, extra_keys: frozenset[str]
 ) -> None:
@@ -123,6 +146,70 @@ def _prepend_upstream_choice_extras(
     upstream_extras: Final[Mapping[str, object]] = upstream_choice.model_dump(include=set(extra_keys))
     choice.__pydantic_extra__ = {**upstream_extras, **(choice.__pydantic_extra__ or {})}  # rebind-ok: reuse choice
     choice.__pydantic_fields_set__.update(upstream_extras)
+
+
+_NO_UPSTREAM_CHOICE_FIELDS: Final[Mapping[str, object]] = MappingProxyType({})
+_NO_CHOICE_FIELDS_BY_INDEX: Final[Mapping[int, Mapping[str, object]]] = MappingProxyType({})
+
+
+def _upstream_first_choice(upstream_chunk: object) -> BaseModel | None:
+    match getattr(upstream_chunk, "choices", None):
+        case [BaseModel() as first_choice, *_]:
+            return first_choice
+        case _:
+            return None
+
+
+def _upstream_choice_fields(upstream_chunk: object, fields: Sequence[str]) -> Mapping[str, object]:
+    first_choice: Final = _upstream_first_choice(upstream_chunk)
+    if first_choice is None:
+        return _NO_UPSTREAM_CHOICE_FIELDS
+    upstream_extras: Final[Mapping[str, object]] = first_choice.model_extra or {}
+    return MappingProxyType({field: upstream_extras[field] for field in fields if field in upstream_extras})
+
+
+def _upstream_choice_index(upstream_chunk: object) -> int:
+    upstream_index: Final[object] = getattr(_upstream_first_choice(upstream_chunk), "index", 0)
+    return upstream_index if isinstance(upstream_index, int) else 0
+
+
+def _response_choice_index(response_obj: Mapping[str, object]) -> int:
+    choice_index: Final = response_obj.get("choice_index")
+    if isinstance(choice_index, int):
+        return choice_index
+    return _upstream_choice_index(response_obj.get("original_chunk"))
+
+
+def _non_null_upstream_choice_fields(upstream_chunk: object, fields: Sequence[str]) -> Mapping[str, object]:
+    first_choice: Final = _upstream_first_choice(upstream_chunk)
+    upstream_extras: Final = first_choice.model_extra if first_choice is not None else None
+    if not upstream_extras:
+        return _NO_UPSTREAM_CHOICE_FIELDS
+    return MappingProxyType(
+        {field: upstream_extras[field] for field in fields if upstream_extras.get(field) is not None}
+    )
+
+
+def _apply_choice_fields(choice: StreamingChoices, fields: Mapping[str, object]) -> None:
+    for field, value in fields.items():
+        setattr(choice, field, value)
+
+
+def _choice_fields_chunk(
+    model_response: ModelResponseStream, upstream_index: int, fields: Mapping[str, object]
+) -> ModelResponseStream:
+    model_response.choices[0].delta = Delta(content="")  # rebind-ok: chunks are built in place here
+    model_response.choices[0].index = upstream_index  # rebind-ok: chunks are built in place here
+    _apply_choice_fields(model_response.choices[0], fields)
+    return model_response
+
+
+def _without_token_ids_under_post_call_rules(chunk: ModelResponseStream | None) -> ModelResponseStream | None:
+    if chunk is None or not litellm.post_call_rules:
+        return chunk
+    for choice in chunk.choices:
+        drop_token_ids(choice)
+    return chunk
 
 
 def _holds_only_scalars(fields: Iterable[tuple[str, object]]) -> bool:
@@ -265,6 +352,10 @@ class _VertexChunkLike(Protocol):
 
 class _ParsedChunkHiddenParams(LiteLLMBaseModel):
     provider_specific_fields: Mapping[str, object] | None = None
+    upstream_provider: str | None = None
+
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 def _provider_response_model(chunk: object) -> str | None:
@@ -281,9 +372,17 @@ def _parsed_provider_hidden_params(hidden: object) -> _ParsedChunkHiddenParams |
         return None
 
 
+def _provider_upstream_provider(chunk: object) -> str | None:
+    parsed: Final = _parsed_provider_hidden_params(get_hidden_params(chunk))
+    if parsed is None or not parsed.upstream_provider:
+        return None
+    return parsed.upstream_provider
+
+
 def _provider_hidden_params(
     chunk: object,
     provider_response_model: str | None,
+    upstream_provider: str | None,
 ) -> Mapping[str, object] | None:
     hidden: Final = get_hidden_params(chunk)
     parsed: Final = _parsed_provider_hidden_params(hidden)
@@ -296,6 +395,10 @@ def _provider_hidden_params(
             for key, value in (
                 ("provider_response_model", provider_response_model),
                 ("provider_specific_fields", provider_specific_fields),
+                (
+                    "upstream_provider",
+                    parsed.upstream_provider if parsed is not None and parsed.upstream_provider else upstream_provider,
+                ),
             )
             if value is not None
         }
@@ -324,11 +427,14 @@ class CustomStreamWrapper:
         make_call: Callable | None = None,
         _response_headers: dict | httpx.Headers | None = None,
         count_prompt_tokens: Callable[[], int] | None = None,
+        is_mock: bool = False,
     ):
         self.model = model
         self.make_call = make_call
         self.count_prompt_tokens = count_prompt_tokens
         self.custom_llm_provider = custom_llm_provider
+        self.is_mock = is_mock
+        self.uses_openai_chat_stream = False
         self.logging_obj: LiteLLMLoggingObject = logging_obj
         self.completion_stream = completion_stream
         self.sent_first_chunk = False
@@ -338,9 +444,8 @@ class CustomStreamWrapper:
         self._closed = False
         self._stream_created_time: float = time.time()
 
-        litellm_params: Final[GenericLiteLLMParams] = GenericLiteLLMParams.model_validate(
-            dict(**self.logging_obj.model_call_details.get("litellm_params", {}))
-        )
+        raw_litellm_params: Final = dict[str, object](**self.logging_obj.model_call_details.get("litellm_params", {}))
+        litellm_params: Final[GenericLiteLLMParams] = GenericLiteLLMParams.model_validate(raw_litellm_params)
         self.merge_reasoning_content_in_choices: bool = litellm_params.merge_reasoning_content_in_choices or False
         self.sent_first_thinking_block = False
         self.sent_last_thinking_block = False
@@ -348,8 +453,12 @@ class CustomStreamWrapper:
 
         self.system_fingerprint: str | None = None
         self._provider_response_model: str | None = None
+        self._upstream_provider: str | None = None
         self.received_finish_reason: str | None = None
+        self.received_finish_choice_fields: Mapping[int, Mapping[str, object]] = _NO_CHOICE_FIELDS_BY_INDEX
+        self.carried_chunk_choice_fields: Mapping[int, Mapping[str, object]] = _NO_CHOICE_FIELDS_BY_INDEX
         self.intermittent_finish_reason: str | None = None  # finish reasons that show up mid-stream
+        self.received_any_finish_reason = False  # a later chunk can reset intermittent_finish_reason
         self.special_tokens = [
             "<|assistant|>",
             "<|system|>",
@@ -367,7 +476,7 @@ class CustomStreamWrapper:
 
         _api_base: Final = get_api_base(
             model=model or "",
-            optional_params=self.logging_obj.model_call_details.get("litellm_params", {}),
+            optional_params=raw_litellm_params,
         )
 
         self._hidden_params: dict[str, object] = {
@@ -793,6 +902,7 @@ class CustomStreamWrapper:
                 "logprobs": logprobs,
                 "original_chunk": str_line,
                 "usage": usage,
+                "chunk_choice_fields": _non_null_upstream_choice_fields(str_line, STREAM_CHUNK_CHOICE_FIELDS),
             }
         except Exception as e:
             raise e
@@ -817,7 +927,7 @@ class CustomStreamWrapper:
         except Exception as e:
             raise e
 
-    def handle_openai_text_completion_chunk(self, chunk):
+    def handle_openai_text_completion_chunk(self, chunk: object):
         try:
             text = ""
             is_finished = False
@@ -830,11 +940,15 @@ class CustomStreamWrapper:
                     is_finished = True
                     finish_reason = choices[0].finish_reason
             usage = getattr(chunk, "usage", None)
+            choice_index: Final = _upstream_choice_index(chunk)
             return {
                 "text": text,
                 "is_finished": is_finished,
                 "finish_reason": finish_reason,
                 "usage": usage,
+                "chunk_choice_fields": _non_null_upstream_choice_fields(chunk, STREAM_CHUNK_CHOICE_FIELDS),
+                "choice_index": choice_index,
+                "sibling_finish_reason": finish_reason if choice_index != 0 else None,
             }
 
         except Exception as e:
@@ -850,7 +964,7 @@ class CustomStreamWrapper:
                 if "text_output" in chunk:
                     response = CustomStreamWrapper.strip_sse_data_from_chunk(chunk) or ""
                     response = response.strip()
-                    parsed_response = json.loads(response)
+                    parsed_response = decoded_json_object(_DECODED_JSON.validate_python(json.loads(response)))
                 else:
                     return {
                         "text": "",
@@ -875,13 +989,21 @@ class CustomStreamWrapper:
         except Exception as e:
             raise e
 
+    def _served_openrouter_model(self) -> str | None:
+        if self.custom_llm_provider == LlmProviders.OPENROUTER.value or (
+            self.custom_llm_provider == "cached_response"
+            and self.logging_obj.model_call_details.get("custom_llm_provider") == LlmProviders.OPENROUTER.value
+        ):
+            return self._provider_response_model
+        return None
+
     def model_response_creator(
         self,
         chunk: dict | None = None,
         hidden_params: Mapping[str, object] | None = None,
         delta: Delta | None = None,
     ) -> ModelResponseStream:
-        _model: Final = self._cached_model_name
+        _model: Final = self._served_openrouter_model() or self._cached_model_name
         _logging_obj_llm_provider: Final = self._cached_logging_llm_provider
 
         if chunk is None:
@@ -976,7 +1098,7 @@ class CustomStreamWrapper:
 
     def is_chunk_non_empty(
         self,
-        completion_obj: dict[str, Any],
+        completion_obj: Mapping[str, object],
         model_response: ModelResponseStream,
         response_obj: Mapping[str, object],
     ) -> bool:
@@ -986,7 +1108,7 @@ class CustomStreamWrapper:
             or (
                 "tool_calls" in completion_obj
                 and completion_obj["tool_calls"] is not None
-                and len(completion_obj["tool_calls"]) > 0
+                and _entry_len(completion_obj, "tool_calls") > 0
             )
             or ("function_call" in completion_obj and completion_obj["function_call"] is not None)
             or (
@@ -1018,6 +1140,7 @@ class CustomStreamWrapper:
                 and model_response.choices[0].delta.role is not None
             )
             or (getattr(model_response.choices[0].delta, "reasoning_items", None) is not None)
+            or getattr(model_response.choices[0].delta, "thinking_blocks", None)
         ):
             return True
         else:
@@ -1034,7 +1157,7 @@ class CustomStreamWrapper:
             _initial_delta: Final = model_response.choices[0].delta.model_dump()
 
             _initial_delta.pop("role", None)
-            model_response.choices[0].delta = Delta(**_initial_delta)
+            set_extra_attribute(model_response.choices[0], "delta", Delta(**_initial_delta))
         return model_response
 
     def _prebuilt_plain_delta(self, chunk: object) -> Delta | None:
@@ -1060,13 +1183,13 @@ class CustomStreamWrapper:
     def _set_role_on_fresh_delta(self, model_response: ModelResponseStream) -> None:
         delta: Final = model_response.choices[0].delta
         if self.sent_first_chunk is False:
-            delta.role = "assistant"
+            set_extra_attribute(delta, "role", "assistant")
             self.sent_first_chunk = True
             return
         if not _holds_only_scalars(delta):
             self.strip_role_from_delta(model_response)
             return
-        delta.role = None
+        set_extra_attribute(delta, "role", None)
         if "provider_specific_fields" not in delta.model_fields_set:
             delta.provider_specific_fields = None
 
@@ -1145,6 +1268,13 @@ class CustomStreamWrapper:
         )
 
         is_chunk_non_empty: Final = self.is_chunk_non_empty(completion_obj, model_response, response_obj)
+        upstream_chunk_choice_fields: Final[Mapping[str, object]] = (
+            _NO_UPSTREAM_CHOICE_FIELDS
+            if litellm.post_call_rules
+            else response_obj.get("chunk_choice_fields", _NO_UPSTREAM_CHOICE_FIELDS)
+        )
+        chunk_choice_fields: Final = self._take_carried_chunk_choice_fields(response_obj, upstream_chunk_choice_fields)
+        sibling_finish_reason: Final[str | None] = response_obj.get("sibling_finish_reason")
 
         if is_chunk_non_empty:  # cannot set content of an OpenAI Object to be an empty string
             self.raise_on_model_repetition()
@@ -1185,8 +1315,8 @@ class CustomStreamWrapper:
                             and _holds_only_scalars(upstream_delta)
                         )
                         if can_reuse_choice and upstream_choice is not None:
-                            model_response.choices[0].finish_reason = None  # rebind-ok: keep reused choice
-                            model_response.choices[0].index = upstream_choice.index  # rebind-ok: keep reused choice
+                            set_extra_attribute(model_response.choices[0], "finish_reason", None)
+                            set_extra_attribute(model_response.choices[0], "index", upstream_choice.index)
                             _prepend_upstream_choice_extras(
                                 model_response.choices[0],
                                 upstream_choice,
@@ -1201,18 +1331,17 @@ class CustomStreamWrapper:
                                         choice_json.pop(
                                             "finish_reason", None
                                         )  # for mistral etc. which return a value in their last chunk (not-openai compatible).
-                                        choices.append(StreamingChoices(**choice_json))
+                                        choice_json.pop("logprobs", None)
+                                        choices.append(
+                                            StreamingChoices(**choice_json, logprobs=getattr(choice, "logprobs", None))
+                                        )
                                 except Exception:
                                     choices.append(StreamingChoices())
                             setattr(model_response, "choices", choices)
                     else:
                         return
                     model_response.system_fingerprint = upstream_chunk.system_fingerprint
-                    setattr(
-                        model_response,
-                        "citations",
-                        stored_attribute(upstream_chunk, "citations"),
-                    )
+                    set_extra_attribute(model_response, "citations", stored_attribute(upstream_chunk, "citations"))
                     preserve_upstream_non_openai_attributes(
                         model_response=model_response,
                         original_chunk=original_chunk,
@@ -1233,16 +1362,40 @@ class CustomStreamWrapper:
                     if response_obj.get("provider_specific_fields") is not None:
                         completion_obj["provider_specific_fields"] = response_obj["provider_specific_fields"]
                     model_response.choices[0].delta = Delta(**completion_obj)
-                    _index: Final[int | None] = completion_obj.get("index")
+                    _index: Final[int | None] = completion_obj.get("index", response_obj.get("choice_index"))
                     if _index is not None:
                         model_response.choices[0].index = _index
 
+                _apply_choice_fields(model_response.choices[0], chunk_choice_fields)
+                if sibling_finish_reason is not None:
+                    self._finish_sibling_choice(model_response.choices[0], sibling_finish_reason)
+                elif response_obj.get("is_finished"):
+                    self._apply_finish_choice_fields(model_response.choices[0])
                 self._optional_combine_thinking_block_in_choices(model_response=model_response)
 
                 return model_response
             else:
                 return
+        elif sibling_finish_reason is not None:
+            sibling_chunk: Final = _choice_fields_chunk(
+                model_response, _response_choice_index(response_obj), chunk_choice_fields
+            )
+            self._finish_sibling_choice(sibling_chunk.choices[0], sibling_finish_reason)
+            return sibling_chunk
         elif self.received_finish_reason is not None:
+            chunk_upstream_index: Final = _response_choice_index(response_obj)
+            if chunk_choice_fields and self._streams_past_the_pending_finish(
+                model_response, response_obj, chunk_upstream_index
+            ):
+                self.carried_chunk_choice_fields = MappingProxyType(
+                    {**self.carried_chunk_choice_fields, chunk_upstream_index: chunk_choice_fields}
+                )
+            else:
+                another_choice_fields_chunk: Final = self._another_choice_fields_chunk(
+                    model_response, response_obj, chunk_choice_fields
+                )
+                if another_choice_fields_chunk is not None:
+                    return another_choice_fields_chunk
             if self.sent_last_chunk is True:
                 # Bedrock returns the guardrail trace in the last chunk - we want to return this here
                 if self.custom_llm_provider == "bedrock" and "trace" in model_response:
@@ -1277,15 +1430,23 @@ class CustomStreamWrapper:
             if _is_delta_empty:
                 model_response.choices[0].delta = Delta(content=self._close_open_think_block())
                 # get any function call arguments
-                model_response.choices[0].finish_reason = map_finish_reason(
-                    finish_reason=self.received_finish_reason
+                model_response.choices[0].finish_reason = self._normalize_tool_call_finish_reason(
+                    map_finish_reason(finish_reason=self.received_finish_reason)
                 )  # ensure consistent output to openai
+                self._apply_finish_choice_fields(model_response.choices[0])
+                if (
+                    response_obj.get("is_finished")
+                    and _response_choice_index(response_obj) == model_response.choices[0].index
+                ):
+                    _apply_choice_fields(model_response.choices[0], chunk_choice_fields)
 
                 self.sent_last_chunk = True
 
             return model_response
         elif self._has_special_delta_content(model_response):
             return self._handle_special_delta_content(model_response)
+        elif chunk_choice_fields:
+            return _choice_fields_chunk(model_response, _response_choice_index(response_obj), chunk_choice_fields)
         else:
             if hasattr(model_response, "usage"):
                 self.chunks.append(model_response)
@@ -1508,6 +1669,8 @@ class CustomStreamWrapper:
             completion_obj["content"] = response_obj["text"]
             print_verbose(f"completion obj content: {completion_obj['content']}")
             if response_obj["is_finished"]:
+                self._record_finish_choice_fields(chunk)
+            if response_obj["is_finished"] and response_obj["sibling_finish_reason"] is None:
                 self.received_finish_reason = response_obj["finish_reason"]
             if response_obj["usage"] is not None:
                 _text_completion_usage: Final[Usage] = response_obj["usage"]
@@ -1571,7 +1734,9 @@ class CustomStreamWrapper:
                 self.system_fingerprint = cached_chunk.system_fingerprint
             if response_obj["is_finished"]:
                 self.received_finish_reason = response_obj["finish_reason"]
+                self._record_finish_choice_fields(cached_chunk)
         else:  # openai / azure chat model
+            self.uses_openai_chat_stream = True
             if isinstance(chunk, ChatCompletionChunk):
                 self._openai_handler_receives_chat_chunks = True
                 if any(str(choice.finish_reason) == "abort" for choice in chunk.choices or ()):
@@ -1592,12 +1757,14 @@ class CustomStreamWrapper:
                 return _ProviderChunkEarlyReturn(None)
             completion_obj["content"] = response_obj["text"]
             self.intermittent_finish_reason = response_obj.get("finish_reason", None)
+            self.received_any_finish_reason |= response_obj["finish_reason"] is not None
             if response_obj["is_finished"]:
                 if response_obj["finish_reason"] == "error":
                     raise Exception(
                         f"{self.custom_llm_provider} raised a streaming error - finish_reason: error, no content string given. Received Chunk={response_obj}"
                     )
                 self.received_finish_reason = response_obj["finish_reason"]
+                self._record_finish_choice_fields(chunk)
             if response_obj.get("original_chunk", None) is not None:
                 if hasattr(response_obj["original_chunk"], "id"):
                     model_response = self.set_model_id(response_obj["original_chunk"].id, model_response)
@@ -1605,7 +1772,7 @@ class CustomStreamWrapper:
                     model_response.system_fingerprint = response_obj["original_chunk"].system_fingerprint
                     self.system_fingerprint = response_obj["original_chunk"].system_fingerprint
             if response_obj["logprobs"] is not None:
-                model_response.choices[0].logprobs = response_obj["logprobs"]
+                model_response.choices[0].logprobs = CHOICE_LOGPROBS_OR_JSON.validate_python(response_obj["logprobs"])
 
             if response_obj["usage"] is not None:
                 if isinstance(response_obj["usage"], dict):
@@ -1642,10 +1809,17 @@ class CustomStreamWrapper:
         provider_response_model: Final = _provider_response_model(chunk)
         if provider_response_model is not None:
             self._provider_response_model = provider_response_model
+        upstream_provider: Final = _provider_upstream_provider(chunk)
+        if self._upstream_provider is None and upstream_provider is not None:
+            self._upstream_provider = upstream_provider
         prebuilt_delta: Final = self._prebuilt_plain_delta(chunk)
         plain_delta_created: bool = prebuilt_delta is not None  # rebind-ok: the first chunk builds its delta below
         model_response = self.model_response_creator(
-            hidden_params=_provider_hidden_params(chunk, self._provider_response_model),
+            hidden_params=_provider_hidden_params(
+                chunk,
+                self._provider_response_model,
+                self._upstream_provider,
+            ),
             delta=prebuilt_delta,
         )
         response_obj: dict[str, Any] = {}
@@ -1658,10 +1832,10 @@ class CustomStreamWrapper:
                 completion_obj=completion_obj,
             )
             if isinstance(dispatch_result, _ProviderChunkEarlyReturn):
-                return dispatch_result.value
+                return _without_token_ids_under_post_call_rules(dispatch_result.value)
             response_obj = dispatch_result.response_obj
 
-            model_response.model = self.model
+            model_response.model = self._served_openrouter_model() or self.model
             ## FUNCTION CALL PARSING
             original_chunk: Final[_UpstreamChunkLike | None] = (
                 response_obj.get("original_chunk") if response_obj is not None else None
@@ -1688,7 +1862,9 @@ class CustomStreamWrapper:
                             elif delta.tool_calls is not None:
                                 if isinstance(delta.tool_calls, list):
                                     for t in delta.tool_calls:
-                                        if hasattr(t, "functions") and hasattr(getattr(t, "functions"), "arguments"):
+                                        if hasattr(t, "functions") and hasattr(
+                                            attribute_or_none(t, "functions"), "arguments"
+                                        ):
                                             if t.function.arguments is None:
                                                 t.function.arguments = ""
                             _json_delta: Final[_DeltaDumpDict] = delta.model_dump()
@@ -1705,6 +1881,8 @@ class CustomStreamWrapper:
                                         # if function returned but type set to None - mistral's api returns type: None
                                         tool["type"] = "function"
                             model_response.choices[0].delta = Delta(**_json_delta)
+                            if model_response.choices[0].delta.tool_calls:
+                                self.tool_call = True
                         except Exception as e:
                             verbose_logger.exception(
                                 "litellm.CustomStreamWrapper.chunk_creator(): Exception occured - %s", e
@@ -1724,7 +1902,7 @@ class CustomStreamWrapper:
                     return
             ## CHECK FOR TOOL USE
 
-            if "tool_calls" in completion_obj and len(completion_obj["tool_calls"]) > 0:
+            if "tool_calls" in completion_obj and _entry_len(completion_obj, "tool_calls") > 0:
                 if self.is_function_call is True:  # user passed in 'functions' param
                     completion_obj["function_call"] = completion_obj["tool_calls"][0]["function"]
                     completion_obj["tool_calls"] = None
@@ -1746,7 +1924,7 @@ class CustomStreamWrapper:
                 response_obj=response_obj,
                 plain_delta_created=plain_delta_created,
             )
-            return result
+            return _without_token_ids_under_post_call_rules(result)
 
         except StopIteration:
             raise StopIteration
@@ -1934,25 +2112,119 @@ class CustomStreamWrapper:
         if self.logging_obj.is_sync_litellm_request(litellm_params):
             self.logging_obj.success_handler(processed_chunk, None, None, cache_hit)
 
+    def _normalize_tool_call_finish_reason(self, finish_reason: str) -> str:
+        if finish_reason == "stop" and self.tool_call:
+            return "tool_calls"
+        return finish_reason
+
+    def _record_finish_choice_fields(self, upstream_chunk: object) -> None:
+        self.received_finish_choice_fields = MappingProxyType(
+            {
+                **self.received_finish_choice_fields,
+                _upstream_choice_index(upstream_chunk): _upstream_choice_fields(
+                    upstream_chunk, STREAM_FINISH_CHOICE_FIELDS
+                ),
+            }
+        )
+
+    def _apply_finish_choice_fields(self, choice: StreamingChoices) -> None:
+        _apply_choice_fields(choice, self.received_finish_choice_fields.get(choice.index, _NO_UPSTREAM_CHOICE_FIELDS))
+
+    def _finish_sibling_choice(self, choice: StreamingChoices, finish_reason: str) -> None:
+        choice.finish_reason = map_finish_reason(finish_reason)  # rebind-ok: chunks are built in place here
+        self._apply_finish_choice_fields(choice)
+
+    def _streams_past_the_pending_finish(
+        self, model_response: ModelResponseStream, response_obj: Mapping[str, object], upstream_index: int
+    ) -> bool:
+        finishing_index: Final = model_response.choices[0].index
+        return (
+            not self.sent_last_chunk
+            and not response_obj.get("is_finished")
+            and upstream_index != finishing_index
+            and finishing_index in self.received_finish_choice_fields
+        )
+
+    def _take_carried_chunk_choice_fields(
+        self, response_obj: Mapping[str, object], chunk_choice_fields: Mapping[str, object]
+    ) -> Mapping[str, object]:
+        if not self.carried_chunk_choice_fields:
+            return chunk_choice_fields
+        upstream_index: Final = _response_choice_index(response_obj)
+        carried: Final = self.carried_chunk_choice_fields.get(upstream_index)
+        if carried is None:
+            return chunk_choice_fields
+        self.carried_chunk_choice_fields = MappingProxyType(
+            {index: fields for index, fields in self.carried_chunk_choice_fields.items() if index != upstream_index}
+        )
+        return MappingProxyType(
+            {
+                field: [*object_items(carried.get(field)), *object_items(chunk_choice_fields.get(field))]
+                for field in STREAM_CHUNK_CHOICE_FIELDS
+                if field in carried or field in chunk_choice_fields
+            }
+        )
+
+    def _another_choice_fields_chunk(
+        self,
+        model_response: ModelResponseStream,
+        response_obj: Mapping[str, object],
+        chunk_choice_fields: Mapping[str, object],
+    ) -> ModelResponseStream | None:
+        upstream_index: Final = _response_choice_index(response_obj)
+        is_finished: Final = bool(response_obj.get("is_finished"))
+        if is_finished and upstream_index == model_response.choices[0].index and not self.sent_last_chunk:
+            return None
+        finish_fields: Final = (
+            self.received_finish_choice_fields.get(upstream_index, _NO_UPSTREAM_CHOICE_FIELDS)
+            if is_finished
+            else _NO_UPSTREAM_CHOICE_FIELDS
+        )
+        if not chunk_choice_fields and all(value is None for value in finish_fields.values()):
+            return None
+        return _choice_fields_chunk(
+            model_response, upstream_index, MappingProxyType({**finish_fields, **chunk_choice_fields})
+        )
+
     def finish_reason_handler(self):
         model_response: Final = self.model_response_creator(
             hidden_params=None if self.received_model_id is None else {"received_model_id": self.received_model_id}
         )
+        served_tier: Final = next(
+            (
+                tier
+                for chunk in reversed(self.chunks)
+                if isinstance(tier := getattr(chunk, "service_tier", None), str) and tier
+            ),
+            None,
+        )
+        if served_tier is not None:
+            setattr(model_response, "service_tier", served_tier)  # noqa: B010  # pydantic extra, not a declared field
         _finish_reason: Final = self.received_finish_reason or self.intermittent_finish_reason
-        if _finish_reason is not None:
-            model_response.choices[0].finish_reason = _finish_reason
-        else:
-            model_response.choices[0].finish_reason = "stop"
-
-        ## if tool use
-        if (
-            model_response.choices[0].finish_reason == "stop" and self.tool_call
-        ):  # don't overwrite for other - potential error finish reasons
-            model_response.choices[0].finish_reason = "tool_calls"
+        model_response.choices[0].finish_reason = self._normalize_tool_call_finish_reason(
+            _finish_reason if _finish_reason is not None else "stop"
+        )
+        self._apply_finish_choice_fields(model_response.choices[0])
         close_tag: Final = self._close_open_think_block()
         if close_tag is not None:
             model_response.choices[0].delta.content = close_tag
         return model_response
+
+    def _should_fail_on_clean_eof(self) -> bool:
+        return (
+            not self.is_mock
+            and self.uses_openai_chat_stream
+            and self.received_finish_reason is None
+            and self.intermittent_finish_reason is None
+            and not self.received_any_finish_reason
+        )
+
+    @staticmethod
+    def _stream_eof_error() -> httpx.RemoteProtocolError:
+        return httpx.RemoteProtocolError(
+            "Stream ended before a finish_reason was received",
+            request=httpx.Request(method="POST", url="https://docs.litellm.ai/docs"),
+        )
 
     def _final_chunk_for_logging(self, processed_chunk: "ModelResponseStream") -> "ModelResponseStream | None":
         if self.received_finish_reason is not None or self.intermittent_finish_reason is not None:
@@ -2139,6 +2411,13 @@ class CustomStreamWrapper:
                     return response
 
         except StopIteration:
+            if self._should_fail_on_clean_eof():
+                error: Final = self._stream_eof_error()
+                eof_traceback: Final = traceback.format_exc()
+                self._record_partial_usage_for_failure()
+                threading.Thread(target=self.logging_obj.failure_handler, args=(error, eof_traceback)).start()
+                self.close()
+                self._handle_stream_fallback_error(error)
             if self.sent_last_chunk is True:
                 complete_streaming_response: Final = self._build_complete_streaming_response()
                 response = self._new_usage_chunk()
@@ -2342,6 +2621,9 @@ class CustomStreamWrapper:
                             continue
                         return usage_free_chunk
         except (StopAsyncIteration, StopIteration):
+            if self._should_fail_on_clean_eof():
+                await self.aclose()
+                self._log_stream_failure_and_raise(self._stream_eof_error())
             return await self._finalize_completed_stream(cache_hit=cache_hit)
         except httpx.TimeoutException as e:  # if httpx read timeout error occues
             traceback_exception = traceback.format_exc()
@@ -2472,6 +2754,25 @@ class CustomStreamWrapper:
     def bill_failure_after_earlier_rounds(self, earlier: "BilledRoundsSpend") -> None:
         self._earlier_rounds_spend = earlier
 
+    def partial_response(self) -> "ModelResponse | TextCompletionResponse | None":
+        partial: Final = (
+            litellm.stream_chunk_builder(
+                chunks=self.chunks,
+                messages=self.messages if isinstance(self.messages, list) else None,
+                logging_obj=self.logging_obj,
+                count_prompt_tokens=self.count_prompt_tokens,
+            )
+            if self.chunks
+            else None
+        )
+        usage: Final[object] = getattr(partial, "usage", None)
+        if partial is None or not isinstance(usage, Usage):
+            return None
+        if self.model:
+            partial.model = self._served_openrouter_model() or self.model
+        backfill_missing_cache_usage_fields(usage)
+        return partial
+
     def _record_partial_usage_for_failure(self) -> None:
         """
         A stream that breaks mid-flight still billed the provider for the chunks
@@ -2481,23 +2782,15 @@ class CustomStreamWrapper:
         moves it into terminal failure usage before opening the next attempt,
         so a recovered attempt logs its own usage.
         """
-        if self.logging_obj is None or not self.chunks:
+        if self.logging_obj is None:
             return
         try:
-            partial_response: Final = litellm.stream_chunk_builder(
-                chunks=self.chunks,
-                messages=self.messages if isinstance(self.messages, list) else None,
-                logging_obj=self.logging_obj,
-                count_prompt_tokens=self.count_prompt_tokens,
-            )
+            partial_response: Final = self.partial_response()
             if partial_response is None:
                 return
-            usage: Final = cast(Usage | None, getattr(partial_response, "usage", None))
-            if usage is None:
+            usage: Final[object] = getattr(partial_response, "usage", None)
+            if not isinstance(usage, Usage):
                 return
-            if self.model:
-                partial_response.model = self.model
-            backfill_missing_cache_usage_fields(usage)
             partial_cost: Final = self.logging_obj.response_cost_calculator(result=partial_response) or 0.0
             if self._earlier_rounds_spend is None:
                 self.logging_obj.model_call_details["combined_usage_object"] = usage
@@ -2538,8 +2831,9 @@ class CustomStreamWrapper:
 
     def _record_and_strip_usage_chunk(self, chunk: ModelResponseStream) -> ModelResponseStream | None:
         self.chunks.append(chunk.model_copy())
+        dumped_chunk: Final = MappingProxyType[str, object](chunk.model_dump())
         usage_free_chunk: Final = self.model_response_creator(
-            chunk={key: value for key, value in chunk.model_dump().items() if key != "usage"},
+            chunk={key: value for key, value in dumped_chunk.items() if key != "usage"},
             hidden_params=cast(  # cast-ok: preserve mapping operations on dynamic storage
                 Mapping[str, object], getattr(chunk, HIDDEN_PARAMS_ATTR)
             ),
@@ -2547,8 +2841,6 @@ class CustomStreamWrapper:
         return None if is_model_response_stream_empty(model_response=usage_free_chunk) else usage_free_chunk
 
     def _accumulate_streamed_delta(self, delta: object) -> None:
-        # Shared by the sync, async, and non-aiohttp iteration sites so answer
-        # text and the disqualifying-content latch stay in step across all three.
         get: Final = getattr(delta, "get", None)
         content: Final = get("content") if callable(get) else None
         self.response_uptil_now += content if isinstance(content, str) else ""

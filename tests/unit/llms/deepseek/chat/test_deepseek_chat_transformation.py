@@ -1,4 +1,5 @@
 import json
+import logging
 from collections.abc import Iterator
 from typing import Final
 
@@ -6,6 +7,7 @@ import httpx
 import litellm
 import pytest
 import respx
+from litellm._logging import verbose_logger
 from litellm.caching.llm_caching_handler import LLMClientCache
 from litellm.llms.deepseek.chat.transformation import DeepSeekChatConfig
 
@@ -951,3 +953,87 @@ def test_get_complete_url_ignores_a_trailing_slash_on_api_base(api_base: str):
         )
         == "https://gateway.example.com/deepseek/chat/completions"
     )
+
+
+_HOSTED_MCP_TOOL: Final = {
+    "type": "mcp",
+    "server_label": "deepwiki",
+    "server_url": "https://mcp.deepwiki.com/mcp",
+    "require_approval": "never",
+}
+
+
+def test_a_hosted_mcp_tool_answers_400_on_deepseek_without_drop_params(monkeypatch):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    with pytest.raises(litellm.utils.UnsupportedParamsError) as raised:
+        DeepSeekChatConfig().map_openai_params(
+            {"tools": [_function_tool("shell"), _HOSTED_MCP_TOOL]}, {}, "deepseek-v4-flash", False
+        )
+    assert raised.value.status_code == 400
+    assert "deepseek-v4-flash on deepseek " in str(raised.value)
+    assert "`deepwiki`" in str(raised.value)
+
+
+def test_deepseek_drops_a_hosted_mcp_tool_under_drop_params_and_keeps_the_function_tool(monkeypatch, caplog):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    with caplog.at_level("WARNING"):
+        result: Final = DeepSeekChatConfig().map_openai_params(
+            {"tools": [_HOSTED_MCP_TOOL, _function_tool("shell")], "tool_choice": "auto"}, {}, "deepseek-v4-flash", True
+        )
+    assert result["tools"] == [_function_tool("shell")]
+    assert result["tool_choice"] == "auto"
+    assert any(
+        "`deepwiki`" in record.getMessage() and " on deepseek (" in record.getMessage() for record in caplog.records
+    )
+
+
+def test_deepseek_sends_no_tools_when_drop_params_drops_every_hosted_mcp_tool(monkeypatch):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    result: Final = DeepSeekChatConfig().map_openai_params(
+        {"tools": [_HOSTED_MCP_TOOL], "tool_choice": "required", "parallel_tool_calls": True},
+        {},
+        "deepseek-v4-flash",
+        True,
+    )
+    assert "tools" not in result
+    assert "tool_choice" not in result
+    assert "parallel_tool_calls" not in result
+
+
+def _budget_warnings(caplog: pytest.LogCaptureFixture) -> tuple[str, ...]:
+    return tuple(
+        r.getMessage()
+        for r in caplog.records
+        if r.levelno == logging.WARNING and "Dropping thinking.budget_tokens=" in r.getMessage()
+    )
+
+
+def test_enabled_thinking_budget_dropped_for_deepseek_warns_once(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        result: Final = DeepSeekChatConfig().map_openai_params(
+            non_default_params={"thinking": {"type": "enabled", "budget_tokens": 4000}},
+            optional_params={},
+            model="deepseek-reasoner",
+            drop_params=False,
+        )
+
+    warnings: Final = _budget_warnings(caplog)
+    assert result["thinking"] == {"type": "enabled"}
+    assert len(warnings) == 1
+    assert "budget_tokens=4000" in warnings[0]
+    assert "deepseek-reasoner" in warnings[0]
+
+
+@pytest.mark.parametrize(
+    "thinking", ({"type": "enabled"}, {"type": "disabled", "budget_tokens": 4000}), ids=("no-budget", "disabled")
+)
+def test_deepseek_thinking_without_a_requested_budget_does_not_warn(
+    thinking: dict[str, object], caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        result: Final = DeepSeekChatConfig().map_openai_params(
+            non_default_params={"thinking": thinking}, optional_params={}, model="deepseek-reasoner", drop_params=False
+        )
+
+    assert result["thinking"] == {"type": thinking["type"]}
+    assert _budget_warnings(caplog) == ()
