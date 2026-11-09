@@ -471,11 +471,13 @@ class _ProxyDBLogger(CustomLogger):
             return
 
         request_route: Final = user_api_key_dict.request_route
+        from litellm.proxy.pass_through_endpoints.pass_through_endpoints import InitPassThroughEndpointHelpers
+
         route_is_trackable: Final = (
             request_route is None
             or RouteChecks.is_llm_api_route(route=request_route)
             or RouteChecks.is_info_route(route=request_route)
-            or request_data.get("call_type") == CallTypes.pass_through.value
+            or InitPassThroughEndpointHelpers.has_configured_route_ignoring_trailing_slash(route=request_route)
         )
         if (
             ProxyDBLogger._should_track_errors_in_db() is False
