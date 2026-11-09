@@ -129,8 +129,9 @@ def _join_stream_frames(endpoint: str, frames: tuple[SSEFrame, ...]) -> Mapping[
         case "/v1/chat/completions":
             state: Final = ChatCompletionStreamState()
             for frame in frames:
-                if frame.data != "[DONE]":
-                    state.handle_chunk(ChatCompletionChunk.model_validate(frame.data))
+                if frame.data == "[DONE]" or (isinstance(frame.data, Mapping) and "error" in frame.data):
+                    continue
+                state.handle_chunk(ChatCompletionChunk.model_validate(frame.data))
             return JSON_OBJECT.validate_python(state.get_final_completion().model_dump(mode="json", exclude_none=True))
         case _:
             raise AssertionError(f"no stream accumulator for {endpoint}")

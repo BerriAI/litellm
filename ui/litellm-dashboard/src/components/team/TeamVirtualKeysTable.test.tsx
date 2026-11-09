@@ -1,5 +1,5 @@
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi, MockedFunction } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, MockedFunction } from "vitest";
 import { QueryClient, QueryObserver } from "@tanstack/react-query";
 import { chooseSelectOption, fireEvent, renderWithProviders, screen, waitFor, within } from "../../../tests/test-utils";
 import { TeamVirtualKeysTable } from "./TeamVirtualKeysTable";
@@ -182,6 +182,33 @@ describe("TeamVirtualKeysTable", () => {
       expect(screen.getByText("alice_key_team1")).toBeInTheDocument();
     });
     expect(screen.getByText("bob_key_team1")).toBeInTheDocument();
+  });
+
+  describe("Budget Reset column", () => {
+    const originalTimezone: string | undefined = process.env.TZ;
+
+    afterEach(() => {
+      if (originalTimezone === undefined) {
+        delete process.env.TZ;
+        return;
+      }
+      process.env.TZ = originalTimezone;
+    });
+
+    it("shows the reset time in UTC with a UTC label for a viewer in another timezone", async () => {
+      process.env.TZ = "America/Los_Angeles";
+      const keysResponse: KeysResponse = {
+        keys: [createMockKey({ budget_reset_at: "2026-11-01T00:00:00Z" })],
+        total_count: 1,
+        current_page: 1,
+        total_pages: 1,
+      };
+      mockUseKeys.mockReturnValue(createKeysQueryResult(keysResponse));
+
+      renderWithProviders(<TeamVirtualKeysTable {...defaultProps} />);
+
+      expect(await screen.findByText("Nov 1, 00:00:00 UTC")).toBeInTheDocument();
+    });
   });
 
   it("shows the team member budget for budgetless keys and keeps each key's own budget", async () => {

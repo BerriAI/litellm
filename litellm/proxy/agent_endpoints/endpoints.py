@@ -22,6 +22,7 @@ from typing_extensions import ReadOnly, Required, assert_never
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import AGENT_HEALTH_CHECK_GATHER_TIMEOUT_SECONDS, AGENT_HEALTH_CHECK_TIMEOUT_SECONDS
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, iter_items
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.proxy._types import (
     CommonProxyErrors,
@@ -33,6 +34,7 @@ from litellm.proxy.a2a.agent_card import (
     SUPPORTED_A2A_PROTOCOL_VERSIONS,
     merge_agent_card,
     normalize_protocol_version,
+    point_agent_card_at_proxy,
 )
 from litellm.proxy.agent_endpoints.agent_registry import (
     AgentIdWhere,
@@ -67,7 +69,7 @@ from litellm.proxy.agent_endpoints.kill_switch import (
 from litellm.proxy.agent_endpoints.managed_identity import raise_identity_failure
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.rbac_utils import check_feature_access_for_user
-from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity
+from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity, unless_database_fails
 from litellm.proxy.utils import PrismaClient, get_custom_url
 from litellm.repositories.chunked_in import find_many_in
 from litellm.types.agents import (
@@ -180,10 +182,36 @@ def _redact_agent_litellm_params_dict(
     return dict(parse_agent_litellm_params(redact_sensitive_agent_litellm_params(litellm_params)))
 
 
+def _non_admin_agent_card(
+    card: Mapping[str, object], proxy_url: str
+) -> dict[str, object]:  # mutable-ok: AgentResponse.agent_card_params requires a mutable dictionary
+    pointed_card: Final = point_agent_card_at_proxy(card, proxy_url)
+    interfaces: Final = pointed_card.get("supportedInterfaces")
+    interface_items: Final = (
+        tuple(iter_items(pointed_card.get("supportedInterfaces"))) if isinstance(interfaces, list) else ()
+    )
+    first_interface: Final[object] = interface_items[0] if interface_items else None
+    first_mapping: Final = as_str_mapping(first_interface)
+    proxy_interface: Final = (
+        {"supportedInterfaces": [{**first_mapping, "url": proxy_url}]}
+        if isinstance(first_interface, dict) and first_mapping is not None and first_mapping.get("url") == proxy_url
+        else {}
+    )
+    return {
+        **{
+            key: value
+            for key, value in pointed_card.items()
+            if key not in ("additionalInterfaces", "supportedInterfaces")
+        },
+        **proxy_interface,
+    }
+
+
 def _redact_sensitive_agent_fields(
     agents: Sequence[AgentResponse],
     *,
     is_admin: bool,
+    request_base_url: str,
 ) -> list[AgentResponse]:
     """
     Return copies of the given agents with credential-bearing litellm_params
@@ -207,6 +235,11 @@ def _redact_sensitive_agent_fields(
             copy.keys = None
             copy.kill_switch = None
             copy.identity = None
+            if copy.agent_card_params:
+                copy.agent_card_params = _non_admin_agent_card(
+                    copy.agent_card_params,
+                    get_custom_url(request_base_url, route=f"a2a/{copy.agent_id}"),
+                )
         if copy.litellm_params:
             copy.litellm_params = _redact_agent_litellm_params_dict(copy.litellm_params)
         copy.kill_switch = redact_kill_switch(copy.kill_switch)
@@ -361,10 +394,12 @@ async def resolve_agent_daily_activity_scope(
         prisma_client=prisma_client,
     )
 
-    agent_records: Final = (
-        await agents_table(prisma_client).find_many(where={})
+    agent_records: Final = await unless_database_fails(
+        agents_table(prisma_client).find_many(where={})
         if resolved_agent_ids is None
-        else await find_many_in(agents_table(prisma_client), "agent_id", resolved_agent_ids)
+        else find_many_in(agents_table(prisma_client), "agent_id", resolved_agent_ids),
+        (),
+        "its agent names",
     )
     agent_metadata: Final[Mapping[str, dict[str, object]]] = MappingProxyType(
         {agent.agent_id: {"agent_name": agent.agent_name} for agent in agent_records}
@@ -461,14 +496,6 @@ async def get_agents(
                 global_agent_registry.ids_for_agent(agent.agent_id).isdisjoint(litellm.public_agent_groups)
             )
 
-        # litellm_params secrets are always redacted; keys/headers stay
-        # admin-only.
-        is_admin: Final = (
-            user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
-            or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
-        )
-        returned_agents = _redact_sensitive_agent_fields(returned_agents, is_admin=is_admin)
-
         if health_check:
             agents_with_url: Final = [agent for agent in returned_agents if (agent.agent_card_params or {}).get("url")]
             agents_without_url = [agent for agent in returned_agents if not (agent.agent_card_params or {}).get("url")]
@@ -492,6 +519,18 @@ async def get_agents(
                 ]
             healthy_ids: Final = {result["agent_id"] for result in health_results if result["healthy"]}
             returned_agents = [agent for agent in agents_with_url if agent.agent_id in healthy_ids] + agents_without_url
+
+        # litellm_params secrets are always redacted; keys/headers stay
+        # admin-only.
+        is_admin: Final = (
+            user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
+            or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
+        )
+        returned_agents = _redact_sensitive_agent_fields(
+            returned_agents,
+            is_admin=is_admin,
+            request_base_url=str(request.base_url),
+        )
 
         if query is None:
             return returned_agents
@@ -691,7 +730,11 @@ async def create_agent(
 
         # The caller is a proxy admin (enforced above); litellm_params
         # secrets are still never echoed back in the response.
-        return _redact_sensitive_agent_fields((result,), is_admin=True)[0]
+        return _redact_sensitive_agent_fields(
+            (result,),
+            is_admin=True,
+            request_base_url=str(http_request.base_url),
+        )[0]
 
     except HTTPException:
         raise
@@ -708,6 +751,7 @@ async def create_agent(
 )
 async def get_agent_by_id(
     agent_id: str,
+    request: Request,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -770,7 +814,11 @@ async def get_agent_by_id(
             user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
             or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
         )
-        agent = _redact_sensitive_agent_fields((agent,), is_admin=is_admin)[0]
+        agent = _redact_sensitive_agent_fields(
+            (agent,),
+            is_admin=is_admin,
+            request_base_url=str(request.base_url),
+        )[0]
 
         return agent
     except HTTPException:
@@ -879,7 +927,11 @@ async def update_agent(
             "Successfully updated agent '%s' (ID: %s) in memory", existing_agent.get("agent_name"), agent_id
         )
 
-        return _redact_sensitive_agent_fields((result,), is_admin=True)[0]
+        return _redact_sensitive_agent_fields(
+            (result,),
+            is_admin=True,
+            request_base_url=str(http_request.base_url),
+        )[0]
     except HTTPException:
         raise
     except Exception as e:
@@ -987,7 +1039,11 @@ async def patch_agent(
             "Successfully updated agent '%s' (ID: %s) in memory", existing_agent.get("agent_name"), agent_id
         )
 
-        return _redact_sensitive_agent_fields((result,), is_admin=True)[0]
+        return _redact_sensitive_agent_fields(
+            (result,),
+            is_admin=True,
+            request_base_url=str(http_request.base_url),
+        )[0]
     except HTTPException:
         raise
     except Exception as e:

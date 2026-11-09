@@ -9,6 +9,7 @@ through the consumer; and no path leaks the upstream token in a repr.
 """
 
 from datetime import datetime, timedelta, timezone
+from typing import Final
 
 import pytest
 from pydantic import SecretStr
@@ -318,3 +319,33 @@ def test_is_bridge_envelope_shaped_rejects_non_envelope_bearer():
     assert is_bridge_envelope_shaped("Bearer sk-some-litellm-key") is False
     assert is_bridge_envelope_shaped("plain-upstream-token") is False
     assert is_bridge_envelope_shaped("") is False
+
+
+def test_envelope_keys_without_fips_stay_the_scrypt_keys_of_the_master_key() -> None:
+    keys: Final = envelope_keys_from_master_key(_MASTER_KEY)
+    assert (keys.signing_key.get_secret_value(), keys.encryption_key.get_secret_value()) == (
+        "34d3bb6ae2e03cddca3417209304e9603417b89258d3979d0569880b6fbd1bed",
+        "eebfbee8cbe767ee136ce3a9745b44de2b2ae35d1ea46dcf72c58b811fac3250",
+    )
+
+
+@pytest.mark.usefixtures("openssl_enforcing_fips")
+def test_envelope_keys_on_a_fips_openssl_without_fips_mode_stay_the_scrypt_keys(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("LITELLM_SALT_KEY", raising=False)
+    keys: Final = envelope_keys_from_master_key(_MASTER_KEY)
+    assert (keys.signing_key.get_secret_value(), keys.encryption_key.get_secret_value()) == (
+        "34d3bb6ae2e03cddca3417209304e9603417b89258d3979d0569880b6fbd1bed",
+        "eebfbee8cbe767ee136ce3a9745b44de2b2ae35d1ea46dcf72c58b811fac3250",
+    )
+
+
+@pytest.mark.usefixtures("fips_mode_on")
+@pytest.mark.parametrize("salt_key", ["", "sk-salt-change-me", _MASTER_KEY, "sk-" + "5a" * 31])
+def test_envelope_keys_under_fips_refuse_a_salt_key_that_is_not_32_bytes_of_hex(
+    monkeypatch: pytest.MonkeyPatch, salt_key: str
+) -> None:
+    monkeypatch.setenv("LITELLM_SALT_KEY", salt_key)
+    with pytest.raises(ValueError, match="LITELLM_SALT_KEY"):
+        envelope_keys_from_master_key(_MASTER_KEY)
