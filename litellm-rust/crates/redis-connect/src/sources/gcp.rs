@@ -41,6 +41,15 @@ impl GcpIam {
     }
 }
 
+fn token_url(service_account: &str) -> String {
+    match service_account.starts_with("projects/") {
+        true => format!("{IAM_CREDENTIALS}/{service_account}:generateAccessToken"),
+        false => format!(
+            "{IAM_CREDENTIALS}/projects/-/serviceAccounts/{service_account}:generateAccessToken"
+        ),
+    }
+}
+
 impl CredentialSource for GcpIam {
     fn fetch(&self) -> SourceFuture<'_> {
         Box::pin(async move {
@@ -52,10 +61,7 @@ impl CredentialSource for GcpIam {
                 .map_err(Error::credential(CredentialStage::Identity))?;
             let response = self
                 .http
-                .post(format!(
-                    "{IAM_CREDENTIALS}/{}:generateAccessToken",
-                    self.service_account
-                ))
+                .post(token_url(&self.service_account))
                 .bearer_auth(caller.expose())
                 .json(&serde_json::json!({ "scope": [CLOUD_PLATFORM_SCOPE] }))
                 .send()
@@ -92,8 +98,28 @@ impl CredentialSource for GcpIam {
 mod tests {
     use rstest::rstest;
 
-    use super::GcpIam;
+    use super::{GcpIam, token_url};
     use crate::CredentialSource;
+
+    #[rstest]
+    #[case::bare_email(
+        "redis@project.iam.gserviceaccount.com",
+        "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/redis@project.iam.gserviceaccount.com:generateAccessToken"
+    )]
+    #[case::resource_name(
+        "projects/-/serviceAccounts/redis@project.iam.gserviceaccount.com",
+        "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/redis@project.iam.gserviceaccount.com:generateAccessToken"
+    )]
+    #[case::project_scoped_resource_name(
+        "projects/project/serviceAccounts/redis@project.iam.gserviceaccount.com",
+        "https://iamcredentials.googleapis.com/v1/projects/project/serviceAccounts/redis@project.iam.gserviceaccount.com:generateAccessToken"
+    )]
+    fn a_bare_service_account_email_is_addressed_as_a_resource_name(
+        #[case] service_account: &str,
+        #[case] expected: &str,
+    ) {
+        assert_eq!(token_url(service_account), expected);
+    }
 
     #[rstest]
     #[tokio::test]
