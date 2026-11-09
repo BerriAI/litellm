@@ -130,9 +130,9 @@ async fn provider_call(
     )?;
     let transform_context =
         MessagesTransformContext::new(shaping.capabilities, shaping.settings.drop_params);
-    let filtered = requested_optional_params(sanitized, provider, &transform_context)?;
-    let trimmed =
-        without_additional_drop_params(filtered, &shaping.settings.additional_drop_params)?;
+    let without_listed =
+        without_additional_drop_params(sanitized, &shaping.settings.additional_drop_params)?;
+    let trimmed = requested_optional_params(without_listed, provider, &transform_context)?;
 
     let scoped =
         get_provider_specific_headers(provider_specific_header.as_ref(), provider.as_str());

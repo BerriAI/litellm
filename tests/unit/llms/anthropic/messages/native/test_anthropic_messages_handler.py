@@ -2091,6 +2091,20 @@ async def test_bedrock_invoke_messages_still_rejects_top_k_the_deployment_does_n
 
 
 @pytest.mark.asyncio
+async def test_bedrock_invoke_messages_answers_the_top_k_400_for_a_drop_list_that_is_not_a_list(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    bodies: list[dict[str, object]] = []
+
+    with pytest.raises(litellm.UnsupportedParamsError, match="does not support top_k=5") as raised:
+        await _opus_4_8_messages_with_top_k(bodies, additional_drop_params="top_k")
+
+    assert raised.value.status_code == 400
+    assert bodies == []
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("client_headers", _CLIENT_BETA_HEADERS)
 async def test_anthropic_messages_forwards_safeguards_and_dangerous_tool_use_beta_to_vertex(
     local_beta_headers_config: None, client_headers: dict[str, str]

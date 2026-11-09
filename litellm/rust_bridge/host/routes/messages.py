@@ -28,7 +28,6 @@ from litellm.rust_bridge.host import callbacks_legacy_python
 from litellm.rust_bridge.public_call import known_params, optional_str
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
 
-_DROP_PATHS: Final = TypeAdapter(list[object])
 _METADATA: Final = TypeAdapter(dict[str, object])
 _BODY_FIELDS: Final = frozenset(
     {
@@ -263,20 +262,12 @@ def _drop_params(kwargs: Mapping[str, object]) -> bool:
     return bool(litellm.drop_params) or normalize_drop_params(kwargs.get("drop_params")) is True
 
 
-def _additional_drop_params(kwargs: Mapping[str, object]) -> tuple[str, ...]:
-    try:
-        configured: Final = _DROP_PATHS.validate_python(kwargs.get("additional_drop_params"))
-    except ValidationError:
-        return ()
-    return tuple(path for path in configured if isinstance(path, str))
-
-
 def settings(kwargs: Mapping[str, object]) -> dict[str, object]:
     return asdict(
         MessagesSettings(
             drop_params=_drop_params(kwargs),
             reasoning_auto_summary=is_reasoning_auto_summary_enabled(),
-            additional_drop_params=_additional_drop_params(kwargs),
+            additional_drop_params=handler.additional_drop_paths(kwargs),
             request_timeout=get_configured_request_timeout(),
         )
     )

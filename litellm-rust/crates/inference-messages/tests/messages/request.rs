@@ -531,6 +531,30 @@ async fn unsupported_params_are_dropped_under_drop_params_and_rejected_without_i
 }
 
 #[rstest]
+#[tokio::test]
+async fn additional_drop_params_clear_a_param_the_model_does_not_support(call: MessagesCall) {
+    let upstream = upstream([message_response()]).await;
+
+    run_message(MessagesCall {
+        api_key: Some("sk".into()),
+        api_base: Some(upstream.uri()),
+        shaping: MessagesShaping {
+            capabilities: sampling_removed(),
+            settings: MessagesSettings {
+                additional_drop_params: vec!["top_k".into()],
+                ..MessagesSettings::default()
+            },
+        },
+        ..with_fields(call, json!({"top_k": 5}))
+    })
+    .await;
+
+    let sent = only_request(&upstream).await.json();
+    assert_eq!(sent.get("top_k"), None);
+    assert_eq!(sent["max_tokens"], 16);
+}
+
+#[rstest]
 #[case::adaptive_thinking(json!({"type": "adaptive"}), json!({"type": "adaptive", "display": "summarized"}))]
 #[case::disabled_thinking(json!({"type": "disabled"}), json!({"type": "disabled"}))]
 #[tokio::test]
