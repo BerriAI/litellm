@@ -223,12 +223,21 @@ def _caller_session_beside_trace_header(
     return get_chain_id_from_headers(session_headers) or _caller_body_session_id(data, metadata_variable_name)
 
 
+def _claude_code_subagent_tier_session(normalized_headers: Mapping[str, str]) -> str | None:
+    session: Final = normalized_headers.get("x-claude-code-session-id", "")
+    agent: Final = normalized_headers.get("x-claude-code-agent-id", "")
+    if not _SESSION_ID_VALUE_RE.fullmatch(session) or not _SESSION_ID_VALUE_RE.fullmatch(agent):
+        return None
+    return f"{session}:{agent}"
+
+
 def _child_tier_session_metadata(
     normalized_headers: Mapping[str, str], data: Mapping[str, object], metadata_variable_name: str
 ) -> Mapping[str, str | None]:
     parent: Final = normalized_headers.get("x-parent-session-id")
     if not parent or not _SESSION_ID_VALUE_RE.fullmatch(parent):
-        return {}
+        claude_code_subagent: Final = _claude_code_subagent_tier_session(normalized_headers)
+        return {COMPLEXITY_ROUTER_CHILD_SESSION_ID_METADATA_KEY: claude_code_subagent} if claude_code_subagent else {}
     own_headers: Final = {
         key: value
         for key, value in normalized_headers.items()
