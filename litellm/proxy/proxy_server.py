@@ -994,6 +994,7 @@ from litellm.proxy.spend_tracking.budget_reservation import (
 from litellm.proxy.spend_tracking.committed_spend import (
     committed_spend_key,
     committed_spend_keys,
+    has_committed_twin,
     is_committed_spend_key,
     seed_committed_spend,
 )
@@ -3802,7 +3803,7 @@ async def _increment_spend_counters_batched(
     """Runs inside one spend counter batch: the reservation reconcile and the warm checks share a single MGET, and
     the reconcile adjustments go out in the same INCRBYFLOAT pipeline as the counter increments."""
     committed_counter_keys: Final = (
-        committed_spend_scope.tracked()
+        tuple(counter_key for counter_key in committed_spend_scope.tracked() if has_committed_twin(counter_key))
         if committed_spend_scope is not None and response_cost is not None and response_cost > 0
         else ()
     )

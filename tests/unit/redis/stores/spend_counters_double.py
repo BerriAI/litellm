@@ -35,8 +35,21 @@ def _is_number(value: object) -> bool:
     return value is None or (isinstance(value, (int, float)) and not isinstance(value, bool))
 
 
+_TWIN_SCOPES: Final = frozenset({"key", "team", "user", "org", "end_user"})
+_WINDOWED_SCOPES: Final = frozenset({"key", "team"})
+
+
+def _native_store_takes_twin(twin: str) -> bool:
+    scope, _, counter_id = twin.partition(":")
+    _, separator, window = counter_id.rpartition(":window:")
+    return scope in _TWIN_SCOPES and not (scope in _WINDOWED_SCOPES and separator and window)
+
+
 def _check(counter: str) -> None:
     if not counter.startswith("spend:"):
+        raise ValueError(f"{counter!r} is not a spend counter")
+    twin: Final = counter.removeprefix("spend:committed:")
+    if twin != counter and not _native_store_takes_twin(twin):
         raise ValueError(f"{counter!r} is not a spend counter")
 
 

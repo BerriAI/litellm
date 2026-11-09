@@ -1604,6 +1604,49 @@ async def test_delete_organization_evicts_the_cache_of_the_keys_it_deletes(monke
 
 
 @pytest.mark.asyncio
+async def test_delete_organization_drops_the_committed_spend_of_the_org_and_its_teams(monkeypatch):
+    from litellm.proxy._types import DeleteOrganizationRequest, LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.management_endpoints.organization_endpoints import delete_organization
+    from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
+
+    spend: Final = FakeSpendCounters(
+        redis=None,
+        memory={
+            "spend:committed:org:org-doomed": 7.0,
+            "spend:committed:team:team-in-org": 5.0,
+            "spend:committed:org:org-kept": 3.0,
+            "spend:committed:team:team-elsewhere": 2.0,
+        },
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.spend_counter_store", spend.store())
+    prisma_client: Final = AsyncMock()
+    prisma_client.db.litellm_teamtable.find_many = AsyncMock(
+        return_value=[SimpleNamespace(team_id="team-in-org", organization_id="org-doomed")]
+    )
+    prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    prisma_client.db.litellm_jwtkeymapping.find_many = AsyncMock(return_value=[])
+    prisma_client.db.litellm_organizationtable.delete = AsyncMock(return_value=MagicMock())
+
+    @asynccontextmanager
+    async def transaction():
+        yield prisma_client.db
+
+    prisma_client.tx = transaction
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True, raising=False)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", UserApiKeyCache())
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", None)
+
+    await delete_organization(
+        data=DeleteOrganizationRequest(organization_ids=["org-doomed"]),
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+
+    assert spend.memory == {"spend:committed:org:org-kept": 3.0, "spend:committed:team:team-elsewhere": 2.0}
+
+
+@pytest.mark.asyncio
 async def test_delete_organization_is_refused_while_one_of_its_teams_holds_a_ptu_share(monkeypatch):
     """Deleting an organization deletes its teams, so a team still holding a PTU share stops it the
     way /team/delete does, before any team, member, key, or the organization itself is removed."""

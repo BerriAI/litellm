@@ -225,12 +225,14 @@ from litellm.proxy.management_helpers.utils import (
     add_new_member,
     management_endpoint_wrapper,
 )
+from litellm.proxy.spend_tracking.committed_spend import drop_committed_spend
 from litellm.proxy.utils import (
     PrismaClient,
     ProxyLogging,
     handle_exception_on_proxy,
     query_raw_within_statement_timeout,
 )
+from litellm.redis.stores.spend_counters import team_counter
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.chunked_in import delete_many_in, find_many_in
 from litellm.repositories.daily_activity_buckets import api_key_from_bucket
@@ -4848,6 +4850,7 @@ async def delete_validated_team_rows(
     """
     from litellm.proxy.proxy_server import (
         proxy_logging_obj,
+        spend_counter_store,
         user_api_key_cache,
     )
 
@@ -4919,7 +4922,9 @@ async def delete_validated_team_rows(
         _emit_team_members_metric(deleted_team.model_copy(update={"members_with_roles": ()}))
         await sync_team_access_group_membership(prisma_client=prisma_client, team_id=deleted_team.team_id)
 
-    return DeletedTeams(team_ids=tuple(team.team_id for team in locked))
+    deleted_team_ids: Final = tuple(team.team_id for team in locked)
+    await drop_committed_spend(spend_counter_store, tuple(team_counter(team_id) for team_id in deleted_team_ids))
+    return DeletedTeams(team_ids=deleted_team_ids)
 
 
 def _locked_roster_user_ids(locked: Sequence[LiteLLM_TeamTable]) -> tuple[str, ...]:

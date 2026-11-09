@@ -2653,6 +2653,10 @@ async def delete_user(
     )
     if isinstance(deleted_users, str):
         raise HTTPException(status_code=500, detail={"error": deleted_users})
+    from litellm.proxy.proxy_server import spend_counter_store
+    from litellm.proxy.spend_tracking.committed_spend import drop_committed_spend
+
+    await drop_committed_spend(spend_counter_store, tuple(user_counter(user_id) for user_id in data.user_ids))
     return deleted_users
 
 

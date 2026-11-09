@@ -773,6 +773,24 @@ async def test_only_the_entities_in_the_committed_scope_take_the_charge_on_their
     assert committed_spend_key("spend:team:t1") not in spend.memory
 
 
+@pytest.mark.asyncio
+async def test_a_budgeted_team_whose_id_names_a_window_keeps_its_charge_and_gets_no_twin(monkeypatch):
+    team_counter_key: Final = "spend:team:t1:window:1d"
+    spend: Final = _spend_counters(monkeypatch, redis=None, memory={team_counter_key: 1.0})
+    monkeypatch.setattr(ps, "user_api_key_cache", UserApiKeyCache())
+    monkeypatch.setattr(ps, "prisma_client", MagicMock())
+
+    await ps.increment_spend_counters(
+        token=None,
+        team_id="t1:window:1d",
+        user_id=None,
+        response_cost=0.5,
+        committed_spend_scope=EntitySpendCounterKeys(team=team_counter_key),
+    )
+
+    assert spend.memory == pytest.approx({team_counter_key: 1.5})
+
+
 _PENDING_SPEND_COUNTER_KEYS: tuple[str, ...] = (
     "spend:key:hashed",
     "spend:team:team-1",

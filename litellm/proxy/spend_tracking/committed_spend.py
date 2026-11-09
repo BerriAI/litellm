@@ -42,12 +42,12 @@ def committed_spend_key(counter_key: str) -> str:
     return committed_counter(counter_key)
 
 
-def _has_committed_twin(counter_key: str) -> bool:
+def has_committed_twin(counter_key: str) -> bool:
     return counter_key.startswith(_BASE_COUNTER_PREFIXES) and ":window:" not in counter_key
 
 
 def committed_spend_keys(counter_keys: Iterable[str]) -> tuple[str, ...]:
-    return tuple(committed_spend_key(counter_key) for counter_key in counter_keys if _has_committed_twin(counter_key))
+    return tuple(committed_spend_key(counter_key) for counter_key in counter_keys if has_committed_twin(counter_key))
 
 
 def is_committed_spend_key(counter_key: str) -> bool:
