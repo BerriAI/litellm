@@ -221,9 +221,9 @@ class CohereEmbeddingConfig(BaseEmbeddingConfig):
         )
         if last_segment == "chat":
             raise ValueError(
-                f"COHERE_API_BASE points at a chat endpoint ({base!r}), but "
-                "embeddings need a base URL ending in /v2/embed (or a bare "
-                "gateway host). Chat and embeddings share this variable with "
+                "COHERE_API_BASE points at a chat endpoint, but embeddings "
+                "need a base URL ending in /v2/embed (or a bare gateway "
+                "host). Chat and embeddings share this variable with "
                 "different semantics — configure them separately."
             )
         if "embed" in last_segment:
