@@ -10974,7 +10974,7 @@ async def async_data_generator(
                 error_message = chunk
                 break
 
-            ProxyBaseLLMRequestProcessing.add_stream_overhead(timing_sink, chunk_received_at)
+            ProxyBaseLLMRequestProcessing.record_first_chunk_overhead(timing_sink, chunk_received_at)
             if not raw_passthrough:
                 try:
                     if error_state is not None:

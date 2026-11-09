@@ -7551,9 +7551,10 @@ async def test_async_data_generator_cleanup_on_early_exit():
 
 
 @pytest.mark.asyncio
-async def test_async_data_generator_records_per_chunk_work_on_the_logging_object():
+async def test_async_data_generator_records_first_chunk_work_on_the_logging_object():
     """The overhead header is stamped before any chunk is read, so the time the proxy spends in the
-    per-chunk hook on a chat stream has to be recorded on the logging object for the success callback."""
+    hook on the first chunk of a chat stream is recorded on the logging object for the success callback.
+    Later chunks are not summed, a 20 ms hook on 3 chunks delays the client by 20 ms, not 60."""
     from litellm.litellm_core_utils.litellm_logging import Logging
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.proxy_server import async_data_generator
@@ -7603,7 +7604,8 @@ async def test_async_data_generator_records_per_chunk_work_on_the_logging_object
         ]
 
     assert len([frame for frame in yielded if frame.startswith("data: {")]) == len(mock_chunks)
-    assert logging_obj.streaming_overhead_ms >= 50
+    assert logging_obj.first_chunk_overhead_ms is not None
+    assert 20 <= logging_obj.first_chunk_overhead_ms < 60
 
 
 def _guarded_chain_logging(chain):

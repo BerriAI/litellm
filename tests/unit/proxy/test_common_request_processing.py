@@ -5434,9 +5434,10 @@ class TestAsyncStreamingDataGeneratorFastPath:
         ProxyLogging._callback_capabilities_cache.clear()
 
     @pytest.mark.asyncio
-    async def test_slow_path_records_per_chunk_work_on_the_logging_object(self, monkeypatch: pytest.MonkeyPatch):
+    async def test_slow_path_records_first_chunk_work_on_the_logging_object(self, monkeypatch: pytest.MonkeyPatch):
         """The overhead header is stamped before any chunk is read, so the time the proxy spends in
-        the per-chunk hook has to be recorded on the logging object for the success callback to add."""
+        the hook on the first chunk is recorded on the logging object for the success callback to add.
+        Later chunks are not summed, a 20 ms hook on 3 chunks delays the client by 20 ms, not 60."""
 
         class _StreamingCb(CustomLogger):
             async def async_post_call_streaming_hook(
@@ -5478,7 +5479,8 @@ class TestAsyncStreamingDataGeneratorFastPath:
         ]
 
         assert len(out) == len(chunks)
-        assert logging_obj.streaming_overhead_ms >= 50
+        assert logging_obj.first_chunk_overhead_ms is not None
+        assert 20 <= logging_obj.first_chunk_overhead_ms < 60
 
         ProxyLogging._callback_capabilities_cache.clear()
 

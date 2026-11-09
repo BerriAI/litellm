@@ -10082,18 +10082,18 @@ def test_get_standard_logging_object_payload_reads_overhead_from_logging_obj_for
 
 
 @pytest.mark.parametrize(
-    ("stamped_overhead_ms", "streaming_overhead_ms", "expected_overhead_ms"),
+    ("stamped_overhead_ms", "first_chunk_overhead_ms", "expected_overhead_ms"),
     (
         (100.0, 25.5, 125.5),
         (None, 25.5, None),
     ),
 )
-def test_get_standard_logging_object_payload_adds_streaming_chunk_work_to_overhead(
-    logging_obj, stamped_overhead_ms, streaming_overhead_ms, expected_overhead_ms
+def test_get_standard_logging_object_payload_adds_first_chunk_work_to_overhead(
+    logging_obj, stamped_overhead_ms, first_chunk_overhead_ms, expected_overhead_ms
 ):
-    """The overhead stamped when the stream object came back misses every per-chunk hook and cost
-    injection, so the proxy's per-chunk work recorded on the logging object is added on top. With no
-    stamped overhead (a Responses stream timed to first byte) the chunk work alone is not reported."""
+    """The overhead stamped when the stream object came back misses the hook and cost injection on
+    the first chunk, the delay every chunk the client sees inherits, so that one chunk's work is
+    added on top. With no stamped overhead the first chunk work alone is not reported."""
     import datetime
 
     from litellm.litellm_core_utils.litellm_logging import (
@@ -10105,7 +10105,7 @@ def test_get_standard_logging_object_payload_adds_streaming_chunk_work_to_overhe
         if stamped_overhead_ms is None
         else {"_response_ms": 1000.0, "litellm_overhead_time_ms": stamped_overhead_ms}
     )
-    logging_obj.streaming_overhead_ms = streaming_overhead_ms
+    logging_obj.first_chunk_overhead_ms = first_chunk_overhead_ms
     now = datetime.datetime.now()
     payload = get_standard_logging_object_payload(
         kwargs={"litellm_call_id": "call-1", "model": "gpt-4o", "messages": []},
