@@ -11,6 +11,7 @@ import {
   DataTable,
   DataTableFilterDrawer,
   DataTableFilterField,
+  type FilterDraft,
   DataTableToolbar,
   usePersistedColumnVisibility,
   useUrlTableState,
@@ -298,7 +299,7 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
               title={t("apiKeys.virtualKeysTable.filters.title")}
               description={t("apiKeys.virtualKeysTable.filters.description")}
             >
-              {({ get, set }) => (
+              {({ get, set }: FilterDraft<"key_hash" | "org_id" | "status" | "team_id" | "user_id">) => (
                 <>
                   <DataTableFilterField label={t("apiKeys.virtualKeysTable.filters.team")}>
                     <SearchSelect

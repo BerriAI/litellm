@@ -272,7 +272,7 @@ class OpenAITokenCounter(BaseTokenCounter):
     @staticmethod
     async def _counted(
         resolved: _CountCredential,
-        send: Callable[[str, str | None], Awaitable[Mapping[str, object]]],
+        send: Callable[[str, str | None], Awaitable[object]],
         model_to_use: str,
         request_model: str,
     ) -> TokenCountResponse | None:

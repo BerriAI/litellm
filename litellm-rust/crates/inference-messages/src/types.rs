@@ -144,6 +144,7 @@ mod tests {
                 supports_reasoning: true,
                 supports_adaptive_thinking: true,
                 thinking_always_on: false,
+                thinking_on_by_default: false,
                 supports_legacy_thinking: false,
                 supports_output_config: true,
                 supports_sampling_params: false,

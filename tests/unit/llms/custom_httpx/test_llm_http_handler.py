@@ -4253,12 +4253,14 @@ def test_video_generation_with_input_reference_keeps_file_multipart():
 AZURE_AI_BASE = "https://myfoundry.services.ai.azure.com"
 AZURE_AI_CHAT_COMPLETIONS_URL = f"{AZURE_AI_BASE}/models/chat/completions"
 
+
 def _a_tool_with_an_unsupported_field() -> dict:
     return {
         "type": "function",
         "function": {"name": "lookup", "parameters": {"type": "object", "properties": {}}},
         "strict": True,
     }
+
 
 A_COMPLETION = {
     "id": "chatcmpl-1",
@@ -4457,6 +4459,45 @@ async def test_create_file_async_awaits_the_provider_credential_hook_instead_of_
     provider_config.avalidate_environment.assert_awaited_once()
     assert client.post.call_args.kwargs["headers"] == {"x-api-key": "federated"}
     assert client.post.call_args.kwargs["url"] == "https://files.example/v1/files"
+
+
+def test_create_file_sync_sends_a_presigned_upload_with_its_own_method_url_headers_and_body():
+    provider_config = Mock(spec=BaseFilesConfig)
+    provider_config.validate_environment.return_value = {"x-api-key": "unused-for-presigned"}
+    provider_config.get_complete_file_url.return_value = "https://files.example/v1/files"
+    provider_config.transform_create_file_request.return_value = {
+        "method": "PUT",
+        "url": "https://bucket.s3.example/batch.jsonl",
+        "headers": {"Authorization": "AWS4-HMAC-SHA256 signed"},
+        "data": b'{"recordId": "req-1"}',
+    }
+    file_object = object()
+    provider_config.transform_create_file_response.return_value = file_object
+    upload_response = Mock(spec=httpx.Response)
+    client = Mock(spec=HTTPHandler)
+    client.put.return_value = upload_response
+
+    result = BaseLLMHTTPHandler().create_file(
+        create_file_data={"file": b"{}", "purpose": "batch"},
+        litellm_params={},
+        provider_config=provider_config,
+        headers={},
+        api_base=None,
+        api_key=None,
+        logging_obj=Mock(),
+        client=client,
+        timeout=30,
+    )
+
+    assert result is file_object
+    client.post.assert_not_called()
+    client.put.assert_called_once_with(
+        url="https://bucket.s3.example/batch.jsonl",
+        headers={"Authorization": "AWS4-HMAC-SHA256 signed"},
+        data=b'{"recordId": "req-1"}',
+        timeout=30,
+    )
+    assert provider_config.transform_create_file_response.call_args.kwargs["raw_response"] is upload_response
 
 
 @pytest.mark.asyncio

@@ -476,6 +476,8 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     output_cost_per_image_512: ReadOnly[float | None]
     output_cost_per_image_1024: ReadOnly[float | None]
     output_cost_per_image_1536: ReadOnly[float | None]
+    output_cost_per_image_1K: ReadOnly[float | None]
+    output_cost_per_image_2K: ReadOnly[float | None]
     ocr_cost_per_page: float | None  # for OCR models
     ocr_cost_per_page_batches: ReadOnly[float | None]
     ocr_cost_per_credit: float | None  # for OCR models priced by credit
@@ -3382,7 +3384,10 @@ class StandardLoggingRoutingDecision(TypedDict, total=False):
     """Per-request provenance for a pre-routing strategy (auto-router) decision."""
 
     router_model_name: str
-    router_type: ReadOnly[Literal["complexity", "adaptive", "quality", "semantic"]]
+    router_type: ReadOnly[Literal["complexity", "adaptive", "quality", "semantic", "switchyard"]]
+    switchyard_algorithm: ReadOnly[str]
+    switchyard_evidence: ReadOnly[object]
+    switchyard_fallback_reason: ReadOnly[str]
     router_config_id: ReadOnly[str]
     router_config_updated_at: ReadOnly[str]
     router_config_fingerprint: ReadOnly[str]
@@ -3443,10 +3448,12 @@ class StandardLoggingKubernetesPodRouting(TypedDict):
 # so a redacted row stays explainable. `test_every_routing_decision_field_is_classified`
 # fails if a field is added to the record without being placed in one set or the other.
 PROMPT_QUOTING_ROUTING_DECISION_FIELDS: frozenset[str] = frozenset(
-    {"signals", "matched_keyword", "escalation_keyword", "classifier_crux"}
+    {"signals", "matched_keyword", "escalation_keyword", "classifier_crux", "switchyard_evidence"}
 )
 DERIVED_ROUTING_DECISION_FIELDS: Final[frozenset[str]] = frozenset(
     {
+        "switchyard_algorithm",
+        "switchyard_fallback_reason",
         "router_model_name",
         "router_type",
         "router_config_id",
@@ -4146,6 +4153,8 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     output_cost_per_image_512: float | None = None
     output_cost_per_image_1024: float | None = None
     output_cost_per_image_1536: float | None = None
+    output_cost_per_image_1K: float | None = None
+    output_cost_per_image_2K: float | None = None
     input_cost_per_pixel: float | None = None
     output_cost_per_pixel: float | None = None
 

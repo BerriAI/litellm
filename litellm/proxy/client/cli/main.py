@@ -199,7 +199,8 @@ def cli(ctx: click.Context, show_version: bool, base_url: str | None, api_key: s
     # If no API key provided via flag or environment variable, try to load from saved token.
     # Pass base_url so we only use the stored key when it was issued for this server.
     setup_command: Final = ctx.invoked_subcommand in ("configure", "reconfigure", "unconfigure")
-    api_key_from_token_file: Final = api_key is None and not setup_command
+    reads_the_stored_login_itself: Final = ctx.invoked_subcommand in ("login", "logout")
+    api_key_from_token_file: Final = api_key is None and not setup_command and not reads_the_stored_login_itself
     resolved_api_key: Final = (
         get_stored_api_key(expected_base_url=base_url, vault=context_secret_vault(ctx))
         if api_key_from_token_file

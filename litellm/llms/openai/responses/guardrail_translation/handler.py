@@ -78,6 +78,7 @@ from litellm.llms.openai.responses.guardrail_translation.tool_merge import (
     append_returned_tools,
     merge_guardrailed_tools,
 )
+from litellm.responses.additional_tools import additional_tools_in_input
 from litellm.responses.litellm_completion_transformation.compaction_items import (
     compaction_summary,
     decode_compaction_item,
@@ -275,6 +276,7 @@ _ITEM_ID_KEYED_TOOL_CALL_TYPES: Final = frozenset({_TOOL_SEARCH_CALL_TYPE, _WEB_
 _OUTPUT_TOOL_CALL_ITEM_TYPES: Final = _TOOL_CALL_ITEM_TYPES | {_TOOL_SEARCH_CALL_TYPE}
 _SCANNED_TOOL_SEARCH_NAME: Final = "tool_search"
 _TOOL_SEARCH_ARGUMENTS_ADAPTER: Final = TypeAdapter(dict[str, object])
+_STREAM_EVENT_TYPE_ADAPTER: Final = TypeAdapter(str)
 _TOOL_CALL_PAYLOAD_FIELDS: Final[Mapping[str, str]] = MappingProxyType(
     {"function_call": "arguments", "custom_tool_call": "input"}
 )
@@ -776,7 +778,7 @@ class OpenAIResponsesHandler(BaseTranslation):
     delivers_ended_stream_rewrites = True
     assembles_streamed_response = True
 
-    def get_structured_messages(self, data: dict) -> list[AllMessageValues] | None:
+    def get_structured_messages(self, data: dict, *, keep_tool_errors: bool = False) -> list[AllMessageValues] | None:
         """
         Convert Responses API request data to OpenAI-spec structured messages.
 
@@ -989,9 +991,14 @@ class OpenAIResponsesHandler(BaseTranslation):
 
     def extract_request_tool_names(self, data: Mapping[str, object]) -> list[str]:
         """Extract tool names from Responses API request (tools[].name for function
-        and custom, tools[].server_label for mcp)."""
+        and custom, tools[].server_label for mcp), including tools carried by
+        ``additional_tools`` input items."""
         names: Final[list[str]] = []
-        for tool in list_field(data, "tools"):
+        request_tools: Final[tuple[object, ...]] = (
+            *list_field(data, "tools"),
+            *additional_tools_in_input(data.get("input")),
+        )
+        for tool in request_tools:
             if not isinstance(tool, dict):
                 continue
             if tool.get("type") in ("function", "custom") and tool.get("name"):
@@ -1985,7 +1992,6 @@ class OpenAIResponsesHandler(BaseTranslation):
           new output item under the same response id, and close with a
           ``response.completed`` carrying only the replacement item.
 
-        The proxy's data generator appends ``data: [DONE]`` itself.
         """
         events: Final = (
             self._block_continuation_events(exc, responses_so_far or ())
@@ -1993,6 +1999,7 @@ class OpenAIResponsesHandler(BaseTranslation):
             else self._standalone_block_events(exc)
         )
         return tuple(
+            f"event: {_STREAM_EVENT_TYPE_ADAPTER.validate_python(stream_item_field(event, 'type'))}\n"
             f"data: {event.model_dump_json(exclude_none=True, exclude_unset=True, serialize_as_any=True)}\n\n".encode()
             for event in events
         )
