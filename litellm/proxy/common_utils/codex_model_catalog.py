@@ -6,7 +6,8 @@ feature on) and decodes the body as its own ``ModelsResponse``, ``{"models": [Mo
 never the OpenAI list shape. Codex then ignores its own bundled catalog, so this body is all it knows
 about the provider's models. It is built from the rows ``/v1/models`` already lists: a model Codex
 knows, by its id or by the upstream model its deployments call once the provider's own prefixes are
-stripped, keeps Codex's own entry for it, minus any service tier some deployment behind it prices tokens
+stripped, keeps Codex's own entry for it, out of the catalog Codex itself uses for the provider those
+deployments call (its Bedrock catalogs for ``bedrock`` and ``bedrock_mantle``, its OpenAI one otherwise), minus any service tier some deployment behind it prices tokens
 but not that tier for; any other model gets an entry translated from the capabilities its deployments' model info
 declares (see ``codex_model_translation``). ``model_info.service_tiers`` becomes the entry's
 ``service_tiers``, which Codex turns into slash commands (``/ultrafast``) that send ``service_tier``
@@ -20,6 +21,14 @@ https://github.com/openai/codex/blob/rust-v0.166.0/codex-rs/models-manager/model
 as ``codex_bundled_models_0.166.0.json``, and ``codex_base_instructions.md`` is
 ``codex-rs/models-manager/prompt.md`` at the same tag. Refresh both by downloading those two paths at
 a newer tag.
+
+Codex builds its Bedrock catalogs in code rather than shipping them as files, so the ones for Bedrock's
+runtime and Mantle endpoints are vendored from Codex 0.166.0's own output, with the ``base_instructions``
+copy of each entry's ``model_messages.instructions_template`` that it adds for older clients dropped:
+``codex -c 'model_provider="amazon-bedrock-runtime"' debug models | jq 'del(.models[].base_instructions)'``
+as ``codex_bedrock_runtime_models_0.166.0.json``, and ``model_provider="amazon-bedrock"`` the same way as
+``codex_bedrock_mantle_models_0.166.0.json``. Refresh them at the same release as the bundled catalog,
+which they take each entry's ``minimal_client_version`` from.
 """
 
 from __future__ import annotations
@@ -58,6 +67,13 @@ if TYPE_CHECKING:
 
 CODEX_BASE_INSTRUCTIONS_PATH: Final = Path(__file__).with_name("codex_base_instructions.md")
 CODEX_BUNDLED_MODELS_PATH: Final = Path(__file__).with_name("codex_bundled_models_0.166.0.json")
+CodexBedrockEndpoint: TypeAlias = Literal["bedrock", "bedrock_mantle"]
+CODEX_BEDROCK_MODELS_PATHS: Final[Mapping[CodexBedrockEndpoint, Path]] = MappingProxyType(
+    {
+        "bedrock": Path(__file__).with_name("codex_bedrock_runtime_models_0.166.0.json"),
+        "bedrock_mantle": Path(__file__).with_name("codex_bedrock_mantle_models_0.166.0.json"),
+    }
+)
 CODEX_CATALOG_BYTE_LIMIT: Final = 1024 * 1024
 CODEX_CHAT_MODES: Final = frozenset({"chat", "responses"})
 
@@ -129,8 +145,8 @@ _NATIVE_ALIAS_DEFAULTS: Final[CodexAliasDefaults] = "deployment"
 @dataclass(frozen=True, slots=True)
 class CodexCatalogRow:
     """What the catalog needs to know about one listed model: its public id, the listing's mode and
-    input limit, the upstream model behind it and the provider its deployment declares, the reasoning
-    effort its deployments pin, and the
+    input limit, the upstream model behind it and the provider its deployment declares, every routable
+    deployment's `upstreams` (model and declared provider), the reasoning effort its deployments pin, and the
     `model_info` values the operator set; `service_tiers` holds one raw `model_info.service_tiers`
     value per deployment behind the id, None where a deployment sets none, and
     `configured_max_input_tokens` one `model_info.max_input_tokens` per deployment the same way.
@@ -142,6 +158,7 @@ class CodexCatalogRow:
     max_input_tokens: int | None = None
     upstream_model: str | None = None
     upstream_provider: str | None = None
+    upstreams: tuple[tuple[str, str | None], ...] = ()
     reasoning_effort: str | None = None
     display_name: str | None = None
     service_tiers: tuple[object, ...] = ()
@@ -156,6 +173,32 @@ def bundled_codex_models() -> Mapping[str, CodexStockModel]:
     """Codex's bundled catalog by slug, read once from the vendored file."""
     catalog: Final = CodexStockCatalog.model_validate_json(CODEX_BUNDLED_MODELS_PATH.read_text(encoding="utf-8"))
     return MappingProxyType({model.slug: model for model in catalog.models})
+
+
+def _with_minimal_client_version(model: CodexStockModel, version: str | tuple[int, ...] | None) -> CodexStockModel:
+    return model if version is None else model.model_copy(update={"minimal_client_version": version})
+
+
+@cache
+def bundled_bedrock_codex_models(endpoint: CodexBedrockEndpoint) -> Mapping[str, CodexStockModel]:
+    """Codex's catalog for a Bedrock endpoint by slug, read once from the vendored file. `codex debug models`
+    prints no `minimal_client_version`, so each entry takes the one of the bundled entry Codex built it from."""
+    from litellm.llms.bedrock.common_utils import bedrock_model_name_without_provider
+
+    catalog: Final = CodexStockCatalog.model_validate_json(
+        CODEX_BEDROCK_MODELS_PATHS[endpoint].read_text(encoding="utf-8")
+    )
+    built_from: Final = MappingProxyType(
+        {slug: model.minimal_client_version for slug, model in bundled_codex_models().items()}
+    )
+    return MappingProxyType(
+        {
+            model.slug: _with_minimal_client_version(
+                model, built_from.get(bedrock_model_name_without_provider(model.slug))
+            )
+            for model in catalog.models
+        }
+    )
 
 
 @cache
@@ -274,15 +317,67 @@ def _provider_model_name(upstream_model: str, upstream_provider: str | None) -> 
     return model if name_for is None else name_for(model)
 
 
-def _stock_for(row: CodexCatalogRow, stock: Mapping[str, CodexStockModel]) -> CodexStockModel | None:
+@dataclass(frozen=True, slots=True)
+class _StockMatch:
+    """Codex's entry for a row, and whether the row lists it under another name than Codex's (an alias)."""
+
+    model: CodexStockModel
+    alias: bool
+
+
+def _on_endpoint(
+    declared: Sequence[tuple[str | None, str]], endpoint: CodexBedrockEndpoint
+) -> tuple[CodexBedrockEndpoint, str] | None:
+    return next(((endpoint, model) for provider, model in declared if provider == endpoint), None)
+
+
+def _bedrock_upstream(row: CodexCatalogRow) -> tuple[CodexBedrockEndpoint, str] | None:
+    """The Bedrock endpoint a request to the row can reach whose Codex catalog promises the least, with the model
+    a deployment on it calls. A request can route to any deployment, and Codex's Bedrock entries leave out what
+    Bedrock does not support yet, so one Bedrock deployment puts the whole row on its catalog, the runtime one
+    (no tool search) ahead of Mantle's."""
+    from litellm.litellm_core_utils.get_llm_provider_logic import declared_provider
+
+    first: Final = () if row.upstream_model is None else ((row.upstream_model, row.upstream_provider),)
+    declared: Final = tuple((declared_provider(model, provider), model) for model, provider in (*first, *row.upstreams))
+    on_bedrock: Final = (_on_endpoint(declared, endpoint) for endpoint in CODEX_BEDROCK_MODELS_PATHS)
+    return next((found for found in on_bedrock if found is not None), None)
+
+
+def _bedrock_stock_for(row_id: str, endpoint: CodexBedrockEndpoint, upstream_model: str) -> _StockMatch | None:
+    """Codex's entry for the row's id or the Bedrock model as written, else for the same model under any of
+    Bedrock's routing and region prefixes (`eu.openai.gpt-6.1-sol` takes `global.openai.gpt-6.1-sol`'s)."""
+    from litellm.llms.bedrock.common_utils import bedrock_model_name_without_provider
+
+    stock: Final = bundled_bedrock_codex_models(endpoint)
+    names: Final = (row_id, upstream_model.removeprefix(f"{endpoint}/"))
+    exact: Final = next((stock[name] for name in names if name in stock), None)
+    model_names: Final = tuple(bedrock_model_name_without_provider(name) for name in names)
+    same_model: Final = (
+        next((model for slug, model in stock.items() if bedrock_model_name_without_provider(slug) == name), None)
+        for name in model_names
+    )
+    found: Final = exact if exact is not None else next((model for model in same_model if model is not None), None)
+    if found is None:
+        return None
+    return _StockMatch(found, model_names[0] != bedrock_model_name_without_provider(found.slug))
+
+
+def _stock_for(row: CodexCatalogRow, stock: Mapping[str, CodexStockModel]) -> _StockMatch | None:
     """Codex's entry for the row's id, else for its upstream model as written, else for that model's name
-    once its provider's own prefixes are stripped (`bedrock/us.openai.gpt-6.1-sol` is `gpt-6.1-sol`)."""
+    once its provider's own prefixes are stripped (`openai/gpt-6.1-sol` is `gpt-6.1-sol`), out of Codex's
+    Bedrock catalog when a deployment behind the row is on Bedrock and `stock` otherwise. A Bedrock model that
+    catalog does not know has no entry, since `stock`'s would promise what Bedrock does not support."""
+    bedrock: Final = _bedrock_upstream(row)
+    if bedrock is not None:
+        return _bedrock_stock_for(row.id, *bedrock)
     names: Final = (
         (row.id,)
         if row.upstream_model is None
         else (row.id, row.upstream_model, _provider_model_name(row.upstream_model, row.upstream_provider))
     )
-    return next((stock[name] for name in names if name in stock), None)
+    found: Final = next((stock[name] for name in names if name in stock), None)
+    return None if found is None else _StockMatch(found, row.id != found.slug)
 
 
 def _readable_by(stock_model: CodexStockModel, client_version: str | None) -> bool:
@@ -391,7 +486,7 @@ def _entry(
     client_version: str | None,
 ) -> CodexCatalogEntry:
     matched: Final = _stock_for(row, stock)
-    stock_model: Final = matched if matched is not None and _readable_by(matched, client_version) else None
+    stock_model: Final = matched.model if matched is not None and _readable_by(matched.model, client_version) else None
     stock_tiers: Final = MappingProxyType(
         {tier.id: tier for tier in (stock_model.service_tiers if stock_model is not None else ())}
     )
@@ -412,7 +507,7 @@ def _entry(
     upgrade: Final = (
         stock_model.upgrade if stock_model.upgrade is not None and stock_model.upgrade.model in served else None
     )
-    is_alias: Final = row.id != stock_model.slug
+    is_alias: Final = matched is not None and matched.alias
     deployment_decides: Final = is_alias and alias_defaults == "deployment"
     stock_name: Final = row.id if is_alias else stock_model.display_name
     listing: Final = {
@@ -659,6 +754,7 @@ def _catalog_row(
         upstream_provider=(
             registry.resolve(lookup_id, kind="upstream_provider", team_id=team_id) if registry is not None else None
         ),
+        upstreams=registry.resolve(lookup_id, kind="upstreams", team_id=team_id) if registry is not None else (),
         display_name=registry.group(label_id, field="display_name") if registry is not None else None,
         reasoning_effort=(
             _shared_pinned_effort(registry.group(lookup_id, field="pinned_reasoning_efforts", team_id=team_id))

@@ -1,6 +1,6 @@
 import json
 import logging
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from dataclasses import replace
 from types import MappingProxyType
 from typing import Final, Literal
@@ -11,11 +11,13 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.llm_cost_calc.utils import get_service_tier_cost_key
+from litellm.llms.bedrock.common_utils import bedrock_model_name_without_provider
 from litellm.proxy.common_utils.codex_model_catalog import (
     CODEX_CATALOG_BYTE_LIMIT,
     CodexCatalogRow,
     CodexStockModel,
     CodexStockUpgrade,
+    bundled_bedrock_codex_models,
     bundled_codex_models,
     codex_catalog_etag,
     codex_catalog_rows,
@@ -32,9 +34,7 @@ _PROMPT = "base prompt"
 _FAST = {"id": "priority", "name": "Fast", "description": "2x speed, increased usage"}
 
 
-def _stock(
-    slug, *, visibility="list", supported_in_api=True, upgrade=None, service_tiers=(_FAST,), default_tier=None
-):
+def _stock(slug, *, visibility="list", supported_in_api=True, upgrade=None, service_tiers=(_FAST,), default_tier=None):
     return CodexStockModel(
         slug=slug,
         display_name=slug.upper(),
@@ -633,14 +633,17 @@ def test_default_service_tier_survives_only_while_still_offered(configured, expe
     assert entry["default_service_tier"] == expected
 
 
-
 @pytest.mark.parametrize(("alias_defaults", "expected"), [("codex", "priority"), ("deployment", None)])
 def test_alias_with_offered_tiers_takes_codexs_default_tier_only_under_codex_defaults(alias_defaults, expected):
     (entry,) = _models(
         _row("team-sol", upstream_model="gpt-6-sol", service_tiers=["priority"]), alias_defaults=alias_defaults
     )
 
-    assert (_tiers(entry), entry["default_service_tier"]) == ([("priority", "Fast", "2x speed, increased usage")], expected)
+    assert (_tiers(entry), entry["default_service_tier"]) == (
+        [("priority", "Fast", "2x speed, increased usage")],
+        expected,
+    )
+
 
 def test_non_chat_and_wildcard_rows_are_left_out_of_the_catalog():
     body = _body(
@@ -836,6 +839,7 @@ def test_catalog_rows_read_the_router_by_each_entry_lookup_id():
             max_input_tokens=7,
             upstream_model="openai/gpt-5.5",
             upstream_provider="openai",
+            upstreams=(("openai/gpt-5.5", "openai"), ("openai/gpt-5.5", "openai")),
             display_name="Team 5.5",
             service_tiers=(["ultrafast"], None),
             supported_reasoning_efforts=router.get_model_group_info(
@@ -848,6 +852,7 @@ def test_catalog_rows_read_the_router_by_each_entry_lookup_id():
             id="plain",
             upstream_model="openai/some-unmapped-model",
             upstream_provider="openai",
+            upstreams=(("openai/some-unmapped-model", "openai"),),
             service_tiers=(None,),
             search_tool_support=(None,),
             configured_max_input_tokens=(None,),
@@ -882,6 +887,7 @@ def test_catalog_rows_read_an_alias_off_its_target_under_the_alias_name():
         max_input_tokens=9,
         upstream_model="openai/gpt-6-astra",
         upstream_provider="openai",
+        upstreams=(("openai/gpt-6-astra", "openai"),),
         service_tiers=(["ultrafast"],),
         supported_reasoning_efforts=router.get_model_group_info("gpt-6-astra").supported_reasoning_efforts,
         search_tool_support=(None,),
@@ -1123,19 +1129,7 @@ _SOL_SLUG: Final = next(
 )
 
 
-@pytest.mark.parametrize(
-    "upstream",
-    [
-        "bedrock/us.openai.{slug}",
-        "bedrock/global.openai.{slug}",
-        "bedrock/converse/us.openai.{slug}",
-        "bedrock/openai.{slug}",
-        "bedrock_mantle/openai.{slug}",
-        "bedrock_mantle/us-east-1/openai.{slug}",
-        "openai/{slug}",
-        "{slug}",
-    ],
-)
+@pytest.mark.parametrize("upstream", ["openai/{slug}", "{slug}"])
 @pytest.mark.parametrize("slug", sorted(bundled_codex_models()))
 def test_a_model_codex_knows_keeps_codexs_entry_under_any_provider_prefix(upstream: str, slug: str) -> None:
     stock: Final = bundled_codex_models()[slug].model_dump(mode="json")
@@ -1150,24 +1144,204 @@ def test_a_model_codex_knows_keeps_codexs_entry_under_any_provider_prefix(upstre
     assert entry["supported_reasoning_levels"] == stock["supported_reasoning_levels"]
 
 
-@pytest.mark.parametrize("model", ["us.openai.{slug}", "converse/global.openai.{slug}"])
-def test_a_bedrock_deployment_naming_its_provider_apart_from_the_model_keeps_codexs_entry(model: str) -> None:
+_BEDROCK_UPSTREAMS: Final = MappingProxyType(
+    {
+        "bedrock": (
+            "bedrock/us.openai.{name}",
+            "bedrock/global.openai.{name}",
+            "bedrock/eu.openai.{name}",
+            "bedrock/converse/us.openai.{name}",
+            "bedrock/openai.{name}",
+        ),
+        "bedrock_mantle": ("bedrock_mantle/openai.{name}", "bedrock_mantle/us-east-1/openai.{name}"),
+    }
+)
+_LISTING_FIELDS: Final = frozenset({"slug", "display_name", "priority"})
+_TIER_FIELDS: Final = frozenset({"service_tiers", "additional_speed_tiers", "default_service_tier"})
+
+
+def _bedrock_names(endpoint: Literal["bedrock", "bedrock_mantle"]) -> tuple[str, ...]:
+    return tuple(
+        dict.fromkeys(bedrock_model_name_without_provider(slug) for slug in bundled_bedrock_codex_models(endpoint))
+    )
+
+
+def _bedrock_stock(endpoint: Literal["bedrock", "bedrock_mantle"], name: str) -> dict[str, object]:
+    model: Final = next(
+        model
+        for slug, model in bundled_bedrock_codex_models(endpoint).items()
+        if bedrock_model_name_without_provider(slug) == name
+    )
+    return model.model_dump(mode="json", exclude_unset=True)
+
+
+def _codex_fields(
+    entry: Mapping[str, object], stock: Mapping[str, object], skipped: frozenset[str]
+) -> dict[str, object]:
+    return {field: entry.get(field, _ABSENT) for field in stock if field not in skipped}
+
+
+def _without(stock: Mapping[str, object], skipped: frozenset[str]) -> dict[str, object]:
+    return {field: value for field, value in stock.items() if field not in skipped}
+
+
+def _only_entry(*rows: CodexCatalogRow, client_version: str | None = None) -> dict[str, object]:
+    (entry,) = json.loads(
+        codex_models_response_json(rows, instructions=_PROMPT, byte_limit=None, client_version=client_version).json
+    )["models"]
+    return entry
+
+
+def _bedrock_cases() -> Iterator[tuple[str, str, str]]:
+    for endpoint, upstreams in _BEDROCK_UPSTREAMS.items():
+        for upstream in upstreams:
+            for name in _bedrock_names(endpoint):
+                yield endpoint, upstream, name
+
+
+@pytest.mark.parametrize(("endpoint", "upstream", "name"), tuple(_bedrock_cases()))
+def test_a_bedrock_deployment_takes_codexs_entry_for_its_bedrock_endpoint_not_openais(
+    endpoint: Literal["bedrock", "bedrock_mantle"], upstream: str, name: str
+) -> None:
+    stock: Final = _bedrock_stock(endpoint, name)
+
+    entry: Final = _only_entry(_row("team-model", upstream_model=upstream.format(name=name)))
+    openai_entry: Final = _only_entry(_row("team-model", upstream_model=f"openai/{name}"))
+
+    assert _codex_fields(entry, stock, _LISTING_FIELDS) == _without(stock, _LISTING_FIELDS)
+    assert _codex_fields(openai_entry, stock, _LISTING_FIELDS) != _without(stock, _LISTING_FIELDS)
+
+
+@pytest.mark.parametrize("model", ["us.openai.{name}", "converse/global.openai.{name}"])
+def test_a_bedrock_deployment_naming_its_provider_apart_from_the_model_takes_codexs_bedrock_entry(model: str) -> None:
+    name: Final = _bedrock_names("bedrock")[0]
     router: Final = litellm.Router(
         model_list=[
             {
                 "model_name": "team-model",
                 "litellm_params": {
-                    "model": model.format(slug=_SOL_SLUG),
+                    "model": model.format(name=name),
                     "custom_llm_provider": "bedrock",
                     "aws_region_name": "us-east-1",
                 },
             }
         ]
     )
+    stock: Final = _bedrock_stock("bedrock", name)
 
     entry: Final = _served(router, "team-model")["team-model"]
 
-    assert entry["model_messages"] == bundled_codex_models()[_SOL_SLUG].model_dump(mode="json")["model_messages"]
+    assert _codex_fields(entry, stock, _LISTING_FIELDS | _TIER_FIELDS) == _without(
+        stock, _LISTING_FIELDS | _TIER_FIELDS
+    )
+
+
+@pytest.mark.parametrize(
+    "upstreams",
+    [
+        ("openai/{name}", "bedrock/us.openai.{name}"),
+        ("bedrock/us.openai.{name}", "openai/{name}"),
+        ("bedrock_mantle/openai.{name}", "bedrock/us.openai.{name}"),
+        ("openai/{name}", "bedrock_mantle/openai.{name}", "bedrock/us.openai.{name}"),
+    ],
+)
+def test_a_model_name_any_of_whose_deployments_is_on_bedrock_runtime_takes_codexs_runtime_entry(
+    upstreams: tuple[str, ...],
+) -> None:
+    name: Final = next(name for name in _bedrock_names("bedrock") if name in bundled_codex_models())
+    router: Final = litellm.Router(
+        model_list=[
+            {"model_name": name, "litellm_params": {"model": upstream.format(name=name)}} for upstream in upstreams
+        ]
+    )
+    stock: Final = _bedrock_stock("bedrock", name)
+
+    entry: Final = _served(router, name)[name]
+
+    assert _codex_fields(entry, stock, _LISTING_FIELDS | _TIER_FIELDS) == _without(
+        stock, _LISTING_FIELDS | _TIER_FIELDS
+    )
+
+
+@pytest.mark.parametrize(
+    "upstreams", [("openai/{name}", "bedrock_mantle/openai.{name}"), ("bedrock_mantle/openai.{name}",)]
+)
+def test_a_model_name_on_bedrock_mantle_but_not_runtime_takes_codexs_mantle_entry(upstreams: tuple[str, ...]) -> None:
+    name: Final = next(name for name in _bedrock_names("bedrock_mantle") if name in bundled_codex_models())
+    router: Final = litellm.Router(
+        model_list=[
+            {"model_name": name, "litellm_params": {"model": upstream.format(name=name)}} for upstream in upstreams
+        ]
+    )
+    stock: Final = _bedrock_stock("bedrock_mantle", name)
+
+    entry: Final = _served(router, name)[name]
+
+    assert _codex_fields(entry, stock, _LISTING_FIELDS | _TIER_FIELDS) == _without(
+        stock, _LISTING_FIELDS | _TIER_FIELDS
+    )
+
+
+def _left_out_of_bedrock() -> Iterator[tuple[str, str]]:
+    for endpoint, upstream in (
+        ("bedrock", "bedrock/us.openai.{slug}"),
+        ("bedrock_mantle", "bedrock_mantle/openai.{slug}"),
+    ):
+        for slug in sorted(frozenset(bundled_codex_models()) - frozenset(_bedrock_names(endpoint))):
+            yield upstream, slug
+
+
+@pytest.mark.parametrize(("upstream", "slug"), tuple(_left_out_of_bedrock()))
+def test_a_bedrock_deployment_of_a_model_its_bedrock_catalog_leaves_out_gets_a_translated_entry(
+    upstream: str, slug: str
+) -> None:
+    entry: Final = _only_entry(_row("team-model", upstream_model=upstream.format(slug=slug)))
+
+    assert "model_messages" not in entry and entry["base_instructions"] == _PROMPT
+
+
+@pytest.mark.parametrize(
+    ("endpoint", "upstream"),
+    [("bedrock", "bedrock/us.openai.{name}"), ("bedrock_mantle", "bedrock_mantle/openai.{name}")],
+)
+def test_a_codex_older_than_the_openai_entry_a_bedrock_one_is_built_from_gets_an_entry_it_can_decode(
+    endpoint: Literal["bedrock", "bedrock_mantle"], upstream: str
+) -> None:
+    name: Final = next(
+        name for name in _bedrock_names(endpoint) if bundled_codex_models()[name].minimal_client_version is not None
+    )
+    minimum: Final = bundled_codex_models()[name].minimal_client_version
+    assert isinstance(minimum, str)
+    row: Final = _row("team-model", upstream_model=upstream.format(name=name))
+
+    older: Final = _only_entry(row, client_version="0.0.1")
+    at_minimum: Final = _only_entry(row, client_version=minimum)
+
+    assert "model_messages" not in older and older["base_instructions"] == _PROMPT
+    assert at_minimum["model_messages"] == _bedrock_stock(endpoint, name)["model_messages"]
+
+
+@pytest.mark.parametrize("listed_as", ["{name}", "us.openai.{name}", "eu.openai.{name}"])
+def test_a_bedrock_model_listed_under_its_own_name_keeps_codexs_defaults_in_the_native_catalog(listed_as: str) -> None:
+    name: Final = next(
+        name for name in _bedrock_names("bedrock") if _bedrock_stock("bedrock", name).get("default_reasoning_level")
+    )
+    upstream_model: Final = f"bedrock/us.openai.{name}"
+    upstream: Final = json.dumps({"models": [{"slug": "upstream-model", "priority": 0}]}).encode()
+
+    merged: Final = merged_codex_catalog(
+        upstream,
+        (
+            _row(listed_as.format(name=name), upstream_model=upstream_model),
+            _row("team-model", upstream_model=upstream_model),
+        ),
+        instructions=_PROMPT,
+        client_version="0.166.0",
+    )
+
+    own_name, alias = json.loads(merged)["models"][1:]
+    assert own_name["default_reasoning_level"] == _bedrock_stock("bedrock", name)["default_reasoning_level"]
+    assert alias["default_reasoning_level"] is None
 
 
 def test_an_upstream_with_no_provider_prefix_matches_only_by_its_own_name() -> None:
