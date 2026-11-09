@@ -113,6 +113,20 @@ class TeamTrace:
 
 
 @dataclass(frozen=True, slots=True)
+class ToolRequest:
+    token_present: bool
+    call_types: tuple[str, ...] | None = None
+    capable_types: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class ToolAllowlist:
+    key_nonempty_list: bool
+    team_nonempty_list: bool | None = None
+    requested_count: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class Tools:
     requested: tuple[str, ...]
     key_allowed: tuple[str, ...] | None
@@ -128,6 +142,16 @@ class GrantLayers:
     virtual_key: bool
     session_token: bool
     team_present: bool
+
+
+@dataclass(frozen=True, slots=True)
+class VectorRequest:
+    client_present: bool
+    strict: bool
+    ids_read: bool = False
+    unreadable: bool = False
+    grants: tuple[tuple[str, ...] | None, ...] | None = None
+    requested_count: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -160,8 +184,11 @@ AccessFacts: TypeAlias = (
     | Guardrails
     | AgentTrace
     | TeamTrace
+    | ToolRequest
+    | ToolAllowlist
     | Tools
     | GrantLayers
+    | VectorRequest
     | VectorStores
     | TeamLookup
 )
@@ -176,6 +203,7 @@ AccessDenial: TypeAlias = Literal[
     "Tools",
     "VectorStores",
     "MissingVectorGrant",
+    "MalformedVectorIds",
     "TeamLookup",
 ]
 GrantLayer: TypeAlias = Literal["key", "team", "user"]
@@ -183,7 +211,27 @@ GrantLayer: TypeAlias = Literal["key", "team", "user"]
 
 @dataclass(frozen=True, slots=True)
 class AccessDecision:
-    read: Literal["UserParam", "ClientTagRoute", "ClientTags", "GuardrailPermission", "UnavailablePolicy"] | None = None
+    read: (
+        Literal[
+            "UserParam",
+            "ClientTagRoute",
+            "ClientTags",
+            "GuardrailPermission",
+            "UnavailablePolicy",
+            "ToolRoute",
+            "ToolAllowlist",
+            "TeamToolList",
+            "ToolNames",
+            "KeyToolGrant",
+            "TeamToolGrant",
+            "StrictVectorIds",
+            "LegacyVectorIds",
+            "LegacyVectorGrants",
+            "RagVectorIds",
+            "VectorGrants",
+        ]
+        | None
+    ) = None
     denial: AccessDenial | None = None
     rejected: tuple[str, ...] = ()
     layers: tuple[GrantLayer, ...] = ()

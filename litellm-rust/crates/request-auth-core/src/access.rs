@@ -76,6 +76,16 @@ pub enum AccessFacts {
         selected_trace_present: bool,
         other_trace: Option<String>,
     },
+    ToolRequest {
+        token_present: bool,
+        call_types: Option<Vec<String>>,
+        capable_types: Vec<String>,
+    },
+    ToolAllowlist {
+        key_nonempty_list: bool,
+        team_nonempty_list: Option<bool>,
+        requested_count: Option<usize>,
+    },
     Tools {
         requested: Vec<String>,
         key_allowed: Option<Vec<String>>,
@@ -89,6 +99,14 @@ pub enum AccessFacts {
         virtual_key: bool,
         session_token: bool,
         team_present: bool,
+    },
+    VectorRequest {
+        client_present: bool,
+        strict: bool,
+        ids_read: bool,
+        unreadable: bool,
+        grants: Option<Vec<Option<Vec<String>>>>,
+        requested_count: Option<usize>,
     },
     VectorStores {
         requested: Vec<String>,
@@ -115,6 +133,7 @@ pub enum Denial {
     Tools,
     VectorStores,
     MissingVectorGrant,
+    MalformedVectorIds,
     TeamLookup,
 }
 
@@ -146,6 +165,17 @@ pub enum AccessRead {
     ClientTags,
     GuardrailPermission,
     UnavailablePolicy,
+    ToolRoute,
+    ToolAllowlist,
+    TeamToolList,
+    ToolNames,
+    KeyToolGrant,
+    TeamToolGrant,
+    StrictVectorIds,
+    LegacyVectorIds,
+    LegacyVectorGrants,
+    RagVectorIds,
+    VectorGrants,
 }
 
 fn modifies_guardrails(keys: &[String]) -> bool {
@@ -173,6 +203,87 @@ fn nonempty(value: &Option<String>) -> bool {
 
 pub fn decide(facts: AccessFacts) -> AccessDecision {
     match facts {
+        AccessFacts::VectorRequest {
+            client_present,
+            strict,
+            ids_read,
+            unreadable,
+            grants,
+            requested_count,
+        } => {
+            if !client_present {
+                return AccessDecision::default();
+            }
+            let read = if !ids_read {
+                Some(if strict {
+                    AccessRead::StrictVectorIds
+                } else {
+                    AccessRead::LegacyVectorIds
+                })
+            } else if unreadable {
+                let Some(grants) = grants else {
+                    return AccessDecision {
+                        read: Some(AccessRead::LegacyVectorGrants),
+                        ..AccessDecision::default()
+                    };
+                };
+                return AccessDecision {
+                    denial: grants
+                        .iter()
+                        .flatten()
+                        .any(|grant| !grant.is_empty())
+                        .then_some(Denial::MalformedVectorIds),
+                    ..AccessDecision::default()
+                };
+            } else {
+                match requested_count {
+                    None => Some(AccessRead::RagVectorIds),
+                    Some(0) => None,
+                    Some(_) => Some(AccessRead::VectorGrants),
+                }
+            };
+            AccessDecision {
+                read,
+                ..AccessDecision::default()
+            }
+        }
+        AccessFacts::ToolRequest {
+            token_present,
+            call_types,
+            capable_types,
+        } => AccessDecision {
+            read: if !token_present {
+                None
+            } else {
+                match call_types {
+                    None => Some(AccessRead::ToolRoute),
+                    Some(types) => types
+                        .iter()
+                        .any(|kind| capable_types.contains(kind))
+                        .then_some(AccessRead::ToolAllowlist),
+                }
+            },
+            ..AccessDecision::default()
+        },
+        AccessFacts::ToolAllowlist {
+            key_nonempty_list,
+            team_nonempty_list,
+            requested_count,
+        } => AccessDecision {
+            read: if !key_nonempty_list && team_nonempty_list.is_none() {
+                Some(AccessRead::TeamToolList)
+            } else if !key_nonempty_list && team_nonempty_list != Some(true) {
+                None
+            } else {
+                match requested_count {
+                    None => Some(AccessRead::ToolNames),
+                    Some(0) => None,
+                    Some(_) if key_nonempty_list => Some(AccessRead::KeyToolGrant),
+                    Some(_) => Some(AccessRead::TeamToolGrant),
+                }
+            },
+            ..AccessDecision::default()
+        },
         AccessFacts::ConcurrentFailures { failures, terminal } => AccessDecision {
             failure_index: terminal
                 .iter()
@@ -405,6 +516,129 @@ pub fn decide(facts: AccessFacts) -> AccessDecision {
 mod tests {
     use super::*;
     use rstest::rstest;
+
+    #[rstest]
+    #[case::no_database(false, true, false, false, None, None, (None, None))]
+    #[case::strict_ids(
+        true,
+        true,
+        false,
+        false,
+        None,
+        None,
+        (Some(AccessRead::StrictVectorIds), None)
+    )]
+    #[case::legacy_ids(
+        true,
+        false,
+        false,
+        false,
+        None,
+        None,
+        (Some(AccessRead::LegacyVectorIds), None)
+    )]
+    #[case::unreadable_grants(
+        true,
+        false,
+        true,
+        true,
+        None,
+        None,
+        (Some(AccessRead::LegacyVectorGrants), None)
+    )]
+    #[case::unrestricted_unreadable(true, false, true, true, Some(vec![None, Some(vec![])]), None, (None, None))]
+    #[case::restricted_unreadable(true, false, true, true, Some(vec![Some(vec!["a".into()])]), None, (None, Some(Denial::MalformedVectorIds)))]
+    #[case::rag_ids(
+        true,
+        true,
+        true,
+        false,
+        None,
+        None,
+        (Some(AccessRead::RagVectorIds), None)
+    )]
+    #[case::no_ids(true, true, true, false, None, Some(0), (None, None))]
+    #[case::identity_grants(
+        true,
+        true,
+        true,
+        false,
+        None,
+        Some(2),
+        (Some(AccessRead::VectorGrants), None)
+    )]
+    fn vector_read_order(
+        #[case] client_present: bool,
+        #[case] strict: bool,
+        #[case] ids_read: bool,
+        #[case] unreadable: bool,
+        #[case] grants: Option<Vec<Option<Vec<String>>>>,
+        #[case] requested_count: Option<usize>,
+        #[case] expected: (Option<AccessRead>, Option<Denial>),
+    ) {
+        assert_eq!(
+            decide(AccessFacts::VectorRequest {
+                client_present,
+                strict,
+                ids_read,
+                unreadable,
+                grants,
+                requested_count,
+            }),
+            AccessDecision {
+                read: expected.0,
+                denial: expected.1,
+                ..AccessDecision::default()
+            }
+        );
+    }
+
+    #[rstest]
+    #[case::no_token(false, None, None)]
+    #[case::route(true, None, Some(AccessRead::ToolRoute))]
+    #[case::no_call_type(true, Some(vec![]), None)]
+    #[case::non_tool_route(true, Some(vec!["embedding".into()]), None)]
+    #[case::tool_route(true, Some(vec!["embedding".into(), "completion".into()]), Some(AccessRead::ToolAllowlist))]
+    fn tool_route_reads(
+        #[case] token_present: bool,
+        #[case] call_types: Option<Vec<String>>,
+        #[case] read: Option<AccessRead>,
+    ) {
+        assert_eq!(
+            decide(AccessFacts::ToolRequest {
+                token_present,
+                call_types,
+                capable_types: vec!["completion".into()],
+            })
+            .read,
+            read
+        );
+    }
+
+    #[rstest]
+    #[case::key_override(true, None, None, Some(AccessRead::ToolNames))]
+    #[case::team_fallback(false, None, None, Some(AccessRead::TeamToolList))]
+    #[case::no_allowlist(false, Some(false), None, None)]
+    #[case::team_enabled(false, Some(true), None, Some(AccessRead::ToolNames))]
+    #[case::no_tools(true, None, Some(0), None)]
+    #[case::key_grant(true, None, Some(1), Some(AccessRead::KeyToolGrant))]
+    #[case::team_grant(false, Some(true), Some(1), Some(AccessRead::TeamToolGrant))]
+    fn tool_grant_reads(
+        #[case] key_nonempty_list: bool,
+        #[case] team_nonempty_list: Option<bool>,
+        #[case] requested_count: Option<usize>,
+        #[case] read: Option<AccessRead>,
+    ) {
+        assert_eq!(
+            decide(AccessFacts::ToolAllowlist {
+                key_nonempty_list,
+                team_nonempty_list,
+                requested_count,
+            })
+            .read,
+            read
+        );
+    }
 
     #[rstest]
     #[case::disabled(false, None, None)]

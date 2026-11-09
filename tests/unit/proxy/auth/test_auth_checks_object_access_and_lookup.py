@@ -2321,6 +2321,18 @@ async def test_every_requested_vector_store_needs_a_grant(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("deny_by_default", (False, True), ids=("legacy", "strict"))
+async def test_missing_database_skips_malformed_vector_request(deny_by_default: bool) -> None:
+    with patch("litellm.proxy.proxy_server.prisma_client", None):
+        assert await vector_store_access_check(
+            request_body={"vector_store_ids": {"malformed": "ids"}},
+            valid_token=_virtual_key(),
+            team_object=None,
+            deny_by_default=deny_by_default,
+        )
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "valid_token",
     [_virtual_key(), UserAPIKeyAuth(user_id="user-1", user_role=LitellmUserRoles.INTERNAL_USER)],
@@ -2430,6 +2442,67 @@ async def test_file_search_inside_additional_tools_input_item_needs_a_vector_sto
         ),
         denied_by,
     )
+
+
+@pytest.mark.parametrize("strict", [False, True], ids=["legacy", "strict"])
+@pytest.mark.parametrize(
+    ("input_items", "expected"),
+    [
+        (None, ("top", "shared", "tool", "shared")),
+        ("not-a-list", ("top", "shared", "tool", "shared")),
+        ([{"type": "additional_tools", "tools": 1}], ("top", "shared", "tool", "shared")),
+        (
+            [
+                {"type": "message", "tools": [{"vector_store_ids": ["ignored"]}]},
+                {"type": "additional_tools", "tools": [{"vector_store_ids": ["input", "shared"]}]},
+                {"type": "additional_tools", "tools": [{"vector_store_ids": ["last"]}]},
+            ],
+            ("top", "shared", "tool", "shared", "input", "shared", "last"),
+        ),
+    ],
+    ids=["no-input", "string-input", "malformed-tools", "ordered-duplicates"],
+)
+def test_vector_store_raw_reads_keep_top_level_tools_then_additional_tools(
+    strict: bool, input_items: object, expected: tuple[str, ...]
+) -> None:
+    from litellm.proxy.auth.auth_checks import _legacy_requested_vector_store_ids, _strict_requested_vector_store_ids
+
+    body: Final = {
+        "vector_store_ids": ["top", "shared"],
+        "tools": [{"vector_store_ids": ["tool", "shared"]}],
+        "input": input_items,
+    }
+    result: Final = (
+        _strict_requested_vector_store_ids(body) if strict else _legacy_requested_vector_store_ids(body, lambda: ())
+    )
+    assert result == expected
+
+
+@pytest.mark.parametrize("strict", [False, True], ids=["legacy", "strict"])
+def test_malformed_top_level_vector_ids_do_not_read_additional_tools(strict: bool) -> None:
+    from litellm.proxy.auth.auth_checks import (
+        _legacy_requested_vector_store_ids,
+        _strict_requested_vector_store_ids,
+        _UnreadableVectorStoreIds,
+    )
+
+    with patch(
+        "litellm.proxy.auth.auth_checks.additional_tools_in_input",
+        side_effect=AssertionError("unreadable top-level IDs read input tools"),
+    ) as input_reader:
+        if strict:
+            with pytest.raises(ProxyException) as caught:
+                _strict_requested_vector_store_ids({"vector_store_ids": 42})
+            assert (caught.value.code, caught.value.type, caught.value.param) == (
+                "400",
+                "invalid_request_error",
+                "vector_store_ids",
+            )
+        else:
+            assert isinstance(
+                _legacy_requested_vector_store_ids({"vector_store_ids": 42}, lambda: ()), _UnreadableVectorStoreIds
+            )
+    input_reader.assert_not_called()
 
 
 @pytest.mark.asyncio

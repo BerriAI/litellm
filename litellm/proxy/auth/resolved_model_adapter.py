@@ -44,7 +44,7 @@ class ResolvedModelReading:
 
 @dataclass(frozen=True, slots=True)
 class _Source:
-    model: str
+    model: str | Sequence[str]
     token: UserAPIKeyAuth
     router: RegistryReader | None
     prisma: PrismaClient | None
@@ -57,7 +57,7 @@ class _Source:
 
 
 async def read_resolved_model_facts(
-    model: str,
+    model: str | Sequence[str],
     valid_token: UserAPIKeyAuth,
     llm_router: RegistryReader | None,
     prisma_client: PrismaClient | None,
@@ -65,7 +65,7 @@ async def read_resolved_model_facts(
     proxy_logging_obj: ProxyLogging,
 ) -> ResolvedModelReading:
     facts: Final = ResolvedModelFacts(
-        model=model,
+        model=str(model),
         config_nonempty=bool(_Config.model_validate(valid_token, from_attributes=True).config),
         key_models=object_model_grants(valid_token),
         team_id=valid_token.team_id,
@@ -83,7 +83,10 @@ async def read_resolved_model_facts(
 
 
 async def can_key_call_resolved_model(
-    model: str, llm_model_list: Sequence[object] | None, valid_token: UserAPIKeyAuth, llm_router: RegistryReader | None
+    model: str | Sequence[str],
+    llm_model_list: Sequence[object] | None,
+    valid_token: UserAPIKeyAuth,
+    llm_router: RegistryReader | None,
 ) -> None:
     from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj, user_api_key_cache
 

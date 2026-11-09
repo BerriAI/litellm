@@ -22,9 +22,9 @@ from litellm.proxy.auth.common_budget_adapter import (
     resolve_effective_team_member_budget,
 )
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
-from litellm.redis.stores.spend_counters import model_access_group_counter
 from litellm.proxy.spend_tracking.carried_budget_state import carry_organization_budget_state
 from litellm.proxy.utils import PrismaClient, ProxyLogging
+from litellm.redis.stores.spend_counters import model_access_group_counter
 from litellm.types.proxy.model_access_group_budget import ModelAccessGroupBudget
 
 
@@ -200,9 +200,7 @@ async def read_access_group_budget_row(name: str, row: ModelAccessGroupBudget | 
     limit: Final = row.max_budget if row is not None else None
     facts, _decision = await read_budget(
         BudgetFacts("AccessGroup", limit),
-        CounterRead(
-            model_access_group_counter(name), row.spend if row is not None else 0.0, limit, authoritative=True
-        ),
+        CounterRead(model_access_group_counter(name), row.spend if row is not None else 0.0, limit, authoritative=True),
     )
     return AccessGroupBudgetReading(name, facts)
 

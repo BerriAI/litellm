@@ -27,7 +27,7 @@ from typing_extensions import NotRequired, ReadOnly, Required, TypedDict, Unpack
 import litellm
 from litellm._auth import access as access_policy
 from litellm._auth import common_flow
-from litellm._auth.failure import NativeAuthFailure
+from litellm._auth.failure import NativeAuthFailure, NativeAuthRuntimeError
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.dual_cache import DualCache, LimitedSizeOrderedDict
@@ -782,21 +782,36 @@ async def check_tools_allowlist(
         get_call_types_for_route,
     )
 
-    if valid_token is None:
+    if access_policy.decide(access_policy.ToolRequest(valid_token is not None)).read is None:
         return
+    assert valid_token is not None
     call_types: Final = get_call_types_for_route(route)
-    if not call_types or not any(ct.value in TOOL_CAPABLE_CALL_TYPES for ct in call_types):
+    route_plan: Final = access_policy.decide(
+        access_policy.ToolRequest(True, tuple(ct.value for ct in call_types or ()), tuple(TOOL_CAPABLE_CALL_TYPES))
+    )
+    if route_plan.read is None:
         return
     key_meta: Final = (valid_token.metadata or {}) if isinstance(valid_token.metadata, dict) else {}
     team_meta: Final = (valid_token.team_metadata or {}) if isinstance(valid_token.team_metadata, dict) else {}
     key_allowed: Final = key_meta.get("allowed_tools")
     team_allowed: Final = team_meta.get("allowed_tools")
-    effective: Final = key_allowed if (isinstance(key_allowed, list) and len(key_allowed) > 0) else team_allowed
-    if not isinstance(effective, list) or len(effective) == 0:
+    key_facts: Final = access_policy.ToolAllowlist(isinstance(key_allowed, list) and len(key_allowed) > 0)
+    key_plan: Final = access_policy.decide(key_facts)
+    facts: Final = (
+        replace(key_facts, team_nonempty_list=isinstance(team_allowed, list) and len(team_allowed) > 0)
+        if key_plan.read == "TeamToolList"
+        else key_facts
+    )
+    if access_policy.decide(facts).read is None:
         return
     tool_names: Final = extract_request_tool_names(route, request_body)
-    if not tool_names:
+    grant_plan: Final = access_policy.decide(replace(facts, requested_count=len(tool_names)))
+    if grant_plan.read is None:
         return
+    if grant_plan.read not in ("KeyToolGrant", "TeamToolGrant"):
+        raise NativeAuthRuntimeError("Unexpected tool-grant decision")
+    effective: Final = key_allowed if grant_plan.read == "KeyToolGrant" else team_allowed
+    assert isinstance(effective, list)
     decision: Final = access_policy.decide(
         access_policy.Tools(
             requested=tuple(tool_names),
@@ -4610,7 +4625,7 @@ async def can_key_call_model(
 
 
 async def can_key_call_resolved_model(
-    model: str,
+    model: str | Sequence[str],
     llm_model_list: Sequence[object] | None,
     valid_token: UserAPIKeyAuth,
     llm_router: RegistryReader | None,
@@ -5824,7 +5839,21 @@ def _legacy_requested_vector_store_ids(
 
 
 def _restricts_vector_stores(grants: Sequence[tuple[GrantLayer, LiteLLM_ObjectPermissionTable | None]]) -> bool:
-    return any(grant is not None and bool(grant.vector_stores) for _, grant in grants)
+    return (
+        access_policy.decide(
+            access_policy.VectorRequest(
+                client_present=True,
+                strict=False,
+                ids_read=True,
+                unreadable=True,
+                grants=tuple(
+                    tuple(grant.vector_stores) if grant is not None and grant.vector_stores is not None else None
+                    for _, grant in grants
+                ),
+            )
+        ).denial
+        is not None
+    )
 
 
 def _request_drop_policies(
@@ -5932,28 +5961,35 @@ async def vector_store_access_check(
     #########################################################
     # Get the vector store the user is trying to access
     #########################################################
-    if prisma_client is None:
+    facts: Final = access_policy.VectorRequest(prisma_client is not None, deny_by_default)
+    initial: Final = access_policy.decide(facts)
+    if initial.read is None:
         verbose_proxy_logger.debug("Prisma client not found, skipping vector store access check")
         return True
+    assert prisma_client is not None
 
     typed_request_body: Final = _typed_request_body(request_body)
     requested_ids: Final = (
         _strict_requested_vector_store_ids(typed_request_body)
-        if deny_by_default
+        if initial.read == "StrictVectorIds"
         else _legacy_requested_vector_store_ids(
             typed_request_body, lambda: _request_drop_policies(typed_request_body, llm_router, valid_token)
         )
     )
-    if isinstance(requested_ids, _UnreadableVectorStoreIds):
+    ids_plan: Final = access_policy.decide(
+        replace(facts, ids_read=True, unreadable=isinstance(requested_ids, _UnreadableVectorStoreIds))
+    )
+    if ids_plan.read == "LegacyVectorGrants":
         if _restricts_vector_stores(
             await _identity_grants(valid_token, team_object, None, prisma_client, user_api_key_cache)
         ):
             raise _malformed_vector_store_ids()
         return True
+    assert not isinstance(requested_ids, _UnreadableVectorStoreIds)
     rag_vector_store_id: Final = _get_rag_query_vector_store_id(typed_request_body)
     rag_ids: Final = (rag_vector_store_id,) if rag_vector_store_id is not None else ()
     vector_store_ids_to_run: Final = tuple(dict.fromkeys((*requested_ids, *rag_ids)))
-    if not vector_store_ids_to_run:
+    if access_policy.decide(replace(facts, ids_read=True, requested_count=len(vector_store_ids_to_run))).read is None:
         return True
 
     #########################################################
