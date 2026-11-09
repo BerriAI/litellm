@@ -17237,8 +17237,12 @@ def _team_spend_by_user_db_row(team_id: str, user_id: str, spend: float, request
 
 
 @pytest.mark.asyncio
-async def test_get_team_spend_by_user_admin_groups_spend_logs_by_team_and_user(mock_db_client):
+@pytest.mark.parametrize("use_ledger", [True, False])
+async def test_get_team_spend_by_user_admin_groups_spend_by_team_and_user(mock_db_client, monkeypatch, use_ledger):
+    from litellm.proxy import proxy_server
     from litellm.proxy.management_endpoints.team_endpoints import get_team_spend_by_user
+
+    monkeypatch.setattr(proxy_server, "general_settings", {"use_spend_logs_ledger": use_ledger})
 
     admin = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
     alpha = _team_spend_by_user_team("team-alpha", "Team Alpha", Member(user_id="alice", role="admin"), [])
@@ -17265,13 +17269,20 @@ async def test_get_team_spend_by_user_admin_groups_spend_logs_by_team_and_user(m
     assert any("statement_timeout = 30000" in statement for statement in transaction.statements)
     mock_db_client.db.tx.assert_not_called()
     sql, *params = transaction.query_raw.call_args.args
-    assert params == ["2026-09-01", "2026-09-04", "team-alpha", "team-beta"]
-    assert 'FROM "LiteLLM_SpendLogs" sl' in sql
-    assert 'sl."startTime" >= $1::timestamp' in sql
-    assert "sl.\"startTime\" < $2::timestamp + INTERVAL '1 day'" in sql
-    assert "sl.team_id IN ($3, $4)" in sql
-    assert 'GROUP BY sl.team_id, sl."user"' in sql
-    assert 'sl."user" = $' not in sql
+    if use_ledger:
+        assert params == ["2026-09-01", "2026-09-04", ["team-alpha", "team-beta"]]
+        assert 'FROM "LiteLLM_DailyTeamUserSpend" d' in sql
+        assert "d.date >= $1 AND d.date <= $2" in sql
+        assert "d.team_id = ANY($3::text[])" in sql
+        assert "d.user_id = $" not in sql
+    else:
+        assert params == ["2026-09-01", "2026-09-04", "team-alpha", "team-beta"]
+        assert 'FROM "LiteLLM_SpendLogs" sl' in sql
+        assert 'sl."startTime" >= $1::timestamp' in sql
+        assert "sl.\"startTime\" < $2::timestamp + INTERVAL '1 day'" in sql
+        assert "sl.team_id IN ($3, $4)" in sql
+        assert 'GROUP BY sl.team_id, sl."user"' in sql
+        assert 'sl."user" = $' not in sql
 
     assert response.start_date == "2026-09-01"
     assert response.end_date == "2026-09-04"
@@ -17301,8 +17312,8 @@ async def test_get_team_spend_by_user_team_admin_sees_every_member(mock_db_clien
     )
 
     sql, *params = transaction.query_raw.call_args.args
-    assert params == ["2026-09-01", "2026-09-04", "team-alpha"]
-    assert 'sl."user" = $' not in sql
+    assert params == ["2026-09-01", "2026-09-04", ["team-alpha"]]
+    assert "d.user_id = $" not in sql
 
 
 @pytest.mark.asyncio
@@ -17325,9 +17336,8 @@ async def test_get_team_spend_by_user_plain_member_only_sees_own_row(mock_db_cli
     )
 
     sql, *params = transaction.query_raw.call_args.args
-    assert params == ["2026-09-01", "2026-09-04", "team-alpha", "bob"]
-    assert "sl.team_id IN ($3)" in sql
-    assert 'AND sl."user" = $4' in sql
+    assert params == ["2026-09-01", "2026-09-04", ["team-alpha"], "bob"]
+    assert "AND d.user_id = $4" in sql
     assert [(r.user_id, r.spend) for r in response.results] == [("bob", 0.25)]
 
 

@@ -15637,7 +15637,7 @@
       },
       "title": "Spend Per User Within Team",
       "downloadCsv": "Download CSV",
-      "attributionNote": "Attributed per request from spend logs, so it includes JWT/SSO traffic that does not use a virtual key",
+      "attributionNote": "Attributed to the user who sent each request, so it includes JWT/SSO traffic that does not use a virtual key",
       "loadFailed": "Spend per user failed to load",
       "selectTeam": "Select a team to see spend per user",
       "noUserSpend": "No user spend in this range",
