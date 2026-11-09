@@ -848,3 +848,35 @@ def test_key_logging_entries_drops_an_entry_whose_credential_is_not_defined(monk
     ]
 
     assert key_logging_entries({"logging": entries}) == (kept,)
+
+
+@pytest.mark.parametrize(
+    "logging_value",
+    [
+        pytest.param("abc", id="string"),
+        pytest.param({"callback_name": "arize"}, id="object"),
+        pytest.param(5, id="number"),
+        pytest.param(["x"], id="list-with-string"),
+        pytest.param([{"callback_name": "langfuse", "callback_vars": {}}, None], id="list-with-null"),
+    ],
+)
+def test_key_logging_entries_fails_on_non_object_logging_like_the_request_path_always_has(
+    logging_value: object,
+) -> None:
+    with pytest.raises(TypeError):
+        key_logging_entries({"logging": logging_value})
+
+
+@pytest.mark.parametrize(
+    ("logging_value", "expected"),
+    [
+        pytest.param("", (), id="empty-string"),
+        pytest.param({}, (), id="empty-object"),
+        pytest.param([], (), id="empty-list"),
+        pytest.param([{"bad": 1}], ({"bad": 1},), id="object-with-unknown-fields"),
+    ],
+)
+def test_key_logging_entries_passes_empty_and_object_entries_through(
+    logging_value: object, expected: tuple[dict[str, object], ...]
+) -> None:
+    assert key_logging_entries({"logging": logging_value}) == expected

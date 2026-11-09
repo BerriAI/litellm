@@ -750,11 +750,14 @@ def key_logging_entries(metadata: object) -> tuple[Mapping[str, object], ...] | 
     entries: Final = decrypted_logging_entries(metadata)
     if entries is None:
         return None
-    return tuple(
-        resolved
-        for entry in object_sequence(entries) or ()
-        if (resolved := _with_credential(string_keyed(entry))) is not None
-    )
+    return tuple(resolved for entry in _logging_objects(entries) if (resolved := _with_credential(entry)) is not None)
+
+
+def _logging_objects(entries: object) -> tuple[Mapping[str, object], ...]:
+    items: Final = () if entries in ("", {}) else object_sequence(entries)
+    if items is None or not all(isinstance(item, Mapping) for item in items):
+        raise TypeError(f"key metadata.logging must be a list of objects, got {type(entries).__name__}")
+    return tuple(string_keyed(item) for item in items)
 
 
 def _with_credential(entry: Mapping[str, object]) -> Mapping[str, object] | None:
