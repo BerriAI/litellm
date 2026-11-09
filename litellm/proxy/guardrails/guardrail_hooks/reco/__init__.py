@@ -28,9 +28,12 @@ def _optional_params_mapping(optional_params: object) -> Mapping[str, object]:
 
 def _first_configured(field_name: str, sources: tuple[Mapping[str, object], ...]) -> object:
     value: Final = next((source[field_name] for source in sources if source.get(field_name) is not None), None)
-    if isinstance(value, str) and value.startswith("os.environ/"):
-        return get_secret_str(value)
-    return value
+    if not (isinstance(value, str) and value.startswith("os.environ/")):
+        return value
+    resolved: Final = get_secret_str(value)
+    if resolved is None:
+        raise ValueError(f"{field_name} references {value}, which is not set")
+    return resolved
 
 
 def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail") -> RecoGuardrail:
@@ -52,6 +55,7 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
         guardrail_name=guardrail["guardrail_name"],
         reco_tenant_id=reco_params.reco_tenant_id,
         api_base=reco_params.api_base,
+        api_key=reco_params.api_key,
         unreachable_fallback=reco_params.unreachable_fallback,
         fail_on_error=reco_params.fail_on_error,
         event_hook=litellm_params.mode,
