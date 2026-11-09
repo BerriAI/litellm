@@ -1024,39 +1024,7 @@ class TestSetResponseHeadersLiftsDecision:
 
 
 class TestRouterQualityDeploymentMethods:
-    """Tests for Router._is_quality_router_deployment and Router.init_quality_router_deployment."""
-
-    def test_is_quality_router_deployment_true(self):
-        """_is_quality_router_deployment returns True for quality router models."""
-        from litellm.router import Router
-        from litellm.types.router import LiteLLM_Params
-
-        router = Router(
-            model_list=[
-                {
-                    "model_name": "gpt-4o-mini",
-                    "litellm_params": {"model": "openai/gpt-4o-mini"},
-                }
-            ]
-        )
-        params = LiteLLM_Params(model="auto_router/quality_router/my-router")
-        assert router._is_quality_router_deployment(params) is True
-
-    def test_is_quality_router_deployment_false(self):
-        """_is_quality_router_deployment returns False for regular models."""
-        from litellm.router import Router
-        from litellm.types.router import LiteLLM_Params
-
-        router = Router(
-            model_list=[
-                {
-                    "model_name": "gpt-4o-mini",
-                    "litellm_params": {"model": "openai/gpt-4o-mini"},
-                }
-            ]
-        )
-        params = LiteLLM_Params(model="openai/gpt-4o-mini")
-        assert router._is_quality_router_deployment(params) is False
+    """Tests for Router.init_quality_router_deployment."""
 
     def test_init_quality_router_deployment(self):
         """init_quality_router_deployment registers a QualityRouter."""
