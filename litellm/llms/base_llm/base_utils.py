@@ -41,6 +41,7 @@ from litellm.types.utils import (
 
 class BaseTokenCounter(ABC):
     includes_framing: ClassVar[bool] = True
+    estimates_on_any_failure: ClassVar[bool] = False
 
     @abstractmethod
     async def count_tokens(

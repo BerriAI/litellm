@@ -10,7 +10,7 @@ from litellm.anthropic_interface.exceptions.exception_mapping_utils import Anthr
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.proxy._types import ProxyException
 from litellm.types.token_count import TokenCountProvider, TokenCountSourceFields, TokenCountTokenizer
-from litellm.types.utils import TokenCountResponse
+from litellm.types.utils import LlmProviders, TokenCountResponse
 
 CANNOT_COUNT_MODEL_STATUSES: Final = frozenset({400, 404})
 REGION_DENIED_STATUSES: Final = frozenset({401, 403})
@@ -154,7 +154,8 @@ def _count_model(value: Mapping[str, object], configured: bool) -> TokenCountMod
         else TokenCountModel(
             model=model,
             region=_non_blank(value.get("region")),
-            litellm_provider=_count_provider(value.get("litellm_provider")),
+            litellm_provider=_count_provider(value.get("litellm_provider"))
+            or ("xai" if model.startswith(f"{LlmProviders.XAI.value}/") else None),
             configured=configured,
         )
     )

@@ -15214,6 +15214,13 @@ def _count_model_counter(settings: TokenCountSettings) -> BaseTokenCounter | Non
 def _counter_with_known_framing(
     counter: BaseTokenCounter | None, settings: TokenCountSettings, model: str
 ) -> BaseTokenCounter | None:
+    if counter is None and settings.count_model is not None and settings.count_model.configured:
+        verbose_proxy_logger.warning(
+            "token_count_model is set for %s, but no provider counts tokens for %s, so it counts with the local "
+            "estimate. Set litellm_provider in token_count_model to the provider that serves it",
+            model,
+            settings.count_model.model,
+        )
     if counter is None or counter.includes_framing or settings.framing is not None:
         return counter
     if settings.count_model is not None and settings.count_model.configured:
@@ -15430,6 +15437,7 @@ async def _provider_token_count(
     local_estimate_allowed: bool,
     added_framing: int = 0,
     forwarded_edits: bool = False,
+    estimates_on_any_failure: bool = False,
 ) -> Union["TokenCountResponse", ProviderCountFailure, None]:
     """Count with the provider, using the token_count_model in its region when one is set.
 
@@ -15462,7 +15470,9 @@ async def _provider_token_count(
     )
     failure: Final = counted if region_hint is None else counted.with_hint(region_hint)
     framing_can_stand_in: Final = (count_model is None or not count_model.configured) and (
-        failure.cannot_count_model or (pinned_count_model is not None and failure.denied_in_region)
+        failure.cannot_count_model
+        or (estimates_on_any_failure and not failure.rejected_before_provider_call)
+        or (pinned_count_model is not None and failure.denied_in_region)
     )
     if not (framing_can_stand_in and settings.frames_counts and local_estimate_allowed):
         raise failure.to_proxy_exception()
@@ -16257,6 +16267,7 @@ async def _count_request_tokens(
                 else settings.hidden_prompt_tokens(carries_tools=provider_carries_tools, responses_api=native_responses)
             ),
             forwarded_edits=context_edits is not None and edited_request is None,
+            estimates_on_any_failure=provider_counter.estimates_on_any_failure,
         )
     )
     if isinstance(ladder, TokenCountResponse):

@@ -1,11 +1,14 @@
 import json
+import logging
 import time
-from collections.abc import Callable, Mapping
+import tracemalloc
+from collections.abc import AsyncIterator, Callable, Mapping
 from typing import Final
 
 import httpx
 import pytest
 
+from litellm._logging import verbose_logger
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.xai.count_tokens.token_counter import XAITokenCounter
 from litellm.types.utils import TokenCountResponse
@@ -214,6 +217,9 @@ async def test_an_xai_deployment_without_a_key_falls_back_to_the_local_estimate(
     assert xai.requests == ()
 
 
+_NO_TOKEN_IDS: Final = "xAI tokenize-text answered without token ids"
+
+
 def _refuse(request: httpx.Request) -> httpx.Response:
     raise httpx.ReadError("connection reset", request=request)
 
@@ -222,24 +228,33 @@ def _refuse(request: httpx.Request) -> httpx.Response:
     ("reply", "status_code", "message"),
     [
         (lambda request: httpx.Response(429, text="slow down", request=request), 429, "slow down"),
-        (lambda request: httpx.Response(503, request=request), 503, "answered 503"),
-        (lambda request: httpx.Response(200, json={"tokens": []}, request=request), 502, "without token ids"),
-        (lambda request: httpx.Response(200, text="<html>", request=request), 502, "without token ids"),
-        (_refuse, 502, "ReadError"),
+        (lambda request: httpx.Response(503, request=request), 503, "xAI tokenize-text answered 503"),
+        (lambda request: httpx.Response(200, json={"tokens": []}, request=request), 502, _NO_TOKEN_IDS),
+        (lambda request: httpx.Response(200, text="<html>", request=request), 502, _NO_TOKEN_IDS),
+        (_refuse, 502, "xAI tokenize-text failed: ReadError"),
     ],
     ids=["provider_error", "empty_error_body", "unexpected_shape", "not_json", "unreachable"],
 )
 @pytest.mark.asyncio
-async def test_a_failed_count_answers_an_error_with_its_status(
-    reply: Callable[[httpx.Request], httpx.Response], status_code: int, message: str
+async def test_a_failed_count_answers_and_logs_an_error_with_its_status(
+    reply: Callable[[httpx.Request], httpx.Response],
+    status_code: int,
+    message: str,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    result: Final = await _counter(_XAI(reply)).count_tokens(
-        model_to_use="xai/grok-4.7", messages=HI, contents=None, deployment=XAI_DEPLOYMENT
-    )
+    verbose_logger.addHandler(caplog.handler)
+    try:
+        with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+            result: Final = await _counter(_XAI(reply)).count_tokens(
+                model_to_use="xai/grok-4.7", messages=HI, contents=None, deployment=XAI_DEPLOYMENT
+            )
+    finally:
+        verbose_logger.removeHandler(caplog.handler)
 
     assert result is not None
     assert (result.error, result.status_code, result.total_tokens) == (True, status_code, 0)
-    assert result.error_message is not None and message in result.error_message
+    assert result.error_message == message
+    assert f"status={status_code}, message={message}" in caplog.text
 
 
 @pytest.mark.asyncio
@@ -281,6 +296,52 @@ async def test_a_large_count_reply_is_counted_without_holding_the_event_loop() -
 
     assert result is not None and result.total_tokens == token_count
     assert elapsed < 0.3
+
+
+_STREAMED_TOKEN: Final = b'{"token_id":1,"string_token":" word","token_bytes":[32,119,111,114,100]},'
+
+
+async def _chunks(chunk: bytes, times: int) -> AsyncIterator[bytes]:
+    for _ in range(times):
+        yield chunk
+
+
+@pytest.mark.parametrize("chunk_size", [1, 3, 7, 64])
+@pytest.mark.asyncio
+async def test_a_reply_streamed_in_chunks_that_split_the_keys_counts_each_token_once(chunk_size: int) -> None:
+    reply: Final = _STREAMED_TOKEN * 9
+    pieces: Final = tuple(reply[i : i + chunk_size] for i in range(0, len(reply), chunk_size))
+
+    async def stream() -> AsyncIterator[bytes]:
+        for piece in pieces:
+            yield piece
+
+    xai: Final = _XAI(lambda request: httpx.Response(200, content=stream(), request=request))
+
+    result: Final = await _counter(xai).count_tokens(
+        model_to_use="xai/grok-4.7", messages=HI, contents=None, deployment=XAI_DEPLOYMENT
+    )
+
+    assert result is not None and (result.error, result.total_tokens) == (False, 9)
+
+
+@pytest.mark.asyncio
+async def test_a_reply_many_times_the_prompt_size_is_counted_without_holding_it_in_memory() -> None:
+    chunk: Final = _STREAMED_TOKEN * 900
+    chunk_count: Final = 800
+    xai: Final = _XAI(lambda request: httpx.Response(200, content=_chunks(chunk, chunk_count), request=request))
+
+    tracemalloc.start()
+    try:
+        result: Final = await _counter(xai).count_tokens(
+            model_to_use="xai/grok-4.7", messages=HI, contents=None, deployment=XAI_DEPLOYMENT
+        )
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    assert result is not None and result.total_tokens == 900 * chunk_count
+    assert peak < len(chunk) * chunk_count / 10
 
 
 @pytest.mark.asyncio

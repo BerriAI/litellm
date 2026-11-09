@@ -1,6 +1,6 @@
 import copy
 import json
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import AsyncIterator, Iterable, Mapping, Sequence
 from itertools import groupby
 from types import MappingProxyType
 from typing import ClassVar, Final, Literal
@@ -149,8 +149,21 @@ def _is_xai_deployment(litellm_params: Mapping[str, object]) -> bool:
     return provider == LlmProviders.XAI.value
 
 
-def _count_token_ids_without_parsing(reply: bytes) -> int:
-    return reply.count(_TOKEN_ID_KEY)
+async def _count_token_ids_without_parsing(response: httpx.Response) -> int:
+    try:
+        return await _streamed_key_count(response.aiter_bytes())
+    finally:
+        await response.aclose()
+
+
+async def _streamed_key_count(chunks: AsyncIterator[bytes]) -> int:
+    overlap: Final = len(_TOKEN_ID_KEY) - 1
+    total = 0  # rebind-ok: running count over a reply too large to hold whole
+    carry = b""  # rebind-ok: the last chunk's tail, where a key split across chunks starts
+    async for chunk in chunks:
+        total += (carry + chunk).count(_TOKEN_ID_KEY)
+        carry = (carry + chunk)[-overlap:]
+    return total
 
 
 def _non_blank(value: object) -> str | None:
@@ -159,6 +172,7 @@ def _non_blank(value: object) -> str | None:
 
 class XAITokenCounter(BaseTokenCounter):
     includes_framing: ClassVar[bool] = False
+    estimates_on_any_failure: ClassVar[bool] = True
 
     def __init__(self, client: AsyncHTTPHandler | None = None) -> None:
         self._client: Final = client
@@ -221,13 +235,16 @@ class XAITokenCounter(BaseTokenCounter):
                 headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
                 json={"text": text, "model": model},
                 timeout=_TOKENIZE_TIMEOUT_SECONDS,
+                stream=True,
             )
+            token_count: Final = await _count_token_ids_without_parsing(response)
         except MaskedHTTPStatusError as e:
             status_code: Final = e.response.status_code
-            return self._error(request_model, model, status_code, e.text or f"xAI tokenize-text answered {status_code}")
+            return self._error(
+                request_model, model, status_code, e.response.text or f"xAI tokenize-text answered {status_code}"
+            )
         except (httpx.RequestError, litellm.Timeout) as e:
             return self._error(request_model, model, 502, f"xAI tokenize-text failed: {type(e).__name__}")
-        token_count: Final = _count_token_ids_without_parsing(response.content)
         if token_count == 0:
             return self._error(request_model, model, 502, "xAI tokenize-text answered without token ids")
         return TokenCountResponse(
