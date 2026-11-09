@@ -182,7 +182,6 @@ from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # leg
     safe_get_request_query_params,
     safe_set_request_parsed_body,
 )
-from litellm.proxy.common_utils.model_listing_utils import claude_code_requested_group
 from litellm.proxy.common_utils.realtime_utils import (  # noqa: F401  # legacy module exports
     _realtime_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     realtime_request_body,
@@ -302,10 +301,6 @@ def _get_model_from_request_context(
     )
 
 
-_CLAUDE_MODEL_ROUTES: Final = frozenset(
-    f"/{prefix}{endpoint}" for prefix in ("", "v1/") for endpoint in ("messages", "chat/completions", "responses")
-)
-_CLAUDE_MODEL_NORMALIZED: Final = "litellm.claude_model_normalized"
 _GENERAL_SETTINGS_ADAPTER: Final = TypeAdapter(dict[str, object])
 _PASS_THROUGH_HEADERS_ADAPTER: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(
     Mapping[str, object] | None
@@ -313,37 +308,14 @@ _PASS_THROUGH_HEADERS_ADAPTER: Final[TypeAdapter[Mapping[str, object] | None]] =
 
 
 async def _normalize_claude_model(
-    request_data: dict, valid_token: UserAPIKeyAuth, request: Request | None, route: str
+    request_data: dict[str, object],  # mutable-ok: normalization rewrites the request body for downstream readers
+    valid_token: UserAPIKeyAuth,
+    request: Request | None,
+    route: str,
 ) -> None:
-    from litellm.proxy.proxy_server import llm_router, prisma_client, proxy_config, proxy_logging_obj
+    from litellm.proxy.auth.claude_normalization_adapter import normalize_claude_model
 
-    if route not in _CLAUDE_MODEL_ROUTES or llm_router is None:
-        return
-    if request is not None and request.scope.get(_CLAUDE_MODEL_NORMALIZED) is True:
-        return
-    requested: Final = _get_model_from_request_context(request_data, route, request, llm_router, valid_token.team_id)
-    if not isinstance(requested, str) or requested != request_data.get("model"):
-        return
-    if not requested.startswith("claude-router-") and not requested.lower().endswith("[1m]"):
-        return
-    settings: Final = await proxy_config.get_hierarchical_router_settings(
-        user_api_key_dict=valid_token, prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj
-    )
-    aliases: Final = settings.get("model_group_alias") if isinstance(settings, Mapping) else None
-    source: Final = claude_code_requested_group(
-        requested, llm_router, valid_token.team_id, (valid_token.aliases, valid_token.team_model_aliases, aliases)
-    )
-    if request is not None:
-        request.scope[_CLAUDE_MODEL_NORMALIZED] = True
-    if source is None:
-        return
-    rewrite_request_model(request_data, request, source)
-
-
-def _is_codex_native_litellm_turn(route: str, model: object, llm_router: litellm.Router, team_id: str | None) -> bool:
-    from litellm.proxy.auth.codex_model_adapter import is_codex_native_litellm_turn
-
-    return is_codex_native_litellm_turn(route, model, llm_router, team_id)
+    await normalize_claude_model(request_data, valid_token, request, route)
 
 
 async def _resolve_router_settings_model_group_alias(
