@@ -190,6 +190,7 @@ _METADATA_KEYS: Final = frozenset(("litellm_metadata", "metadata"))
 _DECODED_JSON: Final = TypeAdapter(object)
 _KEPT_OUT_OF_LITELLM_PARAMS: Final = _METADATA_KEYS | frozenset(wire_names(ProxyRequestState))
 _PRICING_MODEL_OVERRIDE_PARAMS: Final = frozenset(("base_model",))
+_KEPT_IN_CONFIGURED_ROUTE_BODY: Final = frozenset(("id",))
 
 
 def _is_mergeable_client_metadata(key: str, value: object) -> bool:
@@ -689,8 +690,14 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
             team_id=user_api_key_dict.team_id,
         )
 
+        configured_route: Final = request_dispatched_to_pass_through_endpoint(request)
+        kept_in_body: Final = _KEPT_IN_CONFIGURED_ROUTE_BODY if configured_route else frozenset[str]()
         litellm_keys_in_body: Final = MappingProxyType(
-            {k: _parsed_body.pop(k) for k in types_utils.all_litellm_params if k in _parsed_body}
+            {
+                k: _parsed_body.pop(k)
+                for k in types_utils.all_litellm_params
+                if k in _parsed_body and k not in kept_in_body
+            }
         )
         kept_out_of_litellm_params: Final = (
             _KEPT_OUT_OF_LITELLM_PARAMS
@@ -745,7 +752,7 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         # charging a counter anyway would track spend that nothing can refuse, and
         # would attribute it to a budget the operator scoped to a LiteLLM model that
         # merely shares the name.
-        if not request_dispatched_to_pass_through_endpoint(request):
+        if not configured_route:
             _metadata["model_group"] = managed_model if isinstance(managed_model, str) else None
             _metadata["user_api_key_model_max_budget"] = user_api_key_dict.model_max_budget
             _metadata["user_api_key_team_model_max_budget"] = user_api_key_dict.team_model_max_budget
