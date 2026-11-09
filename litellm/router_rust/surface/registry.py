@@ -584,6 +584,20 @@ def _index_key(value: object) -> str | None:
     return value if isinstance(value, str) else None
 
 
+GroupMembers: TypeAlias = tuple[tuple[object, object], ...]
+
+
+def _members_of(model_list: Sequence[Mapping[str, object]] | None) -> GroupMembers | None:
+    if model_list is None:
+        return None
+    return tuple((_field(entry, "model_info", "id"), _field(entry, "litellm_params", "model")) for entry in model_list)
+
+
+def _field(entry: Mapping[str, object], section: str, key: str) -> object:
+    held: Final = entry.get(section)
+    return held.get(key) if isinstance(held, Mapping) else None
+
+
 def _round_trips(value: object) -> bool:
     """Whether JSON reads ``value`` back equal to itself."""
     try:
@@ -674,6 +688,8 @@ class HostRegistry(HostModelInfo):
         # `zero_cost()`: the per-deployment zero-cost lookup the auth checks fill, emptied with the
         # group info caches.
         self._zero_cost_cache: dict[str, bool] = {}  # mutable-ok: the auth checks write into it
+        self._group_members_cache: dict[str, tuple[object, GroupMembers | None]] = {}  # mutable-ok: by model group
+        self._group_counters_cache = {}
         # The routing cache usage reads come from; RustCore sets it to the one its Rust core writes.
         self._core_cache: DualCache = DualCache()
         # The tpm/rpm store usage reads come from; RustCore sets it to the one its Rust core writes.
@@ -826,6 +842,7 @@ class HostRegistry(HostModelInfo):
         self._core_cached_deployment_model_info.cache_clear()  # pyright: ignore[reportFunctionMemberAccess]  # an lru_cache
         self.cached_deployment_tracks_usage.cache_clear()  # pyright: ignore[reportFunctionMemberAccess]  # an lru_cache
         self._zero_cost_cache.clear()
+        self._group_members_cache.clear()
         self._routing_group_rows = None
 
     def set_routing_groups(self, groups: Sequence[RoutingGroup]) -> None:
@@ -1757,6 +1774,23 @@ class HostRegistry(HostModelInfo):
             return cast(Sequence[object], handle.named_positions(member) or ())  # cast-ok: positions, or junk
 
         return sum(len(held(member)) for member in group.models) > 1
+
+    def _group_members(self, model_group: str) -> GroupMembers | None:
+        """``(id, litellm model)`` of each entry ``_core_get_model_list(model_name=model_group)`` lists,
+        ``None`` where it lists none. Listed again only after the registry moves: an alias or a
+        wildcard name reads state the registry version does not cover, so those list every time."""
+        handle: Final = self._live_handle()
+        if handle is None or _index_key(model_group) is None or model_group in (self._core_model_group_alias or {}):
+            return _members_of(self._core_get_model_list(model_name=model_group))
+        stamp: Final = (handle, handle.registry_version(), self._registry_version)
+        cached: Final = self._group_members_cache.get(model_group)
+        if cached is not None and cached[0] == stamp:
+            return cached[1]
+        members: Final = _members_of(self._core_get_model_list(model_name=model_group))
+        if len(self._group_members_cache) >= DEFAULT_MAX_LRU_CACHE_SIZE:
+            self._group_members_cache.clear()
+        self._group_members_cache[model_group] = (stamp, members)
+        return members
 
     def _core_get_model_list_from_model_alias(
         self, model_name: str | None = None

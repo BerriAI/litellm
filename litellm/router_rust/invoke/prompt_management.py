@@ -21,10 +21,10 @@ _PROMPT_MANAGEMENT_PARAMS: Final = frozenset(
 def is_prompt_management_model(core: EndpointCore, model: str) -> bool:
     """`_is_prompt_management_model`: one deployment, whose model's provider prefix is a known
     custom-logger-compatible callback."""
-    model_list: Final = core.group_deployments(model_name=model)
-    if model_list is None or len(model_list) != 1:
+    members: Final = core.group_members(model)
+    if members is None or len(members) != 1:
         return False
-    litellm_model: Final = as_dict(model_list[0].get("litellm_params")).get("model")
+    litellm_model: Final = members[0][1]
     if not isinstance(litellm_model, str) or "/" not in litellm_model:
         return False
     known: Final = core.host.dynamic().known_custom_logger_compatible_callbacks
