@@ -210,6 +210,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self._upstream_exhausted: bool = False
         self._response_id_primed: bool = False
         self._pending_tool_events: list[BaseLiteLLMOpenAIResponseObject] = []
+        self._streamed_output_items_by_index: dict[int, BaseLiteLLMOpenAIResponseObject] = {}
         self._tool_calls_held_behind_text: tuple[object, ...] = ()
         self._tool_output_index_by_call_id: dict[str, int] = {}
         self._tool_args_by_call_id: dict[str, str] = {}
@@ -1230,7 +1231,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                             "id": self._cached_reasoning_item_id,
                             "type": "reasoning",
                             "status": "in_progress",
-                            "summary": None,
+                            "summary": [],
                         }
                     ),
                 )
@@ -1284,6 +1285,8 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self._reasoning_active = False
 
     def _stamp_sequence_number(self, event: BaseLiteLLMOpenAIResponseObject) -> BaseLiteLLMOpenAIResponseObject:
+        if isinstance(event, OutputItemDoneEvent):
+            self._streamed_output_items_by_index[event.output_index] = event.item
         stamped: Final = event.model_copy(update={"sequence_number": self._sequence_number})
         self._sequence_number += 1
         return stamped
@@ -1555,7 +1558,16 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         )
         compaction_aligned: Final = _output_items_with_id(reasoning_aligned, "compaction", self._compaction_item_id)
         streamed_items: Final = filterfalse(self._is_unstreamed_empty_message, compaction_aligned)
-        return tuple(sorted(streamed_items, key=self._streamed_output_position))
+        ordered_items: Final = tuple(sorted(streamed_items, key=self._streamed_output_position))
+        if not self._streamed_output_items_by_index:
+            return ordered_items
+        aligned: Final[list[object]] = list(ordered_items)
+        for output_index, done_item in self._streamed_output_items_by_index.items():
+            if output_index < len(aligned):
+                aligned[output_index] = done_item
+            elif output_index == len(aligned):
+                aligned.append(done_item)
+        return tuple(aligned)
 
     def _is_unstreamed_empty_message(self, item: object) -> bool:
         if getattr(item, "type", None) != "message" or self._message_output_index is not None:
