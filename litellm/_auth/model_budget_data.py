@@ -26,6 +26,7 @@ class ModelBudgetResolveFacts:
     key_entries: tuple[ModelBudgetEntry, ...] = ()
     team: bool = False
     access_groups: tuple[str, ...] | None = None
+    excluded_entries: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,6 +70,13 @@ _RESOLUTION: Final = TypeAdapter(ModelBudgetResolution)
 _QUERY: Final = TypeAdapter(ModelBudgetQueryFacts)
 _SNAPSHOT: Final = TypeAdapter(ModelBudgetSnapshot)
 _DECISION: Final = TypeAdapter(ModelBudgetDecision)
+_TEAM_FACTS: Final = TypeAdapter(tuple[ModelBudgetResolveFacts, ...])
+_NAMES: Final = TypeAdapter(tuple[str, ...])
+
+
+@native_boundary
+def team_exclusions(facts: tuple[ModelBudgetResolveFacts, ...]) -> tuple[str, ...]:
+    return _NAMES.validate_python(_native.request_auth_model_budget_team_exclusions(_TEAM_FACTS.dump_python(facts)))  # pyright: ignore[reportAny]  # Pydantic serializes typed native facts
 
 
 @native_boundary

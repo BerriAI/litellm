@@ -22,6 +22,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.utils import ProxyLogging
+from litellm.redis.stores.spend_counters import end_user_counter, key_counter, team_counter, user_counter
 
 _METADATA: Final = TypeAdapter(Mapping[str, object])
 AlertKind: TypeAlias = Literal[
@@ -136,7 +137,7 @@ async def team_max_budget_check(
         return
     facts, result = await read_budget(
         BudgetFacts("Team", team_object.max_budget, token_present=valid_token is not None),
-        CounterRead(f"spend:team:{team_object.team_id}", team_object.spend or 0.0, team_object.max_budget),
+        CounterRead(team_counter(team_object.team_id), team_object.spend or 0.0, team_object.max_budget),
     )
     if result.alert is not None and valid_token is not None:
         emit_alert(
@@ -175,7 +176,7 @@ async def virtual_key_max_budget_check(
             tpm_limit=valid_token.tpm_limit,
             rpm_limit=valid_token.rpm_limit,
         ),
-        CounterRead(f"spend:key:{valid_token.token}", valid_token.spend or 0.0, valid_token.max_budget),
+        CounterRead(key_counter(str(valid_token.token)), valid_token.spend or 0.0, valid_token.max_budget),
     )
     if result.alert is not None and facts.spend is not None:
         send_token_budget_alert(valid_token, facts.spend, proxy_logging_obj, user_obj)
@@ -231,7 +232,7 @@ async def user_max_budget_check(
             team_key=team_object is not None and team_object.team_id is not None,  # pyright: ignore[reportUnnecessaryComparison]  # retain the legacy None guard for constructed cache rows
             apply_user_budget_to_team_keys=general_settings.get("apply_user_budget_to_team_keys") is True,
         ),
-        CounterRead(f"spend:user:{user_object.user_id}", user_object.spend or 0.0, user_object.max_budget),
+        CounterRead(user_counter(user_object.user_id), user_object.spend or 0.0, user_object.max_budget),
     )
     if result.alert is not None:
         emit_alert(
@@ -262,7 +263,7 @@ async def check_end_user_budget(end_user_obj: LiteLLM_EndUserTable, route: str) 
     )
     facts, result = await read_budget(
         BudgetFacts("EndUser", limit, info_route=RouteChecks.is_info_route(route)),
-        CounterRead(f"spend:end_user:{end_user_obj.user_id}", end_user_obj.spend or 0.0, limit, authoritative=True),
+        CounterRead(end_user_counter(end_user_obj.user_id), end_user_obj.spend or 0.0, limit, authoritative=True),
     )
     if result.denied:
         raise_budget(

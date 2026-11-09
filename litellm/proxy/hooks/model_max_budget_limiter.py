@@ -1047,28 +1047,6 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         exceeded_message: str,
         key_model_max_budget: Mapping[str, object] | None = None,
     ) -> bool:
-        for candidate in expand_model_latest_alias(model):
-            await self._is_single_entity_within_model_budget(
-                entity_type=entity_type,
-                entity_id=entity_id,
-                team_id=team_id,
-                model_max_budget=model_max_budget,
-                model=candidate,
-                exceeded_message=exceeded_message,
-                key_model_max_budget=key_model_max_budget,
-            )
-        return True
-
-    async def _is_single_entity_within_model_budget(
-        self,
-        entity_type: Litellm_EntityType,
-        entity_id: str | None,
-        team_id: str | None,
-        model_max_budget: Mapping[str, object] | None,
-        model: str,
-        exceeded_message: str,
-        key_model_max_budget: Mapping[str, object] | None = None,
-    ) -> bool:
         entities: Final[Mapping[Litellm_EntityType, ModelBudgetEntity]] = {
             Litellm_EntityType.KEY: "Key",
             Litellm_EntityType.USER: "User",

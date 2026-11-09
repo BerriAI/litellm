@@ -55,6 +55,27 @@ def entry(name: str, limit: float | None = 1, duration: str | None = "1h") -> Mo
     return ModelBudgetEntry(name, limit, duration, 3600 if duration is not None else None)
 
 
+@pytest.mark.parametrize("limit", (None, -1.0, 0.0, 1.0, inf, nan))
+@pytest.mark.parametrize("overrides", (("alias",), ("target",), ("alias", "target")))
+def test_team_exact_entries_are_removed_across_all_alias_names(limit: float | None, overrides: tuple[str, ...]) -> None:
+    key: Final = tuple(entry(name, limit) for name in overrides)
+    facts: Final = tuple(ModelBudgetResolveFacts(model, model, "", (), key, True) for model in ("alias", "target"))
+    excluded: Final = native.team_exclusions(facts)
+    assert excluded == (tuple(sorted(overrides)) if limit is not None and limit >= 0 else ())
+    resolution: Final = native.resolve(
+        ModelBudgetResolveFacts(
+            "alias",
+            "alias",
+            "",
+            (entry("alias"), entry("target"), entry("*")),
+            access_groups=("alias", "target"),
+            excluded_entries=excluded,
+        )
+    )
+    expected: Final = "alias" if "alias" not in excluded else "target" if "target" not in excluded else "*"
+    assert resolution.entry is not None and resolution.entry.name == expected
+
+
 @pytest.mark.parametrize(
     ("entries", "groups", "expected"),
     (

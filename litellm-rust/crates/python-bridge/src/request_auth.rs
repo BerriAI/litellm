@@ -201,6 +201,42 @@ pub(crate) fn request_auth_model_budget_resolve(
 }
 
 #[pyfunction]
+pub(crate) fn request_auth_model_budget_aliases(
+    py: Python<'_>,
+    facts: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    let facts: core::model_budget_aliases::Facts = from_py(facts)?;
+    to_py(
+        py,
+        &py.detach(move || core::model_budget_aliases::decide(&facts)),
+    )
+}
+
+#[pyfunction]
+pub(crate) fn request_auth_model_budget_scope(
+    py: Python<'_>,
+    facts: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    let facts: core::model_budget_aliases::ScopeFacts = from_py(facts)?;
+    to_py(
+        py,
+        &py.detach(move || core::model_budget_aliases::scope(&facts)),
+    )
+}
+
+#[pyfunction]
+pub(crate) fn request_auth_model_budget_team_exclusions(
+    py: Python<'_>,
+    facts: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    let facts: Vec<core::model_budget_data::ResolveFacts> = from_py(facts)?;
+    to_py(
+        py,
+        &py.detach(move || core::model_budget_data::team_exclusions(&facts)),
+    )
+}
+
+#[pyfunction]
 pub(crate) fn request_auth_model_budget_query(
     py: Python<'_>,
     facts: &Bound<'_, PyAny>,
