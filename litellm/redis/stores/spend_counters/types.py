@@ -8,6 +8,7 @@ SPEND_COUNTERS_TARGET: Final = "spend_counters"
 SPEND_COUNTER_PREFIX: Final = "spend:"
 END_USER_COUNTER_PREFIX: Final = "spend:end_user:"
 TEAM_MEMBER_COUNTER_PREFIX: Final = "spend:team_member:"
+COMMITTED_COUNTER_PREFIX: Final = "spend:committed:"
 
 SpendIncrement: TypeAlias = tuple[str, float]
 SpendReading: TypeAlias = tuple[float | None, bool]
@@ -60,6 +61,11 @@ def model_access_group_counter(access_group: str) -> str:
 
 def shadow_eval_counter(job_id: str) -> str:
     return f"spend:shadow_eval:{job_id}"
+
+
+def committed_counter(counter_key: str) -> str:
+    """The charges-only twin of a key, team, user, org or end user lifetime counter."""
+    return f"{COMMITTED_COUNTER_PREFIX}{counter_key.removeprefix(SPEND_COUNTER_PREFIX)}"
 
 
 def is_unavailable(error: BaseException) -> bool:

@@ -427,6 +427,7 @@ class LiteLLMRoutes(enum.Enum):
         "/bespoke",
         "/openrouter",
         "/milvus",
+        "/opensearch",
         "/gigachat",
         "/watsonx",
         "/nvidia_nim",
