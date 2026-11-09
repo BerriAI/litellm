@@ -18,6 +18,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from functools import partial
 from pathlib import Path, PurePath
+from types import MappingProxyType
 from typing import Final, SupportsIndex, cast
 from unittest import mock
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
@@ -1028,6 +1029,8 @@ _COST_MAP_ROW_SCHEMA: Final = {
             "audio_transcription_config": {"type": "string"},
             "deprecation_date": {"type": "string"},
             "successor_model": {"type": "string"},
+            "aliases": {"type": "array", "items": {"type": "string"}},
+            "alias_of": {"type": "string"},
             "deprecation_source": {"type": "string"},
             "input_cost_per_audio_per_second": {"type": "number"},
             "input_cost_per_audio_per_second_above_128k_tokens": {"type": "number"},
@@ -3871,6 +3874,124 @@ class TestGetOptionalParamsSpeedGate:
         assert result.get("speed") == "fast"
 
 
+class TestGetOptionalParamsOutputConfigGate:
+    """Regression for the issue 24549 follow-up (SLP-2948): Anthropic's ``output_config`` is not a named
+    OpenAI param, so it rode the provider-specific pass-through into ``extra_body`` and ``drop_params`` never
+    saw it."""
+
+    UNREAD_LEGS: Final = (
+        ("openai", "gpt-5.6"),
+        ("azure", "gpt-5.6"),
+        ("xiaomi_mimo", "mimo-v2.6-pro"),
+        ("hosted_vllm", "my-model"),
+        ("gemini", "gemini-3-pro-preview"),
+        ("bedrock", "us.amazon.nova-pro-v1:0"),
+    )
+    CLAUDE_LEGS: Final = (
+        ("anthropic", "claude-opus-4-8"),
+        ("vertex_ai", "claude-opus-4-8"),
+        ("azure_ai", "claude-opus-4-8"),
+        ("bedrock", "converse/anthropic.claude-opus-4-8-v1:0"),
+        ("bedrock", "invoke/anthropic.claude-opus-4-8-v1:0"),
+    )
+    OUTPUT_CONFIG: Final = MappingProxyType({"effort": "medium"})
+
+    @staticmethod
+    def _output_config_anywhere(optional_params: Mapping[str, object]) -> bool:
+        extra_body: Final = optional_params.get("extra_body")
+        return "output_config" in optional_params or (isinstance(extra_body, dict) and "output_config" in extra_body)
+
+    @pytest.mark.parametrize("global_drop_params", [True, False])
+    @pytest.mark.parametrize(("custom_llm_provider", "model"), UNREAD_LEGS)
+    def test_drop_params_strips_output_config_on_providers_that_do_not_read_it(
+        self, monkeypatch: pytest.MonkeyPatch, custom_llm_provider: str, model: str, global_drop_params: bool
+    ) -> None:
+        monkeypatch.setattr(litellm, "drop_params", global_drop_params)
+        result: Final = litellm.get_optional_params(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            output_config=dict(self.OUTPUT_CONFIG),
+            drop_params=not global_drop_params,
+        )
+        assert not self._output_config_anywhere(result), result
+
+    def test_drop_params_keeps_the_mapped_reasoning_effort_beside_the_dropped_output_config(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(litellm, "drop_params", False)
+        result: Final = litellm.get_optional_params(
+            model="gpt-5.6",
+            custom_llm_provider="openai",
+            output_config=dict(self.OUTPUT_CONFIG),
+            reasoning_effort="low",
+            drop_params=True,
+        )
+        assert result.get("reasoning_effort") == "low"
+        assert not self._output_config_anywhere(result), result
+
+    @pytest.mark.parametrize(("custom_llm_provider", "model"), [("openai", "gpt-5.6"), ("hosted_vllm", "my-model")])
+    def test_output_config_is_forwarded_untouched_without_drop_params(
+        self, monkeypatch: pytest.MonkeyPatch, custom_llm_provider: str, model: str
+    ) -> None:
+        monkeypatch.setattr(litellm, "drop_params", False)
+        result: Final = litellm.get_optional_params(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            output_config=dict(self.OUTPUT_CONFIG),
+            drop_params=False,
+        )
+        assert self._output_config_anywhere(result), result
+
+    @pytest.mark.parametrize(("custom_llm_provider", "model"), CLAUDE_LEGS)
+    def test_drop_params_keeps_output_config_for_claude_transformations(
+        self, monkeypatch: pytest.MonkeyPatch, custom_llm_provider: str, model: str
+    ) -> None:
+        monkeypatch.setattr(litellm, "drop_params", False)
+        result: Final = litellm.get_optional_params(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            output_config=dict(self.OUTPUT_CONFIG),
+            drop_params=True,
+        )
+        assert self._output_config_anywhere(result), result
+
+    def test_drop_params_keeps_output_config_for_a_downstream_litellm_proxy(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(litellm, "drop_params", False)
+        result: Final = litellm.get_optional_params(
+            model="claude-opus-4-8",
+            custom_llm_provider="litellm_proxy",
+            output_config=dict(self.OUTPUT_CONFIG),
+            drop_params=True,
+        )
+        assert self._output_config_anywhere(result), result
+
+    def test_drop_params_keeps_output_config_for_a_deployment_that_declares_reasoning_effort_levels(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(litellm, "drop_params", False)
+        result: Final = litellm.get_optional_params(
+            model="my-kimi",
+            custom_llm_provider="hosted_vllm",
+            output_config=dict(self.OUTPUT_CONFIG),
+            model_info={"id": "kimi-vllm-1", "reasoning_effort_levels": ["low", "medium", "high"]},
+            drop_params=True,
+        )
+        assert self._output_config_anywhere(result), result
+
+    def test_allowed_openai_params_overrides_the_drop(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(litellm, "drop_params", False)
+        result: Final = litellm.get_optional_params(
+            model="gpt-5.6",
+            custom_llm_provider="openai",
+            output_config=dict(self.OUTPUT_CONFIG),
+            allowed_openai_params=["output_config"],
+            drop_params=True,
+        )
+        assert self._output_config_anywhere(result), result
+
+
 class TestGetOptionalParamsDeepSeek:
     """Tests that deepseek provider uses DeepSeekChatConfig for parameter mapping."""
 
@@ -6391,6 +6512,34 @@ async def test_wrapper_async_raises_original_exception_even_if_hook_callback_err
 
 
 @pytest.mark.asyncio
+async def test_wrapper_async_lets_a_cancellation_during_the_failure_hook_cancel_the_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    hook_entered: Final = asyncio.Event()
+
+    class HangingLogger(CustomLogger):
+        async def async_post_call_failure_deployment_hook(
+            self, request_data, exception, call_type, fallback_depth=None
+        ):
+            hook_entered.set()
+            await asyncio.Event().wait()
+
+    monkeypatch.setattr(litellm, "callbacks", [HangingLogger()])
+    call: Final = asyncio.create_task(
+        litellm.acompletion(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response=litellm.AuthenticationError(message="bad key", llm_provider="openai", model="gpt-4o-mini"),
+        )
+    )
+    await hook_entered.wait()
+    call.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await call
+
+
+@pytest.mark.asyncio
 async def test_router_fallback_chain_reports_increasing_fallback_depth(monkeypatch: pytest.MonkeyPatch) -> None:
     """Regression: a real Router fallback chain must report fallback_depth=None on the
     first, pre-fallback attempt and fallback_depth=1 on the first fallback hop - the
@@ -6775,41 +6924,6 @@ async def test_router_fallback_not_skipped_when_failure_hook_callback_touches_at
     )
 
     assert response.choices[0].message.content == "fallback worked"
-
-
-@pytest.mark.asyncio
-async def test_wrapper_async_preserves_original_exception_when_hook_await_is_cancelled(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Regression: if the caller's own timeout (e.g. asyncio.wait_for) fires while the
-    failure hook is still being awaited, the real deployment exception must still reach
-    the caller - not get replaced by CancelledError/TimeoutError from the hook's own
-    await getting cancelled."""
-
-    hook_entered: Final = asyncio.Event()
-    hook_released: Final = asyncio.Event()
-
-    class SlowLogger(CustomLogger):
-        async def async_post_call_failure_deployment_hook(
-            self, request_data, exception, call_type, fallback_depth=None
-        ):
-            hook_entered.set()
-            await hook_released.wait()
-
-    monkeypatch.setattr(litellm, "callbacks", [SlowLogger()])
-
-    call: Final = asyncio.create_task(
-        litellm.acompletion(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": "hi"}],
-            mock_response=litellm.AuthenticationError(message="bad key", llm_provider="openai", model="gpt-4o-mini"),
-        )
-    )
-    assert await asyncio.wait_for(hook_entered.wait(), timeout=5)
-    call.cancel()
-
-    with pytest.raises(litellm.AuthenticationError):
-        await call
 
 
 @pytest.mark.asyncio
@@ -8688,7 +8802,8 @@ def test_validate_tool_choice_cursor_format():
         {"type": "invalid"},
         {"type": "function"},
         {"name": "lookup_fruit"},
-        {"type": "file_search"},
+        {"type": "web_search_tool"},
+        {"type": ["web_search"]},
     ],
 )
 def test_validate_tool_choice_invalid_dict_is_a_400(tool_choice):
@@ -8700,6 +8815,24 @@ def test_validate_tool_choice_invalid_dict_is_a_400(tool_choice):
         validate_chat_completion_tool_choice(tool_choice, model=MODEL)
     assert exc_info.value.status_code == 400
     assert exc_info.value.model == MODEL
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+@pytest.mark.parametrize(
+    "tool_choice",
+    [
+        {"type": "web_search"},
+        {"type": "web_search_preview"},
+        {"type": "file_search"},
+        {"type": "tool_search"},
+        {"type": "code_interpreter"},
+        {"type": "mcp", "server_label": "docs", "name": "search"},
+    ],
+    ids=lambda choice: str(choice["type"]),
+)
+def test_validate_tool_choice_forcing_a_hosted_tool_passes_through(tool_choice: dict[str, object]):
+    """Forcing an OpenAI hosted tool is a Responses API choice the bridge sends as is, so validation leaves it alone."""
+    assert validate_chat_completion_tool_choice(tool_choice, model=MODEL) is tool_choice
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")

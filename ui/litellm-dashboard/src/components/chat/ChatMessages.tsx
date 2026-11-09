@@ -24,6 +24,32 @@ import { ChatAttachment, ChatImageAttachment, ChatMessage } from "./types";
 import ChatFileChip from "./ChatFileChip";
 import { isChatImageUrl } from "./imageHelpers";
 
+const THINKING_PULSE_CSS = `
+        @keyframes thinking-pulse {
+          0%, 100% { opacity: 0.4; }
+          50% { opacity: 1; }
+        }
+        .chat-thinking-text {
+          animation: thinking-pulse 1.4s ease-in-out infinite;
+        }
+      `;
+
+const TYPING_DOTS_CSS = `
+        @keyframes chat-typing-bounce {
+          0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
+          30% { transform: translateY(-4px); opacity: 1; }
+        }
+        .chat-dot {
+          width: 7px;
+          height: 7px;
+          border-radius: 50%;
+          background-color: var(--color-muted-foreground);
+          animation: chat-typing-bounce 1.2s ease-in-out infinite;
+        }
+        .chat-dot:nth-child(2) { animation-delay: 0.2s; }
+        .chat-dot:nth-child(3) { animation-delay: 0.4s; }
+      `;
+
 const REDACTED_KEY_PATTERNS = /token|key|secret|password|auth/i;
 
 function redactSensitiveValues(obj: Record<string, unknown>): Record<string, unknown> {
@@ -442,15 +468,7 @@ function ThinkingPlaceholder() {
   const { t } = useTranslation();
   return (
     <>
-      <style>{`
-        @keyframes thinking-pulse {
-          0%, 100% { opacity: 0.4; }
-          50% { opacity: 1; }
-        }
-        .chat-thinking-text {
-          animation: thinking-pulse 1.4s ease-in-out infinite;
-        }
-      `}</style>
+      <style>{THINKING_PULSE_CSS}</style>
       <div className="inline-flex items-center gap-1.5 px-2.5 mb-2 bg-muted/50 border rounded-lg text-xs text-muted-foreground">
         <span className="chat-thinking-text py-1">{t("chat.messages.thinking")}</span>
       </div>
@@ -461,21 +479,7 @@ function ThinkingPlaceholder() {
 function TypingDots() {
   return (
     <>
-      <style>{`
-        @keyframes chat-typing-bounce {
-          0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
-          30% { transform: translateY(-4px); opacity: 1; }
-        }
-        .chat-dot {
-          width: 7px;
-          height: 7px;
-          border-radius: 50%;
-          background-color: var(--color-muted-foreground);
-          animation: chat-typing-bounce 1.2s ease-in-out infinite;
-        }
-        .chat-dot:nth-child(2) { animation-delay: 0.2s; }
-        .chat-dot:nth-child(3) { animation-delay: 0.4s; }
-      `}</style>
+      <style>{TYPING_DOTS_CSS}</style>
       <div className="chat-dot" />
       <div className="chat-dot" />
       <div className="chat-dot" />

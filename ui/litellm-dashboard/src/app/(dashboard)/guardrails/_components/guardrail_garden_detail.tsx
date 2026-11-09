@@ -9,6 +9,7 @@ import AddGuardrailForm from "./add_guardrail_form";
 import { Logo } from "@/components/molecules/logo/Logo";
 import { GUARDRAIL_PRESETS } from "./guardrail_garden_configs";
 import { GuardrailCardInfo, gardenCardDescription, gardenCardName, gardenTagLabel } from "./guardrail_garden_data";
+import { codeSamples } from "@/i18n/untranslated/codeSamples";
 
 const CATEGORY_LABEL_KEYS: Record<GuardrailCardInfo["category"], { provider: ParseKeys; type: ParseKeys }> = {
   litellm: {
@@ -180,7 +181,10 @@ const GuardrailDetailView: React.FC<GuardrailDetailViewProps> = ({ card, onBack,
             {/* Guardrail ID */}
             <div className="mb-7">
               <div className="mb-1 text-xs text-muted-foreground">{t("guardrails.gardenDetail.guardrailIdLabel")}</div>
-              <div className="break-all text-[13px] text-foreground">litellm/{card.id}</div>
+              <div className="break-all text-[13px] text-foreground">
+                {codeSamples.guardrails.gardenIdPrefix}
+                {card.id}
+              </div>
             </div>
 
             {/* Type */}

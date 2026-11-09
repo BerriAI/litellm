@@ -8,6 +8,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import GuardrailTestResults from "./GuardrailTestResults";
+import { codeSamples } from "@/i18n/untranslated/codeSamples";
 
 interface GuardrailTestPanelProps {
   guardrailNames: string[];
@@ -205,7 +206,7 @@ export function GuardrailTestPanel({
                   setMetadataError(parseMetadata(e.target.value).error);
                 }
               }}
-              placeholder='{"forbidden_topics": ["tax", "finance"]}'
+              placeholder={codeSamples.guardrails.testPanelParamsJson}
               rows={3}
               className="font-mono text-sm field-sizing-fixed"
               aria-invalid={metadataError ? true : undefined}
