@@ -1,6 +1,7 @@
 import { keyActivityLabel } from "@/components/UsagePage/keyActivityLabel";
 import type { TopKeyItem } from "@/components/UsagePage/components/EntityUsage/TopKeyView";
 import { BreakdownMetrics, DailyData, KeyMetricWithMetadata, TagUsage } from "@/components/UsagePage/types";
+import { subscriptionCoveredProviders } from "../SubscriptionCost/types";
 
 export type ExtendedDailyData = DailyData & {
   breakdown: BreakdownMetrics;
@@ -15,6 +16,7 @@ export interface ProviderSpendRow extends Record<string, unknown> {
   successful_requests: number;
   failed_requests: number;
   tokens: number;
+  subscription_covered: boolean;
 }
 
 export const getTopModels = (
@@ -205,6 +207,7 @@ export const getTopAPIKeys = (results: ExtendedDailyData[], topKeysLimit: number
 };
 
 export const getProviderSpend = (results: ExtendedDailyData[]): ProviderSpendRow[] => {
+  const covered = subscriptionCoveredProviders(results);
   const providerSpend: Record<string, ProviderSpendRow> = {};
   results.forEach((day) => {
     Object.entries(day.breakdown.providers || {}).forEach(([provider, metrics]) => {
@@ -216,6 +219,7 @@ export const getProviderSpend = (results: ExtendedDailyData[]): ProviderSpendRow
           successful_requests: 0,
           failed_requests: 0,
           tokens: 0,
+          subscription_covered: covered.has(provider),
         };
       }
       try {
@@ -231,6 +235,6 @@ export const getProviderSpend = (results: ExtendedDailyData[]): ProviderSpendRow
   });
 
   return Object.values(providerSpend)
-    .filter((provider) => provider.spend > 0)
+    .filter((provider) => provider.spend > 0 || provider.subscription_covered)
     .sort((a, b) => b.spend - a.spend);
 };

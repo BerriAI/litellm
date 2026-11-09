@@ -51,10 +51,12 @@ pub fn anthropic_model_capabilities(
         ),
         bare: catalog.lookup(name).map(|found| found.entry.fields()),
     };
+    let thinking_always_on = probe.supports("thinking_always_on");
     MessagesModelCapabilities {
         supports_reasoning: probe.supports("supports_reasoning"),
         supports_adaptive_thinking: probe.supports("supports_adaptive_thinking"),
-        thinking_always_on: probe.supports("thinking_always_on"),
+        thinking_always_on,
+        thinking_on_by_default: thinking_always_on || probe.supports("thinking_on_by_default"),
         supports_legacy_thinking: probe.supports("supports_legacy_thinking"),
         supports_output_config: probe.supports("supports_output_config"),
         supports_sampling_params: backstop(
@@ -234,6 +236,8 @@ mod tests {
             "supports_adaptive_thinking": false
         },
         "claude-embed-5": {"litellm_provider": "anthropic", "mode": "embedding"},
+        "claude-default-think-5": {"litellm_provider": "anthropic", "mode": "chat", "thinking_on_by_default": true},
+        "claude-always-think-5": {"litellm_provider": "anthropic", "mode": "chat", "thinking_always_on": true},
         "anthropic/claude-split-5": {"litellm_provider": "anthropic", "mode": "chat"},
         "claude-split-5": {"litellm_provider": "anthropic", "mode": "chat", "supports_reasoning": true},
         "anthropic.claude-test-5-v1:0": {
@@ -307,6 +311,21 @@ mod tests {
                 capabilities.supports_speed,
                 capabilities.supports_sampling_params,
             ),
+            expected
+        );
+    }
+
+    #[rstest]
+    #[case::default_on("anthropic/claude-default-think-5", true)]
+    #[case::always_on("anthropic/claude-always-think-5", true)]
+    #[case::off("anthropic/claude-test-5", false)]
+    fn thinking_on_by_default_follows_the_row(
+        catalog: Catalog,
+        #[case] model: &str,
+        #[case] expected: bool,
+    ) {
+        assert_eq!(
+            anthropic_model_capabilities(&catalog, model, None).thinking_on_by_default,
             expected
         );
     }

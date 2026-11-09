@@ -1,3 +1,6 @@
+import type { ParseKeys } from "i18next";
+import i18n from "@/i18n/i18n";
+
 export interface PermissionInfo {
   method: string;
   endpoint: string;
@@ -8,22 +11,21 @@ export interface PermissionInfo {
 /**
  * Map of permission endpoint patterns to their descriptions
  */
-export const PERMISSION_DESCRIPTIONS: Record<string, string> = {
-  "/auto_router/manage": "Member can create auto routers for this team and edit their own router configurations",
-  "/key/generate": "Member can generate a virtual key for this team",
-  "/key/service-account/generate":
-    "Member can generate a service account key (not belonging to any user) for this team",
-  "/key/update": "Member can update a virtual key belonging to this team",
-  "/key/delete": "Member can delete a virtual key belonging to this team",
-  "/key/info": "Member can get info about a virtual key belonging to this team",
-  "/key/regenerate": "Member can regenerate a virtual key belonging to this team",
-  "/key/{key_id}/regenerate": "Member can regenerate a virtual key belonging to this team",
-  "/key/list": "Member can list virtual keys belonging to this team",
-  "/key/block": "Member can block a virtual key belonging to this team",
-  "/key/unblock": "Member can unblock a virtual key belonging to this team",
-  "/key/access_group_assignment": "Member can assign access groups to virtual keys for this team",
-  "/team/daily/activity": "Member can view all team usage data (not just their own)",
-  "/spend/logs": "Member can view spend logs for the entire team (not just their own)",
+export const PERMISSION_DESCRIPTIONS: Record<string, ParseKeys> = {
+  "/auto_router/manage": "teams.memberPermissions.descriptions.autoRouterManage",
+  "/key/generate": "teams.memberPermissions.descriptions.keyGenerate",
+  "/key/service-account/generate": "teams.memberPermissions.descriptions.keyServiceAccountGenerate",
+  "/key/update": "teams.memberPermissions.descriptions.keyUpdate",
+  "/key/delete": "teams.memberPermissions.descriptions.keyDelete",
+  "/key/info": "teams.memberPermissions.descriptions.keyInfo",
+  "/key/regenerate": "teams.memberPermissions.descriptions.keyRegenerate",
+  "/key/{key_id}/regenerate": "teams.memberPermissions.descriptions.keyIdRegenerate",
+  "/key/list": "teams.memberPermissions.descriptions.keyList",
+  "/key/block": "teams.memberPermissions.descriptions.keyBlock",
+  "/key/unblock": "teams.memberPermissions.descriptions.keyUnblock",
+  "/key/access_group_assignment": "teams.memberPermissions.descriptions.keyAccessGroupAssignment",
+  "/team/daily/activity": "teams.memberPermissions.descriptions.teamDailyActivity",
+  "/spend/logs": "teams.memberPermissions.descriptions.spendLogs",
 };
 
 /**
@@ -49,22 +51,24 @@ export const getPermissionInfo = (permission: string): PermissionInfo => {
   const endpoint = permission;
 
   // Find exact match or fallback to default description
-  let description = PERMISSION_DESCRIPTIONS[permission];
+  let descriptionKey = Object.hasOwn(PERMISSION_DESCRIPTIONS, permission)
+    ? PERMISSION_DESCRIPTIONS[permission]
+    : undefined;
 
   // If no exact match, try to find a partial match based on patterns
-  if (!description) {
-    for (const [pattern, desc] of Object.entries(PERMISSION_DESCRIPTIONS)) {
+  if (!descriptionKey) {
+    for (const [pattern, key] of Object.entries(PERMISSION_DESCRIPTIONS)) {
       if (permission.includes(pattern)) {
-        description = desc;
+        descriptionKey = key;
         break;
       }
     }
   }
 
   // Fallback if no match found
-  if (!description) {
-    description = `Access ${permission}`;
-  }
+  const description = descriptionKey
+    ? i18n.t(descriptionKey)
+    : i18n.t("teams.memberPermissions.descriptions.fallback", { permission });
 
   return {
     method,

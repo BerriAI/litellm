@@ -18,7 +18,7 @@ from __future__ import annotations
 import hashlib
 import uuid
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Final, TypedDict
+from typing import TYPE_CHECKING, ClassVar, Final, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
@@ -29,6 +29,10 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+from litellm.llms.bedrock.web_identity_session_policy import (
+    S3_VECTORS_INGESTION_SESSION_POLICY,
+    WebIdentitySessionPolicy,
+)
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -84,6 +88,8 @@ class S3VectorsRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
     - distance_metric: "cosine" or "euclidean" (default: S3_VECTORS_DEFAULT_DISTANCE_METRIC)
     - non_filterable_metadata_keys: List of metadata keys to exclude from filtering
     """
+
+    _web_identity_session_policy: ClassVar[WebIdentitySessionPolicy] = S3_VECTORS_INGESTION_SESSION_POLICY
 
     def __init__(
         self,
