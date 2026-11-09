@@ -7392,11 +7392,9 @@ def test_apply_overrides_single_provider_default_does_not_leak_to_other_provider
             credential_values={"api_key": "sk-ant-key-for-team-1"},
         )
     )
-    team_metadata = {
-        "model_config": {"defaultconfig": {"anthropic": {"litellm_credentials": "anthropic-team-1"}}}
-    }
+    team_metadata = {"model_config": {"defaultconfig": {"anthropic": {"litellm_credentials": "anthropic-team-1"}}}}
 
-    router = MagicMock()
+    router = route_entry_points_to_stubs(MagicMock())
     openai_deployment = MagicMock()
     openai_deployment.litellm_params.model = "openai/gpt-4o-mini"
     openai_deployment.litellm_params.custom_llm_provider = "openai"
