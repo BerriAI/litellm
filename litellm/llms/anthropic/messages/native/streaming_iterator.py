@@ -1,13 +1,13 @@
 import asyncio
 import json
 import re
-from collections.abc import AsyncGenerator, AsyncIterator, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Generator, Iterator, Mapping, Sequence
 from contextvars import ContextVar
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final, Protocol, runtime_checkable
 
 import httpx
-from pydantic import TypeAdapter, ValidationError
+from pydantic import ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import TypedDict
 
 from litellm.constants import (
@@ -17,6 +17,7 @@ from litellm.constants import (
 from litellm.litellm_core_utils.core_helpers import process_response_headers
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.litellm_core_utils.usage_cost import stamp_usage_cost, validated_usage_cost
 from litellm.llms.anthropic.common_utils import ANTHROPIC_ERROR_STATUS_CODE_MAP
 from litellm.llms.anthropic.messages.native.utils import (
     INCOMPLETE_STREAM_ERROR_MESSAGE,
@@ -30,7 +31,7 @@ from litellm.proxy.pass_through_endpoints.success_handler import (
 )
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
 from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
-from litellm.types.utils import GenericStreamingChunk, ModelResponseStream
+from litellm.types.utils import GenericStreamingChunk, ModelResponse, ModelResponseStream
 
 if TYPE_CHECKING:
     from litellm.llms.anthropic.messages.safeguards import SafeguardsEvaluator
@@ -99,7 +100,7 @@ def is_anthropic_content_delta_chunk(chunk: object) -> bool:
 _DECODED_SSE_DATA: Final = TypeAdapter(object)
 
 
-def _decoded_sse_data_line(line: bytes) -> object | None:
+def _decoded_sse_data_line(line: bytes | bytearray) -> object | None:
     if not line.startswith(b"data:"):
         return None
     try:
@@ -442,6 +443,119 @@ def _sse_frame_event(frame: bytes) -> Mapping[str, object] | None:
         return _SSE_EVENT.validate_python(json.loads(data))
     except (ValueError, ValidationError):
         return None
+
+
+def _usage_cost_sse_bytes(chunk: object) -> bytes:
+    if isinstance(chunk, bytes):
+        return chunk
+    if isinstance(chunk, str):
+        return chunk.encode()
+    return anthropic_sse_frame(_SSE_EVENT.validate_python(chunk))
+
+
+_MESSAGES_STREAM: Final[TypeAdapter[Iterator[object] | AsyncIterator[object]]] = TypeAdapter(
+    Iterator[object] | AsyncIterator[object], config=ConfigDict(arbitrary_types_allowed=True)
+)
+_MESSAGES_LOGGING: Final = TypeAdapter(LiteLLMLoggingObj, config=ConfigDict(arbitrary_types_allowed=True))
+
+
+class UsageCostMessagesStream:
+    def __init__(self, stream: Iterator[object] | AsyncIterator[object], logging_obj: LiteLLMLoggingObj) -> None:
+        self.stream = stream
+        self.logging_obj = logging_obj
+        self.message: Mapping[str, object] = {}
+        self.pending = b""
+        self.frames = self._iterate()
+        self.sync_frames = self._iterate_sync()
+
+    @classmethod
+    def for_request(cls, stream: object, logging_obj: object) -> "UsageCostMessagesStream":
+        return cls(_MESSAGES_STREAM.validate_python(stream), _MESSAGES_LOGGING.validate_python(logging_obj))
+
+    def __iter__(self) -> "UsageCostMessagesStream":
+        return self
+
+    def __next__(self) -> bytes:
+        return next(self.sync_frames)
+
+    def close(self) -> None:
+        self.sync_frames.close()
+        close: Final = getattr(self.stream, "close", None)
+        if callable(close):
+            close()
+
+    def __getattr__(self, name: str) -> object:
+        return _DECODED_SSE_DATA.validate_python(getattr(self.stream, name))
+
+    def __aiter__(self) -> "UsageCostMessagesStream":
+        return self
+
+    async def __anext__(self) -> bytes:
+        return await self.frames.__anext__()
+
+    async def aclose(self) -> None:
+        try:
+            await self.frames.aclose()
+        finally:
+            await aclose_if_supported(self.stream)
+
+    def _stamp(self, frame: bytes) -> bytes:
+        event: Final = _sse_frame_event(frame)
+        if event is None:
+            return frame
+        if event.get("type") == "message_start":
+            message: Final = event.get("message")
+            self.message = _SSE_EVENT.validate_python(message) if isinstance(message, Mapping) else {}
+            return frame
+        usage: Final = event.get("usage")
+        if event.get("type") != "message_delta" or not isinstance(usage, Mapping):
+            return frame
+        initial_usage: Final = self.message.get("usage")
+        body: Final[Mapping[str, object]] = {
+            **self.message,
+            "type": "message",
+            "content": (),
+            "usage": {
+                **(_SSE_EVENT.validate_python(initial_usage) if isinstance(initial_usage, Mapping) else {}),
+                **_SSE_EVENT.validate_python(usage),
+            },
+        }
+        try:
+            priced: Final = self.logging_obj.normalize_endpoint_logging_result(body)
+            cost: Final = validated_usage_cost(self.logging_obj.response_cost_calculator(result=priced))
+        except Exception:  # noqa: BLE001  # optional billing metadata must not interrupt a completed stream
+            return frame
+        stamp_usage_cost(priced, cost)
+        if isinstance(priced, ModelResponse):
+            self.logging_obj.record_bridged_model_response(priced)
+        stamped: Final = dict(event)
+        stamp_usage_cost(stamped, cost)
+        return anthropic_sse_frame(stamped)
+
+    def _frames(self, chunk: object) -> Iterator[bytes]:
+        self.pending += _usage_cost_sse_bytes(chunk)
+        *frames, remaining = _SSE_FRAME_END.split(self.pending)
+        self.pending = remaining
+        return (self._stamp(frame) for frame in frames)
+
+    def _iterate_sync(self) -> Generator[bytes, None, None]:
+        if not isinstance(self.stream, Iterator):
+            return
+        for chunk in self.stream:
+            yield from self._frames(chunk)
+        if self.pending:
+            yield self._stamp(self.pending)
+
+    async def _iterate(self) -> AsyncGenerator[bytes, None]:
+        if not isinstance(self.stream, AsyncIterator):
+            for frame in self._iterate_sync():
+                yield frame
+            return
+        async for chunk in self.stream:
+            for frame in self._frames(chunk):
+                yield frame
+        if self.pending:
+            yield self._stamp(self.pending)
 
 
 async def _stamped_sse_frame(frame: bytes, safeguard_results: StreamedSafeguardResults) -> bytes:

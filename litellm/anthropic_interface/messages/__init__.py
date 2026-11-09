@@ -10,8 +10,15 @@ This is an __init__.py file to allow the following interface
 
 """
 
-from collections.abc import AsyncIterator, Coroutine, Iterator
+from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping
+from datetime import datetime, timezone
+from typing import Final
+from uuid import uuid4
 
+from pydantic import TypeAdapter
+
+from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.litellm_core_utils.llm_response_utils.response_metadata import update_response_metadata
 from litellm.messages import (
     anthropic_messages as _async_anthropic_messages,
 )
@@ -21,6 +28,10 @@ from litellm.messages import (
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
+
+_REQUEST_KWARGS: Final = TypeAdapter(dict[str, object])
+_MESSAGES: Final = TypeAdapter(list[dict[str, object]])
+_OPTIONAL_MAPPING: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
 
 
 async def acreate(
@@ -126,20 +137,49 @@ def create(
     Returns:
         Dict: Response from the API
     """
-    return _sync_anthropic_messages(
+    request_kwargs: Final = _REQUEST_KWARGS.validate_python(kwargs)
+    supplied_logging: Final = request_kwargs.get("litellm_logging_obj")
+    logging_obj: Final = (
+        supplied_logging
+        if isinstance(supplied_logging, Logging)
+        else Logging(
+            model=model,
+            messages=_MESSAGES.validate_python(messages),
+            stream=stream is True,
+            call_type="anthropic_messages",
+            start_time=datetime.now(timezone.utc),
+            litellm_call_id=str(uuid4()),
+            function_id=str(uuid4()),
+        )
+    )
+    response: Final = _sync_anthropic_messages(
         max_tokens=max_tokens,
-        messages=messages,
+        messages=_MESSAGES.validate_python(messages),
         model=model,
-        metadata=metadata,
+        metadata=_OPTIONAL_MAPPING.validate_python(metadata),
         stop_sequences=stop_sequences,
         stream=stream,
         system=system,
         temperature=temperature,
-        thinking=thinking,
-        tool_choice=tool_choice,
+        thinking=_OPTIONAL_MAPPING.validate_python(thinking),
+        tool_choice=_OPTIONAL_MAPPING.validate_python(tool_choice),
         tools=tools,
         top_k=top_k,
         top_p=top_p,
         container=container,
-        **kwargs,
+        **{**request_kwargs, "litellm_logging_obj": logging_obj},
     )
+    if not stream:
+        update_response_metadata(
+            response,
+            logging_obj,
+            model,
+            request_kwargs,
+            logging_obj.start_time,
+            datetime.now(timezone.utc),
+        )
+    if stream and isinstance(response, (Iterator, AsyncIterator)):
+        from litellm.llms.anthropic.messages.native.streaming_iterator import UsageCostMessagesStream
+
+        return UsageCostMessagesStream(response, logging_obj)
+    return response

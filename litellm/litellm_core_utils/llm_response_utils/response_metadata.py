@@ -10,12 +10,34 @@ from litellm.constants import LITELLM_DETAILED_TIMING
 from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs, process_response_headers
 from litellm.litellm_core_utils.llm_response_utils.get_api_base import get_api_base
 from litellm.litellm_core_utils.logging_utils import LiteLLMLoggingObject
+from litellm.litellm_core_utils.usage_cost import stamp_usage_cost, validated_usage_cost
 from litellm.types.utils import (
     EmbeddingResponse,
     HiddenParams,
     ModelResponse,
     TranscriptionResponse,
 )
+
+_MESSAGES_BODY: Final = TypeAdapter(Mapping[str, object])
+
+
+def _messages_body(result: object) -> Mapping[str, object] | None:
+    return _MESSAGES_BODY.validate_python(result) if isinstance(result, dict) else None
+
+
+def _stamp_messages_cost(result: object, logging_obj: LiteLLMLoggingObject, cache_hit: bool | None) -> None:
+    try:
+        body: Final = _messages_body(result)
+        if body is None or body.get("type") != "message" or not isinstance(body.get("usage"), Mapping):
+            return
+        priced: Final = logging_obj.normalize_endpoint_logging_result(body)
+        cost: Final = validated_usage_cost(logging_obj.response_cost_calculator(result=priced, cache_hit=cache_hit))
+        stamp_usage_cost(priced, cost)
+        stamp_usage_cost(result, cost)
+        if isinstance(priced, ModelResponse):
+            logging_obj.record_bridged_model_response(priced)
+    except Exception:  # noqa: BLE001  # optional billing metadata must not fail a completed response
+        return
 
 
 def _timing_window_start(
@@ -270,13 +292,15 @@ class ResponseMetadata:
         """Apply metadata to the response object"""
         if hasattr(self.result, "_hidden_params"):
             self.result._hidden_params = self._hidden_params
+            hidden: Final = _MESSAGES_BODY.validate_python(getattr(self, "_hidden_params", {}))
+            stamp_usage_cost(self.result, validated_usage_cost(hidden.get("response_cost")))
 
 
 def update_response_metadata(
     result: object,
     logging_obj: LiteLLMLoggingObject,
     model: str | None,
-    kwargs: dict,
+    kwargs: Mapping[str, object],
     start_time: datetime.datetime,
     end_time: datetime.datetime,
     include_overhead: bool = True,
@@ -295,15 +319,13 @@ def update_response_metadata(
     if result is None:
         return
     if not hasattr(result, "_hidden_params"):
-        # /v1/messages returns a plain dict and the Anthropic / Responses bridge stream wrappers
-        # cannot hold ``_hidden_params``: keep only the timing on the logging object (no cost
-        # recompute) so the proxy headers and the standard logging payload can still read it.
         logging_obj.set_response_timing_metrics(
             response_timing_metrics(start_time, end_time, logging_obj, include_overhead)
         )
+        _stamp_messages_cost(result, logging_obj, cache_hit)
         return
 
     metadata: Final = ResponseMetadata(result)
     metadata.set_timing_metrics(start_time, end_time, logging_obj, include_overhead)
-    metadata.set_hidden_params(logging_obj, model, kwargs, cache_hit=cache_hit)
+    metadata.set_hidden_params(logging_obj, model, dict(kwargs), cache_hit=cache_hit)
     metadata.apply()
