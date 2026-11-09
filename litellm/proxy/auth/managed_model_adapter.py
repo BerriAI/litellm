@@ -29,6 +29,7 @@ from litellm.proxy.agent_endpoints.auth.agent_caller import (
 from litellm.proxy.agent_endpoints.auth.managed_authorization import managed_agent_policy
 from litellm.proxy.auth.member_model_adapter import read_member_model_facts
 from litellm.proxy.auth.model_access_adapter import object_model_grants, project_model_facts, raise_model_denial
+from litellm.proxy.auth.model_projection_adapter import read_grouped_scope
 from litellm.proxy.auth.team_alias_adapter import resolve_team_alias
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.utils import PrismaClient, ProxyLogging
@@ -252,7 +253,7 @@ def _dispatch(source: _Source) -> str | Sequence[str]:
 
 
 async def _read(facts: ManagedModelFacts, source: _Source) -> tuple[ManagedModelFacts, _Source]:
-    from litellm.proxy.auth.auth_checks import get_models_from_access_groups, key_model_aliases_for_auth_check
+    from litellm.proxy.auth.auth_checks import key_model_aliases_for_auth_check
 
     decision: Final = managed_models(facts)
     match decision.kind:
@@ -331,8 +332,8 @@ async def _read(facts: ManagedModelFacts, source: _Source) -> tuple[ManagedModel
         case "ReadTeamGroups":
             if facts.team is None:
                 raise NativeAuthRuntimeError("missing caller team group scope")
-            grants: Final = await get_models_from_access_groups(facts.team.group_ids, prisma_client=source.prisma)
-            return await _read(replace(facts, team=replace(facts.team, group_models=tuple(grants))), source)
+            grouped: Final = await read_grouped_scope(facts.team, source.router, source.prisma, merge=True)
+            return await _read(replace(facts, team=grouped), source)
         case "ReadMember":
             if source.team is None or source.caller is None or source.cache is None or source.logging is None:
                 raise NativeAuthRuntimeError("missing caller member model context")

@@ -20,6 +20,7 @@ class ModelHelperFacts:
     names: tuple[str, ...] | None = None
     provider_loaded: bool = False
     provider: ModelProvider | None = None
+    provider_reads: tuple[ModelProvider | None, ...] | None = None
 
 
 @dataclass(frozen=True, slots=True)

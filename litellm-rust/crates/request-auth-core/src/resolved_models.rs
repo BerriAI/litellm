@@ -82,7 +82,10 @@ pub fn decide(facts: &Facts) -> Result<Decision, Error> {
             return Ok(Decision::ReadKey);
         };
         let key = fallback_access::grouped(key.clone(), false)?;
-        if matches!(key, ModelDecision::ReadGroups) {
+        if matches!(
+            key,
+            ModelDecision::ReadGroups | ModelDecision::ReadGroupScope { .. }
+        ) {
             return Ok(Decision::ReadKeyGroups);
         }
         if !key.allowed() {

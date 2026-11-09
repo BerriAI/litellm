@@ -20,6 +20,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.member_model_adapter import read_member_model_facts
 from litellm.proxy.auth.model_access_adapter import object_model_grants, project_model_facts, raise_model_denial
+from litellm.proxy.auth.model_projection_adapter import read_grouped_scope
 from litellm.proxy.auth.personal_model_request_adapter import read_personal_model_request_facts
 from litellm.proxy.auth.team_override_adapter import read_team_override_facts
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
@@ -108,7 +109,6 @@ async def _read(facts: ResolvedModelFacts, source: _Source) -> ResolvedModelRead
     from litellm.proxy.auth.auth_checks import (
         get_end_user_object,
         get_key_end_user_budget_id,
-        get_models_from_access_groups,
         get_project_object,
         get_team_object,
         get_user_object,
@@ -139,8 +139,8 @@ async def _read(facts: ResolvedModelFacts, source: _Source) -> ResolvedModelRead
         case "ReadKeyGroups":
             if facts.key is None:
                 raise NativeAuthRuntimeError("resolved key group read without scope")
-            models: Final = await get_models_from_access_groups(facts.key.group_ids)
-            return await _read(replace(facts, key=replace(facts.key, group_models=tuple(models))), source)
+            scope: Final = await read_grouped_scope(facts.key, source.router, merge=False)
+            return await _read(replace(facts, key=scope), source)
         case "ReadTeamObject":
             if source.token.team_id is None:
                 raise NativeAuthRuntimeError("resolved team read without identity")

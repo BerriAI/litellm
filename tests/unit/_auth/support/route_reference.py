@@ -4,6 +4,7 @@ from collections.abc import Collection, Iterable, Mapping, Sequence
 from typing import Final, Protocol, cast
 
 from fastapi import HTTPException, Request, status
+from pydantic import TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import (
@@ -19,7 +20,96 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 
-from litellm.proxy.auth.auth_checks_organization import user_is_org_admin  # pyright: ignore[reportUnknownVariableType]  # preserve the original organization lookup
+
+def user_is_org_admin(request_data: Mapping[str, object], user_object: LiteLLM_UserTable | None = None) -> bool:
+    if user_object is None or user_object.organization_memberships is None:
+        return False
+    singular: Final = request_data.get("organization_id")
+    multiple: Final = request_data.get("organizations")
+    candidates: Final = (
+        *((singular,) if singular is not None else ()),
+        *(TypeAdapter(tuple[object, ...]).validate_python(multiple) if isinstance(multiple, list) else ()),
+    )
+    admins: Final = frozenset(
+        membership.organization_id
+        for membership in user_object.organization_memberships
+        if membership.user_role == LitellmUserRoles.ORG_ADMIN.value and membership.organization_id is not None  # pyright: ignore[reportUnnecessaryComparison]  # Phase 1 rejected absent legacy membership IDs
+    )
+    return bool(candidates) and all(candidate in admins for candidate in candidates)
+
+
+def managed_agent_route_allowed(route: str, method: str | None) -> bool:
+    if route in ("/agents", "/v1/agents"):
+        return method in (None, "GET", "HEAD")
+    if route in (
+        "/realtime",
+        "/v1/realtime",
+        "/openai/v1/realtime",
+        "/realtime/translations",
+        "/v1/realtime/translations",
+        "/live/sessions",
+        "/v1/live/sessions",
+        "/openai/v1/live/sessions",
+    ):
+        return method in (None, "GET")
+    model_routes: Final = frozenset(
+        f"{prefix}/{operation}"
+        for prefix, operation in itertools.product(
+            ("", "/v1"),
+            (
+                "chat/completions",
+                "completions",
+                "embeddings",
+                "responses",
+                "messages",
+                "messages/count_tokens",
+                "images/generations",
+                "images/edits",
+                "audio/transcriptions",
+                "audio/speech",
+                "moderations",
+                "rerank",
+                "decisions",
+                "systemone",
+                "extraction",
+                "ocr",
+            ),
+        )
+    ) | frozenset(
+        (
+            "/openai/v1/responses",
+            "/v2/rerank",
+            "/claude_code_gateway/v1/messages",
+            "/claude_code_gateway/v1/messages/count_tokens",
+            "/cursor/chat/completions",
+        )
+    )
+    paths: Final = (
+        "/engines/{model:path}/chat/completions",
+        "/engines/{model:path}/completions",
+        "/engines/{model:path}/embeddings",
+        "/openai/deployments/{model:path}/chat/completions",
+        "/openai/deployments/{model:path}/completions",
+        "/openai/deployments/{model:path}/embeddings",
+        "/openai/deployments/{model:path}/images/generations",
+        "/openai/deployments/{model:path}/images/edits",
+        "/v1beta/models/{model_name:path}:countTokens",
+        "/v1beta/models/{model_name:path}:generateContent",
+        "/v1beta/models/{model_name:path}:streamGenerateContent",
+        "/models/{model_name:path}:countTokens",
+        "/models/{model_name:path}:generateContent",
+        "/models/{model_name:path}:streamGenerateContent",
+    )
+    if route in model_routes or RouteChecks.check_route_access(route, paths):
+        return method in (None, "POST")
+    mcp: Final = tuple(
+        candidate
+        for candidate in LiteLLMRoutes.mcp_inference_routes.value
+        if candidate not in ("/token", "/introspect")
+    )
+    return RouteChecks.check_route_access(route, mcp) or RouteChecks.check_route_access(
+        route, LiteLLMRoutes.agent_inference_routes.value
+    )
 
 
 class _ReferenceToken(Protocol):
@@ -439,7 +529,10 @@ class RouteChecks:
 
     @staticmethod
     def custom_admin_only_route_check(route: str):
-        from litellm.proxy.proxy_server import general_settings, premium_user  # pyright: ignore[reportUnknownVariableType]  # preserve the legacy settings import in this reference
+        from litellm.proxy.proxy_server import (
+            general_settings,  # pyright: ignore[reportUnknownVariableType]  # preserve the legacy settings import in this reference
+            premium_user,
+        )
 
         if "admin_only_routes" in general_settings:
             if premium_user is not True:

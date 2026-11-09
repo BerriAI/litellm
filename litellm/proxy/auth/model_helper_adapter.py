@@ -4,13 +4,13 @@ from typing import Final
 
 from litellm._auth.failure import NativeAuthRuntimeError
 from litellm._auth.model_helpers import ModelHelperFacts, model_helper
-from litellm.proxy.auth.model_access_adapter import (
-    _provider,  # pyright: ignore[reportPrivateUsage]  # shared raw provider projection preserves terminal failures
-)
+from litellm.proxy.auth.model_projection_adapter import provider_facts
 from litellm.router_api import RegistryReader
 
 
 def read_model_helper_facts(facts: ModelHelperFacts, router: RegistryReader | None) -> ModelHelperFacts:
+    if facts.provider_reads is None and not facts.provider_loaded:
+        return read_model_helper_facts(replace(facts, provider_reads=()), router)
     decision: Final = model_helper(facts)
     match decision.kind:
         case "Complete":
@@ -26,7 +26,12 @@ def read_model_helper_facts(facts: ModelHelperFacts, router: RegistryReader | No
             return read_model_helper_facts(replace(facts, names=tuple(router.registry().names())), router)
         case "ReadProvider":
             return read_model_helper_facts(
-                replace(facts, provider_loaded=True, provider=_provider(facts.model)), router
+                replace(
+                    facts,
+                    provider_loaded=True,
+                    provider_reads=(*(facts.provider_reads or ()), provider_facts(facts.model)),
+                ),
+                router,
             )
 
 

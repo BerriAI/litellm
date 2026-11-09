@@ -8,6 +8,7 @@ from litellm._auth.team_override import TeamOverrideFacts, team_override
 from litellm.proxy._types import LiteLLM_TeamTable, UserAPIKeyAuth
 from litellm.proxy.auth.model_access_adapter import object_model_grants, project_model_facts, raise_model_denial
 from litellm.proxy.auth.model_group_adapter import get_authorized_resources_from_key_access_groups
+from litellm.proxy.auth.model_projection_adapter import read_grouped_scope
 from litellm.repositories.prisma_protocols import DatabaseClient
 from litellm.router_api import RegistryReader
 
@@ -59,7 +60,6 @@ async def can_team_call_model_with_override(
 
 
 async def _read(facts: TeamOverrideFacts, source: _Source) -> TeamOverrideFacts:
-    from litellm.proxy.auth.auth_checks import get_models_from_access_groups
 
     decision: Final = team_override(facts)
     match decision.kind:
@@ -80,8 +80,8 @@ async def _read(facts: TeamOverrideFacts, source: _Source) -> TeamOverrideFacts:
         case "ReadTeamGroups":
             if facts.team is None:
                 raise NativeAuthRuntimeError("missing team override scope")
-            models: Final = await get_models_from_access_groups(facts.team.group_ids, prisma_client=source.prisma)
-            return await _read(replace(facts, team=replace(facts.team, group_models=tuple(models))), source)
+            grouped: Final = await read_grouped_scope(facts.team, source.router, source.prisma, merge=True)
+            return await _read(replace(facts, team=grouped), source)
         case "ReadAssignedGroups":
             assigned: Final = await get_authorized_resources_from_key_access_groups(
                 source.token, source.team, "access_model_names"

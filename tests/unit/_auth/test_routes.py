@@ -10,6 +10,7 @@ from litellm.proxy._types import LiteLLMRoutes, UserAPIKeyAuth
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.route_policy_adapter import route_context
 from tests.unit._auth.support.route_reference import RouteChecks as ReferenceRoutes
+from tests.unit._auth.support.route_reference import managed_agent_route_allowed
 
 
 @dataclass(frozen=True, slots=True)
@@ -169,8 +170,6 @@ def test_route_pattern_modes(route: str, pattern: str) -> None:
 )
 @pytest.mark.parametrize("method", (None, "GET", "HEAD", "POST", "DELETE", "get"))
 def test_managed_actor_route_methods(route: str, method: str | None) -> None:
-    from litellm.proxy.agent_endpoints.auth.managed_authorization import managed_agent_route_allowed
-
     assert routes.classify_route(route_context(route, method), "Managed") == managed_agent_route_allowed(route, method)
 
 

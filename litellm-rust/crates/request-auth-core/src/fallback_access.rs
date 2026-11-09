@@ -20,6 +20,7 @@ pub struct Facts {
     pub team: Option<GroupedScope>,
     pub embedded_team: Option<ModelFacts>,
     pub assigned_models: Option<Vec<String>>,
+    pub assigned_scope: Option<ModelFacts>,
     pub member: Option<ModelFacts>,
     pub project: Option<ModelFacts>,
     pub team_present: bool,
@@ -41,6 +42,7 @@ pub enum Decision {
     ReadKeyGroups,
     ReadTeamGroups,
     ReadAssignedGroups,
+    ReadAssignedScope,
 }
 
 pub fn grouped(scope: GroupedScope, merge: bool) -> Result<ModelDecision, Error> {
@@ -64,7 +66,10 @@ pub fn decide(facts: Facts) -> Result<Decision, Error> {
         return Ok(Decision::ReadKey);
     };
     let key = grouped(key, false)?;
-    if matches!(key, ModelDecision::ReadGroups) {
+    if matches!(
+        key,
+        ModelDecision::ReadGroups | ModelDecision::ReadGroupScope { .. }
+    ) {
         return Ok(Decision::ReadKeyGroups);
     }
     if !key.allowed() {
@@ -74,9 +79,11 @@ pub fn decide(facts: Facts) -> Result<Decision, Error> {
         return Ok(Decision::ReadTeam);
     }
     if let Some(team) = facts.team {
-        let model_facts = team.facts.clone();
         let decision = grouped(team, true)?;
-        if matches!(decision, ModelDecision::ReadGroups) {
+        if matches!(
+            decision,
+            ModelDecision::ReadGroups | ModelDecision::ReadGroupScope { .. }
+        ) {
             return Ok(Decision::ReadTeamGroups);
         }
         if !decision.allowed() {
@@ -88,13 +95,15 @@ pub fn decide(facts: Facts) -> Result<Decision, Error> {
             let Some(grants) = facts.assigned_models else {
                 return Ok(Decision::ReadAssignedGroups);
             };
-            if grants.is_empty()
-                || !model_access::check(&ModelFacts {
-                    grants,
-                    ..model_facts
-                })?
-                .allowed()
-            {
+            if grants.is_empty() {
+                return Ok(Decision::Deny {
+                    denial: Some(decision),
+                });
+            }
+            let Some(assigned) = facts.assigned_scope else {
+                return Ok(Decision::ReadAssignedScope);
+            };
+            if !model_access::check(&assigned)?.allowed() {
                 return Ok(Decision::Deny {
                     denial: Some(decision),
                 });

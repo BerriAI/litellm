@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field
 from typing import Final, Literal, TypeAlias
@@ -8,6 +10,7 @@ from litellm._auth.failure import native_boundary
 from litellm.rust_bridge import _native
 
 ModelObject: TypeAlias = Literal["user", "customer", "team", "key", "org", "project", "agent"]
+ModelReadKind: TypeAlias = Literal["Compaction", "Aliases", "AliasTarget", "Deployment", "Groups", "Names", "Provider"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,12 +28,31 @@ class ModelRecord:
 
 
 @dataclass(frozen=True, slots=True)
+class ModelReading:
+    kind: ModelReadKind
+    model: str
+    values: tuple[str, ...] = ()
+    value: str | None = None
+    team: str | None = None
+    provider: ModelProvider | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ModelEvaluation:
+    grants: tuple[str, ...]
+    reads: tuple[ModelReading, ...]
+    aliases: ModelAliases | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class ModelRegistry:
     present: bool = False
     names: tuple[str, ...] = ()
     aliases: Mapping[str, str] = field(default_factory=dict[str, str])
     records: Mapping[str, ModelRecord] = field(default_factory=dict[str, ModelRecord])
     compaction_parents: Mapping[str, str] = field(default_factory=dict[str, str])
+    helper_present: bool | None = None
+    evaluations: tuple[ModelEvaluation, ...] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,6 +60,7 @@ class ModelAliases:
     team: Mapping[str, str] = field(default_factory=dict[str, str])
     key: Mapping[str, str] = field(default_factory=dict[str, str])
     global_: Mapping[str, str] = field(default_factory=dict[str, str])
+    team_order: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,6 +88,7 @@ class ModelAccessDecision:
         "PersonalTeam",
         "ReadGroups",
         "ReadScope",
+        "ReadGroupScope",
     ]
     model: str | None = None
     grants: tuple[str, ...] = ()

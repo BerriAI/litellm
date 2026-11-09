@@ -43,7 +43,10 @@ fn scope(facts: Scope) -> Result<Decision, Error> {
         return Ok(Decision::ReadTeam);
     };
     let team = fallback_access::grouped(team, true)?;
-    if matches!(team, model_access::Decision::ReadGroups) {
+    if matches!(
+        team,
+        model_access::Decision::ReadGroups | model_access::Decision::ReadGroupScope { .. }
+    ) {
         return Ok(Decision::ReadGroups);
     }
     if !team.allowed() {

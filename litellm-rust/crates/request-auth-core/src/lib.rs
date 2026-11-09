@@ -22,6 +22,8 @@ pub mod managed;
 pub mod managed_models;
 pub mod member_models;
 pub mod model_access;
+pub mod model_projection;
+pub mod route_enable;
 pub mod model_attribution;
 pub mod model_budget_data;
 mod model_budgets;

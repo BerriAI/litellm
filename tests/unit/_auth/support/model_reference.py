@@ -6,7 +6,7 @@ from litellm._auth.model_access import ModelAccessDecision, ModelAccessFacts
 
 
 def _pattern(model: str, pattern: str) -> bool:
-    return "*" in pattern and re.match("^" + re.escape(pattern).replace(r"\*", ".*") + "$", model) is not None
+    return "*" in pattern and re.match("^" + pattern.replace("*", ".*") + "$", model) is not None
 
 
 def helper(model: str, facts: ModelAccessFacts, *, team_aliases: bool = True) -> bool:

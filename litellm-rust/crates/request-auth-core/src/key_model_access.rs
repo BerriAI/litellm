@@ -51,7 +51,10 @@ pub fn decide(facts: Facts) -> Result<Decision, Error> {
     }
     if let Some(primary) = facts.primary {
         let decision = grouped(primary, false)?;
-        if matches!(decision, ModelDecision::ReadGroups) {
+        if matches!(
+            decision,
+            ModelDecision::ReadGroups | ModelDecision::ReadGroupScope { .. }
+        ) {
             return Ok(Decision::ReadPrimaryGroups);
         }
         if !decision.allowed() {
@@ -66,7 +69,10 @@ pub fn decide(facts: Facts) -> Result<Decision, Error> {
             return Ok(Decision::ReadFallbackScope { index });
         };
         let decision = grouped(scope.clone(), false)?;
-        if matches!(decision, ModelDecision::ReadGroups) {
+        if matches!(
+            decision,
+            ModelDecision::ReadGroups | ModelDecision::ReadGroupScope { .. }
+        ) {
             return Ok(Decision::ReadFallbackGroups { index });
         }
         if !decision.allowed() {

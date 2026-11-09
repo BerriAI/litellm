@@ -125,7 +125,10 @@ pub fn decide(facts: &Facts) -> Result<Decision, Error> {
             return Ok(Decision::ReadTeamScope);
         };
         let result = fallback_access::grouped(team.clone(), true)?;
-        if matches!(result, ModelDecision::ReadGroups) {
+        if matches!(
+            result,
+            ModelDecision::ReadGroups | ModelDecision::ReadGroupScope { .. }
+        ) {
             return Ok(Decision::ReadTeamGroups);
         }
         if !result.allowed() {

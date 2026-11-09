@@ -3,10 +3,11 @@ from typing import Final
 
 from litellm._auth.failure import NativeAuthRuntimeError
 from litellm._auth.fallback_access import FallbackAuthorizationFacts, GroupedModelScope, fallback_authorization
-from litellm._auth.model_access import key_model_grants
+from litellm._auth.model_access import ModelAccessFacts, key_model_grants
 from litellm.proxy._types import LiteLLM_ProjectTable, LiteLLM_TeamMembership, LiteLLM_TeamTable, UserAPIKeyAuth
 from litellm.proxy.auth.model_access_adapter import object_model_grants, project_model_facts
 from litellm.proxy.auth.model_group_adapter import get_authorized_resources_from_key_access_groups
+from litellm.proxy.auth.model_projection_adapter import read_grouped_scope
 from litellm.repositories.prisma_protocols import DatabaseClient
 from litellm.router_api import RegistryReader
 
@@ -45,7 +46,7 @@ async def load_fallback_authorization_facts(
 
 
 async def _read(facts: FallbackAuthorizationFacts, source: _Sources) -> FallbackAuthorizationFacts:
-    from litellm.proxy.auth.auth_checks import get_models_from_access_groups, key_model_aliases_for_auth_check
+    from litellm.proxy.auth.auth_checks import key_model_aliases_for_auth_check
 
     decision: Final = fallback_authorization(facts)
     match decision.kind:
@@ -106,29 +107,48 @@ async def _read(facts: FallbackAuthorizationFacts, source: _Sources) -> Fallback
             )
             return await _read(replace(facts, member=member), source)
         case "ReadProject":
-            if source.project is None:
-                raise NativeAuthRuntimeError("missing fallback project source")
-            project: Final = project_model_facts(
-                source.model,
-                source.router,
-                facts.project_grants,
-                team_id=source.project.team_id,
-                key_model_aliases=key_model_aliases_for_auth_check(source.token),
-                object_type="project",
-            )
+            project: Final = _project_scope(facts, source)
             return await _read(replace(facts, project=project), source)
         case "ReadKeyGroups":
             if facts.key is None:
                 raise NativeAuthRuntimeError("missing fallback key scope")
-            models: Final = await get_models_from_access_groups(facts.key.group_ids, prisma_client=source.prisma)
-            return await _read(replace(facts, key=replace(facts.key, group_models=tuple(models))), source)
+            key_scope: Final = await read_grouped_scope(facts.key, source.router, source.prisma, merge=False)
+            return await _read(replace(facts, key=key_scope), source)
         case "ReadTeamGroups":
             if facts.team is None:
                 raise NativeAuthRuntimeError("missing fallback team scope")
-            team_models: Final = await get_models_from_access_groups(facts.team.group_ids, prisma_client=source.prisma)
-            return await _read(replace(facts, team=replace(facts.team, group_models=tuple(team_models))), source)
+            team_scope: Final = await read_grouped_scope(facts.team, source.router, source.prisma, merge=True)
+            return await _read(replace(facts, team=team_scope), source)
         case "ReadAssignedGroups":
             assigned: Final = await get_authorized_resources_from_key_access_groups(
                 source.token, source.team, "access_model_names"
             )
             return await _read(replace(facts, assigned_models=tuple(assigned)), source)
+        case "ReadAssignedScope":
+            if facts.assigned_models is None:
+                raise NativeAuthRuntimeError("missing fallback assigned models")
+            scope: Final = project_model_facts(
+                source.model,
+                source.router,
+                facts.assigned_models,
+                source.token.team_model_aliases,
+                source.token.team_id,
+                key_model_aliases_for_auth_check(source.token),
+                "key",
+            )
+            return await _read(replace(facts, assigned_scope=scope), source)
+
+
+def _project_scope(facts: FallbackAuthorizationFacts, source: _Sources) -> ModelAccessFacts:
+    from litellm.proxy.auth.auth_checks import key_model_aliases_for_auth_check
+
+    if source.project is None:
+        raise NativeAuthRuntimeError("missing fallback project source")
+    return project_model_facts(
+        source.model,
+        source.router,
+        facts.project_grants,
+        team_id=source.project.team_id,
+        key_model_aliases=key_model_aliases_for_auth_check(source.token),
+        object_type="project",
+    )

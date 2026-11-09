@@ -46,6 +46,16 @@ _BASE: Final = FallbackAuthorizationFacts(GroupedModelScope(_ALLOW))
         ),
         pytest.param(
             replace(_BASE, team=GroupedModelScope(_DENY), assigned_models=("model",)),
+            "ReadAssignedScope",
+            id="assigned-reads-scope-before-override",
+        ),
+        pytest.param(
+            replace(
+                _BASE,
+                team=GroupedModelScope(_DENY),
+                assigned_models=("model",),
+                assigned_scope=replace(_DENY, grants=("model",)),
+            ),
             "Allow",
             id="assigned-overrides-team",
         ),

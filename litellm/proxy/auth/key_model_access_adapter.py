@@ -11,6 +11,7 @@ from litellm._auth.key_model_access import KeyAndFallbackModelAccessFacts, key_a
 from litellm._auth.model_access import key_model_grants
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.model_access_adapter import object_model_grants, project_model_facts
+from litellm.proxy.auth.model_projection_adapter import read_grouped_scope
 from litellm.router import Router
 
 
@@ -70,11 +71,8 @@ def _scope(model: str | Sequence[str], source: _Sources) -> GroupedModelScope:
     )
 
 
-async def _groups(scope: GroupedModelScope) -> GroupedModelScope:
-    from litellm.proxy.auth.auth_checks import get_models_from_access_groups
-
-    models: Final = await get_models_from_access_groups(scope.group_ids)
-    return replace(scope, group_models=tuple(models))
+async def _groups(scope: GroupedModelScope, source: _Sources) -> GroupedModelScope:
+    return await read_grouped_scope(scope, source.router, merge=False)
 
 
 async def _route(name: str, source: _Sources) -> Exception | None:
@@ -124,7 +122,7 @@ async def _read(
         case "ReadPrimaryGroups":
             if facts.primary is None:
                 raise NativeAuthRuntimeError("missing primary model scope")
-            return await _read(replace(facts, primary=await _groups(facts.primary)), source, route_errors)
+            return await _read(replace(facts, primary=await _groups(facts.primary, source)), source, route_errors)
         case "ReadFallbackNames":
             names: Final = tuple(
                 dict.fromkeys(
@@ -140,7 +138,7 @@ async def _read(
             scope: Final = _scope(facts.fallback_names[decision.index], source)
             return await _read(replace(facts, fallback_scopes=(*facts.fallback_scopes, scope)), source, route_errors)
         case "ReadFallbackGroups":
-            grouped: Final = await _groups(facts.fallback_scopes[decision.index])
+            grouped: Final = await _groups(facts.fallback_scopes[decision.index], source)
             scopes: Final = tuple(
                 grouped if index == decision.index else scope for index, scope in enumerate(facts.fallback_scopes)
             )

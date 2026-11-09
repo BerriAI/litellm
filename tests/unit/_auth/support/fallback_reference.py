@@ -41,10 +41,11 @@ def authorization(facts: Facts) -> Decision:
                 return Decision("Deny", team)
             if facts.assigned_models is None:
                 return Decision("ReadAssignedGroups")
-            if (
-                not facts.assigned_models
-                or model_access(replace(facts.team.facts, grants=facts.assigned_models)).kind != "Allow"
-            ):
+            if not facts.assigned_models:
+                return Decision("Deny", team)
+            if facts.assigned_scope is None:
+                return Decision("ReadAssignedScope")
+            if model_access(facts.assigned_scope).kind != "Allow":
                 return Decision("Deny", team)
     elif facts.embedded_team is None and facts.embedded_team_grants:
         return Decision("ReadEmbeddedTeam")
