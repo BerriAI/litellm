@@ -7077,11 +7077,13 @@ _team_member_max_budget_alert_check: Final = team_member_max_budget_alert_check
 
 
 def _raise_team_member_without_membership(user_id: str, team_id: str) -> None:
+    from litellm.proxy.litellm_pre_call_utils import sanitize_for_log
+
     verbose_proxy_logger.warning(
         "fail_closed_budget_enforcement: rejecting request, user_id=%s has no membership row in team_id=%s "
         "so spend against the team member budget cannot be verified",
-        user_id,
-        team_id,
+        sanitize_for_log(user_id),
+        sanitize_for_log(team_id),
     )
     raise HTTPException(
         status_code=status.HTTP_403_FORBIDDEN,
