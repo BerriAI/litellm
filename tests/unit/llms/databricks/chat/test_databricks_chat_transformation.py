@@ -23,6 +23,7 @@ from litellm.constants import (
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.databricks.common_utils import DatabricksException
+from litellm.responses.litellm_completion_transformation.transformation import LiteLLMCompletionResponsesConfig
 from litellm.llms.databricks.chat.transformation import (
     DatabricksChatResponseIterator,
     DatabricksConfig,
@@ -2743,6 +2744,51 @@ def test_transform_response_carries_served_service_tier(served_tier: str | None)
     )
 
     assert result.to_dict().get("service_tier") == served_tier
+
+
+def _transform_with_response_id(
+    response_id: str | None, model_response: litellm.ModelResponse
+) -> litellm.ModelResponse:
+    raw_response: Final = MagicMock()
+    raw_response.json.return_value = {
+        "id": response_id,
+        "object": "chat.completion",
+        "created": 0,
+        "model": "databricks-gemini-3-8-flash",
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": "Paris"}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 4, "completion_tokens": 1, "total_tokens": 5},
+    }
+    return DatabricksConfig().transform_response(
+        model="databricks/databricks-gemini-3-8-flash",
+        raw_response=raw_response,
+        model_response=model_response,
+        logging_obj=MagicMock(),
+        request_data={},
+        messages=[{"role": "user", "content": "Capital of France?"}],
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+    )
+
+
+def test_transform_response_keeps_generated_id_when_databricks_returns_null_id() -> None:
+    model_response: Final = litellm.ModelResponse()
+    generated_id: Final = model_response.id
+
+    result: Final = _transform_with_response_id(None, model_response)
+
+    assert result.id == generated_id
+    assert LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+        request_input="Capital of France?",
+        responses_api_request={},
+        chat_completion_response=result,
+    ).id
+
+
+def test_transform_response_keeps_databricks_id_when_present() -> None:
+    result: Final = _transform_with_response_id("chatcmpl-from-databricks", litellm.ModelResponse())
+
+    assert result.id == "chatcmpl-from-databricks"
 
 
 _DATABRICKS_TOOLS_WITH_OPENAI_TOOL_SEARCH: Final = [

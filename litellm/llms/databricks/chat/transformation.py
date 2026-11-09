@@ -961,7 +961,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         _custom_llm_provider: Final = litellm_params.get("custom_llm_provider") or "databricks"
         _response_model: Final = completion_response.get("model") or ""
         model_response.model = f"{_custom_llm_provider}/{_response_model}"
-        model_response.id = completion_response["id"]
+        model_response.id = completion_response.get("id") or model_response.id
         model_response.created = completion_response["created"]
         if "system_fingerprint" in completion_response:
             model_response.system_fingerprint = (  # rebind-ok: fills the caller's model_response like id above
