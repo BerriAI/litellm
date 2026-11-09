@@ -34,9 +34,9 @@ async def read_default_budget(budget_id: str, io: EndUserIO) -> LiteLLM_BudgetTa
         record: Final = (
             await native.one("budget", [budget_id], LiteLLM_BudgetTable)
             if native is not None
-            else await auth_checks._dictable_table(BudgetRepository(io.prisma), "budget").find_unique(
+            else await auth_checks._dictable_table(BudgetRepository(io.prisma), "budget").find_unique(  # pyright: ignore[reportPrivateUsage]  # shared raw repository projection
                 where={"budget_id": budget_id}
-            )  # pyright: ignore[reportPrivateUsage]  # shared raw repository projection
+            )
         )
         if record is None:
             verbose_proxy_logger.warning(

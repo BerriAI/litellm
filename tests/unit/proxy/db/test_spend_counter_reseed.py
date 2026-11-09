@@ -48,13 +48,45 @@ async def test_native_reseed_reads_authoritative_zero_without_a_prisma_handle(co
 
 
 @pytest.mark.asyncio
-async def test_native_reseed_distinguishes_missing_from_failure():
+async def test_native_reseed_distinguishes_missing_from_invariant_failure():
     native = SimpleNamespace(auth_spend=AsyncMock(side_effect=[None, RuntimeError("offline")]))
     prisma = SimpleNamespace(native_auth_database=native)
     assert await SpendCounterReseed.from_db(prisma, "spend:user:u") is None
     with pytest.raises(NativeAuthFailure):
         await SpendCounterReseed.from_db(prisma, "spend:user:u")
     assert native.auth_spend.await_count == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error", [OSError("connection lost"), asyncio.TimeoutError()])
+async def test_native_spend_io_failure_preserves_cached_fallback_without_prisma(error):
+    native = SimpleNamespace(auth_spend=AsyncMock(side_effect=error))
+    prisma = SimpleNamespace(native_auth_database=native)
+    assert await SpendCounterReseed.from_db(prisma, "spend:key:hash") is None
+    assert await SpendCounterReseed.end_user_from_db(prisma, "spend:end_user:u") is None
+    assert native.auth_spend.await_count == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("aggregate", [[{"spend": 4.5}], OSError("connection still lost")])
+async def test_native_window_io_failure_uses_only_native_aggregate_and_preserves_unavailable(aggregate):
+    native = SimpleNamespace(auth_read=AsyncMock(side_effect=[OSError("connection lost"), aggregate]))
+    result = await SpendCounterReseed.window_from_db(
+        SimpleNamespace(native_auth_database=native), "Key", "hash", "1d", WINDOW_START
+    )
+    assert result == (None if isinstance(aggregate, OSError) else 4.5)
+    assert [call.args[0] for call in native.auth_read.call_args_list] == ["budget_window", "window_spend"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("payload", ["not a number", {}, []])
+async def test_native_invalid_spend_cannot_become_cached_fallback(payload):
+    native = SimpleNamespace(auth_spend=AsyncMock(return_value=payload))
+    prisma = SimpleNamespace(native_auth_database=native)
+    with pytest.raises(NativeAuthFailure):
+        await SpendCounterReseed.from_db(prisma, "spend:key:hash")
+    with pytest.raises(NativeAuthFailure):
+        await SpendCounterReseed.end_user_from_db(prisma, "spend:end_user:u")
 
 
 @pytest.mark.asyncio

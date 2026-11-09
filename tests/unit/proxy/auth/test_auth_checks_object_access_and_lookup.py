@@ -9727,6 +9727,40 @@ async def test_get_managed_vector_store_rows_by_uuids_db_fetch_validates_rows():
 
 
 @pytest.mark.asyncio
+async def test_native_managed_vector_store_read_preserves_owner_and_warms_cache():
+    from litellm.proxy.auth.auth_checks import get_managed_vector_store_rows_by_uuids
+
+    native = SimpleNamespace(auth_read=AsyncMock(return_value=[{
+        "vector_store_id": "vs-native", "custom_llm_provider": "openai",
+        "team_id": "team", "user_id": "owner", "litellm_params": {"vector_store_id": "upstream"},
+    }]))
+    prisma = SimpleNamespace(native_auth_database=native)
+    cache = UserApiKeyCache()
+    rows = await get_managed_vector_store_rows_by_uuids(["vs-native"], prisma, cache)
+    cached = await get_managed_vector_store_rows_by_uuids(["vs-native"], prisma, cache)
+    assert len(rows) == len(cached) == 1
+    assert rows[0].team_id == cached[0].team_id == "team"
+    assert rows[0].user_id == cached[0].user_id == "owner"
+    assert rows[0].litellm_params == {"vector_store_id": "upstream"}
+    native.auth_read.assert_awaited_once_with("managed_vector_store", ["vs-native"], writer=False)
+
+
+@pytest.mark.asyncio
+async def test_native_email_backfill_reads_the_writer_after_the_atomic_update():
+    from litellm.proxy.auth.auth_checks import _backfill_null_user_email
+
+    native = SimpleNamespace(auth_read=AsyncMock(return_value=[{"user_id": "u", "user_email": "winner@example.test"}]))
+    prisma = MagicMock(native_auth_database=native)
+    prisma.db.litellm_usertable.update_many = AsyncMock(return_value=0)
+    prisma.db.litellm_usertable.find_unique = AsyncMock(side_effect=AssertionError("legacy read"))
+    row = await _backfill_null_user_email(prisma, UserApiKeyCache(), LiteLLM_UserTable(user_id="u"), "loser@example.test")
+    assert row.user_email == "winner@example.test"
+    native.auth_read.assert_awaited_once_with("user", ["u"], writer=True)
+    prisma.db.litellm_usertable.update_many.assert_awaited_once()
+    prisma.db.litellm_usertable.find_unique.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_get_project_object_db_fetch_returns_cached_obj():
     from litellm.proxy._types import LiteLLM_ProjectTableCachedObj
     from litellm.proxy.auth.auth_checks import get_project_object

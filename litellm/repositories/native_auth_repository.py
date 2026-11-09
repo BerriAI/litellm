@@ -1,8 +1,9 @@
 import time
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from inspect import getattr_static
+from itertools import chain
 from typing import Final, Protocol, TypeVar
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter
@@ -14,10 +15,30 @@ from litellm.models.team import Member
 from litellm.proxy.db.db_lookup_gate import DBLookupDeadlineExceeded, bounded_db_lookup, db_lookup_gate
 from litellm.types.proxy.auth.user_api_key_auth import LiteLLM_VerificationTokenView
 
-_Model = TypeVar("_Model", bound=BaseModel)
+_Model = TypeVar("_Model", bound=BaseModel)  # rebind-ok: TypeVar declarations cannot be annotated Final
 _ROWS: Final = TypeAdapter(list[dict[str, object]])
 _SPEND: Final[TypeAdapter[float | None]] = TypeAdapter(float | None)
-_MEMBERS: Final = TypeAdapter(list[dict[str, object]])
+_BATCH_ID_KINDS: Final = frozenset(
+    {
+        "key",
+        "user",
+        "team",
+        "org",
+        "project",
+        "end_user",
+        "budget",
+        "object_permission",
+        "access_group",
+        "tag",
+        "model_access_group",
+        "agent",
+        "agent_name",
+        "retired_agent",
+        "managed_vector_store",
+        "agent_access_group",
+    }
+)
+_BATCH_SIZE: Final = 1000
 
 
 class ModelAccessGroupRow(BaseModel):
@@ -37,6 +58,11 @@ class TagRegistryRow(BaseModel):
     tag_name: str
 
 
+class AgentIdRow(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    agent_id: str
+
+
 class SpendRow(BaseModel):
     model_config = ConfigDict(frozen=True)
     spend: float | None = None
@@ -46,12 +72,21 @@ class BudgetWindowRow(SpendRow):
     window_start: datetime
 
 
-class NativeAuthDeadlineExceeded(NativeAuthFailure, DBLookupDeadlineExceeded):
+class NativeAuthDatabaseError(NativeAuthFailure):
+    pass
+
+
+class NativeAuthDeadlineExceeded(NativeAuthDatabaseError, DBLookupDeadlineExceeded):
     pass
 
 
 class AuthReadHandle(Protocol):
-    async def auth_read(self, kind: str, ids: list[str], writer: bool = False) -> object: ...
+    async def auth_read(
+        self,
+        kind: str,
+        ids: list[str],  # mutable-ok: PyO3 requires a Python list at this boundary
+        writer: bool = False,
+    ) -> object: ...
 
     async def auth_spend(self, kind: str, id: str) -> object: ...
 
@@ -71,7 +106,7 @@ class NativeAuthRepository:
             return None
         try:
             row: Final = rows[0]
-            members: Final = _MEMBERS.validate_python(row.get("team_members_with_roles") or [])
+            members: Final = _ROWS.validate_python(row.get("team_members_with_roles") or [])
             matches: Final = tuple(
                 Member.model_validate(member)
                 for member in members
@@ -94,7 +129,7 @@ class NativeAuthRepository:
         except Exception as error:  # noqa: BLE001  # preserve terminal native projection errors
             raise NativeAuthRuntimeError("Invalid native auth key projection") from error
 
-    async def read(self, kind: str, ids: Sequence[str], writer: bool = False) -> list[dict[str, object]]:
+    async def read(self, kind: str, ids: Sequence[str], writer: bool = False) -> Sequence[Mapping[str, object]]:
         try:
             value: Final = await bounded_db_lookup(self._read(kind, ids, writer), name=kind)
             return _ROWS.validate_python(value)
@@ -102,6 +137,8 @@ class NativeAuthRepository:
             raise
         except DBLookupDeadlineExceeded as error:
             raise NativeAuthDeadlineExceeded(error.lookup, error.deadline_seconds) from error
+        except OSError as error:
+            raise NativeAuthDatabaseError(f"Native auth {kind} database read failed") from error
         except Exception as error:  # noqa: BLE001  # native errors must not enter legacy fallback paths
             raise NativeAuthRuntimeError(f"Native auth {kind} read failed") from error
 
@@ -113,12 +150,24 @@ class NativeAuthRepository:
         rows: Final = await self.many(kind, ids, model, writer=writer)
         return rows[0] if rows else None
 
-    async def many(self, kind: str, ids: Sequence[str], model: type[_Model], *, writer: bool = False) -> list[_Model]:
-        rows: Final = await self.read(kind, ids, writer=writer)
+    async def many(
+        self, kind: str, ids: Sequence[str], model: type[_Model], *, writer: bool = False
+    ) -> Sequence[_Model]:
+        rows: Final = await self._many_rows(kind, ids, writer=writer)
         try:
-            return [model.model_validate(row) for row in rows]
+            return tuple(model.model_validate(row) for row in rows)
         except Exception as error:  # noqa: BLE001  # invalid native projections are terminal
             raise NativeAuthRuntimeError(f"Invalid native auth {kind} projection") from error
+
+    async def _many_rows(self, kind: str, ids: Sequence[str], *, writer: bool) -> Sequence[Mapping[str, object]]:
+        if kind not in _BATCH_ID_KINDS or len(ids) <= _BATCH_SIZE:
+            return await self.read(kind, ids, writer=writer)
+        unique_ids: Final = tuple(dict.fromkeys(ids))
+        chunks: Final = [
+            await self.read(kind, unique_ids[start : start + _BATCH_SIZE], writer=writer)
+            for start in range(0, len(unique_ids), _BATCH_SIZE)
+        ]
+        return tuple(chain.from_iterable(chunks))
 
     async def spend(self, kind: str, entity_id: str) -> float | None:
         try:
@@ -128,6 +177,8 @@ class NativeAuthRepository:
             raise
         except DBLookupDeadlineExceeded as error:
             raise NativeAuthDeadlineExceeded(error.lookup, error.deadline_seconds) from error
+        except OSError as error:
+            raise NativeAuthDatabaseError(f"Native auth {kind} database spend read failed") from error
         except Exception as error:  # noqa: BLE001  # a failed native read is not an authoritative miss
             raise NativeAuthRuntimeError(f"Native auth {kind} spend read failed") from error
 

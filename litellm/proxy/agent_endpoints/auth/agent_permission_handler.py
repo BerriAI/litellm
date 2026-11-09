@@ -32,6 +32,7 @@ from litellm.proxy.agent_endpoints.auth.agent_caller import agent_caller_auth
 from litellm.proxy.agent_endpoints.auth.managed_authorization import managed_agent_policy
 from litellm.proxy.mcp_server.ui_session_utils import build_effective_auth_contexts
 from litellm.proxy.utils import PrismaClient
+from litellm.repositories.native_auth_repository import AgentIdRow, native_auth_repository
 from litellm.repositories.table_repositories import AgentsRepository
 from litellm.types.agents import AgentResponse
 
@@ -597,8 +598,13 @@ class AgentRequestHandler:
         if not access_groups or prisma_client is None:
             return set()
 
-        agents: Final = await AgentsRepository(prisma_client, use_writer=check_db_only).table.find_many(
-            where={"agent_access_groups": {"hasSome": access_groups}}
+        native: Final = native_auth_repository(prisma_client)
+        agents: Final = (
+            await native.many("agent_access_group", access_groups, AgentIdRow, writer=check_db_only)
+            if native is not None
+            else await AgentsRepository(prisma_client, use_writer=check_db_only).table.find_many(
+                where={"agent_access_groups": {"hasSome": access_groups}}
+            )
         )
         return {agent.agent_id for agent in agents}
 
