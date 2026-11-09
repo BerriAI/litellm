@@ -416,6 +416,36 @@ class BaseConfig(ABC):
     ) -> "ModelResponse":
         pass
 
+    async def async_transform_response(
+        self,
+        model: str,
+        raw_response: httpx.Response,
+        model_response: "ModelResponse",
+        logging_obj: LiteLLMLoggingObj,
+        request_data: dict,
+        messages: list[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        encoding: "Tokenizer | None",
+        api_key: str | None = None,
+        json_mode: bool | None = None,
+        async_http_client: object | None = None,
+    ) -> "ModelResponse":
+        """Override when transform_response would block the event loop (e.g. sync polling)."""
+        return self.transform_response(
+            model=model,
+            raw_response=raw_response,
+            model_response=model_response,
+            logging_obj=logging_obj,
+            request_data=request_data,
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            encoding=encoding,
+            api_key=api_key,
+            json_mode=json_mode,
+        )
+
     def transform_parsed_response_dict(self, parsed_response: dict) -> dict:
         """
         Repair a parsed OpenAI-format response dict before generic conversion.
@@ -500,6 +530,10 @@ class BaseConfig(ABC):
 
     @property
     def uses_async_transform_request(self) -> bool:
+        return False
+
+    @property
+    def uses_async_transform_response(self) -> bool:
         return False
 
     @property

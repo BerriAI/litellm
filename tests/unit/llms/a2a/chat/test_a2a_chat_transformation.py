@@ -265,6 +265,57 @@ def test_transform_response_rejects_a_working_task_without_polling_context():
         _transform(payload)
 
 
+@pytest.mark.asyncio
+async def test_async_transform_response_polls_tasks_get_until_completed(mocker):
+    agent_url = "http://agent.example"
+    mock_poll = mocker.patch(
+        "litellm.llms.a2a.chat.transformation.async_poll_a2a_task_completion",
+        new=mocker.AsyncMock(
+            return_value={
+                "jsonrpc": "2.0",
+                "id": "poll-0",
+                "result": {
+                    "kind": "task",
+                    "id": "t1",
+                    "status": {"state": "completed"},
+                    "artifacts": [{"parts": [{"kind": "text", "text": "async final"}]}],
+                },
+            }
+        ),
+    )
+
+    response = await A2AConfig().async_transform_response(
+        model="a2a/test-agent",
+        raw_response=httpx.Response(
+            200,
+            json={
+                "jsonrpc": "2.0",
+                "id": "req1",
+                "result": {
+                    "kind": "task",
+                    "id": "t1",
+                    "status": {"state": "working"},
+                },
+            },
+        ),
+        model_response=ModelResponse(),
+        logging_obj=None,
+        request_data={},
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={},
+        litellm_params={"api_base": agent_url, "timeout": 5},
+        encoding=None,
+        async_http_client=mocker.Mock(),
+    )
+
+    mock_poll.assert_awaited_once()
+    assert response.choices[0].message.content == "async final"
+
+
+def test_a2a_config_uses_async_transform_response():
+    assert A2AConfig().uses_async_transform_response is True
+
+
 def test_transform_response_polls_tasks_get_until_completed(respx_mock):
     agent_url = "http://agent.example"
     respx_mock.post(agent_url).mock(

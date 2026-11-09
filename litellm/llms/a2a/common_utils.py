@@ -2,9 +2,10 @@
 Common utilities for A2A (Agent-to-Agent) Protocol
 """
 
+import asyncio
 import time
 from collections.abc import Awaitable, Callable, Mapping
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 from pydantic import BaseModel
@@ -16,6 +17,8 @@ from litellm.llms.azure_ai.common_utils import has_azure_entra_params, resolve_a
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.openai import AllMessageValues
 
+if TYPE_CHECKING:
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
 A2A_TASK_STATE_COMPLETED: Final = "completed"
 A2A_TASK_FAILURE_STATES: Final = frozenset({"failed", "canceled", "rejected"})
@@ -176,6 +179,23 @@ def extract_text_from_a2a_response(response_dict: Mapping[str, object], max_dept
     return ""
 
 
+def _handle_a2a_poll_data(poll_data: Mapping[str, object], status_code: int) -> Mapping[str, object] | None:
+    if "error" in poll_data:
+        error: Final = poll_data.get("error")
+        message: Final = error.get("message", "Unknown error") if isinstance(error, dict) else "Unknown error"
+        raise A2AError(status_code=status_code, message=f"A2A error: {message}")
+
+    result: Final = poll_data.get("result", {})
+    state: Final = a2a_task_state(result) if isinstance(result, dict) else None
+    if state == A2A_TASK_STATE_COMPLETED:
+        return poll_data
+    if state in A2A_TASK_FAILURE_STATES:
+        raise A2AError(status_code=status_code, message=f"A2A task ended with state: {state}")
+    if state in A2A_TASK_INTERRUPTED_STATES:
+        raise A2AError(status_code=status_code, message=f"A2A task requires further action (state: {state})")
+    return None
+
+
 def poll_a2a_task_completion(
     *,
     api_base: str,
@@ -185,13 +205,14 @@ def poll_a2a_task_completion(
     timeout: float = 60.0,
     poll_interval: float = 0.5,
 ) -> Mapping[str, object]:
-    """Poll ``tasks/get`` until the task reaches a terminal state."""
+    """Poll ``tasks/get`` until the task reaches a terminal state (sync completions only)."""
     endpoint: Final = api_base.rstrip("/")
-    max_attempts: Final = max(1, int(timeout / poll_interval))
+    deadline: Final = time.monotonic() + timeout
     request_headers: Final = {"Content-Type": "application/json", **(dict(headers) if headers else {})}
+    attempt: Final = 0
 
     with httpx.Client(timeout=timeout) as client:
-        for attempt in range(max_attempts):
+        while time.monotonic() < deadline:
             poll_request: Final = {
                 "jsonrpc": "2.0",
                 "id": f"{request_id}-poll-{attempt}",
@@ -203,24 +224,64 @@ def poll_a2a_task_completion(
             poll_data: Final = response.json()
             if not isinstance(poll_data, dict):
                 raise A2AError(status_code=response.status_code, message="Invalid tasks/get response")
+            completed: Final = _handle_a2a_poll_data(poll_data, response.status_code)
+            if completed is not None:
+                return completed
+            attempt += 1
+            time.sleep(min(poll_interval, max(0.0, deadline - time.monotonic())))
 
-            if "error" in poll_data:
-                error: Final = poll_data.get("error")
-                message: Final = error.get("message", "Unknown error") if isinstance(error, dict) else "Unknown error"
-                raise A2AError(status_code=response.status_code, message=f"A2A error: {message}")
+    raise A2AError(
+        status_code=504,
+        message=f"A2A task {task_id} did not complete within {timeout} seconds",
+    )
 
-            result: Final = poll_data.get("result", {})
-            state: Final = a2a_task_state(result) if isinstance(result, dict) else None
-            if state == A2A_TASK_STATE_COMPLETED:
-                return poll_data
-            if state in A2A_TASK_FAILURE_STATES:
-                raise A2AError(status_code=response.status_code, message=f"A2A task ended with state: {state}")
-            if state in A2A_TASK_INTERRUPTED_STATES:
-                raise A2AError(
-                    status_code=response.status_code,
-                    message=f"A2A task requires further action (state: {state})",
-                )
-            time.sleep(poll_interval)
+
+async def async_poll_a2a_task_completion(
+    *,
+    api_base: str,
+    task_id: str,
+    request_id: str,
+    headers: Mapping[str, str] | None = None,
+    timeout: float = 60.0,
+    poll_interval: float = 0.5,
+    client: "AsyncHTTPHandler | None" = None,
+) -> Mapping[str, object]:
+    """Poll ``tasks/get`` without blocking the event loop."""
+    from litellm import LlmProviders
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, get_async_httpx_client
+
+    endpoint: Final = api_base.rstrip("/")
+    deadline: Final = asyncio.get_running_loop().time() + timeout
+    request_headers: Final = {"Content-Type": "application/json", **(dict(headers) if headers else {})}
+    attempt: Final = 0
+    async_client: Final = client or get_async_httpx_client(llm_provider=LlmProviders.A2A)
+    owns_client: Final = client is None
+
+    try:
+        while asyncio.get_running_loop().time() < deadline:
+            poll_request: Final = {
+                "jsonrpc": "2.0",
+                "id": f"{request_id}-poll-{attempt}",
+                "method": "tasks/get",
+                "params": {"id": task_id},
+            }
+            if not isinstance(async_client, AsyncHTTPHandler):
+                raise A2AError(status_code=500, message="A2A async poll requires AsyncHTTPHandler")
+            response: Final = await async_client.post(
+                endpoint, json=poll_request, headers=request_headers, timeout=timeout
+            )
+            response.raise_for_status()
+            poll_data: Final = response.json()
+            if not isinstance(poll_data, dict):
+                raise A2AError(status_code=response.status_code, message="Invalid tasks/get response")
+            completed: Final = _handle_a2a_poll_data(poll_data, response.status_code)
+            if completed is not None:
+                return completed
+            attempt += 1
+            await asyncio.sleep(min(poll_interval, max(0.0, deadline - asyncio.get_running_loop().time())))
+    finally:
+        if owns_client:
+            await async_client.aclose()
 
     raise A2AError(
         status_code=504,
