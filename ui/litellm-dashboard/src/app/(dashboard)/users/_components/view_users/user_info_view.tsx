@@ -1,5 +1,5 @@
 import ResourceActivity from "@/components/UsagePage/ResourceActivity";
-import type { ParseKeys } from "i18next";
+import { MemberRoleSelect } from "./MemberRoleSelect";
 import React, { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
@@ -20,7 +20,6 @@ import {
   teamMemberDeleteCall,
   Member,
 } from "@/components/networking";
-import { SimpleTooltip } from "@/components/ui/tooltip";
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import {
   Combobox,
@@ -30,7 +29,6 @@ import {
   ComboboxItem,
   ComboboxList,
 } from "@/components/ui/combobox";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { hasProxyWideSpendView, rolesWithWriteAccess } from "@/utils/roles";
 import { teamDetailHref } from "@/utils/entityLinks";
 import { BadgeLink } from "@/components/shared/BadgeLink";
@@ -70,17 +68,11 @@ interface TeamDisplayInfo {
 }
 
 const ADD_TEAM_FIELD_ID = "add-team-team";
-const ADD_TEAM_ROLE_FIELD_ID = "add-team-role";
 
 interface TeamOption {
   team_id: string;
   team_alias: string;
 }
-
-const MEMBER_ROLE_OPTIONS: ReadonlyArray<{ value: string; hintKey: ParseKeys }> = [
-  { value: "user", hintKey: "users.userInfo.memberRoles.userHint" },
-  { value: "admin", hintKey: "users.userInfo.memberRoles.adminHint" },
-];
 
 export default function UserInfoView({
   userId,
@@ -521,7 +513,7 @@ export default function UserInfoView({
 
         {canViewUserUsage && (
           <TabsContent value="activity">
-            <ResourceActivity scope="user" id={userId} />
+            <ResourceActivity scope="user" id={userId} activity={activityDateRange} />
           </TabsContent>
         )}
 
@@ -841,24 +833,7 @@ export default function UserInfoView({
                 </Combobox>
               </Field>
 
-              <Field>
-                <FieldLabel htmlFor={ADD_TEAM_ROLE_FIELD_ID}>{t("users.userInfo.addTeamDialog.memberRole")}</FieldLabel>
-                <Select value={selectedRole} onValueChange={(value) => value !== null && setSelectedRole(value)}>
-                  <SelectTrigger id={ADD_TEAM_ROLE_FIELD_ID} className="w-full">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {MEMBER_ROLE_OPTIONS.map((option) => (
-                      <SelectItem key={option.value} value={option.value} title={option.value}>
-                        <SimpleTooltip content={t(option.hintKey)}>
-                          <span className="font-medium">{option.value}</span>
-                          <span className="ml-2 text-muted-foreground text-sm">- {t(option.hintKey)}</span>
-                        </SimpleTooltip>
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </Field>
+              <MemberRoleSelect value={selectedRole} onChange={setSelectedRole} />
             </FieldGroup>
 
             <div className="text-right mt-4">

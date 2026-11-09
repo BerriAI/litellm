@@ -213,6 +213,26 @@ describe("ModelInfoView", () => {
       "user",
       expect.objectContaining({ model: defaultModelData.litellm_params.model }),
     );
+    vi.stubGlobal("requestIdleCallback", (callback: () => void) => {
+      callback();
+      return 0;
+    });
+    fireEvent.click(screen.getByRole("button", { name: /\d.* - .*\d/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Last 7 Days/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+    await waitFor(() => expect(networking.dailyActivityAggregatedCall).toHaveBeenCalledTimes(2));
+    const selected = vi.mocked(networking.dailyActivityAggregatedCall).mock.calls.at(-1)![1];
+    fireEvent.click(screen.getByRole("tab", { name: "Overview" }));
+    fireEvent.click(activityTab);
+    await waitFor(() => expect(networking.dailyActivityAggregatedCall).toHaveBeenCalledTimes(3));
+    expect(networking.dailyActivityAggregatedCall).toHaveBeenLastCalledWith(
+      "user",
+      expect.objectContaining({
+        startTime: selected.startTime,
+        endTime: selected.endTime,
+      }),
+    );
+    vi.unstubAllGlobals();
   });
 
   it("should render", async () => {

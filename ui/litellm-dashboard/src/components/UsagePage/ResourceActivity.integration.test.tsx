@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import * as networking from "@/components/networking";
 import { EMPTY_DAILY_ACTIVITY_METADATA, type DailyActivityAggregatedResponse } from "./dailyActivityApi";
@@ -42,6 +42,79 @@ const response: DailyActivityAggregatedResponse = {
 };
 
 describe("ResourceActivity", () => {
+  afterEach(() => vi.useRealTimers());
+
+  it.each(["team", "user"] as const)("shows the returned model breakdown for a %s", async (scope) => {
+    vi.mocked(networking.dailyActivityAggregatedCall).mockResolvedValue({
+      ...response,
+      results: [
+        {
+          ...response.results[0],
+          breakdown: {
+            models: {
+              "example-model": { metrics: response.results[0].metrics },
+            },
+          },
+        },
+      ],
+    });
+    render(<ResourceActivity scope={scope} id="resource-1" />);
+    expect(await screen.findByRole("cell", { name: "example-model" })).toBeInTheDocument();
+  });
+
+  it("shows matching recorded models and their totals for a wildcard, in one request", async () => {
+    vi.mocked(networking.dailyActivityAggregatedCall).mockResolvedValue({
+      ...response,
+      metadata: { ...response.metadata, total_spend: 124.68 },
+      results: [
+        {
+          ...response.results[0],
+          breakdown: {
+            models: {
+              "openai/model-one": { metrics: response.results[0].metrics },
+              "openai/model-two": { metrics: response.results[0].metrics },
+              "anthropic/other-model": { metrics: { ...response.results[0].metrics, spend: 100 } },
+            },
+          },
+        },
+      ],
+    });
+    render(<ResourceActivity scope="model" id="openai/*" />);
+    expect(await screen.findByText("$24.68")).toBeInTheDocument();
+    expect(screen.getByText("openai/model-one")).toBeInTheDocument();
+    expect(screen.getByText("openai/model-two")).toBeInTheDocument();
+    expect(screen.queryByText("anthropic/other-model")).not.toBeInTheDocument();
+    expect(networking.dailyActivityAggregatedCall).toHaveBeenCalledExactlyOnceWith(
+      "user",
+      expect.objectContaining({ model: undefined }),
+    );
+  });
+
+  it("keeps wildcard usage within the viewer's scope and shows empty when no model matches", async () => {
+    vi.mocked(useAuthorized).mockReturnValue({ ...auth, userRole: "Internal User" });
+    render(<ResourceActivity scope="model" id="openai/*" />);
+    expect(await screen.findByText("No daily details available")).toBeInTheDocument();
+    expect(screen.queryByText("$12.34")).not.toBeInTheDocument();
+    expect(networking.dailyActivityAggregatedCall).toHaveBeenCalledWith(
+      "user",
+      expect.objectContaining({ model: undefined, entityIds: [auth.userId] }),
+    );
+  });
+
+  it("includes today's UTC bucket for a team when the local date is still yesterday", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-11-09T01:00:00Z"));
+    vi.spyOn(networking, "formatDate").mockImplementation((date) =>
+      new Date(date.getTime() - 8 * 60 * 60 * 1000).toISOString().slice(0, 10),
+    );
+    render(<ResourceActivity scope="team" id="team-1" />);
+    expect(await screen.findByText("$12.34")).toBeInTheDocument();
+    const request = vi.mocked(networking.dailyActivityAggregatedCall).mock.calls[0][1];
+    expect(request.endTime.getFullYear()).toBe(2026);
+    expect(request.endTime.getMonth()).toBe(10);
+    expect(request.endTime.getDate()).toBe(9);
+  });
+
   beforeEach(() => {
     vi.restoreAllMocks();
     vi.mocked(useAuthorized).mockReturnValue(auth);

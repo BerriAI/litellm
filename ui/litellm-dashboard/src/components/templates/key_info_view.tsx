@@ -953,7 +953,7 @@ export default function KeyInfoView({
           </TabsContent>
 
           <TabsContent value="activity">
-            <ResourceActivity scope="key" id={currentKeyData.token} />
+            <ResourceActivity scope="key" id={currentKeyData.token} activity={activityDateRange} />
           </TabsContent>
 
           {/* Savings Panel. No keepMounted: this tab sweeps the daily rollup, and staying mounted

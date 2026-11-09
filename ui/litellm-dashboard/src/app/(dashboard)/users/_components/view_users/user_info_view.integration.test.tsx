@@ -136,6 +136,26 @@ describe("UserInfoView add-to-team form", () => {
       "user",
       expect.objectContaining({ entityIds: [defaultProps.userId], apiKey: undefined }),
     );
+    vi.stubGlobal("requestIdleCallback", (callback: () => void) => {
+      callback();
+      return 0;
+    });
+    fireEvent.click(screen.getByRole("button", { name: /\d.* - .*\d/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Last 7 Days/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+    await waitFor(() => expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalledTimes(2));
+    const selected = vi.mocked(mockUserDailyActivityAggregatedCall).mock.calls.at(-1)![1];
+    fireEvent.click(screen.getByRole("tab", { name: "Overview" }));
+    fireEvent.click(activityTab);
+    await waitFor(() => expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalledTimes(3));
+    expect(mockUserDailyActivityAggregatedCall).toHaveBeenLastCalledWith(
+      "user",
+      expect.objectContaining({
+        startTime: selected.startTime,
+        endTime: selected.endTime,
+      }),
+    );
+    vi.unstubAllGlobals();
   });
 
   const setup = () => userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });

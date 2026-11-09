@@ -1,4 +1,5 @@
 import ResourceActivity from "@/components/UsagePage/ResourceActivity";
+import { useActivityDateRange } from "@/app/(dashboard)/cost-optimization/_components/useDailyActivityRange";
 import { useModelCostMap } from "@/app/(dashboard)/hooks/models/useModelCostMap";
 import { useModelHub, useModelsInfo } from "@/app/(dashboard)/hooks/models/useModels";
 import { useQueryClient } from "@tanstack/react-query";
@@ -32,8 +33,7 @@ import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import DeleteResourceModal from "./common_components/DeleteResourceModal";
 import EditAutoRouterModal from "./edit_auto_router/edit_auto_router_modal";
 import ReuseCredentialsModal from "./model_add/reuse_credentials";
-import { credentialLabelsByName } from "./shared/credentialOptions";
-import { CredentialIdentity } from "./shared/CredentialIdentity";
+import { ExistingCredentialDialog } from "./model_info/ExistingCredentialDialog";
 import { toast } from "@/lib/toast";
 import {
   CredentialItem,
@@ -79,6 +79,7 @@ export default function ModelInfoView({
 }: ModelInfoViewProps) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
+  const activityDateRange = useActivityDateRange();
   const [localModelData, setLocalModelData] = useState<any>(null);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [deleteLoading, setDeleteLoading] = useState(false);
@@ -756,7 +757,7 @@ export default function ModelInfoView({
           </TabsContent>
 
           <TabsContent value="activity">
-            <ResourceActivity scope="model" id={modelData.litellm_model_name} />
+            <ResourceActivity scope="model" id={modelData.litellm_model_name} activity={activityDateRange} />
           </TabsContent>
 
           <TabsContent value="raw" keepMounted>
@@ -811,25 +812,12 @@ export default function ModelInfoView({
           setIsCredentialModalOpen={setIsCredentialModalOpen}
         />
       ) : (
-        <Dialog open={isCredentialModalOpen} onOpenChange={(open) => !open && setIsCredentialModalOpen(false)}>
-          <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto">
-            <DialogHeader>
-              <DialogTitle>{t("modelInfoView.existingCredentialDialog.title")}</DialogTitle>
-            </DialogHeader>
-            <CredentialIdentity
-              className="text-sm"
-              credentialName={modelData.litellm_params.litellm_credential_name ?? ""}
-              label={credentialLabelsByName(credentialsList).get(
-                modelData.litellm_params.litellm_credential_name ?? "",
-              )}
-            />
-            <DialogFooter>
-              <Button variant="outline" onClick={() => setIsCredentialModalOpen(false)}>
-                {t("modelInfoView.existingCredentialDialog.cancel")}
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
+        <ExistingCredentialDialog
+          open={isCredentialModalOpen}
+          onClose={() => setIsCredentialModalOpen(false)}
+          credentialName={modelData.litellm_params.litellm_credential_name ?? ""}
+          credentials={credentialsList}
+        />
       )}
 
       {isUpdateCredentialsModalOpen && accessToken && (
