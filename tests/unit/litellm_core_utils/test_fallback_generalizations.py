@@ -792,6 +792,35 @@ def test_shipped_wandb_rule_is_anchored_to_the_wandb_namespace(shipped_cost_map)
         assert matched is None or not matched.get("supports_reasoning"), foreign
 
 
+def test_shipped_rules_flag_unmapped_minimax_m_series_ids_as_reasoning(shipped_cost_map):
+    """MiniMax ships M-series reasoning models faster than the registry names them. The rule
+    carries no mode and no pricing, so cost stays on the standard unpriced behavior."""
+    model = "minimax/MiniMax-M3.2"
+    assert model not in litellm.model_cost
+
+    info = litellm.get_model_info(model, custom_llm_provider="minimax")
+    assert info["litellm_provider"] == "minimax"
+    assert info["supports_reasoning"] is True
+    assert info.get("mode") is None
+    assert not info.get("input_cost_per_token")
+    assert not info.get("output_cost_per_token")
+
+
+def test_shipped_minimax_rule_matches_only_minimax_m_series_ids(shipped_cost_map):
+    """``^minimax/minimax-m\\d`` stays off MiniMax's speech, video and image ids and off other namespaces."""
+    for matching in ("minimax/MiniMax-M3.2", "minimax/MiniMax-M4-Flash", "minimax/minimax-m3.1-flash"):
+        assert match_capability_generalizations(matching) == {"supports_reasoning": True}, matching
+    for foreign in (
+        "minimax/speech-02-hd",
+        "minimax/MiniMax-H3",
+        "minimax/image-01",
+        "openrouter/minimax/minimax-m3",
+        "notminimax/MiniMax-M3",
+    ):
+        matched = match_capability_generalizations(foreign)
+        assert matched is None or not matched.get("supports_reasoning"), foreign
+
+
 def test_shipped_wandb_rule_keeps_reasoning_effort_on_an_unmapped_model(shipped_cost_map):
     """End to end through the provider config: the gate WandbConfig applies reads the
     rule, so reasoning_effort is advertised and survives get_optional_params rather than

@@ -42065,6 +42065,29 @@
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000
     },
+    "minimax/MiniMax-M3.1-Flash": {
+        "input_cost_per_token": 1.5e-07,
+        "output_cost_per_token": 6e-07,
+        "cache_read_input_token_cost": 1.5e-08,
+        "litellm_provider": "minimax",
+        "mode": "chat",
+        "source": "https://platform.minimax.io/docs/guides/pricing-paygo",
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_none_reasoning_effort": false,
+        "supports_xhigh_reasoning_effort": true,
+        "supports_max_reasoning_effort": true,
+        "reasoning_effort_levels": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+        ],
+        "supports_vision": true,
+        "max_input_tokens": 1000000
+    },
     "minimax/MiniMax-H3": {
         "litellm_provider": "minimax",
         "mode": "video_generation",
@@ -63758,6 +63781,14 @@
                 "name": "wandb-reasoning-baseline",
                 "pattern": "^wandb/",
                 "description": "Any Weights & Biases Inference model id, anchored to the wandb/ namespace so only that provider's ids match. W&B's serverless catalog is reasoning-first and grows faster than this registry names it, so an id the map has not described yet is treated as reasoning-capable and keeps the caller's reasoning_effort instead of dropping it or raising UnsupportedParamsError. Rules lose to exact entries, so a mapped non-reasoning model such as wandb/meta-llama/Llama-3.1-8B-Instruct is unaffected. Carries no mode and no pricing, so cost stays on the standard unpriced behavior and the deployment does not read as catalog-mapped to the router's reasoning-effort resolver.",
+                "model_info": {
+                    "supports_reasoning": true
+                }
+            },
+            {
+                "name": "minimax-reasoning-baseline",
+                "pattern": "^minimax/minimax-m\\d",
+                "description": "Any MiniMax M-series text model id under the minimax/ namespace, such as minimax/MiniMax-M3.2. Every M-series model MiniMax has shipped reasons, and new ones reach callers before this registry names them, so an id the map has not described yet is treated as reasoning-capable and keeps the caller's reasoning_effort and thinking instead of dropping them. Anchored to minimax/minimax-m so MiniMax's speech, video and image ids never match. Rules lose to exact entries. Carries no mode and no pricing, so cost stays on the standard unpriced behavior.",
                 "model_info": {
                     "supports_reasoning": true
                 }

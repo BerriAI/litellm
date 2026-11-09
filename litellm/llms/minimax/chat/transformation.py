@@ -81,10 +81,18 @@ class MinimaxChatConfig(OpenAIGPTConfig):
     def get_supported_openai_params(self, model: str) -> list:
         """
         Get supported OpenAI parameters for MiniMax.
-        Adds reasoning_split, reasoning_effort and thinking to the list of supported params.
+        Adds reasoning_split, plus reasoning_effort unless the cost map marks the model as
+        non-reasoning, and thinking when the model supports reasoning.
         """
+        from litellm.utils import is_known_non_reasoning_model
+
         base_params: Final = super().get_supported_openai_params(model=model)
-        additional_params: Final = ["reasoning_split", "reasoning_effort"]
+        additional_params: Final = ["reasoning_split"]
+
+        # Unmapped MiniMax ids keep reasoning_effort, so a model newer than the cost map is not
+        # silently stripped. Only an entry that says the model does not reason drops it.
+        if not is_known_non_reasoning_model(model, "minimax"):
+            additional_params.append("reasoning_effort")
 
         # Add thinking parameter if model supports reasoning
         try:
