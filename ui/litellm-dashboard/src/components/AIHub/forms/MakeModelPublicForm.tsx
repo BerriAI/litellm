@@ -1,11 +1,18 @@
 import React, { useState, useCallback, useEffect } from "react";
-import { Modal, Form, Steps, Button, Checkbox } from "antd";
-import { Text, Title, Badge } from "@tremor/react";
+import type { ParseKeys } from "i18next";
+import { Loader2 } from "lucide-react";
+import { Trans, useTranslation } from "react-i18next";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { cn } from "@/lib/cva.config";
 import { makeModelGroupPublic } from "../../networking";
 import ModelFilters from "../../model_filters";
-import NotificationsManager from "../../molecules/notifications_manager";
+import { toast } from "@/lib/toast";
+import { displayMode } from "@/lib/decisionModels";
 
-const { Step } = Steps;
+const STEP_TITLES: ParseKeys[] = ["aiHub.makeModelPublic.steps.selectModels", "aiHub.makeModelPublic.steps.confirm"];
 
 interface ModelGroupInfo {
   model_group: string;
@@ -40,24 +47,23 @@ const MakeModelPublicForm: React.FC<MakeModelPublicFormProps> = ({
   modelHubData,
   onSuccess,
 }) => {
+  const { t } = useTranslation();
   const [currentStep, setCurrentStep] = useState(0);
   const [selectedModels, setSelectedModels] = useState<Set<string>>(new Set());
   const [filteredData, setFilteredData] = useState<ModelGroupInfo[]>([]);
   const [loading, setLoading] = useState(false);
-  const [form] = Form.useForm();
 
   const handleClose = () => {
     setCurrentStep(0);
     setSelectedModels(new Set());
     setFilteredData([]);
-    form.resetFields();
     onClose();
   };
 
   const handleNext = () => {
     if (currentStep === 0) {
       if (selectedModels.size === 0) {
-        NotificationsManager.fromBackend("Please select at least one model to make public");
+        toast.fromError(t("aiHub.makeModelPublic.selectAtLeastOne"));
         return;
       }
       setCurrentStep(1);
@@ -110,7 +116,7 @@ const MakeModelPublicForm: React.FC<MakeModelPublicFormProps> = ({
 
   const handleSubmit = async () => {
     if (selectedModels.size === 0) {
-      NotificationsManager.fromBackend("Please select at least one model to make public");
+      toast.fromError(t("aiHub.makeModelPublic.selectAtLeastOne"));
       return;
     }
 
@@ -119,12 +125,12 @@ const MakeModelPublicForm: React.FC<MakeModelPublicFormProps> = ({
       const modelGroupsToMakePublic = Array.from(selectedModels);
       await makeModelGroupPublic(accessToken, modelGroupsToMakePublic);
 
-      NotificationsManager.success(`Successfully made ${modelGroupsToMakePublic.length} model group(s) public!`);
+      toast.success(t("aiHub.makeModelPublic.success", { total: modelGroupsToMakePublic.length }));
       handleClose();
       onSuccess();
     } catch (error) {
       console.error("Error making model groups public:", error);
-      NotificationsManager.fromBackend("Failed to make model groups public. Please try again.");
+      toast.fromError(t("aiHub.makeModelPublic.failed"));
     } finally {
       setLoading(false);
     }
@@ -138,60 +144,54 @@ const MakeModelPublicForm: React.FC<MakeModelPublicFormProps> = ({
     return (
       <div className="space-y-4">
         <div className="flex items-center justify-between">
-          <Title>Select Models to Make Public</Title>
+          <h3 className="text-lg font-semibold">{t("aiHub.makeModelPublic.step1Title")}</h3>
           <div className="flex items-center space-x-2">
-            <Checkbox
-              checked={allModelsSelected}
-              indeterminate={isIndeterminate}
-              onChange={(e) => handleSelectAll(e.target.checked)}
-              disabled={filteredData.length === 0}
-            >
-              Select All {filteredData.length > 0 && `(${filteredData.length})`}
-            </Checkbox>
+            <label className="flex items-center gap-2 text-sm">
+              <Checkbox
+                checked={allModelsSelected}
+                indeterminate={isIndeterminate}
+                onCheckedChange={(checked) => handleSelectAll(checked === true)}
+                disabled={filteredData.length === 0}
+              />
+              {t("aiHub.makeModelPublic.selectAll")} {filteredData.length > 0 && `(${filteredData.length})`}
+            </label>
           </div>
         </div>
 
-        <Text className="text-sm text-gray-600">
-          Select the models you want to be visible on the public model hub. Users will still require a valid Virtual Key
-          to use these models.
-        </Text>
+        <p className="text-sm text-muted-foreground">{t("aiHub.makeModelPublic.description")}</p>
 
         {/* Filters */}
         <ModelFilters
           modelHubData={modelHubData}
           onFilteredDataChange={handleFilteredDataChange}
           showFiltersCard={false}
-          className="border rounded-lg p-4 bg-gray-50"
+          className="border rounded-lg p-4 bg-muted"
         />
 
         <div className="max-h-96 overflow-y-auto border rounded-lg p-4">
           <div className="space-y-3">
             {filteredData.length === 0 ? (
-              <div className="text-center py-8 text-gray-500">
-                <Text>No models match the current filters.</Text>
+              <div className="text-center py-8 text-muted-foreground">
+                <p>{t("aiHub.makeModelPublic.noMatch")}</p>
               </div>
             ) : (
               filteredData.map((model) => (
                 <div
                   key={model.model_group}
-                  className="flex items-center space-x-3 p-3 border rounded-lg hover:bg-gray-50"
+                  className="flex items-center space-x-3 p-3 border rounded-lg hover:bg-accent"
                 >
                   <Checkbox
                     checked={selectedModels.has(model.model_group)}
-                    onChange={(e) => handleModelSelection(model.model_group, e.target.checked)}
+                    onCheckedChange={(checked) => handleModelSelection(model.model_group, checked === true)}
                   />
-                  <div className="flex-1">
-                    <div className="flex items-center space-x-2">
-                      <Text className="font-medium">{model.model_group}</Text>
-                      {model.mode && (
-                        <Badge color="green" size="sm">
-                          {model.mode}
-                        </Badge>
-                      )}
+                  <div className="flex-1 min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="font-medium break-words">{model.model_group}</p>
+                      {model.mode && <Badge>{displayMode(model.mode)}</Badge>}
                     </div>
                     <div className="flex flex-wrap gap-1 mt-1">
                       {model.providers.map((provider) => (
-                        <Badge key={provider} color="blue" size="xs">
+                        <Badge key={provider} variant="secondary">
                           {provider}
                         </Badge>
                       ))}
@@ -204,10 +204,14 @@ const MakeModelPublicForm: React.FC<MakeModelPublicFormProps> = ({
         </div>
 
         {selectedModels.size > 0 && (
-          <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
-            <Text className="text-sm text-blue-800">
-              <strong>{selectedModels.size}</strong> model{selectedModels.size !== 1 ? "s" : ""} selected
-            </Text>
+          <div className="bg-info/10 border border-info/20 rounded-lg p-3">
+            <p className="text-sm text-info">
+              <Trans
+                i18nKey="aiHub.makeModelPublic.selectedCount"
+                count={selectedModels.size}
+                components={{ strong: <strong /> }}
+              />
+            </p>
           </div>
         )}
       </div>
@@ -217,29 +221,28 @@ const MakeModelPublicForm: React.FC<MakeModelPublicFormProps> = ({
   const renderStep2Content = () => {
     return (
       <div className="space-y-4">
-        <Title>Confirm Making Models Public</Title>
+        <h3 className="text-lg font-semibold">{t("aiHub.makeModelPublic.step2Title")}</h3>
 
-        <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
-          <Text className="text-sm text-yellow-800">
-            <strong>Warning:</strong> Once you make these models public, anyone who can go to the{" "}
-            <code>/ui/model_hub_table</code> will be able to know they exist on the proxy.
-          </Text>
+        <div className="bg-warning/10 border border-warning/20 rounded-lg p-4">
+          <p className="text-sm text-warning">
+            <Trans i18nKey="aiHub.makeModelPublic.warning" components={{ strong: <strong />, code: <code /> }} />
+          </p>
         </div>
 
         <div className="space-y-3">
-          <Text className="font-medium">Models to be made public:</Text>
+          <p className="font-medium">{t("aiHub.makeModelPublic.toBeMadePublic")}</p>
           <div className="max-h-48 overflow-y-auto border rounded-lg p-3">
             <div className="space-y-2">
               {Array.from(selectedModels).map((modelGroup) => {
                 const model = modelHubData.find((m) => m.model_group === modelGroup);
                 return (
-                  <div key={modelGroup} className="flex items-center justify-between p-2 bg-gray-50 rounded-sm">
-                    <div>
-                      <Text className="font-medium">{modelGroup}</Text>
+                  <div key={modelGroup} className="flex items-center justify-between p-2 bg-muted rounded-sm">
+                    <div className="min-w-0">
+                      <p className="font-medium break-words">{modelGroup}</p>
                       {model && (
                         <div className="flex flex-wrap gap-1 mt-1">
                           {model.providers.map((provider) => (
-                            <Badge key={provider} color="blue" size="xs">
+                            <Badge key={provider} variant="secondary">
                               {provider}
                             </Badge>
                           ))}
@@ -253,11 +256,14 @@ const MakeModelPublicForm: React.FC<MakeModelPublicFormProps> = ({
           </div>
         </div>
 
-        <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
-          <Text className="text-sm text-blue-800">
-            Total: <strong>{selectedModels.size}</strong> model{selectedModels.size !== 1 ? "s" : ""} will be made
-            public
-          </Text>
+        <div className="bg-info/10 border border-info/20 rounded-lg p-3">
+          <p className="text-sm text-info">
+            <Trans
+              i18nKey="aiHub.makeModelPublic.total"
+              count={selectedModels.size}
+              components={{ strong: <strong /> }}
+            />
+          </p>
         </div>
       </div>
     );
@@ -277,20 +283,21 @@ const MakeModelPublicForm: React.FC<MakeModelPublicFormProps> = ({
   const renderStepButtons = () => {
     return (
       <div className="flex justify-between mt-6">
-        <Button onClick={currentStep === 0 ? handleClose : handlePrevious}>
-          {currentStep === 0 ? "Cancel" : "Previous"}
+        <Button variant="outline" onClick={currentStep === 0 ? handleClose : handlePrevious}>
+          {currentStep === 0 ? t("aiHub.makeModelPublic.cancel") : t("aiHub.makeModelPublic.previous")}
         </Button>
 
         <div className="flex space-x-2">
           {currentStep === 0 && (
             <Button onClick={handleNext} disabled={selectedModels.size === 0}>
-              Next
+              {t("aiHub.makeModelPublic.next")}
             </Button>
           )}
 
           {currentStep === 1 && (
-            <Button onClick={handleSubmit} loading={loading}>
-              Make Public
+            <Button onClick={handleSubmit} disabled={loading}>
+              {loading && <Loader2 className="size-4 animate-spin" />}
+              {t("aiHub.makeModelPublic.makePublic")}
             </Button>
           )}
         </div>
@@ -299,24 +306,42 @@ const MakeModelPublicForm: React.FC<MakeModelPublicFormProps> = ({
   };
 
   return (
-    <Modal
-      title="Make Models Public"
-      open={visible}
-      onCancel={handleClose}
-      footer={null}
-      width={1200}
-      maskClosable={false}
-    >
-      <Form form={form} layout="vertical">
-        <Steps current={currentStep} className="mb-6">
-          <Step title="Select Models" />
-          <Step title="Confirm" />
-        </Steps>
+    <Dialog open={visible} onOpenChange={(open) => !open && handleClose()} disablePointerDismissal>
+      <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[1200px]">
+        <DialogHeader>
+          <DialogTitle>{t("aiHub.makeModelPublic.title")}</DialogTitle>
+        </DialogHeader>
 
-        {renderStepContent()}
-        {renderStepButtons()}
-      </Form>
-    </Modal>
+        <div>
+          <ol className="mb-6 flex items-center gap-6">
+            {STEP_TITLES.map((title, index) => (
+              <li
+                key={title}
+                className="flex items-center gap-2"
+                aria-current={currentStep === index ? "step" : undefined}
+              >
+                <span
+                  className={cn(
+                    "flex size-6 items-center justify-center rounded-full border text-xs",
+                    currentStep === index
+                      ? "border-primary bg-primary text-primary-foreground"
+                      : "border-border text-muted-foreground",
+                  )}
+                >
+                  {index + 1}
+                </span>
+                <span className={cn("text-sm", currentStep === index ? "font-medium" : "text-muted-foreground")}>
+                  {t(title)}
+                </span>
+              </li>
+            ))}
+          </ol>
+
+          {renderStepContent()}
+          {renderStepButtons()}
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 };
 

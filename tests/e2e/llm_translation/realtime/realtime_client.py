@@ -11,32 +11,31 @@ models, matching the suite's no-raw-dicts rule.
 from __future__ import annotations
 
 import time
-from collections.abc import Generator, Mapping
+from collections.abc import Generator, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import TypeVar
+from itertools import chain, repeat
+from typing import Final, TypeVar
 from urllib.parse import urlencode
 
 from pydantic import BaseModel, ConfigDict
 from websockets.sync.client import connect
 from websockets.sync.connection import Connection
 
-from e2e_config import PROXY_BASE_URL, unique_marker
+from e2e_config import unique_marker, ws_base_url
+from e2e_metadata import step
 from proxy_client import ProxyClient
 from models import LiteLLMParamsBody
 
 _M = TypeVar("_M", bound=BaseModel)
 
-
-def ws_base_url() -> str:
-    for scheme, ws_scheme in (("https://", "wss://"), ("http://", "ws://")):
-        if PROXY_BASE_URL.startswith(scheme):
-            return ws_scheme + PROXY_BASE_URL[len(scheme) :]
-    return PROXY_BASE_URL
+REALTIME_ROUTE: Final = "/v1/realtime"
+TRANSLATIONS_ROUTE: Final = "/v1/realtime/translations"
 
 
-def realtime_ws_url(model: str) -> str:
-    return f"{ws_base_url()}/v1/realtime?{urlencode({'model': model})}"
+def realtime_ws_url(model: str, *, route: str = REALTIME_ROUTE, intent: str | None = None) -> str:
+    query: Final = {"model": model} if intent is None else {"model": model, "intent": intent}
+    return f"{ws_base_url()}{route}?{urlencode(query)}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,13 +44,14 @@ class RealtimeProvider:
     the suite registers through /model/new (the gateway resolves the os.environ/*
     credential refs), so the suite is self-contained and never depends on a static
     gateway model_list. Every provider here is provisioned and asserted: per
-    tests/e2e/CLAUDE.md the suite never skips a provider, so a provider whose
+    tests/e2e/AGENTS.md the suite never skips a provider, so a provider whose
     credentials or upstream realtime model are missing on the gateway is a hard
     failure, not a skip."""
 
     id: str
     alias: str
     litellm_params: LiteLLMParamsBody
+    modalities: tuple[str, ...] = ("text",)
 
 
 PROVIDERS = (
@@ -80,17 +80,28 @@ PROVIDERS = (
             model="gemini/gemini-3.1-flash-live-preview",
             api_key="os.environ/GEMINI_API_KEY",
         ),
+        modalities=("audio",),
     ),
     RealtimeProvider(
         "vertex_ai",
         "vertex-realtime",
         LiteLLMParamsBody(
-            model="vertex_ai/gemini-live-2.5-flash-preview-native-audio-09-2025",
+            model="vertex_ai/gemini-live-2.5-flash-native-audio",
             vertex_location="us-central1",
             vertex_credentials="os.environ/VERTEXAI_CREDENTIALS",
         ),
+        modalities=("audio",),
     ),
-    # RealtimeProvider("bedrock", "bedrock-realtime", ...) # TODO: Enable when Bedrock is passing
+    RealtimeProvider(
+        "bedrock",
+        "bedrock-realtime",
+        LiteLLMParamsBody(
+            model="bedrock/amazon.nova-2-sonic-v1:0",
+            aws_access_key_id="os.environ/AWS_ACCESS_KEY_ID",
+            aws_secret_access_key="os.environ/AWS_SECRET_ACCESS_KEY",
+            aws_region_name="os.environ/AWS_REGION",
+        ),
+    ),
     # RealtimeProvider(
     #     "xai",
     #     "xai-realtime",
@@ -105,7 +116,7 @@ PROVIDERS = (
 def realtime_model(provider: RealtimeProvider, provisioned: Mapping[str, str]) -> str:
     """Return the provisioned deployment name for this provider. Every provider in
     PROVIDERS is provisioned at session start, so a missing entry is a harness bug,
-    never an environment skip - the suite hard-fails instead (see tests/e2e/CLAUDE.md)."""
+    never an environment skip - the suite hard-fails instead (see tests/e2e/AGENTS.md)."""
     model = provisioned.get(provider.id)
     assert model is not None, (
         f"{provider.id} was not provisioned; the realtime_models fixture is broken"
@@ -171,6 +182,80 @@ class ResponseCreate(BaseModel):
     type: str = "response.create"
 
 
+class InputAudioBufferAppend(BaseModel):
+    type: str = "input_audio_buffer.append"
+    audio: str
+
+
+class InputAudioBufferCommit(BaseModel):
+    type: str = "input_audio_buffer.commit"
+
+
+class SessionInputAudioBufferAppend(BaseModel):
+    type: str = "session.input_audio_buffer.append"
+    audio: str
+
+
+AudioAppend = InputAudioBufferAppend | SessionInputAudioBufferAppend
+
+
+class TranslationOutput(BaseModel):
+    language: str
+
+
+class TranslationAudio(BaseModel):
+    output: TranslationOutput
+
+
+class TranslationSessionConfig(BaseModel):
+    audio: TranslationAudio
+
+
+class TranslationSessionUpdate(BaseModel):
+    type: str = "session.update"
+    session: TranslationSessionConfig
+
+
+class PcmFormat(BaseModel):
+    type: str = "audio/pcm"
+    rate: int = 24000
+
+
+class InputTranscription(BaseModel):
+    model: str
+
+
+class TranscriptionAudioInput(BaseModel):
+    format: PcmFormat = PcmFormat()
+    transcription: InputTranscription
+
+
+class TranscriptionAudio(BaseModel):
+    input: TranscriptionAudioInput
+
+
+class TranscriptionSessionConfig(BaseModel):
+    type: str = "transcription"
+    audio: TranscriptionAudio
+
+
+class TranscriptionSessionUpdate(BaseModel):
+    type: str = "session.update"
+    session: TranscriptionSessionConfig
+
+
+RealtimeClientEvent = (
+    SessionUpdate
+    | TranslationSessionUpdate
+    | TranscriptionSessionUpdate
+    | ConversationItemCreate
+    | ResponseCreate
+    | InputAudioBufferAppend
+    | InputAudioBufferCommit
+    | SessionInputAudioBufferAppend
+)
+
+
 def user_message(text: str) -> ConversationItemCreate:
     return ConversationItemCreate(
         item=MessageItem(content=[InputTextContent(text=text)])
@@ -219,6 +304,12 @@ class ResponsePayload(BaseModel):
     model_config = ConfigDict(extra="allow")
     usage: dict[str, object] | None = None
     output: list[OutputItem] | None = None
+
+
+class TextDone(BaseModel):
+    type: str
+    response_id: str
+    text: str
 
 
 class ResponseDone(BaseModel):
@@ -293,7 +384,7 @@ def function_call_item(events: tuple[ReceivedEvent, ...]) -> OutputItem | None:
 # ---- session + client --------------------------------------------------
 
 
-def _as_text(message: str | bytes) -> str:
+def as_text(message: str | bytes) -> str:
     return message.decode("utf-8") if isinstance(message, bytes) else message
 
 
@@ -301,9 +392,11 @@ def _as_text(message: str | bytes) -> str:
 class RealtimeSession:
     connection: Connection
 
-    def send(self, event: BaseModel) -> None:
+    @step("Send the realtime event {event.type} over the websocket")
+    def send(self, event: RealtimeClientEvent) -> None:
         self.connection.send(event.model_dump_json(by_alias=True, exclude_none=True))
 
+    @step("Wait for a {stop_type} event on the realtime websocket")
     def collect_until(
         self, stop_type: str, *, timeout: float
     ) -> tuple[ReceivedEvent, ...]:
@@ -311,7 +404,7 @@ class RealtimeSession:
         collected: list[ReceivedEvent] = []
         while time.monotonic() < deadline:
             try:
-                text = _as_text(
+                text = as_text(
                     self.connection.recv(timeout=deadline - time.monotonic())
                 )
             except TimeoutError:
@@ -327,10 +420,55 @@ class RealtimeSession:
         )
 
 
+    @step("Stream the spoken question as mic chunks, then silence until the turn goes idle")
+    def stream_and_collect(
+        self,
+        chunks: Sequence[AudioAppend],
+        *,
+        tail: AudioAppend,
+        interval: float,
+        idle: float,
+        timeout: float,
+    ) -> tuple[ReceivedEvent, ...]:
+        """Send `chunks`, then `tail` every `interval` seconds like a live mic, until
+        no event arrives for `idle` seconds or `timeout` elapses."""
+        return tuple(self._live_mic_events(chunks, tail=tail, interval=interval, idle=idle, timeout=timeout))
+
+    def _live_mic_events(
+        self,
+        chunks: Sequence[AudioAppend],
+        *,
+        tail: AudioAppend,
+        interval: float,
+        idle: float,
+        timeout: float,
+    ) -> Iterator[ReceivedEvent]:
+        start: Final = time.monotonic()
+        last_event = start  # rebind-ok: the idle timer restarts at every received event
+        for frame in chain(chunks, repeat(tail)):
+            if (now := time.monotonic()) - start >= timeout or now - last_event >= idle:
+                return
+            self.send(frame)
+            for event in self._events_until(now + interval):
+                last_event = time.monotonic()
+                yield event
+
+    def _events_until(self, deadline: float) -> Iterator[ReceivedEvent]:
+        while (remaining := deadline - time.monotonic()) > 0 and (text := self._recv_text(remaining)) is not None:
+            yield ReceivedEvent(type=ServerEnvelope.model_validate_json(text).type, payload=text)
+
+    def _recv_text(self, timeout: float) -> str | None:
+        try:
+            return as_text(self.connection.recv(timeout=timeout))
+        except TimeoutError:
+            return None
+
+
 @dataclass(frozen=True, slots=True)
 class RealtimeClient:
     proxy: ProxyClient
 
+    @step("Add a realtime deployment that calls {provider.litellm_params.model}")
     def provision(self, provider: RealtimeProvider) -> tuple[str, str]:
         """Register this provider's realtime deployment through /model/new and return
         (model_name, model_id). The name is marker-unique so it never collides with a
@@ -343,12 +481,19 @@ class RealtimeClient:
         )
         return model_name, model_id
 
+    @step("Open a {route} websocket session to {model}")
     @contextmanager
     def connect(
-        self, *, key: str, model: str, timeout: float = 15.0
+        self,
+        *,
+        key: str,
+        model: str,
+        route: str = REALTIME_ROUTE,
+        intent: str | None = None,
+        timeout: float = 15.0,
     ) -> Generator[RealtimeSession, None, None]:
         with connect(
-            realtime_ws_url(model),
+            realtime_ws_url(model, route=route, intent=intent),
             additional_headers={"Authorization": f"Bearer {key}"},
             open_timeout=timeout,
         ) as connection:

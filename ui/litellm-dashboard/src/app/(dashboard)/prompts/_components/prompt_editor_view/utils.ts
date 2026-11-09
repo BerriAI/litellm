@@ -1,3 +1,4 @@
+import i18n from "@/i18n/i18n";
 import { PromptType, Message, Tool } from "./types";
 
 export const extractVariables = (prompt: PromptType): string[] => {
@@ -23,7 +24,7 @@ export const extractVariables = (prompt: PromptType): string[] => {
 
 export const convertToDotPrompt = (prompt: PromptType): string => {
   const variables = extractVariables(prompt);
-  let result = `---\nmodel: ${prompt.model}\n`;
+  let result = prompt.model ? `---\nmodel: ${prompt.model}\n` : "---\n";
 
   // Add temperature if set
   if (prompt.config.temperature !== undefined) {
@@ -117,7 +118,7 @@ const parseToolsFromFrontmatter = (lines: string[]): Tool[] => {
     try {
       const toolObj = JSON.parse(rawJson);
       tools.push({
-        name: toolObj?.function?.name || "Unnamed Tool",
+        name: toolObj?.function?.name || i18n.t("prompts.editor.unnamedTool"),
         description: toolObj?.function?.description || "",
         json: JSON.stringify(toolObj, null, 2),
       });
@@ -237,7 +238,7 @@ export const parseExistingPrompt = (apiResponse: any): PromptType => {
 
   return {
     name: baseName,
-    model: parsedFrontmatter.model || "gpt-4o",
+    model: parsedFrontmatter.model || null,
     config: parsedFrontmatter.config,
     tools: parsedFrontmatter.tools,
     developerMessage: parsedBody.developerMessage,

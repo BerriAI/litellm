@@ -1,10 +1,25 @@
 import React from "react";
-import { Card, Typography, Select, Table, Tag, Collapse, Button } from "antd";
-import { DeleteOutlined, PlusOutlined, FileTextOutlined } from "@ant-design/icons";
+import { useTranslation } from "react-i18next";
+import { ChevronRight, FileText, Plus, Trash2 } from "lucide-react";
+import type { ColumnDef } from "@tanstack/react-table";
 import { getCategoryYaml } from "@/components/networking";
+import { DataTable } from "@/components/shared/DataTable";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import {
+  Combobox,
+  ComboboxContent,
+  ComboboxEmpty,
+  ComboboxInput,
+  ComboboxItem,
+  ComboboxList,
+} from "@/components/ui/combobox";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { ACTION_ITEMS, SEVERITY_ITEMS, translateOptions } from "./action_options";
 
-const { Title, Text } = Typography;
-const { Option } = Select;
+const DEFAULT_CATEGORY_FILE_TYPE = "yaml";
 
 interface ContentCategory {
   name: string;
@@ -26,7 +41,7 @@ interface ContentCategoryConfigurationProps {
   selectedCategories: SelectedCategory[];
   onCategoryAdd: (category: SelectedCategory) => void;
   onCategoryRemove: (id: string) => void;
-  onCategoryUpdate: (id: string, field: string, value: any) => void;
+  onCategoryUpdate: (id: string, field: "action" | "severity_threshold", value: any) => void;
   accessToken?: string | null;
   pendingSelection?: string;
   onPendingSelectionChange?: (value: string) => void;
@@ -42,6 +57,9 @@ const ContentCategoryConfiguration: React.FC<ContentCategoryConfigurationProps> 
   pendingSelection,
   onPendingSelectionChange,
 }) => {
+  const { t } = useTranslation();
+  const actionItems = translateOptions(ACTION_ITEMS, t);
+  const severityItems = translateOptions(SEVERITY_ITEMS, t);
   // Use controlled state if parent provides it, otherwise use local state
   const [localSelectedCategoryName, setLocalSelectedCategoryName] = React.useState<string>("");
   const selectedCategoryName = pendingSelection !== undefined ? pendingSelection : localSelectedCategoryName;
@@ -107,7 +125,7 @@ const ContentCategoryConfiguration: React.FC<ContentCategoryConfigurationProps> 
       }
 
       setCategoryYaml((prev) => ({ ...prev, [categoryName]: content }));
-      setCategoryFileTypes((prev) => ({ ...prev, [categoryName]: data.file_type || "yaml" }));
+      setCategoryFileTypes((prev) => ({ ...prev, [categoryName]: data.file_type || DEFAULT_CATEGORY_FILE_TYPE }));
     } catch (error) {
       console.error(`Failed to fetch content for category ${categoryName}:`, error);
     } finally {
@@ -144,7 +162,10 @@ const ContentCategoryConfiguration: React.FC<ContentCategoryConfigurationProps> 
           setPreviewYaml(content);
           // Also cache it for later use
           setCategoryYaml((prev) => ({ ...prev, [selectedCategoryName]: content }));
-          setCategoryFileTypes((prev) => ({ ...prev, [selectedCategoryName]: data.file_type || "yaml" }));
+          setCategoryFileTypes((prev) => ({
+            ...prev,
+            [selectedCategoryName]: data.file_type || DEFAULT_CATEGORY_FILE_TYPE,
+          }));
         })
         .catch((error) => {
           console.error(`Failed to fetch preview content for category ${selectedCategoryName}:`, error);
@@ -160,67 +181,84 @@ const ContentCategoryConfiguration: React.FC<ContentCategoryConfigurationProps> 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedCategoryName, accessToken]);
 
-  const columns = [
+  const columns: ColumnDef<SelectedCategory>[] = [
     {
-      title: "Category",
-      dataIndex: "display_name",
-      key: "display_name",
-      render: (text: string, record: SelectedCategory) => {
-        const category = availableCategories.find((c) => c.name === record.category);
+      header: t("guardrails.contentFilter.categoryConfiguration.columns.category"),
+      accessorKey: "display_name",
+      cell: ({ row }) => {
+        const category = availableCategories.find((c) => c.name === row.original.category);
         return (
           <div>
-            <div style={{ fontWeight: 500 }}>{text}</div>
-            {category?.description && (
-              <div style={{ fontSize: "12px", color: "#888", marginTop: "4px" }}>{category.description}</div>
-            )}
+            <div className="font-medium">{row.original.display_name}</div>
+            {category?.description && <div className="mt-1 text-xs text-muted-foreground">{category.description}</div>}
           </div>
         );
       },
     },
     {
-      title: "Action",
-      dataIndex: "action",
-      key: "action",
-      width: 150,
-      render: (action: string, record: SelectedCategory) => (
+      header: t("guardrails.contentFilter.categoryConfiguration.columns.action"),
+      accessorKey: "action",
+      size: 150,
+      cell: ({ row }) => (
         <Select
-          value={action}
-          onChange={(value) => onCategoryUpdate(record.id, "action", value)}
-          style={{ width: "100%" }}
+          items={actionItems}
+          value={row.original.action}
+          onValueChange={(value: string | null) => value && onCategoryUpdate(row.original.id, "action", value)}
         >
-          <Option value="BLOCK">
-            <Tag color="red">BLOCK</Tag>
-          </Option>
-          <Option value="MASK">
-            <Tag color="orange">MASK</Tag>
-          </Option>
+          <SelectTrigger
+            size="sm"
+            className="w-full"
+            aria-label={t("guardrails.contentFilter.categoryConfiguration.columns.action")}
+          >
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {actionItems.map((item) => (
+              <SelectItem key={item.value} value={item.value}>
+                <Badge variant={item.value === "BLOCK" ? "destructive" : "secondary"}>{item.value}</Badge>
+              </SelectItem>
+            ))}
+          </SelectContent>
         </Select>
       ),
     },
     {
-      title: "Severity Threshold",
-      dataIndex: "severity_threshold",
-      key: "severity_threshold",
-      width: 180,
-      render: (threshold: string, record: SelectedCategory) => (
+      header: t("guardrails.contentFilter.categoryConfiguration.columns.severityThreshold"),
+      accessorKey: "severity_threshold",
+      size: 180,
+      cell: ({ row }) => (
         <Select
-          value={threshold}
-          onChange={(value) => onCategoryUpdate(record.id, "severity_threshold", value)}
-          style={{ width: "100%" }}
+          items={severityItems}
+          value={row.original.severity_threshold}
+          onValueChange={(value: string | null) =>
+            value && onCategoryUpdate(row.original.id, "severity_threshold", value)
+          }
         >
-          <Option value="low">Low</Option>
-          <Option value="medium">Medium</Option>
-          <Option value="high">High</Option>
+          <SelectTrigger
+            size="sm"
+            className="w-full"
+            aria-label={t("guardrails.contentFilter.categoryConfiguration.columns.severityThreshold")}
+          >
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {severityItems.map((item) => (
+              <SelectItem key={item.value} value={item.value}>
+                {item.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
         </Select>
       ),
     },
     {
-      title: "",
-      key: "actions",
-      width: 80,
-      render: (_: any, record: SelectedCategory) => (
-        <Button icon={<DeleteOutlined />} onClick={() => onCategoryRemove(record.id)} size="small">
-          Remove
+      header: "",
+      id: "actions",
+      size: 80,
+      cell: ({ row }) => (
+        <Button variant="outline" size="sm" onClick={() => onCategoryRemove(row.original.id)}>
+          <Trash2 />
+          {t("guardrails.contentFilter.categoryConfiguration.remove")}
         </Button>
       ),
     },
@@ -229,172 +267,135 @@ const ContentCategoryConfiguration: React.FC<ContentCategoryConfigurationProps> 
   const unselectedCategories = availableCategories.filter(
     (cat) => !selectedCategories.some((sel) => sel.category === cat.name),
   );
+  const pendingCategory = availableCategories.find((c) => c.name === selectedCategoryName) ?? null;
 
   return (
-    <Card
-      title={
-        <div
-          style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}
-        >
-          <Title level={5} style={{ margin: 0 }}>
-            Blocked topics
-          </Title>
-          <Text type="secondary" style={{ fontSize: 12, fontWeight: 400 }}>
-            Select topics to block using keyword and semantic analysis
-          </Text>
+    <Card>
+      <CardHeader>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <CardTitle>{t("guardrails.contentFilter.categoryConfiguration.title")}</CardTitle>
+          <p className="text-xs font-normal text-muted-foreground">
+            {t("guardrails.contentFilter.categoryConfiguration.subtitle")}
+          </p>
         </div>
-      }
-      size="small"
-    >
-      <div style={{ marginBottom: 16, display: "flex", gap: 8 }}>
-        <Select
-          placeholder="Select a content category"
-          value={selectedCategoryName || undefined}
-          onChange={setSelectedCategoryName}
-          style={{ flex: 1 }}
-          showSearch
-          optionLabelProp="label"
-          filterOption={(input, option) =>
-            (option?.label?.toString().toLowerCase() ?? "").includes(input.toLowerCase())
-          }
-        >
-          {unselectedCategories.map((cat) => (
-            <Option key={cat.name} value={cat.name} label={cat.display_name}>
-              <div>
-                <div style={{ fontWeight: 500 }}>{cat.display_name}</div>
-                <div style={{ fontSize: "12px", color: "#666", marginTop: "2px" }}>{cat.description}</div>
-              </div>
-            </Option>
-          ))}
-        </Select>
-        <Button type="primary" onClick={handleAddCategory} disabled={!selectedCategoryName} icon={<PlusOutlined />}>
-          Add
-        </Button>
-      </div>
+      </CardHeader>
+      <CardContent>
+        <div className="mb-4 flex gap-2">
+          <Combobox
+            items={unselectedCategories}
+            value={pendingCategory}
+            onValueChange={(category: ContentCategory | null) => setSelectedCategoryName(category?.name ?? "")}
+            itemToStringLabel={(category: ContentCategory) => category.display_name}
+          >
+            <ComboboxInput
+              className="w-full"
+              placeholder={t("guardrails.contentFilter.categoryConfiguration.placeholder")}
+            />
+            <ComboboxContent>
+              <ComboboxEmpty>{t("guardrails.contentFilter.categoryConfiguration.noMatches")}</ComboboxEmpty>
+              <ComboboxList>
+                {(cat: ContentCategory) => (
+                  <ComboboxItem key={cat.name} value={cat}>
+                    <div>
+                      <div className="font-medium">{cat.display_name}</div>
+                      <div className="mt-0.5 text-xs text-muted-foreground">{cat.description}</div>
+                    </div>
+                  </ComboboxItem>
+                )}
+              </ComboboxList>
+            </ComboboxContent>
+          </Combobox>
+          <Button onClick={handleAddCategory} disabled={!selectedCategoryName}>
+            <Plus />
+            {t("guardrails.contentFilter.categoryConfiguration.add")}
+          </Button>
+        </div>
 
-      {/* Preview box - shown when category is selected but not yet added */}
-      {selectedCategoryName && (
-        <div
-          style={{
-            marginBottom: 16,
-            padding: "12px",
-            background: "#f9f9f9",
-            border: "1px solid #e0e0e0",
-            borderRadius: "4px",
-          }}
-        >
-          <div style={{ marginBottom: 8, fontWeight: 500, fontSize: "14px" }}>
-            Preview: {availableCategories.find((c) => c.name === selectedCategoryName)?.display_name}
-            {categoryFileTypes[selectedCategoryName] && (
-              <span style={{ marginLeft: 8, fontSize: "12px", color: "#888", fontWeight: 400 }}>
-                ({categoryFileTypes[selectedCategoryName]?.toUpperCase()})
-              </span>
+        {/* Preview box - shown when category is selected but not yet added */}
+        {selectedCategoryName && (
+          <div className="mb-4 rounded-md border border-border bg-muted/40 p-3">
+            <div className="mb-2 text-sm font-medium">
+              {t("guardrails.contentFilter.categoryConfiguration.preview")}{" "}
+              {availableCategories.find((c) => c.name === selectedCategoryName)?.display_name}
+              {categoryFileTypes[selectedCategoryName] && (
+                <span className="ml-2 text-xs font-normal text-muted-foreground">
+                  ({categoryFileTypes[selectedCategoryName]?.toUpperCase()})
+                </span>
+              )}
+            </div>
+            {loadingPreviewYaml ? (
+              <div className="p-4 text-center text-muted-foreground">
+                {t("guardrails.contentFilter.categoryConfiguration.loadingContent")}
+              </div>
+            ) : previewYaml ? (
+              <pre className="m-0 max-h-[300px] max-w-full overflow-auto rounded-md border border-border bg-background p-3 text-xs leading-relaxed break-words whitespace-pre-wrap">
+                <code>{previewYaml}</code>
+              </pre>
+            ) : (
+              <div className="p-2 text-center text-xs text-muted-foreground">
+                {t("guardrails.contentFilter.categoryConfiguration.previewUnavailable")}
+              </div>
             )}
           </div>
-          {loadingPreviewYaml ? (
-            <div style={{ padding: "16px", textAlign: "center", color: "#888" }}>Loading content...</div>
-          ) : previewYaml ? (
-            <pre
-              style={{
-                background: "#fff",
-                padding: "12px",
-                borderRadius: "4px",
-                overflow: "auto",
-                maxHeight: "300px",
-                maxWidth: "100%",
-                fontSize: "12px",
-                lineHeight: "1.5",
-                margin: 0,
-                border: "1px solid #e0e0e0",
-                whiteSpace: "pre-wrap",
-                wordBreak: "break-word",
-              }}
-            >
-              <code>{previewYaml}</code>
-            </pre>
-          ) : (
-            <div style={{ padding: "8px", textAlign: "center", color: "#888", fontSize: "12px" }}>
-              Unable to load category content
-            </div>
-          )}
-        </div>
-      )}
+        )}
 
-      {selectedCategories.length > 0 ? (
-        <>
-          <Table dataSource={selectedCategories} columns={columns} pagination={false} size="small" rowKey="id" />
-          <div style={{ marginTop: 16 }}>
-            <Collapse
-              activeKey={expandedYamlCategories}
-              onChange={(keys) => {
-                const keyArray = Array.isArray(keys) ? keys : keys ? [keys] : [];
-                const oldExpanded = new Set(expandedYamlCategories);
+        {selectedCategories.length > 0 ? (
+          <>
+            <DataTable data={selectedCategories} columns={columns} getRowId={(row) => row.id} size="compact" />
+            <div className="mt-4 space-y-2">
+              {selectedCategories.map((category) => {
+                const fileType = categoryFileTypes[category.category] || DEFAULT_CATEGORY_FILE_TYPE;
+                const isExpanded = expandedYamlCategories.includes(category.category);
 
-                // Find newly expanded categories and fetch their YAML
-                keyArray.forEach((key) => {
-                  const categoryName = key as string;
-                  if (!oldExpanded.has(categoryName) && !categoryYaml[categoryName]) {
-                    fetchCategoryYaml(categoryName);
-                  }
-                });
-
-                setExpandedYamlCategories(keyArray as string[]);
-              }}
-              ghost
-              items={selectedCategories.map((category) => {
-                const fileType = categoryFileTypes[category.category] || "yaml";
-                const fileTypeLabel = fileType.toUpperCase();
-
-                return {
-                  key: category.category,
-                  label: (
-                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                      <FileTextOutlined />
+                return (
+                  <Collapsible
+                    key={category.category}
+                    open={isExpanded}
+                    onOpenChange={(open) => {
+                      if (open && !categoryYaml[category.category]) {
+                        fetchCategoryYaml(category.category);
+                      }
+                      setExpandedYamlCategories((prev) =>
+                        open ? [...prev, category.category] : prev.filter((name) => name !== category.category),
+                      );
+                    }}
+                  >
+                    <CollapsibleTrigger className="flex items-center gap-2 text-sm">
+                      <ChevronRight className={`size-4 transition-transform ${isExpanded ? "rotate-90" : ""}`} />
+                      <FileText className="size-4" />
                       <span>
-                        View {fileTypeLabel} for {category.display_name}
+                        {t("guardrails.contentFilter.categoryConfiguration.viewContent", {
+                          fileType: fileType.toUpperCase(),
+                          name: category.display_name,
+                        })}
                       </span>
-                    </div>
-                  ),
-                  children: loadingYaml[category.category] ? (
-                    <div style={{ padding: "16px", textAlign: "center", color: "#888" }}>Loading content...</div>
-                  ) : categoryYaml[category.category] ? (
-                    <pre
-                      style={{
-                        background: "#f5f5f5",
-                        padding: "16px",
-                        borderRadius: "4px",
-                        overflow: "auto",
-                        maxHeight: "400px",
-                        fontSize: "12px",
-                        lineHeight: "1.5",
-                        margin: 0,
-                      }}
-                    >
-                      <code>{categoryYaml[category.category]}</code>
-                    </pre>
-                  ) : (
-                    <div style={{ padding: "16px", textAlign: "center", color: "#888" }}>
-                      Content will load when expanded
-                    </div>
-                  ),
-                };
+                    </CollapsibleTrigger>
+                    <CollapsibleContent>
+                      {loadingYaml[category.category] ? (
+                        <div className="p-4 text-center text-muted-foreground">
+                          {t("guardrails.contentFilter.categoryConfiguration.loadingContent")}
+                        </div>
+                      ) : categoryYaml[category.category] ? (
+                        <pre className="m-0 max-h-[400px] overflow-auto rounded-md bg-muted p-4 text-xs leading-relaxed">
+                          <code>{categoryYaml[category.category]}</code>
+                        </pre>
+                      ) : (
+                        <div className="p-4 text-center text-muted-foreground">
+                          {t("guardrails.contentFilter.categoryConfiguration.contentLoadsOnExpand")}
+                        </div>
+                      )}
+                    </CollapsibleContent>
+                  </Collapsible>
+                );
               })}
-            />
+            </div>
+          </>
+        ) : (
+          <div className="rounded-md border border-dashed border-border p-6 text-center text-muted-foreground">
+            {t("guardrails.contentFilter.categoryConfiguration.empty")}
           </div>
-        </>
-      ) : (
-        <div
-          style={{
-            textAlign: "center",
-            padding: "24px",
-            color: "#888",
-            border: "1px dashed #d9d9d9",
-            borderRadius: "4px",
-          }}
-        >
-          No blocked topics selected. Add topics to detect and block harmful content.
-        </div>
-      )}
+        )}
+      </CardContent>
     </Card>
   );
 };

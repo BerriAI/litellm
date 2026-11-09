@@ -1,4 +1,4 @@
-import { detectSSOProvider, processSSOSettingsPayload } from "./utils";
+import { detectSSOProvider, diffSSOSettingsPayload, processSSOSettingsPayload } from "./utils";
 import { describe, it, expect } from "vitest";
 import type { SSOSettingsValues } from "@/app/(dashboard)/hooks/sso/useSSOSettings";
 
@@ -450,5 +450,60 @@ describe("processSSOSettingsPayload with SAML", () => {
     expect(
       processSSOSettingsPayload({ sso_provider: "saml", saml_allow_unsolicited: false }).saml_allow_unsolicited,
     ).toBe("false");
+  });
+});
+
+describe("diffSSOSettingsPayload", () => {
+  const stored = {
+    sso_provider: "generic",
+    generic_client_id: "client-id",
+    generic_client_secret: "kc-s****6e0d",
+    user_email: "admin@example.com",
+    role_mappings: { group_claim: "groups", roles: { proxy_admin: ["admins"] } },
+  };
+
+  it("returns an empty patch when nothing changed", () => {
+    expect(diffSSOSettingsPayload(stored, { ...stored })).toEqual({});
+  });
+
+  it("leaves an untouched masked secret out of the patch", () => {
+    expect(diffSSOSettingsPayload(stored, { ...stored, user_email: "new@example.com" })).toEqual({
+      user_email: "new@example.com",
+    });
+  });
+
+  it("sends null for a field that was emptied", () => {
+    expect(diffSSOSettingsPayload(stored, { ...stored, generic_client_secret: "" })).toEqual({
+      generic_client_secret: null,
+    });
+  });
+
+  it("sends null for fields dropped from the payload, like another provider's or disabled mappings", () => {
+    const { generic_client_id, generic_client_secret, role_mappings, ...rest } = stored;
+    expect(diffSSOSettingsPayload(stored, { ...rest, sso_provider: "google", google_client_id: "g-id" })).toEqual({
+      sso_provider: "google",
+      google_client_id: "g-id",
+      generic_client_id: null,
+      generic_client_secret: null,
+      role_mappings: null,
+    });
+  });
+
+  it("sends the whole mapping object when one part of it changed", () => {
+    const role_mappings = { group_claim: "roles", roles: { proxy_admin: ["admins"] } };
+    expect(diffSSOSettingsPayload(stored, { ...stored, role_mappings })).toEqual({ role_mappings });
+  });
+
+  it("treats empty values on both sides as unchanged", () => {
+    expect(diffSSOSettingsPayload({ generic_scope: undefined, proxy_base_url: "" }, { proxy_base_url: null })).toEqual(
+      {},
+    );
+  });
+
+  it("treats an unchecked saml_allow_unsolicited as unset, but sends false when it was true", () => {
+    expect(diffSSOSettingsPayload({ saml_allow_unsolicited: "false" }, {})).toEqual({});
+    expect(diffSSOSettingsPayload({ saml_allow_unsolicited: "true" }, { saml_allow_unsolicited: "false" })).toEqual({
+      saml_allow_unsolicited: "false",
+    });
   });
 });

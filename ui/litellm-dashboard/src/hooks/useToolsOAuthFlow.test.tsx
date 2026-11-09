@@ -11,10 +11,6 @@ vi.mock("@/components/networking", () => ({
   serverRootPath: "",
 }));
 
-vi.mock("@/components/molecules/notifications_manager", () => ({
-  default: { success: vi.fn(), error: vi.fn() },
-}));
-
 vi.mock("@/utils/pkce", () => ({
   generateCodeVerifier: () => "verifier-1",
   generateCodeChallenge: async () => "challenge-1",

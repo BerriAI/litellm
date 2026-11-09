@@ -24,7 +24,7 @@ model_list:
   - model_name: sagemaker-completion-model
     litellm_params:
       model: sagemaker/berri-benchmarking-Llama-2-70b-chat-hf-4
-      input_cost_per_second: 0.000420  
+      cost_per_second: 0.000420
   - model_name: text-embedding-ada-002
     litellm_params: 
       model: azure/azure-embedding-model
@@ -55,11 +55,10 @@ litellm_settings:
   # budget_duration: 30d
   num_retries: 5
   request_timeout: 600
-  telemetry: False
   context_window_fallbacks: [{"gpt-3.5-turbo": ["gpt-3.5-turbo-large"]}]
 
 general_settings: 
-  master_key: sk-1234 # [OPTIONAL] Use to enforce auth on proxy. See - https://docs.litellm.ai/docs/proxy/virtual_keys
+  master_key: os.environ/LITELLM_MASTER_KEY
   store_model_in_db: True
   proxy_budget_rescheduler_min_time: 60
   proxy_budget_rescheduler_max_time: 64
