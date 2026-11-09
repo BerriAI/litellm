@@ -161,6 +161,10 @@ def test_google_count_tokens_counts_every_google_spelling_of_a_repeated_field_li
         {"systemInstruction": {"parts": 7}},
         {"contents": 5},
         {"contents": ["Count this request"]},
+        {"contents": [{}]},
+        {"contents": [{"role": "user"}]},
+        {"contents": [{"role": "user", "text": "Count this request"}]},
+        {"contents": [{"role": "user", "parts": 4}]},
     ),
 )
 def test_google_count_tokens_rejects_a_scalar_where_google_expects_an_object_or_list(

@@ -208,15 +208,23 @@ def _genai_message_parts(parts: object) -> tuple[_GenAIMessagePart, ...]:
     return tuple(converted for part in items if (converted := _genai_message_part(part)) is not None)
 
 
-def _genai_tool_response(part: object) -> ChatCompletionToolMessage | None:
+def _numbered_call_ids(names: Sequence[str]) -> tuple[str, ...]:
+    return tuple(
+        f"call_{name}" if (earlier := names[:index].count(name)) == 0 else f"call_{name}_{earlier}"
+        for index, name in enumerate(names)
+    )
+
+
+def _genai_function_response(part: object) -> _GenAIFunctionResponse | None:
     fields: Final = _validated(_CONFIG_FIELDS, part)
     if fields is None:
         return None
-    response: Final = _validated(_GENAI_FUNCTION_RESPONSE, fields.get("functionResponse")) or _validated(
+    return _validated(_GENAI_FUNCTION_RESPONSE, fields.get("functionResponse")) or _validated(
         _GENAI_FUNCTION_RESPONSE, fields.get("function_response")
     )
-    if response is None:
-        return None
+
+
+def _genai_tool_response(response: _GenAIFunctionResponse, tool_call_id: str) -> ChatCompletionToolMessage:
     result: Final = json.dumps(response.get("response", {}))
     media_fields: Final = (
         part_fields
@@ -226,22 +234,23 @@ def _genai_tool_response(part: object) -> ChatCompletionToolMessage | None:
     media: Final = tuple(converted for fields in media_fields if (converted := _genai_media_part(fields)) is not None)
     return ChatCompletionToolMessage(
         role="tool",
-        tool_call_id=f"call_{response.get('name', 'unknown')}",
+        tool_call_id=tool_call_id,
         content=[ChatCompletionTextObject(type="text", text=result), *media] if media else result,
     )
 
 
-def _genai_tool_call(part: object) -> ChatCompletionAssistantToolCall | None:
+def _genai_function_call(part: object) -> _GenAIRequestFunctionCall | None:
     fields: Final = _validated(_CONFIG_FIELDS, part)
     if fields is None:
         return None
-    call: Final = _validated(_GENAI_FUNCTION_CALL, fields.get("functionCall")) or _validated(
+    return _validated(_GENAI_FUNCTION_CALL, fields.get("functionCall")) or _validated(
         _GENAI_FUNCTION_CALL, fields.get("function_call")
     )
-    if call is None:
-        return None
+
+
+def _genai_tool_call(call: _GenAIRequestFunctionCall, call_id: str) -> ChatCompletionAssistantToolCall:
     return ChatCompletionAssistantToolCall(
-        id=f"call_{call.get('name', 'unknown')}",
+        id=call_id,
         type="function",
         function=ChatCompletionToolCallFunctionChunk(
             name=call.get("name", ""), arguments=json.dumps(call.get("args", {}))
@@ -269,12 +278,19 @@ def _genai_content_messages(content: object) -> tuple[AllMessageValues, ...]:
             if converted
             else ()
         )
-        responses: Final = tuple(response for part in parts if (response := _genai_tool_response(part)) is not None)
-        return (*user_message, *responses)
+        function_responses: Final = tuple(
+            response for part in parts if (response := _genai_function_response(part)) is not None
+        )
+        response_ids: Final = _numbered_call_ids(
+            tuple(response.get("name", "unknown") for response in function_responses)
+        )
+        return (*user_message, *map(_genai_tool_response, function_responses, response_ids))
     if role != "model":
         return ()
     text: Final = "".join(part["text"] for part in converted if part["type"] == "text")
-    calls: Final = [call for part in parts if (call := _genai_tool_call(part)) is not None]
+    function_calls: Final = tuple(call for part in parts if (call := _genai_function_call(part)) is not None)
+    call_ids: Final = _numbered_call_ids(tuple(call.get("name", "unknown") for call in function_calls))
+    calls: Final = list(map(_genai_tool_call, function_calls, call_ids))
     assistant_content: Final = list(converted) if any(part["type"] != "text" for part in converted) else text or None
     return (
         ChatCompletionAssistantMessage(role="assistant", content=assistant_content, tool_calls=calls)

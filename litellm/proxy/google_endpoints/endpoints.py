@@ -105,6 +105,16 @@ class _GoogleCountTokensTool(BaseModel):
     )
 
 
+class _GoogleContentShape(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    parts: tuple[JsonValue, ...]
+
+
+_GOOGLE_CONTENTS_SHAPE: Final[TypeAdapter[tuple[_GoogleContentShape, ...]]] = TypeAdapter(
+    Annotated[tuple[_GoogleContentShape, ...], BeforeValidator(_google_contents)]
+)
+
+
 class _GoogleCountTokensRequest(BaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore", populate_by_name=True)
     contents: Annotated[tuple[Mapping[str, JsonValue], ...], BeforeValidator(_google_contents)] = ()
@@ -156,6 +166,65 @@ def _google_error_response(request: Request, error: ProxyException) -> JSONRespo
     )
 
 
+def _google_body_error(error: ValidationError) -> ProxyException:
+    detail: Final = error.errors()[0]
+    match detail["loc"]:
+        case (int() as index, *_):
+            return ProxyException(
+                message=f"Invalid contents[{index}]: each entry needs a parts list",
+                type="invalid_request_error",
+                param="contents",
+                code=400,
+            )
+        case (field, *_):
+            return ProxyException(
+                message=f"Invalid {field}: {detail['msg']}", type="invalid_request_error", param=str(field), code=400
+            )
+        case _:
+            return ProxyException(
+                message=f"Invalid request body: {detail['msg']}", type="invalid_request_error", param=None, code=400
+            )
+
+
+def _is_google_tool(tool: Mapping[str, JsonValue]) -> bool:
+    return "type" not in tool and "name" not in tool
+
+
+class _TokenCountExtras(BaseModel):
+    model_config = ConfigDict(frozen=True, from_attributes=True)
+    tools: tuple[Mapping[str, JsonValue], ...] | None = None
+    system: JsonValue = None
+
+
+def google_token_count_request(request: TokenCountRequest) -> TokenCountRequest | ProxyException:
+    if request.contents is None or request.messages is not None:
+        return request
+    caller: Final = _TokenCountExtras.model_validate(request)
+    try:
+        google_request: Final = _google_count_tokens_request(
+            request.model,
+            {
+                "contents": request.contents,
+                "systemInstruction": request.system_instruction,
+                "tools": caller.tools or (),
+            },
+        )
+    except ValidationError as error:
+        return _google_body_error(error)
+    translated: Final = _TokenCountExtras.model_validate(google_request)
+    return request.model_copy(
+        update={
+            "messages": google_request.messages,
+            "system": caller.system if caller.system is not None else translated.system,
+            "tools": [
+                *(dict(tool) for tool in caller.tools or () if not _is_google_tool(tool)),
+                *(dict(tool) for tool in translated.tools or ()),
+            ]
+            or None,
+        }
+    )
+
+
 def with_google_contents_as_messages(request: TokenCountRequest) -> TokenCountRequest:
     from litellm.google_genai.adapters.transformation import GoogleGenAIAdapter
 
@@ -171,6 +240,7 @@ def with_google_contents_as_messages(request: TokenCountRequest) -> TokenCountRe
 
 def _google_count_tokens_request(model_name: str, data: object) -> TokenCountRequest:
     validated_data: Final = TypeAdapter(_GoogleCountTokensRequest).validate_python(data)
+    _GOOGLE_CONTENTS_SHAPE.validate_python(validated_data.contents)
     system: Final = (
         [
             {"type": "text", "text": part.text}

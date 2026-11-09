@@ -47257,6 +47257,7 @@ export interface components {
             prompt?: string | null;
             /** System */
             system?: unknown | null;
+            systemInstruction?: components["schemas"]["JsonValue"];
             /** Tools */
             tools?: {
                 [key: string]: unknown;

@@ -485,6 +485,39 @@ def test_function_response_message_transformation():
     assert response_content["humidity"] == "45%"
 
 
+def test_parallel_calls_to_one_function_get_distinct_ids_that_their_responses_answer():
+    from litellm.google_genai.adapters.transformation import GoogleGenAIAdapter
+
+    contents = [
+        {"role": "user", "parts": [{"text": "Weather in Paris and Rome?"}]},
+        {
+            "role": "model",
+            "parts": [
+                {"functionCall": {"name": "get_weather", "args": {"city": "Paris"}}},
+                {"functionCall": {"name": "get_weather", "args": {"city": "Rome"}}},
+                {"functionCall": {"name": "get_time", "args": {"city": "Paris"}}},
+            ],
+        },
+        {
+            "role": "user",
+            "parts": [
+                {"functionResponse": {"name": "get_weather", "response": {"forecast": "Sun"}}},
+                {"functionResponse": {"name": "get_weather", "response": {"forecast": "Rain"}}},
+                {"functionResponse": {"name": "get_time", "response": {"time": "noon"}}},
+            ],
+        },
+    ]
+
+    messages = GoogleGenAIAdapter().translate_generate_content_to_completion(model="gpt-6-luna", contents=contents)[
+        "messages"
+    ]
+
+    call_ids = [call["id"] for call in messages[1]["tool_calls"]]
+    assert len(set(call_ids)) == 3
+    assert [message["tool_call_id"] for message in messages[2:]] == call_ids
+    assert [json.loads(message["content"]) for message in messages[2:4]] == [{"forecast": "Sun"}, {"forecast": "Rain"}]
+
+
 def test_completion_to_generate_content_with_tool_calls():
     """Test transforming completion response with tool calls back to generate_content format"""
     from litellm.google_genai.adapters.transformation import GoogleGenAIAdapter
