@@ -2,9 +2,11 @@ use std::{future::Future, pin::Pin, sync::Arc};
 
 use litellm_core_utils::settings::Lookup;
 use litellm_host_python::{PythonContext, attach_blocking};
+use litellm_secret_value::SecretValue;
 use litellm_secrets::{
-    Error, ExternalSecretManager, KeyManagementSettings, KeyManagementSystem, Secret, SecretValue,
+    Error, ExternalSecretManager, KeyManagementSettings, KeyManagementSystem, Secret,
 };
+
 use pyo3::{
     exceptions::PyException,
     prelude::*,
@@ -192,7 +194,7 @@ handler.get_secret_from_manager = get_secret_from_manager
                 KeyManagementSettings::default(),
             )),
             Arc::new(move |_: &str| fallback.map(str::to_owned)),
-            OidcResolver::new(litellm_http::Client::plain_for_test()),
+            OidcResolver::new(litellm_http::Client::for_test()),
         )
         .with_failure_policy(FailurePolicy::EnvironmentFallback);
         (resolver, locals, handler)

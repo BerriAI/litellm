@@ -3,6 +3,7 @@ from types import UnionType
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, Union, get_args, get_origin
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 from pydantic import fields as pyd_fields
 
 import litellm
@@ -36,6 +37,8 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+_RESPONSE_BODY: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True))
 
 
 class _EventModelClass(Protocol):
@@ -310,10 +313,10 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, str]]:
         encoded_response_id: Final = encode_url_path_segment(response_id, field_name="response_id")
         url: Final = f"{api_base}/{encoded_response_id}"
-        data: Final[dict] = {}
+        data: Final[dict[str, str]] = {}
         return url, data
 
     def transform_get_response_api_response(
@@ -420,7 +423,7 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
     @staticmethod
     def _parsed_response_body(raw_response: httpx.Response) -> dict[str, object]:
-        return raw_response.json()
+        return _RESPONSE_BODY.validate_python(raw_response.json())
 
     @staticmethod
     def _annotation_origin(annotation: object) -> object:

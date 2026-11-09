@@ -513,7 +513,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
         call_type: CallTypesLiteral,
-    ) -> Any:
+    ) -> object:
         pass
 
     async def async_post_call_streaming_hook(
@@ -896,6 +896,11 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         return OLD_LITELLM_METADATA_FIELD
 
     def redacts_messages_itself(self) -> bool:
+        return False
+
+    def exempt_from_message_redaction(self) -> bool:
+        """Router pre-call checks that key routing off the request and never log it return True, so
+        `turn_off_message_logging` leaves the success event they receive unredacted."""
         return False
 
     def redact_standard_logging_payload_from_model_call_details(self, model_call_details: dict) -> dict:

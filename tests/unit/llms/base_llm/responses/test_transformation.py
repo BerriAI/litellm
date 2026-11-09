@@ -1,14 +1,17 @@
 """The shared Responses API config contract."""
 
 import asyncio, importlib, json
+from collections.abc import Mapping
 
 import httpx
 import pytest
+import respx
 
 import litellm
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.types.router import GenericLiteLLMParams
 from litellm import Router
+from pydantic import BaseModel, ConfigDict
 from litellm.constants import STREAM_SSE_DONE_STRING
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
@@ -24,8 +27,8 @@ from litellm.types.llms.openai import(
     ResponsesAPIStreamEvents,
 )
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
-from typing import Any, AsyncIterator, Final, List
-from unittest.mock import AsyncMock, MagicMock, Mock, patch
+from typing import Any, Final, List
+from unittest.mock import Mock, patch
 
 
 @pytest.mark.asyncio
@@ -748,653 +751,672 @@ class TestBaseResponsesAPIStreamingIterator:
             mock_logging_obj.async_failure_handler.assert_not_called()
             mock_logging_obj.failure_handler.assert_not_called()
 
-@pytest.fixture()
-def _vcr_outcome_gate_router_unit(request, vcr):
-    install_live_call_probe(request, vcr)
-    yield
-    record_vcr_outcome(request, vcr)
+def _sse(*events: Mapping[str, object]) -> httpx.Response:
+    return httpx.Response(
+        200,
+        headers={"content-type": "text/event-stream"},
+        content="".join(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n" for event in events),
+    )
 
-@pytest.fixture(scope="function")
-def setup_and_teardown_router_unit():
-    """
-    This fixture reloads litellm before every function. To speed up testing by removing callbacks being chained.
-    """
-    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 
-    asyncio.run(GLOBAL_LOGGING_WORKER.clear_queue())
-    importlib.reload(litellm)
-    try:
-        if hasattr(litellm, "proxy") and hasattr(litellm.proxy, "proxy_server"):
-            importlib.reload(litellm.proxy.proxy_server)
-    except Exception:
-        pass
-    loop = asyncio.get_event_loop_policy().new_event_loop()
-    asyncio.set_event_loop(loop)
-    yield
-    loop.close()
-    asyncio.set_event_loop(None)
+def _openai_stream_cut_after(partial: str) -> httpx.Response:
+    return _sse(
+        *(
+            ({
+                "type": "response.output_text.delta", "sequence_number": 0,
+                "item_id": "msg_primary", "output_index": 0, "content_index": 0, "delta": partial,
+            },)
+            if partial else ()
+        ),
+        {
+            "type": "error", "sequence_number": 1,
+            "error": {"type": "server_error", "code": "internal_error", "message": "interrupted"},
+        },
+    )
 
-def _make_router() -> Router:
+
+def _anthropic_stream(text: str) -> httpx.Response:
+    return _sse(
+        {"type": "message_start", "message": {
+            "id": "msg_fallback", "type": "message", "role": "assistant",
+            "model": "claude-fallback", "content": [], "usage": {"input_tokens": 10, "output_tokens": 0},
+        }},
+        {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": text}},
+        {"type": "content_block_stop", "index": 0},
+        {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 5}},
+        {"type": "message_stop"},
+    )
+
+
+def _primary_with_fallback(fallback_model: str) -> Router:
     return Router(
         model_list=[
-            {
-                "model_name": "primary",
-                "litellm_params": {
-                    "model": "openai/gpt-4o-mini",
-                    "api_key": "sk-test",
-                },
+            {"model_name": "primary", "litellm_params": {"model": "openai/gpt-6-astra", "api_key": "synthetic"}},
+            {"model_name": "fallback", "litellm_params": {"model": fallback_model, "api_key": "synthetic"}},
+        ],
+        fallbacks=[{"primary": ["fallback"]}],
+        num_retries=0,
+    )
+
+
+def _streamed_text(events: tuple[Any, ...]) -> str:
+    return "".join(event.delta for event in events if event.type == ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA)
+
+
+@pytest.fixture
+def claude_with_prefill() -> str:
+    model: Final = "anthropic/claude-prefill-capable-test-model"
+    litellm.register_model(
+        {model: {"litellm_provider": "anthropic", "mode": "chat", "supports_assistant_prefill": True}},
+        persist_across_reloads=False,
+    )
+    litellm.get_model_info.cache_clear()
+    return model
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("partial", ["", "1, 2, "])
+async def test_responses_fallback_can_continue_on_a_provider_without_prefill(
+    partial: str, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    prompt: Final = "Print the integers 1 through 5, separated by commas."
+    primary: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(
+        return_value=_openai_stream_cut_after(partial)
+    )
+
+    def no_prefill_provider(request: httpx.Request) -> httpx.Response:
+        body: Final = json.loads(request.content)
+        if body["messages"][-1]["role"] != "user":
+            return httpx.Response(
+                400,
+                json={"type": "error", "error": {
+                    "type": "invalid_request_error", "message": "The conversation must end with a user message",
+                }},
+            )
+        return _anthropic_stream("3, 4, 5" if partial else "1, 2, 3, 4, 5")
+
+    fallback: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(side_effect=no_prefill_provider)
+    router: Final = _primary_with_fallback("anthropic/claude-opus-5-5")
+    try:
+        stream: Final = await router.aresponses(model="primary", input=prompt, stream=True, max_output_tokens=100)
+        events: Final = tuple([event async for event in stream])
+        assert _streamed_text(events) == "1, 2, 3, 4, 5"
+        assert events[-1].type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+        assert primary.call_count == fallback.call_count == 1
+        messages: Final = json.loads(fallback.calls.last.request.content)["messages"]
+        assert messages[0] == {"role": "user", "content": [{"type": "text", "text": prompt}]}
+        if partial:
+            assert [message["role"] for message in messages] == ["user", "assistant", "user"]
+            assert messages[-2] == {"role": "assistant", "content": [{"type": "text", "text": partial}]}
+            assert json.dumps(partial) in messages[-1]["content"][0]["text"]
+        else:
+            assert len(messages) == 1
+    finally:
+        router.discard()
+
+
+@pytest.mark.asyncio
+async def test_responses_fallback_continues_a_claude_that_takes_prefill_from_its_own_partial(
+    claude_with_prefill: str, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.post("https://api.openai.com/v1/responses").mock(return_value=_openai_stream_cut_after("1, 2, "))
+    fallback: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=_anthropic_stream(" 3, 4, 5")
+    )
+    router: Final = _primary_with_fallback(claude_with_prefill)
+    try:
+        stream: Final = await router.aresponses(
+            model="primary", input="Print the integers 1 through 5.", stream=True, max_output_tokens=100
+        )
+        events: Final = tuple([event async for event in stream])
+        assert _streamed_text(events) == "1, 2, 3, 4, 5"
+        assert events[-1].type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+        messages: Final = json.loads(fallback.calls.last.request.content)["messages"]
+        assert [message["role"] for message in messages] == ["user", "assistant"]
+        assert messages[-1]["content"][0]["text"].startswith("1, 2,")
+    finally:
+        router.discard()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fallback_takes_prefill", [True, False], ids=["prefill", "request_to_continue"])
+async def test_responses_fallback_continuation_drops_reasoning_the_fallback_cannot_decrypt(
+    fallback_takes_prefill: bool,
+    claude_with_prefill: str,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.post("https://api.openai.com/v1/responses").mock(return_value=_openai_stream_cut_after("1, 2, "))
+    fallback: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=_anthropic_stream(" 3, 4, 5")
+    )
+    router: Final = _primary_with_fallback(claude_with_prefill if fallback_takes_prefill else "anthropic/claude-opus-5-5")
+    try:
+        stream: Final = await router.aresponses(
+            model="primary",
+            input=[
+                {"role": "user", "content": "Print the integers 1 through 5."},
+                {"type": "reasoning", "id": "rs_1", "summary": [], "encrypted_content": "primary-only-ciphertext"},
+            ],
+            stream=True,
+            max_output_tokens=100,
+        )
+        _ = [event async for event in stream]
+        assert fallback.call_count == 1
+        assert "primary-only-ciphertext" not in fallback.calls.last.request.content.decode()
+    finally:
+        router.discard()
+
+
+class _Numbers(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    numbers: tuple[int, ...]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "constraint",
+    [
+        {"text": {"format": {"type": "json_schema", "name": "numbers", "strict": True, "schema": {"type": "object"}}}},
+        {"text": {"format": {"type": "json_object"}}},
+        {"tool_choice": "required", "tools": [{"type": "function", "name": "lookup", "parameters": {"type": "object"}}]},
+        {"text_format": _Numbers},
+    ],
+    ids=["json_schema", "json_object", "required_tool", "sdk_text_format"],
+)
+async def test_responses_fallback_surfaces_the_primary_error_once_constrained_output_was_streamed(
+    constraint: dict[str, object],
+    claude_with_prefill: str,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.post("https://api.openai.com/v1/responses").mock(
+        return_value=_openai_stream_cut_after('{"numbers": [1, 2, ')
+    )
+    fallback: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=_anthropic_stream("3]}")
+    )
+    router: Final = _primary_with_fallback(claude_with_prefill)
+    try:
+        stream: Final = await router.aresponses(
+            model="primary", input="Numbers 1 to 3 as JSON.", stream=True, max_output_tokens=100, **constraint
+        )
+        with pytest.raises(litellm.InternalServerError, match="interrupted"):
+            [event async for event in stream]
+        assert fallback.call_count == 0
+    finally:
+        router.discard()
+
+
+@pytest.mark.asyncio
+async def test_responses_fallback_continues_within_the_callers_output_ceiling(
+    claude_with_prefill: str, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.post("https://api.openai.com/v1/responses").mock(return_value=_openai_stream_cut_after("1, 2, "))
+    fallback: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=_anthropic_stream("3, 4, 5")
+    )
+    router: Final = _primary_with_fallback(claude_with_prefill)
+    try:
+        stream: Final = await router.aresponses(model="primary", input="Count to 5.", stream=True, max_output_tokens=100)
+        events: Final = tuple([event async for event in stream])
+        assert _streamed_text(events) == "1, 2, 3, 4, 5"
+        assert json.loads(fallback.calls.last.request.content)["max_tokens"] == 100 - litellm.token_counter(
+            text="1, 2, "
+        )
+    finally:
+        router.discard()
+
+
+@pytest.mark.asyncio
+async def test_responses_fallback_surfaces_the_primary_error_once_the_cut_stream_used_the_output_ceiling(
+    claude_with_prefill: str, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.post("https://api.openai.com/v1/responses").mock(return_value=_openai_stream_cut_after("1, 2, "))
+    fallback: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=_anthropic_stream("3, 4, 5")
+    )
+    router: Final = _primary_with_fallback(claude_with_prefill)
+    try:
+        stream: Final = await router.aresponses(
+            model="primary", input="Count to 5.", stream=True, max_output_tokens=litellm.token_counter(text="1, 2, ")
+        )
+        with pytest.raises(litellm.InternalServerError, match="interrupted"):
+            [event async for event in stream]
+        assert fallback.call_count == 0
+    finally:
+        router.discard()
+
+
+def _openai_stream_cut_mid_tool_call(preamble: str, *, announce_item: bool = True) -> httpx.Response:
+    text: Final = {
+        "type": "response.output_text.delta", "sequence_number": 0,
+        "item_id": "msg_primary", "output_index": 0, "content_index": 0, "delta": preamble,
+    }
+    item_added: Final = {
+        "type": "response.output_item.added", "sequence_number": 1, "output_index": 1,
+        "item": {
+            "type": "function_call", "id": "fc_primary", "call_id": "call_primary",
+            "name": "lookup", "arguments": "", "status": "in_progress",
+        },
+    }
+    arguments: Final = {
+        "type": "response.function_call_arguments.delta", "sequence_number": 2,
+        "item_id": "fc_primary", "output_index": 1, "delta": '{"city": "Par',
+    }
+    error: Final = {
+        "type": "error", "sequence_number": 3,
+        "error": {"type": "server_error", "code": "internal_error", "message": "interrupted"},
+    }
+    return _sse(*((text, item_added, arguments, error) if announce_item else (text, arguments, error)))
+
+
+def _anthropic_stream_cut_mid_tool_call(preamble: str, tool_block: Mapping[str, object] | None = None) -> httpx.Response:
+    return _sse(
+        {"type": "message_start", "message": {
+            "id": "msg_primary", "type": "message", "role": "assistant",
+            "model": "claude-primary", "content": [], "usage": {"input_tokens": 10, "output_tokens": 0},
+        }},
+        {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": preamble}},
+        {"type": "content_block_stop", "index": 0},
+        {"type": "content_block_start", "index": 1, "content_block": tool_block or {
+            "type": "tool_use", "id": "toolu_primary", "name": "lookup", "input": {},
+        }},
+        {"type": "content_block_delta", "index": 1, "delta": {"type": "input_json_delta", "partial_json": '{"city": "Par'}},
+        {"type": "error", "error": {"type": "overloaded_error", "message": "interrupted"}},
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("announce_item", [True, False], ids=["announced_item", "arguments_only"])
+async def test_responses_fallback_surfaces_the_primary_error_once_the_cut_stream_began_a_tool_call(
+    announce_item: bool, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.post("https://api.openai.com/v1/responses").mock(
+        return_value=_openai_stream_cut_mid_tool_call("Let me look that up. ", announce_item=announce_item)
+    )
+    fallback: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=_anthropic_stream("It is sunny in Paris.")
+    )
+    router: Final = _primary_with_fallback("anthropic/claude-opus-5-5")
+    try:
+        stream: Final = await router.aresponses(
+            model="primary",
+            input="What is the weather in Paris?",
+            stream=True,
+            tools=[{"type": "function", "name": "lookup", "parameters": {"type": "object"}}],
+        )
+        with pytest.raises(litellm.InternalServerError, match="interrupted"):
+            [event async for event in stream]
+        assert fallback.call_count == 0
+    finally:
+        router.discard()
+
+
+def _openai_stream_cut_after_event(preamble: str, event: Mapping[str, object]) -> httpx.Response:
+    return _sse(
+        {
+            "type": "response.output_text.delta", "sequence_number": 0,
+            "item_id": "msg_primary", "output_index": 0, "content_index": 0, "delta": preamble,
+        },
+        {**event, "sequence_number": 1},
+        {
+            "type": "error", "sequence_number": 2,
+            "error": {"type": "server_error", "code": "internal_error", "message": "interrupted"},
+        },
+    )
+
+
+def _openai_stream_cut_after_output_item(preamble: str, item: Mapping[str, object]) -> httpx.Response:
+    return _openai_stream_cut_after_event(
+        preamble, {"type": "response.output_item.added", "output_index": 1, "item": item}
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "item",
+    [
+        {"type": "shell_call", "id": "sh_1", "call_id": "call_1", "action": {"commands": ["ls"]}, "status": "in_progress"},
+        {
+            "type": "apply_patch_call", "id": "apc_1", "call_id": "call_1", "status": "in_progress",
+            "operation": {"type": "update_file", "path": "a.py", "diff": "@@"},
+        },
+        {
+            "type": "local_shell_call", "id": "lsh_1", "call_id": "call_1", "status": "in_progress",
+            "action": {"type": "exec", "command": ["ls"], "env": {}},
+        },
+        {
+            "type": "computer_call", "id": "cu_1", "call_id": "call_1", "status": "in_progress",
+            "action": {"type": "screenshot"}, "pending_safety_checks": [],
+        },
+        {"type": "mcp_approval_request", "id": "mcpr_1", "name": "lookup", "arguments": "{}", "server_label": "docs"},
+    ],
+    ids=lambda item: item["type"],
+)
+async def test_responses_fallback_surfaces_the_primary_error_once_the_cut_stream_began_a_client_run_tool_call(
+    item: Mapping[str, object], respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.post("https://api.openai.com/v1/responses").mock(
+        return_value=_openai_stream_cut_after_output_item("Let me check the repo. ", item)
+    )
+    fallback: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=_anthropic_stream("The repo has two files.")
+    )
+    router: Final = _primary_with_fallback("anthropic/claude-opus-5-5")
+    try:
+        stream: Final = await router.aresponses(model="primary", input="What is in the repo?", stream=True)
+        with pytest.raises(litellm.InternalServerError, match="interrupted"):
+            [event async for event in stream]
+        assert fallback.call_count == 0
+    finally:
+        router.discard()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "server_run_event",
+    [
+        {
+            "type": "response.output_item.added", "output_index": 1,
+            "item": {
+                "type": "mcp_call", "id": "mcp_1", "name": "ask_question", "arguments": "{}",
+                "server_label": "docs", "status": "in_progress",
             },
-            {
-                "model_name": "fallback",
-                "litellm_params": {
-                    "model": "openai/gpt-4o",
-                    "api_key": "sk-test",
+        },
+        {"type": "response.mcp_call_arguments.delta", "output_index": 1, "item_id": "mcp_1", "delta": '{"question": "set'},
+    ],
+    ids=["mcp_call_item", "mcp_call_arguments"],
+)
+async def test_responses_fallback_continues_after_a_server_run_mcp_call(
+    server_run_event: Mapping[str, object], respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.post("https://api.openai.com/v1/responses").mock(
+        return_value=_openai_stream_cut_after_event("Let me check the docs. ", server_run_event)
+    )
+    fallback: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=_anthropic_stream("The docs cover setup.")
+    )
+    router: Final = _primary_with_fallback("anthropic/claude-opus-5-5")
+    try:
+        stream: Final = await router.aresponses(model="primary", input="What do the docs cover?", stream=True)
+        events: Final = tuple([event async for event in stream])
+        assert _streamed_text(events).endswith("The docs cover setup.")
+        assert fallback.call_count == 1
+    finally:
+        router.discard()
+
+
+@pytest.mark.asyncio
+async def test_responses_fallback_continues_when_allowed_tools_in_auto_mode_leaves_the_reply_open(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    openai: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(
+        side_effect=[
+            _openai_stream_cut_after("1, 2, "),
+            _sse(
+                {
+                    "type": "response.output_text.delta", "sequence_number": 0,
+                    "item_id": "msg_fallback", "output_index": 0, "content_index": 0, "delta": "3, 4, 5",
                 },
-            },
+                {
+                    "type": "response.completed", "sequence_number": 1,
+                    "response": {
+                        "id": "resp_fallback", "object": "response", "created_at": 0, "status": "completed",
+                        "model": "gpt-6.1-terra", "output": [],
+                        "usage": {"input_tokens": 5, "output_tokens": 5, "total_tokens": 10},
+                    },
+                },
+            ),
         ]
     )
-
-def _make_completed_event(input_tokens: int, output_tokens: int, total_tokens: int) -> ResponseCompletedEvent:
-    response = ResponsesAPIResponse.model_construct(
-        usage=ResponseAPIUsage(
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-            total_tokens=total_tokens,
-        )
-    )
-    return ResponseCompletedEvent.model_construct(
-        type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
-        response=response,
-    )
-
-@pytest.mark.usefixtures("_vcr_outcome_gate_router_unit", "setup_and_teardown_router_unit")
-def test_extract_partial_responses_usage_native_completed():
-    """Native path: completed_response carries usage → returned as-is."""
-    completed = _make_completed_event(11, 7, 18)
-    source = MagicMock()
-    source.completed_response = completed
-
-    usage = Router._extract_partial_responses_usage(source)
-    assert usage is not None
-    assert usage.input_tokens == 11
-    assert usage.output_tokens == 7
-    assert usage.total_tokens == 18
-
-@pytest.mark.usefixtures("_vcr_outcome_gate_router_unit", "setup_and_teardown_router_unit")
-def test_extract_partial_responses_usage_no_completed_response():
-    """Native path: no completed_response → returns None."""
-    source = MagicMock()
-    source.completed_response = None
-
-    usage = Router._extract_partial_responses_usage(source)
-    assert usage is None
-
-@pytest.mark.usefixtures("_vcr_outcome_gate_router_unit", "setup_and_teardown_router_unit")
-def test_extract_partial_responses_usage_bridge_iterator_no_completed_response():
-    """
-    Regression for #35411: the bridge iterator
-    (LiteLLMCompletionStreamingIterator) overrides __init__ without calling
-    super().__init__(), so completed_response was never set until the stream
-    reached RESPONSE_COMPLETED. On a mid-stream provider error (before
-    completion) the fallback recovery path read source_iterator.completed_response
-    and raised AttributeError, masking the real provider error and bypassing
-    fallbacks. The attribute must always exist and default to None.
-    """
-    from litellm.responses.litellm_completion_transformation.streaming_iterator import (
-        LiteLLMCompletionStreamingIterator,
-    )
-
-    wrapper = MagicMock()
-    wrapper.logging_obj = MagicMock()
-    iterator = LiteLLMCompletionStreamingIterator(
-        model="anthropic/claude-sonnet-4-5",
-        litellm_custom_stream_wrapper=wrapper,
-        request_input="hi",
-        responses_api_request={},
-    )
-
-    assert iterator.completed_response is None
-    # No chat chunks collected yet and no completed_response → must return
-    # None instead of raising AttributeError.
-    assert Router._extract_partial_responses_usage(iterator) is None
-
-@pytest.mark.usefixtures("_vcr_outcome_gate_router_unit", "setup_and_teardown_router_unit")
-def test_combine_responses_fallback_usage_sums_completed_event():
-    """Partial-stream usage is summed into the fallback event's usage."""
-    fallback_event = _make_completed_event(5, 3, 8)
-    partial = ResponseAPIUsage(input_tokens=11, output_tokens=7, total_tokens=18)
-
-    Router._combine_responses_fallback_usage(fallback_event, partial)
-
-    combined = fallback_event.response.usage
-    assert combined is not None
-    assert combined.input_tokens == 16
-    assert combined.output_tokens == 10
-    assert combined.total_tokens == 26
-
-@pytest.mark.usefixtures("_vcr_outcome_gate_router_unit", "setup_and_teardown_router_unit")
-def test_combine_responses_fallback_usage_passthrough_for_unknown_event():
-    """Events that are not completed/failed/incomplete are not mutated."""
-    other = MagicMock()  # not a ResponseCompletedEvent etc. → isinstance false
-    partial = ResponseAPIUsage(input_tokens=1, output_tokens=1, total_tokens=2)
-    Router._combine_responses_fallback_usage(other, partial)
-
-@pytest.mark.usefixtures("_vcr_outcome_gate_router_unit", "setup_and_teardown_router_unit")
-def test_build_responses_continuation_input_from_string():
-    out = Router._build_responses_continuation_input("Hello world", "partial assistant text")
-    assert len(out) == 3
-    assert out[0]["role"] == "user"
-    assert out[0]["content"][0]["text"] == "Hello world"
-    assert out[1]["role"] == "developer"
-    assert out[2]["role"] == "assistant"
-    assert out[2]["content"][0]["text"] == "partial assistant text"
-
-@pytest.mark.usefixtures("_vcr_outcome_gate_router_unit", "setup_and_teardown_router_unit")
-def test_build_responses_continuation_input_from_list_preserves_items():
-    existing: List[Any] = [
-        {
-            "type": "message",
-            "role": "user",
-            "content": [{"type": "input_text", "text": "msg1"}],
-        }
-    ]
-    out = Router._build_responses_continuation_input(existing, "partial")
-    assert len(out) == 3
-    assert out[0]["content"][0]["text"] == "msg1"
-    assert out[1]["role"] == "developer"
-    assert out[2]["role"] == "assistant"
-
-@pytest.mark.usefixtures("_vcr_outcome_gate_router_unit", "setup_and_teardown_router_unit")
-def test_build_responses_continuation_input_from_none():
-    out = Router._build_responses_continuation_input(None, "partial")
-    assert len(out) == 2
-    assert out[0]["role"] == "developer"
-    assert out[1]["role"] == "assistant"
-
-@pytest.mark.usefixtures("_vcr_outcome_gate_router_unit", "setup_and_teardown_router_unit")
-@pytest.mark.asyncio
-async def test_aresponses_streaming_iterator_passthrough():
-    """
-    Without MidStreamFallbackError, the wrapper yields source events
-    unchanged and returns a BaseResponsesAPIStreamingIterator subclass.
-    """
-    from litellm.responses.streaming_iterator import (
-        BaseResponsesAPIStreamingIterator,
-    )
-
-    events = [_make_completed_event(1, 1, 2)]
-
-    class _FakeSource:
-        """Minimal source iterator. Provides every attribute the wrapper
-        constructor reads from source_iterator."""
-
-        def __init__(self) -> None:
-            self._i = 0
-            self.completed_response = None
-            self.response = MagicMock()
-            self.model = "openai/gpt-4o-mini"
-            self.logging_obj = MagicMock()
-            self.responses_api_provider_config = MagicMock()
-            self.start_time = 0.0
-            self.litellm_metadata = {}
-            self.custom_llm_provider = "openai"
-            self.request_data = {}
-            self.call_type = "aresponses"
-            self._hidden_params: dict = {}
-
-        def __aiter__(self) -> AsyncIterator[Any]:
-            return self
-
-        async def __anext__(self):
-            if self._i >= len(events):
-                raise StopAsyncIteration
-            ev = events[self._i]
-            self._i += 1
-            return ev
-
-        async def aclose(self):
-            return None
-
-    router = _make_router()
-    source = _FakeSource()
-
-    wrapper = await router._aresponses_streaming_iterator(source, initial_kwargs={"model": "primary"})
-    assert isinstance(wrapper, BaseResponsesAPIStreamingIterator)
-
-    collected = [ev async for ev in wrapper]
-    assert len(collected) == 1
-    assert collected[0].type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
-
-@pytest.mark.usefixtures("_vcr_outcome_gate_router_unit", "setup_and_teardown_router_unit")
-@pytest.mark.asyncio
-async def test_aresponses_with_streaming_fallbacks_non_streaming_passthrough():
-    """Non-streaming response is returned unchanged, no wrap."""
-    router = _make_router()
-    plain_response = MagicMock()
-
-    async def fake_original(**_kwargs):
-        return plain_response
-
-    with patch.object(
-        router,
-        "_ageneric_api_call_with_fallbacks_helper",
-        new=AsyncMock(return_value=plain_response),
-    ):
-        out = await router._aresponses_with_streaming_fallbacks(
-            original_function=fake_original,
+    router: Final = _primary_with_fallback("openai/gpt-6.1-terra")
+    try:
+        stream: Final = await router.aresponses(
             model="primary",
-            stream=False,
-        )
-    assert out is plain_response
-
-@pytest.mark.usefixtures("_vcr_outcome_gate_router_unit", "setup_and_teardown_router_unit")
-@pytest.mark.asyncio
-async def test_aresponses_with_streaming_fallbacks_wraps_streaming_iterator():
-    """Streaming response is wrapped via _aresponses_streaming_iterator."""
-    from litellm.responses.streaming_iterator import (
-        BaseResponsesAPIStreamingIterator,
-    )
-
-    router = _make_router()
-    streaming_iter = MagicMock(spec=BaseResponsesAPIStreamingIterator)
-    wrapped = MagicMock(spec=BaseResponsesAPIStreamingIterator)
-
-    async def fake_original(**_kwargs):
-        return streaming_iter
-
-    with (
-        patch.object(
-            router,
-            "_ageneric_api_call_with_fallbacks_helper",
-            new=AsyncMock(return_value=streaming_iter),
-        ),
-        patch.object(
-            router,
-            "_aresponses_streaming_iterator",
-            new=AsyncMock(return_value=wrapped),
-        ) as mock_wrap,
-    ):
-        out = await router._aresponses_with_streaming_fallbacks(
-            original_function=fake_original,
-            model="primary",
+            input="Print the integers 1 through 5.",
             stream=True,
+            tools=[{"type": "function", "name": "lookup", "parameters": {"type": "object"}}],
+            tool_choice={"type": "allowed_tools", "mode": "auto", "tools": [{"type": "function", "name": "lookup"}]},
         )
-    assert out is wrapped
-    mock_wrap.assert_awaited_once()
+        events: Final = tuple([event async for event in stream])
+        assert _streamed_text(events) == "1, 2, 3, 4, 5"
+        assert openai.call_count == 2
+        continued_input: Final = json.loads(openai.calls.last.request.content)["input"]
+        assert [item["role"] for item in continued_input[-2:]] == ["assistant", "user"]
+    finally:
+        router.discard()
 
-def _make_three_tier_router(**router_kwargs) -> Router:
-    return Router(
+
+@pytest.mark.asyncio
+async def test_responses_fallback_surfaces_a_content_filter_that_cut_the_stream_mid_answer(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.post("https://api.openai.com/v1/responses").mock(
+        return_value=_sse(
+            {
+                "type": "response.output_text.delta", "sequence_number": 0,
+                "item_id": "msg_primary", "output_index": 0, "content_index": 0, "delta": "Step one is to obtain the",
+            },
+            {
+                "type": "error", "sequence_number": 1,
+                "error": {
+                    "type": "invalid_request_error", "code": "content_policy_violation",
+                    "message": "The response was halted mid-stream.", "param": None,
+                },
+            },
+        )
+    )
+    fallback: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=_anthropic_stream(" reagents.")
+    )
+    router: Final = Router(
         model_list=[
-            {"model_name": "primary", "litellm_params": {"model": "openai/primary-model", "api_key": "sk-test"}},
-            {"model_name": "fb1", "litellm_params": {"model": "openai/fb1-model", "api_key": "sk-test"}},
-            {"model_name": "fb2", "litellm_params": {"model": "openai/fb2-model", "api_key": "sk-test"}},
+            {"model_name": "primary", "litellm_params": {"model": "openai/gpt-6-astra", "api_key": "synthetic"}},
+            {"model_name": "fallback", "litellm_params": {"model": "anthropic/claude-opus-5-5", "api_key": "synthetic"}},
+        ],
+        fallbacks=[{"primary": ["fallback"]}],
+        content_policy_fallbacks=[{"primary": ["fallback"]}],
+        num_retries=0,
+    )
+    try:
+        stream: Final = await router.aresponses(model="primary", input="How do I make it?", stream=True)
+        with pytest.raises(litellm.ContentPolicyViolationError, match="halted mid-stream"):
+            [event async for event in stream]
+        assert fallback.call_count == 0
+    finally:
+        router.discard()
+
+
+@pytest.mark.asyncio
+async def test_bridged_responses_fallback_surfaces_the_primary_error_once_the_cut_stream_began_a_tool_call(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    provider: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        side_effect=[
+            _anthropic_stream_cut_mid_tool_call("Let me look that up. "),
+            _anthropic_stream("It is sunny in Paris."),
+        ]
+    )
+    router: Final = Router(
+        model_list=[
+            {"model_name": "primary", "litellm_params": {"model": "anthropic/claude-primary", "api_key": "synthetic"}},
+            {"model_name": "fallback", "litellm_params": {"model": "anthropic/claude-opus-5-5", "api_key": "synthetic"}},
+        ],
+        fallbacks=[{"primary": ["fallback"]}],
+        num_retries=0,
+    )
+    try:
+        stream: Final = await router.aresponses(
+            model="primary",
+            input="What is the weather in Paris?",
+            stream=True,
+            tools=[{"type": "function", "name": "lookup", "parameters": {"type": "object"}}],
+        )
+        with pytest.raises(litellm.InternalServerError, match="interrupted"):
+            [event async for event in stream]
+        assert provider.call_count == 1
+    finally:
+        router.discard()
+
+
+@pytest.mark.asyncio
+async def test_bridged_responses_fallback_continues_after_a_server_run_tool_search(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    provider: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        side_effect=[
+            _anthropic_stream_cut_mid_tool_call(
+                "Let me find the right tool. ",
+                {"type": "server_tool_use", "id": "srvtoolu_primary", "name": "tool_search_tool_regex", "input": {}},
+            ),
+            _anthropic_stream("It is sunny in Paris."),
+        ]
+    )
+    router: Final = Router(
+        model_list=[
+            {"model_name": "primary", "litellm_params": {"model": "anthropic/claude-primary", "api_key": "synthetic"}},
+            {"model_name": "fallback", "litellm_params": {"model": "anthropic/claude-opus-5-5", "api_key": "synthetic"}},
+        ],
+        fallbacks=[{"primary": ["fallback"]}],
+        num_retries=0,
+    )
+    try:
+        stream: Final = await router.aresponses(
+            model="primary",
+            input="What is the weather in Paris?",
+            stream=True,
+            tools=[
+                {"type": "tool_search", "execution": "server"},
+                {"type": "function", "name": "lookup", "parameters": {"type": "object"}, "defer_loading": True},
+            ],
+        )
+        events: Final = tuple([event async for event in stream])
+        assert _streamed_text(events).endswith("It is sunny in Paris.")
+        assert provider.call_count == 2
+    finally:
+        router.discard()
+
+
+def _openai_completed(model: str) -> Mapping[str, object]:
+    return {
+        "type": "response.completed", "sequence_number": 1,
+        "response": {
+            "id": f"resp_{model}", "object": "response", "created_at": 0, "status": "completed", "model": model,
+            "output": [], "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+        },
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("primary_fails_pre_stream", "request_level_fallbacks"),
+    [(True, False), (False, False), (False, True)],
+    ids=["pre_stream_then_hop_stream_failure", "two_mid_stream_failures", "request_level_fallbacks"],
+)
+async def test_responses_fallback_chain_reaches_the_second_entry_after_a_hop_stream_fails(
+    primary_fails_pre_stream: bool,
+    request_level_fallbacks: bool,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression: fallbacks=[{"primary": ["fb1", "fb2"]}]. fb1 is reached (after the primary failed before or
+    during streaming) and then fails mid-stream; fb2 must still be tried, including when the fallbacks list
+    came with the request rather than the router."""
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    calls: Final[list[str]] = []
+
+    def upstream(request: httpx.Request) -> httpx.Response:
+        model: Final = json.loads(request.content)["model"]
+        calls.append(model)
+        if model == "primary-model" and primary_fails_pre_stream:
+            return httpx.Response(500, json={"error": {"message": "primary down", "type": "server_error"}})
+        if model in ("primary-model", "fb1-model"):
+            return _openai_stream_cut_after("")
+        return _sse(_openai_completed(model))
+
+    respx_mock.post("https://api.openai.com/v1/responses").mock(side_effect=upstream)
+    fallbacks: Final = [{"primary": ["fb1", "fb2"]}]
+    router: Final = Router(
+        model_list=[
+            {"model_name": name, "litellm_params": {"model": f"openai/{name}-model", "api_key": "sk-test"}}
+            for name in ("primary", "fb1", "fb2")
         ],
         num_retries=0,
-        **router_kwargs,
+        **({} if request_level_fallbacks else {"fallbacks": fallbacks}),
     )
+    try:
+        stream: Final = await router.aresponses(
+            model="primary", input="hi", stream=True, **({"fallbacks": fallbacks} if request_level_fallbacks else {})
+        )
+        events: Final = [event async for event in stream]
+    finally:
+        router.discard()
 
-def _mid_stream_failure(model: str):
-    import litellm
-    from litellm.exceptions import MidStreamFallbackError
+    assert calls == ["primary-model", "fb1-model", "fb2-model"]
+    assert [event.type for event in events] == [ResponsesAPIStreamEvents.RESPONSE_COMPLETED]
 
-    return MidStreamFallbackError(
-        message="stream dropped",
-        model=model,
-        llm_provider="openai",
-        original_exception=litellm.InternalServerError(message="stream dropped", llm_provider="openai", model=model),
-        is_pre_first_chunk=True,
-    )
 
-def _scripted_responses_stream(events: list, error: Exception | None = None):
-    from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("error", "falls_back"),
+    [
+        ({"type": "tokens", "code": "rate_limit_exceeded", "message": "rate limited"}, True),
+        ({"type": "invalid_request_error", "code": "invalid_request_error", "message": "bad request"}, False),
+    ],
+    ids=["retriable_429_falls_back", "client_400_surfaces"],
+)
+async def test_responses_in_stream_error_event_falls_back_only_when_retriable(
+    error: Mapping[str, object], falls_back: bool, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A retriable in-stream error event (429) takes the router's mid-stream fallback path; a 400-mapped one
+    surfaces to the caller without invoking a fallback."""
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    calls: Final[list[str]] = []
 
-    class _ScriptedStream(BaseResponsesAPIStreamingIterator):
-        def __init__(self) -> None:
-            self._events = list(events)
-            self._hidden_params: dict = {}
-            self.completed_response = None
-
-        def __aiter__(self):
-            return self
-
-        async def __anext__(self):
-            if self._events:
-                return self._events.pop(0)
-            if error is not None:
-                raise error
-            raise StopAsyncIteration
-
-        async def aclose(self) -> None:
-            return None
-
-    return _ScriptedStream()
-
-def _three_tier_original(calls: list, primary_fails_pre_stream: bool):
-    import litellm
-
-    completed_event = _make_completed_event(1, 1, 2)
-
-    async def fake_original(**kwargs):
-        model = kwargs["model"]
+    def upstream(request: httpx.Request) -> httpx.Response:
+        model: Final = json.loads(request.content)["model"]
         calls.append(model)
-        if model == "openai/primary-model":
-            if primary_fails_pre_stream:
-                raise litellm.InternalServerError(message="primary down", llm_provider="openai", model=model)
-            return _scripted_responses_stream([], _mid_stream_failure(model))
-        if model == "openai/fb1-model":
-            return _scripted_responses_stream([], _mid_stream_failure(model))
-        return _scripted_responses_stream([completed_event])
+        if model == "primary-model":
+            return _sse({"type": "error", "sequence_number": 0, "error": error})
+        return _sse(_openai_completed(model))
 
-    return fake_original, completed_event
-
-@pytest.mark.usefixtures("_vcr_outcome_gate_router_unit", "setup_and_teardown_router_unit")
-@pytest.mark.asyncio
-async def test_aresponses_pre_stream_primary_failure_then_hop_stream_failure_reaches_second_entry():
-    """Regression: fallbacks=[{"primary": ["fb1", "fb2"]}]. The primary fails before streaming,
-    fb1 is reached through the regular fallback chain and then fails mid-stream. Only the
-    primary's stream used to be wrapped, so fb1's mid-stream failure either re-raised or
-    re-tried fb1 itself; fb2 was unreachable."""
-    router = _make_three_tier_router(fallbacks=[{"primary": ["fb1", "fb2"]}])
-    calls: list = []
-    fake_original, completed_event = _three_tier_original(calls, primary_fails_pre_stream=True)
-
-    stream = await router._aresponses_with_streaming_fallbacks(
-        original_function=fake_original, model="primary", stream=True, input="hi"
+    respx_mock.post("https://api.openai.com/v1/responses").mock(side_effect=upstream)
+    router: Final = Router(
+        model_list=[
+            {"model_name": name, "litellm_params": {"model": f"openai/{name}-model", "api_key": "sk-test"}}
+            for name in ("primary", "fallback")
+        ],
+        fallbacks=[{"primary": ["fallback"]}],
+        num_retries=0,
     )
-    collected = [event async for event in stream]
-
-    assert calls == ["openai/primary-model", "openai/fb1-model", "openai/fb2-model"]
-    assert collected == [completed_event]
-
-@pytest.mark.usefixtures("_vcr_outcome_gate_router_unit", "setup_and_teardown_router_unit")
-@pytest.mark.asyncio
-async def test_aresponses_two_consecutive_mid_stream_failures_reach_second_entry():
-    """Regression: the primary and fb1 both fail mid-stream; fb2 must still be tried."""
-    router = _make_three_tier_router(fallbacks=[{"primary": ["fb1", "fb2"]}])
-    calls: list = []
-    fake_original, completed_event = _three_tier_original(calls, primary_fails_pre_stream=False)
-
-    stream = await router._aresponses_with_streaming_fallbacks(
-        original_function=fake_original, model="primary", stream=True, input="hi"
-    )
-    collected = [event async for event in stream]
-
-    assert calls == ["openai/primary-model", "openai/fb1-model", "openai/fb2-model"]
-    assert collected == [completed_event]
-
-@pytest.mark.usefixtures("_vcr_outcome_gate_router_unit", "setup_and_teardown_router_unit")
-@pytest.mark.asyncio
-async def test_aresponses_per_request_fallbacks_survive_into_hop_streams():
-    """Regression: a request-level fallbacks list (key or team router_settings) is popped
-    before each attempt runs, so a hop's mid-stream re-entry used to see only the router's
-    own (empty) list and gave up after fb1."""
-    router = _make_three_tier_router()
-    calls: list = []
-    fake_original, completed_event = _three_tier_original(calls, primary_fails_pre_stream=False)
-
-    stream = await router._aresponses_with_streaming_fallbacks(
-        original_function=fake_original,
-        model="primary",
-        stream=True,
-        input="hi",
-        fallbacks=[{"primary": ["fb1", "fb2"]}],
-    )
-    collected = [event async for event in stream]
-
-    assert calls == ["openai/primary-model", "openai/fb1-model", "openai/fb2-model"]
-    assert collected == [completed_event]
-
-@pytest.mark.usefixtures("_vcr_outcome_gate_router_unit", "setup_and_teardown_router_unit")
-@pytest.mark.asyncio
-async def test_aresponses_attempt_strips_the_controls_carrier_and_wraps_every_hop_stream():
-    """Each attempt of the chain, not only the primary's, comes back wrapped for mid-stream
-    failover, and the per-request controls carrier rides into the wrapper's re-entry kwargs
-    without ever reaching the provider call."""
-    from types import MappingProxyType
-
-    from litellm.router_utils.fallback_event_handlers import (
-        MID_STREAM_FALLBACK_CONTROLS_KEY,
-        MidStreamFallbackControls,
-    )
-
-    router = _make_three_tier_router()
-    completed_event = _make_completed_event(1, 1, 2)
-    hop_stream = _scripted_responses_stream([completed_event])
-    seen: dict = {}
-
-    async def fake_original(**kwargs):
-        seen.update(kwargs)
-        return hop_stream
-
-    controls = MidStreamFallbackControls(MappingProxyType({"fallbacks": [{"primary": ["fb1", "fb2"]}]}))
-    stream = await router._ageneric_api_call_with_fallbacks_responses_attempt(
-        model="fb1",
-        original_generic_function=fake_original,
-        stream=True,
-        input="hi",
-        **{MID_STREAM_FALLBACK_CONTROLS_KEY: controls},
-    )
-    collected = [event async for event in stream]
-
-    assert seen["model"] == "openai/fb1-model"
-    assert MID_STREAM_FALLBACK_CONTROLS_KEY not in seen
-    assert "fallbacks" not in seen
-    assert stream is not hop_stream
-    assert collected == [completed_event]
-
-@pytest.mark.usefixtures("_vcr_outcome_gate_router_unit", "setup_and_teardown_router_unit")
-@pytest.mark.asyncio
-async def test_aresponses_fallback_on_in_stream_error_event():
-    """A retriable in-stream error event (429) must trigger the router's mid-stream
-    fallback path: the wrapper catches MidStreamFallbackError raised by the source
-    iterator and yields the fallback stream instead of surfacing the error."""
-    import json
-    from unittest.mock import Mock
-
-    import litellm
-    from litellm.exceptions import MidStreamFallbackError
-    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-    from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
-    from litellm.responses.streaming_iterator import ResponsesAPIStreamingIterator
-    from litellm.types.llms.openai import ErrorEvent, ErrorEventError
-
-    router = _make_router()
-
-    error_payload = {
-        "type": "error",
-        "error": {"type": "tokens", "code": "rate_limit_exceeded", "message": "rate limited"},
-    }
-    sse_bytes = f"data: {json.dumps(error_payload)}\n\n".encode()
-
-    async def mock_aiter_bytes():
-        yield sse_bytes
-
-    mock_response = Mock()
-    mock_response.headers = {}
-    mock_response.aiter_bytes = mock_aiter_bytes
-    mock_logging_obj = MagicMock(spec=LiteLLMLoggingObj)
-    mock_logging_obj.model_call_details = {"litellm_params": {}}
-    mock_logging_obj.completion_start_time = None
-    mock_config = Mock(spec=BaseResponsesAPIConfig)
-    mock_config.transform_streaming_response.return_value = ErrorEvent(
-        type=ResponsesAPIStreamEvents.ERROR,
-        sequence_number=0,
-        error=ErrorEventError(type="tokens", code="rate_limit_exceeded", message="rate limited"),
-    )
-
-    source = ResponsesAPIStreamingIterator(
-        response=mock_response,
-        model="gpt-5",
-        responses_api_provider_config=mock_config,
-        logging_obj=mock_logging_obj,
-        custom_llm_provider="openai",
-    )
-
-    fallback_event = _make_completed_event(1, 1, 2)
-
-    class _FallbackStream:
-        def __init__(self) -> None:
-            self._done = False
-
-        def __aiter__(self):
-            return self
-
-        async def __anext__(self):
-            if self._done:
-                raise StopAsyncIteration
-            self._done = True
-            return fallback_event
-
-    with patch.object(
-        router,
-        "async_function_with_fallbacks_common_utils",
-        new=AsyncMock(return_value=_FallbackStream()),
-    ) as mock_fallback:
-        wrapped = await router._aresponses_streaming_iterator(
-            response=source,
-            initial_kwargs={"model": "primary", "input": "original question"},
-        )
-        collected = [ev async for ev in wrapped]
-
-    assert collected == [fallback_event]
-    mock_fallback.assert_awaited_once()
-    raised = mock_fallback.await_args.kwargs["e"]
-    assert isinstance(raised, MidStreamFallbackError)
-    assert raised.status_code == 429
-    assert isinstance(raised.original_exception, litellm.RateLimitError)
-    assert raised.original_exception.status_code == 429
-    assert mock_fallback.await_args.kwargs["kwargs"]["input"] == "original question"
-
-@pytest.mark.usefixtures("_vcr_outcome_gate_router_unit", "setup_and_teardown_router_unit")
-@pytest.mark.asyncio
-async def test_aresponses_fallback_uses_continuation_input_after_partial_content():
-    """When output text was already streamed before the error, the fallback re-entry
-    must carry a continuation input with the partial assistant text instead of
-    retrying the original input from scratch (which would duplicate streamed content)."""
-    import json
-    from unittest.mock import Mock
-
-    from litellm.exceptions import MidStreamFallbackError
-    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-    from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
-    from litellm.responses.streaming_iterator import ResponsesAPIStreamingIterator
-    from litellm.types.llms.openai import ErrorEvent, ErrorEventError
-
-    router = _make_router()
-
-    events = [
-        {"type": "response.output_text.delta", "delta": "partial answer"},
-        {"type": "error", "error": {"type": "server_error", "code": "internal_error", "message": "boom"}},
-    ]
-    sse_payload = b"".join(f"data: {json.dumps(event)}\n\n".encode() for event in events)
-
-    async def mock_aiter_bytes():
-        yield sse_payload
-
-    mock_response = Mock()
-    mock_response.headers = {}
-    mock_response.aiter_bytes = mock_aiter_bytes
-    mock_logging_obj = MagicMock(spec=LiteLLMLoggingObj)
-    mock_logging_obj.model_call_details = {"litellm_params": {}}
-    mock_logging_obj.completion_start_time = None
-    mock_config = Mock(spec=BaseResponsesAPIConfig)
-
-    def transform(model, parsed_chunk, logging_obj):
-        if parsed_chunk.get("type") == "error":
-            return ErrorEvent(
-                type=ResponsesAPIStreamEvents.ERROR,
-                sequence_number=0,
-                error=ErrorEventError(**parsed_chunk["error"]),
-            )
-        delta_event = Mock()
-        delta_event.type = ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA
-        delta_event.delta = parsed_chunk["delta"]
-        return delta_event
-
-    mock_config.transform_streaming_response.side_effect = transform
-
-    source = ResponsesAPIStreamingIterator(
-        response=mock_response,
-        model="gpt-5",
-        responses_api_provider_config=mock_config,
-        logging_obj=mock_logging_obj,
-        custom_llm_provider="openai",
-    )
-
-    fallback_event = _make_completed_event(1, 1, 2)
-
-    class _FallbackStream:
-        def __init__(self) -> None:
-            self._done = False
-
-        def __aiter__(self):
-            return self
-
-        async def __anext__(self):
-            if self._done:
-                raise StopAsyncIteration
-            self._done = True
-            return fallback_event
-
-    with patch.object(
-        router,
-        "async_function_with_fallbacks_common_utils",
-        new=AsyncMock(return_value=_FallbackStream()),
-    ) as mock_fallback:
-        wrapped = await router._aresponses_streaming_iterator(
-            response=source,
-            initial_kwargs={"model": "primary", "input": "original question"},
-        )
-        collected = [ev async for ev in wrapped]
-
-    assert collected[-1] == fallback_event
-    raised = mock_fallback.await_args.kwargs["e"]
-    assert isinstance(raised, MidStreamFallbackError)
-    assert raised.is_pre_first_chunk is False
-    assert raised.generated_content == "partial answer"
-    continuation = mock_fallback.await_args.kwargs["kwargs"]["input"]
-    assert isinstance(continuation, list)
-    assert continuation[0]["content"][0]["text"] == "original question"
-    assert continuation[-2]["role"] == "developer"
-    assert continuation[-1]["role"] == "assistant"
-    assert continuation[-1]["content"][0]["text"] == "partial answer"
-
-@pytest.mark.usefixtures("_vcr_outcome_gate_router_unit", "setup_and_teardown_router_unit")
-@pytest.mark.asyncio
-async def test_aresponses_client_error_event_skips_fallback():
-    """A 400-mapped in-stream error (raised as APIError, not MidStreamFallbackError)
-    must surface to the caller without invoking the router's fallback path."""
-    import litellm
-
-    router = _make_router()
-
-    class _ClientErrorSource:
-        completed_response = None
-
-        def __aiter__(self):
-            return self
-
-        async def __anext__(self):
-            raise litellm.APIError(
-                status_code=400,
-                message="bad request",
-                llm_provider="openai",
-                model="gpt-5",
-            )
-
-    wrapped = await router._aresponses_streaming_iterator(
-        response=_ClientErrorSource(),
-        initial_kwargs={"model": "primary"},
-    )
-
-    with patch.object(
-        router,
-        "async_function_with_fallbacks_common_utils",
-        new=AsyncMock(),
-    ) as mock_fallback:
-        with pytest.raises(litellm.APIError) as exc_info:
-            async for _ in wrapped:
-                pass
-
-    assert exc_info.value.status_code == 400
-    mock_fallback.assert_not_awaited()
+    try:
+        stream: Final = await router.aresponses(model="primary", input="hi", stream=True)
+        if falls_back:
+            events: Final = [event async for event in stream]
+            assert [event.type for event in events] == [ResponsesAPIStreamEvents.RESPONSE_COMPLETED]
+            assert calls == ["primary-model", "fallback-model"]
+        else:
+            with pytest.raises(litellm.BadRequestError) as exc_info:
+                async for _ in stream:
+                    pass
+            assert exc_info.value.status_code == 400
+            assert calls == ["primary-model"]
+    finally:
+        router.discard()

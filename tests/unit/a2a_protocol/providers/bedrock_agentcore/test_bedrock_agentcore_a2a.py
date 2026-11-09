@@ -10,6 +10,7 @@ Verifies that:
 """
 
 import json
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -559,6 +560,37 @@ class TestStreaming:
         assert sent_body["method"] == "message/stream", sent_body
         assert sent_body["params"]["message"]["messageId"] == "msg-001"
         assert [event["result"]["kind"] for event in events] == ["task", "status-update"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.usefixtures("httpx_transport")
+    async def test_streaming_keeps_unicode_line_separators_inside_an_sse_event(self) -> None:
+        from litellm.a2a_protocol.providers.bedrock_agentcore.config import (
+            BedrockAgentCoreA2AConfig,
+        )
+
+        event: Final = {
+            "jsonrpc": "2.0",
+            "id": "req-001",
+            "result": {"kind": "artifact-update", "artifact": {"parts": [{"kind": "text", "text": "a\u2028b\u2029c"}]}},
+        }
+        with respx.mock(assert_all_called=True) as router:
+            router.post(url__regex=r".*/invocations.*").mock(
+                return_value=httpx.Response(
+                    200,
+                    headers={"content-type": "text/event-stream"},
+                    text=f"data: {json.dumps(event, ensure_ascii=False)}\n\n",
+                )
+            )
+            events: Final = [
+                streamed
+                async for streamed in BedrockAgentCoreA2AConfig().handle_streaming(
+                    request_id="req-001",
+                    params=SAMPLE_PARAMS,
+                    litellm_params=SAMPLE_LITELLM_PARAMS,
+                )
+            ]
+
+        assert events == [event]
 
 
 class TestConfigManager:
