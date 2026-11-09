@@ -1,4 +1,3 @@
-from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Final
 
@@ -79,21 +78,6 @@ def test_where_clause_binds_each_filter_as_a_single_array_parameter() -> None:
         "gpt-test",
         ["key-1", "key-2"],
     )
-
-
-@pytest.mark.parametrize("teams", (("team-a", "team-b"), (), ("Unassigned",)))
-def test_customer_team_filter_is_separate_from_customer_and_key_filters(teams: tuple[str, ...]) -> None:
-    scope: Final = replace(
-        _scope(table=DailyActivityTable.CUSTOMER, api_keys=("key-a",), model="model-a"), team_ids=teams
-    )
-    sql, params = build_where_clause(scope)
-    assert '"end_user_id" = ANY($3::text[])' in sql
-    assert "api_key = ANY($5::text[])" in sql
-    assert "= ANY($6::text[])" in sql
-    assert '"LiteLLM_VerificationToken"' in sql
-    assert '"LiteLLM_DeletedVerificationToken"' in sql
-    assert "ORDER BY priority, deleted_at DESC LIMIT 1" in sql
-    assert params == ("2026-01-01", "2026-01-31", ["user-1"], "model-a", ["key-a"], list(teams))
 
 
 def test_where_clause_exclusion_keeps_null_entity_rows() -> None:

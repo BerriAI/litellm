@@ -1,10 +1,11 @@
 import uuid
+from hashlib import sha256
 from datetime import datetime, timedelta, timezone
 from typing import Final
 
 import pytest
 from integration._support.client import Gateway, eventually, string_value
-from integration._support.database import read_rows
+from integration._support.database import read_rows, write_rows
 
 from litellm.types.proxy.management_endpoints.common_daily_activity import SpendAnalyticsPaginatedResponse
 
@@ -67,6 +68,27 @@ def test_customer_spend_by_current_team_and_team_filter(gateway: Gateway, route:
         filtered_body: Final = SpendAnalyticsPaginatedResponse.model_validate_json(filtered.content)
         assert filtered_body.metadata.total_spend == pytest.approx(20 * 0.001 + 20 * 0.002)
         assert set(filtered_body.results[0].breakdown.teams or {}) == {team_a}
+        stored_key: Final = sha256(key_a.encode()).hexdigest()
+        stored_model: Final = str(
+            read_rows(
+                'SELECT model FROM "LiteLLM_DailyEndUserSpend" WHERE end_user_id=%s AND api_key=%s',
+                (customer, stored_key),
+            )[0]["model"]
+        )
+        combined: Final = gateway.request(
+            "GET",
+            f"{query}&team_ids={team_a}&api_key={stored_key}&model={stored_model}",
+        )
+        assert combined.status_code == 200, combined.text
+        assert SpendAnalyticsPaginatedResponse.model_validate_json(
+            combined.content
+        ).metadata.total_spend == pytest.approx(20 * 0.001 + 20 * 0.002)
+        excluded: Final = gateway.request(
+            "GET",
+            f"{query}&team_ids={team_b}&api_key={stored_key}&model={stored_model}",
+        )
+        assert excluded.status_code == 200, excluded.text
+        assert SpendAnalyticsPaginatedResponse.model_validate_json(excluded.content).metadata.total_spend == 0
         empty: Final = gateway.request("GET", f"{query}&team_ids=missing-team")
         assert empty.status_code == 200, empty.text
         assert SpendAnalyticsPaginatedResponse.model_validate_json(empty.content).metadata.total_spend == 0
@@ -76,3 +98,24 @@ def test_customer_spend_by_current_team_and_team_filter(gateway: Gateway, route:
         deleted_body: Final = SpendAnalyticsPaginatedResponse.model_validate_json(deleted.content)
         assert deleted_body.metadata.total_spend == pytest.approx(20 * 0.001 + 20 * 0.002)
         assert set(deleted_body.results[0].breakdown.teams or {}) == {team_b}
+        for key, team in ((key_a, team_a), (key_b, team_b)):
+            legacy_key: Final = sha256(sha256(key.encode()).hexdigest().encode()).hexdigest()
+            legacy_customer: Final = f"legacy-{uuid.uuid4().hex}"
+            scenario.cleanups.callback(
+                write_rows, 'DELETE FROM "LiteLLM_DailyEndUserSpend" WHERE end_user_id=%s', (legacy_customer,)
+            )
+            write_rows(
+                'INSERT INTO "LiteLLM_DailyEndUserSpend" '
+                "(id,end_user_id,date,api_key,model,spend,api_requests,updated_at) "
+                "VALUES (gen_random_uuid()::text,%s,%s,%s,%s,0.25,1,now())",
+                (legacy_customer, today.isoformat(), legacy_key, stored_model),
+            )
+            legacy_query: Final = f"{route}?end_user_ids={legacy_customer}&start_date={start}&end_date={end}"
+            for suffix in ("", f"&team_ids={team}"):
+                legacy: Final = gateway.request("GET", legacy_query + suffix)
+                assert legacy.status_code == 200, legacy.text
+                legacy_body: Final = SpendAnalyticsPaginatedResponse.model_validate_json(legacy.content)
+                assert legacy_body.metadata.total_spend == 0.25
+                legacy_teams: Final = legacy_body.results[0].breakdown.teams or {}
+                assert set(legacy_teams) == {team}
+                assert legacy_teams[team].metrics.spend == legacy_body.metadata.total_spend

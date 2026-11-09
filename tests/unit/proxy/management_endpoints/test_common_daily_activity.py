@@ -1,5 +1,5 @@
 from collections.abc import Mapping, Sequence
-from dataclasses import asdict, fields
+from dataclasses import asdict, fields, replace
 from datetime import date, datetime
 from types import FunctionType, SimpleNamespace
 from typing import Final
@@ -43,6 +43,7 @@ from litellm.types.repositories.daily_activity import (
     AggregatedRows,
     CustomerTeamRollupRow,
     DailyActivityScope,
+    DailyActivityTable,
     EntityRollupRow,
     GroupingSetsRow,
     KeyMetadataRow,
@@ -221,6 +222,56 @@ async def test_usage_keeps_spend_when_the_guardrail_lookup_hits_a_database_failu
 
     assert result.metadata.total_spend == result.results[0].metrics.spend == 2.0
     assert result.results[0].breakdown.guardrails == {}
+
+
+@pytest.mark.asyncio
+@DATABASE_FAILURES
+async def test_customer_usage_keeps_spend_when_the_team_lookup_hits_a_database_failure(failure: Exception) -> None:
+    repository: Final = _usage_repository()
+    repository.customer_team_spend = AsyncMock(side_effect=failure)
+    scope: Final = replace(_usage_scope(), table=DailyActivityTable.CUSTOMER, entity_id_field="end_user_id")
+
+    result: Final = await _get_daily_activity_aggregated(repository, scope)
+
+    assert result.metadata.total_spend == result.results[0].metrics.spend == 2.0
+    assert result.results[0].breakdown.api_keys["key"].metrics.spend == 2.0
+    assert result.results[0].breakdown.teams == {}
+
+
+@pytest.mark.asyncio
+@DATABASE_FAILURES
+async def test_customer_daily_activity_keeps_spend_when_the_team_lookup_hits_a_database_failure(
+    failure: Exception,
+) -> None:
+    prisma: Final = _daily_user_spend_prisma(AsyncMock(return_value=[]))
+    prisma.db.litellm_dailyenduserspend.count = AsyncMock(return_value=1)
+    prisma.db.litellm_dailyenduserspend.find_many = AsyncMock(
+        return_value=[
+            SimpleNamespace(
+                **vars(_daily_user_spend_record(user_id="user", api_key="key", spend=7.0)),
+                end_user_id="customer",
+                id="row",
+            )
+        ]
+    )
+    prisma.db.query_raw = AsyncMock(side_effect=failure)
+
+    result: Final = await get_daily_activity(
+        prisma_client=prisma,
+        table_name="litellm_dailyenduserspend",
+        entity_id_field="end_user_id",
+        entity_id=None,
+        entity_metadata_field=None,
+        start_date="2024-01-01",
+        end_date="2024-01-01",
+        model=None,
+        api_key=None,
+        page=1,
+        page_size=1000,
+    )
+
+    assert result.metadata.total_spend == result.results[0].metrics.spend == 7.0
+    assert result.results[0].breakdown.teams == {}
 
 
 @pytest.mark.asyncio

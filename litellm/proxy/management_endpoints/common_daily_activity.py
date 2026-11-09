@@ -1020,7 +1020,11 @@ async def get_daily_activity(
         customer_results: Final = (
             _with_customer_teams(
                 aggregated["results"],
-                await repository.customer_team_spend(scope, row_ids=tuple(row.id for row in daily_spend_data)),
+                await unless_database_fails(
+                    repository.customer_team_spend(scope, row_ids=tuple(row.id for row in daily_spend_data)),
+                    (),
+                    "its customer team breakdown",
+                ),
             )
             if scope.table is DailyActivityTable.CUSTOMER
             else aggregated["results"]
@@ -1231,7 +1235,10 @@ async def get_daily_activity_aggregated(
             else aggregated["results"]
         )
         results: Final = (
-            _with_customer_teams(base_results, await repository.customer_team_spend(scope))
+            _with_customer_teams(
+                base_results,
+                await unless_database_fails(repository.customer_team_spend(scope), (), "its customer team breakdown"),
+            )
             if scope.table is DailyActivityTable.CUSTOMER
             else base_results
         )

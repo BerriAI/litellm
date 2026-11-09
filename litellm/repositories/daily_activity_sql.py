@@ -10,6 +10,7 @@ from typing_extensions import assert_never
 from litellm import constants
 from litellm.constants import PTU_SENTINEL_API_KEY, UNKNOWN_MODEL_SPEND_LOG_MODEL
 from litellm.repositories.daily_activity_buckets import UNATTRIBUTED_API_KEY, UNKNOWN_MODEL_GROUP
+from litellm.repositories.key_metadata_sql import ACTIVE_TOKEN_DIGEST_SQL, DELETED_TOKEN_DIGEST_SQL
 from litellm.types.repositories.daily_activity import DailyActivityScope, DailyActivityTable, ExportType
 
 _API_KEY_ROLLED_UP_BIT: Final = 32
@@ -126,14 +127,21 @@ def build_where_clause(scope: DailyActivityScope, *, start_index: int = 1) -> tu
 
 def _customer_team_expression(scope: DailyActivityScope) -> str:
     table: Final = PRISMA_TO_PG_TABLE[scope.table]
-    return (
-        "COALESCE(NULLIF((SELECT current_key.team_id FROM ("
+    direct: Final = (
+        "(SELECT ARRAY[current_key.team_id] FROM ("
         'SELECT token, team_id, 0 AS priority, NULL::timestamp AS deleted_at FROM "LiteLLM_VerificationToken" '
         "UNION ALL "
         'SELECT token, team_id, 1 AS priority, deleted_at FROM "LiteLLM_DeletedVerificationToken"'
         f') current_key WHERE current_key.token = "{table}".api_key '
-        "ORDER BY priority, deleted_at DESC LIMIT 1), ''), 'Unassigned')"
+        "ORDER BY priority, deleted_at DESC LIMIT 1)"
     )
+    digest_keys: Final = f'ARRAY["{table}".api_key]'
+    active_digest: Final = ACTIVE_TOKEN_DIGEST_SQL.replace("$1", digest_keys)
+    deleted_digest: Final = DELETED_TOKEN_DIGEST_SQL.replace("$1", digest_keys)
+    recovered: Final = f'''CASE WHEN "{table}".api_key ~ '^[0-9a-f]{{64}}$' THEN COALESCE(
+            (SELECT ARRAY[team_id] FROM ({active_digest}) recovered_active LIMIT 1),
+            (SELECT ARRAY[team_id] FROM ({deleted_digest}) recovered_deleted LIMIT 1)) END'''
+    return f"COALESCE(NULLIF((COALESCE({direct}, {recovered}))[1], ''), 'Unassigned')"
 
 
 def build_customer_team_rollup_sql(scope: DailyActivityScope, *, row_ids: tuple[str, ...] | None = None) -> SqlQuery:
