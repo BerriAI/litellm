@@ -155,6 +155,10 @@ impl RedisClient {
         self.0.subscriber.clone().messages(channel.to_owned())
     }
 
+    pub fn subscribe_events(&self, channel: &str) -> BoxStream<'static, crate::SubscriptionEvent> {
+        self.0.subscriber.clone().events(channel.to_owned())
+    }
+
     pub fn pipeline(&self) -> Pipeline {
         Pipeline::new(self.0.namespace.clone())
     }

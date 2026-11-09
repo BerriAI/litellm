@@ -20,6 +20,7 @@ import pytest
 from fastapi import Request, status
 
 import litellm
+from litellm.caching.dual_cache import DualCache
 from litellm.proxy._types import (
     CallInfo,
     Litellm_EntityType,
@@ -633,6 +634,37 @@ async def test_get_key_object_should_reconnect_once_on_db_connection_error():
 
 
 @pytest.mark.asyncio
+async def test_native_key_lookup_populates_cache_without_prisma_io():
+    native = SimpleNamespace(auth_read=AsyncMock(return_value=[{"token": "native-hash", "team_models": None, "team_blocked": None}]))
+    prisma = MagicMock(native_auth_database=native)
+    prisma.get_data = AsyncMock(side_effect=AssertionError("legacy read"))
+    prisma.attempt_db_reconnect = AsyncMock(side_effect=AssertionError("legacy reconnect"))
+    cache = UserApiKeyCache()
+    first = await get_key_object("native-hash", prisma, cache)
+    second = await get_key_object("native-hash", prisma, cache)
+    assert first.token == second.token == "native-hash"
+    assert first.team_models == second.team_models == []
+    assert native.auth_read.await_count == 1
+    prisma.get_data.assert_not_awaited()
+    prisma.attempt_db_reconnect.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_native_key_transport_error_never_enters_prisma_reconnect():
+    from litellm._auth.failure import NativeAuthFailure
+
+    native = SimpleNamespace(auth_read=AsyncMock(side_effect=httpx.ConnectError("db offline")))
+    prisma = MagicMock(native_auth_database=native)
+    prisma.get_data = AsyncMock()
+    prisma.attempt_db_reconnect = AsyncMock()
+    with pytest.raises(NativeAuthFailure):
+        await fetch_key_object_from_db_with_reconnect("hash", prisma, None, None, check_db_only=True)
+    native.auth_read.assert_awaited_once_with("key", ["hash"], writer=True)
+    prisma.get_data.assert_not_awaited()
+    prisma.attempt_db_reconnect.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_get_key_object_should_raise_if_reconnect_fails_on_db_connection_error():
     mock_prisma_client = MagicMock()
     mock_prisma_client.get_data = AsyncMock(side_effect=httpx.ConnectError("db not reachable after outage"))
@@ -850,7 +882,7 @@ class TestAuthCacheRedisWritePolicy:
     """
 
     @pytest.mark.asyncio
-    async def test_get_key_object_db_load_publishes_to_redis(self):
+    async def test_get_key_object_db_load_stays_local_and_is_reused_without_redis_publication(self):
         mock_prisma_client = MagicMock()
         mock_prisma_client.get_data = AsyncMock(return_value=UserAPIKeyAuth(token="hashed-token-db"))
 
@@ -865,10 +897,14 @@ class TestAuthCacheRedisWritePolicy:
         )
 
         assert key_obj.token == "hashed-token-db"
-        fake_redis.async_set_cache.assert_awaited_once()
-        assert (
-            fake_redis.async_set_cache.await_args.kwargs.get("key") or fake_redis.async_set_cache.await_args.args[0]
-        ) == "hashed-token-db"
+        cached: Final = await get_key_object(
+            hashed_token="hashed-token-db",
+            prisma_client=mock_prisma_client,
+            user_api_key_cache=cache,
+        )
+        assert cached.token == key_obj.token
+        mock_prisma_client.get_data.assert_awaited_once()
+        fake_redis.async_set_cache.assert_not_awaited()
 
 
 def test_get_cli_jwt_auth_token_default_expiration(valid_sso_user_defined_values):
@@ -2321,6 +2357,18 @@ async def test_every_requested_vector_store_needs_a_grant(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("deny_by_default", (False, True), ids=("legacy", "strict"))
+async def test_missing_database_skips_malformed_vector_request(deny_by_default: bool) -> None:
+    with patch("litellm.proxy.proxy_server.prisma_client", None):
+        assert await vector_store_access_check(
+            request_body={"vector_store_ids": {"malformed": "ids"}},
+            valid_token=_virtual_key(),
+            team_object=None,
+            deny_by_default=deny_by_default,
+        )
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "valid_token",
     [_virtual_key(), UserAPIKeyAuth(user_id="user-1", user_role=LitellmUserRoles.INTERNAL_USER)],
@@ -2430,6 +2478,67 @@ async def test_file_search_inside_additional_tools_input_item_needs_a_vector_sto
         ),
         denied_by,
     )
+
+
+@pytest.mark.parametrize("strict", [False, True], ids=["legacy", "strict"])
+@pytest.mark.parametrize(
+    ("input_items", "expected"),
+    [
+        (None, ("top", "shared", "tool", "shared")),
+        ("not-a-list", ("top", "shared", "tool", "shared")),
+        ([{"type": "additional_tools", "tools": 1}], ("top", "shared", "tool", "shared")),
+        (
+            [
+                {"type": "message", "tools": [{"vector_store_ids": ["ignored"]}]},
+                {"type": "additional_tools", "tools": [{"vector_store_ids": ["input", "shared"]}]},
+                {"type": "additional_tools", "tools": [{"vector_store_ids": ["last"]}]},
+            ],
+            ("top", "shared", "tool", "shared", "input", "shared", "last"),
+        ),
+    ],
+    ids=["no-input", "string-input", "malformed-tools", "ordered-duplicates"],
+)
+def test_vector_store_raw_reads_keep_top_level_tools_then_additional_tools(
+    strict: bool, input_items: object, expected: tuple[str, ...]
+) -> None:
+    from litellm.proxy.auth.auth_checks import _legacy_requested_vector_store_ids, _strict_requested_vector_store_ids
+
+    body: Final = {
+        "vector_store_ids": ["top", "shared"],
+        "tools": [{"vector_store_ids": ["tool", "shared"]}],
+        "input": input_items,
+    }
+    result: Final = (
+        _strict_requested_vector_store_ids(body) if strict else _legacy_requested_vector_store_ids(body, lambda: ())
+    )
+    assert result == expected
+
+
+@pytest.mark.parametrize("strict", [False, True], ids=["legacy", "strict"])
+def test_malformed_top_level_vector_ids_do_not_read_additional_tools(strict: bool) -> None:
+    from litellm.proxy.auth.auth_checks import (
+        _legacy_requested_vector_store_ids,
+        _strict_requested_vector_store_ids,
+        _UnreadableVectorStoreIds,
+    )
+
+    with patch(
+        "litellm.proxy.auth.auth_checks.additional_tools_in_input",
+        side_effect=AssertionError("unreadable top-level IDs read input tools"),
+    ) as input_reader:
+        if strict:
+            with pytest.raises(ProxyException) as caught:
+                _strict_requested_vector_store_ids({"vector_store_ids": 42})
+            assert (caught.value.code, caught.value.type, caught.value.param) == (
+                "400",
+                "invalid_request_error",
+                "vector_store_ids",
+            )
+        else:
+            assert isinstance(
+                _legacy_requested_vector_store_ids({"vector_store_ids": 42}, lambda: ()), _UnreadableVectorStoreIds
+            )
+    input_reader.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -5926,11 +6035,12 @@ class TestGuardrailModificationCheck:
     `_get_admin_metadata` silently ignores at read time.
     """
 
-    def _call(self, request_body):
+    def _call(self, request_body, *, allowed=False):
         from litellm.proxy.auth.auth_checks import guardrail_modification_check
 
-        team_object = MagicMock()
-        team_object.metadata = {}  # no permission
+        team_object = LiteLLM_TeamTable(
+            team_id="guardrail-team", metadata={"guardrails": {"modify_guardrails": allowed}}
+        )
         return guardrail_modification_check(request_body=request_body, team_object=team_object)
 
     def test_noop_when_no_guardrail_keys_present(self):
@@ -5940,47 +6050,31 @@ class TestGuardrailModificationCheck:
     def test_rejects_guardrails_list(self):
         from fastapi import HTTPException
 
-        with patch(
-            "litellm.proxy.guardrails.guardrail_helpers.can_modify_guardrails",
-            return_value=False,
-        ):
-            with pytest.raises(HTTPException) as exc:
-                self._call({"metadata": {"guardrails": ["custom"]}})
-            assert exc.value.status_code == 403
+        with pytest.raises(HTTPException) as exc:
+            self._call({"metadata": {"guardrails": ["custom"]}})
+        assert exc.value.status_code == 403
 
     def test_rejects_disable_global_guardrails_plural(self):
         from fastapi import HTTPException
 
-        with patch(
-            "litellm.proxy.guardrails.guardrail_helpers.can_modify_guardrails",
-            return_value=False,
-        ):
-            with pytest.raises(HTTPException) as exc:
-                self._call({"metadata": {"disable_global_guardrails": True}})
-            assert exc.value.status_code == 403
+        with pytest.raises(HTTPException) as exc:
+            self._call({"metadata": {"disable_global_guardrails": True}})
+        assert exc.value.status_code == 403
 
     def test_rejects_disable_global_guardrail_singular(self):
         """VERIA-28's originally-reported singular-key typo variant."""
         from fastapi import HTTPException
 
-        with patch(
-            "litellm.proxy.guardrails.guardrail_helpers.can_modify_guardrails",
-            return_value=False,
-        ):
-            with pytest.raises(HTTPException) as exc:
-                self._call({"metadata": {"disable_global_guardrail": True}})
-            assert exc.value.status_code == 403
+        with pytest.raises(HTTPException) as exc:
+            self._call({"metadata": {"disable_global_guardrail": True}})
+        assert exc.value.status_code == 403
 
     def test_rejects_opted_out_global_guardrails(self):
         from fastapi import HTTPException
 
-        with patch(
-            "litellm.proxy.guardrails.guardrail_helpers.can_modify_guardrails",
-            return_value=False,
-        ):
-            with pytest.raises(HTTPException) as exc:
-                self._call({"metadata": {"opted_out_global_guardrails": ["some_guardrail"]}})
-            assert exc.value.status_code == 403
+        with pytest.raises(HTTPException) as exc:
+            self._call({"metadata": {"opted_out_global_guardrails": ["some_guardrail"]}})
+        assert exc.value.status_code == 403
 
     @pytest.mark.parametrize(
         "key",
@@ -6001,46 +6095,30 @@ class TestGuardrailModificationCheck:
         """
         from fastapi import HTTPException
 
-        with patch(
-            "litellm.proxy.guardrails.guardrail_helpers.can_modify_guardrails",
-            return_value=False,
-        ):
-            with pytest.raises(HTTPException) as exc:
-                self._call({"metadata": {key: empty_value}})
-            assert exc.value.status_code == 403
+        with pytest.raises(HTTPException) as exc:
+            self._call({"metadata": {key: empty_value}})
+        assert exc.value.status_code == 403
 
     def test_rejects_injection_via_litellm_metadata_key(self):
         """Caller can populate the OTHER metadata key; that must also 403."""
         from fastapi import HTTPException
 
-        with patch(
-            "litellm.proxy.guardrails.guardrail_helpers.can_modify_guardrails",
-            return_value=False,
-        ):
-            with pytest.raises(HTTPException) as exc:
-                self._call({"litellm_metadata": {"disable_global_guardrails": True}})
-            assert exc.value.status_code == 403
+        with pytest.raises(HTTPException) as exc:
+            self._call({"litellm_metadata": {"disable_global_guardrails": True}})
+        assert exc.value.status_code == 403
 
     def test_rejects_root_level_injection(self):
         """Top-level injection (`request_body["disable_global_guardrails"]`)
         was VERIA-28's easiest variant to hit — keep it rejected."""
         from fastapi import HTTPException
 
-        with patch(
-            "litellm.proxy.guardrails.guardrail_helpers.can_modify_guardrails",
-            return_value=False,
-        ):
-            with pytest.raises(HTTPException) as exc:
-                self._call({"disable_global_guardrails": True})
-            assert exc.value.status_code == 403
+        with pytest.raises(HTTPException) as exc:
+            self._call({"disable_global_guardrails": True})
+        assert exc.value.status_code == 403
 
     def test_allows_when_team_has_permission(self):
-        with patch(
-            "litellm.proxy.guardrails.guardrail_helpers.can_modify_guardrails",
-            return_value=True,
-        ):
-            # no-op, should not raise
-            self._call({"metadata": {"disable_global_guardrails": True}})
+        # no-op, should not raise
+        self._call({"metadata": {"disable_global_guardrails": True}}, allowed=True)
 
     def test_rejects_string_encoded_metadata_bypass(self):
         """Regression: attacker sends metadata as JSON string to bypass the
@@ -6051,13 +6129,9 @@ class TestGuardrailModificationCheck:
         from fastapi import HTTPException
 
         attacker_payload = {"disable_global_guardrails": True}
-        with patch(
-            "litellm.proxy.guardrails.guardrail_helpers.can_modify_guardrails",
-            return_value=False,
-        ):
-            with pytest.raises(HTTPException) as exc:
-                self._call({"metadata": _json.dumps(attacker_payload)})
-            assert exc.value.status_code == 403
+        with pytest.raises(HTTPException) as exc:
+            self._call({"metadata": _json.dumps(attacker_payload)})
+        assert exc.value.status_code == 403
 
     def test_rejects_string_encoded_litellm_metadata_bypass(self):
         """Same bypass via the litellm_metadata key."""
@@ -6066,13 +6140,9 @@ class TestGuardrailModificationCheck:
         from fastapi import HTTPException
 
         attacker_payload = {"guardrails": ["evaded"]}
-        with patch(
-            "litellm.proxy.guardrails.guardrail_helpers.can_modify_guardrails",
-            return_value=False,
-        ):
-            with pytest.raises(HTTPException) as exc:
-                self._call({"litellm_metadata": _json.dumps(attacker_payload)})
-            assert exc.value.status_code == 403
+        with pytest.raises(HTTPException) as exc:
+            self._call({"litellm_metadata": _json.dumps(attacker_payload)})
+        assert exc.value.status_code == 403
 
     def test_noop_when_string_is_not_json_object(self):
         """Unparseable strings should not trigger a 403 — they have no keys."""
@@ -7344,7 +7414,7 @@ class TestManagementObjectTTLHonored:
     @pytest.mark.asyncio
     async def test_uses_configured_user_api_key_cache_ttl(self):
         mem = _TTLCapturingInMemoryCache()
-        cache = UserApiKeyCache(in_memory_cache=mem, default_in_memory_ttl=300)
+        cache = DualCache(in_memory_cache=mem, default_in_memory_ttl=300)
 
         await _cache_management_object(
             key="team_id:lit-3338",
@@ -7359,7 +7429,7 @@ class TestManagementObjectTTLHonored:
     @pytest.mark.asyncio
     async def test_falls_back_to_management_default_when_unconfigured(self):
         mem = _TTLCapturingInMemoryCache()
-        cache = UserApiKeyCache(in_memory_cache=mem)
+        cache = DualCache(in_memory_cache=mem)
         assert cache.default_in_memory_ttl is None
 
         await _cache_management_object(
@@ -9662,6 +9732,40 @@ async def test_get_managed_vector_store_rows_by_uuids_db_fetch_validates_rows():
 
 
 @pytest.mark.asyncio
+async def test_native_managed_vector_store_read_preserves_owner_and_warms_cache():
+    from litellm.proxy.auth.auth_checks import get_managed_vector_store_rows_by_uuids
+
+    native = SimpleNamespace(auth_read=AsyncMock(return_value=[{
+        "vector_store_id": "vs-native", "custom_llm_provider": "openai",
+        "team_id": "team", "user_id": "owner", "litellm_params": {"vector_store_id": "upstream"},
+    }]))
+    prisma = SimpleNamespace(native_auth_database=native)
+    cache = UserApiKeyCache()
+    rows = await get_managed_vector_store_rows_by_uuids(["vs-native"], prisma, cache)
+    cached = await get_managed_vector_store_rows_by_uuids(["vs-native"], prisma, cache)
+    assert len(rows) == len(cached) == 1
+    assert rows[0].team_id == cached[0].team_id == "team"
+    assert rows[0].user_id == cached[0].user_id == "owner"
+    assert rows[0].litellm_params == {"vector_store_id": "upstream"}
+    native.auth_read.assert_awaited_once_with("managed_vector_store", ["vs-native"], writer=False)
+
+
+@pytest.mark.asyncio
+async def test_native_email_backfill_reads_the_writer_after_the_atomic_update():
+    from litellm.proxy.auth.auth_checks import _backfill_null_user_email
+
+    native = SimpleNamespace(auth_read=AsyncMock(return_value=[{"user_id": "u", "user_email": "winner@example.test"}]))
+    prisma = MagicMock(native_auth_database=native)
+    prisma.db.litellm_usertable.update_many = AsyncMock(return_value=0)
+    prisma.db.litellm_usertable.find_unique = AsyncMock(side_effect=AssertionError("legacy read"))
+    row = await _backfill_null_user_email(prisma, UserApiKeyCache(), LiteLLM_UserTable(user_id="u"), "loser@example.test")
+    assert row.user_email == "winner@example.test"
+    native.auth_read.assert_awaited_once_with("user", ["u"], writer=True)
+    prisma.db.litellm_usertable.update_many.assert_awaited_once()
+    prisma.db.litellm_usertable.find_unique.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_get_project_object_db_fetch_returns_cached_obj():
     from litellm.proxy._types import LiteLLM_ProjectTableCachedObj
     from litellm.proxy.auth.auth_checks import get_project_object
@@ -11850,7 +11954,9 @@ async def test_baggage_mapping_rejects_exactly_the_client_tags_rejected_without_
     unmapped_request = _client_tag_request(client_tags, baggage=False)
     unmapped = _client_tag_body(client_tags, client_slot)
     LiteLLMProxyRequestSetup.pre_seed_litellm_metadata_for_route(unmapped, route)
-    LiteLLMProxyRequestSetup.apply_client_tag_policy_pre_auth(unmapped_request, unmapped, UserAPIKeyAuth(api_key="qa-key"))
+    LiteLLMProxyRequestSetup.apply_client_tag_policy_pre_auth(
+        unmapped_request, unmapped, UserAPIKeyAuth(api_key="qa-key")
+    )
 
     mapped_request = _client_tag_request(client_tags, baggage=baggage)
     mapped = _client_tag_body(client_tags, client_slot)

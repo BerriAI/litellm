@@ -3768,6 +3768,8 @@ name = "litellm-db"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "futures-util",
+ "litellm-secret-value",
  "macro_rules_attribute",
  "rstest",
  "serde",
@@ -3776,6 +3778,7 @@ dependencies = [
  "strum",
  "thiserror 2.0.19",
  "tokio",
+ "veil",
 ]
 
 [[package]]
@@ -4389,6 +4392,7 @@ dependencies = [
  "litellm-callbacks-legacy-python",
  "litellm-circuit-breaker",
  "litellm-core-utils",
+ "litellm-db",
  "litellm-error",
  "litellm-host",
  "litellm-host-python",
@@ -4408,6 +4412,7 @@ dependencies = [
  "litellm-redis-resolve",
  "litellm-redis-store",
  "litellm-redis-types",
+ "litellm-request-auth-core",
  "litellm-router-core",
  "litellm-router-types",
  "litellm-secret-value",
@@ -4534,6 +4539,7 @@ dependencies = [
  "litellm-redis-testing",
  "litellm-secret-value",
  "litellm-tracing",
+ "moka",
  "rstest",
  "strum",
  "thiserror 2.0.19",
@@ -4560,6 +4566,20 @@ dependencies = [
  "litellm-secret-value",
  "rstest",
  "url",
+]
+
+[[package]]
+name = "litellm-request-auth-core"
+version = "0.1.0"
+dependencies = [
+ "fancy-regex 0.19.2",
+ "litellm-secret-value",
+ "rstest",
+ "serde",
+ "sha2 0.10.9",
+ "strum",
+ "thiserror 2.0.19",
+ "veil",
 ]
 
 [[package]]

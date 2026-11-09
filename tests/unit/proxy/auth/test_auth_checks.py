@@ -2338,7 +2338,10 @@ async def test_bulk_eviction_clears_this_worker_before_waiting_on_a_wedged_redis
     monkeypatch.setattr(pubsub_module, "_pending_publishes", set())
     monkeypatch.setattr(pubsub_module, "_BULK_EVICTION_WAIT_SECONDS", 0.5)
     client = _WedgedPublishRedisClient()
-    cache: Final = UserApiKeyCache(key_object_in_memory_cache=InMemoryCache(max_size_in_memory=2_000))
+    cache: Final = UserApiKeyCache(
+        in_memory_cache=InMemoryCache(max_size_in_memory=2_000),
+        key_object_in_memory_cache=InMemoryCache(max_size_in_memory=2_000),
+    )
     hashed_tokens: Final = tuple(
         hashlib.sha256(f"token-{index}".encode()).hexdigest()
         for index in range(600)

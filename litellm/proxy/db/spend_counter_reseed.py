@@ -30,6 +30,12 @@ from litellm.proxy.spend_tracking.spend_counter_batch import (
     record_spend_counter_value,
 )
 from litellm.redis.stores.spend_counters import END_USER_COUNTER_PREFIX, SPEND_COUNTERS_TARGET, SpendCounterStore
+from litellm.repositories.native_auth_repository import (
+    BudgetWindowRow,
+    NativeAuthDatabaseError,
+    SpendRow,
+    native_auth_repository,
+)
 from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.project_repository import ProjectRepository
 from litellm.repositories.table_repositories import (
@@ -134,6 +140,24 @@ class SpendCounterReseed:
         # or tag names that merely contain ":window:".
         if SpendCounterReseed._is_key_or_team_window_counter(counter_key):
             return None
+        native: Final = native_auth_repository(prisma_client)
+        if native is not None:
+            prefix, separator, suffix = counter_key.partition("spend:")
+            kind, delimiter, entity_id = suffix.partition(":")
+            if (
+                prefix
+                or not separator
+                or not delimiter
+                or kind not in {"key", "team", "team_member", "user", "org", "project"}
+            ):
+                return None
+            if kind == "team_member" and ":" not in entity_id:
+                return None
+            try:
+                return await native.spend("member" if kind == "team_member" else kind, entity_id)
+            except NativeAuthDatabaseError:
+                verbose_proxy_logger.exception("SpendCounterReseed.from_db: native read failed for %s", counter_key)
+                return None
         try:
             row: Final = await bounded_db_lookup(
                 SpendCounterReseed._counter_row(prisma_client, counter_key), name="spend_counter"
@@ -181,6 +205,15 @@ class SpendCounterReseed:
     async def end_user_from_db(prisma_client: Optional["PrismaClient"], counter_key: str) -> float | None:
         if prisma_client is None or not counter_key.startswith(END_USER_COUNTER_PREFIX):
             return None
+        native: Final = native_auth_repository(prisma_client)
+        if native is not None:
+            try:
+                return await native.spend("end_user", counter_key[len(END_USER_COUNTER_PREFIX) :])
+            except NativeAuthDatabaseError:
+                verbose_proxy_logger.exception(
+                    "SpendCounterReseed.end_user_from_db: native read failed for %s", counter_key
+                )
+                return None
         where: Final[LiteLLM_EndUserTableWhereUniqueInput] = {"user_id": counter_key[len(END_USER_COUNTER_PREFIX) :]}
         try:
             row: Final = await bounded_db_lookup(
@@ -296,6 +329,24 @@ class SpendCounterReseed:
         if row_entity_type is None:
             return None
 
+        native: Final = native_auth_repository(prisma_client)
+        if native is not None:
+            try:
+                window: Final = await native.one(
+                    "budget_window", [entity_type, entity_id, window_duration], BudgetWindowRow
+                )
+            except NativeAuthDatabaseError:
+                verbose_proxy_logger.exception(
+                    "SpendCounterReseed.window_from_table: native read failed for %s=%s window=%s",
+                    entity_type,
+                    entity_id,
+                    window_duration,
+                )
+                return None
+            if window is None or _as_utc(window.window_start) < _as_utc(expected_window_start):
+                return None
+            return float(window.spend or 0.0)
+
         try:
             row: Final = await BudgetWindowSpendRepository(prisma_client).table.find_unique(
                 where={
@@ -367,6 +418,18 @@ class SpendCounterReseed:
         group_field: Final = _WINDOW_SPEND_LOG_FIELDS.get(entity_type)
         if group_field is None:
             return None
+        native: Final = native_auth_repository(prisma_client)
+        if native is not None:
+            try:
+                aggregate: Final = await native.one(
+                    "window_spend", [entity_type, entity_id, window_start.isoformat()], SpendRow
+                )
+            except NativeAuthDatabaseError:
+                verbose_proxy_logger.exception(
+                    "SpendCounterReseed.window_from_spend_logs: native read failed for %s=%s", entity_type, entity_id
+                )
+                return None
+            return float(aggregate.spend or 0.0) if aggregate is not None else 0.0
         where: Final = {
             group_field: entity_id,
             "startTime": {"gte": window_start},

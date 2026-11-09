@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT COALESCE(spend, 0.0)::float8 AS \"spend!\" FROM \"LiteLLM_ModelAccessGroupBudgetTable\" WHERE access_group_name=$1\n",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "spend!",
+        "type_info": "Float8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "1f9b9a6524e417b18865fda7b49c78c7c6a44ada9e601f6c74af1e9debd06f21"
+}

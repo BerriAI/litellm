@@ -1,5 +1,6 @@
 import asyncio
 import json
+import math
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from types import MappingProxyType
@@ -18,6 +19,8 @@ from litellm.proxy.common_utils.config_sync_pubsub import (  # noqa: F401  # leg
     pubsub_capable_client,
 )
 from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET
+from litellm.redis.stores.connection import connect
+from litellm.rust_bridge._native import NativeAuthSubscription
 
 
 class SpendCounterCopies(Protocol):
@@ -65,7 +68,7 @@ def _cache_invalidation_message_json(cache_key: str, new_value: float | None = N
 
 
 def _finite_number_or_none(value: object) -> float | None:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
         return None
     return float(value)
 
@@ -239,7 +242,14 @@ async def evict_and_broadcast(cache_keys: Sequence[str], user_api_key_cache: "Us
 
 
 class AuthCacheInvalidationSubscriber:
-    __slots__ = ("_additional_in_memory_caches", "_redis_cache", "_spend_counters", "_task", "_user_api_key_cache")
+    __slots__ = (
+        "_additional_in_memory_caches",
+        "_native",
+        "_redis_cache",
+        "_spend_counters",
+        "_task",
+        "_user_api_key_cache",
+    )
 
     def __init__(
         self,
@@ -253,11 +263,30 @@ class AuthCacheInvalidationSubscriber:
         self._additional_in_memory_caches = tuple(additional_in_memory_caches)
         self._spend_counters: Final = spend_counters
         self._task: asyncio.Task[None] | None = None
+        self._native: NativeAuthSubscription | None = None
 
     def start(self) -> None:
         if self._task is not None:
             return
+        shared: Final = self._user_api_key_cache.shared
+        client: Final = connect(self._redis_cache).client
+        if shared is not None and client is not None:
+            self._native = shared.subscribe(client, auth_cache_invalidation_channel(self._redis_cache))
+            self._task = asyncio.create_task(self._consume_native(self._native))
+            return
         self._task = asyncio.create_task(self._run())
+
+    async def _consume_native(self, subscription: NativeAuthSubscription) -> None:
+        try:
+            while True:
+                if (data := await subscription.next()) is not None:
+                    self._apply_message({"data": data})
+        finally:
+            await subscription.close()
+
+    @property
+    def is_ready(self) -> bool:
+        return self._native is not None and self._native.is_connected()
 
     async def stop(self) -> None:
         task: Final = self._task
@@ -269,6 +298,7 @@ class AuthCacheInvalidationSubscriber:
             await task
         except asyncio.CancelledError:
             pass
+        self._native = None
 
     async def _run(self) -> None:
         backoff_seconds = _BACKOFF_INITIAL_SECONDS  # rebind-ok: exponential backoff accumulator across reconnects

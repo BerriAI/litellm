@@ -68,9 +68,8 @@ class UserApiKeyCache(DualCache):
     User-key objects (see ``is_user_key_cache_key``) live in their own in-memory partition,
     ``key_object_cache``, so churn in the other management objects cannot evict them.
 
-    Without Redis both partitions are this class's Python memory. ``attach_redis_cache`` moves the whole
-    keyspace, both memory partitions included, onto the native ``AuthCacheStore`` (``shared``); redis-py never
-    reads or writes it, and ``redis_cache`` stays None.
+    Both partitions live in native Moka, including without Redis. ``attach_redis_cache`` adds the shared
+    Redis tier without creating another local authority; ``redis_cache`` stays None.
 
     ``get_cache`` / ``async_get_cache`` overloads and implementations must be contiguous
     (no other methods in between) so mypy resolves ``@overload`` + implementation correctly.
@@ -103,7 +102,7 @@ class UserApiKeyCache(DualCache):
         )
         self._auth_cache: Final = auth_cache
         self._redis_connection: RedisCache | None = None
-        self._shared: AuthCacheStore | None = None
+        self._shared: AuthCacheStore | None = AuthCacheStore(connect(None).auth_cache(self._settings()))
         self.attach_redis_cache(redis_cache, default_redis_ttl=default_redis_ttl)
 
     @property
@@ -113,7 +112,7 @@ class UserApiKeyCache(DualCache):
 
     @property
     def has_redis(self) -> bool:
-        return self._shared is not None
+        return self._redis_connection is not None
 
     @property
     def redis_connection(self) -> RedisCache | None:
@@ -150,12 +149,29 @@ class UserApiKeyCache(DualCache):
     def attach_redis_cache(
         self, redis_cache: RedisCache | None = None, *, default_redis_ttl: float | None = None
     ) -> None:
-        if redis_cache is None or self._shared is not None:
+        if redis_cache is None or self._redis_connection is not None:
             return
         if default_redis_ttl is not None:
             self.update_cache_ttl(default_in_memory_ttl=None, default_redis_ttl=default_redis_ttl)
         self._redis_connection = redis_cache
-        self._shared = self._auth_cache(redis_cache, self._settings())
+        if self._auth_cache is _connected_auth_cache and self._shared is not None:
+            client: Final = connect(redis_cache).client
+            if client is not None:
+                self._shared.attach(client)
+        else:
+            self._shared = self._auth_cache(redis_cache, self._settings())
+
+    def begin_fill(self, key: str) -> int:
+        assert self._shared is not None
+        return self._shared.begin_fill(key)
+
+    def current_generation(self) -> int:
+        assert self._shared is not None
+        return self._shared.current_generation()
+
+    def set_if_generation(self, key: str, value: CacheValue, generation: int, ttl: float | None = None) -> bool:
+        assert self._shared is not None
+        return self._shared.set_if_generation(key, CacheCodec.serialize(value, model_type=None), generation, ttl)
 
     def get_local(self, key: str) -> object:
         """This worker's memory copy alone."""
@@ -309,11 +325,24 @@ class UserApiKeyCache(DualCache):
             return self.key_object_cache.set_cache(key=key, value=payload, local_only=local_only, **kwargs)
         return super().set_cache(key=key, value=payload, local_only=local_only, **kwargs)
 
-    async def async_set_cache(self, key: str | None, value: CacheValue, local_only: bool = False, **kwargs: object):
+    async def async_set_cache(
+        self,
+        key: str | None,
+        value: CacheValue,
+        local_only: bool = False,
+        *,
+        fill_generation: int | None = None,
+        **kwargs: object,
+    ):
         """Inside a request the Redis SET rides the request's pipeline (memory is written at once); anywhere
         else, or with options the pipeline does not carry, it goes to Redis directly as before."""
         model_type: Final = cast(type[BaseModel] | None, kwargs.pop("model_type", None))
         payload: Final[object] = CacheCodec.serialize(value, model_type=model_type)
+        if fill_generation is not None:
+            if key is not None:
+                assert self._shared is not None
+                self._shared.set_if_generation(key, payload, fill_generation, _ttl(kwargs))
+            return None
         ttl: Final = kwargs.get("ttl")
         pipelined: Final = (
             key is not None

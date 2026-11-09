@@ -6,7 +6,11 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+veil.workspace = true
+litellm-secret-value.workspace = true
+tokio.workspace = true
 chrono.workspace = true
+futures-util.workspace = true
 macro_rules_attribute.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -16,4 +20,3 @@ thiserror.workspace = true
 
 [dev-dependencies]
 rstest.workspace = true
-tokio.workspace = true

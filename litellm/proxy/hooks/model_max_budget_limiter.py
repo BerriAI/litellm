@@ -15,6 +15,8 @@ from typing import (
 )
 
 import litellm
+from litellm._auth import model_budget_data
+from litellm._auth.model_budget_data import ModelBudgetEntity
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
@@ -41,6 +43,7 @@ from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import BudgetConfig, LlmProviders, StandardLoggingPayload
 
 if TYPE_CHECKING:
+    from litellm.proxy.auth.model_budget_adapter import ModelBudgetReading
     from litellm.router import Router
 
 VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX: Final = "virtual_key_spend"
@@ -924,21 +927,6 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         )
 
     @with_service_target("model_budgets")
-    async def get_fallback_model_within_budget(
-        self,
-        user_api_key_dict: UserAPIKeyAuth,
-        model: str,
-    ) -> str | None:
-        budget_fallbacks: Final[dict[str, list[str]]] = user_api_key_dict.budget_fallbacks or {}
-        for fallback_model in budget_fallbacks.get(model, []):
-            try:
-                await self.is_key_within_model_budget(user_api_key_dict=user_api_key_dict, model=fallback_model)
-                return fallback_model
-            except litellm.BudgetExceededError:
-                continue
-        return None
-
-    @with_service_target("model_budgets")
     async def is_user_within_model_budget(
         self,
         user_id: str,
@@ -1003,9 +991,8 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             entity_type=Litellm_EntityType.TEAM,
             entity_id=team_id,
             team_id=team_id,
-            model_max_budget=team_model_budget_entries(
-                model=model, team_model_max_budget=team_model_max_budget, key_model_max_budget=key_model_max_budget
-            ),
+            model_max_budget=team_model_max_budget,
+            key_model_max_budget=key_model_max_budget,
             model=model,
             exceeded_message=f"LiteLLM Team: {team_id}, exceeded budget for model={model}",
         )
@@ -1029,6 +1016,27 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             ),
         )
 
+    async def read_model_budget_raw(
+        self,
+        entity: ModelBudgetEntity,
+        entity_id: str | None,
+        team_id: str | None,
+        model: str,
+        budgets: Mapping[str, object] | None,
+        key_budgets: Mapping[str, object] | None = None,
+    ) -> "ModelBudgetReading":
+        from litellm.proxy.auth.model_budget_adapter import ModelBudgetIO, read_model_budget
+
+        io: Final = ModelBudgetIO(
+            self.dual_cache,
+            self._model_access_groups,
+            self._shared_windows,
+            _PROCESS_STARTED_AT,
+            clock=self._clock,
+            monotonic=time.monotonic,
+        )
+        return await read_model_budget(io, entity, entity_id, team_id, model, budgets, key_budgets)
+
     async def _is_entity_within_model_budget(
         self,
         entity_type: Litellm_EntityType,
@@ -1037,65 +1045,32 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         model_max_budget: Mapping[str, object] | None,
         model: str,
         exceeded_message: str,
+        key_model_max_budget: Mapping[str, object] | None = None,
     ) -> bool:
-        for candidate in expand_model_latest_alias(model):
-            await self._is_single_entity_within_model_budget(
-                entity_type=entity_type,
-                entity_id=entity_id,
-                team_id=team_id,
-                model_max_budget=model_max_budget,
-                model=candidate,
-                exceeded_message=exceeded_message,
-            )
-        return True
-
-    async def _is_single_entity_within_model_budget(
-        self,
-        entity_type: Litellm_EntityType,
-        entity_id: str | None,
-        team_id: str | None,
-        model_max_budget: Mapping[str, object] | None,
-        model: str,
-        exceeded_message: str,
-    ) -> bool:
-        if not model_max_budget:
-            return True
-        resolved: Final = resolve_model_budget(
-            model=model,
-            model_max_budget=model_max_budget,
-            model_access_groups=self._model_access_groups,
-            team_id=team_id,
+        entities: Final[Mapping[Litellm_EntityType, ModelBudgetEntity]] = {
+            Litellm_EntityType.KEY: "Key",
+            Litellm_EntityType.USER: "User",
+            Litellm_EntityType.TEAM: "Team",
+            Litellm_EntityType.TEAM_MEMBER: "TeamMember",
+            Litellm_EntityType.END_USER: "EndUser",
+        }
+        reading: Final = await self.read_model_budget_raw(
+            entities[entity_type],
+            entity_id,
+            team_id,
+            model,
+            model_max_budget,
+            key_model_max_budget,
         )
-        if resolved is None:
-            verbose_proxy_logger.debug("Model %s not found in %s model_max_budget", model, entity_type.value)
-            return True
-
-        max_budget: Final = resolved.budget_config.max_budget
-        if max_budget is None or max_budget < 0:
-            return True
-
-        local_spend: Final = await self._get_spend_for_model_budget(
-            entity_type=entity_type,
-            entity_id=entity_id,
-            model=model,
-            resolved=resolved,
-        )
-        current_spend: Final = (
-            local_spend
-            if local_spend >= max_budget
-            else await self._with_shared_spend(
-                entity_type=entity_type, entity_id=entity_id, resolved=resolved, local_spend=local_spend
-            )
-        )
-        if current_spend >= max_budget:
+        decision: Final = model_budget_data.check(reading.snapshot)
+        if decision.denied:
+            assert reading.snapshot.max_budget is not None
             raise litellm.BudgetExceededError(
-                message=(
-                    exceeded_message
-                    if resolved.budget_model in _budget_model_candidates(model)
-                    else f"{exceeded_message}, budget_model={resolved.budget_model}"
-                ),
-                current_cost=current_spend,
-                max_budget=max_budget,
+                message=exceeded_message
+                if reading.named_model
+                else f"{exceeded_message}, budget_model={reading.budget_model}",
+                current_cost=decision.current_spend,
+                max_budget=reading.snapshot.max_budget,
                 entity_type=entity_type.value,
                 entity_id=entity_id,
             )

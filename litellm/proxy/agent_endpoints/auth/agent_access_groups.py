@@ -1,11 +1,7 @@
-import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final, TypeAlias
 
-from fastapi import HTTPException
-
-from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import LiteLLM_AccessGroupTable
 
 if TYPE_CHECKING:
@@ -31,13 +27,6 @@ class AgentAccessGroupCeiling:
 CeilingResolver: TypeAlias = Callable[[str], Awaitable[AgentAccessGroupCeiling | None]]
 
 
-class _MissingGroup:
-    __slots__ = ()
-
-
-_MISSING: Final = _MissingGroup()
-
-
 async def _registry_access_group_ids(agent_id: str) -> AccessGroupIds:
     from litellm.proxy.common_utils.registry_read_through import get_agent_with_read_through
 
@@ -46,29 +35,9 @@ async def _registry_access_group_ids(agent_id: str) -> AccessGroupIds:
 
 
 async def _load_access_group(access_group_id: str, *, check_db_only: bool = False) -> LoadedAccessGroup:
-    from litellm.proxy.auth.auth_checks import AccessGroupNotFoundError, get_access_object
-    from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj, user_api_key_cache
+    from litellm.proxy.auth.agent_ceiling_adapter import load_agent_access_group
 
-    if prisma_client is None:
-        verbose_proxy_logger.warning("Agent access group %s cannot be loaded without a DB", access_group_id)
-        return None
-    try:
-        return await get_access_object(
-            access_group_id=access_group_id,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            proxy_logging_obj=proxy_logging_obj,
-            check_db_only=check_db_only,
-        )
-    except AccessGroupNotFoundError:
-        raise
-    except HTTPException as e:
-        if check_db_only:
-            raise
-        verbose_proxy_logger.warning(
-            "Agent access group %s could not be loaded, treating it as empty: %s", access_group_id, e.detail
-        )
-        return None
+    return await load_agent_access_group(access_group_id, check_db_only=check_db_only)
 
 
 async def resolve_agent_access_group_ceiling(
@@ -82,31 +51,10 @@ async def resolve_agent_access_group_ceiling(
     provably does not exist is dropped from the ceiling, it grants and bounds nothing, while a group
     that exists but could not be read stays named and loads as ``None``. The ceiling itself stays once
     any group is named, so an agent whose every group is missing is still capped to nothing."""
-    named_ids: Final = await load_access_group_ids(agent_id)
-    if not named_ids:
-        return None
+    from litellm.proxy.auth.agent_ceiling_adapter import project_agent_ceiling, read_agent_ceiling_facts
 
-    from litellm.proxy.auth.auth_checks import AccessGroupNotFoundError
-
-    async def load(group_id: str) -> LoadedAccessGroup | _MissingGroup:
-        try:
-            return await (
-                _load_access_group(group_id, check_db_only=True) if check_db_only else load_access_group(group_id)
-            )
-        except AccessGroupNotFoundError:
-            return _MISSING
-
-    results: Final = await asyncio.gather(*(load(group_id) for group_id in named_ids))
-    access_group_ids: Final = tuple(
-        group_id for group_id, result in zip(named_ids, results, strict=True) if not isinstance(result, _MissingGroup)
-    )
-    groups: Final = tuple(result for result in results if isinstance(result, LiteLLM_AccessGroupTable))
-    return AgentAccessGroupCeiling(
-        access_group_ids=access_group_ids,
-        models=frozenset(model for group in groups for model in group.access_model_names),
-        mcp_server_ids=frozenset(server_id for group in groups for server_id in group.access_mcp_server_ids),
-        agent_ids=frozenset(target_id for group in groups for target_id in group.access_agent_ids),
-        access_groups=groups,
+    return project_agent_ceiling(
+        await read_agent_ceiling_facts(agent_id, load_access_group_ids, load_access_group, check_db_only=check_db_only)
     )
 
 

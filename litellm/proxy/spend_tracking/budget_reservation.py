@@ -2,10 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import json
-import math
 import time
 from collections.abc import AsyncIterator, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from itertools import chain
 from types import MappingProxyType
@@ -15,6 +14,9 @@ from fastapi import HTTPException, status
 from pydantic import ConfigDict, TypeAdapter
 
 import litellm
+from litellm._auth import common_budgets, spend_counter_policy
+from litellm._auth import reservation as reservation_policy
+from litellm._auth.failure import NativeAuthRuntimeError
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
@@ -29,6 +31,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.auth_utils import get_model_from_request
 from litellm.proxy.auth.budget_throttle import should_throttle_budget_exceeded
+from litellm.proxy.auth.common_budget_adapter import read_member_limit_facts
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.common_utils.user_api_key_cache import (
     AUTH_OBJECTS_TARGET,
@@ -182,9 +185,16 @@ def _key_reservation_should_release_for_throttle(counter_key: str, valid_token: 
     requests never reach this branch so their concurrent-overspend protection is
     untouched.
     """
-    if valid_token is None:
+    decision: Final = spend_counter_policy.decide(
+        spend_counter_policy.ThrottleKey(
+            counter_key, valid_token is not None, valid_token.token if valid_token is not None else None
+        )
+    )
+    if decision.kind == "Skip":
         return False
-    return counter_key == key_counter(str(valid_token.token)) and should_throttle_budget_exceeded(valid_token)
+    if decision.kind != "ReadThrottle" or valid_token is None:
+        raise NativeAuthRuntimeError("Unexpected throttle-counter decision")
+    return should_throttle_budget_exceeded(valid_token)
 
 
 async def _apply_over_budget_reservation_policy(
@@ -204,26 +214,29 @@ async def _apply_over_budget_reservation_policy(
     down to what is left, unless strict enforcement is on, because the known
     estimate already does not fit; anything else hard-blocks by raising.
     """
-    if _key_reservation_should_release_for_throttle(counter.counter_key, valid_token):
-        await _release_applied_entries_best_effort(entries=[entry], default_reserved_cost=reservation_cost)
-        applied_entries.remove(entry)
-        return reservation_cost
-
-    remaining_before_reservation: Final = counter.max_budget - (current_spend - reservation_cost)
-    if remaining_before_reservation <= 1e-12:
-        _raise_counter_budget_exceeded(counter=counter, current_cost=current_spend)
-    if fail_closed_budget_enforcement and current_spend - counter.max_budget > 1e-12:
-        _raise_counter_budget_exceeded(
-            counter=counter,
-            current_cost=current_spend - reservation_cost,
-            estimated_cost=reservation_cost,
+    decision: Final = spend_counter_policy.decide(
+        spend_counter_policy.OverBudget(
+            _key_reservation_should_release_for_throttle(counter.counter_key, valid_token),
+            current_spend,
+            counter.max_budget,
+            reservation_cost,
+            fail_closed_budget_enforcement,
         )
-    await _resize_applied_reservation(
-        entries=applied_entries,
-        current_reserved_cost=reservation_cost,
-        new_reserved_cost=remaining_before_reservation,
     )
-    return remaining_before_reservation
+    match decision:
+        case spend_counter_policy.Action(kind="Release"):
+            await _release_applied_entries_best_effort(entries=[entry], default_reserved_cost=reservation_cost)
+            applied_entries.remove(entry)
+            return reservation_cost
+        case spend_counter_policy.Rejected(current=current, estimate=estimate):
+            _raise_counter_budget_exceeded(counter=counter, current_cost=current, estimated_cost=estimate)
+        case spend_counter_policy.Resize(cost=cost):
+            await _resize_applied_reservation(
+                entries=applied_entries, current_reserved_cost=reservation_cost, new_reserved_cost=cost
+            )
+            return cost
+        case _:
+            raise NativeAuthRuntimeError("Unexpected reservation-overflow decision")
 
 
 def _raise_counter_budget_exceeded(
@@ -263,11 +276,20 @@ async def reserve_budget_for_request(
     fail_closed_budget_enforcement: bool = False,
     raw_body: bytes | None = None,
 ) -> dict | None:
-    if valid_token is None or not RouteChecks.is_llm_api_route(route=route):
+    start: Final = reservation_policy.Gate(token_present=valid_token is not None)
+    if reservation_policy.action(start).kind == "Skip":
         return None
-    if RouteChecks.is_unbilled_route(route):
+    assert valid_token is not None
+    route_facts: Final = replace(start, llm_route=RouteChecks.is_llm_api_route(route=route))
+    if reservation_policy.action(route_facts).kind == "Skip":
         return None
-    if get_model_from_request(request_body, route, llm_router=llm_router) is None:
+    billing_facts: Final = replace(route_facts, unbilled=RouteChecks.is_unbilled_route(route))
+    if reservation_policy.action(billing_facts).kind == "Skip":
+        return None
+    model_facts: Final = replace(
+        billing_facts, model_present=get_model_from_request(request_body, route, llm_router=llm_router) is not None
+    )
+    if reservation_policy.action(model_facts).kind == "Skip":
         return None
 
     counters: Final = await _get_budget_counters(
@@ -282,7 +304,8 @@ async def reserve_budget_for_request(
         end_user_object=end_user_object,
         apply_user_budget_to_team_keys=apply_user_budget_to_team_keys,
     )
-    if not counters:
+    counter_facts: Final = replace(model_facts, counter_count=len(counters))
+    if reservation_policy.action(counter_facts).kind == "Skip":
         return None
 
     input_token_counts: Final = await count_request_input_tokens(
@@ -302,8 +325,9 @@ async def reserve_budget_for_request(
     # estimate_request_max_cost still returns None when the model is unknown
     # to the cost map (no token-priced cost fields, e.g. image/audio routes).
     # In that case we fall back to read-time enforcement only.
-    if reservation_cost is None or reservation_cost <= 0:
+    if reservation_policy.action(replace(counter_facts, cost_read=True, cost=reservation_cost)).kind == "Skip":
         return None
+    assert reservation_cost is not None
 
     applied_entries: Final[list[dict[str, float | str]]] = []
     try:
@@ -494,9 +518,21 @@ async def _get_budget_counters(
     apply_user_budget_to_team_keys: bool = False,
 ) -> list[_BudgetCounter]:
     counters: Final[list[_BudgetCounter]] = []
+    sources: Final = reservation_policy.sources(
+        reservation_policy.Sources(
+            key_present=valid_token.token is not None,
+            team_present=team_object is not None,
+            team_id=team_object.team_id if team_object is not None else None,
+            user_present=user_object is not None,
+            user_id=user_object.user_id if user_object is not None else None,
+            apply_user_budget_to_team_keys=apply_user_budget_to_team_keys,
+        )
+    )
 
-    if valid_token.token is not None:
-        if valid_token.max_budget is not None and valid_token.max_budget > 0:
+    if sources.key:
+        assert valid_token.token is not None
+        if reservation_policy.counter("Key", valid_token.max_budget):
+            assert valid_token.max_budget is not None
             counters.append(
                 _BudgetCounter(
                     counter_key=key_counter(valid_token.token),
@@ -517,9 +553,11 @@ async def _get_budget_counters(
             )
         )
 
-    if team_object is not None and team_object.team_id is not None:
+    if sources.team:
+        assert team_object is not None and team_object.team_id is not None
         team_id: Final = team_object.team_id
-        if team_object.max_budget is not None and team_object.max_budget > 0:
+        if reservation_policy.counter("Team", team_object.max_budget):
+            assert team_object.max_budget is not None
             counters.append(
                 _BudgetCounter(
                     counter_key=team_counter(team_id),
@@ -540,14 +578,8 @@ async def _get_budget_counters(
             )
         )
 
-    is_team_key: Final = team_object is not None and team_object.team_id is not None
-    if (
-        (not is_team_key or apply_user_budget_to_team_keys)
-        and user_object is not None
-        and user_object.user_id is not None
-        and user_object.max_budget is not None
-        and user_object.max_budget > 0
-    ):
+    if sources.user and reservation_policy.counter("User", user_object.max_budget if user_object is not None else None):
+        assert user_object is not None and user_object.user_id is not None and user_object.max_budget is not None
         counters.append(
             _BudgetCounter(
                 counter_key=user_counter(user_object.user_id),
@@ -616,7 +648,9 @@ async def _get_end_user_budget_counter(
     end_user_id: str | None,
     end_user_object: object,
 ) -> _BudgetCounter | None:
-    end_user_id = end_user_id or valid_token.end_user_id
+    end_user_id = reservation_policy.identity(
+        reservation_policy.Identity("EndUser", end_user_id, valid_token.end_user_id)
+    )
     if end_user_id is None:
         return None
 
@@ -629,8 +663,9 @@ async def _get_end_user_budget_counter(
             budget_table: Final = _get_value(end_user_object, "litellm_budget_table")
             max_budget = _to_float(_get_value(budget_table, "max_budget"))
 
-    if max_budget is None or max_budget <= 0:
+    if not reservation_policy.counter("EndUser", max_budget):
         return None
+    assert max_budget is not None
 
     return _BudgetCounter(
         counter_key=end_user_counter(end_user_id),
@@ -669,8 +704,9 @@ async def _get_tag_budget_counters(
             continue
         budget_table = _get_value(tag_object, "litellm_budget_table")
         max_budget = _to_float(_get_value(budget_table, "max_budget"))
-        if max_budget is None or max_budget <= 0:
+        if not reservation_policy.counter("Tag", max_budget):
             continue
+        assert max_budget is not None
         counters.append(
             _BudgetCounter(
                 counter_key=tag_counter(tag_name),
@@ -712,8 +748,9 @@ async def _get_model_access_group_budget_counters(
 
 def _model_access_group_counter(group: str, budget: ModelAccessGroupBudget | None) -> _BudgetCounter | None:
     """A counter for one group, or nothing when the group carries no budget to reserve against."""
-    if budget is None or budget.max_budget is None or budget.max_budget <= 0:
+    if not reservation_policy.counter("AccessGroup", budget.max_budget if budget is not None else None):
         return None
+    assert budget is not None and budget.max_budget is not None
     return _BudgetCounter(
         counter_key=model_access_group_counter(group),
         source_cache_key=model_access_group_cache_key(group),
@@ -742,8 +779,19 @@ async def _get_team_member_budget_counter(
     user_object: LiteLLM_UserTable | None,
     user_api_key_cache: UserApiKeyCache,
 ) -> _BudgetCounter | None:
-    if team_object is None or team_object.team_id is None or user_object is None or valid_token.user_id is None:
+    if (
+        reservation_policy.action(
+            reservation_policy.MemberGate(
+                team_object is not None,
+                team_object.team_id if team_object is not None else None,
+                user_object is not None,
+                valid_token.user_id,
+            )
+        ).kind
+        == "Skip"
+    ):
         return None
+    assert team_object is not None and valid_token.user_id is not None
 
     membership_cache_key: Final = team_membership_reservation_cache_key(
         user_id=valid_token.user_id, team_id=team_object.team_id
@@ -759,25 +807,33 @@ async def _get_team_member_budget_counter(
 
     member_budget_row: Final = team_membership.litellm_budget_table if team_membership is not None else None
     now: Final = datetime.now(timezone.utc)
-    team_member_budget: float | None = None
-    if member_budget_row is not None and member_budget_row.max_budget is not None:
-        team_member_budget = member_budget_row.effective_max_budget(now=now)
-    else:
+    default_cap: float | None = None
+    if (
+        reservation_policy.action(
+            reservation_policy.MemberCap(member_budget_row.max_budget if member_budget_row is not None else None)
+        ).kind
+        == "ReadDefault"
+    ):
         default_budget_id: Final = (team_object.metadata or {}).get("team_member_budget_id")
         if isinstance(default_budget_id, str):
             default_budget: Final = _CACHED_VALUE.validate_python(
                 await user_api_key_cache.async_get_cache(key=f"team_member_default_budget:{default_budget_id}")
             )
-            default_cap: Final = _to_float(_get_value(default_budget, "max_budget"))
-            if default_cap is not None and default_cap > 0:
-                team_member_budget = default_cap + (
-                    member_budget_row.active_temp_budget_increase(now=now) if member_budget_row is not None else 0.0
-                )
+            default_cap = _to_float(_get_value(default_budget, "max_budget"))
 
-    if team_member_budget is None or team_member_budget <= 0:
+    team_member_budget: Final = common_budgets.member_limit(
+        read_member_limit_facts(
+            member_budget_row,
+            default_cap if reservation_policy.counter("Key", default_cap) else None,
+            now,
+        )
+    )
+
+    if not reservation_policy.counter("Member", team_member_budget):
         return None
+    assert team_member_budget is not None
 
-    team_member_spend = cast(LiteLLM_TeamMembership, team_membership).spend if team_membership is not None else 0.0
+    team_member_spend = team_membership.spend if team_membership is not None else 0.0
     return _BudgetCounter(
         counter_key=team_member_counter(valid_token.user_id, team_object.team_id),
         source_cache_key=membership_cache_key,
@@ -794,11 +850,11 @@ async def _get_org_budget_counter(
     team_object: LiteLLM_TeamTable | None,
     user_api_key_cache: UserApiKeyCache,
 ) -> _BudgetCounter | None:
-    org_id: str | None = None
-    if valid_token.org_id is not None:
-        org_id = valid_token.org_id
-    elif team_object is not None and team_object.organization_id is not None:
-        org_id = team_object.organization_id
+    org_id: Final = reservation_policy.identity(
+        reservation_policy.Identity(
+            "Organization", valid_token.org_id, team_object.organization_id if team_object is not None else None
+        )
+    )
     if org_id is None:
         return None
 
@@ -813,8 +869,9 @@ async def _get_org_budget_counter(
         return None
 
     org_max_budget: Final = _to_float(_get_value(org_budget_table, "max_budget"))
-    if org_max_budget is None or org_max_budget <= 0:
+    if not reservation_policy.counter("Organization", org_max_budget):
         return None
+    assert org_max_budget is not None
 
     org_spend: Final = _to_float(_get_value(org_table, "spend")) or 0.0
     return _BudgetCounter(
@@ -847,8 +904,9 @@ async def _get_project_budget_counter(
         return None
 
     project_max_budget: Final = _to_float(_get_value(project_budget_table, "max_budget"))
-    if project_max_budget is None or project_max_budget <= 0 or not math.isfinite(project_max_budget):
+    if not reservation_policy.counter("Project", project_max_budget):
         return None
+    assert project_max_budget is not None
 
     return _BudgetCounter(
         counter_key=project_counter(valid_token.project_id),
@@ -875,10 +933,11 @@ def _get_budget_limit_counters(
         window_dict = _coerce_window(window)
         budget_duration = window_dict.get("budget_duration")
         max_budget = _to_float(window_dict.get("max_budget"))
-        if not budget_duration or max_budget is None or max_budget <= 0:
+        facts = reservation_policy.Window(bool(budget_duration), max_budget)
+        if reservation_policy.action(facts).kind == "Skip":
             continue
         window_start = get_budget_window_start(window_dict)
-        if window_start is None:
+        if reservation_policy.action(replace(facts, start_present=window_start is not None)).kind == "WarnWindow":
             verbose_proxy_logger.warning(
                 "Skipping budget window with invalid duration for %s=%s: %s",
                 entity_type,
@@ -886,6 +945,7 @@ def _get_budget_limit_counters(
                 budget_duration,
             )
             continue
+        assert max_budget is not None and window_start is not None
         counters.append(
             _BudgetCounter(
                 counter_key=f"{entity_prefix}:window:{budget_duration}",
@@ -937,7 +997,10 @@ async def _reservation_counter_loaded(counter: _BudgetCounter, fail_closed_budge
     try:
         await _initialize_reservation_counter(counter=counter)
     except _CounterReservationUnavailable:
-        if fail_closed_budget_enforcement:
+        if (
+            spend_counter_policy.decide(spend_counter_policy.ReservationFailure(fail_closed_budget_enforcement)).kind
+            == "Unavailable"
+        ):
             _raise_reservation_unavailable(counter_key=counter.counter_key)
         return False
     return True
@@ -1013,7 +1076,12 @@ async def _reserve_reservable_counters(
         if reserved_values is None:
             for entry in entries:
                 applied_entries.remove(entry)
-            if fail_closed_budget_enforcement:
+            if (
+                spend_counter_policy.decide(
+                    spend_counter_policy.ReservationFailure(fail_closed_budget_enforcement)
+                ).kind
+                == "Unavailable"
+            ):
                 _raise_reservation_unavailable(counter_key=group[0].counter_key)
             continue
         for counter, entry, reserved_value in zip(group, entries, reserved_values):
@@ -1023,7 +1091,10 @@ async def _reserve_reservable_counters(
                 current_spend = reserved_value - (charged_cost - reservation_cost)
             else:
                 current_spend = current_spend_by_counter_key[counter.counter_key] + reservation_cost
-            if current_spend > counter.max_budget:
+            if (
+                spend_counter_policy.decide(spend_counter_policy.Overflow(current_spend, counter.max_budget)).kind
+                == "CheckOverflow"
+            ):
                 reservation_cost = await _apply_over_budget_reservation_policy(
                     counter=counter,
                     valid_token=valid_token,
@@ -1044,14 +1115,16 @@ def _reservation_groups(
     """Every counter the batch read says still has room for the estimate is charged in one pipeline. As soon as one
     does not, the counters are charged one at a time so the over-budget policy settles each before the next is
     touched, and a rejection charges nothing after it."""
-    if not counters:
-        return ()
-    if all(
-        current_spend_by_counter_key[counter.counter_key] + reservation_cost <= counter.max_budget
-        for counter in counters
-    ):
-        return (tuple(counters),)
-    return tuple((counter,) for counter in counters)
+    decision: Final = spend_counter_policy.decide(
+        spend_counter_policy.ReservationGroups(
+            tuple(current_spend_by_counter_key[counter.counter_key] for counter in counters),
+            tuple(counter.max_budget for counter in counters),
+            reservation_cost,
+        )
+    )
+    if not isinstance(decision, spend_counter_policy.Groups):
+        raise NativeAuthRuntimeError("Unexpected reservation grouping decision")
+    return tuple(tuple(counters[index] for index in group) for group in decision.groups)
 
 
 async def _reserve_counters(
@@ -1163,7 +1236,12 @@ async def _set_reserved_entries_actual_cost(
             )
         )
         inconsistent: Final = tuple(item for item, ok in zip(adjustments, consistent) if not ok)
-        if inconsistent and not reseed_on_inconsistent:
+        if (
+            spend_counter_policy.decide(
+                spend_counter_policy.ResizeConsistency(bool(inconsistent), reseed_on_inconsistent)
+            ).kind
+            == "RejectResize"
+        ):
             # Pre-call admission resize: the in-flight reservation cost is not yet
             # persisted, so the DB floor would discard it. Keep the original
             # fail-closed behavior (raise -> reserve_budget_for_request releases and
@@ -1206,10 +1284,7 @@ async def _counter_can_apply_adjustment(
         current_value, _ = await read_spend_counter_cache_value(counter_key=counter_key)
     except (TypeError, ValueError):
         return False
-    if current_value is None:
-        return False
-
-    return not (adjustment < 0 and current_value + adjustment < -1e-12)
+    return spend_counter_policy.decide(spend_counter_policy.Adjustment(current_value, adjustment)).kind == "Compatible"
 
 
 async def _release_applied_entries_best_effort(

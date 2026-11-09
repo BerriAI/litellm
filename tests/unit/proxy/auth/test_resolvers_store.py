@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Dict, Optional
+from types import SimpleNamespace
+from typing import Dict, Final, Optional
 
 import pytest
 
@@ -14,6 +15,8 @@ from litellm.proxy.auth.resolvers.exceptions import (
 from litellm.proxy.auth.auth_method import AuthMethod
 from litellm.proxy.auth.resolvers.models import Principal, PrincipalType
 from litellm.proxy.auth.resolvers.store import IdentityStore
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm._auth.failure import NativeAuthRuntimeError
 
 
 class _FakeCache:
@@ -92,3 +95,39 @@ async def test_resolve_raises_a_generic_key_not_found_carrying_the_hash_when_no_
     assert exc_info.value.message == INVALID_API_KEY_ERROR_MESSAGE
     assert missing not in str(exc_info.value)
     assert exc_info.value.hashed_token == missing
+
+
+class _InvalidatedNativeRead:
+    def __init__(self, cache: UserApiKeyCache, *, always_invalidate: bool = False) -> None:
+        self.cache = cache
+        self.calls = 0
+        self.always_invalidate = always_invalidate
+
+    async def auth_read(self, kind: str, ids: list[str], writer: bool = False) -> list[dict[str, object]]:
+        self.calls += 1
+        if self.calls == 1 or self.always_invalidate:
+            self.cache.delete_local(ids[0])
+        return [{"token": ids[0], "blocked": self.calls > 1, "models": ["allowed"]}]
+
+
+async def test_invalidated_key_fill_reloads_instead_of_returning_or_caching_the_old_identity():
+    cache: Final = UserApiKeyCache()
+    handle: Final = _InvalidatedNativeRead(cache)
+    token: Final = hash_token("sk-fill-fence")
+    store: Final = IdentityStore(SimpleNamespace(native_auth_database=handle), cache)
+    principal: Final = await store.resolve(token)
+    assert IdentityStore.key_from_principal(principal).blocked is True
+    assert handle.calls == 2
+    cached: Final = await cache.async_get_cache(token, model_type=UserAPIKeyAuth)
+    assert cached is not None and cached.blocked is True
+
+
+async def test_continuously_invalidated_key_fills_stop_without_caching_a_stale_identity():
+    cache: Final = UserApiKeyCache()
+    handle: Final = _InvalidatedNativeRead(cache, always_invalidate=True)
+    token: Final = hash_token("sk-contended-fill")
+    store: Final = IdentityStore(SimpleNamespace(native_auth_database=handle), cache)
+    with pytest.raises(NativeAuthRuntimeError, match="changed during lookup"):
+        await store.resolve(token)
+    assert handle.calls == 2
+    assert cache.get_local(token) is None

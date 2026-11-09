@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT to_jsonb(a) || jsonb_build_object('access_model_names', COALESCE(to_jsonb(a.access_model_names), '[]'::jsonb),\n    'access_mcp_server_ids', COALESCE(to_jsonb(a.access_mcp_server_ids), '[]'::jsonb),\n    'access_agent_ids', COALESCE(to_jsonb(a.access_agent_ids), '[]'::jsonb),\n    'access_skill_names', COALESCE(to_jsonb(a.access_skill_names), '[]'::jsonb),\n    'assigned_team_ids', COALESCE(to_jsonb(a.assigned_team_ids), '[]'::jsonb),\n    'assigned_key_ids', COALESCE(to_jsonb(a.assigned_key_ids), '[]'::jsonb)) AS \"data!: AuthData\"\nFROM \"LiteLLM_AccessGroupTable\" a\nWHERE a.access_group_id = ANY($1::text[])\nORDER BY a.access_group_id\n",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "data!: AuthData",
+        "type_info": "Jsonb",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "TextArray"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "8d8ac844d36122a8e652c494519d5b7f5ea9ad7a158c5824ab8fc42e1e67dbdb"
+}

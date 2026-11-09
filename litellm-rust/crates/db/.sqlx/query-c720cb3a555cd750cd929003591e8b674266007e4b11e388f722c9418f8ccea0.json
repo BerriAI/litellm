@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT to_jsonb(a) || jsonb_build_object('extra_headers', COALESCE(to_jsonb(a.extra_headers), '[]'::jsonb),\n    'agent_access_groups', COALESCE(to_jsonb(a.agent_access_groups), '[]'::jsonb),\n    'access_group_ids', COALESCE(to_jsonb(a.access_group_ids), '[]'::jsonb), 'identity', (SELECT to_jsonb(i) || jsonb_build_object('required_roles', COALESCE(to_jsonb(i.required_roles), '[]'::jsonb),\n    'required_scopes', COALESCE(to_jsonb(i.required_scopes), '[]'::jsonb)) FROM \"LiteLLM_AgentIdentity\" i WHERE i.agent_id=a.agent_id), 'object_permission', (SELECT to_jsonb(op) || jsonb_build_object('mcp_servers', COALESCE(to_jsonb(op.mcp_servers), '[]'::jsonb),\n    'mcp_access_groups', COALESCE(to_jsonb(op.mcp_access_groups), '[]'::jsonb),\n    'mcp_toolsets', COALESCE(to_jsonb(op.mcp_toolsets), '[]'::jsonb),\n    'blocked_tools', COALESCE(to_jsonb(op.blocked_tools), '[]'::jsonb),\n    'vector_stores', COALESCE(to_jsonb(op.vector_stores), '[]'::jsonb),\n    'agents', COALESCE(to_jsonb(op.agents), '[]'::jsonb),\n    'agent_access_groups', COALESCE(to_jsonb(op.agent_access_groups), '[]'::jsonb),\n    'models', COALESCE(to_jsonb(op.models), '[]'::jsonb),\n    'search_tools', COALESCE(to_jsonb(op.search_tools), '[]'::jsonb),\n    'skills', COALESCE(to_jsonb(op.skills), '[]'::jsonb)) FROM \"LiteLLM_ObjectPermissionTable\" op WHERE op.object_permission_id = a.object_permission_id)) AS \"data!: AuthData\"\nFROM \"LiteLLM_AgentsTable\" a\nWHERE a.agent_id = ANY($1::text[])\nORDER BY a.agent_id\n",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "data!: AuthData",
+        "type_info": "Jsonb",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "TextArray"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "c720cb3a555cd750cd929003591e8b674266007e4b11e388f722c9418f8ccea0"
+}

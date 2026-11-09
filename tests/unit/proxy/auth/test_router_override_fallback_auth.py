@@ -5,14 +5,22 @@ override is promoted to per-request kwargs after auth and lets a caller
 execute requests against models their API key cannot call.
 """
 
-from typing import List
-from unittest.mock import AsyncMock, patch
+from typing import Final, List
 
 import pytest
 
-from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm import Router
+
+from litellm.proxy._types import LitellmUserRoles, ModelAccessDeniedProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import fallback_target_model_name, iter_request_fallback_targets
 from litellm.proxy.auth.user_api_key_auth import enforce_key_and_fallback_model_access
+
+_ROUTER: Final = Router(
+    model_list=[
+        {"model_name": name, "litellm_params": {"model": "openai/unit-model", "api_key": "sk-unit-test"}}
+        for name in ("gpt-3.5-turbo", "real-fallback", "string-fallback")
+    ]
+)
 
 
 def _fallback_model_names(fallbacks):
@@ -38,9 +46,11 @@ def _key_with_models(models: List[str]) -> UserAPIKeyAuth:
 
 def test_fallback_model_names_router_config_shape():
     """Router-config shape: ``[{primary: [fallback_list]}]``."""
-    assert _fallback_model_names(
-        [{"gpt-3.5-turbo": ["gpt-4", "claude-3"]}, {"gpt-4o": ["o1"]}]
-    ) == ["gpt-4", "claude-3", "o1"]
+    assert _fallback_model_names([{"gpt-3.5-turbo": ["gpt-4", "claude-3"]}, {"gpt-4o": ["o1"]}]) == [
+        "gpt-4",
+        "claude-3",
+        "o1",
+    ]
 
 
 def test_fallback_model_names_simple_string_shape():
@@ -58,9 +68,10 @@ def test_fallback_model_names_client_side_shape():
 
 def test_fallback_model_names_nested_deployment_fallbacks():
     """A deployment target's own nested fallback field is unrolled too."""
-    assert _fallback_model_names(
-        [{"primary": [{"model": "gpt-4", "fallbacks": [{"gpt-4": ["deepseek-chat"]}]}]}]
-    ) == ["gpt-4", "deepseek-chat"]
+    assert _fallback_model_names([{"primary": [{"model": "gpt-4", "fallbacks": [{"gpt-4": ["deepseek-chat"]}]}]}]) == [
+        "gpt-4",
+        "deepseek-chat",
+    ]
 
 
 def test_fallback_model_names_empty_or_none():
@@ -85,34 +96,16 @@ async def test_router_override_fallbacks_validated_against_key_allowlist():
         },
     }
 
-    seen_models: List[str] = []
-
-    async def fake_can_key_call_model(model, llm_model_list, valid_token, llm_router):
-        seen_models.append(model)
-
-    with (
-        patch(
-            "litellm.proxy.auth.user_api_key_auth.can_key_call_model",
-            side_effect=fake_can_key_call_model,
-        ),
-        patch(
-            "litellm.proxy.auth.user_api_key_auth.is_valid_fallback_model",
-            new=AsyncMock(),
-        ),
-    ):
+    with pytest.raises(ModelAccessDeniedProxyException) as denied:
         await enforce_key_and_fallback_model_access(
             valid_token=valid_token,
             request_data=request_data,
             route="/v1/chat/completions",
             request=None,
             llm_model_list=None,
-            llm_router=None,
+            llm_router=_ROUTER,
         )
-
-    # Both the primary model and the override-nested fallback must be
-    # checked against the API key's allowlist.
-    assert "gpt-3.5-turbo" in seen_models
-    assert "unauthorized-model" in seen_models
+    assert denied.value.code == "403"
 
 
 @pytest.mark.asyncio
@@ -136,31 +129,16 @@ async def test_router_override_all_fallback_fields_validated(fallback_field):
         },
     }
 
-    seen: List[str] = []
-
-    async def fake_can_key_call_model(model, llm_model_list, valid_token, llm_router):
-        seen.append(model)
-
-    with (
-        patch(
-            "litellm.proxy.auth.user_api_key_auth.can_key_call_model",
-            side_effect=fake_can_key_call_model,
-        ),
-        patch(
-            "litellm.proxy.auth.user_api_key_auth.is_valid_fallback_model",
-            new=AsyncMock(),
-        ),
-    ):
+    with pytest.raises(ModelAccessDeniedProxyException) as denied:
         await enforce_key_and_fallback_model_access(
             valid_token=valid_token,
             request_data=request_data,
             route="/v1/chat/completions",
             request=None,
             llm_model_list=None,
-            llm_router=None,
+            llm_router=_ROUTER,
         )
-
-    assert "smuggled-model" in seen
+    assert denied.value.code == "403"
 
 
 @pytest.mark.asyncio
@@ -183,31 +161,16 @@ async def test_top_level_fallback_fields_validated(fallback_field):
         fallback_field: [{"gpt-3.5-turbo": ["top-level-smuggled"]}],
     }
 
-    seen: List[str] = []
-
-    async def fake_can_key_call_model(model, llm_model_list, valid_token, llm_router):
-        seen.append(model)
-
-    with (
-        patch(
-            "litellm.proxy.auth.user_api_key_auth.can_key_call_model",
-            side_effect=fake_can_key_call_model,
-        ),
-        patch(
-            "litellm.proxy.auth.user_api_key_auth.is_valid_fallback_model",
-            new=AsyncMock(),
-        ),
-    ):
+    with pytest.raises(ModelAccessDeniedProxyException) as denied:
         await enforce_key_and_fallback_model_access(
             valid_token=valid_token,
             request_data=request_data,
             route="/v1/chat/completions",
             request=None,
             llm_model_list=None,
-            llm_router=None,
+            llm_router=_ROUTER,
         )
-
-    assert "top-level-smuggled" in seen
+    assert denied.value.code == "403"
 
 
 @pytest.mark.asyncio
@@ -229,31 +192,16 @@ async def test_nested_deployment_fallback_inner_model_validated():
         ],
     }
 
-    seen: List[str] = []
-
-    async def fake_can_key_call_model(model, llm_model_list, valid_token, llm_router):
-        seen.append(model)
-
-    with (
-        patch(
-            "litellm.proxy.auth.user_api_key_auth.can_key_call_model",
-            side_effect=fake_can_key_call_model,
-        ),
-        patch(
-            "litellm.proxy.auth.user_api_key_auth.is_valid_fallback_model",
-            new=AsyncMock(),
-        ),
-    ):
+    with pytest.raises(ModelAccessDeniedProxyException) as denied:
         await enforce_key_and_fallback_model_access(
             valid_token=valid_token,
             request_data=request_data,
             route="/v1/chat/completions",
             request=None,
             llm_model_list=None,
-            llm_router=None,
+            llm_router=_ROUTER,
         )
-
-    assert "deep-smuggled-model" in seen
+    assert denied.value.code == "403"
 
 
 @pytest.mark.asyncio
@@ -274,32 +222,16 @@ async def test_model_less_fallback_dict_is_skipped_never_passed_as_none():
         ],
     }
 
-    seen: List[str] = []
-
-    async def fake_can_key_call_model(model, llm_model_list, valid_token, llm_router):
-        seen.append(model)
-
-    with (
-        patch(
-            "litellm.proxy.auth.user_api_key_auth.can_key_call_model",
-            side_effect=fake_can_key_call_model,
-        ),
-        patch(
-            "litellm.proxy.auth.user_api_key_auth.is_valid_fallback_model",
-            new=AsyncMock(),
-        ),
-    ):
-        await enforce_key_and_fallback_model_access(
-            valid_token=valid_token,
-            request_data=request_data,
-            route="/v1/chat/completions",
-            request=None,
-            llm_model_list=None,
-            llm_router=None,
-        )
-
-    assert None not in seen
-    assert seen == ["gpt-3.5-turbo", "real-fallback", "string-fallback"]
+    valid_token.models = ["gpt-3.5-turbo", "real-fallback", "string-fallback"]
+    result = await enforce_key_and_fallback_model_access(
+        valid_token=valid_token,
+        request_data=request_data,
+        route="/v1/chat/completions",
+        request=None,
+        llm_model_list=None,
+        llm_router=_ROUTER,
+    )
+    assert result is None
 
 
 @pytest.mark.asyncio
@@ -312,28 +244,12 @@ async def test_router_override_without_fallbacks_does_not_break_auth():
         "router_settings_override": {"num_retries": 3, "timeout": 30},
     }
 
-    seen: List[str] = []
-
-    async def fake_can_key_call_model(model, llm_model_list, valid_token, llm_router):
-        seen.append(model)
-
-    with (
-        patch(
-            "litellm.proxy.auth.user_api_key_auth.can_key_call_model",
-            side_effect=fake_can_key_call_model,
-        ),
-        patch(
-            "litellm.proxy.auth.user_api_key_auth.is_valid_fallback_model",
-            new=AsyncMock(),
-        ),
-    ):
-        await enforce_key_and_fallback_model_access(
-            valid_token=valid_token,
-            request_data=request_data,
-            route="/v1/chat/completions",
-            request=None,
-            llm_model_list=None,
-            llm_router=None,
-        )
-
-    assert seen == ["gpt-3.5-turbo"]
+    result = await enforce_key_and_fallback_model_access(
+        valid_token=valid_token,
+        request_data=request_data,
+        route="/v1/chat/completions",
+        request=None,
+        llm_model_list=None,
+        llm_router=_ROUTER,
+    )
+    assert result is None

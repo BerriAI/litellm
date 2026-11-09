@@ -15,15 +15,34 @@ from litellm._logging import verbose_proxy_logger
 import json
 import logging
 import litellm
+from tests.unit._auth.reference_core import PythonCore
 from litellm.proxy.auth.user_api_key_auth import (
+    _enforce_model_budgets,
+    _ModelBudgetEffects,
     user_api_key_auth,
     UserAPIKeyAuth,
-    get_api_key_from_custom_header,
 )
 from fastapi import WebSocket, HTTPException, status
 
 from litellm.proxy._types import LiteLLM_UserTable, LitellmUserRoles
 from tests._master_key import MASTER_KEY
+
+
+async def _check_user_model_budgets(valid_token: UserAPIKeyAuth, limiter: object, model: str) -> None:
+    request: Final = MagicMock()
+    request.scope = {}
+    await _enforce_model_budgets(
+        PythonCore().check_user_model_budgets(),
+        _ModelBudgetEffects(
+            request=request,
+            request_data={"model": model},
+            valid_token=valid_token,
+            route="/chat/completions",
+            limiter=limiter,
+            llm_router=None,
+            llm_model_list=None,
+        ),
+    )
 
 
 class Request:
@@ -504,50 +523,6 @@ async def test_auth_not_connected_to_db():
     print("got valid token", valid_token)
     assert valid_token.key_name == "failed-to-connect-to-db"
     assert valid_token.token == "failed-to-connect-to-db"
-
-
-def _assert_api_key_from_custom_header(headers, custom_header_name, expected_api_key):
-    verbose_proxy_logger.setLevel(logging.DEBUG)
-    request = MagicMock(spec=Request)
-    request.headers = headers
-    api_key = get_api_key_from_custom_header(request=request, custom_litellm_key_header_name=custom_header_name)
-    assert api_key == expected_api_key
-
-
-def test_get_api_key_from_custom_header_bearer_token():
-    token = "sk-" + "1" * 8
-    _assert_api_key_from_custom_header(
-        headers={"x-custom-api-key": f"Bearer {token}"},
-        custom_header_name="x-custom-api-key",
-        expected_api_key=token,
-    )
-
-
-def test_get_api_key_from_custom_header_empty_value():
-    _assert_api_key_from_custom_header(
-        headers={"x-custom-api-key": ""},
-        custom_header_name="x-custom-api-key",
-        expected_api_key="",
-    )
-
-
-def test_get_api_key_from_custom_header_missing_header():
-    _assert_api_key_from_custom_header(
-        headers={},
-        custom_header_name="X-Custom-API-Key",
-        expected_api_key="",
-    )
-
-
-def test_get_api_key_from_custom_header_different_casing():
-    token = "sk-" + "1" * 8
-    _assert_api_key_from_custom_header(
-        headers={"X-CUSTOM-API-KEY": f"Bearer {token}"},
-        custom_header_name="X-Custom-API-Key",
-        expected_api_key=token,
-    )
-
-
 
 
 @pytest.mark.parametrize(
@@ -1426,27 +1401,25 @@ async def test_check_user_model_budget(user_id, user_model_max_budget, expected_
     stored on LiteLLM_UserTable, accepted by /user/new and /user/update, and read
     by nothing, so a user-level per-model budget never blocked anything.
     """
-    from litellm.proxy.auth.user_api_key_auth import _check_user_model_budget
-
     calls = []
 
     class _Limiter:
-        async def is_user_within_model_budget(
-            self, user_id: str, user_model_max_budget: Mapping[str, object], model: str, team_id: str | None = None
-        ) -> bool:
-            calls.append((user_id, user_model_max_budget, model))
-            return True
+        async def read_model_budget_raw(
+            self, entity: str, entity_id: str | None, team_id: str | None, model: str,
+            budgets: Mapping[str, object] | None, key_budgets: Mapping[str, object] | None = None,
+        ):
+            from litellm._auth.model_budget_data import ModelBudgetSnapshot
+            from litellm.proxy.auth.model_budget_adapter import ModelBudgetReading
+
+            calls.append((entity_id, budgets, model))
+            return ModelBudgetReading(ModelBudgetSnapshot(None, None, None, None, None, None, 0), model, model)
 
     valid_token = UserAPIKeyAuth(
         token="hash",
         user_id=user_id,
         user_model_max_budget=user_model_max_budget,
     )
-    await _check_user_model_budget(
-        valid_token=valid_token,
-        model_max_budget_limiter=_Limiter(),
-        models=["gpt-4"],
-    )
+    await _check_user_model_budgets(valid_token, _Limiter(), model="gpt-4")
     assert len(calls) == expected_calls
     if expected_calls:
         assert calls[0] == ("u-1", user_model_max_budget, "gpt-4")
@@ -1588,7 +1561,6 @@ async def test_jwt_user_model_budget_is_enforced_before_the_jwt_path_returns(ove
     nothing ever reads it, which looks enforced and is not.
     """
     from litellm.proxy._types import Litellm_EntityType, UserAPIKeyAuth
-    from litellm.proxy.auth.user_api_key_auth import _check_user_model_budget
     from litellm.proxy.hooks.model_max_budget_limiter import model_budget_spend_cache_key
     from litellm.proxy.proxy_server import model_max_budget_limiter
 
@@ -1616,18 +1588,11 @@ async def test_jwt_user_model_budget_is_enforced_before_the_jwt_path_returns(ove
 
     if expect_refusal:
         with pytest.raises(litellm.BudgetExceededError) as exc:
-            await _check_user_model_budget(
-                valid_token=valid_token,
-                model_max_budget_limiter=model_max_budget_limiter,
-                models=[model],
-            )
+            await _check_user_model_budgets(valid_token, model_max_budget_limiter, model=model)
         assert exc.value.entity_type == Litellm_EntityType.USER.value
+        assert exc.value.entity_id == user_id
     else:
-        await _check_user_model_budget(
-            valid_token=valid_token,
-            model_max_budget_limiter=model_max_budget_limiter,
-            models=[model],
-        )
+        await _check_user_model_budgets(valid_token, model_max_budget_limiter, model=model)
 
 
 def test_jwt_path_enforces_the_user_model_budget_before_returning():
@@ -1645,7 +1610,7 @@ def test_jwt_path_enforces_the_user_model_budget_before_returning():
     tree = ast.parse(
         textwrap.dedent(inspect.getsource(auth_module._user_api_key_auth_builder))
         + "\n"
-        + textwrap.dedent(inspect.getsource(auth_module.validate_resolved_virtual_key))
+        + textwrap.dedent(inspect.getsource(auth_module._BuilderEffects))
     )
 
     def calls_before_each_return(node):
@@ -1654,7 +1619,7 @@ def test_jwt_path_enforces_the_user_model_budget_before_returning():
             if isinstance(child, ast.Call):
                 fn = child.func
                 name = getattr(fn, "id", None) or getattr(fn, "attr", None)
-                if name == "_check_user_model_budget":
+                if name == "_enforce_model_budgets":
                     seen_check.append(child.lineno)
         return seen_check
 
@@ -1690,7 +1655,7 @@ def test_every_jwt_branch_carries_the_user_model_budget():
     tree = ast.parse(
         textwrap.dedent(inspect.getsource(auth_module._user_api_key_auth_builder))
         + "\n"
-        + textwrap.dedent(inspect.getsource(auth_module.validate_resolved_virtual_key))
+        + textwrap.dedent(inspect.getsource(auth_module._BuilderEffects))
     )
 
     assignments = [
@@ -1708,7 +1673,7 @@ def test_every_jwt_branch_carries_the_user_model_budget():
     assert "auto_registered" in targets, (
         f"the auto-registered JWT token must carry the user's model budget; only these are populated: {sorted(targets)}"
     )
-    assert "valid_token" in targets, "the virtual-key path must carry the user's model budget"
+    assert "key" in targets, "the virtual-key path must carry the user's model budget"
 
 
 @pytest.mark.asyncio
@@ -1815,8 +1780,10 @@ def test_zero_cost_models_skip_the_user_budget_check_on_every_path():
     whether the caller used a JWT or a virtual key, and makes that log a lie.
 
     Structural rather than behavioural on purpose: the defect is a call site
-    sitting outside a guard, and driving both auth paths to a zero-cost model
-    would prove it for the two requests exercised rather than for every site.
+    sitting outside a guard, and driving the JWT path to a zero-cost model
+    would prove it for the request exercised rather than for every site. The
+    virtual-key path's exemption is decided by the auth core and covered in
+    tests/unit/_auth/test_python_core.py.
     """
     import ast
     import inspect
@@ -1824,11 +1791,7 @@ def test_zero_cost_models_skip_the_user_budget_check_on_every_path():
 
     from litellm.proxy.auth import user_api_key_auth as auth_module
 
-    tree = ast.parse(
-        textwrap.dedent(inspect.getsource(auth_module._user_api_key_auth_builder))
-        + "\n"
-        + textwrap.dedent(inspect.getsource(auth_module.validate_resolved_virtual_key))
-    )
+    tree = ast.parse(textwrap.dedent(inspect.getsource(auth_module._user_api_key_auth_builder)))
 
     def guarded_by_skip(node: ast.AST, target: ast.AST) -> bool:
         for parent in ast.walk(node):
@@ -1848,69 +1811,41 @@ def test_zero_cost_models_skip_the_user_budget_check_on_every_path():
     calls = [
         node
         for node in ast.walk(tree)
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "_check_user_model_budget"
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "_enforce_model_budgets"
     ]
-    assert len(calls) == 2, f"expected the JWT and virtual-key call sites, found {len(calls)}"
+    assert len(calls) == 1, f"expected the JWT call site, found {len(calls)}"
 
     unguarded = [c for c in calls if not guarded_by_skip(tree, c)]
     assert not unguarded, (
-        f"{len(unguarded)} _check_user_model_budget call(s) run even when "
+        f"{len(unguarded)} _enforce_model_budgets call(s) run even when "
         "skip_budget_checks is set, so a zero-cost model is enforced on one auth path and not the other"
     )
 
 
-def test_custom_auth_also_skips_budget_checks_for_zero_cost_models():
-    """
-    The custom-auth helper runs its own key, user and end-user per-model budget
-    checks. If it does not honour the zero-cost skip that the JWT and
-    virtual-key paths honour, the same free request is refused under one auth
-    method and served under the others.
-
-    Asserted structurally, on the same reasoning as the sibling test: the defect
-    is a check sitting outside a guard, and it must hold for checks added later
-    rather than only for whichever request a behavioural test happened to drive.
-    """
-    import ast
-    import inspect
-    import textwrap
-
+@pytest.mark.asyncio
+async def test_custom_auth_also_skips_budget_checks_for_zero_cost_models():
     from litellm.proxy.auth import user_api_key_auth as auth_module
 
-    src = textwrap.dedent(inspect.getsource(auth_module._run_post_custom_auth_checks))
-    tree = ast.parse(src)
-
-    assert "skip_budget_checks" in src, "the custom-auth path never computes the zero-cost skip flag"
-
-    budget_calls = (
-        "_check_key_model_budget_with_fallback",
-        "_check_user_model_budget",
-        "is_end_user_within_model_budget",
+    router = litellm.Router(model_list=[{
+        "model_name": "free-model",
+        "litellm_params": {
+            "model": "openai/free-model", "api_key": "unused",
+            "input_cost_per_token": 0, "output_cost_per_token": 0,
+        },
+        "model_info": {"id": "free-id"},
+    }])
+    token = UserAPIKeyAuth(
+        token="test-key",
+        model_max_budget={"free-model": {"max_budget": 0}},
     )
-
-    def guarding_ifs(target: ast.AST) -> list[ast.If]:
-        return [
-            node for node in ast.walk(tree) if isinstance(node, ast.If) and any(sub is target for sub in ast.walk(node))
-        ]
-
-    def mentions_skip(node: ast.If) -> bool:
-        return any(isinstance(sub, ast.Name) and sub.id == "skip_budget_checks" for sub in ast.walk(node.test))
-
-    for call_name in budget_calls:
-        calls = [
-            node
-            for node in ast.walk(tree)
-            if isinstance(node, ast.Call)
-            and (
-                (isinstance(node.func, ast.Name) and node.func.id == call_name)
-                or (isinstance(node.func, ast.Attribute) and node.func.attr == call_name)
-            )
-        ]
-        assert calls, f"{call_name} is no longer called here; update this invariant"
-        for call in calls:
-            assert any(mentions_skip(node) for node in guarding_ifs(call)), (
-                f"{call_name} runs even for a zero-cost model, so custom auth refuses "
-                "requests the JWT and virtual-key paths serve"
-            )
+    with (
+        patch("litellm.proxy.proxy_server.llm_router", router),
+        patch("litellm.proxy.proxy_server.general_settings", {}),
+    ):
+        result = await auth_module._run_post_custom_auth_checks(
+            token, None, {"model": "free-model"}, "/v1/chat/completions", None
+        )
+    assert result is token
 
 
 def test_custom_auth_attaches_the_user_budget_even_when_it_does_not_enforce():
@@ -1972,7 +1907,7 @@ def test_mapped_key_jwt_falls_through_to_the_shared_user_budget_attach():
     tree = ast.parse(
         textwrap.dedent(inspect.getsource(auth_module._user_api_key_auth_builder))
         + "\n"
-        + textwrap.dedent(inspect.getsource(auth_module.validate_resolved_virtual_key))
+        + textwrap.dedent(inspect.getsource(auth_module._BuilderEffects))
     )
 
     # Half one: the shared block copies the user row's budget onto the token.
@@ -2154,7 +2089,7 @@ async def test_jwt_path_skips_user_model_budget_only_for_zero_spend_mcp_methods(
     with (
         patch("litellm.proxy.proxy_server.premium_user", True),
         patch("litellm.proxy.auth.handle_jwt.JWTAuthManager.auth_builder", return_value=jwt_response),
-        patch("litellm.proxy.auth.user_api_key_auth._check_user_model_budget", user_model_budget_check),
+        patch("litellm.proxy.auth.user_api_key_auth._enforce_model_budgets", user_model_budget_check),
     ):
         result: Final = await user_api_key_auth_builder(
             request=mock_request,

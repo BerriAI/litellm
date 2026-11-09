@@ -1,0 +1,25 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT jsonb_build_object('window_start', window_start, 'spend', spend) AS \"data!: AuthData\" FROM \"LiteLLM_BudgetWindowSpend\" WHERE entity_type=$1 AND entity_id=$2 AND window_duration=$3\n",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "data!: AuthData",
+        "type_info": "Jsonb",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "683dd0c1cdf39792c5b0c7ca482fee4c56e187d9f9e3d26d625fc3432e9d5652"
+}

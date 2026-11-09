@@ -23,6 +23,7 @@ pub use litellm_redis_types::{
 };
 pub use namespace::Namespace;
 pub use pipeline::Pipeline;
+pub use pubsub::SubscriptionEvent;
 pub use redis::{
     BasicAuth, ErrorKind as RedisErrorKind, RedisError, StreamingCredentialsProvider, Value,
     cluster_routing::Slot,

@@ -50,10 +50,6 @@ impl<V: Clone> Memory<V> {
         self.cache.flush_cache()
     }
 
-    pub fn len(&self) -> Result<usize, Error> {
-        self.cache.len()
-    }
-
     pub fn expires_at(&self, key: &str) -> Result<Option<Duration>, Error> {
         self.cache.expires_at(key)
     }
@@ -63,6 +59,7 @@ impl<V: Clone> Memory<V> {
     }
 
     /// `DualCache.update_in_memory_max_size`: `None` restores the 200-entry default.
+    #[cfg(test)]
     pub fn update_max_size(&self, entries: Option<usize>) {
         self.cache.update_max_size_in_memory(entries);
     }

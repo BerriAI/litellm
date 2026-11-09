@@ -85,12 +85,14 @@ class HeldStatementRelay:
         *,
         after: bytes | None = None,
         armed: bool = True,
+        response: bool = False,
     ) -> None:
         self.port: Final = allocate_port()
         self._upstream_host: Final = upstream_host
         self._upstream_port: Final = upstream_port
         self._trigger: Final = trigger
         self._after: Final = after
+        self._response: Final = response
         self._marker_length: Final = max(len(trigger), len(after or b""))
         self._server: Final = LoopbackServer(self.port, self._serve)
         self._loop: Final = self._server.loop
@@ -144,8 +146,8 @@ class HeldStatementRelay:
                 await close_writer(writer)
 
         await asyncio.gather(
-            forward(client_reader, server_writer, True),
-            forward(server_reader, client_writer, False),
+            forward(client_reader, server_writer, not self._response),
+            forward(server_reader, client_writer, self._response),
         )
 
 

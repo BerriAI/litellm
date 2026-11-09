@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT COALESCE(spend, 0.0)::float8 AS \"spend!\" FROM \"LiteLLM_TeamMembership\" WHERE user_id=$1 AND team_id=$2\n",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "spend!",
+        "type_info": "Float8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "2c4e1f73d4170dd3c6a2b077fbd837fa0adb227764bcaff1c2267f9a4624f99c"
+}

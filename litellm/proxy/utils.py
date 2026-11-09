@@ -141,6 +141,7 @@ from litellm import (
     ModelResponseStream,
     Router,
 )
+from litellm._auth.key import hash_token as hash_token  # noqa: PLC0414  # public re-export
 from litellm._internal_context import service_target
 from litellm._logging import redact_string, verbose_proxy_logger
 from litellm._service_logger import ServiceLogging, ServiceTypes
@@ -331,7 +332,9 @@ if TYPE_CHECKING:
     from litellm.proxy.db.baseline_accounting import BaselineAccountingRecord
     from litellm.proxy.db.model_usage_rollup import ModelUsageTransaction
     from litellm.proxy.db.spend_log_tool_index import ToolUsageTransaction
+    from litellm.repositories.database_settings import NativeDatabaseSettings
     from litellm.repositories.prisma_protocols import TableActions
+    from litellm.rust_bridge._native import NativeDatabase
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
     from litellm.types.proxy.policy_engine.pipeline_types import GuardrailPipeline, PipelineStep
 
@@ -5674,6 +5677,8 @@ class PrismaClient:
         http_client: "HttpConfig | None" = None,
         engine_exit_wait_seconds: float = _SHUTDOWN_ENGINE_EXIT_WAIT_SECONDS,
     ):
+        self.native_auth_database: NativeDatabase | None = None
+        self._native_database_url: Final = database_url
         ## init logging object
         self.baseline_accounting_transactions: list[BaselineAccountingRecord] = []
         self.baseline_accounting_lock: Final = asyncio.Lock()
@@ -5773,6 +5778,7 @@ class PrismaClient:
                 self.db = writer_wrapper
         else:
             self.db = writer_wrapper  # Client to connect to Prisma db
+        self._native_reader_url: Final = read_replica_url if isinstance(self.db, RoutingPrismaWrapper) else None
         self._db_reconnect_lock = asyncio.Lock()
         self._closing: bool = False
         self._engine_exit_wait_seconds: Final = engine_exit_wait_seconds
@@ -5841,6 +5847,23 @@ class PrismaClient:
             return self.db.read_target
         return self.db
 
+    @property
+    def native_writer_settings(self) -> "NativeDatabaseSettings":
+        from litellm.repositories.database_settings import NativeDatabaseSettings
+
+        return NativeDatabaseSettings.from_url(self._native_database_url, self.writer_db.token_auth)
+
+    def set_native_auth_database(self, native: "NativeDatabase | None") -> None:
+        self.native_auth_database = native
+
+    @property
+    def native_reader_settings(self) -> "NativeDatabaseSettings | None":
+        from litellm.repositories.database_settings import NativeDatabaseSettings
+
+        if self._native_reader_url is None or not isinstance(self.db, RoutingPrismaWrapper):
+            return None
+        return NativeDatabaseSettings.from_url(self._native_reader_url, self.db.reader.token_auth)
+
     def tx(
         self, *, timeout: timedelta = _PRISMA_DEFAULT_TX_TIMEOUT, max_wait: timedelta = _PRISMA_DEFAULT_TX_MAX_WAIT
     ) -> "TransactionManager":
@@ -5878,11 +5901,8 @@ class PrismaClient:
             # Default to success if metadata parsing fails
             return "success"
 
-    def hash_token(self, token: str):
-        # Hash the string using SHA-256
-        hashed_token: Final = hashlib.sha256(token.encode()).hexdigest()
-
-        return hashed_token
+    def hash_token(self, token: str) -> str:
+        return hash_token(token)
 
     def jsonify_object(self, data: Mapping[str, object]) -> dict[str, object]:
         db_data: Final[dict[str, object]] = copy.deepcopy(dict(data))
@@ -8457,15 +8477,6 @@ async def send_email(
     return True
 
 
-def hash_token(token: str):
-    import hashlib
-
-    # Hash the string using SHA-256
-    hashed_token: Final = hashlib.sha256(token.encode()).hexdigest()
-
-    return hashed_token
-
-
 def _is_pbkdf2_row(stored: str) -> bool:
     return re.fullmatch(r"pbkdf2:[A-Za-z0-9+/]{64}", stored) is not None
 
@@ -8473,7 +8484,6 @@ def _is_pbkdf2_row(stored: str) -> bool:
 def hash_password(password: str) -> str:
     """Hash a password using scrypt with a random salt, or PBKDF2 in FIPS mode."""
     import base64
-    import hashlib
     import os
 
     if fips_mode_active():
@@ -8488,7 +8498,6 @@ def hash_password(password: str) -> str:
 def verify_password(password: str, stored: str) -> bool:
     """Verify a password against a stored hash. Supports scrypt and SHA256, or only PBKDF2 in FIPS mode."""
     import base64
-    import hashlib
     import secrets
 
     if fips_mode_active():

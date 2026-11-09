@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT jsonb_build_object('access_group_name', access_group_name) AS \"data!: AuthData\" FROM \"LiteLLM_ModelAccessGroupBudgetTable\" ORDER BY access_group_name LIMIT $1\n",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "data!: AuthData",
+        "type_info": "Jsonb",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "cc5bac434a523f8deb0416b806412422927cedd9981b6b3617aa61b1086ab8f9"
+}

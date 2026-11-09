@@ -6,18 +6,23 @@ macro_rules_attribute::attribute_alias! {
         #[derive(Clone, Debug, PartialEq, sqlx::FromRow)];
 }
 
+mod auth;
 mod daily_spend;
 mod end_user;
 mod error;
+mod executor;
 mod failure;
+mod pool;
 mod spend;
 #[cfg(test)]
 mod test_support;
 
+pub use auth::{AuthRead, AuthRow, AuthSpend, auth_read, auth_spend};
 pub use daily_spend::{DailyEndUserRow, DailyTeamRow, DailyUserRow};
 pub use end_user::{EndUser, RateLimits, find_end_user};
 pub use error::Error;
 pub use failure::DbFailure;
+pub use pool::{DatabasePools, DatabaseSettings};
 pub use spend::{
     DailySpend, DailyTable, EntitySpend, SpendLog, SpendLogRow, TeamMemberSpend,
     add_end_user_spend, add_key_spend, add_team_member_spend, add_team_spend, add_user_spend,

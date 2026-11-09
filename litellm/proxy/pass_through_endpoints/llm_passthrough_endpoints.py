@@ -31,6 +31,7 @@ from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm import get_llm_provider
+from litellm._auth.runtime import scheme_credential
 from litellm._logging import redact_internal_details_from_client_message, verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.constants import (
@@ -99,7 +100,7 @@ from litellm.proxy.auth.user_api_key_auth import (  # noqa: F401  # legacy modul
     _get_bearer_token,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     api_key_header,
     custom_litellm_key_header,
-    get_bearer_token,
+    get_bearer_token,  # pyright: ignore[reportUnusedImport]  # backwards-compatible package export
     is_no_auth_dev_mode,
     user_api_key_auth,
     user_api_key_auth_accepted_websocket_for_model,
@@ -2858,17 +2859,7 @@ _CREDENTIALLESS_VERTEX_MISSING_CREDENTIAL_DETAIL: Final = (
 
 
 def _normalize_credential_value(value: str) -> str:
-    """Reduce a header value to the bare token, matching how ``user_api_key_auth``
-    reads a caller's key.
-
-    Reuses the auth module's ``_get_bearer_token`` so the caller-key comparison
-    strips exactly the schemes authentication accepts (``Bearer`` / ``bearer`` /
-    ``Basic`` / ``AWS4-HMAC-SHA256`` credential), rather than re-deriving a
-    narrower normalization here. ``_get_bearer_token`` returns ``""`` for a value
-    with no recognized scheme prefix, so a bare token (or a real Google
-    credential that carries no scheme) falls back to its own value.
-    """
-    return get_bearer_token(value) or value
+    return scheme_credential(value) or value
 
 
 _VERTEX_UPSTREAM_CREDENTIAL_HEADERS: Final = frozenset({"authorization", "x-goog-api-key"})

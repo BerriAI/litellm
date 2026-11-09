@@ -7,7 +7,7 @@ use litellm_circuit_breaker::{Breaker, Config};
 use litellm_redis_client::commands;
 use litellm_redis_client::{
     Credentials, DEFAULT_TIMEOUT, Error, Namespace, Node, RedisClient, RedisConfig, Sentinel,
-    Target, Timeouts,
+    SubscriptionEvent, Target, Timeouts,
 };
 use litellm_redis_testing::{RedisDeployment, RedisSentinel, SERVICE_NAME, Topology, eventually};
 use rstest::rstest;
@@ -15,6 +15,85 @@ use support::{connect, connect_guarded};
 use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
 
 const CHANNEL: &str = "litellm_proxy.auth_cache_invalidation";
+
+#[rstest]
+#[tokio::test]
+async fn a_silent_dead_subscription_is_detected_and_reconnected(
+    #[values(Topology::Standalone, Topology::Cluster)] topology: Topology,
+) {
+    let server = RedisDeployment::start(topology).await.unwrap();
+    let proxy = support::proxied(&server).await;
+    let client = RedisClient::new(RedisConfig {
+        target: proxy.target.clone(),
+        credentials: Credentials::NONE,
+        namespace: Namespace::default(),
+        timeouts: Timeouts::new(Duration::from_millis(500), None),
+        breaker: None,
+        events: None,
+        health_check: None,
+        keepalive: true,
+    })
+    .unwrap();
+    let mut events = client.subscribe_events(CHANNEL);
+    assert!(matches!(
+        tokio::time::timeout(Duration::from_secs(5), events.next())
+            .await
+            .unwrap(),
+        Some(SubscriptionEvent::Connected)
+    ));
+    proxy.blackhole_open_connections();
+    assert!(matches!(
+        tokio::time::timeout(Duration::from_secs(20), events.next())
+            .await
+            .unwrap(),
+        Some(SubscriptionEvent::Disconnected)
+    ));
+    assert!(matches!(
+        tokio::time::timeout(Duration::from_secs(10), events.next())
+            .await
+            .unwrap(),
+        Some(SubscriptionEvent::Connected)
+    ));
+}
+
+#[rstest]
+#[tokio::test]
+async fn lifecycle_reports_disconnect_before_reconnect(
+    #[values(Topology::Standalone, Topology::Cluster)] topology: Topology,
+) {
+    let server = RedisDeployment::start(topology).await.unwrap();
+    let client = connect(&server, "", Duration::from_millis(500));
+    let mut events = client.subscribe_events(CHANNEL);
+    assert!(matches!(
+        tokio::time::timeout(Duration::from_secs(5), events.next())
+            .await
+            .unwrap(),
+        Some(SubscriptionEvent::Connected)
+    ));
+    server.restart().await.unwrap();
+    assert!(matches!(
+        tokio::time::timeout(Duration::from_secs(5), events.next())
+            .await
+            .unwrap(),
+        Some(SubscriptionEvent::Disconnected)
+    ));
+    assert!(matches!(
+        tokio::time::timeout(Duration::from_secs(15), events.next())
+            .await
+            .unwrap(),
+        Some(SubscriptionEvent::Connected)
+    ));
+    eventually(async || {
+        client
+            .send(commands::publish(CHANNEL, b"after".as_slice()))
+            .await
+            .ok()
+    })
+    .await;
+    assert!(
+        matches!(tokio::time::timeout(Duration::from_secs(5), events.next()).await.unwrap(), Some(SubscriptionEvent::Message(bytes)) if bytes == b"after")
+    );
+}
 
 fn listen(client: &RedisClient, channel: &str) -> UnboundedReceiver<Vec<u8>> {
     let (sender, receiver) = unbounded_channel();

@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT to_jsonb(u) || jsonb_build_object('teams', COALESCE(to_jsonb(u.teams), '[]'::jsonb),\n    'models', COALESCE(to_jsonb(u.models), '[]'::jsonb),\n    'allowed_cache_controls', COALESCE(to_jsonb(u.allowed_cache_controls), '[]'::jsonb),\n    'policies', COALESCE(to_jsonb(u.policies), '[]'::jsonb), 'organization_memberships', COALESCE((SELECT jsonb_agg(to_jsonb(om)) FROM \"LiteLLM_OrganizationMembership\" om WHERE om.user_id = u.user_id), '[]'::jsonb)) AS \"data!: AuthData\" FROM \"LiteLLM_UserTable\" u WHERE LOWER(u.user_email) = LOWER($1) ORDER BY u.user_id LIMIT 1\n",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "data!: AuthData",
+        "type_info": "Jsonb",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "b0d27eac417a4044836ce7ba4450b4bd94727d6f882992ff4b8419be945175ef"
+}

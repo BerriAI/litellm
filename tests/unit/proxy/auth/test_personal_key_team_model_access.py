@@ -320,14 +320,12 @@ async def test_model_listing_loads_each_team_once(monkeypatch: pytest.MonkeyPatc
 @pytest.mark.asyncio
 async def test_team_check_error_grants_nothing_for_that_team(monkeypatch: pytest.MonkeyPatch, teams: None) -> None:
     _enable(monkeypatch)
-    check_team: Final = auth_checks.can_team_access_model
 
-    async def _failing_for_team_b(model: str, team_object: LiteLLM_TeamTableCachedObj, **_: object) -> bool:
-        if team_object.team_id == "team-b":
-            raise RuntimeError("access group lookup failed")
-        return await check_team(model=model, team_object=team_object, llm_router=_ROUTER)
+    async def _failing_for_team_b(*, team_id: str, **_: object) -> None:
+        if team_id == "team-b":
+            raise RuntimeError("membership lookup failed")
 
-    monkeypatch.setattr(auth_checks, "can_team_access_model", _failing_for_team_b)
+    monkeypatch.setattr(auth_checks, "get_team_membership", _failing_for_team_b)
     owner: Final = LiteLLM_UserTable(user_id="u1", teams=["team-a", "team-b"])
     token: Final = UserAPIKeyAuth(token="k1", user_id="u1")
     assert await _common_checks("gpt-a", owner, token) is True

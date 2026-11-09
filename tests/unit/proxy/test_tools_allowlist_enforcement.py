@@ -6,14 +6,14 @@ Covers:
 - extract_request_tool_names: OpenAI chat, responses, Anthropic, generate_content, MCP
 """
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from typing import Final
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from litellm.proxy._types import ProxyErrorTypes, ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import check_tools_allowlist
 from litellm.proxy.guardrails.tool_name_extraction import (
-    TOOL_CAPABLE_CALL_TYPES,
     extract_request_tool_names,
 )
 
@@ -58,9 +58,7 @@ class TestExtractRequestToolNames:
                 {"type": "function", "name": "get_current_weather", "description": "x"},
             ]
         }
-        assert extract_request_tool_names("/v1/responses", data) == [
-            "get_current_weather"
-        ]
+        assert extract_request_tool_names("/v1/responses", data) == ["get_current_weather"]
 
     def test_openai_responses_mcp_tools(self):
         data = {
@@ -129,9 +127,7 @@ class TestExtractRequestToolNames:
                 },
             ]
         }
-        assert extract_request_tool_names("/generate_content", data) == [
-            "schedule_meeting"
-        ]
+        assert extract_request_tool_names("/generate_content", data) == ["schedule_meeting"]
 
     def test_mcp_call_tool_name(self):
         data = {"name": "my_tool", "arguments": {}}
@@ -163,6 +159,57 @@ class TestExtractRequestToolNames:
 
 class TestCheckToolsAllowlist:
     """Test allowlist enforcement in auth (no DB in hot path)."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("key", [None, [], "forbidden", {"tool": "forbidden"}])
+    @pytest.mark.parametrize("team", [None, [], "forbidden", {"tool": "forbidden"}])
+    async def test_disabled_allowlists_never_extract_tool_names(self, key: object, team: object) -> None:
+        with patch(
+            "litellm.proxy.auth.auth_checks.extract_request_tool_names",
+            side_effect=AssertionError("disabled allowlist read request tools"),
+        ) as extractor:
+            await check_tools_allowlist(
+                request_body={"tools": object()},
+                valid_token=_token(metadata={"allowed_tools": key}, team_metadata={"allowed_tools": team}),
+                team_object=None,
+                route="/v1/responses",
+            )
+        extractor.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_empty_tool_names_do_not_convert_allowlist_members(self) -> None:
+        member: Final = MagicMock()
+        with patch("litellm.proxy.auth.auth_checks.extract_request_tool_names", return_value=[]) as extractor:
+            await check_tools_allowlist(
+                request_body={},
+                valid_token=_token(metadata={"allowed_tools": [member]}),
+                team_object=None,
+                route="/v1/responses",
+            )
+        assert extractor.call_count == 1
+        member.__str__.assert_not_called()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("key", [None, [], "ignored", {"tool": "ignored"}])
+    async def test_team_members_are_stringified_only_after_tool_names(self, key: object) -> None:
+        member: Final = MagicMock()
+        member.__str__.return_value = "allowed"
+
+        def names(route: str, body: object) -> list[str]:
+            member.__str__.assert_not_called()
+            return ["allowed", "123", "None", "False"]
+
+        with patch("litellm.proxy.auth.auth_checks.extract_request_tool_names", side_effect=names):
+            await check_tools_allowlist(
+                request_body={},
+                valid_token=_token(
+                    metadata={"allowed_tools": key},
+                    team_metadata={"allowed_tools": [member, 123, None, False]},
+                ),
+                team_object=None,
+                route="/v1/responses",
+            )
+        member.__str__.assert_called_once_with()
 
     @pytest.mark.asyncio
     async def test_no_allowlist_passes(self):

@@ -4,6 +4,7 @@ the readers and the fallback, so enforcement never depends on this running."""
 
 from __future__ import annotations
 
+import json
 import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
@@ -12,6 +13,7 @@ from typing import Final, Literal, TypeAlias
 
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
+from litellm._auth.failure import NativeAuthFailure, NativeAuthRuntimeError
 from litellm._internal_context import service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.redis_batch import Batch
@@ -32,6 +34,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
 from litellm.proxy.db.db_span import db_span
 from litellm.proxy.utils import PrismaClient
 from litellm.redis.stores.auth_cache import AuthCacheStore
+from litellm.repositories.native_auth_repository import native_auth_repository
 
 _RowKind: TypeAlias = Literal["user_row", "team_row", "membership_row", "organization_row", "project_row"]
 
@@ -220,6 +223,7 @@ async def _fill_from_redis(
     """On the request's native pipeline when one is open; a failed read is a miss, like ``async_batch_get_cache``."""
     if not entries:
         return
+    generation: Final = shared.current_generation()
     before_read()
     try:
         with service_target(AUTH_OBJECTS_TARGET):
@@ -229,13 +233,16 @@ async def _fill_from_redis(
         return
     for entry, value in ((entry, found.get(entry.cache_key)) for entry in entries):
         if value is not None:
-            shared.set_local(
-                entry.cache_key, value, cache.in_memory_cache.default_ttl if entry.ttl is None else entry.ttl
+            shared.set_if_generation(
+                entry.cache_key,
+                value,
+                generation,
+                cache.in_memory_cache.default_ttl if entry.ttl is None else entry.ttl,
             )
 
 
 def _validate_row(
-    row_value: object, model_type: type[BaseModel], row: _RowKind, refreshed_at: float
+    row_value: object, model_type: type[BaseModel], row: _RowKind, refreshed_at: float, *, native: bool = False
 ) -> BaseModel | None:
     if row_value is None:
         return None
@@ -246,6 +253,8 @@ def _validate_row(
             return model_type.model_validate(stamped)
         return model_type.model_validate(columns)
     except ValidationError as e:
+        if native:
+            raise NativeAuthRuntimeError(f"Invalid native auth {row} projection") from e
         verbose_proxy_logger.warning("auth prefetch: %s did not validate as %s: %s", row, model_type.__name__, e)
         return None
 
@@ -253,6 +262,20 @@ def _validate_row(
 async def _fetch_rows(
     refs: AuthObjectRefs, kinds: frozenset[_RowKind], prisma_client: PrismaClient
 ) -> Mapping[str, object]:
+    native: Final = native_auth_repository(prisma_client)
+    if native is not None:
+        refs_json: Final = json.dumps(
+            [
+                refs.user_id if "user_row" in kinds else None,
+                refs.team_id if kinds & _TEAM_BOUND_ROWS else None,
+                refs.membership_user_id if "membership_row" in kinds else None,
+                refs.organization_id if "organization_row" in kinds else None,
+                refs.project_id if "project_row" in kinds else None,
+            ]
+        )
+        async with db_span("prefetch_auth_objects", AUTH_OBJECTS_TARGET):
+            rows: Final = await native.read("prefetch", [refs_json])
+        return rows[0] if rows else _NO_ROWS
     async with db_span("prefetch_auth_objects", AUTH_OBJECTS_TARGET):
         row: Final[object] = await prisma_client.db.query_first(  # pyright: ignore[reportAny]  # prisma types query_first as Any
             _SQL,
@@ -265,12 +288,19 @@ async def _fetch_rows(
     return _RowValues.validate_python(row) if row is not None else _NO_ROWS
 
 
-async def _write_back(entries: Sequence[tuple[_CacheEntry, BaseModel]], cache: UserApiKeyCache) -> None:
+async def _write_back(
+    entries: Sequence[tuple[_CacheEntry, BaseModel]], cache: UserApiKeyCache, generation: int | None = None
+) -> None:
     payloads: Final = tuple(
         (entry.cache_key, CacheCodec.serialize(value, model_type=entry.model_type), entry.ttl)
         for entry, value in entries
     )
     shared: Final = cache.shared
+    if generation is not None:
+        assert shared is not None
+        for cache_key, payload, ttl in payloads:
+            shared.set_if_generation(cache_key, payload, generation, ttl)
+        return
     if shared is not None:
         with service_target(AUTH_OBJECTS_TARGET):
             await shared.write_back(payloads, batch=Batch.PRE_CALL)
@@ -284,17 +314,22 @@ async def _fill_from_db(
 ) -> None:
     if not entries:
         return
+    native: Final = native_auth_repository(prisma_client) is not None
+    generation: Final = cache.current_generation() if native else None
     model_for: Final[Mapping[_RowKind, type[BaseModel]]] = MappingProxyType(
         {entry.row: entry.model_type for entry in entries}
     )
     rows: Final = await _fetch_rows(refs, frozenset(model_for), prisma_client)
     refreshed_at: Final = time.time()
     objects: Final[Mapping[_RowKind, BaseModel | None]] = MappingProxyType(
-        {row: _validate_row(rows.get(row), model_type, row, refreshed_at) for row, model_type in model_for.items()}
+        {
+            row: _validate_row(rows.get(row), model_type, row, refreshed_at, native=native)
+            for row, model_type in model_for.items()
+        }
     )
     writes: Final = tuple((entry, value) for entry in entries if (value := objects[entry.row]) is not None)
     if writes:
-        await _write_back(writes, cache)
+        await _write_back(writes, cache, generation)
 
 
 async def prefetch_auth_objects(
@@ -313,6 +348,8 @@ async def prefetch_auth_objects(
         if prisma_client is None:
             return
         await _fill_from_db(refs, _missing_in_memory(missing, user_api_key_cache), user_api_key_cache, prisma_client)
+    except NativeAuthFailure:
+        raise
     except Exception as e:  # noqa: BLE001  # warm-up only; the getters enforce and fail closed on their own
         verbose_proxy_logger.warning("auth prefetch skipped, falling back to per-object lookups: %s", e)
 
@@ -338,6 +375,7 @@ async def prefetch_identity_keys(
         missing: Final = tuple(key for key in dict.fromkeys(cache_keys) if shared.get_local(key) is None)
         if not missing:
             return
+        generation: Final = shared.current_generation()
         before_read()
         with service_target(AUTH_OBJECTS_TARGET):
             found: Final = await shared.read_missing(sorted(missing), batch=Batch.PRE_CALL)
@@ -347,4 +385,4 @@ async def prefetch_identity_keys(
         return
     for key, value in ((key, found.get(key)) for key in missing):
         if value is not None:
-            shared.set_local(key, value, _identity_memory_ttl(value, management_ttl))
+            shared.set_if_generation(key, value, generation, _identity_memory_ttl(value, management_ttl))

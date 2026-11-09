@@ -9,6 +9,7 @@ license = "MIT"
 repository = "https://github.com/BerriAI/litellm"
 
 [workspace.dependencies]
+litellm-request-auth-core = { path = "crates/request-auth-core" }
 litellm-config = { path = "crates/config" }
 litellm-error = { path = "crates/error" }
 litellm-router = { path = "crates/router" }

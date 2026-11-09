@@ -81,6 +81,19 @@ async def test_resync_exception_returns_false_without_negative_caching():
 
 
 @pytest.mark.asyncio
+async def test_native_read_through_failure_is_terminal_and_not_negative_cached():
+    from litellm._auth.failure import NativeAuthRuntimeError
+
+    spy: Final = ResyncSpy(error=NativeAuthRuntimeError("native connection lost"))
+    read_through: Final = RegistryReadThrough(resync=spy, is_loaded=nothing_loaded)
+    with pytest.raises(NativeAuthRuntimeError):
+        await read_through.attempt("agent")
+    with pytest.raises(NativeAuthRuntimeError):
+        await read_through.attempt("agent")
+    assert spy.calls == ["agent", "agent"]
+
+
+@pytest.mark.asyncio
 async def test_concurrent_attempts_for_missing_key_resync_once():
     class SlowResyncSpy(ResyncSpy):
         async def __call__(self, key: str) -> bool:
@@ -255,6 +268,69 @@ async def test_get_agent_with_read_through_recovers_agent_by_name(clean_agent_re
         where={"agent_name": agent_name},
         include={"object_permission": True, "identity": True},
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("by_name", [False, True])
+async def test_native_agent_read_through_preserves_identity_and_permission_without_prisma(
+    by_name, clean_agent_registry, fresh_agent_read_through, monkeypatch
+):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from litellm.proxy.common_utils.registry_read_through import get_agent_with_read_through
+
+    binding = {
+        "agent_id": "native-agent",
+        "provider": "microsoft_entra",
+        "tenant_id": "tenant",
+        "client_id": "client",
+        "issuer": "https://login.microsoftonline.com/tenant/v2.0",
+        "revision": "revision",
+    }
+    row = {
+        **FakeAgentRow("native-agent", "Native agent name").model_dump(),
+        "identity": binding,
+        "enabled": False,
+        "access_group_ids": ["group"],
+        "object_permission": {"models": ["approved-model"]},
+    }
+    native = SimpleNamespace(auth_read=AsyncMock(side_effect=[[], [row]] if by_name else [[row]]))
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", SimpleNamespace(native_auth_database=native))
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+    lookup = "Native agent name" if by_name else "native-agent"
+
+    agent = await get_agent_with_read_through(lookup)
+    assert agent is not None and agent.identity is not None
+    assert agent.identity.model_dump(include=set(binding)) == binding
+    assert agent.object_permission == {"models": ["approved-model"]}
+    assert agent.access_group_ids == ["group"] and agent.enabled is False
+    assert clean_agent_registry.get_agent_by_id(agent_id="native-agent") == agent
+    assert [call.args[0] for call in native.auth_read.call_args_list] == (
+        ["agent", "agent_name"] if by_name else ["agent"]
+    )
+
+    await get_agent_with_read_through(lookup)
+    assert native.auth_read.await_count == (2 if by_name else 1)
+
+
+@pytest.mark.asyncio
+async def test_native_agent_read_through_error_does_not_retry_by_name_or_return_miss(
+    clean_agent_registry, fresh_agent_read_through, monkeypatch
+):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from litellm._auth.failure import NativeAuthFailure
+    from litellm.proxy.common_utils.registry_read_through import get_agent_with_read_through
+
+    native = SimpleNamespace(auth_read=AsyncMock(side_effect=RuntimeError("offline")))
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", SimpleNamespace(native_auth_database=native))
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+    with pytest.raises(NativeAuthFailure):
+        await get_agent_with_read_through("native-failed-agent")
+    native.auth_read.assert_awaited_once_with("agent", ["native-failed-agent"], writer=False)
+    assert clean_agent_registry.get_agent_by_id(agent_id="native-failed-agent") is None
 
 
 @pytest.mark.asyncio
@@ -1083,7 +1159,9 @@ async def test_resync_model_deployments_by_ids_reloads_credentials_only_for_one_
     model_params: Final = {"model": "openai/gpt-backup"}
     row: Final = _stored_model_row(
         "backup-id",
-        model_params if stored_credential_name is None else model_params | {"litellm_credential_name": stored_credential_name},
+        model_params
+        if stored_credential_name is None
+        else model_params | {"litellm_credential_name": stored_credential_name},
     )
     stored_credential: Final = CredentialItem(
         credential_name="shared-openai",

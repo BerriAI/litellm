@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH resolved AS (\n    SELECT COALESCE(v.token, d.active_token_id) AS token\n    FROM UNNEST($1::text[]) AS requested(token)\n    LEFT JOIN \"LiteLLM_VerificationToken\" v ON v.token=requested.token\n    LEFT JOIN \"LiteLLM_DeprecatedVerificationToken\" d ON d.token=requested.token AND d.revoke_at > (clock_timestamp() AT TIME ZONE 'UTC')\n)\nSELECT to_jsonb(view) AS \"data!: AuthData\" FROM (\nSELECT v.*,\nt.spend AS team_spend,\nt.max_budget AS team_max_budget,\nt.soft_budget AS team_soft_budget,\nt.model_max_budget AS team_model_max_budget,\nt.tpm_limit AS team_tpm_limit,\nt.rpm_limit AS team_rpm_limit,\nt.tpd_limit AS team_tpd_limit,\nt.models AS team_models,\nt.metadata AS team_metadata,\nt.blocked AS team_blocked,\nt.team_alias AS team_alias,\nt.members_with_roles AS team_members_with_roles,\nt.object_permission_id AS team_object_permission_id,\nt.organization_id AS org_id,\np.project_alias AS project_alias,\ntm.spend AS team_member_spend,\nb_tm.tpm_limit AS team_member_tpm_limit,\nb_tm.rpm_limit AS team_member_rpm_limit,\nm.aliases AS team_model_aliases,\nb.max_budget AS litellm_budget_table_max_budget,\nb.tpm_limit AS litellm_budget_table_tpm_limit,\nb.rpm_limit AS litellm_budget_table_rpm_limit,\nb.tpd_limit AS litellm_budget_table_tpd_limit,\nb.model_max_budget AS litellm_budget_table_model_max_budget,\nb.soft_budget AS litellm_budget_table_soft_budget,\no.metadata AS organization_metadata,\no.organization_alias AS organization_alias,\nb2.max_budget AS organization_max_budget,\nb2.tpm_limit AS organization_tpm_limit,\nb2.rpm_limit AS organization_rpm_limit\nFROM \"LiteLLM_VerificationToken\" v\nLEFT JOIN \"LiteLLM_TeamTable\" t ON v.team_id=t.team_id\nLEFT JOIN \"LiteLLM_TeamMembership\" tm ON v.team_id=tm.team_id AND tm.user_id=v.user_id\nLEFT JOIN \"LiteLLM_BudgetTable\" b_tm ON tm.budget_id=b_tm.budget_id\nLEFT JOIN \"LiteLLM_ModelTable\" m ON t.model_id=m.id\nLEFT JOIN \"LiteLLM_BudgetTable\" b ON v.budget_id=b.budget_id\nLEFT JOIN \"LiteLLM_ProjectTable\" p ON v.project_id=p.project_id\nLEFT JOIN \"LiteLLM_OrganizationTable\" o ON v.organization_id=o.organization_id\nLEFT JOIN \"LiteLLM_BudgetTable\" b2 ON o.budget_id=b2.budget_id\nWHERE v.token IN (SELECT token FROM resolved)\nORDER BY v.token\n) view\n",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "data!: AuthData",
+        "type_info": "Jsonb",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "TextArray"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "847628007ea76e788caf20d35219860f7a2da7d3d6d40c209322e0893b99ac69"
+}

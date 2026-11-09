@@ -1,4 +1,5 @@
 mod keys;
+mod local;
 mod types;
 
 use std::{
@@ -12,23 +13,19 @@ use litellm_redis_client::{Declared, RedisBatch, commands};
 pub use self::keys::is_key_object;
 pub use self::types::Settings;
 use crate::{
-    Error, Number, Pending, RequestRedis, Send,
-    dual_cache::DualCache,
+    Error, Number, Pending, RequestRedis, Send, codec,
+    failure_log::redis_failure,
     memory::{Clock, lock, system_clock},
     remote::{Remote, RemoteSlot},
-    request::ready,
+    request::{pending, ready},
 };
 
 /// `RedisCache.async_increment_if_present`, byte for byte, sent as `EVAL` like it.
 const INCREMENT_IF_PRESENT: &str = "if redis.call('EXISTS', KEYS[1]) == 0 then return false end return redis.call('INCRBYFLOAT', KEYS[1], ARGV[1])";
 
-/// The proxy's auth object cache with `enable_redis_auth_cache` on: `UserApiKeyCache`'s two
-/// `DualCache` partitions, so churn in management objects cannot evict user-key objects, in front of
-/// one Redis shared by every pod. Keys are the logical cache keys `UserApiKeyCache` callers already
-/// use; values are what `json.loads` returns, written as `json.dumps`, like `RedisCache.async_set_cache`.
 pub struct AuthCache {
-    key_objects: DualCache<Value>,
-    objects: DualCache<Value>,
+    local: Mutex<local::Local>,
+    now: Clock,
     redis: Arc<RemoteSlot>,
     settings: Mutex<Settings>,
 }
@@ -40,10 +37,9 @@ impl AuthCache {
 
     pub fn with_clock(remote: Option<Remote>, settings: Settings, now: Clock) -> Self {
         let redis = Arc::new(RemoteSlot::new(remote));
-        let partition = || DualCache::new(redis.clone(), settings.memory(), now.clone());
         Self {
-            key_objects: partition(),
-            objects: partition(),
+            local: Mutex::new(local::Local::new(settings)),
+            now,
             redis,
             settings: Mutex::new(settings),
         }
@@ -51,6 +47,40 @@ impl AuthCache {
 
     pub fn has_redis(&self) -> bool {
         self.redis.get().is_some()
+    }
+
+    pub fn attach(&self, remote: Remote) -> bool {
+        self.redis.attach(remote)
+    }
+
+    pub fn current_generation(&self) -> u64 {
+        lock(&self.local).generation
+    }
+
+    pub fn local_ready(&self) -> bool {
+        lock(&self.local).healthy
+    }
+
+    pub fn subscriber_connected(&self, connected: bool) {
+        let mut local = lock(&self.local);
+        local.flush();
+        local.healthy = connected;
+    }
+
+    pub fn set_if_generation(
+        &self,
+        key: &str,
+        value: Value,
+        generation: u64,
+        ttl: Option<Duration>,
+    ) -> bool {
+        let ttl = ttl.or(self.settings().memory_ttl);
+        let local = lock(&self.local);
+        if local.generation != generation || !local.healthy || key.starts_with("sk-") {
+            return false;
+        }
+        local.set(key, value, ttl, (self.now)());
+        true
     }
 
     pub fn settings(&self) -> Settings {
@@ -61,37 +91,33 @@ impl AuthCache {
     /// keep what they hold.
     pub fn reconfigure(&self, settings: Settings) {
         *lock(&self.settings) = settings;
-        self.key_objects.reconfigure(settings.memory());
-        self.objects.reconfigure(settings.memory());
+        lock(&self.local).reconfigure(settings);
     }
 
     pub fn get_local(&self, key: &str) -> Result<Option<Value>, Error> {
-        Ok(self.partition(key).memory().get(key)?)
+        Ok(lock(&self.local).get(key, (self.now)()))
     }
 
     /// A memory write with `ttl`, or `default_in_memory_ttl` when it names none.
     pub fn set_local(&self, key: &str, value: Value, ttl: Option<Duration>) -> Result<(), Error> {
-        let partition = self.partition(key);
-        Ok(partition
-            .memory()
-            .set(key, value, ttl.or(partition.default_in_memory_ttl()))?)
+        let ttl = ttl.or(self.settings().memory_ttl);
+        lock(&self.local).set(key, value, ttl, (self.now)());
+        Ok(())
     }
 
     pub fn delete_local(&self, key: &str) -> Result<(), Error> {
-        Ok(self.partition(key).memory().delete(key)?)
+        lock(&self.local).delete(key);
+        Ok(())
     }
 
     pub fn flush_local(&self) -> Result<(), Error> {
-        self.key_objects.memory().flush()?;
-        Ok(self.objects.memory().flush()?)
+        lock(&self.local).flush();
+        Ok(())
     }
 
     /// Entries held by the management-object and the user-key partitions.
     pub fn len_local(&self) -> Result<(usize, usize), Error> {
-        Ok((
-            self.objects.memory().len()?,
-            self.key_objects.memory().len()?,
-        ))
+        Ok(lock(&self.local).len())
     }
 
     /// `DualCache.async_get_cache`. A key `request` already read as missing from Redis is not read
@@ -101,12 +127,42 @@ impl AuthCache {
         request: Option<&RequestRedis>,
         key: &str,
     ) -> Result<Option<Value>, Error> {
-        self.partition(key).get(request, key, None).await
+        let generation = self.current_generation();
+        if let Some(value) = self.get_local(key)? {
+            return Ok(Some(value));
+        }
+        if !lock(&self.local).healthy || key.starts_with("sk-") {
+            return Ok(None);
+        }
+        let Some(client) = self.redis.client() else {
+            return Ok(None);
+        };
+        if request.is_some_and(|request| request.misses(client).contains(key)) {
+            return Ok(None);
+        }
+        let value = client
+            .send(commands::get::<Vec<u8>>(key))
+            .await
+            .map_err(Error::from)
+            .and_then(|raw| Ok(types::decode(raw)?))
+            .unwrap_or_else(|error| {
+                redis_failure!(&error, "auth cache read failed");
+                None
+            });
+        if let Some(value) = &value
+            && !self.set_if_generation(key, value.clone(), generation, None)
+        {
+            return Ok(None);
+        }
+        Ok(value)
     }
 
     /// `DualCache.async_set_cache`, writing `json.dumps(value)`.
     pub async fn set(&self, key: &str, value: Value, ttl: Option<Duration>) -> Result<(), Error> {
-        self.partition(key).set(key, value, ttl).await
+        if let Err(error) = self.declare_set(Send::Now, key, value, ttl)?.await {
+            redis_failure!(&error, "auth cache write failed");
+        }
+        Ok(())
     }
 
     /// `DualCache.set_cache`, whose `RedisCache.set_cache` writes `str(value)`.
@@ -116,7 +172,14 @@ impl AuthCache {
         value: Value,
         ttl: Option<Duration>,
     ) -> Result<(), Error> {
-        self.partition(key).set_str(key, value, ttl).await
+        let encoded = codec::str(value.clone());
+        if let Err(error) = self
+            .declare_encoded(Send::Now, key, value, ttl, Ok(encoded))?
+            .await
+        {
+            redis_failure!(&error, "auth cache write failed");
+        }
+        Ok(())
     }
 
     /// `DualCache.async_set_cache_pre_call`: memory now, the `SET` on the batch `send` picks.
@@ -127,12 +190,56 @@ impl AuthCache {
         value: Value,
         ttl: Option<Duration>,
     ) -> Result<Pending<()>, Error> {
-        self.partition(key).declare_set(send, key, value, ttl)
+        let encoded = codec::dumps(value.clone());
+        self.declare_encoded(send, key, value, ttl, encoded)
+    }
+
+    fn declare_encoded(
+        &self,
+        send: Send<'_>,
+        key: &str,
+        value: Value,
+        ttl: Option<Duration>,
+        encoded: Result<String, Error>,
+    ) -> Result<Pending<()>, Error> {
+        let ttl = ttl.or(self.settings().memory_ttl);
+        self.set_local(key, value, ttl)?;
+        if key.starts_with("sk-") {
+            return Ok(ready(()));
+        }
+        let Some(remote) = self.redis.get() else {
+            return Ok(ready(()));
+        };
+        let encoded = match encoded {
+            Ok(encoded) => encoded,
+            Err(error) => {
+                redis_failure!(&error, "auth cache value did not encode");
+                return Ok(ready(()));
+            }
+        };
+        if let Some(misses) = send.misses(&remote.client) {
+            misses.forget(key);
+        }
+        Ok(pending(send.batch(&remote.client).add(commands::set(
+            key,
+            encoded,
+            ttl.unwrap_or(remote.default_ttl),
+        ))))
     }
 
     /// `DualCache.async_delete_cache_pre_call`, memory now and the `DEL` on the batch `send` picks.
     pub fn declare_delete(&self, send: Send<'_>, key: &str) -> Result<Pending<()>, Error> {
-        self.partition(key).declare_delete(send, key)
+        self.delete_local(key)?;
+        let Some(client) = self.redis.client() else {
+            return Ok(ready(()));
+        };
+        if let Some(misses) = send.misses(client) {
+            misses.note([key.to_owned()]);
+        }
+        let deleted = send.batch(client).add(commands::del(&[key]));
+        Ok(Box::pin(
+            async move { Ok(deleted.resolve().await.map(drop)?) },
+        ))
     }
 
     /// `UserApiKeyCache.async_set_cache_pipeline`: the key-object entries in one pipeline, then
@@ -142,10 +249,30 @@ impl AuthCache {
         entries: Vec<(String, Value)>,
         ttl: Option<Duration>,
     ) -> Result<(), Error> {
-        let (key_objects, others): (Vec<_>, Vec<_>) =
+        let (keys, objects): (Vec<_>, Vec<_>) =
             entries.into_iter().partition(|(key, _)| is_key_object(key));
-        self.key_objects.set_pipeline(key_objects, ttl).await?;
-        self.objects.set_pipeline(others, ttl).await
+        self.set_partition(keys, ttl).await?;
+        self.set_partition(objects, ttl).await
+    }
+
+    async fn set_partition(
+        &self,
+        entries: Vec<(String, Value)>,
+        ttl: Option<Duration>,
+    ) -> Result<(), Error> {
+        let ttl = ttl.or(self.settings().memory_ttl);
+        let entries = entries
+            .into_iter()
+            .map(|(key, value)| (key, value, ttl))
+            .collect();
+        let result = match self.write_back(Send::Now, entries) {
+            Ok(written) => written.await,
+            Err(error) => Err(error),
+        };
+        if let Err(error) = result {
+            redis_failure!(&error, "auth cache pipeline write failed");
+        }
+        Ok(())
     }
 
     /// The auth prefetch write-back: memory first, an entry without a TTL taking
@@ -158,6 +285,10 @@ impl AuthCache {
         send: Send<'_>,
         entries: Vec<(String, Value, Option<Duration>)>,
     ) -> Result<Pending<()>, Error> {
+        let entries: Vec<_> = entries
+            .into_iter()
+            .filter(|(key, _, _)| !key.starts_with("sk-"))
+            .collect();
         let encoded = self
             .redis
             .get()
@@ -199,13 +330,30 @@ impl AuthCache {
     /// `UserApiKeyCache.async_delete_cache_keys`: the key-object partition and the rest as two
     /// concurrent `DualCache.async_delete_cache_keys`. Both run even when one fails.
     pub async fn delete(&self, keys: &[String]) -> Result<(), Error> {
-        let (key_objects, others): (Vec<String>, Vec<String>) =
+        for key in keys {
+            self.delete_local(key)?;
+        }
+        let (keys, objects): (Vec<_>, Vec<_>) =
             keys.iter().cloned().partition(|key| is_key_object(key));
-        let (key_objects, others) = tokio::join!(
-            self.key_objects.delete_keys(&key_objects),
-            self.objects.delete_keys(&others)
+        let (keys, objects) = tokio::join!(
+            self.delete_partition(&keys),
+            self.delete_partition(&objects)
         );
-        key_objects.and(others)
+        keys.and(objects)
+    }
+
+    async fn delete_partition(&self, keys: &[String]) -> Result<(), Error> {
+        let Some(client) = self.redis.client() else {
+            return Ok(());
+        };
+        for chunk in keys.chunks(1000) {
+            client
+                .send(commands::del(
+                    &chunk.iter().map(String::as_str).collect::<Vec<_>>(),
+                ))
+                .await?;
+        }
+        Ok(())
     }
 
     /// `RedisCache.async_batch_get_cache` for keys the caller found missing in memory, one `MGET` on
@@ -247,12 +395,67 @@ impl AuthCache {
             .send(commands::eval_source(INCREMENT_IF_PRESENT, &[key], amount))
             .await?)
     }
+}
 
-    fn partition(&self, key: &str) -> &DualCache<Value> {
-        if is_key_object(key) {
-            &self.key_objects
-        } else {
-            &self.objects
-        }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rstest::rstest;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    };
+
+    const KEY: &str = "88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b";
+
+    #[rstest]
+    fn invalidation_fences_an_in_flight_fill_and_allows_a_new_one() {
+        let cache = AuthCache::new(None, Settings::default());
+        let before = cache.current_generation();
+        cache.delete_local(KEY).unwrap();
+        assert!(!cache.set_if_generation(KEY, Value::from("revoked"), before, None));
+        assert_eq!(cache.get_local(KEY).unwrap(), None);
+        let after = cache.current_generation();
+        assert!(cache.set_if_generation(KEY, Value::from("fresh"), after, None));
+        assert_eq!(cache.get_local(KEY).unwrap(), Some(Value::from("fresh")));
+    }
+
+    #[rstest]
+    fn disconnect_bypasses_writes_and_reconnect_fences_old_fills() {
+        let cache = AuthCache::new(None, Settings::default());
+        cache.set_local(KEY, Value::Bool(true), None).unwrap();
+        cache.subscriber_connected(false);
+        assert_eq!(cache.get_local(KEY).unwrap(), None);
+        cache.set_local(KEY, Value::Bool(true), None).unwrap();
+        let disconnected = cache.current_generation();
+        assert!(!cache.set_if_generation(KEY, Value::Bool(true), disconnected, None));
+        cache.subscriber_connected(true);
+        assert_eq!(cache.get_local(KEY).unwrap(), None);
+        assert!(!cache.set_if_generation(KEY, Value::Bool(true), disconnected, None));
+    }
+
+    #[rstest]
+    fn auth_entries_expire_even_without_a_configured_ttl() {
+        let seconds = Arc::new(AtomicU64::new(100));
+        let clock = seconds.clone();
+        let cache = AuthCache::with_clock(
+            None,
+            Settings::default(),
+            Arc::new(move || Duration::from_secs(clock.load(Ordering::SeqCst))),
+        );
+        cache.set_local(KEY, Value::Bool(true), None).unwrap();
+        assert_eq!(cache.get_local(KEY).unwrap(), Some(Value::Bool(true)));
+        seconds.store(160, Ordering::SeqCst);
+        assert_eq!(cache.get_local(KEY).unwrap(), None);
+    }
+
+    #[rstest]
+    fn raw_credentials_are_not_cached() {
+        let cache = AuthCache::new(None, Settings::default());
+        cache
+            .set_local("sk-do-not-cache", Value::Bool(true), None)
+            .unwrap();
+        assert_eq!(cache.get_local("sk-do-not-cache").unwrap(), None);
+        assert_eq!(cache.len_local().unwrap(), (0, 0));
     }
 }

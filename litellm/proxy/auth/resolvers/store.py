@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import time
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Final
 
 from pydantic import BaseModel
 
+from litellm._auth.failure import NativeAuthFailure, NativeAuthRuntimeError
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import UserAPIKeyAuth
@@ -36,7 +38,12 @@ from litellm.proxy.auth.resolvers.models import (
     UserIdentity,
 )
 from litellm.proxy.auth.roles import TeamRole, map_role, team_role
-from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET
+from litellm.proxy.common_utils.user_api_key_cache import (
+    AUTH_OBJECTS_TARGET,
+    UserApiKeyCache,
+    get_management_object_ttl,
+)
+from litellm.repositories.native_auth_repository import NativeAuthDatabaseError
 
 if TYPE_CHECKING:
     from litellm.caching.caching import DualCache
@@ -108,10 +115,25 @@ class IdentityStore:
     async def _resolve_key(self, hashed_token: str) -> UserAPIKeyAuth:
         if self._prisma is None:
             raise NoDatabaseConnectionError()
+        first: Final = await self._resolve_key_once(hashed_token)
+        if first is not None:
+            return first
+        retried: Final = await self._resolve_key_once(hashed_token)
+        if retried is not None:
+            return retried
+        raise NativeAuthRuntimeError("Auth identity changed during lookup")
 
+    async def _resolve_key_once(self, hashed_token: str) -> UserAPIKeyAuth | None:
+        assert self._prisma is not None
+        cache: Final = self._cache if isinstance(self._cache, UserApiKeyCache) else None
+        generation: Final = cache.begin_fill(hashed_token) if cache is not None else None
         cached: Final = await self._cache.async_get_cache(key=hashed_token, model_type=UserAPIKeyAuth)
         if cached is not None:
-            return copy_user_api_key_auth_for_cache(user_api_key_obj=cached)
+            return (
+                copy_user_api_key_auth_for_cache(user_api_key_obj=cached)
+                if cache is None or cache.current_generation() == generation
+                else None
+            )
 
         if self._check_cache_only:
             raise KeyNotInCacheError(hashed_token)
@@ -137,11 +159,20 @@ class IdentityStore:
                     proxy_logging_obj=self._proxy_logging_obj,
                 )
             except Exception as e:
+                if isinstance(e, NativeAuthFailure) and not isinstance(e, NativeAuthDatabaseError):
+                    raise
                 verbose_proxy_logger.debug(
                     "Failed to load object_permission for key with object_permission_id=%s: %s",
                     key.object_permission_id,
                     e,
                 )
+
+        if cache is not None and generation is not None:
+            refreshed: Final = key.model_copy(update={"last_refreshed_at": time.time()})
+            stored: Final = cache.set_if_generation(
+                hashed_token, refreshed, generation, ttl=get_management_object_ttl(cache)
+            )
+            return refreshed if stored or cache.current_generation() == generation else None
 
         await cache_key_object(
             hashed_token=hashed_token,

@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT to_jsonb(op) || jsonb_build_object('mcp_servers', COALESCE(to_jsonb(op.mcp_servers), '[]'::jsonb),\n    'mcp_access_groups', COALESCE(to_jsonb(op.mcp_access_groups), '[]'::jsonb),\n    'mcp_toolsets', COALESCE(to_jsonb(op.mcp_toolsets), '[]'::jsonb),\n    'blocked_tools', COALESCE(to_jsonb(op.blocked_tools), '[]'::jsonb),\n    'vector_stores', COALESCE(to_jsonb(op.vector_stores), '[]'::jsonb),\n    'agents', COALESCE(to_jsonb(op.agents), '[]'::jsonb),\n    'agent_access_groups', COALESCE(to_jsonb(op.agent_access_groups), '[]'::jsonb),\n    'models', COALESCE(to_jsonb(op.models), '[]'::jsonb),\n    'search_tools', COALESCE(to_jsonb(op.search_tools), '[]'::jsonb),\n    'skills', COALESCE(to_jsonb(op.skills), '[]'::jsonb)) AS \"data!: AuthData\"\nFROM \"LiteLLM_ObjectPermissionTable\" op\nWHERE op.object_permission_id = ANY($1::text[])\nORDER BY op.object_permission_id\n",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "data!: AuthData",
+        "type_info": "Jsonb",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "TextArray"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "4ddd384812d4cc34d601873e73294c7e1bafada2968e53f4ecd16cd49d82cd5b"
+}

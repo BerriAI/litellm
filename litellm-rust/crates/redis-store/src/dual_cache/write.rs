@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use litellm_redis_client::{Declared, RedisBatch, commands};
+use litellm_redis_client::commands;
 
 use super::DualCache;
 use crate::{
@@ -33,69 +33,6 @@ impl<V: Clone + IntoValue, R> DualCache<V, R> {
     ) -> Result<(), Error> {
         self.set_now(key, value, ttl, |value| Ok(codec::str(value)))
             .await
-    }
-
-    /// `DualCache._set_on_batch`: memory now, the `SET` on the batch `send` picks. Memory and Redis
-    /// both take `ttl`, else `default_in_memory_ttl`, and Redis falls back to its own default.
-    pub(crate) fn declare_set(
-        &self,
-        send: Send<'_>,
-        key: &str,
-        value: V,
-        ttl: Option<Duration>,
-    ) -> Result<Pending<()>, Error> {
-        self.declare_encoded(send, key, value, ttl, codec::dumps)
-    }
-
-    /// `DualCache.async_set_cache_pipeline`: memory, then one pipeline of `SET`s. A value
-    /// `json.dumps` refuses aborts the whole pipeline, and any failure only logs, as `RedisCache`
-    /// does.
-    pub(crate) async fn set_pipeline(
-        &self,
-        entries: Vec<(String, V)>,
-        ttl: Option<Duration>,
-    ) -> Result<(), Error> {
-        let ttl = ttl.or(self.default_in_memory_ttl());
-        let encoded = self.redis.get().map(|_| {
-            entries
-                .iter()
-                .map(|(_, value)| codec::dumps(value.clone()))
-                .collect::<Result<Vec<_>, Error>>()
-        });
-        let keys = entries
-            .into_iter()
-            .map(|(key, value)| {
-                self.memory.set(&key, value, ttl)?;
-                Ok(key)
-            })
-            .collect::<Result<Vec<_>, Error>>()?;
-        let (Some(remote), Some(encoded)) = (self.redis.get(), encoded) else {
-            return Ok(());
-        };
-        let failure = match encoded {
-            Err(error) => Some(error),
-            Ok(values) => {
-                let pipeline = RedisBatch::pipelined(remote.client.clone());
-                let ttl = ttl.unwrap_or(remote.default_ttl);
-                let written = keys
-                    .iter()
-                    .zip(values)
-                    .map(|(key, value)| pipeline.add(commands::set(key, value, ttl)))
-                    .collect::<Vec<_>>();
-                Declared::all(written)
-                    .await
-                    .into_iter()
-                    .find_map(Result::err)
-                    .map(Error::from)
-            }
-        };
-        if let Some(error) = failure {
-            redis_failure!(
-                &error,
-                "LiteLLM Redis Caching: async set_cache_pipeline() - Got exception from REDIS",
-            );
-        }
-        Ok(())
     }
 
     async fn set_now(
@@ -147,22 +84,6 @@ impl<V: Clone + IntoValue, R> DualCache<V, R> {
 }
 
 impl<V: Clone, R> DualCache<V, R> {
-    /// `DualCache.async_delete_cache_pre_call`: memory now, the `DEL` on the batch `send` picks,
-    /// after which the request reads the key as missing.
-    pub(crate) fn declare_delete(&self, send: Send<'_>, key: &str) -> Result<Pending<()>, Error> {
-        self.memory.delete(key)?;
-        let Some(client) = self.redis.client() else {
-            return Ok(ready(()));
-        };
-        if let Some(misses) = send.misses(client) {
-            misses.note([key.to_owned()]);
-        }
-        let deleted = send.batch(client).add(commands::del(&[key]));
-        Ok(Box::pin(
-            async move { Ok(deleted.resolve().await.map(drop)?) },
-        ))
-    }
-
     /// `DualCache.async_delete_cache_keys`: memory, then one multi-key `DEL` per chunk, in order.
     pub(crate) async fn delete_keys(&self, keys: &[String]) -> Result<(), Error> {
         keys.iter().try_for_each(|key| self.memory.delete(key))?;

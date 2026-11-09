@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT jsonb_build_object('tag_name', tag_name) AS \"data!: AuthData\" FROM \"LiteLLM_TagTable\" ORDER BY tag_name LIMIT $1\n",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "data!: AuthData",
+        "type_info": "Jsonb",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "8637bd849446309e631a4eaa47f7b51a9910fb27160356d9cc5dd03eb16985b2"
+}
