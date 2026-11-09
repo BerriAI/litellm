@@ -52372,6 +52372,8 @@ export interface components {
             discoverable?: boolean | null;
             /** Enable Tag Filtering */
             enable_tag_filtering?: boolean | null;
+            /** Encrypted Content Boundary */
+            encrypted_content_boundary?: string | null;
             /** Enforce Supported Endpoints */
             enforce_supported_endpoints?: boolean | null;
             /** Explicit Cache Read Input Token Cost */
