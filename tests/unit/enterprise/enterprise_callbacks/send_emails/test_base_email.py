@@ -1276,6 +1276,47 @@ async def test_send_max_budget_alert_email_multi_recipient_uses_custom_signature
         assert "The LiteLLM team" not in html_body
 
 
+def _max_budget_alert_event(key_alias: str | None) -> WebhookEvent:
+    return WebhookEvent(
+        token="hashed_key_1",
+        user_id="test_user",
+        user_email="team@example.com",
+        key_alias=key_alias,
+        event_group=Litellm_EntityType.KEY,
+        event="max_budget_alert",
+        event_message="Max Budget Alert",
+        spend=165.0,
+        max_budget=200.0,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("recipient_emails", [None, ["a@example.com", "b@example.com"]])
+async def test_send_max_budget_alert_email_names_the_key(
+    base_email_logger, mock_send_email, mock_lookup_user_email, recipient_emails
+):
+    event: Final = _max_budget_alert_event(key_alias="billing-bot<prod>")
+    with mock.patch.dict(os.environ, {"PROXY_BASE_URL": "http://test.com"}):
+        await base_email_logger.send_max_budget_alert_email(event, recipient_emails=recipient_emails)
+
+    html_body: Final = mock_send_email.call_args[1]["html_body"]
+    assert "<b>Key Alias:</b> billing-bot&lt;prod&gt;" in html_body
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("recipient_emails", [None, ["a@example.com", "b@example.com"]])
+async def test_send_max_budget_alert_email_without_key_alias_omits_the_line(
+    base_email_logger, mock_send_email, mock_lookup_user_email, recipient_emails
+):
+    event: Final = _max_budget_alert_event(key_alias=None)
+    with mock.patch.dict(os.environ, {"PROXY_BASE_URL": "http://test.com"}):
+        await base_email_logger.send_max_budget_alert_email(event, recipient_emails=recipient_emails)
+
+    html_body: Final = mock_send_email.call_args[1]["html_body"]
+    assert "Key Alias" not in html_body
+    assert "<b>Current Spend:</b> $165.0" in html_body
+
+
 @pytest.mark.asyncio
 async def test_send_soft_budget_alert_email_default_footer_when_no_signature(
     base_email_logger, mock_send_email, mock_lookup_user_email
