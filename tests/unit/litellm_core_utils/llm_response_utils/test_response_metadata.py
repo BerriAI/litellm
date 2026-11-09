@@ -721,6 +721,13 @@ class _CannedChatClient(AsyncHTTPHandler):
         ),
         ({"api_base": "https://gateway.example.com"}, "https://gateway.example.com"),
         ({"aws_bedrock_runtime_endpoint": "https://runtime.example.com"}, None),
+        (
+            {
+                "api_base": "https://gateway.example.com",
+                "aws_bedrock_runtime_endpoint": "https://svc:s3cret@runtime.example.com:8443",
+            },
+            "https://runtime.example.com:8443",
+        ),
     ],
 )
 @pytest.mark.asyncio

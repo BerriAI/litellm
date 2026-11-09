@@ -140,7 +140,7 @@ def _provider_response_model(result: object) -> str | None:
 
 def _origin(url: str) -> str:
     parts: Final = urlsplit(url)
-    return f"{parts.scheme}://{parts.netloc}"
+    return f"{parts.scheme}://{parts.netloc.rpartition('@')[2]}"
 
 
 def _called_bedrock_url(logging_obj: LiteLLMLoggingObject) -> str | None:

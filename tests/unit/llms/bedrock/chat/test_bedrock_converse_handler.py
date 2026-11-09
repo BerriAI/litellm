@@ -1096,7 +1096,11 @@ def test_converse_profile_override_records_cost_without_changing_response_model(
 
 @pytest.mark.parametrize(
     "api_base",
-    ["https://gateway.example.com/openai/v1/chat/completions", "https://gateway.example.com/openai/v1/responses"],
+    [
+        "https://gateway.example.com/openai/v1/chat/completions",
+        "https://gateway.example.com/openai/v1/responses",
+        "https://gateway.example.com/openai/v1",
+    ],
 )
 def test_converse_fallback_on_a_full_route_url_api_base_calls_converse_on_that_host(
     api_base: str, respx_mock: respx.MockRouter

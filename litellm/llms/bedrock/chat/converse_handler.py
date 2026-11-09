@@ -374,7 +374,11 @@ class BedrockConverseLLM(BaseAWSLLM):
         proxy_endpoint_url: Final = join_api_base(
             strip_bedrock_runtime_route_suffix(
                 runtime_url,
-                (*BEDROCK_RUNTIME_OPENAI_CHAT_ROUTE_SUFFIXES, *BEDROCK_RUNTIME_OPENAI_RESPONSES_ROUTE_SUFFIXES),
+                (
+                    *BEDROCK_RUNTIME_OPENAI_CHAT_ROUTE_SUFFIXES,
+                    *BEDROCK_RUNTIME_OPENAI_RESPONSES_ROUTE_SUFFIXES,
+                    "/openai/v1",
+                ),
             ),
             f"model/{modelId}/{converse_route}",
         )
