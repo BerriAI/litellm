@@ -166,6 +166,22 @@ def _google_error_response(request: Request, error: ProxyException) -> JSONRespo
     )
 
 
+_EXPECTED_JSON_KIND: Final = MappingProxyType(
+    {
+        "tuple_type": "a list",
+        "list_type": "a list",
+        "model_type": "an object",
+        "model_attributes_type": "an object",
+        "dict_type": "an object",
+        "string_type": "a string",
+    }
+)
+
+
+def _json_path(loc: tuple[int | str, ...]) -> str:
+    return "".join(f"[{part}]" if isinstance(part, int) else f".{part}" for part in loc).removeprefix(".")
+
+
 def _google_body_error(error: ValidationError) -> ProxyException:
     detail: Final = error.errors()[0]
     match detail["loc"]:
@@ -177,8 +193,12 @@ def _google_body_error(error: ValidationError) -> ProxyException:
                 code=400,
             )
         case (field, *_):
+            kind: Final = _EXPECTED_JSON_KIND.get(detail["type"])
             return ProxyException(
-                message=f"Invalid {field}: {detail['msg']}", type="invalid_request_error", param=str(field), code=400
+                message=f"Invalid {_json_path(detail['loc'])}: {f'expected {kind}' if kind else detail['msg']}",
+                type="invalid_request_error",
+                param=str(field),
+                code=400,
             )
         case _:
             return ProxyException(

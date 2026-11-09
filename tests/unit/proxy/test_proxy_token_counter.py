@@ -2208,32 +2208,51 @@ _WEATHER_CONTENTS: Final = ({"role": "user", "parts": [{"text": "What is the wea
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("body", "field", "location"),
+    ("body", "field", "message"),
     [
-        pytest.param({"contents": [{}]}, "contents", "contents[0]", id="empty_entry"),
-        pytest.param({"contents": [{"role": "user"}]}, "contents", "contents[0]", id="no_parts"),
+        pytest.param(
+            {"contents": [{}]}, "contents", "Invalid contents[0]: each entry needs a parts list", id="empty_entry"
+        ),
+        pytest.param(
+            {"contents": [{"role": "user"}]},
+            "contents",
+            "Invalid contents[0]: each entry needs a parts list",
+            id="no_parts",
+        ),
         pytest.param(
             {"contents": [{"role": "user", "text": "Return exactly OK."}]},
             "contents",
-            "contents[0]",
+            "Invalid contents[0]: each entry needs a parts list",
             id="text_outside_parts",
         ),
         pytest.param(
             {"contents": [{"role": "user", "parts": [{"text": "Hi"}]}, {"role": "user", "parts": 4}]},
             "contents",
-            "contents[1]",
+            "Invalid contents[1]: each entry needs a parts list",
             id="second_entry_parts_number",
         ),
         pytest.param(
             {"contents": list(_WEATHER_CONTENTS), "systemInstruction": {"parts": 4}},
             "systemInstruction",
-            "systemInstruction",
+            "Invalid systemInstruction.parts: expected a list",
             id="system_instruction_parts_number",
+        ),
+        pytest.param(
+            {"contents": list(_WEATHER_CONTENTS), "systemInstruction": "Answer briefly."},
+            "systemInstruction",
+            "Invalid systemInstruction: expected an object",
+            id="system_instruction_string",
+        ),
+        pytest.param(
+            {"contents": list(_WEATHER_CONTENTS), "systemInstruction": {"parts": [{"text": 4}]}},
+            "systemInstruction",
+            "Invalid systemInstruction.parts[0].text: expected a string",
+            id="system_instruction_text_number",
         ),
     ],
 )
 async def test_utils_token_counter_answers_400_for_a_google_body_it_cannot_read(
-    monkeypatch: pytest.MonkeyPatch, body: dict[str, object], field: str, location: str
+    monkeypatch: pytest.MonkeyPatch, body: dict[str, object], field: str, message: str
 ):
     _local_luna(monkeypatch)
 
@@ -2242,7 +2261,7 @@ async def test_utils_token_counter_answers_400_for_a_google_body_it_cannot_read(
 
     assert rejected.value.code == "400"
     assert rejected.value.param == field
-    assert f"Invalid {location}" in rejected.value.message
+    assert rejected.value.message == message
 
 
 @pytest.mark.asyncio
@@ -2355,9 +2374,7 @@ async def test_utils_token_counter_drops_a_prompt_sent_with_contents_like_one_se
         litellm.proxy.proxy_server,
         "llm_router",
         Router(
-            model_list=[
-                {"model_name": "kimi", "litellm_params": {"model": "openai/gpt-6-luna", "drop_params": True}}
-            ]
+            model_list=[{"model_name": "kimi", "litellm_params": {"model": "openai/gpt-6-luna", "drop_params": True}}]
         ),
     )
     prompt: Final = "one two three four five six seven eight nine ten eleven twelve"
@@ -2372,7 +2389,9 @@ async def test_utils_token_counter_drops_a_prompt_sent_with_contents_like_one_se
         ),
         call_endpoint=False,
     )
-    prompt_only: Final = await token_counter(request=TokenCountRequest(model="kimi", prompt=prompt), call_endpoint=False)
+    prompt_only: Final = await token_counter(
+        request=TokenCountRequest(model="kimi", prompt=prompt), call_endpoint=False
+    )
 
     assert from_contents.total_tokens == from_messages.total_tokens != prompt_only.total_tokens
 
