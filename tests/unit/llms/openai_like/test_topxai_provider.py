@@ -115,6 +115,7 @@ class TestTopxAIProviderConfig:
         "model",
         (
             "gpt-6.1-sol",
+            "gpt-6.1-terra",
             "kimi-k3.1-pro",
             "deepseek-flash-Abliterated",
             "deepseek-flash-fast",
@@ -195,6 +196,7 @@ class TestTopxAIModelMetadata:
         "topxai/claude-opus-5-5",
         "topxai/claude-fable-5-1",
         "topxai/gpt-6.1-sol",
+        "topxai/gpt-6.1-terra",
         "topxai/gpt-6-astra",
         "topxai/grok-4.7",
         "topxai/kimi-k3.1-pro",
@@ -211,16 +213,19 @@ class TestTopxAIModelMetadata:
         "topxai/claude-opus-5-5",
         "topxai/claude-fable-5-1",
         "topxai/gpt-6.1-sol",
+        "topxai/gpt-6.1-terra",
         "topxai/gpt-6-astra",
     )
     # The catalogue publishes no output limit for these
     NO_OUTPUT_LIMIT_MODELS: Final = ("topxai/grok-4.7",)
     # First premium token and output multiplier, verified 2026-09-30:
     # https://ai.topxea.com/pricing/gpt-6.1-sol
+    # https://ai.topxea.com/pricing/gpt-6.1-terra (verified 2026-11-09)
     # https://ai.topxea.com/pricing/gpt-6-astra
     # https://ai.topxea.com/pricing/grok-4.7
     TIERED_MODELS: Final = (
         ("topxai/gpt-6.1-sol", 272_001, 1.5),
+        ("topxai/gpt-6.1-terra", 272_001, 1.5),
         ("topxai/gpt-6-astra", 272_001, 1.5),
         ("topxai/grok-4.7", 200_000, 2.0),
     )
