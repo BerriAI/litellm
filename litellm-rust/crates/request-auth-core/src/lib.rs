@@ -9,6 +9,8 @@ pub mod fallback_candidate;
 mod key;
 pub mod key_model_access;
 pub mod model_access;
+pub mod model_projection;
+pub mod route_enable;
 pub mod model_attribution;
 pub mod model_budget_data;
 mod model_budgets;

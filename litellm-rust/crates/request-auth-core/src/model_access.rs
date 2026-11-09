@@ -25,11 +25,14 @@ pub struct Registry {
     pub aliases: BTreeMap<String, String>,
     pub records: BTreeMap<String, ModelRecord>,
     pub compaction_parents: BTreeMap<String, String>,
+    pub helper_present: Option<bool>,
+    pub evaluations: Option<Vec<crate::model_projection::Evaluation>>,
 }
 
 #[derive(Clone, Default, Deserialize)]
 pub struct Aliases {
     pub team: BTreeMap<String, String>,
+    pub team_order: Option<Vec<String>>,
     pub key: BTreeMap<String, String>,
     #[serde(rename = "global_")]
     pub global: BTreeMap<String, String>,
@@ -80,6 +83,9 @@ pub enum Decision {
     },
     ReadGroups,
     ReadScope,
+    ReadGroupScope {
+        grants: Vec<String>,
+    },
 }
 
 impl Decision {
@@ -212,11 +218,19 @@ pub fn candidate_names(
         .filter(|record| record.deployment_team.as_deref() == Some(team))
         .and_then(|record| record.deployment_public_name.clone())
         .filter(|name| !name.is_empty());
-    let legacy = aliases
-        .team
-        .iter()
-        .filter(|(_, target)| target.as_str() == model)
-        .map(|(alias, _)| alias.clone());
+    let ordered: Vec<&String> = aliases.team_order.as_ref().map_or_else(
+        || aliases.team.keys().collect(),
+        |names| names.iter().collect(),
+    );
+    let legacy = ordered
+        .into_iter()
+        .filter(|alias| {
+            aliases
+                .team
+                .get(*alias)
+                .is_some_and(|target| target == model)
+        })
+        .cloned();
     (candidates, public.into_iter().chain(legacy).collect())
 }
 
@@ -235,6 +249,32 @@ pub fn live_team_target(model: &str, facts: &Facts) -> String {
 }
 
 pub fn check(facts: &Facts) -> Result<Decision, Error> {
+    check_at(facts, 0)
+}
+
+fn check_at(facts: &Facts, skip: usize) -> Result<Decision, Error> {
+    if let Some(evaluations) = &facts.registry.evaluations {
+        let Some(evaluation) = evaluations
+            .iter()
+            .skip(skip)
+            .find(|evaluation| evaluation.grants == facts.grants)
+        else {
+            return Ok(Decision::ReadGroupScope {
+                grants: facts.grants.clone(),
+            });
+        };
+        let scoped = Facts {
+            aliases: evaluation
+                .aliases
+                .clone()
+                .unwrap_or_else(|| facts.aliases.clone()),
+            ..facts.clone()
+        };
+        return match crate::model_projection::decide(&scoped, &evaluation.reads)? {
+            crate::model_projection::Decision::Complete { decision } => Ok(decision),
+            _ => Err(Error::InvalidAnswer),
+        };
+    }
     if facts.fallback_depth >= facts.max_depth {
         return Ok(Decision::Depth { model: None });
     }
@@ -372,14 +412,17 @@ pub fn decide(request: Request) -> Result<Response, Error> {
                 if models.is_empty() {
                     primary
                 } else {
-                    check(&Facts {
-                        grants: if merge {
-                            unique(facts.grants.iter().cloned().chain(models))
-                        } else {
-                            models
+                    check_at(
+                        &Facts {
+                            grants: if merge {
+                                unique(facts.grants.iter().cloned().chain(models))
+                            } else {
+                                models
+                            },
+                            ..facts
                         },
-                        ..facts
-                    })?
+                        1,
+                    )?
                 }
             } else {
                 Decision::ReadGroups

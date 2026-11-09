@@ -29,6 +29,7 @@ class FallbackAuthorizationFacts:
     embedded_team_grants: tuple[str, ...] = ()
     member_grants: tuple[str, ...] = ()
     project_grants: tuple[str, ...] = ()
+    assigned_scope: ModelAccessFacts | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,6 +45,7 @@ class FallbackAuthorizationDecision:
         "ReadKeyGroups",
         "ReadTeamGroups",
         "ReadAssignedGroups",
+        "ReadAssignedScope",
     ]
     denial: ModelAccessDecision | None = None
 

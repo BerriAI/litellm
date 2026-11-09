@@ -63,6 +63,8 @@ mod _native {
         request_auth_managed_models,
         request_auth_agent_ceiling_source,
         request_auth_managed_model_grants,
+        request_auth_model_projection,
+        request_auth_route_enable,
     };
     #[pymodule_export]
     use crate::router::{RouterCall, RouterCoreHandle};

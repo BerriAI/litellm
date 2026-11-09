@@ -20,6 +20,7 @@ pub struct Facts {
     pub names: Option<Vec<String>>,
     pub provider_loaded: bool,
     pub provider: Option<Provider>,
+    pub provider_reads: Option<Vec<Option<Provider>>>,
 }
 
 #[derive(Debug, PartialEq, Eq, Serialize)]
@@ -90,21 +91,26 @@ pub fn decide(facts: &Facts) -> Result<Decision, Error> {
             return done(true);
         }
     }
-    if !wildcards.is_empty() {
-        if !facts.provider_loaded {
-            return Ok(Decision::ReadProvider);
-        }
-        if let Some(provider) = &facts.provider
-            && (provider.stripped_model != facts.model || !facts.model.contains('/'))
-        {
-            for pattern in wildcards {
-                if patterns::model_pattern(
-                    &format!("{}/{}", provider.provider, provider.stripped_model),
-                    pattern,
-                )? {
-                    return done(true);
-                }
+    for (index, pattern) in wildcards.iter().enumerate() {
+        let provider = if let Some(providers) = &facts.provider_reads {
+            let Some(provider) = providers.get(index) else {
+                return Ok(Decision::ReadProvider);
+            };
+            provider
+        } else {
+            if !facts.provider_loaded {
+                return Ok(Decision::ReadProvider);
             }
+            &facts.provider
+        };
+        if let Some(provider) = provider
+            && (provider.stripped_model != facts.model || !facts.model.contains('/'))
+            && patterns::model_pattern(
+                &format!("{}/{}", provider.provider, provider.stripped_model),
+                pattern,
+            )?
+        {
+            return done(true);
         }
     }
     done(
@@ -135,6 +141,7 @@ mod tests {
             names: None,
             provider_loaded: false,
             provider: None,
+            provider_reads: None,
         };
         assert_eq!(decide(&facts).unwrap(), expected);
     }

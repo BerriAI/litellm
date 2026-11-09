@@ -1,4 +1,4 @@
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import replace
 from typing import Final
 
@@ -7,7 +7,6 @@ from litellm._auth.team_aliases import TeamAliasFacts, team_aliases
 from litellm.router_api import RegistryReader
 
 
-@native_boundary
 def resolve_team_alias(
     model: str | Sequence[str],
     team_model_aliases: Mapping[str, str] | None,
@@ -22,8 +21,13 @@ def resolve_team_alias(
         return decision.models[0] if isinstance(model, str) else list(decision.models)
     if llm_router is None:
         raise NativeAuthRuntimeError("team aliases requested names without a router")
-    names: Final = tuple(tuple(llm_router.registry().index("model_name")) for _ in range(decision.count))
+    names: Final = tuple(_names(llm_router.registry().index("model_name")) for _ in range(decision.count))
     completed: Final = team_aliases(replace(initial, names=names))
     if completed.kind != "Complete":
         raise NativeAuthRuntimeError("incomplete team alias resolution")
     return completed.models[0] if isinstance(model, str) else list(completed.models)
+
+
+@native_boundary
+def _names(names: Iterable[str]) -> tuple[str, ...]:
+    return tuple(names)

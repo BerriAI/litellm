@@ -5,10 +5,8 @@ from typing import Final
 import pytest
 
 from litellm._auth.unpriced_models import DeploymentPricing, PriceEntry, UnpricedModelFacts, unpriced_model
-from litellm.proxy.auth.auth_checks import (
-    _entry_has_priced_metric,  # pyright: ignore[reportPrivateUsage]  # compare the preserved pricing policy with native facts
-)
 from litellm.proxy.auth.unpriced_model_adapter import price_entry
+from tests.unit._auth.support.model_registry_reference import entry_has_priced_metric
 
 _BASE: Final = UnpricedModelFacts("model", True)
 _ROW: Final = DeploymentPricing((), True)
@@ -41,7 +39,7 @@ def test_native_price_metrics_match_reference(entry: Mapping[str, object], expec
         deployments=(replace(_ROW, info_loaded=True, info=price_entry(entry)),),
         cost_deployments=(),
     )
-    assert _entry_has_priced_metric(entry) == expected
+    assert entry_has_priced_metric(entry) == expected
     assert unpriced_model(facts).unpriced == (not expected)
 
 

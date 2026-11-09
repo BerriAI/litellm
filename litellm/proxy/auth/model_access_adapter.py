@@ -1,24 +1,21 @@
 from collections.abc import Mapping, Sequence
-from dataclasses import replace
 from typing import Final, Literal
 
 from fastapi import HTTPException
 from pydantic import BaseModel
 
 import litellm
-from litellm._auth.failure import NativeAuthFailure, NativeAuthRuntimeError, native_boundary
+from litellm._auth.failure import NativeAuthRuntimeError, native_boundary
+from litellm._auth.fallback_access import GroupedModelScope
 from litellm._auth.model_access import (
     ModelAccessDecision,
     ModelAccessFacts,
     ModelAliases,
     ModelObject,
-    ModelProvider,
-    ModelRecord,
     ModelRegistry,
     grouped_model_access,
     key_model_grants,
     model_access,
-    model_candidates,
     user_model_precheck,
 )
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
@@ -36,9 +33,9 @@ from litellm.proxy.auth.model_access_denied import (
     customer_model_access_denied_client_message,
     model_access_denied_client_message,
 )
+from litellm.proxy.auth.model_projection_adapter import project_scope, read_grouped_scope
 from litellm.repositories.prisma_protocols import DatabaseClient
 from litellm.router_api import RegistryReader
-from litellm.router_strategy.complexity_router.context_compaction import native_compaction_parent
 
 
 class ModelLists(BaseModel, frozen=True):
@@ -50,30 +47,8 @@ def object_model_grants(source: object) -> tuple[str, ...]:
     return ModelLists.model_validate(source, from_attributes=True).models
 
 
-def _provider(model: str) -> ModelProvider | None:
-    try:
-        stripped, provider, _, _ = litellm.get_llm_provider(model=model)
-        return ModelProvider(stripped, provider)
-    except NativeAuthFailure:
-        raise
-    except Exception:  # noqa: BLE001  # provider inference failure leaves the raw provider fact absent
-        return None
-
-
-def _record(model: str, router: RegistryReader | None, team_id: str | None) -> ModelRecord:
-    deployment: Final = router.registry().deployments(model, source="first_in_group") if router is not None else None
-    return ModelRecord(
-        access_groups=tuple(router.registry().access_groups(model_name=model, team_id=team_id))
-        if router is not None
-        else (),
-        provider=_provider(model),
-        deployment_team=deployment.model_info.team_id if deployment is not None else None,
-        deployment_public_name=deployment.model_info.team_public_model_name if deployment is not None else None,
-    )
-
-
 @native_boundary
-def project_model_facts(
+def _initial_model_facts(
     model: str | Sequence[str],
     llm_router: RegistryReader | None,
     models: Sequence[str],
@@ -85,22 +60,15 @@ def project_model_facts(
 ) -> ModelAccessFacts:
     requested: Final = (model,) if isinstance(model, str) else tuple(model)
     aliases: Final = ModelAliases(
-        team=dict(team_model_aliases or {}), key=dict(key_model_aliases or {}), global_=dict(litellm.model_alias_map)
+        team=dict(team_model_aliases or {}),
+        key=dict(key_model_aliases or {}),
+        global_=dict(litellm.model_alias_map),
+        team_order=tuple(team_model_aliases or ()),
     )
-    names: Final = tuple(dict.fromkeys((*requested, *aliases.team.values())))
     registry: Final = ModelRegistry(
         present=llm_router is not None,
-        names=tuple(llm_router.registry().names()) if llm_router is not None else (),
-        aliases={
-            name: target
-            for name in names
-            if name in llm_router.registry().aliases()
-            and (target := llm_router.registry().resolve(name, kind="alias")) is not None
-        }
-        if llm_router is not None
-        else {},
-        records={name: _record(name, llm_router, team_id) for name in names},
-        compaction_parents={name: parent for name in names if (parent := native_compaction_parent(name)) is not None},
+        helper_present=bool(llm_router),
+        evaluations=(),
     )
     initial: Final = ModelAccessFacts(
         requested=requested,
@@ -113,17 +81,23 @@ def project_model_facts(
         max_depth=DEFAULT_MAX_RECURSE_DEPTH,
         is_list=not isinstance(model, str),
     )
-    candidates: Final = model_candidates(replace(initial, requested=names))
-    return replace(
-        initial,
-        registry=replace(
-            registry,
-            records={
-                **registry.records,
-                **{name: _record(name, llm_router, team_id) for name in candidates if name not in registry.records},
-            },
-        ),
+    return initial
+
+
+def project_model_facts(
+    model: str | Sequence[str],
+    llm_router: RegistryReader | None,
+    models: Sequence[str],
+    team_model_aliases: Mapping[str, str] | None = None,
+    team_id: str | None = None,
+    key_model_aliases: Mapping[str, str] | None = None,
+    object_type: ModelObject = "user",
+    fallback_depth: int = 0,
+) -> ModelAccessFacts:
+    initial: Final = _initial_model_facts(
+        model, llm_router, models, team_model_aliases, team_id, key_model_aliases, object_type, fallback_depth
     )
+    return project_scope(initial, llm_router)
 
 
 def raise_model_denial(
@@ -145,7 +119,7 @@ def raise_model_denial(
             )
         case "NoAgentModels":
             raise HTTPException(403, "This agent has no model grants")
-        case "ReadGroups" | "ReadScope":
+        case "ReadGroups" | "ReadScope" | "ReadGroupScope":
             raise NativeAuthRuntimeError("model grant lookup was not answered")
         case "Deny" | "NoDefaultModels" | "EmptyAgentCeiling" | "PersonalTeam":
             error_model: Final = decision.model if decision.model is not None else model
@@ -214,14 +188,12 @@ async def _grouped_model_access(
     prisma_client: DatabaseClient | None,
     *,
     merge: bool,
+    router: RegistryReader | None = None,
 ) -> ModelAccessDecision:
-    from litellm.proxy.auth.auth_checks import get_models_from_access_groups
-
-    decision: Final = grouped_model_access(facts, tuple(group_ids), merge=merge)
-    if decision.kind != "ReadGroups":
-        return decision
-    models: Final = await get_models_from_access_groups(list(group_ids), prisma_client=prisma_client)
-    return grouped_model_access(facts, tuple(group_ids), tuple(models), merge=merge)
+    scope: Final = await read_grouped_scope(
+        GroupedModelScope(facts, tuple(group_ids)), router, prisma_client, merge=merge
+    )
+    return grouped_model_access(scope.facts, scope.group_ids, scope.group_models, merge=merge)
 
 
 async def can_key_call_model(
@@ -245,7 +217,9 @@ async def can_key_call_model(
         key_model_aliases_for_auth_check(valid_token),
         "key",
     )
-    decision: Final = await _grouped_model_access(facts, valid_token.access_group_ids or (), prisma_client, merge=False)
+    decision: Final = await _grouped_model_access(
+        facts, valid_token.access_group_ids or (), prisma_client, merge=False, router=llm_router
+    )
     return raise_model_denial(decision, model)
 
 
@@ -267,7 +241,11 @@ async def can_team_access_model(
         "team",
     )
     decision: Final = await _grouped_model_access(
-        facts, (team_object.access_group_ids or ()) if team_object is not None else (), prisma_client, merge=True
+        facts,
+        (team_object.access_group_ids or ()) if team_object is not None else (),
+        prisma_client,
+        merge=True,
+        router=llm_router,
     )
     return raise_model_denial(decision, model)
 

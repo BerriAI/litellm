@@ -30,7 +30,9 @@ pub fn decide(facts: &Facts) -> Result<Decision, Error> {
     let denial = fallback_access::grouped(team.clone(), true)?;
     match denial {
         ModelDecision::Allow => return Ok(Decision::Allow),
-        ModelDecision::ReadGroups => return Ok(Decision::ReadTeamGroups),
+        ModelDecision::ReadGroups | ModelDecision::ReadGroupScope { .. } => {
+            return Ok(Decision::ReadTeamGroups);
+        }
         ModelDecision::Deny {
             object_type: ObjectType::Team,
             ..

@@ -18,6 +18,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
 from litellm.proxy._types import LiteLLM_TeamTableCachedObj, ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.model_access_adapter import object_model_grants, project_model_facts
+from litellm.proxy.auth.model_projection_adapter import read_grouped_scope
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.router_api import RegistryReader
@@ -101,7 +102,7 @@ async def _read_scope(facts: PersonalModelScope, source: _Source) -> PersonalMod
 async def _scope_effect(
     decision: PersonalModelDecision, facts: PersonalModelScope, source: _Source
 ) -> PersonalModelScope:
-    from litellm.proxy.auth.auth_checks import get_models_from_access_groups, get_team_membership
+    from litellm.proxy.auth.auth_checks import get_team_membership
 
     match decision.kind:
         case "ReadTeam":
@@ -117,8 +118,8 @@ async def _scope_effect(
         case "ReadGroups":
             if facts.team is None:
                 raise NativeAuthRuntimeError("personal model group read without team facts")
-            groups: Final = await get_models_from_access_groups(facts.team.group_ids, prisma_client=source.prisma)
-            return replace(facts, team=replace(facts.team, group_models=tuple(groups)))
+            grouped: Final = await read_grouped_scope(facts.team, source.router, source.prisma, merge=True)
+            return replace(facts, team=grouped)
         case "ReadMembership":
             if source.token.user_id is None:
                 raise NativeAuthRuntimeError("personal model membership read without identity")

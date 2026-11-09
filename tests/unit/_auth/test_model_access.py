@@ -23,8 +23,9 @@ from litellm._auth.model_access import (
     ModelRegistry as Registry,
 )
 from litellm.proxy._types import LiteLLM_UserTable, ModelAccessDeniedProxyException
-from litellm.proxy.auth import auth_checks, model_access_adapter
+from litellm.proxy.auth import model_access_adapter
 from tests.unit._auth.support import model_reference as reference
+from tests.unit._auth.support import model_registry_reference
 
 _BASE: Final = Facts(("model",), object_type="key")
 _CASES: Final = (
@@ -220,7 +221,9 @@ def test_user_default_scope(present: bool, grants: tuple[str, ...], kind: str) -
     assert native.user_model_access(replace(_BASE, grants=grants), present=present).kind == kind
 
 
-@pytest.mark.parametrize("policy", (auth_checks.can_user_call_model, model_access_adapter.can_user_call_model))
+@pytest.mark.parametrize(
+    "policy", (model_registry_reference.can_user_call_model, model_access_adapter.can_user_call_model)
+)
 @pytest.mark.asyncio
 async def test_user_precheck_does_not_read_registry(
     policy: Callable[[str, MagicMock, LiteLLM_UserTable | None], Awaitable[Literal[True]]],

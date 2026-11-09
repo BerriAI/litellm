@@ -333,3 +333,18 @@ pub(crate) fn request_auth_managed_model_grants(py: Python<'_>, facts: &Bound<'_
     let facts: core::managed_models::GrantFacts = from_py(facts)?;
     to_py(py, &py.detach(move || core::managed_models::grants(&facts)))
 }
+
+#[pyfunction]
+pub(crate) fn request_auth_model_projection(py: Python<'_>, facts: &Bound<'_, PyAny>, reads: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
+    let facts: core::model_access::Facts = from_py(facts)?;
+    let reads: Vec<core::model_projection::Reading> = from_py(reads)?;
+    let decision = py.detach(move || core::model_projection::decide(&facts, &reads)).map_err(map_error)?;
+    to_py(py, &decision)
+}
+
+#[pyfunction]
+pub(crate) fn request_auth_route_enable(py: Python<'_>, facts: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
+    let facts: core::route_enable::Facts = from_py(facts)?;
+    let decision = py.detach(move || core::route_enable::decide(&facts)).map_err(map_error)?;
+    to_py(py, &decision)
+}
