@@ -24793,7 +24793,7 @@
     "deepinfra/mistralai/Mistral-Nemo-Instruct-2407": {
         "max_input_tokens": 131072,
         "max_output_tokens": 131072,
-        "input_cost_per_token": 1.9e-08,
+        "input_cost_per_token": 2.9e-08,
         "output_cost_per_token": 3e-08,
         "litellm_provider": "deepinfra",
         "mode": "chat",
@@ -24874,8 +24874,8 @@
     },
     "deepinfra/nvidia/NVIDIA-Nemotron-3.5-Lightning": {
         "max_input_tokens": 262144,
-        "input_cost_per_token": 8e-08,
-        "output_cost_per_token": 2e-07,
+        "input_cost_per_token": 6e-08,
+        "output_cost_per_token": 1.6e-07,
         "litellm_provider": "deepinfra",
         "mode": "chat",
         "source": "https://deepinfra.com/pricing",
@@ -67597,12 +67597,12 @@
         "source": "https://deepinfra.com/pricing"
     },
     "deepinfra/anthropic/claude-sonnet-5": {
-        "input_cost_per_token": 2e-06,
+        "input_cost_per_token": 3e-06,
         "litellm_provider": "deepinfra",
         "max_input_tokens": 1000000,
         "max_output_tokens": 1000000,
         "mode": "chat",
-        "output_cost_per_token": 1e-05,
+        "output_cost_per_token": 1.5e-05,
         "prompt_cache_min_tokens": 1024,
         "source": "https://deepinfra.com/pricing",
         "supports_adaptive_thinking": true,
@@ -67770,7 +67770,7 @@
     "deepinfra/nvidia/NVIDIA-Nemotron-3-Super-120B-A12B": {
         "max_output_tokens": 262144,
         "max_input_tokens": 262144,
-        "input_cost_per_token": 8.5e-08,
+        "input_cost_per_token": 7.5e-08,
         "output_cost_per_token": 4e-07,
         "litellm_provider": "deepinfra",
         "mode": "chat",
