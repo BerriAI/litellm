@@ -470,9 +470,9 @@ class UsageCostMessagesStream:
 
     def close(self) -> None:
         self.sync_frames.close()
-        close: Final = getattr(self.stream, "close", None)
-        if callable(close):
-            close()
+        close_upstream: Final = getattr(self.stream, "close", None)
+        if callable(close_upstream):
+            close_upstream()
 
     def __getattr__(self, name: str) -> object:
         return getattr(self.stream, name)

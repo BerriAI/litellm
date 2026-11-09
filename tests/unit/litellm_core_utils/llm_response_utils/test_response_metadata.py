@@ -28,7 +28,22 @@ from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
-from litellm.types.utils import ModelResponse, Usage
+from litellm.types.utils import EmbeddingResponse, HiddenParams, ModelResponse, TextCompletionResponse, Usage
+
+
+@pytest.mark.parametrize("response_type", [EmbeddingResponse, TextCompletionResponse])
+def test_metadata_apply_preserves_model_hidden_params(
+    response_type: type[EmbeddingResponse] | type[TextCompletionResponse],
+) -> None:
+    response: Final = response_type()
+    hidden: Final = HiddenParams(response_cost=0.125)
+    response._hidden_params = hidden
+    before: Final = response.model_dump()
+
+    ResponseMetadata(response).apply()
+
+    assert response._hidden_params is hidden
+    assert response.model_dump() == before
 
 
 @pytest.mark.parametrize("shape", ["chat", "responses", "messages"])

@@ -714,7 +714,12 @@ def test_completion_defaults_missing_message_role_and_preserves_omitted_fields()
         "created": 1,
         "model": "gpt-5.4",
         "object": "chat.completion",
-        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        "usage": {
+            "prompt_tokens": 1,
+            "completion_tokens": 1,
+            "total_tokens": 2,
+            "cost": response._hidden_params["response_cost"],
+        },
     }
 
 

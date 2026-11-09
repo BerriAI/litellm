@@ -2,6 +2,7 @@ import asyncio
 import json
 from collections.abc import AsyncIterator, Mapping, Sequence
 from datetime import datetime
+from io import BytesIO
 from typing import Final, Literal
 from unittest.mock import patch
 
@@ -69,6 +70,13 @@ def test_usage_cost_preserves_completed_stream_frames_when_billing_fails(failure
 
 def test_usage_cost_does_not_add_frames_to_an_empty_messages_stream() -> None:
     assert tuple(UsageCostMessagesStream(iter(()), _usage_cost_logging_obj())) == ()
+
+
+def test_usage_cost_stream_close_closes_the_upstream() -> None:
+    upstream: Final = BytesIO()
+    stream: Final = UsageCostMessagesStream(upstream, _usage_cost_logging_obj())
+    stream.close()
+    assert upstream.closed
 
 
 class _RecordingLoggingIterator(BaseAnthropicMessagesStreamingIterator):

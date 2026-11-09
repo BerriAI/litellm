@@ -7,6 +7,7 @@ import httpx
 from pydantic import TypeAdapter, ValidationError
 
 from litellm.constants import LITELLM_DETAILED_TIMING
+from litellm.litellm_core_utils.add_retry_fallback_headers import get_hidden_params_dict
 from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs, process_response_headers
 from litellm.litellm_core_utils.llm_response_utils.get_api_base import get_api_base
 from litellm.litellm_core_utils.logging_utils import LiteLLMLoggingObject
@@ -17,8 +18,6 @@ from litellm.types.utils import (
     ModelResponse,
     TranscriptionResponse,
 )
-
-_HIDDEN_PARAMS: Final = TypeAdapter(Mapping[str, object])
 
 
 def _timing_window_start(
@@ -273,7 +272,7 @@ class ResponseMetadata:
         """Apply metadata to the response object"""
         if hasattr(self.result, "_hidden_params"):
             self.result._hidden_params = self._hidden_params
-            hidden: Final = _HIDDEN_PARAMS.validate_python(getattr(self, "_hidden_params", {}))
+            hidden: Final = get_hidden_params_dict(self.result)
             stamp_usage_cost(self.result, validated_usage_cost(hidden.get("response_cost")))
 
 
