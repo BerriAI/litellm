@@ -1177,10 +1177,14 @@ async def test_bedrock_converse_empty_user_message_beside_a_tool_result_keeps_th
     assert [list(block) for block in result[-1]["content"]] == [["toolResult"]]
 
 
+def _carries_the_placeholder(turns: Sequence[Mapping[str, object]]) -> bool:
+    return any(block.get("text") == _EMPTY_TEXT_PLACEHOLDER for turn in turns for block in turn["content"])
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("use_async", [False, True])
 @CONVERSE_EMPTY_USER_MESSAGES
-async def test_bedrock_converse_keeps_turns_alternating_around_an_empty_user_message(
+async def test_bedrock_converse_adds_no_placeholder_for_an_empty_user_message_before_later_turns(
     use_async: bool, empty_user_message: Mapping[str, object]
 ) -> None:
     result: Final = await _converse(
@@ -1194,8 +1198,56 @@ async def test_bedrock_converse_keeps_turns_alternating_around_an_empty_user_mes
         use_async,
     )
 
-    assert [message["role"] for message in result] == ["user", "assistant", "user", "assistant", "user"]
-    assert result[2]["content"] == [{"text": _EMPTY_TEXT_PLACEHOLDER}]
+    assert not _carries_the_placeholder(result)
+    assert result[-1] == {"role": "user", "content": [{"text": "no"}]}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize("tool_output", ["ok", ""], ids=["tool-output", "empty-tool-output"])
+@CONVERSE_EMPTY_USER_MESSAGES
+async def test_bedrock_converse_keeps_a_tool_result_right_after_its_tool_call_across_empty_turns(
+    use_async: bool, tool_output: str, empty_user_message: Mapping[str, object]
+) -> None:
+    result: Final = await _converse(
+        [
+            {"role": "user", "content": "hi"},
+            _CONVERSE_TOOL_CALL_TURN,
+            empty_user_message,
+            {"role": "assistant", "content": ""},
+            {"role": "tool", "tool_call_id": "tooluse_1", "content": tool_output},
+        ],
+        use_async,
+    )
+
+    assert [message["role"] for message in result] == ["user", "assistant", "user"]
+    assert [list(block) for block in result[-1]["content"]] == [["toolResult"]]
+
+
+_CONVERSE_UNSENDABLE_MEDIA_TURN: Final = {
+    "role": "user",
+    "content": [{"type": "input_audio", "input_audio": {"data": "AAAA", "format": "wav"}}],
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize(
+    "trailing_turns",
+    [
+        (_CONVERSE_UNSENDABLE_MEDIA_TURN,),
+        ({"role": "user", "content": ""}, _CONVERSE_UNSENDABLE_MEDIA_TURN),
+    ],
+    ids=["media-only", "empty-then-media"],
+)
+async def test_bedrock_converse_does_not_call_a_media_only_user_turn_empty(
+    use_async: bool, trailing_turns: tuple[Mapping[str, object], ...]
+) -> None:
+    result: Final = await _converse(
+        [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hello"}, *trailing_turns], use_async
+    )
+
+    assert not _carries_the_placeholder(result)
 
 
 @pytest.mark.asyncio
@@ -6212,16 +6264,19 @@ async def test_bedrock_converse_messages_pt_async_lone_content_less_user_turn_co
 
 
 @pytest.mark.parametrize("content_less_user_message", _CONTENT_LESS_USER_MESSAGES)
-def test_bedrock_converse_messages_pt_lone_content_less_user_turn_sends_the_placeholder_without_a_continue_message(
+def test_bedrock_converse_messages_pt_lone_content_less_user_turn_adds_no_block_without_a_continue_message(
     content_less_user_message: dict[str, object], monkeypatch: pytest.MonkeyPatch
 ):
     monkeypatch.setattr(litellm, "modify_params", False)
 
-    assert _bedrock_converse_messages_pt(
-        messages=validate_and_fix_openai_messages([content_less_user_message]),
-        model="anthropic.claude-haiku-4-5",
-        llm_provider="bedrock",
-    ) == [{"role": "user", "content": [{"text": _EMPTY_TEXT_PLACEHOLDER}]}]
+    assert (
+        _bedrock_converse_messages_pt(
+            messages=validate_and_fix_openai_messages([content_less_user_message]),
+            model="anthropic.claude-haiku-4-5",
+            llm_provider="bedrock",
+        )
+        == []
+    )
 
 
 @pytest.fixture()

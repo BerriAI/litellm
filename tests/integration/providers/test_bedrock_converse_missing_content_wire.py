@@ -318,7 +318,7 @@ def modify_params_proxy(tmp_path_factory: pytest.TempPathFactory) -> Iterator[tu
             yield owned.gateway, wire
 
 
-def test_r01_openai_sync_lone_user_without_content_sends_the_placeholder_turn(gateway: Gateway) -> None:
+def test_r01_openai_sync_lone_user_without_content_sends_no_converse_block(gateway: Gateway) -> None:
     with wire_server(_converse_peer) as wire, gateway.scenario() as scenario:
         model: Final = _converse_deployment(scenario, wire)
         with openai.OpenAI(base_url=f"{_proxy_url(gateway)}/v1", api_key=gateway.key, max_retries=0) as client:
@@ -328,7 +328,7 @@ def test_r01_openai_sync_lone_user_without_content_sends_the_placeholder_turn(ga
         assert completion.choices[0].message.content == _ANSWER, completion
         target, received = _only_received(wire)
         assert target == _CONVERSE_TARGET, target
-        assert received["messages"] == [_CONVERSE_PLACEHOLDER] and "system" not in received, received
+        assert received["messages"] == [] and "system" not in received, received
         assert _spend_row(completion.id)["status"] == "success"
 
 
@@ -427,11 +427,11 @@ def test_r08_assistant_without_content_between_two_user_turns_merges_them(gatewa
         )
 
 
-def test_r09_lone_user_with_empty_string_content_sends_the_placeholder_turn(gateway: Gateway) -> None:
+def test_r09_lone_user_with_empty_string_content_sends_no_converse_block(gateway: Gateway) -> None:
     with wire_server(_converse_peer) as wire, gateway.scenario() as scenario:
         model: Final = _converse_deployment(scenario, wire)
         _, received = _converse_cell(gateway, wire, _chat(model, (_EMPTY_CONTENT_USER,)))
-        assert received["messages"] == [_CONVERSE_PLACEHOLDER], received
+        assert received["messages"] == [], received
 
 
 def test_r10_empty_null_and_missing_content_produce_byte_identical_converse_bodies(gateway: Gateway) -> None:
@@ -445,7 +445,7 @@ def test_r10_empty_null_and_missing_content_produce_byte_identical_converse_bodi
         received: Final = wire.drain()
         assert [unquote(request.target) for request in received] == [_CONVERSE_TARGET] * 3, received
         assert len({request.body for request in received}) == 1, received
-        assert json.loads(received[0].body)["messages"] == [_CONVERSE_PLACEHOLDER], received
+        assert json.loads(received[0].body)["messages"] == [], received
         for identity in identities:
             assert _spend_row(identity)["status"] == "success"
 
@@ -515,15 +515,15 @@ def test_r19_anthropic_native_invoke_forwards_the_turn_verbatim_and_relays_the_s
         assert received["messages"] == [_NO_CONTENT_USER], received
 
 
-def test_r20_responses_lone_input_item_without_content_sends_the_placeholder_turn(gateway: Gateway) -> None:
+def test_r20_responses_lone_input_item_without_content_is_rejected_before_any_peer_call(gateway: Gateway) -> None:
     with wire_server(_converse_peer) as wire, gateway.scenario() as scenario:
         model: Final = _converse_deployment(scenario, wire)
         response: Final = gateway.request(
             "POST", "/v1/responses", {"model": model, "input": [_NO_CONTENT_USER], **_EXTRA}
         )
-        assert response.status_code == 200, response.text
-        _, received = _only_received(wire)
-        assert received["messages"] == [_CONVERSE_PLACEHOLDER], received
+        assert response.status_code == 400, response.text
+        assert _NO_NON_SYSTEM_MESSAGE in response.text, response.text
+        assert wire.drain() == ()
 
 
 def test_r21_responses_stream_input_item_without_content_after_an_assistant_item_ends_on_the_placeholder_turn(
@@ -659,11 +659,11 @@ def test_s09_unknown_model_with_a_content_less_turn_never_reaches_the_peer(gatew
         assert wire.drain() == (), response.text
 
 
-def test_s10_a_deployment_continue_message_without_content_sends_the_placeholder_turn(gateway: Gateway) -> None:
+def test_s10_a_deployment_continue_message_without_content_adds_no_converse_block(gateway: Gateway) -> None:
     with wire_server(_converse_peer) as wire, gateway.scenario() as scenario:
         model: Final = _converse_deployment(scenario, wire, user_continue_message={"role": "user"})
         _, received = _converse_cell(gateway, wire, _chat(model, (_NO_CONTENT_USER,)))
-        assert received["messages"] == [_CONVERSE_PLACEHOLDER], received
+        assert received["messages"] == [], received
 
 
 def test_s11_a_deployment_continue_message_given_as_a_string_errors_in_the_body_and_leaves_the_proxy_serving(
@@ -728,7 +728,7 @@ def _content_less_bodies(gateway: Gateway, wire: Wire, model: str, count: int) -
     received: Final = wire.drain()
     assert len(received) == len(identities), (identities, received)
     bodies: Final = tuple(_JSON.validate_python(json.loads(request.body))["messages"] for request in received)
-    assert all(body in ([_CONVERSE_PLACEHOLDER], [_continue_turn(_DEPLOYMENT_CONTINUE)]) for body in bodies), bodies
+    assert all(body in ([], [_continue_turn(_DEPLOYMENT_CONTINUE)]) for body in bodies), bodies
     return bodies
 
 
@@ -738,7 +738,7 @@ def test_e03_updating_the_deployment_continue_message_under_traffic_never_breaks
 ) -> None:
     with wire_server(_converse_peer) as wire, gateway.scenario() as scenario:
         model: Final = _converse_deployment(scenario, wire)
-        assert _content_less_bodies(gateway, wire, model, 4) == ([_CONVERSE_PLACEHOLDER],) * 4
+        assert _content_less_bodies(gateway, wire, model, 4) == ([],) * 4
         gateway.post(
             "/model/update",
             {
@@ -756,7 +756,7 @@ def test_e03_updating_the_deployment_continue_message_under_traffic_never_breaks
 
 @pytest.mark.parametrize(
     ("continue_message", "expected"),
-    ((None, [_CONVERSE_PLACEHOLDER]), ({}, [_continue_turn(_DEFAULT_CONTINUE)])),
+    ((None, []), ({}, [_continue_turn(_DEFAULT_CONTINUE)])),
     ids=("e04", "e05"),
 )
 def test_e04_e05_a_null_continue_message_means_absent_and_an_empty_one_means_the_default(

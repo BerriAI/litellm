@@ -6009,30 +6009,104 @@ def test_no_cache_control_when_absent():
     assert "cache_control" not in msg
 
 
+_NULL_USER_ITEM: Final = {"role": "user", "content": None}
+_QUESTION_ITEM: Final = {"role": "user", "content": "What is 2+2?"}
+_ANSWER_ITEM: Final = {"role": "assistant", "content": "Four."}
+
+
+def _bridged_turns(model: str, provider: str, items: Sequence[Mapping[str, object]]) -> list[tuple[object, object]]:
+    result: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+        model=model,
+        input=cast(ResponseInputParam, list(items)),
+        responses_api_request={},
+        custom_llm_provider=provider,
+    )
+    return [(message["role"], message.get("content")) for message in result["messages"]]
+
+
 @pytest.mark.parametrize(
-    "empty_user_item", ({"role": "user", "content": None}, {"role": "user"}), ids=("null_content", "no_content_key")
+    ("model", "provider"),
+    (
+        ("bedrock/us.anthropic.claude-opus-5-5", "bedrock"),
+        ("bedrock/us.amazon.nova-pro-v1:0", "bedrock"),
+        ("bedrock/invoke/us.anthropic.claude-opus-5-5", "bedrock"),
+        ("anthropic/claude-opus-5-5", "anthropic"),
+    ),
 )
-def test_a_user_input_item_without_content_stays_an_empty_user_turn(empty_user_item: dict[str, object]) -> None:
+@pytest.mark.parametrize(
+    "empty_user_item", (_NULL_USER_ITEM, {"role": "user"}), ids=("null_content", "no_content_key")
+)
+def test_a_final_user_input_item_without_content_stays_an_empty_user_turn(
+    model: str, provider: str, empty_user_item: dict[str, object]
+) -> None:
+    assert _bridged_turns(
+        model,
+        provider,
+        (
+            _QUESTION_ITEM,
+            {"role": "assistant", "content": None},
+            {"type": "item_reference", "id": "msg_earlier"},
+            _ANSWER_ITEM,
+            empty_user_item,
+        ),
+    ) == [("user", "What is 2+2?"), ("assistant", "Four."), ("user", "")]
+
+
+@pytest.mark.parametrize(
+    ("items", "expected"),
+    (
+        ((_NULL_USER_ITEM,), []),
+        ((_QUESTION_ITEM, _NULL_USER_ITEM), [("user", "What is 2+2?")]),
+        ((_QUESTION_ITEM, _ANSWER_ITEM), [("user", "What is 2+2?"), ("assistant", "Four.")]),
+        (
+            (_QUESTION_ITEM, _ANSWER_ITEM, _NULL_USER_ITEM, {"role": "user", "content": "And 3+3?"}),
+            [("user", "What is 2+2?"), ("assistant", "Four."), ("user", "And 3+3?")],
+        ),
+    ),
+    ids=("lone", "after_a_user_item", "ending_on_an_assistant_item", "before_a_later_item"),
+)
+def test_a_user_input_item_without_content_is_dropped_where_no_assistant_turn_would_end_the_request(
+    items: Sequence[Mapping[str, object]], expected: list[tuple[object, object]]
+) -> None:
+    assert _bridged_turns("bedrock/us.anthropic.claude-opus-5-5", "bedrock", items) == expected
+
+
+def test_a_final_user_input_item_without_content_stays_dropped_on_routes_that_send_empty_text_as_is() -> None:
+    assert _bridged_turns("moonshot/kimi-k3", "moonshot", (_QUESTION_ITEM, _ANSWER_ITEM, _NULL_USER_ITEM)) == [
+        ("user", "What is 2+2?"),
+        ("assistant", "Four."),
+    ]
+
+
+def test_a_user_input_item_without_content_between_function_calls_keeps_them_in_one_turn() -> None:
+    def call(call_id: str) -> dict[str, object]:
+        return {"type": "function_call", "call_id": call_id, "name": "f", "arguments": "{}"}
+
+    def output(call_id: str) -> dict[str, object]:
+        return {"type": "function_call_output", "call_id": call_id, "output": "ok"}
+
     result: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
         model="bedrock/us.anthropic.claude-opus-5-5",
         input=cast(
-            ResponseInputParam,
-            [
-                {"role": "user", "content": "What is 2+2?"},
-                {"role": "assistant", "content": None},
-                {"type": "item_reference", "id": "msg_earlier"},
-                {"role": "assistant", "content": "Four."},
-                empty_user_item,
-            ],
+            ResponseInputParam, [_QUESTION_ITEM, call("c1"), _NULL_USER_ITEM, call("c2"), output("c1"), output("c2")]
         ),
         responses_api_request={},
         custom_llm_provider="bedrock",
     )
 
-    assert [(message["role"], message.get("content")) for message in result["messages"]] == [
+    assert [message["role"] for message in result["messages"]] == ["user", "assistant", "tool", "tool"]
+    assert [call["id"] for call in result["messages"][1]["tool_calls"]] == ["c1", "c2"]
+
+
+def test_callers_that_only_read_the_input_see_no_turn_for_a_user_item_without_content() -> None:
+    messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+        input=cast(ResponseInputParam, [_QUESTION_ITEM, _ANSWER_ITEM, _NULL_USER_ITEM]),
+        responses_api_request={},
+    )
+
+    assert [(message["role"], message.get("content")) for message in messages] == [
         ("user", "What is 2+2?"),
         ("assistant", "Four."),
-        ("user", ""),
     ]
 
 

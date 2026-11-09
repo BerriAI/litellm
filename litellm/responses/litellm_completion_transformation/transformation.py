@@ -186,6 +186,7 @@ from .tool_search import (
     is_anthropic_tool_search_chat_tool,
     is_server_tool_search_tool,
     provider_builds_anthropic_request,
+    provider_chat_config,
     tool_search_call_ids,
     tool_search_routing,
     without_tool_search_calls,
@@ -788,6 +789,20 @@ def _input_to_read(
     return input
 
 
+def _dropped_final_user_turn(input_items: str | ResponseInputParam, messages: Sequence[object]) -> bool:
+    if isinstance(input_items, str) or not input_items or not messages:
+        return False
+    return message_field(input_items[-1], "role") == "user" and message_field(messages[-1], "role") == "assistant"
+
+
+def _target_fills_empty_user_turns(model: str, custom_llm_provider: str | None) -> bool:
+    from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+
+    return isinstance(
+        provider_chat_config(model, custom_llm_provider), AmazonConverseConfig
+    ) or provider_builds_anthropic_request(model, custom_llm_provider)
+
+
 def _replays_compaction_block(input: str | ResponseInputParam, context_management: object) -> bool:
     return requests_compaction(context_management) and holds_compaction_summary(input)
 
@@ -1282,6 +1297,7 @@ class LiteLLMCompletionResponsesConfig:
             native_compaction=native_compaction,
             only_since_compaction=not native_compaction,
             caller_input=numbered_input,
+            route_fills_empty_user_turns=partial(_target_fills_empty_user_turns, model, custom_llm_provider),
         )
         malformed_field_error: Final = (
             _first_invalid_input_type(
@@ -1367,6 +1383,7 @@ class LiteLLMCompletionResponsesConfig:
         native_compaction: bool = False,
         only_since_compaction: bool = False,
         caller_input: str | ResponseInputParam | None = None,
+        route_fills_empty_user_turns: Callable[[], bool] | None = None,
     ) -> list[
         AllMessageValues
         | GenericChatCompletionMessage
@@ -1441,6 +1458,12 @@ class LiteLLMCompletionResponsesConfig:
                 raise
             raise call_id_error from error
         messages.extend(converted)
+        if (
+            route_fills_empty_user_turns is not None
+            and _dropped_final_user_turn(sent_input, messages)
+            and route_fills_empty_user_turns()
+        ):
+            messages.append(GenericChatCompletionMessage(role="user", content=""))
 
         return messages
 
@@ -2448,8 +2471,6 @@ class LiteLLMCompletionResponsesConfig:
             ]
         else:
             content: Final[object] = input_item.get("content")
-            if content is None and input_item.get("role") == "user":
-                return [GenericChatCompletionMessage(role="user", content="")]
             # Handle None content: Responses API allows None content, but GenericChatCompletionMessage requires content
             # Since guardrails skip None content anyway, we return empty list to exclude it from structured messages
             if content is None:
