@@ -78,7 +78,6 @@ from ..common_utils import (
     deployment_model_info,
     merge_bedrock_aws_request_params,
     resolve_s3_encryption_key_id,
-    without_bedrock_native_output_opt_in,
 )
 
 S3_SIGNED_REQUEST_HEADERS_PARAM: Final = "_s3_signed_request_headers"
@@ -1087,15 +1086,13 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             )
 
             config: Final = AmazonAnthropicClaudeConfig()
-            litellm_params: Final = without_bedrock_native_output_opt_in(
-                {
-                    "model_info": {
-                        "supports_native_structured_output": bedrock_batch_record_takes_native_output(
-                            _invoke_route_model(model), optional_params.get("response_format"), model_info
-                        )
-                    }
+            litellm_params: Final = {
+                "model_info": {
+                    "supports_native_structured_output": bedrock_batch_record_takes_native_output(
+                        _invoke_route_model(model), optional_params.get("response_format"), model_info
+                    )
                 }
-            )
+            }
             mapped_params = get_optional_params(
                 model=_invoke_route_model(model),
                 custom_llm_provider="bedrock",
