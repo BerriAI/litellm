@@ -319,24 +319,29 @@ _ssl_context_cache: Final[dict[tuple[str | None, str | None, str | None, bool], 
 _rsa_key_exchange_excluded: Final = threading.Event()
 
 
-def _cipher_string(ssl_security_level: str | None) -> str:
+def _cipher_string(ssl_security_level: str | None, rsa_key_exchange_excluded: bool) -> str:
     """SSL_SECURITY_LEVEL's cipher string if set, else DEFAULT_SSL_CIPHERS, without RSA key exchange when excluded."""
     ciphers: Final = (
         ssl_security_level if ssl_security_level and isinstance(ssl_security_level, str) else DEFAULT_SSL_CIPHERS
     )
-    return f"{ciphers}:!kRSA" if _rsa_key_exchange_excluded.is_set() else ciphers
+    return f"{ciphers}:!kRSA" if rsa_key_exchange_excluded else ciphers
 
 
 def exclude_rsa_key_exchange(excluded: bool) -> None:
-    """Turn RSA key exchange off or back on for new SSL contexts and every cached one, which clients already hold."""
+    """
+    Turn RSA key exchange off or back on for new SSL contexts and every cached one, which clients already hold.
+    Raises ssl.SSLError before changing anything when the configured cipher string would have no TLS 1.2 suite left.
+    """
     if excluded == _rsa_key_exchange_excluded.is_set():
         return
+    configured: Final = os.getenv("SSL_SECURITY_LEVEL", litellm.ssl_security_level)
+    ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT).set_ciphers(_cipher_string(configured, excluded))
     if excluded:
         _rsa_key_exchange_excluded.set()
     else:
         _rsa_key_exchange_excluded.clear()
     for (_, ssl_security_level, _, _), context in list(_ssl_context_cache.items()):
-        context.set_ciphers(_cipher_string(ssl_security_level))
+        context.set_ciphers(_cipher_string(ssl_security_level, excluded))
 
 
 def _create_ssl_context(
@@ -354,7 +359,7 @@ def _create_ssl_context(
     # Set minimum TLS version to 1.2 for better performance
     custom_ssl_context.minimum_version = ssl.TLSVersion.TLSv1_2
 
-    custom_ssl_context.set_ciphers(_cipher_string(ssl_security_level))
+    custom_ssl_context.set_ciphers(_cipher_string(ssl_security_level, _rsa_key_exchange_excluded.is_set()))
 
     # Configure ECDH curve for key exchange (e.g., to disable PQC and improve performance)
     # Set SSL_ECDH_CURVE env var or litellm.ssl_ecdh_curve to 'X25519' to disable PQC

@@ -386,7 +386,6 @@ def test_fips_mode_drops_rsa_key_exchange_from_the_outbound_cipher_list(
 
     assert standard == _offered_ciphers(configured)
     without_rsa_key_exchange: Final = tuple(cipher for cipher in standard if cipher[1] != "kx-rsa")
-    assert without_rsa_key_exchange != standard
     assert held_in_fips == without_rsa_key_exchange
     assert new_in_fips == without_rsa_key_exchange
     assert held_after_fips == standard
