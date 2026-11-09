@@ -936,6 +936,8 @@ class Logging(LiteLLMLoggingBaseClass):
         self._failed_attempts_owed_on_success: tuple[ServedRound, ...] = ()
         self.failed_attempts_billed_on_success: tuple[ServedRound, ...] = ()
         self.shadow_eval_request_snapshot: GuardrailRequestSnapshot | None = None
+        self._message_redaction_token = None
+        self._ensure_request_message_redaction()
 
     def copy_for_new_call(self, litellm_call_id: str, start_time: datetime.datetime) -> "Logging":
         """One turn of a long-lived connection: the connection's deployment, key and metadata under its own call id,
@@ -974,6 +976,7 @@ class Logging(LiteLLMLoggingBaseClass):
         new_call.deferred_success_result = None
         new_call.streaming_chunks = []
         new_call.sync_streaming_chunks = []
+        new_call._message_redaction_token = None
         return new_call
 
     def reset_caching_details(self) -> None:
@@ -1257,6 +1260,37 @@ class Logging(LiteLLMLoggingBaseClass):
 
         if "custom_llm_provider" in self.model_call_details:
             self.custom_llm_provider = self.model_call_details["custom_llm_provider"]
+        self._ensure_request_message_redaction()
+
+    def _ensure_request_message_redaction(self) -> None:
+        from contextvars import Token
+
+        from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
+            bind_message_logging_privacy,
+            message_logging_is_private,
+        )
+
+        if isinstance(getattr(self, "_message_redaction_token", None), Token) or message_logging_is_private():
+            return
+        if not should_redact_message_logging(self._message_redaction_details()):
+            return
+        self._message_redaction_token = bind_message_logging_privacy()
+
+    def _message_redaction_details(self) -> Mapping[str, object]:
+        return {
+            **self.model_call_details,
+            "litellm_params": self.litellm_params,
+            "standard_callback_dynamic_params": self.standard_callback_dynamic_params,
+        }
+
+    def __del__(self) -> None:
+        from contextvars import Token
+
+        from litellm.litellm_core_utils.initialize_dynamic_callback_params import release_message_logging_privacy
+
+        token: Final = getattr(self, "_message_redaction_token", None)
+        if isinstance(token, Token):
+            release_message_logging_privacy(token)
 
     def record_agentic_loop_params(self, params: AgenticLoopParams) -> None:
         self.model_call_details["agentic_loop_params"] = params

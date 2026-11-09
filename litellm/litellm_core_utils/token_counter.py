@@ -22,8 +22,8 @@ from tiktoken.model import MODEL_TO_ENCODING
 from typing_extensions import ParamSpec, TypeVar
 
 import litellm
-from litellm import verbose_logger
 from litellm._lazy_imports import get_default_encoding
+from litellm._logging import debug_message_redaction_active, verbose_logger
 from litellm.constants import (
     ANTHROPIC_IMAGE_MAX_LONG_EDGE_PX,
     ANTHROPIC_IMAGE_MAX_PIXELS,
@@ -930,7 +930,7 @@ def token_counter(
         return 0
 
     logged_text: Final = (
-        REDACTED_BY_LITELLM if litellm.turn_off_message_logging is True and isinstance(text, str) and text != "" else text
+        REDACTED_BY_LITELLM if debug_message_redaction_active() and isinstance(text, str) and text != "" else text
     )
     verbose_logger.debug("messages in token_counter: %s, text in token_counter: %s", messages, logged_text)
     if text is not None and messages is not None:

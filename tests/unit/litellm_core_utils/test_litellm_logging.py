@@ -27,7 +27,8 @@ from pydantic import BaseModel
 
 import litellm
 from litellm._internal_context import in_post_response_phase
-from litellm._logging import session_id_var, trace_id_var, verbose_logger
+from litellm._logging import session_id_var, trace_id_var, verbose_logger, verbose_proxy_logger
+from litellm.utils import print_args_passed_to_litellm
 from litellm._service_logger import ServiceLogging
 from litellm.caching.caching import DualCache
 from litellm.constants import (
@@ -8912,6 +8913,80 @@ def test_turn_off_message_logging_redacts_request_str_debug_line(logging_obj, ca
 
     assert _DEBUG_PROMPT not in caplog.text
     assert _DEBUG_API_BASE in caplog.text
+    assert REDACTED_BY_LITELLM in caplog.text
+
+
+def _embedding_call() -> None:
+    return None
+
+
+def _text_completion_call() -> None:
+    return None
+
+
+def test_print_args_redacts_scalar_input_and_prompt_when_message_logging_is_off(caplog, monkeypatch):
+    monkeypatch.setattr(litellm, "turn_off_message_logging", True)
+    caplog.set_level(logging.DEBUG, logger="LiteLLM")
+
+    print_args_passed_to_litellm(_embedding_call, (), {"model": "text-embedding-3-small", "input": _DEBUG_PROMPT})
+    print_args_passed_to_litellm(_text_completion_call, (), {"model": "gpt-3.5-turbo-instruct", "prompt": _DEBUG_REPLY})
+
+    assert _DEBUG_PROMPT not in caplog.text
+    assert _DEBUG_REPLY not in caplog.text
+    assert "text-embedding-3-small" in caplog.text
+    assert "gpt-3.5-turbo-instruct" in caplog.text
+    assert REDACTED_BY_LITELLM in caplog.text
+
+
+def test_print_args_keeps_scalar_input_when_message_logging_is_on(caplog, monkeypatch):
+    monkeypatch.setattr(litellm, "turn_off_message_logging", False)
+    caplog.set_level(logging.DEBUG, logger="LiteLLM")
+
+    print_args_passed_to_litellm(_embedding_call, (), {"model": "text-embedding-3-small", "input": _DEBUG_PROMPT})
+
+    assert _DEBUG_PROMPT in caplog.text
+
+
+def test_print_args_redacts_scalar_input_for_a_per_request_opt_in(caplog, monkeypatch):
+    monkeypatch.setattr(litellm, "turn_off_message_logging", False)
+    caplog.set_level(logging.DEBUG, logger="LiteLLM")
+
+    print_args_passed_to_litellm(
+        _embedding_call,
+        (),
+        {"model": "text-embedding-3-small", "input": _DEBUG_PROMPT, "turn_off_message_logging": True},
+    )
+
+    assert _DEBUG_PROMPT not in caplog.text
+    assert "text-embedding-3-small" in caplog.text
+
+
+def test_debug_filter_redacts_a_request_payload_when_only_the_request_opts_in(caplog, monkeypatch):
+    from litellm.litellm_core_utils.initialize_dynamic_callback_params import inherit_message_logging_privacy
+
+    monkeypatch.setattr(litellm, "turn_off_message_logging", False)
+    caplog.set_level(logging.DEBUG, logger="LiteLLM Proxy")
+    payload: Final = json.dumps({"model": _DEBUG_MODEL, "messages": [{"role": "user", "content": _DEBUG_PROMPT}]})
+
+    verbose_proxy_logger.debug("Request received by LiteLLM:\n%s", payload)
+    assert _DEBUG_PROMPT in caplog.text
+
+    caplog.clear()
+    with inherit_message_logging_privacy(True):
+        verbose_proxy_logger.debug(
+            "Request received by LiteLLM:\n%s",
+            json.dumps(
+                {
+                    "model": _DEBUG_MODEL,
+                    "messages": [{"role": "user", "content": _DEBUG_PROMPT}],
+                    "message": _DEBUG_REPLY,
+                }
+            ),
+        )
+
+    assert _DEBUG_PROMPT not in caplog.text
+    assert _DEBUG_REPLY not in caplog.text
+    assert _DEBUG_MODEL in caplog.text
     assert REDACTED_BY_LITELLM in caplog.text
 
 

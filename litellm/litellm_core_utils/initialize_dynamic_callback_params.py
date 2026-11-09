@@ -1,7 +1,7 @@
 import re
 from collections.abc import Generator, Iterator, Mapping
 from contextlib import contextmanager
-from contextvars import ContextVar
+from contextvars import ContextVar, Token
 from typing import Any, Final
 
 from litellm.types.utils import (
@@ -25,6 +25,27 @@ def inherit_message_logging_privacy(disabled: bool) -> Generator[None]:
         yield
     finally:
         _inherited_message_logging_disabled.reset(token)
+
+
+def message_logging_is_private() -> bool:
+    """True when this call inherited message-logging privacy from its parent request."""
+    return _inherited_message_logging_disabled.get()
+
+
+def bind_message_logging_privacy() -> Token[bool] | None:
+    """Mark this call private when it is not already. The token is for ``release_message_logging_privacy``."""
+    if _inherited_message_logging_disabled.get():
+        return None
+    return _inherited_message_logging_disabled.set(True)
+
+
+def release_message_logging_privacy(token: Token[bool] | None) -> None:
+    if token is None:
+        return
+    try:
+        _inherited_message_logging_disabled.reset(token)
+    except (ValueError, RuntimeError):
+        return
 
 
 def iter_client_callback_metadata_dicts(

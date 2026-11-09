@@ -201,11 +201,24 @@ class SecretRedactionFilter(logging.Filter):
 _secret_filter: Final = SecretRedactionFilter()
 
 
+def debug_message_redaction_active() -> bool:
+    """True when process logs for this call must not contain message content.
+
+    The global setting covers every call. A request that opts in, or a parent call that
+    already did, covers just that call even when the global setting is off.
+    """
+    if litellm.turn_off_message_logging is True:
+        return True
+    from litellm.litellm_core_utils.initialize_dynamic_callback_params import message_logging_is_private
+
+    return message_logging_is_private()
+
+
 class MessageContentLogFilter(logging.Filter):
-    """Applies ``litellm.turn_off_message_logging`` to process logs, including debug lines."""
+    """Applies message-logging privacy to process logs, including debug lines."""
 
     def filter(self, record: logging.LogRecord) -> bool:
-        if litellm.turn_off_message_logging is not True:
+        if not debug_message_redaction_active():
             return True
         try:
             _redact_message_content_record(record)
@@ -1285,7 +1298,7 @@ def print_verbose(print_statement: object, *args: object) -> None:
 
 
 def _message_for_print(message: str) -> str:
-    if litellm.turn_off_message_logging is not True:
+    if not debug_message_redaction_active():
         return message
     from litellm.litellm_core_utils.redact_messages import redact_logged_message_content
 
