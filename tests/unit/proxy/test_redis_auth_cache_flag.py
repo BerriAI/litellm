@@ -16,7 +16,7 @@ import litellm.proxy.proxy_server as ps
 from litellm.caching.caching import RedisCache
 from litellm.caching.dual_cache import DualCache
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
-from litellm.redis.store_settings import RedisStoreSettings, breaker_settings
+from litellm.redis.store_settings import RedisStoreSettings
 from litellm.redis.stores.spend_counters import SpendCounterStore
 from tests.unit.redis.stores.auth_cache_double import FakeAuthCache
 from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
@@ -40,7 +40,7 @@ class _FakeRedisCache(RedisCache):
             redis_kwargs={"host": "127.0.0.1", "port": 1, "socket_timeout": 0.2},
             namespace=None,
             default_ttl=60,
-            breaker=breaker_settings(),
+            breaker=None,
         )
 
     def set_cache(self, key, value, **kwargs):  # type: ignore[override]

@@ -631,7 +631,13 @@ def test_should_not_pollute_shared_key_with_custom_nonzero_pricing():
 
 @pytest.mark.parametrize(
     "flag",
-    ["supports_regex_lookaround", "supports_assistant_prefill", "supports_sampling_params", "supports_continuation"],
+    [
+        "supports_regex_lookaround",
+        "supports_assistant_prefill",
+        "supports_sampling_params",
+        "supports_continuation",
+        "supports_bedrock_native_structured_output_by_default",
+    ],
 )
 def test_capability_flag_stays_on_the_deployment_that_set_it(flag: str) -> None:
     """A deployment's capability override must not land on the shared

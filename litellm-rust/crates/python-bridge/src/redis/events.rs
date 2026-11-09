@@ -54,21 +54,33 @@ pub(crate) struct ServiceLoggingEvents {
 }
 
 impl ServiceLoggingEvents {
+    const MODULE: &str = "litellm.rust_bridge.host.redis_events";
+
     pub(crate) fn new(py: Python<'_>, runtime: Handle) -> PyResult<Self> {
-        const MODULE: &str = "litellm.rust_bridge.host.redis_events";
-        Self::from_module(py, &py.import(MODULE)?, runtime)
+        Self::from_module(
+            py,
+            &py.import(Self::MODULE)?,
+            runtime,
+            EventLoop::running(py),
+        )
+    }
+
+    /// For a breaker, whose transitions never run on the caller's loop, so building it never looks one up.
+    pub(crate) fn transitions_only(py: Python<'_>, runtime: Handle) -> PyResult<Self> {
+        Self::from_module(py, &py.import(Self::MODULE)?, runtime, None)
     }
 
     fn from_module(
         py: Python<'_>,
         module: &Bound<'_, PyModule>,
         runtime: Handle,
+        event_loop: Option<EventLoop>,
     ) -> PyResult<Self> {
         Ok(Self {
             record_call: Arc::new(module.getattr("record_redis_call")?.unbind()),
             record_breaker: Arc::new(module.getattr("record_redis_breaker")?.unbind()),
             context: PythonContext::capture(py)?,
-            event_loop: EventLoop::running(py),
+            event_loop,
             runtime,
         })
     }
@@ -226,14 +238,14 @@ def record_redis_breaker(state):
             let module =
                 PyModule::from_code(py, &std::ffi::CString::new(RECORDER).unwrap(), &name, &name)
                     .unwrap();
-            let events = ServiceLoggingEvents::from_module(py, &module, Handle::current()).unwrap();
-            (
-                ServiceLoggingEvents {
-                    event_loop: client_loop.map(|client_loop| stand_in_loop(py, client_loop)),
-                    ..events
-                },
-                module.unbind(),
+            let events = ServiceLoggingEvents::from_module(
+                py,
+                &module,
+                Handle::current(),
+                client_loop.map(|client_loop| stand_in_loop(py, client_loop)),
             )
+            .unwrap();
+            (events, module.unbind())
         })
     }
 
