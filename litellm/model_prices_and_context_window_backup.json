@@ -17046,6 +17046,7 @@
         "source": "https://platform.claude.com/docs/en/about-claude/pricing"
     },
     "claude-fable-5-2": {
+        "supports_mid_conversation_system": true,
         "supports_prompt_caching": true,
         "thinking_always_on": true,
         "supports_function_calling": true,
