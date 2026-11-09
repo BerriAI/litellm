@@ -3480,6 +3480,21 @@ GEMINI_GEMINI_3_1_PRO_PREVIEW_TIERED_INPUT_ABOVE_200K: Final = _gemini_case(
     ),
     usage_fields={"serviceTier": "standard"},
 )
+GEMINI_GEMINI_3_1_PRO_PREVIEW_TIERED_FLEX_ABOVE_200K: Final = _gemini_case(
+    GEMINI_GEMINI_3_1_PRO_TIERED_INPUT_ABOVE_200K,
+    "gemini-gemini-3.1-pro-preview-tiered_flex_above_200k",
+    "gemini/gemini-3.1-pro-preview",
+    "gemini-3.1-pro-preview",
+    ExactExpected(
+        spend=0.539734, input_cost=0.53248, output_cost=0.007254, prompt_tokens=204800, completion_tokens=620
+    ),
+    usage_fields={"serviceTier": "flex"},
+).model_copy(
+    update={
+        "known_bug": "gemini route bills the standard above-200k rate (1.079468) when the Gemini API reply marks flex only "
+        "through usageMetadata.serviceTier, so the above_200k_tokens_flex prices are never applied"
+    }
+)
 GEMINI_GEMINI_3_1_PRO_PREVIEW_TIERED_CACHE_READ_ABOVE_200K: Final = _gemini_case(
     GEMINI_GEMINI_3_1_PRO_TIERED_CACHE_READ_ABOVE_200K,
     "gemini-gemini-3.1-pro-preview-tiered_cache_read_above_200k",
@@ -3572,6 +3587,7 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     GEMINI_GEMINI_3_1_PRO_PREVIEW_CACHE_READ,
     GEMINI_GEMINI_3_1_PRO_PREVIEW_TIERED_INPUT_ABOVE_200K,
     GEMINI_GEMINI_3_1_PRO_PREVIEW_TIERED_CACHE_READ_ABOVE_200K,
+    GEMINI_GEMINI_3_1_PRO_PREVIEW_TIERED_FLEX_ABOVE_200K,
     GEMINI_GEMINI_3_1_PRO_PREVIEW_REASONING,
     GEMINI_GEMINI_3_1_PRO_PREVIEW_TOOL_CALL,
     GEMINI_GEMINI_3_1_PRO_PREVIEW_SERVICE_TIER_PRIORITY,
