@@ -53249,10 +53249,6 @@
         "deprecation_date": "2027-11-09",
         "input_cost_per_token_batches": 4e-06,
         "output_cost_per_token_batches": 2e-05,
-        "supports_fast_mode": true,
-        "provider_specific_entry": {
-            "fast": 2
-        },
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
     },
     "vertex_ai/claude-fable-latest": {
@@ -53377,10 +53373,6 @@
         "deprecation_date": "2027-11-09",
         "input_cost_per_token_batches": 4e-06,
         "output_cost_per_token_batches": 2e-05,
-        "supports_fast_mode": true,
-        "provider_specific_entry": {
-            "fast": 2
-        },
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
     },
     "vertex_ai/claude-opus-5": {

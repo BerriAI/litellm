@@ -11,6 +11,7 @@ shape, which Fable 5 rejects with a 400.
 
 import json
 import os
+from typing import Final
 
 import pytest
 
@@ -103,7 +104,7 @@ FABLE_5_2_VARIANTS = (
 )
 
 
-def test_fable_5_2_present_in_bundled_backup():
+def test_fable_5_2_present_in_bundled_backup() -> None:
     backup = GetModelCostMap.load_local_model_cost_map()
     root = _load_root_cost_map()
     for model_name in FABLE_5_2_VARIANTS:
@@ -122,25 +123,34 @@ def test_fable_5_2_present_in_bundled_backup():
         "bedrock/claude_platform/claude-fable-5-2",
     ],
 )
-def test_adaptive_thinking_detected_for_fable_5_2(local_model_cost_map, model):
+def test_adaptive_thinking_detected_for_fable_5_2(local_model_cost_map, model: str) -> None:
     from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
     assert AnthropicModelInfo.is_adaptive_thinking_model(model, "anthropic") is True
 
 
-@pytest.mark.parametrize("model", ["claude-fable-5-2", "vertex_ai/claude-fable-5-2"])
-def test_fable_5_2_fast_mode_doubles_every_token_price(local_model_cost_map, model):
-    """Anthropic and Google both price fast mode at 2x the standard rate on every
-    token type, so the row's fast multiplier must apply across the board."""
+def test_fable_5_2_fast_mode_doubles_every_token_price_on_the_anthropic_api(local_model_cost_map) -> None:
+    """Anthropic bills fast mode at 2x the standard rate on every token type
+    (platform.claude.com/docs/en/about-claude/pricing, read 2026-11-09), and the
+    Anthropic cost path is the one that reads the row's `fast` multiplier."""
     from litellm.litellm_core_utils.llm_cost_calc.utils import get_provider_specific_speed_multiplier
     from litellm.types.utils import Usage
 
-    info = litellm.get_model_info(model)
+    info: Final = litellm.get_model_info("claude-fable-5-2")
     assert get_provider_specific_speed_multiplier(info, Usage(speed="fast")) == 2.0
     assert get_provider_specific_speed_multiplier(info, Usage()) == 1.0
 
 
-def test_fable_5_2_accepts_the_speed_param_on_the_anthropic_api(local_model_cost_map):
+def test_fable_5_2_vertex_rows_do_not_advertise_fast_mode(local_model_cost_map) -> None:
+    """Vertex cost calculation ignores the `fast` multiplier, so a Vertex row that
+    advertised fast mode would bill fast calls at the standard rate."""
+    for model in ("vertex_ai/claude-fable-5-2", "vertex_ai/claude-fable-5-2@default"):
+        info: Final = litellm.get_model_info(model)
+        assert info.get("supports_fast_mode") is not True, model
+        assert "fast" not in (info.get("provider_specific_entry") or {}), model
+
+
+def test_fable_5_2_accepts_the_speed_param_on_the_anthropic_api(local_model_cost_map) -> None:
     from litellm.llms.anthropic.chat.transformation import AnthropicConfig
     from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
