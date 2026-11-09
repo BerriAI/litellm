@@ -413,17 +413,65 @@ async def test_default_requester_metadata_does_not_carry_one_request_labels_into
 
 
 @pytest.mark.parametrize(
-    ("request_metadata", "sent_tags"),
-    [({"tags": ["caller"]}, ["caller"]), ({"tags": None}, ["proxy-default"]), ({}, ["proxy-default"])],
+    ("request_metadata", "sent_regions"),
+    [({"regions": ["eu"]}, ["eu"]), ({"regions": None}, ["us"]), ({}, ["us"])],
 )
 async def test_a_default_metadata_list_applies_only_when_the_request_sets_none(
+    make_core: MakeCore, host: ScriptedHost, request_metadata: Mapping[str, object], sent_regions: list[str]
+) -> None:
+    core: Final = make_core(
+        model_list=[deployment("g", "d1")], default_litellm_params={"metadata": {"regions": ["us"]}}
+    )
+    await core.acompletion(model="g", messages=MESSAGES, metadata=dict(request_metadata))  # pyright: ignore[reportAttributeAccessIssue]
+    assert _metadata(host.calls[0].kwargs)["regions"] == sent_regions
+
+
+_PROXY_DEFAULT_TAGS: Final = {"metadata": {"tags": ["proxy-default"]}}
+
+
+@pytest.mark.parametrize(
+    ("request_metadata", "sent_tags"),
+    [
+        ({"tags": ["caller"]}, ["caller", "proxy-default"]),
+        ({"tags": ["proxy-default", "caller"]}, ["proxy-default", "caller"]),
+        ({"tags": None}, ["proxy-default"]),
+        ({}, ["proxy-default"]),
+        ({"tags": "caller"}, "caller"),
+    ],
+)
+async def test_default_metadata_tags_follow_the_request_tags(
+    make_core: MakeCore, host: ScriptedHost, request_metadata: Mapping[str, object], sent_tags: object
+) -> None:
+    core: Final = make_core(model_list=[deployment("g", "d1")], default_litellm_params=_PROXY_DEFAULT_TAGS)
+    await core.acompletion(model="g", messages=MESSAGES, metadata=dict(request_metadata))  # pyright: ignore[reportAttributeAccessIssue]
+    assert _metadata(host.calls[0].kwargs)["tags"] == sent_tags
+
+
+@pytest.mark.parametrize(
+    ("request_metadata", "sent_tags"),
+    [
+        ({}, ["t1", "Credential: cred", "proxy-default"]),
+        ({"tags": ["caller"]}, ["caller", "t1", "Credential: cred", "proxy-default"]),
+    ],
+)
+async def test_default_metadata_tags_join_the_deployment_and_credential_tags(
     make_core: MakeCore, host: ScriptedHost, request_metadata: Mapping[str, object], sent_tags: list[str]
 ) -> None:
     core: Final = make_core(
-        model_list=[deployment("g", "d1")], default_litellm_params={"metadata": {"tags": ["proxy-default"]}}
+        model_list=[deployment("g", "d1", tags=["t1"], litellm_credential_name="cred")],
+        default_litellm_params=_PROXY_DEFAULT_TAGS,
     )
     await core.acompletion(model="g", messages=MESSAGES, metadata=dict(request_metadata))  # pyright: ignore[reportAttributeAccessIssue]
     assert _metadata(host.calls[0].kwargs)["tags"] == sent_tags
+
+
+async def test_default_metadata_tags_do_not_carry_one_request_tags_into_the_next(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    core: Final = make_core(model_list=[deployment("g", "d1")], default_litellm_params=_PROXY_DEFAULT_TAGS)
+    await core.acompletion(model="g", messages=MESSAGES, metadata={"tags": ["caller"]})  # pyright: ignore[reportAttributeAccessIssue]
+    await core.acompletion(model="g", messages=MESSAGES)  # pyright: ignore[reportAttributeAccessIssue]
+    assert _metadata(host.calls[1].kwargs)["tags"] == ["proxy-default"]
 
 
 @pytest.mark.parametrize("router_caching_groups", [[("g", "other")], None])

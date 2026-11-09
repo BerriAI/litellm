@@ -13,7 +13,7 @@ import litellm
 from litellm._logging import verbose_logger, verbose_router_logger
 from litellm.constants import ROUTER_FALLBACK_ERROR_DETAIL_MAX_CHARS
 from litellm.exceptions import BadRequestError
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_structure
@@ -70,13 +70,25 @@ def metadata_defaults_under_request(
     defaults: Mapping[str, object], request_metadata: Mapping[str, object]
 ) -> Mapping[str, object]:
     return {
-        key: (
-            default
-            if key in _ROUTER_OWNED_METADATA_KEYS
-            else _request_value_over_default(default=default, requested=request_metadata.get(key))
-        )
+        key: _default_under_request(key=key, default=default, requested=request_metadata.get(key))
         for key, default in defaults.items()
     }
+
+
+def _default_under_request(key: str, default: object, requested: object) -> object:
+    if key in _ROUTER_OWNED_METADATA_KEYS:
+        return default
+    if key == "tags":
+        return _request_tags_then_default_tags(default=default, requested=requested)
+    return _request_value_over_default(default=default, requested=requested)
+
+
+def _request_tags_then_default_tags(default: object, requested: object) -> object:
+    default_tags: Final = as_object_list(default)
+    request_tags: Final = () if requested is None else as_object_list(requested)
+    if default_tags is None or request_tags is None:
+        return _request_value_over_default(default=default, requested=requested)
+    return [*request_tags, *(tag for tag in default_tags if tag not in request_tags)]
 
 
 def _request_value_over_default(default: object, requested: object) -> object:
