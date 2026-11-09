@@ -33,12 +33,12 @@ tests:
     set:
       ingress.enabled: true
       ingress.extraPaths:
-        - path: /watsonx
+        - path: /hosted_vllm
     asserts:
       - equal:
           path: spec.rules[0].http.paths[-2]
           value:
-            path: /watsonx
+            path: /hosted_vllm
             pathType: Prefix
             backend:
               service:
@@ -60,7 +60,7 @@ tests:
     set:
       ingress.enabled: true
       ingress.extraPaths:
-        - path: /watsonx
+        - path: /hosted_vllm
     asserts:
       - contains:
           path: spec.rules[0].http.paths
@@ -117,7 +117,7 @@ tests:
     set:
       ingress.enabled: true
       ingress.extraPaths:
-        - path: /watsonx
+        - path: /hosted_vllm
           service: gateway
         - path: /my-passthrough
           pathType: Exact
@@ -129,7 +129,7 @@ tests:
       - equal:
           path: spec.rules[0].http.paths[-4]
           value:
-            path: /watsonx
+            path: /hosted_vllm
             pathType: Prefix
             backend:
               service:
@@ -164,7 +164,7 @@ tests:
       backend.service.port: 8001
       ui.service.port: 8080
       ingress.extraPaths:
-        - path: /watsonx
+        - path: /hosted_vllm
         - path: /my-passthrough
           service: backend
         - path: /brand.txt
@@ -184,21 +184,21 @@ tests:
     set:
       ingress.enabled: true
       ingress.extraPaths:
-        - path: /watsonx
+        - path: /hosted_vllm
           service: proxy
     asserts:
       - failedTemplate:
-          errorMessage: 'ingress.extraPaths[0] (path /watsonx): unknown service "proxy", expected one of backend, gateway, ui'
+          errorMessage: 'ingress.extraPaths[0] (path /hosted_vllm): unknown service "proxy", expected one of backend, gateway, ui'
 
   - it: rejects an entry whose pathType is not a kubernetes pathType
     set:
       ingress.enabled: true
       ingress.extraPaths:
-        - path: /watsonx
+        - path: /hosted_vllm
           pathType: prefix
     asserts:
       - failedTemplate:
-          errorMessage: 'ingress.extraPaths[0] (path /watsonx): unknown pathType "prefix", expected one of Exact, ImplementationSpecific, Prefix'
+          errorMessage: 'ingress.extraPaths[0] (path /hosted_vllm): unknown pathType "prefix", expected one of Exact, ImplementationSpecific, Prefix'
 
   - it: rejects an entry with no path
     set:
@@ -322,7 +322,7 @@ tests:
     set:
       ingress.enabled: true
       ingress.extraPaths:
-        - /watsonx
+        - /hosted_vllm
     asserts:
       - failedTemplate:
           errorMessage: "ingress.extraPaths[0]: each entry must be a mapping with a 'path' key"
@@ -372,7 +372,7 @@ tests:
         - path: /moyai
           serviceName: moyai-ingress
           servicePort: http
-        - path: /watsonx
+        - path: /hosted_vllm
           service: gateway
     asserts:
       - equal:
