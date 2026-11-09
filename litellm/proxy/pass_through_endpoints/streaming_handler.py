@@ -6,10 +6,14 @@ from typing import Final, Protocol
 
 import httpx
 
-import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.asyncify import asyncify
-from litellm.litellm_core_utils.core_helpers import bind_budget_reservation_to_callbacks
+from litellm.litellm_core_utils.core_helpers import (
+    as_str_mapping,
+    bind_budget_reservation_to_callbacks,
+    proxy_request_headers,
+    stream_cost_injection_requested,
+)
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.anthropic.common_utils import anthropic_error_frame_exception
@@ -194,12 +198,11 @@ class PassThroughStreamingHandler:
             litellm_logging_obj=litellm_logging_obj,
         )
 
-        # Resolve once per stream rather than re-reading the global +
-        # re-branching on every chunk. ``include_cost_in_streaming_usage`` is
-        # set at config load and stable for the process, matching how the
-        # proxy-level streaming fast path resolves it.
+        request_headers: Final = proxy_request_headers(
+            as_str_mapping(litellm_logging_obj.model_call_details.get("litellm_params"))
+        )
         cost_injection_active: Final = (
-            bool(getattr(litellm, "include_cost_in_streaming_usage", False))
+            stream_cost_injection_requested(request_headers)
             and bool(model_name)
             and (
                 endpoint_type in (EndpointType.ANTHROPIC, EndpointType.OPENAI)
@@ -242,7 +245,7 @@ class PassThroughStreamingHandler:
                     complete_frames, pending = split_complete_sse_frames(pending + chunk)
                     if complete_frames:
                         yield ProxyBaseLLMRequestProcessing.process_chunk_with_cost_injection(
-                            complete_frames, resolved_model_name, litellm_logging_obj
+                            complete_frames, resolved_model_name, litellm_logging_obj, request_headers=request_headers
                         )
                 if pending:
                     yield pending

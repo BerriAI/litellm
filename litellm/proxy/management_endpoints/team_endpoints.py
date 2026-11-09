@@ -109,6 +109,7 @@ from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module expo
     can_org_access_model,
     delete_cache_key_objects,
     delete_cache_team_object,
+    evict_budget_windows_absent_marker,
     get_jwt_key_mapping_cache_keys_for_tokens,
     get_org_object,
     get_team_membership,
@@ -121,6 +122,7 @@ from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module expo
 from litellm.proxy.auth.auth_utils import (
     enforce_batch_limits_are_admin_only,
     enforce_output_token_estimates_are_admin_only,
+    enforce_vector_store_index_grants_are_admin_only,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
@@ -132,6 +134,7 @@ from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
 )
 from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
 from litellm.proxy.common_utils.json_merge_patch import apply_json_merge_patch
+from litellm.proxy.common_utils.openai_error_payload import proxy_exception_for
 from litellm.proxy.common_utils.user_api_key_cache import (
     UserApiKeyCache,
     team_membership_auth_cache_key,
@@ -153,6 +156,7 @@ from litellm.proxy.management.teams.dependencies import get_team_access
 from litellm.proxy.management_endpoints.common_daily_activity import (
     InvalidDateRange,
     parse_canonical_date_range,
+    unless_database_fails,
 )
 from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401  # legacy module exports
     _check_disable_global_guardrails_caller_permission,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -222,9 +226,17 @@ from litellm.proxy.management_helpers.utils import (
     add_new_member,
     management_endpoint_wrapper,
 )
-from litellm.proxy.utils import PrismaClient, ProxyLogging, handle_exception_on_proxy
+from litellm.proxy.spend_tracking.committed_spend import drop_committed_spend
+from litellm.proxy.utils import (
+    PrismaClient,
+    ProxyLogging,
+    handle_exception_on_proxy,
+    query_raw_within_statement_timeout,
+)
+from litellm.redis.stores.spend_counters import team_counter
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.chunked_in import delete_many_in, find_many_in
+from litellm.repositories.daily_activity_buckets import api_key_from_bucket
 from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import (
@@ -610,6 +622,9 @@ async def refresh_cached_team(
     await publish_auth_cache_invalidation(cache_key=f"team_id:{team_row.team_id}")
     if team_table.team_alias is not None:
         await publish_auth_cache_invalidation(cache_key=f"team_alias:{team_table.team_alias}")
+    await evict_budget_windows_absent_marker(
+        entity_type=Litellm_EntityType.TEAM, entity_id=team_row.team_id, user_api_key_cache=user_api_key_cache
+    )
 
 
 _refresh_cached_team: Final = refresh_cached_team
@@ -1662,7 +1677,7 @@ async def new_team(
     - team_member_key_duration: Optional[str] - The duration for a team member's key. e.g. "1d", "1w", "1mo"
     - allowed_passthrough_routes: Optional[List[str]] - List of allowed pass through routes for the team.
     - denied_passthrough_routes: Optional[List[str]] - List of pass through routes the team's keys may not call, even if allowed. Applies together with each key's `denied_passthrough_routes`.
-    - allowed_vector_store_indexes: Optional[List[dict]] - List of allowed vector store indexes for the key. Example - [{"index_name": "my-index", "index_permissions": ["write", "read"]}]. If specified, the key will only be able to use these specific vector store indexes. Create index, using `/v1/indexes` endpoint.
+    - allowed_vector_store_indexes: Optional[List[dict]] - List of allowed vector store indexes for the key. Example - [{"index_name": "my-index", "index_permissions": ["write", "read"]}]. If specified, the key will only be able to use these specific vector store indexes. Only a proxy admin can set or change it. Create index, using `/v1/indexes` endpoint.
     - secret_manager_settings: Optional[dict] - Secret manager settings for the team. [Docs](https://docs.litellm.ai/docs/secret_managers/overview)
     - router_settings: Optional[UpdateRouterConfig] - team-specific router settings. Example - {"model_group_retry_policy": {"gpt-4": {"RateLimitErrorRetries": 5}}}. IF null or {} then no router settings.
     - access_group_ids: Optional[List[str]] - List of access group IDs to associate with the team. Access groups define which models the team can access. Example - ["access_group_1", "access_group_2"].
@@ -1773,6 +1788,13 @@ async def new_team(
             user_api_key_dict=user_api_key_dict,
             entity="team",
         )
+        enforce_vector_store_index_grants_are_admin_only(
+            data=data,
+            top_level_grants=data.allowed_vector_store_indexes,
+            existing_metadata=None,
+            user_api_key_dict=user_api_key_dict,
+            entity="team",
+        )
 
         # Check if license is over limit
         total_teams: Final = await _team_db(prisma_client).count()
@@ -1816,6 +1838,7 @@ async def new_team(
             "tpm_limit",
             "rpm_limit",
             "team_member_permissions",
+            "access_group_ids",
         ):
             if getattr(data, field, None) is None and (
                 field != "budget_duration" or field not in data.model_fields_set
@@ -2446,7 +2469,7 @@ async def update_team(
     - default_estimated_output_tokens_per_model: Optional[Dict[str, int]] - Per-model override of the above. Example: {"gpt-4": 4096, "gpt-3.5-turbo": 1024}
     - mcp_rpm_limit: Optional[Dict[str, int]] - Per-MCP-server RPM limit for this team, keyed by MCP server name (alias if set, else the configured name). Example: {"github": 100, "slack": 200}. Applied across all keys for this team.
     Example - update team TPM Limit
-    - allowed_vector_store_indexes: Optional[List[dict]] - List of allowed vector store indexes for the key. Example - [{"index_name": "my-index", "index_permissions": ["write", "read"]}]. If specified, the key will only be able to use these specific vector store indexes. Create index, using `/v1/indexes` endpoint.
+    - allowed_vector_store_indexes: Optional[List[dict]] - List of allowed vector store indexes for the key. Example - [{"index_name": "my-index", "index_permissions": ["write", "read"]}]. If specified, the key will only be able to use these specific vector store indexes. Only a proxy admin can set or change it. Create index, using `/v1/indexes` endpoint.
     - secret_manager_settings: Optional[dict] - Secret manager settings for the team. [Docs](https://docs.litellm.ai/docs/secret_managers/overview)
     - router_settings: Optional[UpdateRouterConfig] - team-specific router settings. Example - {"model_group_retry_policy": {"gpt-4": {"RateLimitErrorRetries": 5}}}. IF null or {} then no router settings.
     - access_group_ids: Optional[List[str]] - List of access group IDs to associate with the team. Access groups define which models the team can access. Example - ["access_group_1", "access_group_2"].
@@ -2581,6 +2604,13 @@ async def update_team(
         enforce_batch_limits_are_admin_only(
             data=data,
             existing_metadata=_existing_team_metadata if isinstance(_existing_team_metadata, dict) else None,
+            user_api_key_dict=user_api_key_dict,
+            entity="team",
+        )
+        enforce_vector_store_index_grants_are_admin_only(
+            data=data,
+            top_level_grants=data.allowed_vector_store_indexes,
+            existing_metadata=_existing_team_metadata if isinstance(_existing_team_metadata, dict) else None,  # pyright: ignore[reportUnknownArgumentType]  # stored metadata is a bare dict
             user_api_key_dict=user_api_key_dict,
             entity="team",
         )
@@ -4835,6 +4865,7 @@ async def delete_validated_team_rows(
     """
     from litellm.proxy.proxy_server import (
         proxy_logging_obj,
+        spend_counter_store,
         user_api_key_cache,
     )
 
@@ -4906,7 +4937,9 @@ async def delete_validated_team_rows(
         _emit_team_members_metric(deleted_team.model_copy(update={"members_with_roles": ()}))
         await sync_team_access_group_membership(prisma_client=prisma_client, team_id=deleted_team.team_id)
 
-    return DeletedTeams(team_ids=tuple(team.team_id for team in locked))
+    deleted_team_ids: Final = tuple(team.team_id for team in locked)
+    await drop_committed_spend(spend_counter_store, tuple(team_counter(team_id) for team_id in deleted_team_ids))
+    return DeletedTeams(team_ids=deleted_team_ids)
 
 
 def _locked_roster_user_ids(locked: Sequence[LiteLLM_TeamTable]) -> tuple[str, ...]:
@@ -5526,21 +5559,9 @@ async def team_info(
             e,
             traceback.format_exc(),
         )
-        if isinstance(e, HTTPException):
-            raise ProxyException(
-                message=getattr(e, "detail", f"Authentication Error({e})"),
-                type=ProxyErrorTypes.auth_error,
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
-            )
-        elif isinstance(e, ProxyException):
-            raise e
-        raise ProxyException(
-            message="Authentication Error, " + str(e),
-            type=ProxyErrorTypes.auth_error,
-            param=getattr(e, "param", "None"),
-            code=status.HTTP_400_BAD_REQUEST,
-        )
+        if isinstance(e, ProxyException):
+            raise
+        raise proxy_exception_for(e, default_status_code=status.HTTP_400_BAD_REQUEST) from e
 
 
 @router.get(
@@ -7303,7 +7324,12 @@ async def resolve_team_daily_activity_scope(
     where_condition: Final[_TeamIdInFilter] = {}
     if team_ids_list:
         where_condition["team_id"] = {"in": list(team_ids_list)}
-    team_aliases: Final = await _team_db(prisma_client).find_many(where=where_condition)
+    team_alias_lookup: Final = _team_db(prisma_client).find_many(where=where_condition)
+    team_aliases: Final = (
+        await unless_database_fails(team_alias_lookup, [], "its team aliases")
+        if user_api_key_has_admin_view(user_api_key_dict)
+        else await team_alias_lookup
+    )
     team_alias_metadata: Final = {t.team_id: {"team_alias": _as_object(t.team_alias)} for t in team_aliases}
 
     # Check if user is team admin or has /team/daily/activity permission
@@ -7340,11 +7366,12 @@ async def resolve_team_daily_activity_scope(
             if not user_api_keys:
                 user_api_keys = []
 
+    selected_key: Final = api_key_from_bucket(api_key) if api_key else None
     final_api_key_filter: str | list[str] | None
     if user_api_keys is None:
-        final_api_key_filter = api_key
-    elif api_key:
-        final_api_key_filter = api_key if api_key in user_api_keys else []
+        final_api_key_filter = [selected_key] if selected_key is not None else None
+    elif selected_key is not None:
+        final_api_key_filter = [selected_key] if selected_key in user_api_keys else []
     else:
         final_api_key_filter = user_api_keys
 
@@ -7478,6 +7505,9 @@ class _TeamUserSpendDbRow(TypedDict):
     failed_requests: ReadOnly[int]
 
 
+_TEAM_USER_SPEND_ROWS: Final = TypeAdapter(tuple[_TeamUserSpendDbRow, ...])
+
+
 @router.get(
     "/team/spend/by_user",
     response_model=TeamUserSpendResponse,
@@ -7528,12 +7558,16 @@ async def get_team_spend_by_user(
     own_user_only: Final = scope.api_key_filter is not None
     user_param: Final = (user_api_key_dict.user_id or "",) if own_user_only else ()
     async with db_span("team_user_spend", "LiteLLM_SpendLogs"):
-        rows: Final[Sequence[_TeamUserSpendDbRow]] = await prisma_client.db.query_raw(
-            _team_user_spend_sql(team_count=len(scoped_team_ids), restrict_to_user=own_user_only),
-            start_date,
-            end_date,
-            *scoped_team_ids,
-            *user_param,
+        rows: Final = _TEAM_USER_SPEND_ROWS.validate_python(
+            await query_raw_within_statement_timeout(
+                prisma_client,
+                _team_user_spend_sql(team_count=len(scoped_team_ids), restrict_to_user=own_user_only),
+                start_date,
+                end_date,
+                *scoped_team_ids,
+                *user_param,
+                what="Spend per user",
+            )
         )
     results: Final = tuple(
         TeamUserSpendRow(

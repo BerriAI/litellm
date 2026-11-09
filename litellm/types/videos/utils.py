@@ -17,10 +17,11 @@ VIDEO_ID_PREFIX: Final = "video_"
 VIDEO_ID_SERVED_MODEL_PREFIX: Final = "served_model:"
 VIDEO_ID_DEPLOYMENT_PREFIX: Final = "deployment_id:"
 VIDEO_ID_REQUESTED_MODEL_PREFIX: Final = "requested_model:"
-VIDEO_ID_CALL_TYPES: Final = frozenset(
+VIDEO_STATUS_CALL_TYPES: Final = frozenset({"avideo_status", "video_status"})
+VIDEO_COST_REQUEST_ID_SUFFIX: Final = "_video_cost"
+POLLED_VIDEO_STATUS_KWARG: Final = "polled_video_status"
+VIDEO_ID_CALL_TYPES: Final = VIDEO_STATUS_CALL_TYPES | frozenset(
     {
-        "avideo_status",
-        "video_status",
         "avideo_content",
         "video_content",
         "avideo_remix",
@@ -31,6 +32,12 @@ VIDEO_ID_CALL_TYPES: Final = frozenset(
         "video_extension",
     }
 )
+
+
+def is_video_status_call_type(call_type: object) -> bool:
+    return isinstance(call_type, str) and call_type in VIDEO_STATUS_CALL_TYPES
+
+
 CHARACTER_ID_PREFIX: Final = "character_"
 CHARACTER_ID_TEMPLATE: Final = "litellm:custom_llm_provider:{};model_id:{};character_id:{}"
 
@@ -94,6 +101,27 @@ def _trailing_part(parts: Sequence[str], prefix: str) -> str | None:
     return next((part.removeprefix(prefix) or None for part in parts[3:] if part.startswith(prefix)), None)
 
 
+def _decoded_video_id_payload(encoded_video_id: str) -> str | None:
+    if not encoded_video_id.startswith(VIDEO_ID_PREFIX):
+        return None
+    try:
+        decoded_id: Final = base64.b64decode(
+            _add_base64_padding(encoded_video_id.removeprefix(VIDEO_ID_PREFIX)).encode("utf-8")
+        ).decode("utf-8")
+    except ValueError as e:
+        verbose_logger.debug("Error decoding video_id '%s': %s", encoded_video_id, e)
+        return None
+    return decoded_id if ";" in decoded_id else None
+
+
+def canonical_video_id(video_id: str) -> str:
+    """One spelling per video, since a client may poll a LiteLLM video id with or without its base64 padding."""
+    payload: Final = _decoded_video_id_payload(video_id)
+    if payload is None:
+        return video_id
+    return f"{VIDEO_ID_PREFIX}{base64.b64encode(payload.encode('utf-8')).decode('utf-8')}"
+
+
 def decode_video_id_with_provider(encoded_video_id: str) -> DecodedVideoId:
     """Decode provider and model_id from encoded video_id."""
     if not encoded_video_id:
@@ -103,26 +131,8 @@ def decode_video_id_with_provider(encoded_video_id: str) -> DecodedVideoId:
             video_id=encoded_video_id,
         )
 
-    if not encoded_video_id.startswith(VIDEO_ID_PREFIX):
-        return DecodedVideoId(
-            custom_llm_provider=None,
-            model_id=None,
-            video_id=encoded_video_id,
-        )
-
-    try:
-        cleaned_id = encoded_video_id.replace(VIDEO_ID_PREFIX, "")
-        cleaned_id = _add_base64_padding(cleaned_id)
-        decoded_id: Final = base64.b64decode(cleaned_id.encode("utf-8")).decode("utf-8")
-    except Exception as e:
-        verbose_logger.debug("Error decoding video_id '%s': %s", encoded_video_id, e)
-        return DecodedVideoId(
-            custom_llm_provider=None,
-            model_id=None,
-            video_id=encoded_video_id,
-        )
-
-    if ";" not in decoded_id:
+    decoded_id: Final = _decoded_video_id_payload(encoded_video_id)
+    if decoded_id is None:
         return DecodedVideoId(
             custom_llm_provider=None,
             model_id=None,
