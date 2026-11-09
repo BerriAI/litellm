@@ -519,10 +519,15 @@ async def test_default_metadata_tags_do_not_carry_one_request_tags_into_the_next
         ({"guardrails": ["caller-guard"]}, ["caller-guard", "admin-guard"]),
         ({"guardrails": "caller-guard"}, ["admin-guard"]),
         ({}, ["admin-guard"]),
+        ({"guardrails": [{"admin-guard": {"extra_body": {"threshold": 1}}}]}, ["admin-guard"]),
+        (
+            {"guardrails": [{"admin-guard": {"extra_body": {"threshold": 1}}, "caller-guard": {"extra_body": {"k": 2}}}]},
+            [{"caller-guard": {"extra_body": {"k": 2}}}, "admin-guard"],
+        ),
     ],
 )
-async def test_a_default_guardrail_stays_on_whatever_guardrails_the_request_lists(
-    make_core: MakeCore, host: ScriptedHost, request_metadata: Mapping[str, object], sent_guardrails: list[str]
+async def test_a_default_guardrail_stays_on_with_its_own_settings_whatever_the_request_lists(
+    make_core: MakeCore, host: ScriptedHost, request_metadata: Mapping[str, object], sent_guardrails: list[object]
 ) -> None:
     core: Final = make_core(
         model_list=[deployment("g", "d1")], default_litellm_params={"metadata": {"guardrails": ["admin-guard"]}}

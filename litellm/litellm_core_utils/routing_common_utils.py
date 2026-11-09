@@ -1,6 +1,7 @@
 import hashlib
 import json
 from collections.abc import Mapping, Sequence
+from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, TypeVar
 
@@ -97,8 +98,27 @@ def _request_items_then_default_items(default: object, requested: object) -> obj
     default_items: Final = as_object_list(default)
     if default_items is None:
         return _request_value_over_default(default=default, requested=requested)
-    request_items: Final = as_object_list(requested) or ()
+    default_names: Final = frozenset(chain.from_iterable(_entry_names(item) for item in default_items))
+    request_items: Final = tuple(
+        chain.from_iterable(_without_entries_named(item, default_names) for item in as_object_list(requested) or ())
+    )
     return [*request_items, *(item for item in default_items if item not in request_items)]
+
+
+def _entry_names(entry: object) -> frozenset[str]:
+    mapping: Final = as_str_mapping(entry)
+    if mapping is not None:
+        return frozenset(mapping)
+    return frozenset((entry,)) if isinstance(entry, str) else frozenset()
+
+
+def _without_entries_named(entry: object, names: frozenset[str]) -> tuple[object, ...]:
+    mapping: Final = as_str_mapping(entry)
+    if mapping is None or names.isdisjoint(mapping):
+        return (entry,)
+    if names.issuperset(mapping):
+        return ()
+    return ({key: value for key, value in mapping.items() if key not in names},)
 
 
 def _request_value_over_default(default: object, requested: object) -> object:
