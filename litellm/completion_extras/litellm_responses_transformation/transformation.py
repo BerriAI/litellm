@@ -26,9 +26,11 @@ import litellm
 from litellm import ModelResponse
 from litellm._logging import verbose_logger
 from litellm.integrations.anthropic_cache_control_hook import supports_openai_prompt_cache_breakpoint
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or_none
 from litellm.litellm_core_utils.hidden_params import get_hidden_params, get_or_create_hidden_params
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     responses_reasoning_items_from_thinking_blocks,
+    thinking_blocks_from_reasoning_items,
     with_prompt_cache_breakpoint,
 )
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
@@ -45,6 +47,8 @@ from litellm.responses.utils import ResponsesAPIRequestUtils, normalize_response
 from litellm.types.llms.openai import (
     ChatCompletionAnnotation,
     ChatCompletionReasoningItem,
+    ChatCompletionRedactedThinkingBlock,
+    ChatCompletionThinkingBlock,
     ChatCompletionToolCallChunk,
     ChatCompletionToolCallFunctionChunk,
     ChatCompletionToolParamFunctionChunk,
@@ -54,7 +58,7 @@ from litellm.types.llms.openai import (
     ResponsesAPIResponse,
     ResponsesAPIStreamEvents,
 )
-from litellm.types.utils import GenericStreamingChunk, ModelResponseStream
+from litellm.types.utils import CallTypes, Delta, GenericStreamingChunk, ModelResponseStream, StreamingChoices
 
 if TYPE_CHECKING:
     from openai.types.responses import ResponseInputImageParam, ResponseOutputItem
@@ -70,8 +74,6 @@ if TYPE_CHECKING:
         AllMessageValues,
         ChatCompletionFileObject,
         ChatCompletionImageObject,
-        ChatCompletionRedactedThinkingBlock,
-        ChatCompletionThinkingBlock,
         ChatCompletionToolReferenceObject,
         OpenAIMessageContentListBlock,
     )
@@ -223,6 +225,10 @@ class _BuiltReasoningItem(TypedDict):
     id: str
     encrypted_content: str | None
     summary: Sequence[_ReasoningSummaryText]
+
+
+def serves_anthropic_messages(logging_obj: object) -> bool:
+    return attribute_or_none(logging_obj, "call_type") == CallTypes.anthropic_messages.value
 
 
 def _get_reasoning_items(
@@ -443,6 +449,77 @@ def _as_chat_reasoning_items(
     return cast(list[ChatCompletionReasoningItem], list(reasoning_items))
 
 
+def _with_stream_block_index(
+    block: Mapping[str, object],
+    index: int,
+    summary_streamed: bool,
+) -> ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock:
+    if block.get("type") == "redacted_thinking":
+        data: Final = block.get("data")
+        return ChatCompletionRedactedThinkingBlock(
+            type="redacted_thinking",
+            data=data if isinstance(data, str) else "",
+            index=index,
+        )
+    thinking: Final = block.get("thinking")
+    signature: Final = block.get("signature")
+    return ChatCompletionThinkingBlock(
+        type="thinking",
+        thinking=thinking if isinstance(thinking, str) and not summary_streamed else "",
+        signature=signature if isinstance(signature, str) else None,
+        index=index,
+    )
+
+
+def _stream_output_index(chunk: Mapping[str, object]) -> int | None:
+    output_index: Final = chunk.get("output_index")
+    return output_index if isinstance(output_index, int) and not isinstance(output_index, bool) else None
+
+
+def _reasoning_done_thinking_blocks(
+    item: Mapping[str, object],
+    output_index: int | None,
+    summary_streamed: bool,
+) -> tuple[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock, ...]:
+    index: Final = output_index if output_index is not None else 0
+    return tuple(
+        _with_stream_block_index(block, index, summary_streamed)
+        for block in thinking_blocks_from_reasoning_items((item,))
+    )
+
+
+def _reasoning_done_stream_chunk(
+    chunk: Mapping[str, object],
+    summary_streamed_outputs: frozenset[int | None],
+) -> ModelResponseStream | None:
+    event_type: Final = chunk.get("type")
+    event_name: Final = (
+        event_type.value
+        if isinstance(event_type, ResponsesAPIStreamEvents)
+        else event_type
+        if isinstance(event_type, str)
+        else None
+    )
+    if event_name != ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE:
+        return None
+    item: Final = as_str_mapping(chunk.get("item"))
+    if item is None or item.get("type") != "reasoning":
+        return None
+    output_index: Final = _stream_output_index(chunk)
+    signed_blocks: Final = _reasoning_done_thinking_blocks(item, output_index, output_index in summary_streamed_outputs)
+    if not signed_blocks:
+        return None
+    return ModelResponseStream(
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(thinking_blocks=list(signed_blocks)),
+                finish_reason=None,
+            )
+        ]
+    )
+
+
 def _shift_annotation(annotation: ChatCompletionAnnotation, offset: int) -> ChatCompletionAnnotation:
     shifted: Final = {
         key: value + offset if key in ("start_index", "end_index") and isinstance(value, int) else value
@@ -476,7 +553,7 @@ def _fold_choices_into_one(
     choices: Sequence["Choices"],
     tool_calls: Sequence[Mapping[str, object]],
     trailing_reasoning_content: str | None,
-    trailing_reasoning_item: _BuiltReasoningItem | None,
+    trailing_reasoning_items: Sequence[_BuiltReasoningItem],
     tool_search_items: Sequence[Mapping[str, object]],
     structured_output: bool = False,
 ) -> "Choices":
@@ -495,7 +572,7 @@ def _fold_choices_into_one(
     reasoning_contents: Final = (*(_message_reasoning_content(m) for m in messages), trailing_reasoning_content)
     reasoning_items: Final = (
         *chain.from_iterable(_message_reasoning_items(m) for m in messages),
-        *(() if trailing_reasoning_item is None else (trailing_reasoning_item,)),
+        *trailing_reasoning_items,
     )
     return Choices(
         message=Message(
@@ -1149,6 +1226,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         output_items: Sequence[object],
         handle_raw_dict_callback: Callable[..., tuple["Choices | None", int]] | None = None,
         structured_output: bool = False,
+        keeps_every_reasoning_item: bool = False,
     ) -> list["Choices"]:
         """
         Convert Responses API output items to chat completion choices.
@@ -1158,6 +1236,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             handle_raw_dict_callback: Optional callback for handling raw dict items
             structured_output: The chat request carried a json response_format, so only the
                 first message item becomes content
+            keeps_every_reasoning_item: Keep each reasoning item before an answer, not only the last
 
         Returns:
             List of Choices objects
@@ -1180,7 +1259,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         choices: Final[list[Choices]] = []
         index = 0
         reasoning_content: str | None = None
-        pending_reasoning_item: _BuiltReasoningItem | None = None
+        pending_reasoning_items: tuple[_BuiltReasoningItem, ...] = ()
 
         # Collect all tool calls to put them in a single choice
         # (Chat Completions API expects all tool calls in one message)
@@ -1189,12 +1268,19 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
         for item in output_items:
             if isinstance(item, ResponseReasoningItem):
-                pending_reasoning_item = _build_reasoning_item(
-                    item_id=item.id,
-                    encrypted_content=getattr(item, "encrypted_content", None),
-                    summary_raw=item.summary,
+                pending_reasoning_items = (
+                    *(pending_reasoning_items if keeps_every_reasoning_item else ()),
+                    _build_reasoning_item(
+                        item_id=item.id,
+                        encrypted_content=getattr(item, "encrypted_content", None),
+                        summary_raw=item.summary,
+                    ),
                 )
-                reasoning_content = " ".join(s["text"] for s in pending_reasoning_item["summary"] if s.get("text"))
+                reasoning_content = " ".join(
+                    s["text"]
+                    for s in chain.from_iterable(built["summary"] for built in pending_reasoning_items)
+                    if s.get("text")
+                )
 
             elif isinstance(item, ResponseOutputMessage):
                 for content in item.content:
@@ -1211,7 +1297,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                         annotations=annotations,
                         reasoning_items=cast(
                             list[ChatCompletionReasoningItem] | None,
-                            ([pending_reasoning_item] if pending_reasoning_item is not None else None),
+                            (list(pending_reasoning_items) or None),
                         ),
                     )
 
@@ -1224,7 +1310,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     )
 
                     reasoning_content = None  # flush
-                    pending_reasoning_item = None  # flush
+                    pending_reasoning_items = ()  # flush
                     index += 1
 
             elif isinstance(item, ResponseFunctionToolCall):
@@ -1289,7 +1375,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 choices=choices,
                 tool_calls=accumulated_tool_calls,
                 trailing_reasoning_content=reasoning_content,
-                trailing_reasoning_item=pending_reasoning_item,
+                trailing_reasoning_items=pending_reasoning_items,
                 tool_search_items=tool_search_items,
                 structured_output=structured_output,
             )
@@ -1396,6 +1482,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         encoding: object,
         api_key: str | None = None,
         json_mode: bool | None = None,
+        keeps_every_reasoning_item: bool = False,
     ) -> "ModelResponse":
         """Transform Responses API response to chat completion response"""
         from litellm.responses.utils import ResponseAPILoggingUtils
@@ -1427,6 +1514,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             structured_output=is_structured_output_request(
                 cast("Mapping[str, object]", optional_params)  # cast-ok: optional_params is an untyped dict
             ),
+            keeps_every_reasoning_item=keeps_every_reasoning_item,
         )
 
         response_is_incomplete: Final = raw_response.status == "incomplete" or (
@@ -1490,9 +1578,14 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         sync_stream: bool,
         json_mode: bool | None = False,
         structured_output: bool = False,
+        streams_reasoning_signatures: bool = False,
     ) -> BaseModelResponseIterator:
         return OpenAiResponsesToChatCompletionStreamIterator(
-            streaming_response, sync_stream, json_mode, structured_output=structured_output
+            streaming_response,
+            sync_stream,
+            json_mode,
+            structured_output=structured_output,
+            streams_reasoning_signatures=streams_reasoning_signatures,
         )
 
     def _convert_content_str_to_input_text(self, content: str, role: str) -> dict[str, object]:
@@ -1871,13 +1964,16 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         sync_stream: bool,
         json_mode: bool | None = False,
         structured_output: bool = False,
+        streams_reasoning_signatures: bool = False,
     ):
         super().__init__(streaming_response, sync_stream, json_mode)
+        self._streams_reasoning_signatures: Final = streams_reasoning_signatures
         self._chat_completion_id: str | None = None
         self._served_service_tier: str | None = None
         self._tool_call_index_map: dict[int, int] = {}  # mutable-ok: per-stream accumulator state
         self._structured_output: Final = structured_output
         self._first_message_item_done: bool = False
+        self._summary_streamed_outputs: frozenset[int | None] = frozenset()
 
     def _handle_string_chunk(
         self, str_line: Union[str, "BaseModel"]
@@ -2089,7 +2185,6 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                         )
                     ]
                 )
-
         elif event_type == "response.output_text.delta":
             # Content part added to output
             content_part = parsed_chunk.get("delta", None)
@@ -2193,15 +2288,24 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         """
         verbose_logger.debug("Chat provider: transform_streaming_response called with chunk: %s", chunk)
         self._remember_served_service_tier(chunk)
+        reasoning_chunk: Final = (
+            _reasoning_done_stream_chunk(chunk, self._summary_streamed_outputs)
+            if self._streams_reasoning_signatures
+            else None
+        )
         translated: Final = (
             self._empty_content_chunk()
             if self._is_text_delta_after_structured_answer(chunk)
+            else reasoning_chunk
+            if reasoning_chunk is not None
             else OpenAiResponsesToChatCompletionStreamIterator.translate_responses_chunk_to_openai_stream(
                 chunk, tool_call_index_map=self._tool_call_index_map
             )
         )
         if self._structured_output and _is_message_item_done(chunk):
             self._first_message_item_done = True
+        if _responses_event_type(chunk) == "response.reasoning_summary_text.delta" and chunk.get("delta"):
+            self._summary_streamed_outputs = self._summary_streamed_outputs | {_stream_output_index(chunk)}
         return self._with_served_service_tier(self._with_stream_scoped_id(translated))
 
     def _is_text_delta_after_structured_answer(self, chunk: Mapping[str, object]) -> bool:

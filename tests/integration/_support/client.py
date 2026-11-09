@@ -95,6 +95,10 @@ class Gateway:
     client: httpx.Client
     key: str
     upstream_url: str
+    database_url: str | None = None
+
+    def rows(self, query: str, parameters: tuple[str, ...]) -> list[dict[str, JsonValue]]:
+        return read_rows(query, parameters, database_url=self.database_url)
 
     def request(
         self,
@@ -267,12 +271,14 @@ class Scenario:
         )
         assert read_rows('SELECT model_id FROM "LiteLLM_ProxyModelTable" WHERE model_id = %s', (identity,)) == []
 
-    def model(self, *, model_info: Mapping[str, JsonValue] | None = None, **parameters: JsonValue) -> str:
-        name: Final = f"integration-{uuid.uuid4().hex}"
+    def model(
+        self, *, name: str | None = None, model_info: Mapping[str, JsonValue] | None = None, **parameters: JsonValue
+    ) -> str:
+        model_name: Final = name if name is not None else f"integration-{uuid.uuid4().hex}"
         created: Final = self.gateway.post(
             "/model/new",
             {
-                "model_name": name,
+                "model_name": model_name,
                 "litellm_params": {
                     "model": "openai/gpt-4o-mini",
                     "api_key": "integration-provider-key",
@@ -284,7 +290,7 @@ class Scenario:
         )
         identity: Final = string_value(object_value(created["model_info"])["id"])
         self.cleanups.callback(self.delete_model, identity)
-        return name
+        return model_name
 
 
 @contextmanager
