@@ -681,7 +681,10 @@ async def get_plugin_archive(plugin_name: str, request: Request, key: str | None
     return Response(
         content=data,
         media_type="application/zip",
-        headers={"Content-Disposition": f'attachment; filename="{plugin_name}.zip"'},
+        headers={
+            "Content-Disposition": f'attachment; filename="{plugin_name}.zip"',
+            "Cache-Control": "private, no-store",
+        },
     )
 
 
