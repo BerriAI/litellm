@@ -1776,9 +1776,7 @@ class HostRegistry(HostModelInfo):
         return sum(len(held(member)) for member in group.models) > 1
 
     def _group_members(self, model_group: str) -> GroupMembers | None:
-        """``(id, litellm model)`` of each entry ``_core_get_model_list(model_name=model_group)`` lists,
-        ``None`` where it lists none. Listed again only after the registry moves: an alias or a
-        wildcard name reads state the registry version does not cover, so those list every time."""
+        # An alias or a wildcard name reads state the registry version does not cover: those list every time.
         handle: Final = self._live_handle()
         if handle is None or _index_key(model_group) is None or model_group in (self._core_model_group_alias or {}):
             return _members_of(self._core_get_model_list(model_name=model_group))
