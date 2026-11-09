@@ -266,62 +266,6 @@
             "max"
         ]
     },
-    "abliteratedllm/deepseek-v4.1-flash": {
-        "cache_read_input_token_cost": 6e-09,
-        "input_cost_per_token": 3e-07,
-        "litellm_provider": "abliteratedllm",
-        "max_input_tokens": 1048576,
-        "max_output_tokens": 393216,
-        "mode": "chat",
-        "output_cost_per_token": 1.2e-06,
-        "source": "https://abliteratedllm.dev/pricing",
-        "supported_modalities": [
-            "text"
-        ],
-        "supported_output_modalities": [
-            "text"
-        ],
-        "supports_function_calling": true,
-        "supports_prompt_caching": true,
-        "supports_reasoning": true,
-        "supports_response_schema": false,
-        "supports_tool_choice": true,
-        "supports_vision": false,
-        "reasoning_effort_levels": [
-            "none",
-            "low",
-            "high",
-            "max"
-        ]
-    },
-    "abliteratedllm/deepseek-v4-pro": {
-        "cache_read_input_token_cost": 4.4e-08,
-        "input_cost_per_token": 1.32e-06,
-        "litellm_provider": "abliteratedllm",
-        "max_input_tokens": 1048576,
-        "max_output_tokens": 393216,
-        "mode": "chat",
-        "output_cost_per_token": 3.96e-06,
-        "source": "https://abliteratedllm.dev/pricing",
-        "supported_modalities": [
-            "text"
-        ],
-        "supported_output_modalities": [
-            "text"
-        ],
-        "supports_function_calling": true,
-        "supports_prompt_caching": true,
-        "supports_reasoning": true,
-        "supports_response_schema": false,
-        "supports_tool_choice": true,
-        "supports_vision": false,
-        "reasoning_effort_levels": [
-            "none",
-            "low",
-            "high",
-            "max"
-        ]
-    },
     "abliteratedllm/deepseek-v4.1-flash-1017": {
         "cache_read_input_token_cost": 5.4e-09,
         "cache_read_input_token_cost_priority": 6.75e-09,
