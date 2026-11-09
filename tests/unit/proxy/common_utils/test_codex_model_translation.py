@@ -173,7 +173,9 @@ def test_a_deployment_that_says_nothing_does_not_vote_on_tools_or_reasoning():
         ((True, False, None), False),
     ],
 )
-def test_vision_holds_only_when_every_deployment_says_it_reads_images(flags, expected):
+def test_vision_holds_only_when_every_deployment_says_it_reads_images(
+    flags: tuple[bool | None, ...], expected: bool | None
+) -> None:
     deployments: Final = tuple(CodexDeploymentCapabilities(supports_vision=flag) for flag in flags)
 
     assert combined_capabilities(deployments).supports_vision is expected
