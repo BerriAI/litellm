@@ -200,16 +200,58 @@ def _env_oauth_m2m_token(
     client_id: str | None = None,
     client_secret: str | None = None,
 ) -> str | None:
-    creds: Final = resolve_databricks_oauth_credentials(
-        litellm_params=litellm_params,
-        client_id=client_id,
-        client_secret=client_secret,
+    # Security-critical: we distinguish between deployment-level and global env credentials.
+    #
+    # - Deployment credentials (explicit client_id/client_secret) are admin-configured and
+    #   therefore trusted → the deployment's api_base is the correct workspace to target.
+    # - Global env credentials (DATABRICKS_CLIENT_ID / DATABRICKS_CLIENT_SECRET) are also
+    #   admin-set, but the workspace is derived from DATABRICKS_HOST when available.
+    #   When DATABRICKS_HOST is absent, api_base is used as a fallback (not the other way
+    #   around), so an admin-configured api_base still works while a proxy caller cannot
+    #   redirect global credentials to an arbitrary host that overrides a pinned DATABRICKS_HOST.
+    has_deployment_creds: Final = bool(
+        client_id is not None
+        or client_secret is not None
+        or (
+            isinstance(litellm_params, Mapping)
+            and (
+                litellm_params.get("client_id") is not None
+                or litellm_params.get("client_secret") is not None
+                or litellm_params.get("databricks_client_id") is not None
+                or litellm_params.get("databricks_client_secret") is not None
+            )
+        )
     )
-    if not creds:
+
+    if has_deployment_creds:
+        # Deployment credentials: workspace from api_base (admin-configured for this deployment).
+        creds: Final = resolve_databricks_oauth_credentials(
+            litellm_params=litellm_params,
+            client_id=client_id,
+            client_secret=client_secret,
+        )
+        if not creds:
+            return None
+        resolved_id, resolved_secret = creds
+        workspace: Final = workspace_url_from_api_base(api_base) or get_secret_str("DATABRICKS_HOST")
+        if workspace is None:
+            raise DatabricksException(
+                status_code=400,
+                message=(
+                    "client_id and client_secret are set but the OAuth token endpoint is unknown: "
+                    "set api_base to the workspace URL or set DATABRICKS_HOST"
+                ),
+            )
+        return DatabricksBase().get_cached_oauth_m2m_token(workspace, resolved_id, resolved_secret)
+
+    # Global env credentials: prefer the admin-pinned DATABRICKS_HOST over api_base so that
+    # a proxy caller cannot redirect the global secret to a caller-controlled host.
+    global_id: Final = get_secret_str("DATABRICKS_CLIENT_ID")
+    global_secret: Final = get_secret_str("DATABRICKS_CLIENT_SECRET")
+    if not global_id or not global_secret:
         return None
-    resolved_id, resolved_secret = creds
-    workspace: Final = workspace_url_from_api_base(api_base) or get_secret_str("DATABRICKS_HOST")
-    if workspace is None:
+    env_workspace: Final = get_secret_str("DATABRICKS_HOST") or workspace_url_from_api_base(api_base)
+    if env_workspace is None:
         raise DatabricksException(
             status_code=400,
             message=(
@@ -217,7 +259,7 @@ def _env_oauth_m2m_token(
                 "set DATABRICKS_HOST to the workspace URL (a Databricks App URL is not a workspace)"
             ),
         )
-    return DatabricksBase().get_cached_oauth_m2m_token(workspace, resolved_id, resolved_secret)
+    return DatabricksBase().get_cached_oauth_m2m_token(env_workspace, global_id, global_secret)
 
 
 def _resolved_env_reference(value: str | None) -> str | None:
