@@ -27,6 +27,7 @@ from litellm.proxy.common_utils.codex_model_catalog import (
     merged_codex_catalog,
 )
 from litellm.proxy.common_utils.codex_model_translation import CodexDeploymentCapabilities, CodexServiceTier
+from litellm.types.proxy.model_listing import ModelInfoResponse
 
 _PROMPT = "base prompt"
 _FAST = {"id": "priority", "name": "Fast", "description": "2x speed, increased usage"}
@@ -796,16 +797,18 @@ _UNLIMITED_CODEX: Final = "a codex that reads any size gets every model"
         pytest.param("not-a-version", True, id=f"unparseable version, {_LIMITED_CODEX}"),
     ],
 )
-def test_model_list_body_is_cut_to_1_mib_only_for_a_codex_that_drops_a_larger_catalog(client_version, cut):
-    names = tuple(f"model-{index}" for index in range(60))
-    listing = tuple(
+def test_model_list_body_is_cut_to_1_mib_only_for_a_codex_that_drops_a_larger_catalog(
+    client_version: str | None, cut: bool
+) -> None:
+    names: Final = tuple(f"model-{index}" for index in range(60))
+    listing: Final[tuple[ModelInfoResponse, ...]] = tuple(
         {"id": name, "object": "model", "created": 0, "owned_by": "openai", "mode": "chat"} for name in names
     )
 
-    body = codex_model_list_body(
+    body: Final = codex_model_list_body(
         listing, tuple((name, name) for name in names), None, client_version=client_version, instructions="x" * 20_000
     )
-    slugs = [entry["slug"] for entry in json.loads(body)["models"]]
+    slugs: Final[list[str]] = [entry["slug"] for entry in json.loads(body)["models"]]
 
     assert slugs == list(names[: len(slugs)])
     assert (len(slugs) < len(names)) is cut
