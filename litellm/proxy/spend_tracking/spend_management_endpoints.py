@@ -3602,36 +3602,41 @@ class _EntityIdRow(TypedDict):
 
 
 _COMMITTED_DROP_PAGE_SIZE: Final = 1000
-_TOKEN_PAGE_QUERY: Final = (
-    'SELECT token AS id FROM "LiteLLM_VerificationToken" WHERE token > $1 ORDER BY token LIMIT $2'
+_CommittedDropEntity: TypeAlias = Literal["key", "team"]
+_COMMITTED_DROP_PAGE_QUERIES: Final[Mapping[_CommittedDropEntity, str]] = MappingProxyType(
+    {
+        "key": 'SELECT token AS id FROM "LiteLLM_VerificationToken" WHERE token > $1 ORDER BY token LIMIT $2',
+        "team": 'SELECT team_id AS id FROM "LiteLLM_TeamTable" WHERE team_id > $1 ORDER BY team_id LIMIT $2',
+    }
 )
-_TEAM_PAGE_QUERY: Final = 'SELECT team_id AS id FROM "LiteLLM_TeamTable" WHERE team_id > $1 ORDER BY team_id LIMIT $2'
+_COMMITTED_DROP_COUNTERS: Final[Mapping[_CommittedDropEntity, Callable[[str], str]]] = MappingProxyType(
+    {"key": key_counter, "team": team_counter}
+)
 
 
 async def _drop_committed_spend_page(
-    prisma_client: PrismaClient, page_query: str, counter_of: Callable[[str], str], after_id: str
+    prisma_client: PrismaClient, entity: _CommittedDropEntity, after_id: str
 ) -> str | None:
     from litellm.proxy.proxy_server import spend_counter_store
 
     rows: Final[Sequence[_EntityIdRow]] = await _query_raw(
-        prisma_client, page_query, after_id, _COMMITTED_DROP_PAGE_SIZE
+        prisma_client, _COMMITTED_DROP_PAGE_QUERIES[entity], after_id, _COMMITTED_DROP_PAGE_SIZE
     )
+    counter_of: Final = _COMMITTED_DROP_COUNTERS[entity]
     await drop_committed_spend(spend_counter_store, tuple(counter_of(row["id"]) for row in rows))
     return rows[-1]["id"] if len(rows) == _COMMITTED_DROP_PAGE_SIZE else None
 
 
-async def _drop_committed_spend_pages(
-    prisma_client: PrismaClient, page_query: str, counter_of: Callable[[str], str]
-) -> None:
+async def _drop_committed_spend_pages(prisma_client: PrismaClient, entity: _CommittedDropEntity) -> None:
     after_id: str | None = ""  # rebind-ok: the keyset cursor moves one page at a time
     while after_id is not None:
-        after_id = await _drop_committed_spend_page(prisma_client, page_query, counter_of, after_id)
+        after_id = await _drop_committed_spend_page(prisma_client, entity, after_id)
 
 
 async def _drop_all_key_and_team_committed_spend(prisma_client: PrismaClient) -> None:
     try:
-        await _drop_committed_spend_pages(prisma_client, _TOKEN_PAGE_QUERY, key_counter)
-        await _drop_committed_spend_pages(prisma_client, _TEAM_PAGE_QUERY, team_counter)
+        await _drop_committed_spend_pages(prisma_client, "key")
+        await _drop_committed_spend_pages(prisma_client, "team")
     except Exception as e:  # noqa: BLE001  # the reset already committed; a kept twin lasts until charges stop for its TTL
         verbose_proxy_logger.warning("committed spend drop after a global reset failed: %s", e)
 
