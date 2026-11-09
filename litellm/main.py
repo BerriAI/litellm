@@ -1398,10 +1398,11 @@ def _completion_fakes_stream(
     provider_config: BaseConfig | None,
     optional_params: Mapping[str, object],
     *,
+    fake_stream_requested: bool,
     base_model: str | None,
     bridges_to_responses_api: bool,
 ) -> bool:
-    if optional_params.get("fake_stream") is True:
+    if fake_stream_requested or optional_params.get("fake_stream") is True:
         return True
     if custom_llm_provider is None:
         return False
@@ -6087,6 +6088,7 @@ def completion(
             model,
             custom_llm_provider,
             provider_config,
+            fake_stream_requested=control_options.fake_stream is True,
             base_model=deployment_base_model,
             bridges_to_responses_api=bridges_to_responses_api is True,
         )
