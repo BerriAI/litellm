@@ -24,6 +24,9 @@ class _SandboxRunResult(Protocol):
     @property
     def stdout(self) -> str | None: ...
 
+    @property
+    def stderr(self) -> str | None: ...
+
 
 class _SandboxSession(Protocol):
     """The subset of an llm-sandbox session used while collecting generated files."""
@@ -183,7 +186,7 @@ subprocess.run(
                         return {
                             "success": False,
                             "output": install_result.stdout or "",
-                            "error": install_result.stderr or "",
+                            "error": getattr(install_result, "stderr", "") or "",
                             "files": [],
                         }
                     verbose_logger.debug("SkillsSandboxExecutor: Installed requirements")
@@ -202,7 +205,7 @@ sys.path.insert(0, '/sandbox')
 
                 success: Final = result.exit_code == 0
                 output: Final = result.stdout or ""
-                error: Final = result.stderr or ""
+                error: Final = getattr(result, "stderr", "") or ""
 
                 if success:
                     verbose_logger.debug("SkillsSandboxExecutor: Code execution succeeded")
