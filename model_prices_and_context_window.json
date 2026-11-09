@@ -87352,5 +87352,195 @@
         "supports_parallel_function_calling": true,
         "supports_system_messages": true,
         "supports_tool_choice": true
+    },
+    "unorouter/claude-sonnet-5": {
+        "cache_read_input_token_cost": 4.47e-08,
+        "input_cost_per_token": 4.47e-07,
+        "litellm_provider": "unorouter",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 2.235e-06,
+        "source": "https://api.unorouter.com/api/pricing",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "unorouter/gpt-5.5": {
+        "cache_read_input_token_cost": 7.5e-08,
+        "input_cost_per_token": 7.5e-07,
+        "litellm_provider": "unorouter",
+        "max_input_tokens": 1100000,
+        "max_output_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 4.5e-06,
+        "source": "https://api.unorouter.com/api/pricing",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "unorouter/gemini-3.5-flash": {
+        "cache_read_input_token_cost": 7.5e-09,
+        "input_cost_per_token": 7.5e-08,
+        "litellm_provider": "unorouter",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 65535,
+        "mode": "chat",
+        "output_cost_per_token": 4.5e-07,
+        "source": "https://api.unorouter.com/api/pricing",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "unorouter/deepseek-v4-pro": {
+        "cache_read_input_token_cost": 1.30013e-08,
+        "input_cost_per_token": 1.56078e-07,
+        "litellm_provider": "unorouter",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 384000,
+        "mode": "chat",
+        "output_cost_per_token": 3.12156e-07,
+        "source": "https://api.unorouter.com/api/pricing",
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
+    "unorouter/glm-5.3": {
+        "cache_read_input_token_cost": 3.97769e-09,
+        "input_cost_per_token": 2.142e-08,
+        "litellm_provider": "unorouter",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 943718,
+        "mode": "chat",
+        "output_cost_per_token": 6.73209e-08,
+        "source": "https://api.unorouter.com/api/pricing",
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
+    "unorouter/kimi-k2.6": {
+        "cache_read_input_token_cost": 6.67117e-09,
+        "input_cost_per_token": 3.9615e-08,
+        "litellm_provider": "unorouter",
+        "max_input_tokens": 262100,
+        "max_output_tokens": 235929,
+        "mode": "chat",
+        "output_cost_per_token": 1.66799e-07,
+        "source": "https://api.unorouter.com/api/pricing",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "unorouter/glm-5.3-flash:free": {
+        "cache_read_input_token_cost": 0.0,
+        "input_cost_per_token": 0.0,
+        "litellm_provider": "unorouter",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 943717,
+        "mode": "chat",
+        "output_cost_per_token": 0.0,
+        "source": "https://api.unorouter.com/api/pricing",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "unorouter/qwen3.5-397b-a17b:free": {
+        "cache_read_input_token_cost": 0.0,
+        "input_cost_per_token": 0.0,
+        "litellm_provider": "unorouter",
+        "max_input_tokens": 262100,
+        "max_output_tokens": 235929,
+        "mode": "chat",
+        "output_cost_per_token": 0.0,
+        "source": "https://api.unorouter.com/api/pricing",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
     }
 }
