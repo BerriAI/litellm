@@ -263,6 +263,23 @@ def test_caller_cannot_write_or_override_the_identity_prefix_in_any_case(
     assert surface(metadata(spend_logs_metadata={"USER_API_KEY_TEAM_ALIAS": "forged"}), {}) is None
 
 
+@pytest.mark.parametrize("extra_labels", [{"user_api_key_team_alias": "forged", "app": "bot"}, None])
+def test_gemini_extra_body_labels_cannot_replace_or_drop_identity(
+    extra_labels: dict[str, JsonValue] | None, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", FIELDS)
+    expected: Final = {**IDENTITY, "app": "bot"} if extra_labels else IDENTITY
+
+    assert gemini_labels(metadata(**IDENTITY), {"extra_body": {"labels": extra_labels}}) == expected
+
+
+@pytest.mark.parametrize("setting", [None, []])
+def test_setting_off_merges_gemini_extra_body_labels_as_sent(setting: object, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", setting)
+    optional_params: Final = {"labels": {"env": "prod"}, "extra_body": {"labels": {"user_api_key_team_alias": "x"}}}
+
+    assert gemini_labels(metadata(**IDENTITY), optional_params) == {"env": "prod", "user_api_key_team_alias": "x"}
+
 def test_a_caller_set_claude_labels_header_cannot_forge_identity_and_is_replaced(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(litellm, "vertex_request_label_fields", FIELDS)
     caller_header: Final = {"x-Vertex-AI-labels": encoded({"user_api_key_team_alias": "forged", "app": "bot"})}
