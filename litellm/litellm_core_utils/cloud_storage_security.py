@@ -3,6 +3,7 @@ import posixpath
 import re
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
+from functools import partial
 from itertools import accumulate, chain, repeat, takewhile
 from typing import Final
 from urllib.parse import quote, unquote
@@ -59,6 +60,7 @@ _GEMINI_MEDIA_PART_KEYS: Final = frozenset({"file_data", "fileData"})
 _MEDIA_URI_KEYS: Final = frozenset({"url", "image_url", "file_id", "file_url", "file_data", "file_uri", "fileUri"})
 _ENCODED_FILE_ID_PREFIXES: Final = ("file-", "batch_")
 _EMBEDDED_S3_URI: Final = re.compile(r"s3://[^;]*")
+_MODEL_FILE_ID_MAPPING_KEY: Final = "model_file_id_mapping"
 
 
 def is_s3_uri(value: str) -> bool:
@@ -79,6 +81,10 @@ def _s3_uris_in(text: str) -> Iterator[str]:
 def _s3_uris_embedded_in_file_id(file_id: str) -> Iterator[str]:
     encodings: Final = dict.fromkeys((file_id, *(file_id.removeprefix(prefix) for prefix in _ENCODED_FILE_ID_PREFIXES)))
     return chain.from_iterable(map(_s3_uris_in, filter(None, map(_base64url_text, encodings))))
+
+
+def _with_embedded_s3_uris(file_id: str) -> Iterator[str]:
+    return chain((file_id,), _s3_uris_embedded_in_file_id(file_id))
 
 
 @dataclass(frozen=True, slots=True)
@@ -106,17 +112,30 @@ def _next_level(level: tuple[_BodyNode, ...], _: None) -> tuple[_BodyNode, ...]:
     return tuple(chain.from_iterable(map(_child_nodes, level)))
 
 
-def _body_nodes(request_body: Mapping[str, object]) -> Iterator[_BodyNode]:
+def _body_nodes(request_body: object) -> Iterator[_BodyNode]:
     levels: Final = accumulate(repeat(None), _next_level, initial=(_BodyNode(request_body),))
     return chain.from_iterable(takewhile(bool, levels))
 
 
-def _media_uri_candidates(node: _BodyNode) -> Iterator[str]:
+def _string_leaf(node: _BodyNode) -> str | None:
+    return node.value if isinstance(node.value, str) else None
+
+
+def _media_file_id(node: _BodyNode) -> str | None:
+    return _string_leaf(node) if node.inside_media_part and node.key == "file_id" else None
+
+
+def _media_uri_candidates(trusted_file_ids: frozenset[str], node: _BodyNode) -> Iterator[str]:
     if not node.inside_media_part or not isinstance(node.value, str):
         return iter(())
     if node.key == "file_id":
-        return chain((node.value,), _s3_uris_embedded_in_file_id(node.value))
+        return iter((node.value,)) if node.value in trusted_file_ids else _with_embedded_s3_uris(node.value)
     return iter((node.value,) if node.key in _MEDIA_URI_KEYS else ())
+
+
+def _mapped_provider_file_ids(request_body: Mapping[str, object]) -> Iterator[str]:
+    mapping_leaves: Final = filter(None, map(_string_leaf, _body_nodes(request_body.get(_MODEL_FILE_ID_MAPPING_KEY))))
+    return chain.from_iterable(map(_with_embedded_s3_uris, mapping_leaves))
 
 
 def _s3_bucket(uri: str) -> str | None:
@@ -143,9 +162,17 @@ def _refused_in_some_decoding(
     return bool(parts) and (not settled or not all(map(is_allowed, parts)))
 
 
-def s3_media_uris(request_body: Mapping[str, object]) -> tuple[str, ...]:
-    media_uris: Final = chain.from_iterable(map(_media_uri_candidates, _body_nodes(request_body)))
-    return tuple(dict.fromkeys(filter(is_s3_uri, media_uris)))
+def media_file_ids(request_body: Mapping[str, object]) -> tuple[str, ...]:
+    return tuple(dict.fromkeys(filter(None, map(_media_file_id, _body_nodes(request_body)))))
+
+
+def s3_media_uris(
+    request_body: Mapping[str, object], trusted_file_ids: frozenset[str] = frozenset()
+) -> tuple[str, ...]:
+    media_uris: Final = chain.from_iterable(
+        map(partial(_media_uri_candidates, trusted_file_ids), _body_nodes(request_body))
+    )
+    return tuple(dict.fromkeys(filter(is_s3_uri, chain(media_uris, _mapped_provider_file_ids(request_body)))))
 
 
 def is_managed_s3_uri(uri: str) -> bool:

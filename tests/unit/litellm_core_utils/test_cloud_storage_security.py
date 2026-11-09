@@ -10,6 +10,7 @@ from litellm.litellm_core_utils.cloud_storage_security import (
     is_managed_cloud_storage_uri,
     is_managed_s3_uri,
     names_an_unlisted_s3_bucket,
+    media_file_ids,
     s3_media_uris,
 )
 
@@ -112,6 +113,20 @@ def _gemini_turn(*parts: object) -> dict[str, object]:
         pytest.param(
             _responses_turn({"type": "input_file", "file_id": _UNIFIED_BATCH_OUTPUT_ID}),
             id="responses-unified-file-id",
+        ),
+        pytest.param(
+            {
+                **_user_turn({"type": "file", "file": {"file_id": "alias"}}),
+                "model_file_id_mapping": {"alias": {"deployment-1": _MANAGED_UPLOAD}},
+            },
+            id="model-file-id-mapping",
+        ),
+        pytest.param(
+            {
+                **_responses_turn({"type": "input_file", "file_id": "alias"}),
+                "model_file_id_mapping": {"alias": {"deployment-1": _MODEL_EMBEDDED_UPLOAD_ID}},
+            },
+            id="model-file-id-mapping-to-a-model-embedded-file-id",
         ),
         pytest.param(_responses_turn({"type": "input_image", "image_url": _MANAGED_UPLOAD}), id="responses-image"),
         pytest.param(_responses_turn({"type": "input_file", "file_url": _MANAGED_UPLOAD}), id="responses-file-url"),
@@ -338,6 +353,33 @@ def test_is_managed_s3_uri_leaves_other_objects_alone(uri: str):
 )
 def test_s3_media_uris_ignores_what_never_becomes_an_s3_media_source(request_body: dict[str, object]):
     assert s3_media_uris(request_body) == ()
+
+
+def test_s3_media_uris_skips_only_the_objects_a_trusted_file_id_embeds():
+    listed_image: Final = "s3://media-bucket/dir/cat.png"
+    request_body: Final = _responses_turn(
+        {"type": "input_file", "file_id": _UNIFIED_BATCH_OUTPUT_ID},
+        {"type": "input_file", "file_id": _MODEL_EMBEDDED_UPLOAD_ID},
+        {"type": "input_image", "image_url": listed_image},
+    )
+
+    assert s3_media_uris(request_body, frozenset({_UNIFIED_BATCH_OUTPUT_ID})) == (_MANAGED_UPLOAD, listed_image)
+    assert s3_media_uris(request_body, frozenset({_UNIFIED_BATCH_OUTPUT_ID, _MODEL_EMBEDDED_UPLOAD_ID})) == (
+        listed_image,
+    )
+
+
+def test_media_file_ids_lists_the_file_ids_of_media_parts_only():
+    request_body: Final = {
+        **_user_turn(
+            {"type": "file", "file": {"file_id": "file-a"}},
+            {"type": "text", "text": "file-b", "file_id": "file-b"},
+            {"type": "file", "file": {"file_id": "file-a"}},
+        ),
+        "metadata": {"file_id": "file-c"},
+    }
+
+    assert media_file_ids(request_body) == ("file-a",)
 
 
 def test_s3_media_uris_names_each_s3_object_once_in_the_order_it_first_appears():

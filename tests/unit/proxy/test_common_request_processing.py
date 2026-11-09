@@ -4,6 +4,7 @@ import copy
 import datetime
 import gzip
 import json
+from base64 import urlsafe_b64encode
 from collections.abc import AsyncIterable, Awaitable, Coroutine, Mapping
 from types import MappingProxyType, SimpleNamespace
 from typing import AsyncGenerator, Callable, Final, Iterator, Literal, Optional, Sequence, TypeAlias, TypeVar
@@ -33,7 +34,7 @@ from litellm.litellm_core_utils.bug_report import (
     build_bug_report,
 )
 from litellm.types.router import RouterRateLimitError, RouterRateLimitErrorBasic
-from litellm.types.utils import CachingDetails, Delta, ModelResponseStream, StreamingChoices
+from litellm.types.utils import CachingDetails, Delta, ModelResponseStream, SpecialEnums, StreamingChoices
 from litellm.constants import (
     CLIENT_REQUESTED_MODEL_SCOPE_KEY,
     MAX_LITELLM_CALL_ID_LENGTH,
@@ -260,6 +261,48 @@ _S3_MEDIA_SURFACES: Final = (
 )
 
 
+def _chat_file(file_id: str) -> dict[str, object]:
+    return {"messages": [{"role": "user", "content": [{"type": "file", "file": {"file_id": file_id}}]}]}
+
+
+def _responses_file(file_id: str) -> dict[str, object]:
+    return {"input": [{"role": "user", "content": [{"type": "input_file", "file_id": file_id}]}]}
+
+
+_S3_FILE_ID_SURFACES: Final = (
+    pytest.param("acompletion", "/v1/chat/completions", _chat_file, id="chat-completions"),
+    pytest.param("aresponses", "/v1/responses", _responses_file, id="responses"),
+)
+_UPLOADED_OBJECT: Final = "s3://media-bucket/litellm-bedrock-files/upload.pdf"
+_UPLOADED_FILE_ID: Final = (
+    urlsafe_b64encode(
+        SpecialEnums.LITELLM_MANAGED_FILE_COMPLETE_STR.value.format(
+            "application/pdf", "u1", "nova", _UPLOADED_OBJECT, "deployment-1"
+        ).encode()
+    )
+    .decode()
+    .rstrip("=")
+)
+
+
+class _ManagedFilesCreatedBy(CustomLogger):
+    def __init__(self, creators: Mapping[str, str]) -> None:
+        super().__init__()
+        self.creators: Final = creators
+
+    async def can_user_call_unified_file_id(
+        self, unified_file_id: str, user_api_key_dict: ProxyUserAPIKeyAuth
+    ) -> bool:
+        if unified_file_id not in self.creators:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"File not found: {unified_file_id}")
+        return self.creators[unified_file_id] == user_api_key_dict.user_id
+
+    async def can_user_call_unified_object_id(
+        self, unified_object_id: str, user_api_key_dict: ProxyUserAPIKeyAuth
+    ) -> bool:
+        return False
+
+
 _S3_OBJECT: Final = "s3://media-bucket/dir/cat.png"
 _HELLO: Final = {"role": "user", "content": "hello"}
 _S3_VALUES_OUTSIDE_MEDIA_PARTS: Final = (
@@ -402,8 +445,13 @@ async def _send_s3_media(
     body: dict[str, object],
     user_role: LitellmUserRoles,
     general_settings: dict[str, object],
+    managed_files: CustomLogger | None = None,
 ) -> object:
     from litellm.proxy.proxy_server import ProxyConfig as RealProxyConfig
+
+    proxy_logging_obj: Final = ProxyLogging(user_api_key_cache=UserApiKeyCache())
+    if managed_files is not None:
+        proxy_logging_obj.proxy_hook_mapping["managed_files"] = managed_files
 
     router: Final = Router(
         model_list=[
@@ -424,9 +472,9 @@ async def _send_s3_media(
             }
         ),
         fastapi_response=Response(),
-        user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test", user_role=user_role),
+        user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test", user_id="user-a", user_role=user_role),
         route_type=route_type,
-        proxy_logging_obj=ProxyLogging(user_api_key_cache=UserApiKeyCache()),
+        proxy_logging_obj=proxy_logging_obj,
         general_settings=general_settings,
         proxy_config=RealProxyConfig(),
         llm_router=router,
@@ -819,6 +867,84 @@ class TestProxyBaseLLMRequestProcessing:
         )
 
         assert {key: data[key] for key in body} == body
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(("route_type", "path", "body_for"), _S3_FILE_ID_SURFACES)
+    async def test_non_admin_managed_file_id_its_user_created_passes(
+        self, route_type: _S3MediaRoute, path: str, body_for: Callable[[str], dict[str, object]]
+    ) -> None:
+        response: Final = await _send_s3_media(
+            route_type,
+            path,
+            body_for(_UPLOADED_FILE_ID),
+            LitellmUserRoles.INTERNAL_USER,
+            {},
+            _ManagedFilesCreatedBy({_UPLOADED_FILE_ID: "user-a"}),
+        )
+
+        assert "a cat" in str(response)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(("route_type", "path", "body_for"), _S3_FILE_ID_SURFACES)
+    @pytest.mark.parametrize(
+        "managed_files",
+        [
+            pytest.param(_ManagedFilesCreatedBy({_UPLOADED_FILE_ID: "user-b"}), id="another-user-created-it"),
+            pytest.param(_ManagedFilesCreatedBy({}), id="forged-id"),
+            pytest.param(None, id="no-managed-files-hook"),
+        ],
+    )
+    async def test_non_admin_managed_file_id_the_key_may_not_read_is_refused(
+        self,
+        route_type: _S3MediaRoute,
+        path: str,
+        body_for: Callable[[str], dict[str, object]],
+        managed_files: CustomLogger | None,
+    ) -> None:
+        with pytest.raises(HTTPException) as refused:
+            await _send_s3_media(
+                route_type, path, body_for(_UPLOADED_FILE_ID), LitellmUserRoles.INTERNAL_USER, {}, managed_files
+            )
+
+        assert refused.value.status_code == status.HTTP_403_FORBIDDEN, refused.value.detail
+        assert _UPLOADED_OBJECT in refused.value.detail
+        assert "LiteLLM-managed storage" in refused.value.detail
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("mapped_source", "named_in_refusal"),
+        [
+            pytest.param(
+                "s3://other-bucket/private.pdf",
+                "general_settings.allowed_client_side_s3_buckets",
+                id="unlisted-bucket",
+            ),
+            pytest.param(
+                "s3://media-bucket/litellm-bedrock-files/other-team.pdf", "LiteLLM-managed storage", id="managed-key"
+            ),
+        ],
+    )
+    async def test_non_admin_s3_source_behind_a_model_file_id_mapping_is_refused_while_a_proxy_admin_key_passes(
+        self, mapped_source: str, named_in_refusal: str
+    ) -> None:
+        body: Final = {**_chat_file("alias"), "model_file_id_mapping": {"alias": {"deployment-1": mapped_source}}}
+
+        with pytest.raises(HTTPException) as refused:
+            await _send_s3_media(
+                "acompletion",
+                "/v1/chat/completions",
+                body,
+                LitellmUserRoles.INTERNAL_USER,
+                {"allowed_client_side_s3_buckets": ["media-bucket"]},
+            )
+        admin_response: Final = await _send_s3_media(
+            "acompletion", "/v1/chat/completions", body, LitellmUserRoles.PROXY_ADMIN, {}
+        )
+
+        assert refused.value.status_code == status.HTTP_403_FORBIDDEN, refused.value.detail
+        assert mapped_source in refused.value.detail
+        assert named_in_refusal in refused.value.detail
+        assert "a cat" in str(admin_response)
 
     @pytest.mark.asyncio
     async def test_non_admin_s3_media_refusal_names_a_repeated_object_once(self) -> None:
