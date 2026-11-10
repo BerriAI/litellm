@@ -3,11 +3,11 @@ from collections.abc import Callable, Iterator, Mapping, Sequence
 from functools import partial
 from itertools import chain
 from types import MappingProxyType
-from typing import TYPE_CHECKING, ClassVar, Final, Optional, cast
+from typing import TYPE_CHECKING, ClassVar, Final, Optional, TypeVar, cast
 
 import httpx
 from httpx import Response
-from pydantic import TypeAdapter
+from pydantic import BaseModel, TypeAdapter
 
 from litellm._logging import verbose_logger
 from litellm.constants import AWS_ERROR_TYPE_HEADER
@@ -49,6 +49,9 @@ _BEDROCK_INVOKE_ACTIONS: Final = frozenset({"invoke", "invoke-with-response-stre
 _BEDROCK_INVOKE_GUARDRAIL_HEADERS: Final = frozenset(
     {"x-amzn-bedrock-guardrailidentifier", "x-amzn-bedrock-guardrailversion", "x-amzn-bedrock-trace"}
 )
+_BEDROCK_SERVICE_TIER_HEADER: Final = "x-amzn-bedrock-service-tier"
+_NO_RESPONSE_HEADERS: Final[Mapping[str, str]] = MappingProxyType({})
+_TieredResponse: Final = TypeVar("_TieredResponse", bound=BaseModel)
 
 
 def _bedrock_endpoint_action(endpoint: str) -> str:
@@ -341,15 +344,28 @@ def _count_prompt_tokens(model: str, request_body: object) -> int:
     return token_counter(model=model, messages=messages)
 
 
+def _served_service_tier(response_headers: Mapping[str, str]) -> str | None:
+    headers: Final = httpx.Headers(response_headers)
+    if _BEDROCK_SERVICE_TIER_HEADER not in headers:
+        return None
+    return headers[_BEDROCK_SERVICE_TIER_HEADER]
+
+
+def _with_served_service_tier(response: _TieredResponse, service_tier: str | None) -> _TieredResponse:
+    if service_tier is None:
+        return response
+    return response.model_copy(update={"service_tier": service_tier})
+
+
 def _build_logged_response(
-    chunks: Sequence[ModelResponseStream], litellm_logging_obj: "LiteLLMLoggingObj"
+    chunks: Sequence[ModelResponseStream], litellm_logging_obj: "LiteLLMLoggingObj", service_tier: str | None
 ) -> Optional["CostResponseTypes"]:
     from litellm.litellm_core_utils.streaming_chunk_builder_utils import stream_chunk_builder
 
     if len(chunks) == 0:
         return None
     return stream_chunk_builder(
-        chunks=list(chunks),
+        chunks=[*chunks[:-1], _with_served_service_tier(chunks[-1], service_tier)],
         logging_obj=litellm_logging_obj,
         count_prompt_tokens=partial(
             _count_prompt_tokens, litellm_logging_obj.model, litellm_logging_obj.model_call_details.get("input")
@@ -364,11 +380,13 @@ class BedrockEventStreamCollector:
         self,
         parse_event: Callable[["EventStreamMessage"], str | None],
         decoder: Optional["AWSEventStreamDecoder"],
+        service_tier: str | None = None,
     ) -> None:
         from botocore.eventstream import EventStreamBuffer
 
         self._parse_event = parse_event
         self._decoder = decoder
+        self._service_tier: Final = service_tier
         self._event_stream_buffer: Final[EventStreamBuffer] = EventStreamBuffer()
         self._chunks: Final = _CoalescedChunks()
 
@@ -386,7 +404,7 @@ class BedrockEventStreamCollector:
             self._chunks.add(translated)
 
     def build_logged_response(self, litellm_logging_obj: "LiteLLMLoggingObj") -> Optional["CostResponseTypes"]:
-        return _build_logged_response(self._chunks.chunks(), litellm_logging_obj)
+        return _build_logged_response(self._chunks.chunks(), litellm_logging_obj, self._service_tier)
 
 
 class BedrockAgentRuntimeAWS(BaseAWSLLM):
@@ -552,14 +570,20 @@ class BedrockPassthroughConfig(BaseAWSLLM, BedrockModelInfo, BedrockEventStreamD
             encoding=encoding,
         )
 
-        return litellm_model_response
+        return _with_served_service_tier(litellm_model_response, _served_service_tier(httpx_response.headers))
 
     def create_stream_collector(
-        self, model: str, custom_llm_provider: str, endpoint: str
+        self,
+        model: str,
+        custom_llm_provider: str,
+        endpoint: str,
+        *,
+        response_headers: Mapping[str, str] = _NO_RESPONSE_HEADERS,
     ) -> PassthroughStreamCollector:
         return BedrockEventStreamCollector(
             parse_event=self._parse_message_from_event,
             decoder=self._get_event_stream_decoder(model=model, endpoint=endpoint),
+            service_tier=_served_service_tier(response_headers),
         )
 
     def _get_event_stream_decoder(self, model: str, endpoint: str) -> Optional["AWSEventStreamDecoder"]:

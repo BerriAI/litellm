@@ -101,7 +101,6 @@ from litellm.litellm_core_utils.streaming_handler import (
 )
 from litellm.litellm_core_utils.tool_fields import DropPolicy, MalformedField, drop_policy, resolve_tool_fields
 from litellm.llms.openai.responses.guardrail_translation.handler import OpenAIResponsesHandler
-from litellm.passthrough.utils import BasePassthroughUtils
 from litellm.proxy._types import LiteLLMRoutes, ProxyErrorTypes, ProxyException, UserAPIKeyAuth
 from litellm.proxy.anthropic_endpoints.answered_status import is_provider_overload, with_openai_overload_status
 from litellm.proxy.auth.auth_checks import (
@@ -3862,7 +3861,6 @@ class ProxyBaseLLMRequestProcessing:
             HttpPassThroughEndpointHelpers,
         )
 
-        self.data["request_headers"] = BasePassthroughUtils.pass_through_prefixed_headers(request.headers)
         result: Final = await self.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,

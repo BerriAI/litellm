@@ -24,6 +24,7 @@ from litellm.llms.bedrock.passthrough.transformation import (
     is_bedrock_streaming_endpoint,
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.passthrough.main import AsyncPassthroughStreamingResponse, PassthroughStreamingResponse
 from litellm.types.utils import ModelResponse
 
 CONVERSE_MODEL = "anthropic.claude-sonnet-4-5-20250929-v1:0"
@@ -597,9 +598,13 @@ def _invoke_chunk(payload: dict) -> bytes:
     return _event_frame("chunk", {"bytes": base64.b64encode(json.dumps(payload).encode()).decode()})
 
 
-def _stream_logging_obj(endpoint: str, dynamic_async_success_callbacks: list[CustomLogger] | None = None) -> Logging:
+def _stream_logging_obj(
+    endpoint: str,
+    dynamic_async_success_callbacks: list[CustomLogger] | None = None,
+    model: str = CONVERSE_MODEL,
+) -> Logging:
     logging_obj = Logging(
-        model=f"bedrock/{CONVERSE_MODEL}",
+        model=f"bedrock/{model}",
         messages=[],
         stream=True,
         call_type="pass_through_endpoint",
@@ -900,6 +905,137 @@ def test_stream_collector_logs_nothing_for_an_unrecognized_endpoint():
     collector.add(_event_frame("messageStart", {"role": "assistant"}))
 
     assert collector.build_logged_response(_converse_stream_logging_obj()) is None
+
+
+TIERED_MODEL: Final = "amazon.nova-pro-v1:0"
+TIERED_INVOKE_ENDPOINT: Final = f"/model/{TIERED_MODEL}/invoke"
+TIERED_INVOKE_STREAM_ENDPOINT: Final = f"/model/{TIERED_MODEL}/invoke-with-response-stream"
+SERVICE_TIER_HEADER: Final = "x-amzn-bedrock-service-tier"
+TIERED_PROMPT_TOKENS: Final = 25
+TIERED_COMPLETION_TOKENS: Final = 12
+SERVED_TIER_PRICES: Final = (
+    pytest.param({SERVICE_TIER_HEADER: "priority"}, "_priority", id="priority"),
+    pytest.param({}, "", id="standard"),
+)
+
+
+def _tier_priced_cost(price_suffix: str) -> float:
+    prices: Final = litellm.model_cost[TIERED_MODEL]
+    return (
+        TIERED_PROMPT_TOKENS * prices[f"input_cost_per_token{price_suffix}"]
+        + TIERED_COMPLETION_TOKENS * prices[f"output_cost_per_token{price_suffix}"]
+    )
+
+
+def _nova_invoke_text_stream(texts: list[str]) -> bytes:
+    return b"".join(
+        _invoke_chunk(event)
+        for event in (
+            {"messageStart": {"role": "assistant"}},
+            *({"contentBlockDelta": {"contentBlockIndex": 0, "delta": {"text": text}}} for text in texts),
+            {"contentBlockStop": {"contentBlockIndex": 0}},
+            {"messageStop": {"stopReason": "end_turn"}},
+            {
+                "metadata": {
+                    "usage": {
+                        "inputTokens": TIERED_PROMPT_TOKENS,
+                        "outputTokens": TIERED_COMPLETION_TOKENS,
+                        "totalTokens": TIERED_PROMPT_TOKENS + TIERED_COMPLETION_TOKENS,
+                    },
+                    "metrics": {"latencyMs": 120},
+                }
+            },
+        )
+    )
+
+
+def _provider_stream_reply(reply_headers: Mapping[str, str], stream: bytes) -> httpx.Response:
+    return httpx.Response(
+        200,
+        headers={"content-type": "application/vnd.amazon.eventstream", **reply_headers},
+        content=stream,
+        request=httpx.Request("POST", f"https://bedrock-runtime.us-east-1.amazonaws.com{TIERED_INVOKE_STREAM_ENDPOINT}"),
+    )
+
+
+@pytest.mark.parametrize(("reply_headers", "price_suffix"), SERVED_TIER_PRICES)
+def test_invoke_reply_is_priced_at_the_service_tier_bedrock_served(
+    reply_headers: Mapping[str, str], price_suffix: str
+) -> None:
+    reply: Final = httpx.Response(
+        200,
+        json={
+            "output": {"message": {"role": "assistant", "content": [{"text": "Invoke response"}]}},
+            "stopReason": "end_turn",
+            "usage": {
+                "inputTokens": TIERED_PROMPT_TOKENS,
+                "outputTokens": TIERED_COMPLETION_TOKENS,
+                "totalTokens": TIERED_PROMPT_TOKENS + TIERED_COMPLETION_TOKENS,
+            },
+        },
+        headers=reply_headers,
+    )
+
+    logged: Final = BedrockPassthroughConfig().logging_non_streaming_response(
+        model=TIERED_MODEL,
+        custom_llm_provider="bedrock",
+        httpx_response=reply,
+        request_data={},
+        logging_obj=_stream_logging_obj(TIERED_INVOKE_ENDPOINT, model=TIERED_MODEL),
+        endpoint=TIERED_INVOKE_ENDPOINT,
+    )
+
+    assert litellm.completion_cost(model=f"bedrock/{TIERED_MODEL}", completion_response=logged) == pytest.approx(
+        _tier_priced_cost(price_suffix)
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("reply_headers", "price_suffix"), SERVED_TIER_PRICES)
+async def test_invoke_stream_relay_is_priced_at_the_service_tier_bedrock_served(
+    reply_headers: Mapping[str, str], price_suffix: str
+) -> None:
+    callback: Final = _CaptureAsyncSuccessCallback()
+    stream: Final = _nova_invoke_text_stream(["Invoke ", "response"])
+    reply: Final = _provider_stream_reply(reply_headers, stream)
+
+    async def provider_reply() -> httpx.Response:
+        return reply
+
+    relay: Final = AsyncPassthroughStreamingResponse(
+        response=provider_reply(),
+        litellm_logging_obj=_stream_logging_obj(TIERED_INVOKE_STREAM_ENDPOINT, [callback], model=TIERED_MODEL),
+        provider_config=BedrockPassthroughConfig(),
+    )
+    relayed: Final = b"".join([chunk async for chunk in relay])
+
+    assert relayed == stream
+    assert await relay.wait_for_spend_flush() is True
+    assert callback.kwargs is not None
+    assert callback.kwargs["response_cost"] == pytest.approx(_tier_priced_cost(price_suffix))
+
+
+class _ImmediateExecutor:
+    def submit(self, fn: Callable[..., object], /, *args: object, **kwargs: object) -> None:
+        fn(*args, **kwargs)
+
+
+@pytest.mark.parametrize(("reply_headers", "price_suffix"), SERVED_TIER_PRICES)
+def test_sync_invoke_stream_relay_is_priced_at_the_service_tier_bedrock_served(
+    reply_headers: Mapping[str, str], price_suffix: str
+) -> None:
+    logging_obj: Final = _stream_logging_obj(TIERED_INVOKE_STREAM_ENDPOINT, model=TIERED_MODEL)
+    stream: Final = _nova_invoke_text_stream(["Invoke ", "response"])
+
+    with patch("litellm.utils.executor", _ImmediateExecutor()):
+        relayed: Final = b"".join(
+            PassthroughStreamingResponse(
+                _provider_stream_reply(reply_headers, stream), logging_obj, BedrockPassthroughConfig()
+            )
+        )
+
+    assert relayed == stream
+    assert logging_obj.model_call_details["response_cost"] == pytest.approx(_tier_priced_cost(price_suffix))
 
 
 REQUEST_METADATA_HEADER = "x-amzn-bedrock-request-metadata"

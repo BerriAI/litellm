@@ -86,6 +86,7 @@ from litellm.llms.oss_decision import OssDecisionProvider, oss_connection, valid
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.llms.vllm.common_utils import endpoint_under_api_base
 from litellm.passthrough.main import AsyncPassthroughStreamingResponse, is_provider_error
+from litellm.passthrough.utils import BasePassthroughUtils
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import (
     can_agent_call_model,
@@ -1477,6 +1478,7 @@ async def handle_bedrock_passthrough_router_model(
         "endpoint": endpoint,
         "data": request_body,
         "custom_llm_provider": "bedrock",
+        "request_headers": BasePassthroughUtils.pass_through_prefixed_headers(request.headers),
     }
     data: Final[dict[str, object]] = guardrail_request_data_with_streaming(
         MappingProxyType(bedrock_payload),
@@ -1683,6 +1685,7 @@ async def bedrock_llm_proxy_route(
         "endpoint": endpoint,
         "data": request_body,
         "custom_llm_provider": "bedrock",
+        "request_headers": BasePassthroughUtils.pass_through_prefixed_headers(request.headers),
     }
     data: Final[dict[str, object]] = guardrail_request_data_with_streaming(
         MappingProxyType(passthrough_payload),

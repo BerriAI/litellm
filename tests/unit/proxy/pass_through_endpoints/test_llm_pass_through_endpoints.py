@@ -28,6 +28,7 @@ from fastapi.routing import APIRoute
 from fastapi.responses import StreamingResponse
 from fastapi.testclient import TestClient
 from starlette.datastructures import FormData
+from starlette.types import Message
 
 
 import litellm
@@ -108,6 +109,66 @@ def _assert_bedrock_processing_data_classification(data: dict[str, object], is_s
     assert isinstance(provider_body, dict)
     assert "is_streaming_request" not in provider_body
     assert "litellm_server_streaming_classification" not in provider_body
+
+
+CALLER_X_PASS_HEADER: Final = ("x-pass-x-amzn-bedrock-service-tier", "priority")
+
+
+def _request_with_caller_headers(path: str, body: Mapping[str, object]) -> Request:
+    async def receive() -> Message:
+        return {"type": "http.request", "body": json.dumps(dict(body)).encode(), "more_body": False}
+
+    return Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": path,
+            "query_string": b"",
+            "headers": tuple(
+                (name.encode(), value.encode())
+                for name, value in (
+                    ("content-type", "application/json"),
+                    CALLER_X_PASS_HEADER,
+                    ("authorization", "Bearer sk-proxy-virtual-key"),
+                    ("cookie", "proxy_session=secret"),
+                )
+            ),
+        },
+        receive,
+    )
+
+
+BEDROCK_INVOKE_BODY: Final = MappingProxyType({"messages": [{"role": "user", "content": "test"}]})
+
+
+async def _route_through_bedrock_router_model(request: Request) -> object:
+    return await handle_bedrock_passthrough_router_model(
+        model="test-model",
+        endpoint="model/test-model/invoke",
+        request=request,
+        request_body=dict(BEDROCK_INVOKE_BODY),
+        llm_router=Mock(),
+        user_api_key_dict=Mock(),
+        proxy_logging_obj=Mock(),
+        general_settings={},
+        proxy_config=None,
+        select_data_generator=None,
+        user_model=None,
+        user_temperature=None,
+        user_request_timeout=None,
+        user_max_tokens=None,
+        user_api_base=None,
+        version=None,
+    )
+
+
+async def _route_through_bedrock_direct_model(request: Request) -> object:
+    return await bedrock_llm_proxy_route(
+        endpoint="model/test-model/invoke",
+        request=request,
+        fastapi_response=Mock(),
+        user_api_key_dict=Mock(),
+    )
 
 
 class TestVertexPassthroughGetVertexBaseUrl:
@@ -1355,6 +1416,7 @@ class TestBedrockLLMProxyRoute:
     async def test_bedrock_llm_proxy_route_application_inference_profile(self):
         mock_request = Mock()
         mock_request.method = "POST"
+        mock_request.headers = {}
         mock_response = Mock()
         mock_user_api_key_dict = Mock()
         mock_request_body = {"messages": [{"role": "user", "content": "test"}]}
@@ -1397,6 +1459,7 @@ class TestBedrockLLMProxyRoute:
     async def test_bedrock_llm_proxy_route_regular_model(self):
         mock_request = Mock()
         mock_request.method = "POST"
+        mock_request.headers = {}
         mock_response = Mock()
         mock_user_api_key_dict = Mock()
         mock_request_body = {"messages": [{"role": "user", "content": "test"}]}
@@ -1444,6 +1507,7 @@ class TestBedrockLLMProxyRoute:
     ) -> None:
         mock_request: Final = Mock()
         mock_request.method = "POST"
+        mock_request.headers = {}
         mock_processor: Final = Mock()
         mock_processor.base_passthrough_process_llm_request = AsyncMock(return_value="success")
         request_body: Final = {"messages": [{"role": "user", "content": "test"}]}
@@ -1484,6 +1548,7 @@ class TestBedrockLLMProxyRoute:
     ) -> None:
         mock_request: Final = Mock()
         mock_request.method = "POST"
+        mock_request.headers = {}
         mock_processor: Final = Mock()
         mock_processor.base_passthrough_process_llm_request = AsyncMock(return_value="success")
         request_body: Final = {"messages": [{"role": "user", "content": "test"}]}
@@ -1517,6 +1582,30 @@ class TestBedrockLLMProxyRoute:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
+        "route_to_bedrock",
+        [_route_through_bedrock_router_model, _route_through_bedrock_direct_model],
+        ids=["router_model", "direct_model"],
+    )
+    async def test_bedrock_routes_hand_the_processor_only_the_caller_x_pass_headers(
+        self, route_to_bedrock: Callable[[Request], Awaitable[object]]
+    ) -> None:
+        mock_processor: Final = Mock()
+        mock_processor.base_passthrough_process_llm_request = AsyncMock(return_value="success")
+
+        with patch(
+            "litellm.proxy.common_request_processing.ProxyBaseLLMRequestProcessing",
+            return_value=mock_processor,
+        ) as processor_constructor:
+            result: Final = await route_to_bedrock(
+                _request_with_caller_headers("/bedrock/model/test-model/invoke", BEDROCK_INVOKE_BODY)
+            )
+
+        assert result == "success"
+        processing_data: Final = processor_constructor.call_args.kwargs["data"]
+        assert processing_data["request_headers"] == dict((CALLER_X_PASS_HEADER,))
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
         ("model_id", "action"),
         [
             ("my-converse-stream-model", "converse"),
@@ -1526,6 +1615,7 @@ class TestBedrockLLMProxyRoute:
     async def test_bedrock_direct_model_id_does_not_imply_streaming(self, model_id: str, action: str) -> None:
         mock_request: Final = Mock()
         mock_request.method = "POST"
+        mock_request.headers = {}
         mock_processor: Final = Mock()
         mock_processor.base_passthrough_process_llm_request = AsyncMock(return_value="success")
         request_body: Final = {"messages": [{"role": "user", "content": "test"}]}
@@ -1562,6 +1652,7 @@ class TestBedrockLLMProxyRoute:
     async def test_bedrock_router_model_id_does_not_imply_streaming(self, model_id: str, action: str) -> None:
         mock_request: Final = Mock()
         mock_request.method = "POST"
+        mock_request.headers = {}
         mock_processor: Final = Mock()
         mock_processor.base_passthrough_process_llm_request = AsyncMock(return_value="success")
         request_body: Final = {"messages": [{"role": "user", "content": "test"}]}
@@ -2884,6 +2975,31 @@ class TestGigachatProxyRoute:
         mock_is_router.assert_called_once()
         mock_llm_router.allm_passthrough_route.assert_awaited_once()
         assert isinstance(result, Response)
+
+    @pytest.mark.asyncio
+    async def test_gigachat_router_route_forwards_no_caller_request_headers(self) -> None:
+        router: Final = MagicMock()
+        router.allm_passthrough_route = AsyncMock(return_value=httpx.Response(200, json={"response": "success"}))
+
+        with (
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.is_passthrough_request_using_router_model",
+                return_value=True,
+            ),
+            patch("litellm.proxy.proxy_server.llm_router", router),
+        ):
+            result: Final = await gigachat_proxy_route(
+                endpoint="/chat/completions",
+                request=_request_with_caller_headers(
+                    "/gigachat/chat/completions", {"model": "router-model", "stream": False}
+                ),
+                fastapi_response=MagicMock(spec=Response),
+                user_api_key_dict=MagicMock(),
+            )
+
+        assert isinstance(result, Response)
+        routed_kwargs: Final = router.allm_passthrough_route.await_args.kwargs
+        assert "request_headers" not in routed_kwargs
 
     @pytest.mark.asyncio
     async def test_gigachat_router_handler_keeps_cached_body_and_payload_metadata_pristine(self):

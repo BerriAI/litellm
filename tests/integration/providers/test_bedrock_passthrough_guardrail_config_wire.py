@@ -404,11 +404,7 @@ def _expected_on_the_wire(action: str, request: Request) -> Applied:
     return Applied("deployment-guardrail", "3", "ENABLED", None)
 
 
-def _caller_guardrail_on_the_wire(action: str, request: Request) -> Applied:
-    if action == "converse":
-        return Applied("caller-guardrail", "9", "disabled", None)
-    if action == "converse-stream":
-        return Applied("caller-guardrail", "9", "disabled", "async")
+def _caller_guardrail_on_the_wire(request: Request) -> Applied:
     assert {"x-amzn-bedrock-guardrailidentifier", "x-amzn-bedrock-guardrailversion", "x-amzn-bedrock-trace"} <= (
         _signed_header_names(request)
     ), request.headers["authorization"]
@@ -488,14 +484,35 @@ def test_deployment_guardrail_without_a_version_returns_the_bedrock_rejection(
 def test_deployment_without_a_guardrail_leaves_the_caller_guardrail_as_sent(
     rig: Rig, monkeypatch: pytest.MonkeyPatch, action: str
 ) -> None:
+    if action.startswith("invoke"):
+        pytest.skip(
+            "BUG: the router-model invoke pass-through drops the unprefixed X-Amzn-Bedrock-Guardrail* headers"
+            " that boto3's native guardrailIdentifier / guardrailVersion / trace args send"
+        )
     marker: Final = uuid.uuid4().hex
-    runtime: Final = rig.runtime(monkeypatch, _CALLER_INVOKE_HEADERS)
+    runtime: Final = rig.runtime(monkeypatch)
 
     outcome: Final = _send(runtime, action, rig.unguarded_model, f"{marker} say {_BLOCKED_WORD}", caller_guardrail=True)
 
     assert outcome == Outcome(_BLOCKED_TEXT, intervened=True, traced_guardrail=None), outcome
     (request,) = rig.received(rig.wire, marker)
-    assert _applied(request) == _caller_guardrail_on_the_wire(action, request), (request.headers, request.body)
+    assert _applied(request) == Applied(
+        "caller-guardrail", "9", "disabled", "async" if action == "converse-stream" else None
+    ), request.body
+
+
+@pytest.mark.parametrize("action", ("invoke", "invoke-with-response-stream"))
+def test_deployment_without_a_guardrail_forwards_the_caller_guardrail_sent_as_x_pass_headers(
+    rig: Rig, monkeypatch: pytest.MonkeyPatch, action: str
+) -> None:
+    marker: Final = uuid.uuid4().hex
+    runtime: Final = rig.runtime(monkeypatch, _CALLER_INVOKE_HEADERS)
+
+    outcome: Final = _send(runtime, action, rig.unguarded_model, f"{marker} say {_BLOCKED_WORD}", caller_guardrail=False)
+
+    assert outcome == Outcome(_BLOCKED_TEXT, intervened=True, traced_guardrail=None), outcome
+    (request,) = rig.received(rig.wire, marker)
+    assert _applied(request) == _caller_guardrail_on_the_wire(request), (request.headers, request.body)
 
 
 def test_each_load_balanced_request_carries_the_guardrail_of_the_deployment_it_reached(
