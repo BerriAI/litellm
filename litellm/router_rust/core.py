@@ -1070,9 +1070,6 @@ class RustSettings(RouterSettings):
             return super().as_dict()
         return router.settings_dict()
 
-    def timeout_for(self, litellm_params: Mapping[str, object]) -> object:
-        return self._owner("timeout_for").deployment_call_timeout(litellm_params)
-
 
 class _SettingsSource:
     def settings_dict(self) -> Mapping[str, object]:
@@ -1593,7 +1590,7 @@ class RustCore(
     def _shaping(self) -> Shaping:
         return self._endpoints.shaping(self._resolved)
 
-    def deployment_call_timeout(self, litellm_params: Mapping[str, object]) -> object:
+    def _core_deployment_call_timeout(self, litellm_params: Mapping[str, object]) -> object:
         return non_stream_timeout(self._shaping, MappingProxyType({}), litellm_params)
 
     # -- building --------------------------------------------------------------------------------
