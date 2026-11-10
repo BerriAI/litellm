@@ -226,9 +226,11 @@ class _RejectingGuardrail(CustomGuardrail):
 
 async def test_aspeech_stream_rejected_by_a_deployment_guardrail_closes_the_provider_connection() -> None:
     litellm.callbacks.append(_RejectingGuardrail())
-    with wire_server(_peer(), keep_alive=True) as wire:
+    release: Final = threading.Event()
+    with wire_server(_peer(release), keep_alive=True) as wire:
         with pytest.raises(_SpeechRejected):
             await _aspeech(wire.url, str(uuid.uuid4()))
+        release.set()
         await asyncio.to_thread(eventually, wire.open_connections, lambda still_open: still_open == 0)
         assert wire.connections() == 1
 
