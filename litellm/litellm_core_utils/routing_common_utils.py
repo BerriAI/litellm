@@ -299,9 +299,13 @@ def format_fallback_outcome_message(
     over_budget_targets: Final = tuple(
         dict.fromkeys(target.target for target in skipped if target.reason is FallbackSkipReason.OVER_BUDGET)
     )
+    rate_limited_targets: Final = tuple(
+        dict.fromkeys(target.target for target in skipped if target.reason is FallbackSkipReason.RATE_LIMITED)
+    )
     attempted_text: Final = ", ".join(str(mask_sensitive_structure(target)) for target in attempted_targets)
     not_authorized_text: Final = ", ".join(str(mask_sensitive_structure(target)) for target in not_authorized_targets)
     over_budget_text: Final = ", ".join(str(mask_sensitive_structure(target)) for target in over_budget_targets)
+    rate_limited_text: Final = ", ".join(str(mask_sensitive_structure(target)) for target in rate_limited_targets)
     attempted_failure: Final = (
         (f"Fallback to {attempted_text} also failed: {fallback_failure_detail}",)
         if fallback_failure_detail and attempted_targets
@@ -323,7 +327,15 @@ def format_fallback_outcome_message(
         if over_budget_targets
         else ()
     )
-    sentences: Final = attempted_failure + not_authorized_sentence + over_budget_sentence
+    rate_limited_sentence: Final = (
+        (
+            f"Fallback to {rate_limited_text} was skipped because the caller is over its per-model rate limit for "
+            f"{'it' if len(rate_limited_targets) == 1 else 'them'}.",
+        )
+        if rate_limited_targets
+        else ()
+    )
+    sentences: Final = attempted_failure + not_authorized_sentence + over_budget_sentence + rate_limited_sentence
     if sentences:
         return f"{lead} {' '.join(sentences)}"
 
