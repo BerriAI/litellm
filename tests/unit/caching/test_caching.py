@@ -1456,6 +1456,30 @@ def test_sync_completion_with_zero_s_maxage_skips_the_cached_response(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "cache_controls",
+    [{"s-maxage": 0, "s-max-age": 60}, {"s-maxage": 60, "s-max-age": 0}, {"s-maxage": None, "s-max-age": 0}],
+)
+async def test_sync_and_async_completion_agree_on_the_cache_when_both_max_age_keys_are_sent(
+    monkeypatch: pytest.MonkeyPatch, cache_controls: dict[str, int | None]
+) -> None:
+    monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL))
+    sync_messages: Final = [{"role": "user", "content": f"sync both max-age keys {uuid.uuid4().hex}"}]
+    sync_first: Final = completion(model="gpt-4o-mini", messages=sync_messages, mock_response="first")
+    sync_second: Final = completion(
+        model="gpt-4o-mini", messages=sync_messages, cache=cache_controls, mock_response="second"
+    )
+    async_messages: Final = [{"role": "user", "content": f"async both max-age keys {uuid.uuid4().hex}"}]
+    async_first: Final = await acompletion(model="gpt-4o-mini", messages=async_messages, mock_response="first")
+    await asyncio.gather(*_PENDING_CACHE_WRITES)
+    async_second: Final = await acompletion(
+        model="gpt-4o-mini", messages=async_messages, cache=cache_controls, mock_response="second"
+    )
+
+    assert (sync_second.id == sync_first.id) == (async_second.id == async_first.id)
+
+
+@pytest.mark.asyncio
 async def test_embedding_caching_redis_ttl(monkeypatch: pytest.MonkeyPatch, redis_client_without_network: None) -> None:
     mock_pipeline: Final = AsyncMock()
     mock_set: Final = AsyncMock()
