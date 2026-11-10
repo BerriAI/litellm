@@ -42,6 +42,7 @@ router and every ``registry()`` query dispatches the way it does on the Python c
 
 import copy
 import dataclasses
+import itertools
 import json
 import os
 import re
@@ -102,6 +103,7 @@ from litellm.router_rust.invoke.shaping import ROUTER_CLIENTS_TARGET
 from litellm.router_rust.surface.indexes import HostedIndexes
 from litellm.router_rust.surface.model_info import HostModelInfo
 from litellm.router_rust.surface.model_list import HostedModelList
+from litellm.router_rust.surface.replay import live_registries
 from litellm.router_strategy.auto_router.auto_router_model_naming import classify_strategy_router_model
 from litellm.router_utils.deployment_numbers import refuse_unservable_numbers, refuse_wide_numbers
 from litellm.router_utils.endpoint_eligibility import warn_on_unenforced_endpoint_flag
@@ -577,9 +579,9 @@ def withdraw_shared_capabilities(
     replacement: Mapping[str, object] | None,
     served: Iterable[Mapping[str, object]],
 ) -> None:
-    """Put the catalog's value back on ``removed``'s backend model key(s) for each
-    ``SHARED_ONLY_WHEN_TRUE_CAPABILITY_FIELDS`` flag it set ``True``, unless ``replacement`` or another
-    ``served`` deployment of that backend model still sets it."""
+    """For each ``SHARED_ONLY_WHEN_TRUE_CAPABILITY_FIELDS`` flag ``removed`` set ``True``, set ``removed``'s backend
+    model key(s) to whether ``replacement``, a ``served`` deployment of that backend model, or the catalog still
+    sets it ``True``."""
     backend: Final = _entry_backend(removed)
     backend_keys: Final = _entry_backend_keys(removed)
     kept: Final = (
@@ -590,13 +592,7 @@ def withdraw_shared_capabilities(
     withdrawn: Final = _shared_capabilities_set_true(removed) - kept
     if backend is None or not withdrawn:
         return
-    removed_id: Final = _entry_section(removed, "model_info").get("id")
-    siblings: Final = tuple(
-        entry
-        for entry in served
-        if _entry_section(entry, "model_info").get("id") != removed_id
-        and not _entry_backend_keys(entry).isdisjoint(backend_keys)
-    )
+    siblings: Final = tuple(entry for entry in served if not _entry_backend_keys(entry).isdisjoint(backend_keys))
     catalog: Final = catalog_with_runtime_registrations()
     catalog_keys: Final = _catalog_backend_keys(*backend, _backend_cost_map_keys(*backend))
     restored: Final = {
@@ -911,6 +907,9 @@ class HostRegistry(HostModelInfo):
         except Exception:
             self._replace_model_list(previous)
             raise
+        served: Final = self._served_by_live_routers()
+        for entry in previous:
+            withdraw_shared_capabilities(self._host, entry, None, served)
 
     def _replace_model_list(self, model_list: Sequence[object]) -> None:
         self._discovered_model_info_cache.flush_cache()
@@ -1371,7 +1370,7 @@ class HostRegistry(HostModelInfo):
                         removed: Final = self._core_model_list[removal_idx]  # pyright: ignore[reportArgumentType]  # raises IndexError for a position past the list, as the pop does
                         self._remove(model_id)
                         withdraw_shared_capabilities(
-                            self._host, removed, deployment.to_json(exclude_none=True), tuple(self._core_model_list)
+                            self._host, removed, deployment.to_json(exclude_none=True), self._served_by_live_routers()
                         )
                 if self.strategies is not None:
                     self.strategies.release(on_router)
@@ -1549,6 +1548,10 @@ class HostRegistry(HostModelInfo):
         self._registry_version += 1
         self._on_change()
 
+    def _served_by_live_routers(self) -> tuple[UntypedEntry, ...]:
+        others: Final = (tuple(registry._core_model_list) for registry in live_registries() if registry is not self)
+        return (*self._core_model_list, *itertools.chain.from_iterable(others))
+
     def _core_delete_deployment(self, id: str) -> UntypedEntry | None:
         """Remove one deployment and return its stored entry (``_delete_deployment``)."""
         try:
@@ -1558,7 +1561,7 @@ class HostRegistry(HostModelInfo):
                     return None
                 item: Final = self._core_model_list[deployment_idx]  # pyright: ignore[reportArgumentType]  # raises IndexError for a position past the list, as the pop does
                 self._remove(id)
-                withdraw_shared_capabilities(self._host, item, None, tuple(self._core_model_list))
+                withdraw_shared_capabilities(self._host, item, None, self._served_by_live_routers())
             if self.checks is not None:
                 self.checks.unregister_deployment_budget(id)
             if self.strategies is not None:

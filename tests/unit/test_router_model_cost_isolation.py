@@ -8,6 +8,7 @@ should still use the built-in pricing.
 """
 
 import asyncio
+import contextlib
 import copy
 import itertools
 import json
@@ -18,6 +19,7 @@ import queue
 import re
 import sys
 import threading
+from collections.abc import Iterator
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final, cast
@@ -686,15 +688,27 @@ def _box_flag_deployment(backend_model: str, model_id: str, flag: bool | None) -
     }
 
 
+@contextlib.contextmanager
+def _live_box_router(backend_model: str, deployments: tuple[tuple[str, bool | None], ...]) -> Iterator[Router]:
+    router: Final = Router(
+        model_list=[_box_flag_deployment(backend_model, model_id, flag) for model_id, flag in deployments]
+    )
+    try:
+        yield router
+    finally:
+        router.retire()
+
+
 @pytest.mark.parametrize(
     ("catalog_box", "true_sibling_stays", "change", "shared_flag"),
     (
         (False, False, "update", False),
         (False, False, "delete", False),
+        (False, False, "replace", False),
         (False, True, "update", True),
         (True, False, "update", True),
     ),
-    ids=("update-to-false-clears", "delete-clears", "another-true-sibling-keeps", "catalog-true-keeps"),
+    ids=("update-to-false-clears", "delete-clears", "replace-clears", "another-true-sibling-keeps", "catalog-true-keeps"),
 )
 def test_a_withdrawn_box_questions_true_leaves_the_shared_key_once_no_sibling_sets_it(
     catalog_box: bool, true_sibling_stays: bool, change: str, shared_flag: bool
@@ -718,17 +732,44 @@ def test_a_withdrawn_box_questions_true_leaves_the_shared_key_once_no_sibling_se
         for key in (*(model_id for model_id, _ in deployments), backend_model)
     }
     try:
-        router: Final = Router(
-            model_list=[_box_flag_deployment(backend_model, model_id, flag) for model_id, flag in deployments]
-        )
-        assert litellm.supports_box_questions(model=backend_model) is True
-        _ = router.apply(
-            ChangeSet(upsert=[Deployment(**_box_flag_deployment(backend_model, "sibling-id", False))])
-            if change == "update"
-            else ChangeSet(delete=["sibling-id"])
-        )
+        with _live_box_router(backend_model, deployments) as router:
+            assert litellm.supports_box_questions(model=backend_model) is True
+            if change == "replace":
+                router.set_model_list(
+                    [
+                        _box_flag_deployment(backend_model, model_id, flag)
+                        for model_id, flag in deployments
+                        if model_id != "sibling-id"
+                    ]
+                )
+            else:
+                _ = router.apply(
+                    ChangeSet(upsert=[Deployment(**_box_flag_deployment(backend_model, "sibling-id", False))])
+                    if change == "update"
+                    else ChangeSet(delete=["sibling-id"])
+                )
 
-        assert litellm.supports_box_questions(model=backend_model) is shared_flag
+            assert litellm.supports_box_questions(model=backend_model) is shared_flag
+    finally:
+        _restore_model_cost_entries(model_keys)
+
+
+def test_a_box_questions_true_another_live_router_serves_stays_on_the_shared_key() -> None:
+    backend_model: Final = "perplexity/box-withdraw-across-routers"
+    model_keys: Final = {
+        key: copy.deepcopy(litellm.model_cost.get(key))
+        for key in ("unflagged-id", "sibling-id", "other-router-id", backend_model)
+    }
+    try:
+        with (
+            _live_box_router(backend_model, (("unflagged-id", None), ("sibling-id", True))) as router,
+            _live_box_router(backend_model, (("other-router-id", True),)) as other_router,
+        ):
+            _ = router.apply(ChangeSet(delete=["sibling-id"]))
+            assert litellm.supports_box_questions(model=backend_model) is True
+
+            _ = other_router.apply(ChangeSet(delete=["other-router-id"]))
+            assert litellm.supports_box_questions(model=backend_model) is False
     finally:
         _restore_model_cost_entries(model_keys)
 
