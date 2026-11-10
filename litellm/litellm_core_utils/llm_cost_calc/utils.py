@@ -54,6 +54,7 @@ _VALID_DATA_RESIDENCIES: Final = frozenset(r.value for r in DataResidency)
 
 _DEPLOYMENT_PRICING_KEYS: Final[frozenset[str]] = frozenset(CustomPricingLiteLLMParams.model_fields)
 _IMAGE_REQUEST_PARAMS: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
+_IMAGE_USAGE_DETAILS: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 
 _BASE_CACHE_WRITE_RATE_KEY: Final = "cache_creation_input_token_cost"
 
@@ -2139,7 +2140,7 @@ def calculate_image_response_cost_from_usage(
         text_input_tokens: Final = _get_token_detail_value(input_tokens_details, "text_tokens")
         image_input_tokens: Final = _get_token_detail_value(input_tokens_details, "image_tokens")
         cached_details: Final[object] = (
-            cast(Mapping[object, object], input_tokens_details).get("cached_tokens_details")
+            _IMAGE_USAGE_DETAILS.validate_python(input_tokens_details).get("cached_tokens_details")
             if isinstance(input_tokens_details, Mapping)
             else getattr(input_tokens_details, "cached_tokens_details", None)
         )
