@@ -2280,7 +2280,9 @@ async def register_client_with_server(
             "response_types": ["code"],
             "token_endpoint_auth_method": "none",
         }
-        if shared_client_persistable and not replace_stale_client and not bridge_relay
+        if shared_client_persistable
+        and not bridge_relay
+        and (not replace_stale_client or resolved_server.is_dcr_bridge)
         else {
             **(
                 {"application_type": client_application_type}
