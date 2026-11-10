@@ -299,6 +299,108 @@ tests:
       - failedTemplate:
           errorMessage: "ingress.extraPaths[0]: path /debug/memory/summary with pathType Exact is already routed by this chart, and a duplicate would take it over rather than add to it"
 
+  - it: skips an entry identical to a built-in route, so values that added a path before the chart routed it keep rendering
+    set:
+      ingress.enabled: true
+      ingress.extraPaths:
+        - path: /watsonx
+          service: gateway
+        - path: /openrouter
+        - path: /eu_jev/v1/systemone
+          pathType: Exact
+          serviceName: RELEASE-NAME-litellm-gateway
+          servicePort: 4000
+        - path: /decisions
+          serviceName: RELEASE-NAME-litellm-gateway
+          servicePort: http
+        - path: /ui
+          service: ui
+        - path: /hosted_vllm
+    asserts:
+      - contains:
+          path: spec.rules[0].http.paths
+          content:
+            path: /watsonx
+            pathType: Prefix
+            backend:
+              service:
+                name: RELEASE-NAME-litellm-gateway
+                port:
+                  number: 4000
+          count: 1
+      - contains:
+          path: spec.rules[0].http.paths
+          content:
+            path: /openrouter
+            pathType: Prefix
+            backend:
+              service:
+                name: RELEASE-NAME-litellm-gateway
+                port:
+                  number: 4000
+          count: 1
+      - contains:
+          path: spec.rules[0].http.paths
+          content:
+            path: /eu_jev/v1/systemone
+            pathType: Exact
+            backend:
+              service:
+                name: RELEASE-NAME-litellm-gateway
+                port:
+                  number: 4000
+          count: 1
+      - contains:
+          path: spec.rules[0].http.paths
+          content:
+            path: /decisions
+            pathType: Prefix
+            backend:
+              service:
+                name: RELEASE-NAME-litellm-gateway
+                port:
+                  number: 4000
+          count: 1
+      - contains:
+          path: spec.rules[0].http.paths
+          content:
+            path: /ui
+            pathType: Prefix
+            backend:
+              service:
+                name: RELEASE-NAME-litellm-ui
+                port:
+                  number: 3000
+          count: 1
+      - equal:
+          path: spec.rules[0].http.paths[-2].path
+          value: /hosted_vllm
+      - equal:
+          path: spec.rules[0].http.paths[-3].path
+          value: /metrics
+
+  - it: rejects an entry that repeats a built-in gateway path but routes it to another Service
+    set:
+      ingress.enabled: true
+      ingress.extraPaths:
+        - path: /openrouter
+          serviceName: my-openrouter-proxy
+          servicePort: 4000
+    asserts:
+      - failedTemplate:
+          errorMessage: "ingress.extraPaths[0]: path /openrouter with pathType Prefix is already routed by this chart, and a duplicate would take it over rather than add to it"
+
+  - it: rejects an entry that repeats a built-in gateway path but routes it to another port
+    set:
+      ingress.enabled: true
+      ingress.extraPaths:
+        - path: /openrouter
+          serviceName: RELEASE-NAME-litellm-gateway
+          servicePort: 9000
+    asserts:
+      - failedTemplate:
+          errorMessage: "ingress.extraPaths[0]: path /openrouter with pathType Prefix is already routed by this chart, and a duplicate would take it over rather than add to it"
+
   - it: allows a built-in path under a different pathType, which is a distinct rule
     set:
       ingress.enabled: true

@@ -118,14 +118,19 @@
   and /test/* falls through to the backend catch-all.
 */}}
 {{/*
-  Every "<path>|<pathType>" this template renders on its own. An
-  ingress.extraPaths entry that repeats one of these is rejected: duplicates
-  in a single rule are resolved by position or by controller-specific tie
+  Every "<path>|<pathType>" this template renders on its own, mapped to the
+  "<service>|<port>" targets it routes to. An ingress.extraPaths entry that
+  repeats one of these with another target is rejected: duplicates in a
+  single rule are resolved by position or by controller-specific tie
   breaking, so the operator entry could take over a built-in route (an entry
   at "/" Prefix would swallow the whole backend management API) instead of
-  adding to it.
+  adding to it. An entry with the same target is skipped, so values that
+  added a path before the chart routed it keep rendering.
 */}}
-{{- $builtinPathKeys := list "/|Prefix" -}}
+{{- $gatewayTargets := list (printf "%s|%v" $gatewayName $gatewayPort) (printf "%s|http" $gatewayName) -}}
+{{- $backendTargets := list (printf "%s|%v" $backendName $backendPort) (printf "%s|http" $backendName) -}}
+{{- $uiTargets := list (printf "%s|%v" $uiName $uiPort) (printf "%s|http" $uiName) -}}
+{{- $builtinRoutes := dict "/|Prefix" $backendTargets -}}
 {{- if $hasComponentHosts }}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
@@ -213,7 +218,7 @@ spec:
           # --- UI (Next.js static export) ---
           {{- range $uiPaths }}
           {{- $pathType := include "litellm.ingress.pathType" (dict "controller" $controller "path" .path "pathType" .pathType) }}
-          {{- $builtinPathKeys = append $builtinPathKeys (printf "%s|%s" .path $pathType) }}
+          {{- $_ := set $builtinRoutes (printf "%s|%s" .path $pathType) $uiTargets }}
           - path: {{ .path }}
             pathType: {{ $pathType }}
             backend:
@@ -228,7 +233,7 @@ spec:
           # Exact /debug/memory/summary reads a serving worker's RSS (the e2e memory
           # gate); the rest of /debug/* stays on the backend.
           {{- range $gatewayExactPaths }}
-          {{- $builtinPathKeys = append $builtinPathKeys (printf "%s|Exact" .) }}
+          {{- $_ := set $builtinRoutes (printf "%s|Exact" .) $gatewayTargets }}
           - path: {{ . }}
             pathType: Exact
             backend:
@@ -239,7 +244,7 @@ spec:
           {{- end }}
           {{- range $gatewayPrefixes }}
           {{- $pathType := include "litellm.ingress.pathType" (dict "controller" $controller "path" . "pathType" "Prefix") }}
-          {{- $builtinPathKeys = append $builtinPathKeys (printf "%s|%s" . $pathType) }}
+          {{- $_ := set $builtinRoutes (printf "%s|%s" . $pathType) $gatewayTargets }}
           - path: {{ . }}
             pathType: {{ $pathType }}
             backend:
@@ -249,7 +254,7 @@ spec:
                   number: {{ $gatewayPort }}
           {{- end }}
           {{- if and .Values.lens.enabled .Values.lens.service.name }}
-          {{- $builtinPathKeys = append $builtinPathKeys "/lens-ingest|Prefix" }}
+          {{- $_ := set $builtinRoutes "/lens-ingest|Prefix" (list (printf "%s|%v" .Values.lens.service.name .Values.lens.service.port)) }}
           - path: /lens-ingest
             pathType: Prefix
             backend:
@@ -312,9 +317,14 @@ spec:
           {{- if eq $extra.path "/" }}
           {{- fail (printf "ingress.extraPaths[%d]: path / is already routed in both directions, Exact to ui and Prefix to backend, so no pathType leaves a request for an entry here to capture" $idx) }}
           {{- end }}
-          {{- if has (printf "%s|%s" $extra.path $pathType) $builtinPathKeys }}
+          {{- $pathKey := printf "%s|%s" $extra.path $pathType }}
+          {{- $extraTarget := printf "%s|%v" $target.name (get $port "number" | default (get $port "name")) }}
+          {{- $isBuiltin := hasKey $builtinRoutes $pathKey }}
+          {{- $isIdentical := has $extraTarget (get $builtinRoutes $pathKey | default list) }}
+          {{- if and $isBuiltin (not $isIdentical) }}
           {{- fail (printf "ingress.extraPaths[%d]: path %s with pathType %s is already routed by this chart, and a duplicate would take it over rather than add to it" $idx $extra.path $pathType) }}
           {{- end }}
+          {{- if not $isIdentical }}
           - path: {{ $extra.path | quote }}
             pathType: {{ $pathType }}
             backend:
@@ -322,6 +332,7 @@ spec:
                 name: {{ $target.name | quote }}
                 port:
                   {{- toYaml $port | nindent 18 }}
+          {{- end }}
           {{- end }}
           # --- Catch-all → backend (management API: /key/*, /user/*, /team/*, ...) ---
           - path: /
