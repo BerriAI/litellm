@@ -18,6 +18,8 @@ from litellm.constants import (
     DEFAULT_MAX_LRU_CACHE_SIZE,
     DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND,
 )
+from litellm.litellm_core_utils.audio_utils.utils import normalized_audio_duration_seconds
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or_none
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR
 from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
     StandardBuiltInToolCostTracking,
@@ -320,6 +322,34 @@ def _transcription_usage_has_token_details(
             return True
 
     return (prompt_tokens_val > 0) or (completion_tokens_val > 0)
+
+
+def _get_transcription_usage_duration(completion_response: object) -> float | None:
+    response_fields: Final = as_str_mapping(completion_response)
+    usage_object: Final = (
+        response_fields.get("usage") if response_fields is not None else attribute_or_none(completion_response, "usage")
+    )
+    usage_fields: Final = as_str_mapping(usage_object)
+    usage_type: Final = (
+        usage_fields.get("type") if usage_fields is not None else attribute_or_none(usage_object, "type")
+    )
+    if usage_type != "duration":
+        return None
+    seconds: Final = (
+        usage_fields.get("seconds") if usage_fields is not None else attribute_or_none(usage_object, "seconds")
+    )
+    return normalized_audio_duration_seconds(seconds)
+
+
+def _transcription_duration_for_cost(completion_response: object) -> float:
+    billed_duration: Final = _get_transcription_usage_duration(completion_response)
+    if billed_duration is not None and billed_duration > 0:
+        return billed_duration
+    hidden_params: Final = as_str_mapping(attribute_or_none(completion_response, "_hidden_params")) or {}
+    measured_duration: Final = normalized_audio_duration_seconds(
+        hidden_params.get("audio_transcription_duration", attribute_or_none(completion_response, "duration"))
+    )
+    return measured_duration if measured_duration is not None and measured_duration > 0 else 0.0
 
 
 OCRPricingField = Literal["ocr_cost_per_page", "ocr_cost_per_credit", "annotation_cost_per_page"]
@@ -1750,15 +1780,7 @@ def completion_cost(
                 elif call_type in _SPEECH_CALL_TYPES:
                     prompt_characters = litellm.utils.count_characters(text=prompt)
                 elif call_type in _TRANSCRIPTION_CALL_TYPES:
-                    # Check _hidden_params first (duration stored there to
-                    # avoid polluting the response body), then fall back to
-                    # the response attribute (for verbose_json responses that
-                    # naturally include duration from the provider).
-                    _hidden = getattr(completion_response, "_hidden_params", {}) or {}
-                    audio_transcription_file_duration = _hidden.get(
-                        "audio_transcription_duration",
-                        getattr(completion_response, "duration", 0.0),
-                    )
+                    audio_transcription_file_duration = _transcription_duration_for_cost(completion_response)
                 elif call_type in _RERANK_CALL_TYPES:
                     if completion_response is not None and isinstance(completion_response, RerankResponse):
                         meta_obj = completion_response.meta
