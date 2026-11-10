@@ -8,7 +8,7 @@
 #      Releases API.
 #   2. Update a long-lived worktree at $WORKTREE to that tag and `uv sync` it.
 #   3. Resolve the Claude Code CLI version under test (the newest npm
-#      release at least 3 days old, via pr_gate_version_resolver.py, or
+#      release at least 3 days old, via cli_harness/npm_version_resolver.py, or
 #      $CLAUDE_CODE_VERSION when set) and download that release's
 #      linux-x64 binary into the run's scratch dir, checksum-verified
 #      against the vendor's release manifest (install_claude_code.sh).
@@ -329,7 +329,7 @@ PROXY_CONFIG="${WORKTREE}/tests/e2e/claude_code/test_config.yaml"
 if [[ -z "${CLAUDE_CODE_VERSION}" ]]; then
   CLAUDE_CODE_VERSION="$(
     cd "${WORKTREE}" \
-      && "${WORKTREE_UV}" run --no-sync python "${POPULATOR_DIR}/../pr_gate_version_resolver.py"
+      && "${WORKTREE_UV}" run --no-sync python "${POPULATOR_DIR}/../../cli_harness/npm_version_resolver.py" @anthropic-ai/claude-code
   )" || die "could not resolve the Claude Code version to test"
   log "resolved claude code: ${CLAUDE_CODE_VERSION}"
 else

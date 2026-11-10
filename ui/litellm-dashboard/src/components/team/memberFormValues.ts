@@ -1,3 +1,4 @@
+import type { ParseKeys } from "i18next";
 import {
   entriesToModelMaxBudget,
   modelMaxBudgetToEntries,
@@ -44,7 +45,7 @@ const NULLABLE_NUMERIC_FIELDS: ReadonlySet<string> = new Set([
   "temp_budget_increase",
 ]);
 
-export const TEMP_BUDGET_PAIR_MESSAGE = "Set both a temporary budget increase and its expiry, or neither";
+export const TEMP_BUDGET_PAIR_MESSAGE_KEY: ParseKeys = "teams.memberFormValues.tempBudgetPairRequired";
 
 const isUnset = (value: MemberFieldValue): boolean => value === null || value === undefined || value === "";
 

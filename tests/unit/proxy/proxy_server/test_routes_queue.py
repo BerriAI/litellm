@@ -8,14 +8,19 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from contextlib import AbstractContextManager
+from datetime import datetime, timezone
+from queue import SimpleQueue
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import litellm
 import pytest
 from fastapi.testclient import TestClient
 
 from litellm import Router
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy import proxy_server
+from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 
 from .conftest import normalize  # type: ignore[import-not-found]
 
@@ -39,7 +44,7 @@ HAPPY_RESPONSE = {
 @pytest.fixture
 def patched_queue(monkeypatch):
     router = MagicMock()
-    router.split_request_priority = MagicMock(return_value=(0, {}))
+    router.health.return_value.split_priority.return_value = (0, {})
     router.schedule_acompletion = AsyncMock(return_value=dict(HAPPY_RESPONSE))
     monkeypatch.setattr(proxy_server, "llm_router", router)
     monkeypatch.setattr(
@@ -131,6 +136,65 @@ def _queue_router(
     monkeypatch.setattr(proxy_server, "llm_router", router)
     monkeypatch.setattr(proxy_server, "proxy_logging_obj", MagicMock(post_call_failure_hook=AsyncMock()))
     return router
+
+
+class _QueueRequestLogger(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.requests: Final = SimpleQueue[dict[str, object]]()
+
+    def log_pre_api_call(self, model: str, messages: object, kwargs: dict[str, object]) -> None:
+        self.requests.put(kwargs)
+
+
+@pytest.mark.parametrize("storage_mode", [None, "latest_turn"])
+@pytest.mark.parametrize(
+    ("key_setting", "team_setting", "stored"),
+    [(None, False, False), (True, False, False), (False, None, False), (None, None, True), (True, True, True)],
+)
+def test_queued_requests_apply_authenticated_prompt_storage_policy(
+    client: TestClient,
+    auth_as: Callable[..., AbstractContextManager[None]],
+    monkeypatch: pytest.MonkeyPatch,
+    storage_mode: str | None,
+    key_setting: bool | None,
+    team_setting: bool | None,
+    stored: bool,
+) -> None:
+    _queue_router(monkeypatch, default_priority=0)
+    logger: Final = _QueueRequestLogger()
+    monkeypatch.setattr(litellm, "callbacks", [logger])
+    monkeypatch.setattr(
+        proxy_server,
+        "general_settings",
+        {"store_prompts_in_spend_logs": True, "spend_logs_prompt_storage": storage_mode},
+    )
+    with auth_as(
+        metadata={} if key_setting is None else {"store_prompts_in_spend_logs": key_setting},
+        team_metadata={} if team_setting is None else {"store_prompts_in_spend_logs": team_setting},
+    ):
+        response: Final = client.post(
+            "/queue/chat/completions",
+            json={
+                "model": "gpt-4",
+                "messages": [{"role": "user", "content": "queue-private-prompt"}],
+                "metadata": {
+                    "user_api_key_metadata": {"store_prompts_in_spend_logs": not stored},
+                    "user_api_key_team_metadata": {"store_prompts_in_spend_logs": not stored},
+                },
+            },
+        )
+    assert response.status_code == 200, response.text
+    assert response.json()["choices"][0]["message"]["content"] == "queued"
+    now: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    payload: Final = get_logging_payload(
+        kwargs=logger.requests.get_nowait(),
+        response_obj=litellm.ModelResponse.model_validate(response.json()),
+        start_time=now,
+        end_time=now,
+    )
+    assert ("queue-private-prompt" in payload["proxy_server_request"]) is stored
+    assert ("queued" in payload["response"]) is stored
 
 
 @pytest.mark.parametrize(

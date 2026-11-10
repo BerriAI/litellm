@@ -4,6 +4,7 @@ import logging
 import os
 import threading
 import time
+import uuid
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from queue import SimpleQueue
@@ -11,6 +12,7 @@ from typing import Final
 from unittest.mock import Mock, patch
 
 import pytest
+import respx
 
 import litellm
 from litellm._logging import redact_internal_details_from_client_message
@@ -37,7 +39,7 @@ class MockHTTPHandler:
         self.text = "mocked_token"
         self.json_data = {"value": "mocked_token"}
 
-    def get(self, url, params=None, headers=None):
+    def get(self, url, params=None, headers=None, timeout=None):
         # Store params for audience verification
         self.last_params = params
         logger.debug(
@@ -48,6 +50,9 @@ class MockHTTPHandler:
         mock_response.text = self.text
         mock_response.json.return_value = self.json_data
         return mock_response
+
+    def close(self):
+        pass
 
 
 @pytest.fixture
@@ -227,6 +232,41 @@ def test_oidc_google_failure():
             ):
                 with pytest.raises(ValueError, match="Google OIDC provider failed"):
                     get_secret(secret_name)
+
+
+
+def test_oidc_google_fetches_the_token_from_the_metadata_host_gce_metadata_host_names(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GCE_METADATA_HOST", "127.0.0.1:8930")
+    audience: Final = f"https://vllm.example.test/{uuid.uuid4().hex}"
+
+    with respx.mock(assert_all_called=True) as metadata:
+        metadata.get(
+            "http://127.0.0.1:8930/computeMetadata/v1/instance/service-accounts/default/identity",
+            params={"audience": audience},
+            headers={"Metadata-Flavor": "Google"},
+        ).respond(200, text="metadata-host-token")
+        token: Final = get_secret(f"oidc/google/{audience}")
+
+    assert token == "metadata-host-token"
+
+def test_oidc_google_secret_outside_a_model_api_key_keeps_its_metadata_wait_when_gce_metadata_timeout_is_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GCE_METADATA_TIMEOUT", "1")
+    audience: Final = f"https://sts.example.test/{uuid.uuid4().hex}"
+
+    with respx.mock(assert_all_called=True) as metadata:
+        identity: Final = metadata.get(
+            "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/identity",
+            params={"audience": audience},
+        ).respond(200, text="web-identity-token")
+        token: Final = get_secret(f"oidc/google/{audience}")
+        waits: Final = identity.calls.last.request.extensions["timeout"]
+
+    assert token == "web-identity-token"
+    assert waits == {"connect": 5.0, "read": 600.0, "write": 600.0, "pool": 600.0}
 
 
 def test_oidc_circleci_success(monkeypatch):
