@@ -10,6 +10,7 @@ mod http;
 mod logger;
 mod marshal;
 mod model_registry;
+mod policy_engine;
 mod preflight;
 mod python_settings;
 mod redis;
@@ -37,6 +38,8 @@ mod _native {
     use crate::logger::NativeDiagnosticProcessor;
     #[pymodule_export]
     use crate::model_registry::bundled_model_cost_map;
+    #[pymodule_export]
+    use crate::policy_engine::{NativePolicyEngine, PolicyResolution};
     #[pymodule_export]
     use crate::redis::breaker::{NativeAdmission, NativeRedisBreaker, native_redis_breaker_states};
     #[pymodule_export]
@@ -170,6 +173,8 @@ mod tests {
                 "Tokenizer",
                 "RouterCoreHandle",
                 "RouterCall",
+                "PolicyEngine",
+                "PolicyResolution",
                 "gil_stats",
                 "process_state_started",
                 "reserve_process_for_forking",

@@ -18,6 +18,7 @@ from typing import (
     Optional,
     Protocol,
     TypedDict,
+    TypeVar,
     Union,
     cast,  # noqa: TID251  # prisma types the condition/pipeline Json columns as str, but reads return decoded values
 )
@@ -171,6 +172,17 @@ def _attribute_of(source: object, name: str) -> object:
     return attribute["value"]
 
 
+_Key: Final = TypeVar("_Key")
+_Value: Final = TypeVar("_Value")
+
+
+def _same_or_new(
+    current: dict[_Key, _Value], synced: dict[_Key, _Value]
+) -> dict[_Key, _Value]:  # mutable-ok: registry containers are dicts
+    """The current container when a sync produced the same entries, so the cached policy engine stays valid"""
+    return current if list(current.items()) == list(synced.items()) else synced
+
+
 class PolicyRegistry:
     """
     In-memory registry for storing and managing policies.
@@ -204,19 +216,24 @@ class PolicyRegistry:
         self._sources = {}
         self._policies_by_id = {}
 
-        for policy_name, policy_data in policies_config.items():
-            try:
-                policy = self.parse_policy(policy_name, policy_data)
-                self._policies[policy_name] = policy
-                verbose_proxy_logger.debug("Loaded policy: %s", policy_name)
-            except Exception as e:
-                verbose_proxy_logger.error("Error loading policy '%s': %s", policy_name, e)
-                raise ValueError(f"Invalid policy '{policy_name}': {e}") from e
+        self._policies = {
+            policy_name: self._parse_config_policy(policy_name, policy_data)
+            for policy_name, policy_data in policies_config.items()
+        }
 
         self._config_policies = dict(self._policies)
         self._sources = {policy_name: "config" for policy_name in self._policies}
         self._initialized = True
         verbose_proxy_logger.info("Loaded %s policies", len(self._policies))
+
+    def _parse_config_policy(self, policy_name: str, policy_data: Mapping[str, object]) -> Policy:
+        try:
+            policy: Final = self.parse_policy(policy_name, dict(policy_data))
+        except Exception as e:
+            verbose_proxy_logger.error("Error loading policy '%s': %s", policy_name, e)
+            raise ValueError(f"Invalid policy '{policy_name}': {e}") from e
+        verbose_proxy_logger.debug("Loaded policy: %s", policy_name)
+        return policy
 
     def parse_policy(self, policy_name: str, policy_data: dict[str, Any]) -> Policy:
         """
@@ -296,6 +313,15 @@ class PolicyRegistry:
         """
         return self._policies.copy()
 
+    def current_policies(self) -> Mapping[str, Policy]:
+        """The live policies container. Every change replaces it instead of mutating it, so callers may cache
+        anything derived from it for as long as it stays the same object"""
+        return self._policies
+
+    def current_versions(self) -> Mapping[str, tuple[str, Policy]]:
+        """The live policy-version cache, replaced on every change like ``current_policies``"""
+        return self._policies_by_id
+
     def get_policy_names(self) -> list[str]:
         """
         Get list of all policy names.
@@ -356,7 +382,7 @@ class PolicyRegistry:
             policy: Policy object to add
             source: Provenance of the policy ("db" or "config")
         """
-        self._policies[policy_name] = policy
+        self._policies = {**self._policies, policy_name: policy}
         self._sources = {**self._sources, policy_name: source}
         if source == "config":
             self._config_policies = {**self._config_policies, policy_name: policy}
@@ -378,11 +404,11 @@ class PolicyRegistry:
             return False
         config_fallback: Final = self._config_policies.get(policy_name)
         if config_fallback is not None:
-            self._policies[policy_name] = config_fallback
+            self._policies = {**self._policies, policy_name: config_fallback}
             self._sources = {**self._sources, policy_name: "config"}
             verbose_proxy_logger.debug("Removed policy: %s; restored config-defined version", policy_name)
             return True
-        del self._policies[policy_name]
+        self._policies = {name: policy for name, policy in self._policies.items() if name != policy_name}
         self._sources = {name: source for name, source in self._sources.items() if name != policy_name}
         verbose_proxy_logger.debug("Removed policy: %s", policy_name)
         return True
@@ -600,6 +626,21 @@ class PolicyRegistry:
             verbose_proxy_logger.exception("Error getting policy from DB: %s", e)
             raise Exception(f"Error getting policy from DB: {e}")
 
+    def _parse_version_row(self, row: _PolicyRow) -> Policy:
+        return self.parse_policy(
+            row.policy_name,
+            {
+                "inherit": row.inherit,
+                "description": row.description,
+                "guardrails": {
+                    "add": row.guardrails_add or [],
+                    "remove": row.guardrails_remove or [],
+                },
+                "condition": row.condition,
+                "pipeline": row.pipeline,
+            },
+        )
+
     def get_policy_by_id_for_request(self, policy_id: str) -> tuple[str, Policy] | None:
         """
         Return a policy version by ID from in-memory cache (no DB access).
@@ -683,29 +724,17 @@ class PolicyRegistry:
                 )
             config_sources: Mapping[str, Literal["db", "config"]] = {name: "config" for name in self._config_policies}
             db_sources: Final[Mapping[str, Literal["db", "config"]]] = {name: "db" for name in db_policies}
-            self._policies = {**self._config_policies, **db_policies}
+            self._policies = _same_or_new(self._policies, {**self._config_policies, **db_policies})
             self._sources = {**config_sources, **db_sources}
 
-            self._policies_by_id = {}
             non_production: Final = await _policy_table(prisma_client).find_many(
                 where={"version_status": {"in": ["draft", "published"]}},
                 order={"created_at": "desc"},
             )
-            for row in non_production:
-                policy = self.parse_policy(
-                    row.policy_name,
-                    {
-                        "inherit": row.inherit,
-                        "description": row.description,
-                        "guardrails": {
-                            "add": row.guardrails_add or [],
-                            "remove": row.guardrails_remove or [],
-                        },
-                        "condition": row.condition,
-                        "pipeline": row.pipeline,
-                    },
-                )
-                self._policies_by_id[row.policy_id] = (row.policy_name, policy)
+            self._policies_by_id = _same_or_new(
+                self._policies_by_id,
+                {row.policy_id: (row.policy_name, self._parse_version_row(row)) for row in non_production},
+            )
 
             self._initialized = True
             verbose_proxy_logger.info(
@@ -726,7 +755,7 @@ class PolicyRegistry:
         """
         Resolve all guardrails for a policy from the database.
 
-        Uses the existing PolicyResolver to handle inheritance chain resolution.
+        Resolves the inheritance chain with the policy engine over the production versions.
 
         Args:
             policy_name: Name of the policy to resolve
@@ -735,16 +764,14 @@ class PolicyRegistry:
         Returns:
             List of resolved guardrail names
         """
-        from litellm.proxy.policy_engine.policy_resolver import PolicyResolver
+        from litellm.rust_bridge.policy_engine import build_policy_engine
 
         try:
             # Load only production versions so inheritance resolves against production
             policies: Final = await self.get_all_policies_from_db(prisma_client, version_status="production")
 
-            # Build a temporary in-memory map for resolution
-            temp_policies: Final = {}
-            for policy_response in policies:
-                policy = self.parse_policy(
+            temp_policies: Final = {
+                policy_response.policy_name: self.parse_policy(
                     policy_response.policy_name,
                     {
                         "inherit": policy_response.inherit,
@@ -757,14 +784,10 @@ class PolicyRegistry:
                         "pipeline": policy_response.pipeline,
                     },
                 )
-                temp_policies[policy_response.policy_name] = policy
+                for policy_response in policies
+            }
 
-            # Use the existing PolicyResolver to resolve guardrails
-            resolved_policy: Final = PolicyResolver.resolve_policy_guardrails(
-                policy_name=policy_name,
-                policies=temp_policies,
-                context=None,  # No context needed for simple resolution
-            )
+            resolved_policy: Final = build_policy_engine(temp_policies).policy_guardrails(policy_name)
 
             return sorted(resolved_policy.guardrails)
         except Exception as e:

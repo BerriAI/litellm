@@ -477,6 +477,24 @@ class TestConfigPoliciesPreservedAcrossDbSync:
         assert registry.get_source("config-policy") == "config"
 
     @pytest.mark.asyncio
+    async def test_an_unchanged_sync_keeps_the_policy_containers(self):
+        registry = PolicyRegistry()
+        registry.load_policies({"config-policy": {"guardrails": {"add": ["tooling"]}}})
+
+        def rows():
+            return _prisma_with_policy_rows(
+                [_make_row(policy_id="db-1", policy_name="db-policy", guardrails_add=["db-guard"])],
+                [_make_row(policy_id="draft-1", policy_name="db-policy", version_status="draft")],
+            )
+
+        await registry.sync_policies_from_db(rows())
+        policies, versions = registry.current_policies(), registry.current_versions()
+        await registry.sync_policies_from_db(rows())
+
+        assert registry.current_policies() is policies
+        assert registry.current_versions() is versions
+
+    @pytest.mark.asyncio
     async def test_sync_merges_db_policies_with_config_policies(self):
         registry = PolicyRegistry()
         registry.load_policies({"config-policy": {"guardrails": {"add": ["tooling"]}}})
@@ -518,18 +536,14 @@ class TestConfigPoliciesPreservedAcrossDbSync:
 
     @pytest.mark.asyncio
     async def test_config_policy_resolves_guardrails_after_sync(self):
-        from litellm.proxy.policy_engine.policy_resolver import PolicyResolver
+        from litellm.rust_bridge.policy_engine import build_policy_engine
 
         registry = PolicyRegistry()
         registry.load_policies({"config-policy": {"guardrails": {"add": ["tooling"]}}})
 
         await registry.sync_policies_from_db(_prisma_with_policy_rows([]))
 
-        resolved = PolicyResolver.resolve_policy_guardrails(
-            policy_name="config-policy",
-            policies=registry.get_all_policies(),
-            context=None,
-        )
+        resolved = build_policy_engine(registry.current_policies()).policy_guardrails("config-policy")
         assert resolved.guardrails == ["tooling"]
 
     @pytest.mark.asyncio

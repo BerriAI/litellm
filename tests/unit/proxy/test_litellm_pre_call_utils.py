@@ -2,6 +2,7 @@ import asyncio
 import base64
 import copy
 import json
+import logging
 import os
 import time
 from datetime import datetime, timezone
@@ -45,8 +46,8 @@ from litellm.proxy.litellm_pre_call_utils import (
     _apply_credential_overrides_from_model_config,
     _extract_credential_from_entry,
     _get_enforced_params,
-    _match_and_track_policies,
     _promoted_trace_control_fields,
+    _record_policy_engine_resolution,
     _resolve_credential_from_model_config,
     _resolve_provider_from_deployment,
     _update_model_if_key_alias_exists,
@@ -5473,67 +5474,56 @@ async def test_baggage_mapped_tags_match_tag_policies_only_when_the_caller_or_ke
     assert data["metadata"].get("guardrails", []) == expected_guardrails
 
 
-def test_match_and_track_policies_preserves_attachment_and_request_body_order():
-    from litellm.proxy.policy_engine.attachment_registry import AttachmentRegistry
-    from litellm.types.proxy.policy_engine import Policy, PolicyMatchContext
+def test_policy_engine_preserves_attachment_and_request_body_order():
+    from litellm.rust_bridge.policy_engine import build_policy_engine
+    from litellm.types.proxy.policy_engine import Policy, PolicyAttachment, PolicyMatchContext
 
     attachment_policy_names = [f"attachment-policy-{index}" for index in range(8)]
     request_body_policy_names = ["body-policy-1", "body-policy-2"]
     policy_names = [*attachment_policy_names, *request_body_policy_names]
-    policies = {policy_name: Policy() for policy_name in policy_names}
-    attachment_registry = AttachmentRegistry()
-    attachment_registry.load_attachments(
-        [{"policy": policy_name, "scope": "*"} for policy_name in attachment_policy_names]
+    engine = build_policy_engine(
+        {policy_name: Policy() for policy_name in policy_names},
+        attachments=tuple(PolicyAttachment(policy=policy_name, scope="*") for policy_name in attachment_policy_names),
     )
 
-    applied_policy_names, _ = _match_and_track_policies(
-        data={"metadata": {}},
-        context=PolicyMatchContext(model="gpt-4"),
-        request_body_policies=request_body_policy_names,
-        policies_override=policies,
-        attachment_registry_override=attachment_registry,
-    )
+    resolution = engine.resolve(PolicyMatchContext(model="gpt-4"), request_body_policy_names)
 
-    assert applied_policy_names == policy_names
+    assert resolution.applied_policies == tuple(policy_names)
 
 
-def test_match_and_track_policies_keeps_condition_missing_child_alongside_unconditional_sibling():
-    from litellm.proxy.policy_engine.attachment_registry import AttachmentRegistry
+def test_policy_engine_keeps_condition_missing_child_alongside_unconditional_sibling():
+    from litellm.rust_bridge.policy_engine import build_policy_engine
     from litellm.types.proxy.policy_engine import (
         Policy,
+        PolicyAttachment,
         PolicyCondition,
         PolicyGuardrails,
         PolicyMatchContext,
     )
 
-    policies = {
-        "baseline": Policy(guardrails=PolicyGuardrails(add=["baseline_guardrail"])),
-        "parent": Policy(guardrails=PolicyGuardrails(add=["pii_blocker"])),
-        "child": Policy(
-            inherit="parent",
-            guardrails=PolicyGuardrails(add=["child_guard"]),
-            condition=PolicyCondition(model="claude.*"),
-        ),
+    engine = build_policy_engine(
+        {
+            "baseline": Policy(guardrails=PolicyGuardrails(add=["baseline_guardrail"])),
+            "parent": Policy(guardrails=PolicyGuardrails(add=["pii_blocker"])),
+            "child": Policy(
+                inherit="parent",
+                guardrails=PolicyGuardrails(add=["child_guard"]),
+                condition=PolicyCondition(model="claude.*"),
+            ),
+        },
+        attachments=(PolicyAttachment(policy="baseline", scope="*"), PolicyAttachment(policy="child", scope="*")),
+    )
+    data: dict[str, object] = {"metadata": {}}
+
+    resolution = engine.resolve(PolicyMatchContext(model="gpt-5.5"))
+    _record_policy_engine_resolution(data, "metadata", resolution)
+
+    assert resolution.applied_policies == ("baseline", "child")
+    assert data["metadata"] == {
+        "applied_policies": ["baseline", "child"],
+        "policy_sources": {"baseline": "scope:*", "child": "scope:*"},
+        "guardrails": ["baseline_guardrail", "pii_blocker"],
     }
-    attachment_registry = AttachmentRegistry()
-    attachment_registry.load_attachments(
-        [
-            {"policy": "baseline", "scope": "*"},
-            {"policy": "child", "scope": "*"},
-        ]
-    )
-    data = {"metadata": {}}
-
-    applied_policy_names, _ = _match_and_track_policies(
-        data=data,
-        context=PolicyMatchContext(model="gpt-5.5"),
-        request_body_policies=[],
-        policies_override=policies,
-        attachment_registry_override=attachment_registry,
-    )
-
-    assert applied_policy_names == ["baseline", "child"]
-    assert data["metadata"]["applied_policies"] == ["baseline", "child"]
 
 
 @pytest.mark.asyncio
@@ -5576,6 +5566,66 @@ async def test_add_guardrails_from_policy_engine_keeps_a_policy_added_guardrail_
     assert data["metadata"]["guardrails"] == ["pii_blocker"]
     assert data["metadata"]["_pipeline_managed_guardrails"] == {"pii_blocker"}
     assert [pipeline.mode for _policy_name, pipeline in data["metadata"]["_guardrail_pipelines"]] == ["post_call"]
+
+
+@pytest.mark.asyncio
+async def test_add_guardrails_from_policy_engine_explains_its_resolution_in_debug_logs(caplog):
+    from litellm.proxy.policy_engine.attachment_registry import get_attachment_registry
+    from litellm.proxy.policy_engine.policy_registry import get_policy_registry
+    from litellm.types.proxy.policy_engine import (
+        GuardrailPipeline,
+        PipelineStep,
+        Policy,
+        PolicyAttachment,
+        PolicyCondition,
+        PolicyGuardrails,
+    )
+
+    data = {"model": "gpt-4", "metadata": {}, "policies": ["claude-only", "policy_v1", "policy_gone"]}
+    policy_registry = get_policy_registry()
+    policy_registry._policies = {
+        "base": Policy(guardrails=PolicyGuardrails(add=["pii"])),
+        "child": Policy(
+            inherit="base", guardrails=PolicyGuardrails(add=["audit"]), condition=PolicyCondition(model="claude.*")
+        ),
+        "claude-only": Policy(guardrails=PolicyGuardrails(add=["x"]), condition=PolicyCondition(model="claude.*")),
+        "draft": Policy(),
+    }
+    policy_registry._policies_by_id = {
+        "v1": ("draft", Policy(pipeline=GuardrailPipeline(mode="pre_call", steps=[PipelineStep(guardrail="judge")])))
+    }
+    policy_registry._initialized = True
+    attachment_registry = get_attachment_registry()
+    attachment_registry._attachments = [PolicyAttachment(policy="child", scope="*")]
+    attachment_registry._initialized = True
+
+    try:
+        with caplog.at_level(logging.DEBUG, logger="LiteLLM Proxy"):
+            await add_guardrails_from_policy_engine(
+                data=data, metadata_variable_name="metadata", user_api_key_dict=UserAPIKeyAuth(api_key="test-key")
+            )
+    finally:
+        policy_registry._policies = {}
+        policy_registry._policies_by_id = {}
+        policy_registry._initialized = False
+        attachment_registry._attachments = []
+        attachment_registry._initialized = False
+
+    messages = [record.getMessage() for record in caplog.records]
+    for expected in (
+        "Policy engine: loaded version by ID policy_v1 -> draft",
+        "Policy engine: policy version gone not found in cache, skipping",
+        "Policy engine: matched policies via attachments: ['child']",
+        "Policy engine: added dynamic policies from request body: ['claude-only']",
+        "Policy 'child' condition did not match model=gpt-4, skipping its guardrails and pipeline",
+        "Policy engine: skipped policies with no applicable chain member: ['claude-only']",
+        "Policy engine: applied policies (conditions matched): ['child', 'draft']",
+        "Policy 'child' contributes guardrails: ['pii']",
+        "Policy 'draft' has pipeline with 1 steps",
+        "Policy engine: resolved 1 pipeline(s), managed guardrails: {'judge'}",
+        "Policy engine: added guardrails to request metadata: ['pii']",
+    ):
+        assert expected in messages
 
 
 @pytest.mark.asyncio
@@ -5841,32 +5891,28 @@ async def test_add_guardrails_from_policy_engine_policy_version_by_id():
 
     policy_registry = get_policy_registry()
     policy_registry._policies = {}
+    policy_registry._policies_by_id = {policy_version_uuid: ("test-policy-from-version", published_version_policy)}
     policy_registry._initialized = True
 
     attachment_registry = get_attachment_registry()
     attachment_registry._attachments = []
     attachment_registry._initialized = True
 
-    with patch.object(
-        policy_registry,
-        "get_policy_by_id_for_request",
-        return_value=("test-policy-from-version", published_version_policy),
-    ):
+    try:
         await add_guardrails_from_policy_engine(
             data=data,
             metadata_variable_name="metadata",
             user_api_key_dict=user_api_key_dict,
         )
 
-    # Verify guardrails from the specific version were applied
-    assert "metadata" in data
-    assert "guardrails" in data["metadata"]
-    assert "published_version_guardrail" in data["metadata"]["guardrails"]
-    assert "policies" not in data
-
-    # Clean up
-    policy_registry._policies = {}
-    policy_registry._initialized = False
+        assert "metadata" in data
+        assert "guardrails" in data["metadata"]
+        assert "published_version_guardrail" in data["metadata"]["guardrails"]
+        assert "policies" not in data
+    finally:
+        policy_registry._policies = {}
+        policy_registry._policies_by_id = {}
+        policy_registry._initialized = False
 
 
 @pytest.mark.asyncio
