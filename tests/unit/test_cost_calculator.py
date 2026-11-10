@@ -4638,15 +4638,48 @@ def _rows_with_a_batch_cached_image_price() -> tuple[tuple[str, str, float, Mode
     )
 
 
+def _batch_cached_image_cost(name: str, provider: str, entry: ModelInfo) -> float:
+    return batch_cost_calculator(_cached_image_batch_usage(), name, provider, model_info=entry)[0]
+
+
+@pytest.mark.parametrize(
+    ("usage", "modality_batch_cache_key"),
+    [
+        pytest.param(_cached_audio_batch_usage(), "cache_read_input_audio_token_cost_batches", id="cached-audio"),
+        pytest.param(_cached_image_batch_usage(), "cache_read_input_image_token_cost_batches", id="cached-image"),
+    ],
+)
+def test_batch_cost_calculator_bills_cached_modality_tokens_at_their_batch_cache_price_without_a_text_cache_price(
+    usage: Usage, modality_batch_cache_key: str
+) -> None:
+    model_info: Final = cast(
+        ModelInfo,
+        {
+            "input_cost_per_token": 5e-6,
+            "input_cost_per_audio_token": 8e-6,
+            "input_cost_per_image_token": 8e-6,
+            "input_cost_per_token_batches": 2.5e-6,
+            "input_cost_per_audio_token_batches": 4e-6,
+            "input_cost_per_image_token_batches": 4e-6,
+            modality_batch_cache_key: 1e-6,
+        },
+    )
+
+    prompt_cost, _ = batch_cost_calculator(
+        usage=usage, model="gpt-image-2", custom_llm_provider="openai", model_info=model_info
+    )
+
+    assert prompt_cost == pytest.approx(1000 * 1e-6)
+
+
 def test_batch_cached_image_tokens_bill_the_rows_batch_cached_image_price_on_every_row_that_has_one() -> None:
     rows: Final = _rows_with_a_batch_cached_image_price()
     assert rows, "no cost map row prices Batch cached image input"
 
     mispriced: Final = tuple(
-        (name, cost, 1000 * rate)
+        (name, _batch_cached_image_cost(name, provider, entry), 1000 * rate)
         for name, provider, rate, entry in rows
-        for cost in (batch_cost_calculator(_cached_image_batch_usage(), name, provider, model_info=entry)[0],)
-        if cost != pytest.approx(1000 * rate)
+        if _batch_cached_image_cost(name, provider, entry) != pytest.approx(1000 * rate)
     )
 
     assert mispriced == ()
