@@ -3921,6 +3921,11 @@
         "max_input_tokens": 200000,
         "max_output_tokens": 64000,
         "mode": "chat",
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
         "output_cost_per_token": 2.5e-05,
         "supports_assistant_prefill": true,
         "supports_computer_use": true,
@@ -3932,6 +3937,7 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_output_config": true,
+        "supports_web_search": true,
         "prompt_cache_min_tokens": 4096,
         "source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule"
     },
@@ -4074,7 +4080,7 @@
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/concepts/model-lifecycle-retirement"
     },
     "azure_ai/claude-fable-latest": {
-        "alias_of": "azure_ai/claude-fable-5-1"
+        "alias_of": "azure_ai/claude-fable-5-2"
     },
     "azure_ai/claude-mythos-5-1": {
         "input_cost_per_token": 1e-05,
@@ -4088,6 +4094,11 @@
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
         "mode": "chat",
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
         "supports_adaptive_thinking": true,
         "thinking_always_on": true,
         "supports_mid_conversation_system": true,
@@ -4105,6 +4116,7 @@
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
         "supports_max_reasoning_effort": false,
+        "supports_web_search": true,
         "prompt_cache_min_tokens": 512,
         "source": "https://learn.microsoft.com/en-us/azure/foundry/concepts/model-lifecycle-retirement"
     },
@@ -4229,6 +4241,11 @@
         "max_input_tokens": 200000,
         "max_output_tokens": 64000,
         "mode": "chat",
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
         "output_cost_per_token": 1.5e-05,
         "supports_assistant_prefill": true,
         "supports_computer_use": true,
@@ -4239,6 +4256,7 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
+        "supports_web_search": true,
         "prompt_cache_min_tokens": 1024,
         "source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule"
     },
@@ -4290,6 +4308,11 @@
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
         "mode": "chat",
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
         "output_cost_per_token": 1.5e-05,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
@@ -4302,6 +4325,7 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_output_config": true,
+        "supports_web_search": true,
         "prompt_cache_min_tokens": 1024,
         "source": "https://learn.microsoft.com/en-us/azure/foundry/foundry-models/concepts/claude-models"
     },
@@ -28947,6 +28971,24 @@
         "supports_tool_choice": true,
         "supports_vision": true
     },
+    "fireworks_ai/accounts/fireworks/routers/minimax-latest": {
+        "cache_read_input_token_cost": 6e-08,
+        "cache_read_input_token_cost_priority": 9e-08,
+        "input_cost_per_token": 3e-07,
+        "input_cost_per_token_priority": 4.5e-07,
+        "litellm_provider": "fireworks_ai",
+        "max_input_tokens": 512000,
+        "max_output_tokens": 512000,
+        "mode": "chat",
+        "output_cost_per_token": 1.2e-06,
+        "output_cost_per_token_priority": 1.8e-06,
+        "source": "https://api.fireworks.ai/v1/serverless/models?format=nested",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
     "fireworks_ai/minimax-latest": {
         "alias_of": "fireworks_ai/accounts/fireworks/models/minimax-m3"
     },
@@ -33848,7 +33890,7 @@
         "thinking_always_on": true
     },
     "github_copilot/claude-fable-latest": {
-        "alias_of": "github_copilot/claude-fable-5.1"
+        "alias_of": "github_copilot/claude-fable-5.2"
     },
     "github_copilot/claude-haiku-4.5": {
         "cache_creation_input_token_cost": 1.25e-06,
@@ -36449,6 +36491,7 @@
     },
     "gpt-image-1.5": {
         "cache_read_input_image_token_cost": 2e-06,
+        "cache_read_input_image_token_cost_batches": 1e-06,
         "cache_read_input_token_cost": 1.25e-06,
         "cache_read_input_token_cost_batches": 6.3e-07,
         "deprecation_date": "2026-12-01",
@@ -36497,6 +36540,7 @@
     },
     "gpt-image-2": {
         "cache_read_input_image_token_cost": 2e-06,
+        "cache_read_input_image_token_cost_batches": 1e-06,
         "cache_read_input_token_cost": 1.25e-06,
         "cache_read_input_token_cost_batches": 6.25e-07,
         "deprecation_date": "2027-02-10",
@@ -36539,6 +36583,7 @@
     },
     "gpt-image-2.5-flare": {
         "cache_read_input_image_token_cost": 2e-06,
+        "cache_read_input_image_token_cost_batches": 1e-06,
         "cache_read_input_token_cost": 1.25e-06,
         "cache_read_input_token_cost_batches": 6.25e-07,
         "input_cost_per_token": 5e-06,
@@ -36575,6 +36620,7 @@
     },
     "gpt-image-2.5-sunburst": {
         "cache_read_input_image_token_cost": 2e-06,
+        "cache_read_input_image_token_cost_batches": 1e-06,
         "cache_read_input_token_cost": 1.25e-06,
         "cache_read_input_token_cost_batches": 6.25e-07,
         "input_cost_per_token": 5e-06,
@@ -39936,6 +39982,7 @@
     },
     "gpt-image-1-mini": {
         "cache_read_input_image_token_cost": 2.5e-07,
+        "cache_read_input_image_token_cost_batches": 1.3e-07,
         "cache_read_input_token_cost": 2e-07,
         "cache_read_input_token_cost_batches": 1e-07,
         "deprecation_date": "2026-12-01",
@@ -60402,6 +60449,7 @@
     },
     "chatgpt-image-latest": {
         "cache_read_input_image_token_cost": 2e-06,
+        "cache_read_input_image_token_cost_batches": 1e-06,
         "cache_read_input_token_cost": 1.25e-06,
         "cache_read_input_token_cost_batches": 6.3e-07,
         "deprecation_date": "2026-12-01",
@@ -65247,7 +65295,9 @@
         "source": "https://docs.mistral.ai/models/model-cards/leanstral-1-5",
         "supports_function_calling": true,
         "supports_response_schema": true,
-        "supports_tool_choice": true
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
     },
     "mistral/mistral-moderation-2603": {
         "input_cost_per_token": 0.0,
@@ -65769,6 +65819,30 @@
         "supports_tool_choice": true,
         "supports_vision": true
     },
+    "fireworks_ai/accounts/fireworks/routers/kimi-latest": {
+        "cache_read_input_token_cost": 3e-07,
+        "cache_read_input_token_cost_priority": 3.75e-07,
+        "input_cost_per_token": 3e-06,
+        "input_cost_per_token_priority": 3.75e-06,
+        "litellm_provider": "fireworks_ai",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 1.5e-05,
+        "output_cost_per_token_priority": 1.875e-05,
+        "reasoning_effort_levels": [
+            "low",
+            "high",
+            "max"
+        ],
+        "source": "https://api.fireworks.ai/v1/serverless/models?format=nested",
+        "supports_function_calling": true,
+        "supports_mid_conversation_system": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
     "fireworks_ai/kimi-latest": {
         "alias_of": "fireworks_ai/accounts/fireworks/models/kimi-k3"
     },
@@ -66068,6 +66142,7 @@
         "supports_function_calling": true,
         "supports_mid_conversation_system": true,
         "supports_reasoning": true,
+        "supports_tool_choice": true,
         "supports_vision": true
     },
     "fireworks_ai/accounts/fireworks/models/nemotron-lightning-3p5-30b-a3b": {
@@ -66114,6 +66189,24 @@
         "supports_vision": false
     },
     "fireworks_ai/accounts/fireworks/models/qwen3p8-max": {
+        "cache_read_input_token_cost": 2.5e-07,
+        "cache_read_input_token_cost_priority": 3.75e-07,
+        "input_cost_per_token": 2e-06,
+        "input_cost_per_token_priority": 3e-06,
+        "litellm_provider": "fireworks_ai",
+        "max_input_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 6e-06,
+        "output_cost_per_token_priority": 9e-06,
+        "source": "https://api.fireworks.ai/v1/serverless/models?format=nested",
+        "supports_function_calling": true,
+        "supports_mid_conversation_system": false,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "fireworks_ai/accounts/fireworks/routers/qwen-max-latest": {
         "cache_read_input_token_cost": 2.5e-07,
         "cache_read_input_token_cost_priority": 3.75e-07,
         "input_cost_per_token": 2e-06,
@@ -66181,6 +66274,27 @@
             "max"
         ],
         "source": "https://api.fireworks.ai/v1/serverless/models",
+        "supports_function_calling": true,
+        "supports_mid_conversation_system": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "fireworks_ai/accounts/fireworks/routers/kimi-fast-latest": {
+        "cache_read_input_token_cost": 4.5e-07,
+        "input_cost_per_token": 4.5e-06,
+        "litellm_provider": "fireworks_ai",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 2.25e-05,
+        "reasoning_effort_levels": [
+            "low",
+            "high",
+            "max"
+        ],
+        "source": "https://api.fireworks.ai/v1/serverless/models?format=nested",
         "supports_function_calling": true,
         "supports_mid_conversation_system": true,
         "supports_reasoning": true,
@@ -69002,7 +69116,9 @@
         "source": "https://docs.mistral.ai/models/model-cards/leanstral-1-5",
         "supports_function_calling": true,
         "supports_response_schema": true,
-        "supports_tool_choice": true
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
     },
     "fireworks_ai/accounts/fireworks/models/glm-5p3": {
         "cache_read_input_token_cost": 2.6e-07,
@@ -69016,6 +69132,25 @@
         "output_cost_per_token": 4.4e-06,
         "output_cost_per_token_priority": 5.5e-06,
         "source": "https://api.fireworks.ai/v1/serverless/models",
+        "supports_function_calling": true,
+        "supports_mid_conversation_system": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
+    "fireworks_ai/accounts/fireworks/routers/glm-latest": {
+        "cache_read_input_token_cost": 2.6e-07,
+        "cache_read_input_token_cost_priority": 3.25e-07,
+        "input_cost_per_token": 1.4e-06,
+        "input_cost_per_token_priority": 1.75e-06,
+        "litellm_provider": "fireworks_ai",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 4.4e-06,
+        "output_cost_per_token_priority": 5.5e-06,
+        "source": "https://api.fireworks.ai/v1/serverless/models?format=nested",
         "supports_function_calling": true,
         "supports_mid_conversation_system": true,
         "supports_reasoning": true,
@@ -69096,6 +69231,22 @@
         "supports_tool_choice": true,
         "supports_vision": false
     },
+    "fireworks_ai/accounts/fireworks/routers/glm-fast-latest": {
+        "cache_read_input_token_cost": 3.9e-07,
+        "input_cost_per_token": 2.1e-06,
+        "litellm_provider": "fireworks_ai",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_token": 6.6e-06,
+        "source": "https://api.fireworks.ai/v1/serverless/models?format=nested",
+        "supports_function_calling": true,
+        "supports_mid_conversation_system": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
     "fireworks_ai/accounts/fireworks/routers/auto": {
         "litellm_provider": "fireworks_ai",
         "mode": "chat",
@@ -69140,6 +69291,24 @@
         "supports_vision": false
     },
     "fireworks_ai/accounts/fireworks/models/glm-5p3-flash": {
+        "cache_read_input_token_cost": 3e-08,
+        "cache_read_input_token_cost_priority": 3.75e-08,
+        "input_cost_per_token": 1.5e-07,
+        "input_cost_per_token_priority": 1.875e-07,
+        "litellm_provider": "fireworks_ai",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_token": 5e-07,
+        "output_cost_per_token_priority": 6.25e-07,
+        "source": "https://api.fireworks.ai/v1/serverless/models?format=nested",
+        "supports_function_calling": true,
+        "supports_mid_conversation_system": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "fireworks_ai/accounts/fireworks/routers/glm-flash-latest": {
         "cache_read_input_token_cost": 3e-08,
         "cache_read_input_token_cost_priority": 3.75e-08,
         "input_cost_per_token": 1.5e-07,
@@ -79431,6 +79600,26 @@
         "supports_tool_choice": true,
         "supports_vision": true
     },
+    "fireworks_ai/accounts/fireworks/routers/deepseek-flash-latest": {
+        "cache_read_input_token_cost": 6e-09,
+        "cache_read_input_token_cost_priority": 7.5e-09,
+        "input_cost_per_token": 3e-07,
+        "input_cost_per_token_priority": 3.75e-07,
+        "litellm_provider": "fireworks_ai",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 393216,
+        "mode": "chat",
+        "output_cost_per_token": 1.2e-06,
+        "output_cost_per_token_priority": 1.5e-06,
+        "source": "https://api.fireworks.ai/v1/serverless/models?format=nested",
+        "supports_function_calling": true,
+        "supports_mid_conversation_system": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
     "github_copilot/claude-sonnet-4.6": {
         "cache_creation_input_token_cost": 3.75e-06,
         "cache_read_input_token_cost": 3e-07,
@@ -88522,5 +88711,22 @@
         "supports_vision": true,
         "supports_web_search": true,
         "web_search_billing_unit": "per_query"
+    },
+    "github_copilot/gemini-4-carbon": {
+        "cache_read_input_token_cost": 1e-07,
+        "input_cost_per_token": 2e-06,
+        "litellm_provider": "github_copilot",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 65536,
+        "mode": "chat",
+        "output_cost_per_token": 1e-05,
+        "source": "https://github.blog/changelog/2026-11-09-gemini-4-carbon-in-github-copilot",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_reasoning": true,
+        "supports_vision": true
     }
 }
