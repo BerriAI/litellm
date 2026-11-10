@@ -6,11 +6,11 @@ import hashlib
 import json
 import re
 import sqlite3
-from collections.abc import AsyncIterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Awaitable, Mapping, Sequence
 from datetime import timezone
 from functools import partial
 from types import SimpleNamespace
-from typing import Final, Literal
+from typing import Final, Literal, Protocol, TypeAlias
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import prisma
@@ -7880,46 +7880,53 @@ def test_ui_view_request_response_internal_user_missing_row_forbidden(client, mo
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
 
+_FakeSpendLogRows: TypeAlias = Sequence[Mapping[str, object]]
+
+
+class _FakeRawQuery(Protocol):
+    def __call__(self, statement_timeout_set: bool, sql_query: str, /, *params: object) -> Awaitable[_FakeSpendLogRows]: ...
+
+
 class _SpendLogsWithoutCallIdIndex:
     """A spend-log table missing LiteLLM_SpendLogs_litellm_call_id_idx. A read filtering on
     litellm_call_id scans the whole table, so it fails the test unless it runs under a
     statement timeout, which Postgres cancels it at."""
 
-    def __init__(self, rows):
-        self.rows = rows
-        self.db = SimpleNamespace(query_raw=partial(self._query_raw, False))
+    def __init__(self, rows: _FakeSpendLogRows) -> None:
+        self.rows: Final = rows
+        self.db: Final = SimpleNamespace(query_raw=partial(self._query_raw, False))
 
     @property
-    def read_db(self):
+    def read_db(self) -> SimpleNamespace:
         return SimpleNamespace(tx=lambda **_kwargs: _StatementTimeoutTransaction(self._query_raw))
 
-    async def _query_raw(self, statement_timeout_set, sql_query, *params):
+    async def _query_raw(self, statement_timeout_set: bool, sql_query: str, *params: object) -> _FakeSpendLogRows:
         if "litellm_call_id" in sql_query.split("WHERE", 1)[1]:
             if not statement_timeout_set:
                 raise AssertionError("unbounded full scan of LiteLLM_SpendLogs")
             raise statement_timeout_error()
-        matches = [row for row in self.rows if row["request_id"] == params[0]]
+        matches: Final = [row for row in self.rows if row["request_id"] == params[0]]
         if 'SELECT DISTINCT "user", team_id' in sql_query:
             return [{"user": row["user"], "team_id": row["team_id"]} for row in matches]
         return matches
 
 
 class _StatementTimeoutTransaction:
-    def __init__(self, query_raw):
-        self._query_raw = query_raw
+    def __init__(self, query_raw: _FakeRawQuery) -> None:
+        self._query_raw: Final = query_raw
         self._statement_timeout_set = False
 
-    async def execute_raw(self, sql):
+    async def execute_raw(self, sql: str) -> int:
         self._statement_timeout_set = self._statement_timeout_set or sql.startswith("SET LOCAL statement_timeout")
         return 0
 
-    async def query_raw(self, sql_query, *params):
+    async def query_raw(self, sql_query: str, *params: object) -> _FakeSpendLogRows:
         return await self._query_raw(self._statement_timeout_set, sql_query, *params)
 
-    async def __aenter__(self):
+    async def __aenter__(self) -> "_StatementTimeoutTransaction":
         return self
 
-    async def __aexit__(self, *exc_info):
+    async def __aexit__(self, *exc_info: object) -> None:
         pass
 
 
