@@ -113,7 +113,7 @@ from litellm.router_rust.invoke.endpoints import (
     stamp_error,
     unrouted_fields,
 )
-from litellm.router_rust.invoke.shaping import Shaping
+from litellm.router_rust.invoke.shaping import Shaping, non_stream_timeout
 from litellm.router_rust.invoke.slots import enter_deployment_slot, max_parallel_requests_limit
 from litellm.router_rust.invoke.streaming import (
     StreamAttempt,
@@ -1592,6 +1592,9 @@ class RustCore(
     def _shaping(self) -> Shaping:
         return self._endpoints.shaping(self._resolved)
 
+    def _core_deployment_call_timeout(self, litellm_params: Mapping[str, object]) -> object:
+        return non_stream_timeout(self._shaping, MappingProxyType({}), litellm_params)
+
     # -- building --------------------------------------------------------------------------------
 
     def _new_handle(self, model_list: Sequence[object]) -> "RouterCoreHandle":
@@ -1815,13 +1818,14 @@ class RustCore(
     def _rebuild(self) -> None:
         """A new Rust core for changed static settings, over the same deployments and the
         providers the old one's builds resolved for them."""
-        old: Final = self._handle
-        model_list: Final = list(self._hosted._core_model_list)  # pyright: ignore[reportPrivateUsage]  # see __init__
-        self._handle = self._new_handle(model_list)
-        self._handle.adopt_providers(old)
-        old.retire()
-        # The live list and indexes read the new handle's (the same entries, kept as the same objects).
-        self._hosted.refresh()
+        with self._hosted._deployment_index_lock:  # pyright: ignore[reportPrivateUsage]  # the registry's lock, held across the swap and the read back
+            old: Final = self._handle
+            model_list: Final = list(self._hosted._core_model_list)  # pyright: ignore[reportPrivateUsage]  # see __init__
+            self._handle = self._new_handle(model_list)
+            self._handle.adopt_providers(old)
+            old.retire()
+            # The live list and indexes read the new handle's (the same entries, kept as the same objects).
+            self._hosted.refresh()
         # The new handle builds its indexes from the deployments: written ones are handed again.
         self._index_sent = None
 
@@ -2009,6 +2013,7 @@ class RustCore(
     def retire(self) -> None:
         """``_core_discard``: only the router's global registrations go; it keeps serving calls."""
         untrack_live_registry(self._hosted)
+        self._hosted.retire_shared_capabilities()
         self._retire_callbacks()
         if self._hosted.strategies is not None:
             self._hosted.strategies.retire()

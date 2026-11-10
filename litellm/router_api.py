@@ -1308,6 +1308,9 @@ class RouterSettings:
         """The guardrail configured under this name (was ``get_available_guardrail``)."""
         return self._owner("_core_get_available_guardrail")._core_get_available_guardrail(name)
 
+    def timeout_for(self, litellm_params: Mapping[str, object]) -> object:
+        return self._owner("_core_deployment_call_timeout")._core_deployment_call_timeout(litellm_params)
+
 
 class RouterHealth:
     """Cooldowns, blocked deployments, health checks and usage (``health()``)."""
