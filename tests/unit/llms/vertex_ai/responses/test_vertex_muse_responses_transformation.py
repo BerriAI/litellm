@@ -177,6 +177,35 @@ def test_muse_refuses_server_side_response_storage() -> None:
         )
 
 
+@pytest.mark.parametrize(
+    ("model", "input_tokens", "price_suffix"),
+    tuple((model, 47, "") for model in MODELS)
+    + (("muse-ember-1.0", 200_000, ""), ("muse-ember-1.0", 200_001, "_above_200k_tokens")),
+)
+def test_muse_reports_catalog_cost_for_uncached_cached_and_output_tokens(
+    model: str, input_tokens: int, price_suffix: str, respx_mock: respx.MockRouter
+) -> None:
+    key: Final = f"vertex_ai/meta/{model}"
+    entry: Final = FIELDS.validate_python(litellm.model_cost[key])
+    cached_tokens: Final = 11
+    output_tokens: Final = 13
+    usage: Final = {
+        "input_tokens": input_tokens,
+        "input_tokens_details": {"cached_tokens": cached_tokens},
+        "output_tokens": output_tokens,
+        "total_tokens": input_tokens + output_tokens,
+    }
+    respx_mock.post(ENDPOINT).mock(return_value=httpx.Response(200, json={**_response(model), "usage": usage}))
+    response: Final = litellm.responses(model=key, input="Say hello", vertex_project="unit-project", num_retries=0)
+    input_rate: Final = TypeAdapter(float).validate_python(entry[f"input_cost_per_token{price_suffix}"])
+    cached_rate: Final = TypeAdapter(float).validate_python(entry[f"cache_read_input_token_cost{price_suffix}"])
+    output_rate: Final = TypeAdapter(float).validate_python(entry[f"output_cost_per_token{price_suffix}"])
+    expected: Final = (
+        (input_tokens - cached_tokens) * input_rate + cached_tokens * cached_rate + output_tokens * output_rate
+    )
+    assert response.hidden_params["response_cost"] == pytest.approx(expected)
+
+
 def test_muse_chat_completions_bridge_uses_the_native_responses_endpoint(respx_mock: respx.MockRouter) -> None:
     route: Final = respx_mock.post(ENDPOINT).mock(return_value=httpx.Response(200, json=_response("muse-wonder-1.0")))
     response: Final = litellm.completion(
