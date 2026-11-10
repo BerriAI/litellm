@@ -960,13 +960,29 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         )
 
     @staticmethod
+    def _model_list_url(api_base: str | None) -> str:
+        parsed_url: Final = httpx.URL(api_base or "https://api.openai.com")
+        configured_path: Final = parsed_url.raw_path.split(b"?", 1)[0].rstrip(b"/")
+        endpoint_suffix: Final = (
+            b"/chat/completions" if configured_path.endswith(b"/chat/completions") else b"/completions"
+        )
+        base_path: Final = configured_path.removesuffix(endpoint_suffix)
+        versioned_path: Final = base_path if base_path.endswith(b"/v1") else base_path + b"/v1"
+        return str(
+            httpx.URL(
+                scheme=parsed_url.scheme,
+                host=parsed_url.host,
+                port=parsed_url.port,
+                raw_path=versioned_path + b"/models",
+            )
+        )
+
+    @staticmethod
     def _fetch_model_ids(
         api_base: str | None, bearer_token: str | None
     ) -> list[str]:  # mutable-ok: matches get_models' list[str] contract shared by every provider override
-        parsed_url: Final = httpx.URL(api_base or "https://api.openai.com")
-        port_suffix: Final = f":{parsed_url.port}" if parsed_url.port else ""
         response: Final = litellm.module_level_client.get(
-            url=f"{parsed_url.scheme}://{parsed_url.host}{port_suffix}/v1/models",
+            url=OpenAIGPTConfig._model_list_url(api_base),
             headers={"Authorization": f"Bearer {bearer_token}"},
         )
         if response.status_code != 200:

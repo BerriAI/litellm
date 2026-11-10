@@ -24,6 +24,32 @@ from litellm.llms.openai.chat.gpt_transformation import (
 )
 
 
+@pytest.mark.parametrize(
+    "api_base, expected",
+    [
+        (None, "https://api.openai.com/v1/models"),
+        ("https://example.com", "https://example.com/v1/models"),
+        ("https://example.com/", "https://example.com/v1/models"),
+        ("https://example.com/v1/", "https://example.com/v1/models"),
+        ("https://example.com/gateway", "https://example.com/gateway/v1/models"),
+        ("https://example.com/gateway/", "https://example.com/gateway/v1/models"),
+        ("https://example.com/gateway/v1", "https://example.com/gateway/v1/models"),
+        ("https://example.com/gateway/v1/", "https://example.com/gateway/v1/models"),
+        ("https://example.com/gateway/v1/chat/completions", "https://example.com/gateway/v1/models"),
+        ("https://example.com/gateway/v1/chat/completions/", "https://example.com/gateway/v1/models"),
+        ("https://example.com/gateway/v1/completions", "https://example.com/gateway/v1/models"),
+        ("https://example.com/gateway/chat/completions", "https://example.com/gateway/v1/models"),
+        ("http://localhost:8000/gateway/v1", "http://localhost:8000/gateway/v1/models"),
+        ("http://[::1]:8000/gateway/v1", "http://[::1]:8000/gateway/v1/models"),
+        ("https://example.com/team%2Fname/v1", "https://example.com/team%2Fname/v1/models"),
+        ("https://example.com/v1?ignored=value#fragment", "https://example.com/v1/models"),
+        ("https://user:password@example.com/gateway/v1", "https://example.com/gateway/v1/models"),
+    ],
+)
+def test_model_discovery_preserves_the_configured_api_path(api_base: str | None, expected: str) -> None:
+    assert OpenAIGPTConfig._model_list_url(api_base) == expected
+
+
 class TestOpenAIGPTConfig:
     """Tests for OpenAIGPTConfig class"""
 
