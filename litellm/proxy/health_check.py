@@ -26,6 +26,7 @@ from litellm.constants import (
     DEFAULT_HEALTH_CHECK_PROMPT,
     HEALTH_CHECK_TIMEOUT_SECONDS,
 )
+from litellm.litellm_core_utils.get_llm_provider_logic import resolve_model_and_provider_for_metadata
 from litellm.litellm_core_utils.health_check_helpers import native_health_check_mode
 from litellm.litellm_core_utils.routing_common_utils import deployment_model_id_pin, is_model_capability_field
 from litellm.router_strategy.auto_router.auto_router_model_naming import (
@@ -840,10 +841,10 @@ def _same_health_check_model(deployment_model: str | None, probe_params: Mapping
     provider_param: Final = probe_params.get("custom_llm_provider")
     provider: Final = provider_param if isinstance(provider_param, str) else None
     try:
-        deployment_name, deployment_provider, _, _ = litellm.get_llm_provider(
+        deployment_name, deployment_provider = resolve_model_and_provider_for_metadata(
             model=deployment_model, custom_llm_provider=provider
         )
-        probe_name, probe_provider, _, _ = litellm.get_llm_provider(model=model, custom_llm_provider=provider)
+        probe_name, probe_provider = resolve_model_and_provider_for_metadata(model=model, custom_llm_provider=provider)
     except litellm.exceptions.BadRequestError:
         return False
     return (deployment_name, deployment_provider) == (probe_name, probe_provider)

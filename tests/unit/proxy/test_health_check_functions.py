@@ -12,9 +12,11 @@ from starlette.requests import Request
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.llms.chatgpt import authenticator as chatgpt_authenticator
 from litellm.proxy import proxy_server
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.db.health_check_latest import LatestHealthCheckRow
+from litellm.proxy.health_check import _same_health_check_model
 from litellm.proxy.health_endpoints._health_endpoints import (
     _aggregate_health_check_results,
     _build_model_param_to_info_mapping,
@@ -1129,6 +1131,20 @@ async def test_equivalent_health_check_model_names_keep_deployment_prices(
     assert health["response_cost"] == 10 * model_info["input_cost_per_token"] + 5 * model_info["output_cost_per_token"]
     assert health["model"] == "health-probe"
     assert health["model_id"] == deployment_id
+
+
+@pytest.mark.parametrize(("model", "expected"), [("health-probe", True), ("other-health-probe", False)])
+def test_chatgpt_health_check_model_comparison_does_not_access_credentials(
+    model: str, expected: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def forbidden_auth_file_access(*args: object, **kwargs: object) -> None:
+        pytest.fail("Health-check model comparison accessed the ChatGPT auth file")
+
+    monkeypatch.setattr(chatgpt_authenticator, "open", forbidden_auth_file_access, raising=False)
+
+    assert (
+        _same_health_check_model("chatgpt/health-probe", {"model": model, "custom_llm_provider": "chatgpt"}) is expected
+    )
 
 
 if __name__ == "__main__":
