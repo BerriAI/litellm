@@ -6209,7 +6209,7 @@ def add_provider_specific_params_to_optional_params(
                 extra_body={k: v for k, v in initial_extra_body.items() if k not in dropped_keys}
             )
     else:
-        calls_custom_handler: Final = custom_llm_provider not in LlmProvidersSet and any(
+        calls_custom_handler: Final = any(
             item["provider"] == custom_llm_provider for item in litellm.custom_provider_map
         )
         withheld_hook_params: Final = frozenset[str]() if calls_custom_handler else VECTOR_STORE_HOOK_PARAMS
