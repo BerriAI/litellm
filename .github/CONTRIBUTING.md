@@ -306,7 +306,7 @@ If you want to build the Docker image yourself:
 
 ```bash
 # Build the image (runs as a non-root user by default)
-docker build -t litellm_dev .
+docker build -f litellm/deploy/docker/Dockerfile -t litellm_dev .
 
 # Generate a master key. Requests send it as the bearer token
 export LITELLM_MASTER_KEY="sk-$(openssl rand -hex 32)"

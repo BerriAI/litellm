@@ -128,6 +128,7 @@ def main(
             member.filename
             for member in wheel_members
             if member.filename.endswith((".pdb", ".dwp", ".rlib", ".rmeta", "Cargo.toml", "Cargo.lock"))
+            or member.filename.startswith("litellm/deploy/")
             or any(part.endswith(".dSYM") for part in PurePosixPath(member.filename).parts)
         )
         native_member: Final = native_members[0]
