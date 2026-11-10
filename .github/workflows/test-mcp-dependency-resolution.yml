@@ -38,6 +38,10 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+env:
+  CARGO_TARGET_DIR: ${{ github.workspace }}/litellm-rust/target
+  MATURIN_PEP517_ARGS: --profile dev --strip
+
 jobs:
   resolve:
     runs-on: ubuntu-latest
@@ -96,9 +100,12 @@ jobs:
             (cd "$RUNNER_TEMP" && "$GITHUB_WORKSPACE/.venv-$extra/bin/python" "${checker[@]}")
           done
 
-      - name: Build the public wheel
+      - name: Build the public wheels
         if: steps.changes.outputs.decision != 'skip'
-        run: uv build --all-packages --wheel --out-dir dist/mcp-check
+        run: |
+          for package in litellm litellm-enterprise litellm-proxy-extras; do
+            uv build --package "$package" --wheel --out-dir dist/mcp-check
+          done
 
       - name: Check lowest direct runtime installations
         if: steps.changes.outputs.decision != 'skip'
