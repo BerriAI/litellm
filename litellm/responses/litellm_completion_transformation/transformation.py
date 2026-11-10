@@ -185,6 +185,7 @@ from .tool_search import (
     answers_tool_search,
     anthropic_tool_search_chat_tool,
     build_tool_search_call,
+    has_client_tool_search,
     has_server_tool_search,
     holds_tool_search_use,
     is_anthropic_tool_search_chat_tool,
@@ -1197,6 +1198,8 @@ class LiteLLMCompletionResponsesConfig:
     ) -> Sequence[ChatToolParam]:
         if not any("defer_loading" in tool for tool in tools):
             return tools
+        if has_client_tool_search(callers_tools):
+            return [LiteLLMCompletionResponsesConfig._without_deferral(tool) for tool in tools]
         if any(is_anthropic_tool_search_chat_tool(tool) for tool in tools):
             return tools
         if not has_server_tool_search(callers_tools) and provider_builds_anthropic_request(model, custom_llm_provider):

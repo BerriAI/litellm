@@ -964,6 +964,64 @@ class TestLiteLLMCompletionResponsesConfig:
             ("get_reporting_categories", "get_reporting_categories", '{"market":"TR-TITCK"}')
         ]
 
+    def test_transform_chat_completion_response_tool_loaded_by_client_side_search_has_namespace_equal_to_name(self):
+        """A deferred tool the client's own tool search loaded is still a deferred top-level tool to the
+        Agents SDK, so its call comes back as namespace == name through the client-search bridge too."""
+        from litellm.responses.litellm_completion_transformation.client_tool_search import bridge_client_tool_search
+
+        tool_call_id = "call_client_searched_deploy"
+        bridged = bridge_client_tool_search(
+            [
+                {"type": "tool_search_call", "call_id": "s1", "execution": "client", "arguments": {"query": "deploy"}},
+                {
+                    "type": "tool_search_output",
+                    "call_id": "s1",
+                    "status": "completed",
+                    "execution": "client",
+                    "tools": [{"type": "function", "name": "deploy", "parameters": {"type": "object"}}],
+                },
+            ],
+            [
+                {"type": "tool_search", "execution": "client"},
+                {"type": "function", "name": "deploy", "defer_loading": True, "parameters": {"type": "object"}},
+            ],
+        )
+        chat_completion_response = ModelResponse(
+            id="test-response-id",
+            created=1234567890,
+            model="bedrock/invoke/anthropic.claude-opus-5",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="tool_calls",
+                    index=0,
+                    message=Message(
+                        content=None,
+                        role="assistant",
+                        tool_calls=[
+                            ChatCompletionMessageToolCall(
+                                id=tool_call_id, type="function", function=Function(name="deploy", arguments="{}")
+                            )
+                        ],
+                    ),
+                )
+            ],
+        )
+
+        try:
+            responses_api_response = (
+                LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+                    request_input=bridged.input,
+                    responses_api_request={"tools": list(bridged.tools)},
+                    chat_completion_response=chat_completion_response,
+                )
+            )
+        finally:
+            TOOL_CALLS_CACHE.delete_cache(key=tool_call_id)
+
+        tool_calls = [item for item in responses_api_response.output if item.type == "function_call"]
+        assert [(c.name, c.namespace) for c in tool_calls] == [("deploy", "deploy")]
+
     def test_transform_chat_completion_response_plain_tool_call_has_no_namespace(self):
         """A non-namespace function call must not gain a namespace attribute, matching
         the streaming path which only sets it when a namespace was restored."""
@@ -2051,6 +2109,30 @@ class TestToolTransformation:
         )
 
         assert [tool["function"]["name"] for tool in result["tools"]] == ["get_weather", "finance__get_stock_price"]
+        assert all("defer_loading" not in tool for tool in result["tools"])
+
+    @pytest.mark.parametrize(
+        ("model", "provider"),
+        [
+            ("anthropic/claude-sonnet-5-5", "anthropic"),
+            ("bedrock/invoke/us.anthropic.claude-opus-5", "bedrock"),
+            ("gemini/gemini-2.5-flash", "gemini"),
+        ],
+    )
+    def test_tools_loaded_by_a_client_side_search_go_out_undeferred(self, model: str, provider: str) -> None:
+        tools: Final = [
+            {"type": "tool_search", "execution": "client"},
+            {"type": "function", "name": "deploy", "defer_loading": True, "parameters": {"type": "object"}},
+        ]
+
+        result: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model=model,
+            input="Deploy the service.",
+            responses_api_request={"tools": tools},
+            custom_llm_provider=provider,
+        )
+
+        assert [tool["function"]["name"] for tool in result["tools"]] == ["tool_search", "deploy"]
         assert all("defer_loading" not in tool for tool in result["tools"])
 
     def test_native_bm25_search_tool_keeps_the_other_tools_deferred(self) -> None:
