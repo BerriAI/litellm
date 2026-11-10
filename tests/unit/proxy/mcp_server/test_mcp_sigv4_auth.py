@@ -829,6 +829,7 @@ class TestSigV4BuildFromTable:
 
         table_record = MagicMock()
         table_record.server_id = "test-sigv4-server"
+        table_record.execution_mode = "litellm"
         table_record.server_name = "sigv4_server"
         table_record.alias = None
         table_record.description = None
@@ -899,6 +900,7 @@ class TestSigV4BuildFromTable:
 
         table_record = MagicMock()
         table_record.server_id = "test-bearer-server"
+        table_record.execution_mode = "litellm"
         table_record.server_name = "bearer_server"
         table_record.alias = None
         table_record.description = None

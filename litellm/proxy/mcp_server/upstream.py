@@ -40,6 +40,7 @@ from litellm.types.mcp import (
     MCPTransportType,
     MCPUpstreamProtocol,
     has_header,
+    validate_mcp_gateway_execution,
     without_header,
 )
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
@@ -210,6 +211,7 @@ async def prepare_upstream_client(
     upstream_transport: httpx2.AsyncBaseTransport | None = None,
     for_tool_listing: bool = False,
 ) -> MCPClient:
+    validate_mcp_gateway_execution(server.execution_mode)
     transport: Final[MCPTransportType] = server.transport or MCPTransport.sse
     server_spec: Final = None if transport == MCPTransport.stdio else to_server_spec_fail_closed(server)
     spec: Final = (

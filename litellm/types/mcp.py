@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Annotated, Any, Final, Literal, TypeAlias
 from urllib.parse import urlsplit
 
 import httpx
-from pydantic import ConfigDict, Field
+from pydantic import ConfigDict, Field, TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm.types.llms.base import HiddenParams, LiteLLMBaseModel
@@ -22,6 +22,19 @@ else:
     MCPEmbeddedResource = Any
     MCPImageContent = Any
     MCPTextContent = Any
+
+
+class MCPExecutionMode(str, enum.Enum):
+    litellm = "litellm"
+    provider = "provider"
+
+
+MCPGatewayExecutionMode: TypeAlias = Literal[MCPExecutionMode.litellm]
+_GATEWAY_EXECUTION_MODE: Final = TypeAdapter[MCPGatewayExecutionMode](MCPGatewayExecutionMode)
+
+
+def validate_mcp_gateway_execution(value: object) -> MCPGatewayExecutionMode:
+    return _GATEWAY_EXECUTION_MODE.validate_python(value)
 
 
 class MCPTransport(str, enum.Enum):

@@ -772,3 +772,82 @@ def test_partial_optional_catalog_never_advertises_freshness() -> None:
     assert result.ttl_ms == 0
     assert result.cache_scope == "private"
 
+
+
+@pytest.mark.asyncio
+async def test_provider_records_do_not_enter_or_survive_in_the_gateway_catalog() -> None:
+    from datetime import datetime, timezone
+
+    from litellm.models.mcp_server import LiteLLM_MCPServerTable
+    from litellm.proxy.mcp_server.mcp_server_manager import MCPServerManager
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    manager: Final = MCPServerManager()
+    updated_at: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    record: Final = LiteLLM_MCPServerTable(
+        server_id="docs", execution_mode="provider", transport=None, url="https://docs.example/mcp", updated_at=updated_at
+    )
+    await manager.add_server(record)
+    assert manager.get_mcp_server_by_id("docs") is None
+
+    legacy: Final = MCPServer(server_id="docs", name="docs", transport="http", url=record.url, updated_at=updated_at)
+    manager.registry[legacy.server_id] = legacy
+    assert await manager.catalog._stage_servers((record,), reuse_unchanged=True) == {}
+    await manager.update_server(record)
+    assert manager.get_mcp_server_by_id("docs") is None
+    manager.registry[legacy.server_id] = legacy
+    await manager.add_server(record)
+    assert manager.get_mcp_server_by_id("docs") is None
+
+
+@pytest.mark.asyncio
+async def test_provider_table_cannot_be_converted_to_a_gateway_client() -> None:
+    from pydantic import ValidationError
+
+    from litellm.models.mcp_server import LiteLLM_MCPServerTable
+    from litellm.proxy.mcp_server.mcp_server_manager import MCPServerManager
+
+    manager: Final = MCPServerManager()
+    record: Final = LiteLLM_MCPServerTable(
+        server_id="docs", execution_mode="provider", transport=None, url="https://docs.example/mcp"
+    )
+    with pytest.raises(ValidationError):
+        await manager.build_mcp_server_from_table(record)
+
+
+@pytest.mark.asyncio
+async def test_config_cannot_silently_load_provider_mode_as_a_gateway_server() -> None:
+    from pydantic import ValidationError
+
+    from litellm.proxy.mcp_server.mcp_server_manager import MCPServerManager
+    from litellm.types.mcp import MCPAuth, MCPExecutionMode
+
+    manager: Final = MCPServerManager()
+    with pytest.raises(ValidationError):
+        await manager.load_servers_from_config(
+            {"docs": {"execution_mode": MCPExecutionMode.provider, "url": "https://docs.example/mcp", "auth_type": MCPAuth.oauth2}}
+        )
+    assert manager.get_registry() == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("boundary", ["manager", "upstream"])
+async def test_provider_mode_is_rejected_before_upstream_auth_or_connection(boundary: str) -> None:
+    from pydantic import ValidationError
+
+    from litellm.proxy.mcp_server.mcp_server_manager import MCPServerManager
+    from litellm.proxy.mcp_server.upstream import prepare_upstream_client
+    from litellm.types.mcp import MCPExecutionMode
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    manager: Final = MCPServerManager()
+    server: Final = MCPServer(server_id="docs", name="docs", transport="http", auth_type="oauth2").model_copy(
+        update={"execution_mode": MCPExecutionMode.provider, "url": "https://docs.example/mcp"}
+    )
+    attempt: Final = (
+        manager.create_mcp_client(server)
+        if boundary == "manager"
+        else prepare_upstream_client(server, provider=manager._cred_provider, root_path="", protocol_version="auto")
+    )
+    with pytest.raises(ValidationError):
+        await attempt

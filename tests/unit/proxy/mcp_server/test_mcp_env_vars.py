@@ -1551,6 +1551,7 @@ async def test_create_mcp_server_decrypts_env_vars_when_prisma_returns_json_stri
         from prisma.models import LiteLLM_MCPServerTable
 
         return LiteLLM_MCPServerTable.model_validate({
+            "execution_mode": "litellm",
             "server_id": "srv-returned", "transport": "http", "mcp_access_groups": [], "allowed_tools": [],
             "extra_headers": [], "args": [], "allow_all_keys": False, "available_on_public_internet": True,
             "delegate_auth_to_upstream": False, "oauth_passthrough": False, "per_server_oauth_discovery": False,

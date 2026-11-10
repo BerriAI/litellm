@@ -486,6 +486,7 @@ def map_algorithm(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatc
 
 def _prisma_map_row(data: dict[str, object], quoted: bool = False) -> PrismaMCPServer:
     return PrismaMCPServer.model_validate({
+        "execution_mode": "litellm",
         "transport": "http", "mcp_access_groups": [], "allowed_tools": [], "extra_headers": [], "args": [],
         "allow_all_keys": False, "available_on_public_internet": True, "delegate_auth_to_upstream": False,
         "oauth_passthrough": False, "per_server_oauth_discovery": False, "is_byok": False, "byok_description": [],
