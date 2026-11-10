@@ -3799,6 +3799,21 @@
               },
               "title": "Providers",
               "type": "object"
+            },
+            "teams": {
+              "anyOf": [
+                {
+                  "additionalProperties": {
+                    "$ref": "#/components/schemas/MetricWithMetadata"
+                  },
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Customer spend by the key's current team, or last team for deleted keys. Keys without a known team are grouped under Unassigned",
+              "title": "Teams"
             }
           },
           "title": "BreakdownMetrics",
