@@ -174,7 +174,7 @@ def test_v2_warn_ahead_of_head_swallows_db_errors(monkeypatch, tmp_path):
 
 def test_v2_duplicate_object_p3009_is_not_marked_applied(monkeypatch, tmp_path):
     _stub_v2_env(monkeypatch, tmp_path)
-    monkeypatch.setattr(ProxyExtrasDBManager, "_failed_migration_logs", lambda name: "relation already exists")
+    monkeypatch.setattr(ProxyExtrasDBManager, "_failed_migration_logs", lambda name, started_at: "relation already exists")
     monkeypatch.setattr(
         ProxyExtrasDBManager,
         "_v2_roll_back_migration_best_effort",
@@ -304,7 +304,7 @@ def test_v2_p3009_deadlocked_ledger_row_rolls_back_and_retries(monkeypatch, tmp_
     monkeypatch.setattr(
         ProxyExtrasDBManager,
         "_failed_migration_logs",
-        lambda name: "ERROR: deadlock detected\nDETAIL: Process 72 waits for ShareLock",
+        lambda name, started_at: "ERROR: deadlock detected\nDETAIL: Process 72 waits for ShareLock",
     )
     rolled_back = []
     monkeypatch.setattr(
@@ -332,7 +332,7 @@ def test_v2_p3009_empty_ledger_logs_do_not_prove_completion(monkeypatch, tmp_pat
         "The `20260415120000_health_check_latest_per_model_index` migration "
         "started at 2026-09-01 18:46:13 UTC failed"
     )
-    monkeypatch.setattr(ProxyExtrasDBManager, "_failed_migration_logs", lambda name: "")
+    monkeypatch.setattr(ProxyExtrasDBManager, "_failed_migration_logs", lambda name, started_at: "")
     monkeypatch.setattr(
         ProxyExtrasDBManager,
         "_v2_roll_back_migration_best_effort",
@@ -358,7 +358,7 @@ def test_v2_p3009_unreadable_ledger_still_raises(monkeypatch, tmp_path):
         "The `20260415120000_health_check_latest_per_model_index` migration "
         "started at 2026-09-01 18:46:13 UTC failed"
     )
-    monkeypatch.setattr(ProxyExtrasDBManager, "_failed_migration_logs", lambda name: None)
+    monkeypatch.setattr(ProxyExtrasDBManager, "_failed_migration_logs", lambda name, started_at: None)
     monkeypatch.setattr(
         ProxyExtrasDBManager,
         "_v2_roll_back_migration_best_effort",
@@ -383,7 +383,7 @@ def test_v2_p3009_non_deadlock_ledger_row_still_raises(monkeypatch, tmp_path):
     monkeypatch.setattr(
         ProxyExtrasDBManager,
         "_failed_migration_logs",
-        lambda name: 'ERROR: syntax error at or near "BRKN"',
+        lambda name, started_at: 'ERROR: syntax error at or near "BRKN"',
     )
 
     with patch("litellm_proxy_extras.prisma_toolchain.run_prisma", side_effect=_fake_migrate_deploy_failure(1, stderr)):

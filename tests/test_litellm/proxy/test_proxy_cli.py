@@ -3,16 +3,13 @@ import os
 from contextlib import nullcontext
 from pathlib import Path
 from queue import SimpleQueue
-from typing import Final
 from types import SimpleNamespace
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import click
 import fastapi
 import pytest
-from litellm.proxy.db import prisma_client
-
-
 import builtins
 import types
 import urllib.parse as urlparse
@@ -22,6 +19,8 @@ import yaml
 from uvicorn.config import LOOP_FACTORIES
 from uvicorn.importer import import_from_string
 
+from litellm.proxy.db import prisma_client
+from litellm.proxy import proxy_cli
 from litellm.proxy.proxy_cli import ProxyInitializationHelpers, run_server
 
 
@@ -225,8 +224,6 @@ class TestProxyInitializationHelpers:
 
     def test_patch_statreload_extra_paths_yields_config_and_py(self, tmp_path):
         from pathlib import Path
-from queue import SimpleQueue
-from typing import Final
 
         from uvicorn.supervisors.statreload import StatReload
 
@@ -253,8 +250,6 @@ from typing import Final
 
     def test_patch_statreload_extra_paths_yields_env(self, tmp_path):
         from pathlib import Path
-from queue import SimpleQueue
-from typing import Final
 
         from uvicorn.supervisors.statreload import StatReload
 
@@ -290,8 +285,6 @@ from typing import Final
 
     def test_patch_statreload_extra_paths_is_idempotent(self, tmp_path):
         from pathlib import Path
-from queue import SimpleQueue
-from typing import Final
 
         from uvicorn.supervisors.statreload import StatReload
 
@@ -319,8 +312,6 @@ from typing import Final
         self, tmp_path, monkeypatch
     ):
         from pathlib import Path
-from queue import SimpleQueue
-from typing import Final
 
         from uvicorn.supervisors.statreload import StatReload
 
