@@ -79,17 +79,22 @@ class ProviderCountFailure:
     status_code: int
     message: str
     rejected_before_provider_call: bool = False
+    no_count_endpoint: bool = False
+
+    @property
+    def _provider_answered(self) -> bool:
+        return not (self.rejected_before_provider_call or self.no_count_endpoint)
 
     @property
     def cannot_count_model(self) -> bool:
-        return not self.rejected_before_provider_call and self.status_code in CANNOT_COUNT_MODEL_STATUSES
+        return self.no_count_endpoint or (self._provider_answered and self.status_code in CANNOT_COUNT_MODEL_STATUSES)
 
     @property
     def denied_in_region(self) -> bool:
-        return not self.rejected_before_provider_call and self.status_code in REGION_DENIED_STATUSES
+        return self._provider_answered and self.status_code in REGION_DENIED_STATUSES
 
     def with_hint(self, hint: str) -> "ProviderCountFailure":
-        if self.rejected_before_provider_call:
+        if not self._provider_answered:
             return self
         return replace(self, message=_with_hint(self.message, hint))
 
@@ -175,8 +180,17 @@ def _within_deployment_geography(
     return replace(count_model, region=None)
 
 
+def _shipped_count_model(
+    default: Mapping[str, object], deployment_region: Callable[[], str], counts_on_own_mantle_host: bool
+) -> TokenCountModel | None:
+    count_model: Final = _count_model(default, configured=False)
+    if count_model is not None and count_model.litellm_provider == "bedrock_mantle" and counts_on_own_mantle_host:
+        return replace(count_model, region=None)
+    return _within_deployment_geography(count_model, deployment_region)
+
+
 def _resolved_count_model(
-    configured: object, default: object, deployment_region: Callable[[], str]
+    configured: object, default: object, deployment_region: Callable[[], str], counts_on_own_mantle_host: bool
 ) -> TokenCountModel | None:
     configured_mapping: Final = as_str_mapping(configured)
     if configured_mapping is not None:
@@ -185,7 +199,7 @@ def _resolved_count_model(
     return (
         None
         if default_mapping is None
-        else _within_deployment_geography(_count_model(default_mapping, configured=False), deployment_region)
+        else _shipped_count_model(default_mapping, deployment_region, counts_on_own_mantle_host)
     )
 
 
@@ -198,12 +212,18 @@ def _tokenizer(value: object) -> TokenCountTokenizer | None:
 
 
 def resolve_token_count_settings(
-    configured: Mapping[str, object], default: Mapping[str, object], deployment_region: Callable[[], str]
+    configured: Mapping[str, object],
+    default: Mapping[str, object],
+    deployment_region: Callable[[], str],
+    counts_on_own_mantle_host: bool = False,
 ) -> TokenCountSettings:
     return TokenCountSettings(
         framing=_configured_framing(configured, default, "token_count_framing"),
         count_model=_resolved_count_model(
-            configured.get("token_count_model"), default.get("token_count_model"), deployment_region
+            configured.get("token_count_model"),
+            default.get("token_count_model"),
+            deployment_region,
+            counts_on_own_mantle_host,
         ),
         tokenizer=_tokenizer(default.get("token_count_tokenizer")),
         tool_framing=_configured_framing(configured, default, "token_count_tool_framing"),

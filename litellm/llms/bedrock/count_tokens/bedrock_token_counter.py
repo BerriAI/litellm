@@ -16,18 +16,13 @@ from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.anthropic.common_utils import context_management_betas, context_management_with_edits
 from litellm.llms.anthropic.count_tokens.transformation import ChatCountTranslationError, anthropic_count_fields
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
-from litellm.llms.bedrock.base_aws_llm import run_aws_signing
 from litellm.llms.bedrock.common_utils import (
     BEDROCK_INVOKE_CONTEXT_MANAGEMENT_EDIT_BETAS,
     BedrockError,
     get_bedrock_base_model,
 )
 from litellm.llms.bedrock.count_tokens.handler import BedrockCountTokensHandler, BedrockCountTokensRequestError
-from litellm.llms.bedrock.count_tokens.mantle_handler import (
-    NO_MANTLE_ENDPOINT_MESSAGE,
-    BedrockMantleCountTokensHandler,
-    deployment_mantle_endpoint,
-)
+from litellm.llms.bedrock.count_tokens.mantle_handler import BedrockMantleCountTokensHandler, NoMantleEndpointError
 from litellm.llms.bedrock_mantle.common_utils import is_mantle_claude_model
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.types.utils import (
@@ -60,6 +55,7 @@ class CountTokensFailure:
     message: str
     tokenizer_type: str
     rejected_before_provider_call: bool = False
+    no_count_endpoint: bool = False
 
 
 CountTokensOutcome = CountedTokens | CountTokensFailure
@@ -86,27 +82,12 @@ def _runtime_rejected_claude_model(outcome: CountTokensOutcome, resolved_model: 
     )
 
 
-async def _has_mantle_endpoint(litellm_params: Mapping[str, object]) -> bool:
-    return await run_aws_signing(deployment_mantle_endpoint, litellm_params) is not None
-
-
-def _no_mantle_endpoint_refusal(request_model: str, model_used: str) -> TokenCountResponse:
-    return TokenCountResponse(
-        total_tokens=0,
-        request_model=request_model,
-        model_used=model_used,
-        tokenizer_type=MANTLE_TOKENIZER_TYPE,
-        error=True,
-        error_message=NO_MANTLE_ENDPOINT_MESSAGE,
-        status_code=400,
-        rejected_before_provider_call=True,
-    )
-
-
 def _mantle_retry_outcome(
     runtime: CountTokensOutcome, mantle: CountTokensOutcome, carried_edits: bool
 ) -> CountTokensOutcome:
     match runtime, mantle:
+        case _, CountTokensFailure(no_count_endpoint=True):
+            return runtime
         case CountTokensFailure(status_code=400), CountTokensFailure(status_code=404) if carried_edits:
             return runtime
         case _:
@@ -193,6 +174,10 @@ class BedrockTokenCounter(BaseTokenCounter):
                 tokenizer_type=tokenizer_type,
                 rejected_before_provider_call=True,
             )
+        except NoMantleEndpointError as e:
+            return CountTokensFailure(
+                status_code=e.status_code, message=e.message, tokenizer_type=tokenizer_type, no_count_endpoint=True
+            )
         except BedrockError as e:
             verbose_logger.debug(
                 "%s CountTokens API error: status=%s, message=%s", tokenizer_type, e.status_code, e.message
@@ -224,8 +209,6 @@ class BedrockTokenCounter(BaseTokenCounter):
         counted_model: Final = model_to_use.removeprefix("bedrock_mantle/")
         resolved_model: Final = get_bedrock_base_model(counted_model)
         litellm_params: Final = (deployment or {}).get("litellm_params", {})
-        if use_mantle and not await _has_mantle_endpoint(litellm_params):
-            return _no_mantle_endpoint_refusal(request_model, model_to_use)
         primary_tokenizer: Final = MANTLE_TOKENIZER_TYPE if use_mantle else RUNTIME_TOKENIZER_TYPE
         translated: Final = (
             await anthropic_count_fields(
@@ -274,9 +257,7 @@ class BedrockTokenCounter(BaseTokenCounter):
                 ),
                 carried_edits=bool(native_context_management),
             )
-            if not use_mantle
-            and _runtime_rejected_claude_model(primary, resolved_model)
-            and await _has_mantle_endpoint(litellm_params)
+            if not use_mantle and _runtime_rejected_claude_model(primary, resolved_model)
             else primary
         )
         match outcome:
@@ -304,6 +285,7 @@ class BedrockTokenCounter(BaseTokenCounter):
                     error_message=outcome.message,
                     status_code=outcome.status_code,
                     rejected_before_provider_call=outcome.rejected_before_provider_call,
+                    no_count_endpoint=outcome.no_count_endpoint,
                 )
             case _:
                 assert_never(outcome)

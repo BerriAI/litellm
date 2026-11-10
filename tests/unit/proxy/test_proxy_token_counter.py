@@ -1848,7 +1848,6 @@ class _RejectingBedrockPeer:
 
 _MANTLE_COUNT_MODEL: Final = MappingProxyType(
     {
-        "token_count_framing": 10,
         "token_count_model": {
             "model": "anthropic.claude-opus-5-5",
             "litellm_provider": "bedrock_mantle",
@@ -1856,54 +1855,119 @@ _MANTLE_COUNT_MODEL: Final = MappingProxyType(
         },
     }
 )
+_FRAMED_MANTLE_COUNT_MODEL: Final = MappingProxyType({**_MANTLE_COUNT_MODEL, "token_count_framing": 10})
+
+
+async def _count_on_a_pinned_runtime_deployment(
+    peer: _RejectingBedrockPeer, configured: Mapping[str, object], default: Mapping[str, object]
+) -> TokenCountResponse | ProviderCountFailure | None:
+    counter: Final = BedrockTokenCounter(client=AsyncHTTPHandler(transport=httpx.MockTransport(peer)))
+    return await _provider_token_count(
+        count_with=partial(
+            _try_provider_token_count,
+            counter,
+            "bedrock",
+            messages=_COUNT_REQUEST.messages,
+            contents=_COUNT_REQUEST.contents,
+            request_model=_COUNT_REQUEST.model,
+            deployment={
+                "litellm_params": {
+                    "model": "bedrock/us.anthropic.claude-opus-5-5",
+                    "api_base": "https://vpce-0a1b2c3d.bedrock-runtime.us-east-1.vpce.amazonaws.com",
+                    "aws_access_key_id": "AKIATESTACCESSKEY",
+                    "aws_secret_access_key": "test-secret",
+                    "aws_region_name": "us-east-1",
+                }
+            },
+            tools=_COUNT_REQUEST.tools,
+            system=_COUNT_REQUEST.system,
+        ),
+        model_to_use="us.anthropic.claude-opus-5-5",
+        request_model=_COUNT_REQUEST.model,
+        settings=resolve_token_count_settings(
+            configured=configured, default=default, deployment_region=lambda: "us-east-1"
+        ),
+        local_estimate_allowed=True,
+    )
+
+
+@pytest.fixture
+def _no_bedrock_endpoint_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in ("AWS_BEARER_TOKEN_BEDROCK", "BEDROCK_MANTLE_API_BASE", "AWS_BEDROCK_RUNTIME_ENDPOINT"):
+        monkeypatch.delenv(name, raising=False)
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("_no_bedrock_endpoint_env")
 @pytest.mark.parametrize(
     ("configured", "default"),
-    ((_MANTLE_COUNT_MODEL, {}), ({}, _MANTLE_COUNT_MODEL)),
-    ids=("configured_token_count_model", "cost_map_token_count_model"),
+    ((_FRAMED_MANTLE_COUNT_MODEL, {}), ({}, _MANTLE_COUNT_MODEL)),
+    ids=("configured_token_count_model", "cost_map_token_count_model_without_framing"),
 )
 async def test_mantle_token_count_model_on_a_pinned_runtime_deployment_answers_a_400_naming_the_fix(
-    configured: Mapping[str, object], default: Mapping[str, object], monkeypatch: pytest.MonkeyPatch
+    configured: Mapping[str, object], default: Mapping[str, object]
 ) -> None:
-    for name in ("AWS_BEARER_TOKEN_BEDROCK", "BEDROCK_MANTLE_API_BASE", "AWS_BEDROCK_RUNTIME_ENDPOINT"):
-        monkeypatch.delenv(name, raising=False)
     peer: Final = _RejectingBedrockPeer()
-    counter: Final = BedrockTokenCounter(client=AsyncHTTPHandler(transport=httpx.MockTransport(peer)))
+
     with pytest.raises(ProxyException) as raised:
-        await _provider_token_count(
-            count_with=partial(
-                _try_provider_token_count,
-                counter,
-                "bedrock",
-                messages=_COUNT_REQUEST.messages,
-                contents=_COUNT_REQUEST.contents,
-                request_model=_COUNT_REQUEST.model,
-                deployment={
-                    "litellm_params": {
-                        "model": "bedrock/us.anthropic.claude-opus-5-5",
-                        "api_base": "https://vpce-0a1b2c3d.bedrock-runtime.us-east-1.vpce.amazonaws.com",
-                        "aws_access_key_id": "AKIATESTACCESSKEY",
-                        "aws_secret_access_key": "test-secret",
-                        "aws_region_name": "us-east-1",
-                    }
-                },
-                tools=_COUNT_REQUEST.tools,
-                system=_COUNT_REQUEST.system,
-            ),
-            model_to_use="us.anthropic.claude-opus-5-5",
-            request_model=_COUNT_REQUEST.model,
-            settings=resolve_token_count_settings(
-                configured=configured, default=default, deployment_region=lambda: "us-east-1"
-            ),
-            local_estimate_allowed=True,
-        )
+        await _count_on_a_pinned_runtime_deployment(peer, configured, default)
 
     assert raised.value.code == "400"
     assert "BEDROCK_MANTLE_API_BASE" in raised.value.message
+    assert "token_count_framing" in raised.value.message
     assert "If that region is not enabled" not in raised.value.message
     assert peer.requests == ()
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_no_bedrock_endpoint_env")
+async def test_framing_stands_in_when_a_pinned_runtime_deployment_has_no_mantle_host_to_count_on() -> None:
+    peer: Final = _RejectingBedrockPeer()
+
+    result: Final = await _count_on_a_pinned_runtime_deployment(peer, {}, _FRAMED_MANTLE_COUNT_MODEL)
+
+    assert isinstance(result, ProviderCountFailure)
+    assert result.status_code == 400
+    assert peer.requests == ()
+
+
+@pytest.mark.parametrize(
+    ("endpoint", "counted_in"),
+    [({"api_base": "https://vpce-0e1f2a3b.bedrock-mantle.us-west-2.vpce.api.aws"}, "us-west-2"), ({}, "us-east-1")],
+    ids=["its_own_mantle_host", "the_public_mantle_host"],
+)
+@pytest.mark.asyncio
+async def test_mantle_deployment_signs_counts_on_its_own_host_for_its_own_region(
+    monkeypatch: pytest.MonkeyPatch, endpoint: Mapping[str, str], counted_in: str
+):
+    counter: Final = _ScriptedCounter(
+        {"bedrock_mantle/anthropic.claude-opus-5-5": _provider_reply("opus", total_tokens=447)}
+    )
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "opus",
+                    "litellm_params": {
+                        "model": "bedrock/mantle/anthropic.claude-opus-5-5",
+                        "aws_region_name": "us-west-2",
+                        **endpoint,
+                    },
+                }
+            ]
+        ),
+    )
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server, "_get_provider_token_counter", lambda deployment, model: (counter, model, "bedrock")
+    )
+
+    await token_counter(
+        request=TokenCountRequest(model="opus", messages=[{"role": "user", "content": "hi"}]), call_endpoint=True
+    )
+
+    assert (counter.calls[0][0], counter.regions[0]) == ("bedrock_mantle/anthropic.claude-opus-5-5", counted_in)
 
 
 @pytest.mark.parametrize(

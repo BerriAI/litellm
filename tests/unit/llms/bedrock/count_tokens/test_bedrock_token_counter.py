@@ -695,7 +695,7 @@ async def test_mantle_counting_model_on_a_pinned_runtime_deployment_is_refused_b
         "bedrock_mantle_api",
     )
     assert result.error_message == NO_MANTLE_ENDPOINT_MESSAGE
-    assert result.rejected_before_provider_call
+    assert result.no_count_endpoint
     assert bedrock.requests == ()
     assert vault.read.is_set()
     assert not vault.read_on_loop.is_set()

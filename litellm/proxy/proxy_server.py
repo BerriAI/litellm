@@ -15327,6 +15327,7 @@ def _provider_count_outcome(
             status_code=result.status_code or 500,
             message=result.error_message or "Token counting failed",
             rejected_before_provider_call=result.rejected_before_provider_call,
+            no_count_endpoint=result.no_count_endpoint,
         )
     return result
 
@@ -15774,6 +15775,12 @@ def _deployment_aws_region(deployment: _TokenCountDeployment) -> str:
     )
 
 
+def _counts_on_own_mantle_host(deployment: _TokenCountDeployment) -> bool:
+    from litellm.llms.bedrock.count_tokens.mantle_handler import deployment_names_mantle_host
+
+    return deployment_names_mantle_host(deployment.get("litellm_params", {}))
+
+
 def _deployment_base_model(deployment: _TokenCountDeployment) -> str | None:
     return _non_empty_str(deployment.get("model_info", {}).get("base_model")) or _non_empty_str(
         deployment.get("litellm_params", {}).get("base_model")
@@ -16146,6 +16153,7 @@ async def _count_request_tokens(
         configured=deployment_view.get("model_info", {}),
         default=await asyncify(cost_map_entry)(*_token_count_settings_model(deployment_view, request.model)),
         deployment_region=partial(_deployment_aws_region, deployment_view),
+        counts_on_own_mantle_host=_counts_on_own_mantle_host(deployment_view),
     )
 
     # Try provider-specific token counting first - only for non-direct requests (from provider endpoints)
