@@ -40,6 +40,8 @@ from integration._support.wire import Reply, Request, Wire, wire_server
 pytestmark: Final = pytest.mark.shares_worker_state
 
 MODEL_ID: Final = "anthropic.claude-sonnet-5-v1:0"
+INPUT_COST_PER_TOKEN: Final = 0.001
+OUTPUT_COST_PER_TOKEN: Final = 0.002
 ROUTER_MODEL: Final = "converse-relay"
 EVENT_STREAM: Final = "application/vnd.amazon.eventstream"
 SAMPLED: Final = "relay-sampled"
@@ -390,6 +392,10 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
                         "aws_access_key_id": "AKIASYNTHETICRELAY",
                         "aws_secret_access_key": "synthetic-relay-secret",
                         "aws_region_name": "us-east-1",
+                    },
+                    "model_info": {
+                        "input_cost_per_token": INPUT_COST_PER_TOKEN,
+                        "output_cost_per_token": OUTPUT_COST_PER_TOKEN,
                     },
                 }
             ]
@@ -1037,12 +1043,13 @@ def test_guardrail_vendor_outage_during_a_burst_fails_closed_then_recovers(rig: 
         assert _spend_statuses(call_id, 1) == ["success"], marker
     for marker, (_, _, _, call_id) in during:
         assert len(_spend_statuses(call_id, 1)) == 1, marker
+    stream_cost: Final = 9 * INPUT_COST_PER_TOKEN + 4 * OUTPUT_COST_PER_TOKEN
     costs: Final = [_logged_spend(call_id) for _, (_, _, _, call_id) in after]
-    assert min(costs) > 0 and max(costs) == pytest.approx(min(costs)), costs
+    assert costs == [pytest.approx(stream_cost)] * len(after), costs
     charged: Final = eventually(
         lambda: _key_spend(rig.keys[OUTAGE]) - spend_before,
-        lambda spend: spend == pytest.approx(len((*during, *after)) * costs[0]),
+        lambda spend: spend == pytest.approx(len((*during, *after)) * stream_cost),
         seconds=70,
         return_last_on_timeout=True,
     )
-    assert charged == pytest.approx(len((*during, *after)) * costs[0]), (charged, costs)
+    assert charged == pytest.approx(len((*during, *after)) * stream_cost), charged
