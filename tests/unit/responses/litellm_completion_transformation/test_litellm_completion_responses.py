@@ -1018,6 +1018,170 @@ class TestLiteLLMCompletionResponsesConfig:
         assert getattr(tool_call, "namespace", None) is None
 
 
+class TestRepeatedToolCallIdAcrossSessions:
+    """Two conversations sharing one call id must each recover their own tool call."""
+
+    _CALL_ID = "functions.get_weather:0"
+
+    def _chat_response_with_city(self, city):
+        return ModelResponse(
+            id="test-response-id",
+            created=1234567890,
+            model="fake",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="tool_calls",
+                    index=0,
+                    message=Message(
+                        content=None,
+                        role="assistant",
+                        tool_calls=[
+                            ChatCompletionMessageToolCall(
+                                id=self._CALL_ID,
+                                type="function",
+                                function=Function(
+                                    name="get_weather",
+                                    arguments=json.dumps({"city": city}),
+                                ),
+                            )
+                        ],
+                    ),
+                )
+            ],
+        )
+
+    def _cache_tool_call(self, session_id, city):
+        LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+            request_input=f"What is the weather in {city}?",
+            responses_api_request={
+                "metadata": {"session_id": session_id},
+                "tools": [
+                    {
+                        "type": "function",
+                        "name": "get_weather",
+                        "parameters": {"type": "object", "properties": {}},
+                    }
+                ],
+            },
+            chat_completion_response=self._chat_response_with_city(city),
+        )
+
+    def _tool_call_cities(self, messages):
+        cities = []
+        for message in messages:
+            tool_calls = (
+                message.get("tool_calls") if isinstance(message, dict) else getattr(message, "tool_calls", None)
+            )
+            for tool_call in tool_calls or []:
+                function = (
+                    tool_call.get("function") if isinstance(tool_call, dict) else getattr(tool_call, "function", None)
+                )
+                arguments = (
+                    function.get("arguments") if isinstance(function, dict) else getattr(function, "arguments", None)
+                )
+                if arguments:
+                    cities.append(json.loads(arguments)["city"])
+        return cities
+
+    def _bridged_cities(self, session_id, call_id, output):
+        request = {"metadata": {"session_id": session_id}} if session_id is not None else {}
+        messages = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+            input=[{"type": "function_call_output", "call_id": call_id, "output": output}],
+            responses_api_request=request,
+        )
+        return messages, self._tool_call_cities(messages)
+
+    def _delete_cached_call(self, session_id=None):
+        TOOL_CALLS_CACHE.delete_cache(key=self._CALL_ID)
+        if session_id is not None:
+            TOOL_CALLS_CACHE.delete_cache(key=f"session:{len(session_id)}:{session_id}:{self._CALL_ID}")
+
+    def test_repeated_call_id_pairs_result_with_own_session(self):
+        try:
+            self._cache_tool_call("a", "CityA")
+            self._cache_tool_call("b", "CityB")
+            _, cities_a = self._bridged_cities("a", self._CALL_ID, "Weather for CityA")
+            _, cities_b = self._bridged_cities("b", self._CALL_ID, "Weather for CityB")
+            assert cities_a == ["CityA"], f"Session a paired with the wrong call: {cities_a}"
+            assert cities_b == ["CityB"], f"Session b paired with the wrong call: {cities_b}"
+        finally:
+            self._delete_cached_call("a")
+            self._delete_cached_call("b")
+
+    def test_unknown_call_id_never_pairs_with_another_session_call(self):
+        try:
+            self._cache_tool_call("b", "CityB")
+            messages, cities = self._bridged_cities("a", "functions.get_weather:99", "Weather for CityA")
+            assert cities == [], f"Unknown call id paired with another session's call: {cities}"
+            tool_messages = [
+                message
+                for message in messages
+                if (message.get("role") if isinstance(message, dict) else getattr(message, "role", None)) == "tool"
+            ]
+            assert len(tool_messages) == 1, "The tool result itself must still reach the backend"
+        finally:
+            self._delete_cached_call("b")
+
+    def test_unscoped_lookup_never_pairs_with_scoped_call(self):
+        try:
+            self._cache_tool_call("a", "CityA")
+            self._cache_tool_call("b", "CityB")
+            messages, cities = self._bridged_cities(None, self._CALL_ID, "Weather for CityA")
+            assert cities == [], f"Unscoped lookup paired with a scoped conversation's call: {cities}"
+            tool_messages = [
+                message
+                for message in messages
+                if (message.get("role") if isinstance(message, dict) else getattr(message, "role", None)) == "tool"
+            ]
+            assert len(tool_messages) == 1, "The tool result itself must still reach the backend"
+        finally:
+            self._delete_cached_call("a")
+            self._delete_cached_call("b")
+
+    def test_unscoped_lookup_falls_back_to_bare_cache_entry(self):
+        TOOL_CALLS_CACHE.set_cache(
+            key=self._CALL_ID,
+            value={
+                "id": self._CALL_ID,
+                "type": "function",
+                "function": {"name": "get_weather", "arguments": '{"city":"CityA"}'},
+            },
+        )
+        try:
+            _, unscoped = self._bridged_cities(None, self._CALL_ID, "Weather for CityA")
+            _, scoped = self._bridged_cities("a", self._CALL_ID, "Weather for CityA")
+            assert unscoped == ["CityA"], f"Unscoped lookup lost the bare cache entry: {unscoped}"
+            assert scoped == ["CityA"], f"Scoped lookup lost the bare cache fallback: {scoped}"
+        finally:
+            self._delete_cached_call()
+
+    def test_ensure_tool_results_uses_session_scope(self):
+        try:
+            self._cache_tool_call("a", "CityA")
+            self._cache_tool_call("b", "CityB")
+            messages = [
+                {"role": "assistant", "content": "Calling the tool."},
+                {"role": "tool", "content": "Weather for CityA", "tool_call_id": self._CALL_ID},
+            ]
+            tools = [{"type": "function", "function": {"name": "get_weather"}}]
+            fixed_a = LiteLLMCompletionResponsesConfig._ensure_tool_results_have_corresponding_tool_calls(
+                messages=messages, tools=tools, tool_call_cache_scope="a"
+            )
+            fixed_b = LiteLLMCompletionResponsesConfig._ensure_tool_results_have_corresponding_tool_calls(
+                messages=messages, tools=tools, tool_call_cache_scope="b"
+            )
+            assert self._tool_call_cities(fixed_a) == ["CityA"], (
+                f"Session a recovered the wrong call: {self._tool_call_cities(fixed_a)}"
+            )
+            assert self._tool_call_cities(fixed_b) == ["CityB"], (
+                f"Session b recovered the wrong call: {self._tool_call_cities(fixed_b)}"
+            )
+        finally:
+            self._delete_cached_call("a")
+            self._delete_cached_call("b")
+
+
 class TestFunctionCallTransformation:
     """Test cases for function_call input transformation"""
 

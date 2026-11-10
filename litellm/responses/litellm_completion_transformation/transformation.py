@@ -276,6 +276,44 @@ if TYPE_CHECKING:
 ########### Initialize Classes used for Responses API  ###########
 TOOL_CALLS_CACHE: Final = InMemoryCache()
 
+
+def _tool_call_cache_scope(*requests: Mapping[str, object] | None) -> str | None:
+    for request in requests:
+        if request is None:
+            continue
+        for key in ("metadata", "litellm_metadata"):
+            metadata = request.get(key)
+            if isinstance(metadata, Mapping):
+                session_id = cast(Mapping[str, object], metadata).get("session_id")  # cast-ok: string-keyed metadata
+                if isinstance(session_id, str) and session_id:
+                    return session_id
+    return None
+
+
+def _scoped_tool_call_cache_key(call_id: str, scope: str) -> str:
+    return f"session:{len(scope)}:{scope}:{call_id}"
+
+
+def _cached_tool_call_definition(call_id: object, scope: str | None) -> object:
+    if scope is not None and isinstance(call_id, str):
+        scoped_definition: Final = cast(  # cast-ok: cache stores untyped tool call definitions
+            object, TOOL_CALLS_CACHE.get_cache(key=_scoped_tool_call_cache_key(call_id, scope))
+        )
+        if scoped_definition is not None:
+            return scoped_definition
+    cached_definition: Final = cast(  # cast-ok: cache stores untyped tool call definitions
+        object, TOOL_CALLS_CACHE.get_cache(key=call_id)
+    )
+    return cached_definition
+
+
+def _cache_tool_call_definition(call_id: str, tool_call: object, scope: str | None) -> None:
+    TOOL_CALLS_CACHE.set_cache(
+        key=_scoped_tool_call_cache_key(call_id, scope) if scope is not None else call_id,
+        value=tool_call,
+    )
+
+
 _ANY_KEY_DICT_ADAPTER: Final = TypeAdapter(dict[object, object])
 _STR_KEY_DICT_ADAPTER: Final = TypeAdapter(dict[str, object])
 _OBJECT_LIST_ADAPTER: Final = TypeAdapter(list[object])
@@ -1292,6 +1330,7 @@ class LiteLLMCompletionResponsesConfig:
                         LiteLLMCompletionResponsesConfig._transform_responses_api_input_item_to_chat_completion_message,
                         replay_reasoning=True,
                         native_compaction=native_compaction,
+                        tool_call_cache_scope=_tool_call_cache_scope(responses_api_request),
                     ),
                 )
             )
@@ -1427,6 +1466,9 @@ class LiteLLMCompletionResponsesConfig:
             LiteLLMCompletionResponsesConfig._transform_response_input_param_to_chat_completion_message,
             replay_reasoning=replay_reasoning,
             native_compaction=native_compaction,
+            tool_call_cache_scope=_tool_call_cache_scope(
+                cast(Mapping[str, object], responses_api_request),  # cast-ok: request params are a string-keyed mapping
+            ),
         )
         try:
             converted: Final = convert_input(sent_input)
@@ -1556,7 +1598,9 @@ class LiteLLMCompletionResponsesConfig:
         # Pass tools parameter to help reconstruct tool_calls if not in cache
         tools: Final = _OBJECT_LIST_ADAPTER.validate_python(litellm_completion_request.get("tools") or [])
         combined_messages = LiteLLMCompletionResponsesConfig._ensure_tool_results_have_corresponding_tool_calls(
-            messages=combined_messages, tools=tools
+            messages=combined_messages,
+            tools=tools,
+            tool_call_cache_scope=_tool_call_cache_scope(request_kwargs),
         )
 
         # Safety check: Ensure we don't end up with empty messages
@@ -1604,6 +1648,7 @@ class LiteLLMCompletionResponsesConfig:
         input: str | ResponseInputParam,
         replay_reasoning: bool = False,
         native_compaction: bool = False,
+        tool_call_cache_scope: str | None = None,
     ) -> list[
         AllMessageValues | GenericChatCompletionMessage | ChatCompletionMessageToolCall | ChatCompletionResponseMessage
     ]:
@@ -1630,6 +1675,7 @@ class LiteLLMCompletionResponsesConfig:
                         input_item=_input,
                         replay_reasoning=replay_reasoning,
                         native_compaction=native_compaction,
+                        tool_call_cache_scope=tool_call_cache_scope,
                     )
                 )
 
@@ -2224,6 +2270,7 @@ class LiteLLMCompletionResponsesConfig:
             | Message
         ],
         tools: Sequence[object] | None = None,
+        tool_call_cache_scope: str | None = None,
     ) -> list[
         AllMessageValues
         | GenericChatCompletionMessage
@@ -2240,6 +2287,8 @@ class LiteLLMCompletionResponsesConfig:
         Args:
             messages: List of messages that may include tool_result messages
             tools: Optional list of tools that can be used to reconstruct tool_calls if not in cache
+            tool_call_cache_scope: Session id scoping the tool call cache lookup, so a call id
+                reused by another conversation cannot pair with this conversation's tool result
 
         Returns:
             List of messages with tool_calls added to assistant messages when needed
@@ -2312,7 +2361,7 @@ class LiteLLMCompletionResponsesConfig:
                 tool_calls = LiteLLMCompletionResponsesConfig._get_tool_calls_list(prev_assistant)
 
                 if not LiteLLMCompletionResponsesConfig._check_tool_call_exists(tool_calls, tool_call_id):
-                    _tool_use_definition: object = TOOL_CALLS_CACHE.get_cache(key=tool_call_id)
+                    _tool_use_definition: object = _cached_tool_call_definition(tool_call_id, tool_call_cache_scope)
 
                     if not _tool_use_definition and tools:
                         _tool_use_definition = LiteLLMCompletionResponsesConfig._reconstruct_tool_call_from_tools(
@@ -2342,6 +2391,7 @@ class LiteLLMCompletionResponsesConfig:
         input_item: Mapping[str, object],
         replay_reasoning: bool = False,
         native_compaction: bool = False,
+        tool_call_cache_scope: str | None = None,
     ) -> list[AllMessageValues | GenericChatCompletionMessage | ChatCompletionResponseMessage]:
         """
         Transform a Responses API input item into a Chat Completion message
@@ -2387,7 +2437,7 @@ class LiteLLMCompletionResponsesConfig:
             # handle executed tool call results
             return (
                 LiteLLMCompletionResponsesConfig._transform_responses_api_tool_call_output_to_chat_completion_message(
-                    tool_call_output=input_item
+                    tool_call_output=input_item, tool_call_cache_scope=tool_call_cache_scope
                 )
             )
         elif LiteLLMCompletionResponsesConfig._is_input_item_function_call(input_item):
@@ -2595,6 +2645,7 @@ class LiteLLMCompletionResponsesConfig:
     @staticmethod
     def _transform_responses_api_tool_call_output_to_chat_completion_message(
         tool_call_output: Mapping[str, object],
+        tool_call_cache_scope: str | None = None,
     ) -> list[AllMessageValues | GenericChatCompletionMessage | ChatCompletionResponseMessage]:
         """
         ChatCompletionToolMessage is used to indicate the output from a tool call
@@ -2615,10 +2666,13 @@ class LiteLLMCompletionResponsesConfig:
             )
         )
 
-        _tool_use_definition: Final = TOOL_CALLS_CACHE.get_cache(
-            key=tool_call_output.get("call_id") or "",
+        _tool_use_definition: Final = _cached_tool_call_definition(
+            tool_call_output.get("call_id") or "", tool_call_cache_scope
         )
-        if _tool_use_definition:
+        normalized_tool_use_definition: Final = LiteLLMCompletionResponsesConfig._normalize_tool_use_definition(
+            _tool_use_definition, str(call_id)
+        )
+        if normalized_tool_use_definition:
             """
             Append the tool use definition to the list of messages
 
@@ -2643,15 +2697,10 @@ class LiteLLMCompletionResponsesConfig:
                 }
 
             """
-            function: Final[dict] = _tool_use_definition.get("function") or {}
-            tool_call_chunk: Final = ChatCompletionToolCallChunk(
-                id=_tool_use_definition.get("id") or "",
-                type=cast(Literal["function"], _tool_use_definition.get("type") or "function"),
-                function=ChatCompletionToolCallFunctionChunk(
-                    name=function.get("name") or "",
-                    arguments=serialize_tool_call_arguments(function.get("arguments")),
-                ),
-                index=0,
+            tool_call_chunk: Final = LiteLLMCompletionResponsesConfig._create_tool_call_chunk(
+                normalized_tool_use_definition,
+                str(call_id),
+                0,
             )
             chat_completion_response_message: Final = ChatCompletionResponseMessage(
                 tool_calls=[tool_call_chunk],
@@ -3131,13 +3180,15 @@ class LiteLLMCompletionResponsesConfig:
         ``OutputToolSearchCall`` with ``type="tool_search_call"``.
         """
         all_chat_completion_tools: Final[list[ChatCompletionMessageToolCall]] = []
+        tool_call_cache_scope: Final = _tool_call_cache_scope(responses_api_request)
         for choice in chat_completion_response.choices:
             if isinstance(choice, Choices):
                 for tool_call in (*anthropic_server_tool_calls(choice.message), *(choice.message.tool_calls or ())):
                     all_chat_completion_tools.append(tool_call)
-                    TOOL_CALLS_CACHE.set_cache(
-                        key=tool_call.id,
-                        value=tool_call,
+                    _cache_tool_call_definition(
+                        cast(str, tool_call.id),  # cast-ok: tool calls always carry a string id
+                        cast(object, tool_call),  # cast-ok: cache stores the tool call as an untyped value
+                        tool_call_cache_scope,
                     )
 
         request_tools: Final = responses_api_request.get("tools") if responses_api_request is not None else None
