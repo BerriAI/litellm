@@ -5779,6 +5779,73 @@ def test_a_final_user_input_item_without_content_stays_an_empty_user_turn(
     ) == [("user", "What is 2+2?"), ("assistant", "Four."), ("user", "")]
 
 
+_ARN_DEPLOYMENT: Final = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc"
+_ROUTED_BASE_MODEL_CASES: Final = (
+    pytest.param({"model_info": {"base_model": "anthropic.claude-opus-5-5"}}, [("user", "")], id="model_info_base_model"),
+    pytest.param({"model_info": {}}, [], id="no_base_model"),
+    pytest.param(
+        {"base_model": "amazon.nova-pro-v1:0", "model_info": {"base_model": "anthropic.claude-opus-5-5"}},
+        [],
+        id="request_base_model_wins",
+    ),
+)
+
+
+@pytest.mark.parametrize(("request_kwargs", "expected_tail"), _ROUTED_BASE_MODEL_CASES)
+def test_an_arn_deployment_reads_its_model_from_model_info_base_model_like_chat_inference(
+    request_kwargs: dict[str, object], expected_tail: list[tuple[object, object]]
+) -> None:
+    result: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+        model=_ARN_DEPLOYMENT,
+        input=cast(ResponseInputParam, [_QUESTION_ITEM, _ANSWER_ITEM, _NULL_USER_ITEM]),
+        responses_api_request={},
+        custom_llm_provider="bedrock",
+        **request_kwargs,
+    )
+
+    assert [(message["role"], message.get("content")) for message in result["messages"]] == [
+        ("user", "What is 2+2?"),
+        ("assistant", "Four."),
+        *expected_tail,
+    ]
+
+
+@pytest.mark.parametrize(("request_kwargs", "expected_tail"), _ROUTED_BASE_MODEL_CASES)
+def test_an_arn_deployment_follow_up_reads_its_model_from_model_info_base_model_like_chat_inference(
+    request_kwargs: dict[str, object], expected_tail: list[tuple[object, object]]
+) -> None:
+    async def session_lookup(previous_response_id: str) -> ChatCompletionSession:
+        return ChatCompletionSession(
+            messages=[{"role": "user", "content": "What is 2+2?"}, {"role": "assistant", "content": "Four."}],
+            litellm_session_id=None,
+        )
+
+    chat_request: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+        model=_ARN_DEPLOYMENT,
+        input=cast(ResponseInputParam, [_NULL_USER_ITEM]),
+        responses_api_request={"previous_response_id": "resp_stored"},
+        custom_llm_provider="bedrock",
+        **request_kwargs,
+    )
+
+    request: Final = asyncio.run(
+        LiteLLMCompletionResponsesConfig.async_responses_api_session_handler(
+            previous_response_id="resp_stored",
+            litellm_completion_request=chat_request,
+            instructions=None,
+            session_lookup=session_lookup,
+            request_kwargs=request_kwargs,
+            request_input=cast(ResponseInputParam, [_NULL_USER_ITEM]),
+        )
+    )
+
+    assert [(message["role"], message.get("content")) for message in request["messages"]] == [
+        ("user", "What is 2+2?"),
+        ("assistant", "Four."),
+        *expected_tail,
+    ]
+
+
 @pytest.mark.parametrize(
     ("items", "expected"),
     (

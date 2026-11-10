@@ -355,7 +355,7 @@ def restored_empty_user_turn(
     route_fills_empty_user_turns: Callable[[], bool],
     text: str = "",
 ) -> tuple[GenericChatCompletionMessage, ...]:
-    if isinstance(input_items, str) or not input_items or message_field(input_items[-1], "role") != "user":
+    if not isinstance(input_items, list) or not input_items or message_field(input_items[-1], "role") != "user":
         return ()
     if not messages or message_field(messages[-1], "role") != "assistant" or not route_fills_empty_user_turns():
         return ()
@@ -367,6 +367,14 @@ def _resolved_chat_config(model: str, custom_llm_provider: str | None) -> "BaseC
         return provider_chat_config(model, custom_llm_provider)
     except litellm.BadRequestError:
         return None
+
+
+def _routed_base_model(request_kwargs: Mapping[str, object]) -> object:
+    base_model: Final = request_kwargs.get("base_model")
+    if base_model is not None:
+        return base_model
+    model_info: Final = as_str_mapping(request_kwargs.get("model_info"))
+    return None if model_info is None else model_info.get("base_model")
 
 
 def target_fills_empty_user_turns(model: str, custom_llm_provider: str | None, base_model: object) -> bool:
@@ -913,7 +921,7 @@ class LiteLLMCompletionResponsesConfig:
             replay_reasoning=True,
             item_cache_control=keeps_item_marks,
             route_fills_empty_user_turns=partial(
-                target_fills_empty_user_turns, model, custom_llm_provider, request_kwargs.get("base_model")
+                target_fills_empty_user_turns, model, custom_llm_provider, _routed_base_model(request_kwargs)
             ),
         )
 
@@ -1057,7 +1065,7 @@ class LiteLLMCompletionResponsesConfig:
             model, provider, drops_unsupported_params(request_kwargs.get("drop_params"))
         )
         route_fills_empty_user_turns: Final = partial(
-            target_fills_empty_user_turns, model, provider, request_kwargs.get("base_model")
+            target_fills_empty_user_turns, model, provider, _routed_base_model(request_kwargs)
         )
         lookup: Final = session_lookup or partial(
             ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id,
