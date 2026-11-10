@@ -411,6 +411,21 @@ def test_every_fireworks_model_that_takes_tools_also_takes_tool_choice() -> None
     assert missing_tool_choice == ()
 
 
+def test_every_fireworks_model_that_cannot_stop_reasoning_takes_reasoning_effort() -> None:
+    config: Final = FireworksAIConfig()
+    models_that_always_reason: Final = tuple(
+        name
+        for name, row in litellm.model_cost.items()
+        if row.get("litellm_provider") == "fireworks_ai" and row.get("supports_none_reasoning_effort") is False
+    )
+    missing_reasoning_effort: Final = tuple(
+        name for name in models_that_always_reason if "reasoning_effort" not in config.get_supported_openai_params(name)
+    )
+
+    assert models_that_always_reason
+    assert missing_reasoning_effort == ()
+
+
 # POST https://api.fireworks.ai/inference/v1/chat/completions, 2026-11-10: glm-latest answered 400
 # "GLM-5.3 is a thinking-only model" to reasoning_effort none, and kimi-latest answered 200
 _ALWAYS_REASONS: Final = "accounts/fireworks/routers/glm-latest"
