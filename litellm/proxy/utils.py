@@ -283,8 +283,6 @@ from litellm.proxy.policy_engine.pipeline_executor import (
     pipeline_step_is_detect_only,
     recorded_guardrail_information,
 )
-from litellm.proxy.policy_engine.policy_registry import get_policy_registry
-from litellm.proxy.policy_engine.policy_resolver import PolicyResolver
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.config_repository import ConfigRepository
 from litellm.repositories.spend_log_insert import RejectedSpendLogRow
@@ -993,9 +991,9 @@ def _is_pending_background_response(response: LLMResponseTypes) -> bool:
 
 
 def _guardrails_outside_pipeline(policy_name: str, pipeline: "GuardrailPipeline") -> frozenset[str]:
-    resolved: Final = PolicyResolver.resolve_policy_guardrails(
-        policy_name=policy_name, policies=get_policy_registry().get_all_policies()
-    )
+    from litellm.rust_bridge.policy_engine import current_policy_engine
+
+    resolved: Final = current_policy_engine().policy_guardrails(policy_name)
     return frozenset(resolved.guardrails) - frozenset(step.guardrail for step in pipeline.steps)
 
 

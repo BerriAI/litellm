@@ -14,6 +14,7 @@ litellm-error = { path = "crates/error" }
 litellm-router = { path = "crates/router" }
 litellm-router-types = { path = "crates/router-types" }
 litellm-router-core = { path = "crates/router-core" }
+litellm-policy-engine = { path = "crates/policy-engine" }
 litellm-tracing = { path = "crates/tracing" }
 litellm-spend-clickhouse = { path = "crates/spend-clickhouse" }
 litellm-storage-clickhouse = { path = "crates/storage-clickhouse" }

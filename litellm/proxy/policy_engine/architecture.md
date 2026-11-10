@@ -15,8 +15,8 @@ flowchart TD
     subgraph PolicyEngine["Policy Engine"]
         PR[PolicyRegistry]
         PV[PolicyValidator]
-        PM[PolicyMatcher]
-        PRe[PolicyResolver]
+        AR[AttachmentRegistry]
+        PE[PolicyEngine, Rust]
     end
 
     subgraph Request["Incoming Request"]
@@ -31,11 +31,10 @@ flowchart TD
     PC -->|validate| PV
     PV -->|errors/warnings| PR
     
-    CTX -->|match| PM
-    PM -->|matching policies| PRe
-    PR -->|policies| PM
-    PR -->|policies| PRe
-    PRe -->|resolve inheritance + add/remove| GR
+    PR -->|policies + versions| PE
+    AR -->|attachments| PE
+    CTX -->|resolve| PE
+    PE -->|match attachments, resolve inheritance + add/remove| GR
 ```
 
 ## Components
@@ -44,11 +43,11 @@ flowchart TD
 |-----------|------|-------------|
 | **PolicyRegistry** | `policy_registry.py` | In-memory singleton store for parsed policies |
 | **PolicyValidator** | `policy_validator.py` | Validates configs (guardrails, inheritance, teams/keys/models) |
-| **PolicyMatcher** | `policy_matcher.py` | Matches request context against policy scopes |
-| **PolicyResolver** | `policy_resolver.py` | Resolves final guardrails via inheritance chain |
+| **AttachmentRegistry** | `attachment_registry.py` | In-memory store for policy attachments (where policies apply) |
+| **PolicyEngine** | `litellm/rust_bridge/policy_engine.py`, crate `litellm-policy-engine` | Matches attachments, evaluates conditions and resolves inheritance in Rust over a snapshot of both registries |
 
 ## Flow
 
 1. **Startup**: `init_policies()` loads policies from config, validates, and populates `PolicyRegistry`
-2. **Request**: `PolicyMatcher` finds policies matching the request's team/key/model
-3. **Resolution**: `PolicyResolver` traverses inheritance and applies add/remove to get final guardrails
+2. **Request**: `current_policy_engine().resolve(context)` finds the attachments matching the request's team/key/model/tags
+3. **Resolution**: the same call traverses inheritance, applies add/remove and returns the final guardrails and pipelines. The engine is rebuilt only when a registry replaces its policies or attachments

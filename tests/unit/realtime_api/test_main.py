@@ -28,9 +28,12 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.openai.workload_identity import _workload_identity_auth
 from litellm.models.credentials import CredentialItem
 from litellm.proxy.common_utils.callback_utils import initialize_callbacks_on_proxy
-from litellm.proxy.litellm_pre_call_utils import _apply_resolved_guardrails_to_metadata
+from litellm.proxy.litellm_pre_call_utils import (
+    _record_policy_engine_resolution,  # pyright: ignore[reportPrivateUsage]  # writes a resolution into request metadata
+)
 from litellm.realtime_api import main as realtime_main
 from litellm.realtime_api.main import with_resolved_session_model
+from litellm.rust_bridge.policy_engine import build_policy_engine
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.proxy.policy_engine import Policy, PolicyCondition, PolicyMatchContext
 from litellm.types.proxy.policy_engine.pipeline_types import GuardrailPipeline, PipelineStep
@@ -2402,17 +2405,18 @@ async def test_translation_rejects_only_applicable_policy_pipelines(
 ) -> None:
     monkeypatch.setattr(litellm, "callbacks", [])
     request_data: Final[dict[str, object]] = {"metadata": {}, "litellm_metadata": {}}
-    _apply_resolved_guardrails_to_metadata(
-        data=request_data,
-        metadata_variable_name=metadata_bucket,
-        context=PolicyMatchContext(model="translation-deployment"),
-        policy_names=["translation-policy"] if selected else [],
-        policies={
+    engine: Final = build_policy_engine(
+        {
             "translation-policy": Policy(
                 condition=PolicyCondition(model="translation-deployment" if condition_matches else "unrelated-model"),
                 pipeline=GuardrailPipeline(mode=mode, steps=[PipelineStep(guardrail="speech-policy", on_fail="block")]),
             )
-        },
+        }
+    )
+    _record_policy_engine_resolution(
+        request_data,
+        metadata_bucket,
+        engine.resolve(PolicyMatchContext(model="translation-deployment"), ["translation-policy"] if selected else []),
     )
     metadata: Final = realtime_main._build_litellm_metadata(request_data)
     blocked: Final = selected and condition_matches

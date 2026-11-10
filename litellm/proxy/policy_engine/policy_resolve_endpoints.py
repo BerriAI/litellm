@@ -243,9 +243,8 @@ async def resolve_policies_for_context(
         }'
     ```
     """
-    from litellm.proxy.policy_engine.policy_matcher import PolicyMatcher
-    from litellm.proxy.policy_engine.policy_resolver import PolicyResolver
     from litellm.proxy.proxy_server import prisma_client
+    from litellm.rust_bridge.policy_engine import current_policy_engine
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="Database not connected")
@@ -264,49 +263,20 @@ async def resolve_policies_for_context(
             tags=request.tags,
         )
 
-        # Get matching policies with reasons
-        match_results: Final = get_attachment_registry().get_attached_policies_with_reasons(
-            context=context, policy_applies=PolicyMatcher.policy_applies(context)
+        engine: Final = current_policy_engine()
+        resolution: Final = engine.resolve(context)
+        matched_policies: Final = tuple(
+            PolicyMatchDetail(
+                policy_name=policy_name,
+                matched_via=resolution.policy_sources[policy_name],
+                guardrails_added=engine.policy_guardrails(policy_name, context).guardrails,
+            )
+            for policy_name in resolution.applied_policies
         )
-
-        if not match_results:
-            return PolicyResolveResponse(
-                effective_guardrails=[],
-                matched_policies=[],
-            )
-
-        # Filter by conditions
-        policy_names: Final = [r["policy_name"] for r in match_results]
-        applied_policy_names: Final = PolicyMatcher.get_policies_with_matching_conditions(
-            policy_names=policy_names,
-            context=context,
-        )
-
-        # Resolve guardrails for each applied policy
-        matched_policies: Final = []
-        all_guardrails: Final[set] = set()
-        for result in match_results:
-            pname = result["policy_name"]
-            if pname not in applied_policy_names:
-                continue
-            resolved = PolicyResolver.resolve_policy_guardrails(
-                policy_name=pname,
-                policies=get_policy_registry().get_all_policies(),
-                context=context,
-            )
-            guardrails = resolved.guardrails if resolved else []
-            all_guardrails.update(guardrails)
-            matched_policies.append(
-                PolicyMatchDetail(
-                    policy_name=pname,
-                    matched_via=result["matched_via"],
-                    guardrails_added=guardrails,
-                )
-            )
 
         return PolicyResolveResponse(
-            effective_guardrails=sorted(all_guardrails),
-            matched_policies=matched_policies,
+            effective_guardrails=sorted(resolution.guardrails),
+            matched_policies=list(matched_policies),
         )
     except HTTPException:
         raise
