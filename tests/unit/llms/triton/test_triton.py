@@ -302,9 +302,7 @@ def test_triton_generate_request_serializes_dict_params():
     assert isinstance(data_for_triton["parameters"]["max_tokens"], int)
     assert data_for_triton["parameters"]["temperature"] == 0.7
     assert isinstance(data_for_triton["parameters"]["chat_template_kwargs"], str)
-    assert json.loads(data_for_triton["parameters"]["chat_template_kwargs"]) == {
-        "enable_thinking": False
-    }
+    assert json.loads(data_for_triton["parameters"]["chat_template_kwargs"]) == {"enable_thinking": False}
 
 
 def test_triton_generate_request_serializes_tuple_params():
