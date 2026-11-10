@@ -574,6 +574,9 @@ async def test_writer_recreate_passes_http_client_through(monkeypatch):
         def __init__(self, **kwargs):
             captured_kwargs.update(kwargs)
 
+        def is_connected(self):
+            return True
+
         async def connect(self):
             return None
 
@@ -875,6 +878,9 @@ async def test_reader_recreate_uses_datasource_override(monkeypatch):
         def __init__(self, **kwargs):
             captured_kwargs.update(kwargs)
 
+        def is_connected(self):
+            return True
+
         async def connect(self):
             return None
 
@@ -911,6 +917,9 @@ async def test_writer_recreate_does_not_use_datasource(monkeypatch):
     class FakePrisma:
         def __init__(self, **kwargs):
             captured_kwargs.update(kwargs)
+
+        def is_connected(self):
+            return True
 
         async def connect(self):
             return None
