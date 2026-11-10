@@ -145,6 +145,7 @@ from ..common_utils import (
     STOP_REASON_FIELDS,
     AnthropicError,
     AnthropicModelInfo,
+    anthropic_extra_body_fields,
     eager_input_streaming_flag,
     process_anthropic_headers,
     refusal_params,
@@ -2660,6 +2661,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         request_params: Final = cast(  # cast-ok: optional_params is the untyped dict of the shared transform signature
             dict[str, object], optional_params
         )
+        extra_body: Final = request_params.pop("extra_body", None)
         marked_tools: Final = tools_marked_for_a_tool_config_point(
             request_params.get("tools"), request_params.pop("cache_control_injection_points", None)
         )
@@ -2692,12 +2694,13 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         ):
             request_params.pop("output_format")
 
-        data: Final = {
+        request_body: Final = {
             "model": model,
             "messages": anthropic_messages,
-            **optional_params,
+            **request_params,
             **({} if marked_tools is None else {"tools": list(marked_tools)}),
         }
+        data: Final = {**request_body, **anthropic_extra_body_fields(extra_body, request_body)}
 
         self._apply_output_config(data=data, model=model, optional_params=optional_params)
 

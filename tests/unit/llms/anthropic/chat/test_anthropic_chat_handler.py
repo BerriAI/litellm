@@ -147,6 +147,117 @@ def test_anthropic_completion_does_not_send_deployment_default_limits():
     assert "default_api_key_tpm_limit" not in request_body
 
 
+def test_anthropic_completion_adds_extra_body_fields_top_level_without_overriding_the_request():
+    captured_requests: list[httpx.Request] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        captured_requests.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "id": "msg_extra_body",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-5-5",
+                "content": [{"type": "text", "text": "Hello"}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+
+    client = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond)))
+    try:
+        litellm.completion(
+            model="anthropic/claude-sonnet-5-5",
+            messages=[{"role": "user", "content": "Hello"}],
+            api_key="test-key",
+            client=client,
+            max_tokens=16,
+            extra_body={
+                "fallbacks": [{"model": "claude-opus-5-5"}],
+                "model": "claude-opus-5-5",
+                "messages": [{"role": "user", "content": "unchecked"}],
+                "system": "unchecked",
+                "tools": [{"name": "unchecked", "input_schema": {"type": "object"}}],
+                "max_tokens": 4096,
+            },
+        )
+    finally:
+        client.close()
+
+    request_body = json.loads(captured_requests[0].content)
+    assert request_body == {
+        "model": "claude-sonnet-5-5",
+        "messages": [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}],
+        "max_tokens": 16,
+        "fallbacks": [{"model": "claude-opus-5-5"}],
+    }, request_body
+
+
+def _anthropic_request_with_fallbacks(extra_headers: dict[str, str] | None, drop_params: bool) -> httpx.Request:
+    captured_requests: Final[list[httpx.Request]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        captured_requests.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "id": "msg_fallbacks",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-5-5",
+                "content": [{"type": "text", "text": "Hello"}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+
+    client: Final = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond)))
+    try:
+        litellm.completion(
+            model="anthropic/claude-sonnet-5-5",
+            messages=[{"role": "user", "content": "Hello"}],
+            api_key="test-key",
+            client=client,
+            max_tokens=16,
+            extra_body={"fallbacks": [{"model": "claude-opus-5-5"}]},
+            extra_headers=extra_headers,
+            drop_params=drop_params,
+        )
+    finally:
+        client.close()
+    return captured_requests[0]
+
+
+@pytest.mark.parametrize(
+    ("fallback_beta", "drop_params", "fallbacks_kept"),
+    [
+        ("server-side-fallback-2026-07-01", True, True),
+        ("server-side-fallback-2026-06-01", True, True),
+        (None, False, True),
+        (None, True, False),
+    ],
+)
+def test_anthropic_chat_drops_fallbacks_under_drop_params_only_when_the_request_lacks_a_fallback_beta(
+    fallback_beta: str | None,
+    drop_params: bool,
+    fallbacks_kept: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Both betas unlock ``fallbacks`` per https://platform.claude.com/docs/en/build-with-claude/refusals-and-fallback
+    (fetched 2026-11-03)"""
+    monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "true")
+    monkeypatch.setattr(litellm, "drop_params", False)
+    request: Final = _anthropic_request_with_fallbacks(
+        None if fallback_beta is None else {"anthropic-beta": fallback_beta}, drop_params
+    )
+    sent_betas: Final = request.headers.get("anthropic-beta", "").split(",")
+    assert json.loads(request.content).get("fallbacks") == ([{"model": "claude-opus-5-5"}] if fallbacks_kept else None)
+    assert fallback_beta is None or fallback_beta in sent_betas
+
+
 def test_anthropic_tool_history_without_tools_injects_a_dummy_tool(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:

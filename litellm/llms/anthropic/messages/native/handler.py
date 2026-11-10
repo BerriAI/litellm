@@ -30,6 +30,7 @@ from litellm.litellm_core_utils.reasoning_effort_capability import (
 )
 from litellm.llms.anthropic.common_utils import (
     AnthropicModelInfo,
+    anthropic_extra_body_fields,
     strip_provider_specific_fields_from_anthropic_messages,
     tools_marked_for_a_tool_config_point,
 )
@@ -868,7 +869,12 @@ def anthropic_messages_handler(
         anthropic_messages_provider_config=anthropic_messages_provider_config,
         anthropic_messages_optional_request_params=dict(
             _with_deployment_output_effort(
-                anthropic_messages_optional_request_params,
+                {
+                    **anthropic_messages_optional_request_params,
+                    **anthropic_extra_body_fields(
+                        request_kwargs.get("extra_body"), anthropic_messages_optional_request_params
+                    ),
+                },
                 model=model,
                 custom_llm_provider=custom_llm_provider,
                 kwargs=cast(Mapping[str, object], kwargs),  # cast-ok: router kwargs arrive untyped
