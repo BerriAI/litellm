@@ -4597,7 +4597,8 @@ class ComplexityRouter(CustomLogger):
                         pinned_pin.tier if pinned_pin.tier is not None else self._tier_for_model(pinned_pin.model),
                     )
                 )
-                if selected_pin is not None:
+                pin_plan_sentinel: Final = self._matched_plan_mode_signal(request_kwargs, resolved_messages)
+                if selected_pin is not None and (selected_pin.tier is not None or pin_plan_sentinel is None):
                     escalated: Final = selected_pin.model != pinned_pin.model or (
                         pin_escalation_keyword is not None
                         and pinned_pin.tier is not None
@@ -4624,7 +4625,6 @@ class ComplexityRouter(CustomLogger):
                     # the floor, and the stored pin deliberately keeps the session's own model so
                     # the first turn after plan mode exits auto-routes exactly as it would have.
                     # Escalation is the opposite on purpose -- an explicit ask to re-pin higher.
-                    pin_plan_sentinel: Final = self._matched_plan_mode_signal(request_kwargs, resolved_messages)
                     pinned_tier: Final = resolved_pin_tier if pin_plan_sentinel is not None else None
                     plan_floored: Final = (
                         pinned_tier is not None and self._apply_plan_mode_floor(pinned_tier) != pinned_tier
@@ -4772,10 +4772,16 @@ class ComplexityRouter(CustomLogger):
         # classified at or above the floor keeps its ordinary cause, yet on an adaptive router
         # the hard floor constrained its pick, so pinning it would carry a plan-mode-shaped
         # choice past plan mode's exit. No sentinel turn writes the pin, whatever its cause.
+        holds_fallback_for_this_ask: Final = (
+            not self.config.session_affinity
+            and response is not None
+            and response.routing_decision is not None
+            and response.routing_decision.get("cause") == "default_model_fallback"
+        )
         pinnable: Final = (
             cache_key is not None
             and response is not None
-            and _decision_is_pinnable(response.routing_decision)
+            and (_decision_is_pinnable(response.routing_decision) or holds_fallback_for_this_ask)
             and self._matched_plan_mode_signal(request_kwargs, resolved_messages) is None
         )
         if pinnable and cache_key is not None and response is not None:
