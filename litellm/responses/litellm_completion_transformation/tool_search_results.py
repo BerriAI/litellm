@@ -117,14 +117,23 @@ def _loaded_tool(hits: Sequence[_LoadableTool]) -> Mapping[str, object]:
     return {**hits[0].tool, "tools": members} if members else hits[0].tool
 
 
+def _catalog_entries(
+    loadable: _LoadableTool, anthropic_names: Mapping[str, str]
+) -> tuple[tuple[str, _LoadableTool], ...]:
+    anthropic_name: Final = anthropic_names.get(loadable.chat_name)
+    names: Final = (loadable.chat_name,) if anthropic_name is None else (loadable.chat_name, anthropic_name)
+    return tuple((name, loadable) for name in names)
+
+
 def loaded_tools(tool_names: Iterable[str], request_tools: Sequence[object] | None) -> tuple[Mapping[str, object], ...]:
+    from litellm.llms.anthropic.chat.transformation import build_anthropic_tool_name_maps
+
+    loadables: Final = tuple(
+        chain.from_iterable(_loadable_tools(position, tool) for position, tool in enumerate(request_tools or ()))
+    )
+    anthropic_names, _ = build_anthropic_tool_name_maps([loadable.chat_name for loadable in loadables])
     catalog: Final = MappingProxyType(
-        {
-            loadable.chat_name: loadable
-            for loadable in chain.from_iterable(
-                _loadable_tools(position, tool) for position, tool in enumerate(request_tools or ())
-            )
-        }
+        dict(chain.from_iterable(_catalog_entries(loadable, anthropic_names) for loadable in loadables))
     )
     hits: Final = tuple(catalog[name] for name in dict.fromkeys(tool_names) if name in catalog)
     positions: Final = dict.fromkeys(hit.position for hit in hits)

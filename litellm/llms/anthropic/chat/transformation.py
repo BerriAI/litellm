@@ -152,7 +152,6 @@ from ..common_utils import (
     requires_native_compaction_beta,
     stop_reason_provider_specific_fields,
     strip_advisor_blocks_from_messages,
-    tool_search_content_renamed,
     tool_search_result_renamed,
     tools_marked_for_a_tool_config_point,
     validated_object_mapping,
@@ -426,14 +425,6 @@ def _provider_fields_with_tool_names(message: object, forward_map: Mapping[str, 
     }
 
 
-def _tool_result_with_caller_names(
-    result: _AnthropicToolResultBlock, reverse_map: Mapping[str, str]
-) -> _AnthropicToolResultBlock:
-    if result.get("type") != "tool_search_tool_result":
-        return result
-    return {**result, "content": tool_search_content_renamed(result.get("content"), reverse_map)}
-
-
 _ENUM_TYPE_CHECKS: Final[Mapping[object, Callable[[object], bool]]] = MappingProxyType(
     {
         "null": lambda v: v is None,
@@ -480,7 +471,7 @@ def _basic_sanitize_anthropic_tool_name(name: str) -> str:
     return _ANTHROPIC_TOOL_NAME_INVALID_CHARS.sub("_", name)[:_ANTHROPIC_TOOL_NAME_MAX_LEN]
 
 
-def _build_anthropic_tool_name_maps(
+def build_anthropic_tool_name_maps(
     original_names: list[str],
 ) -> tuple[dict[str, str], dict[str, str]]:
     """Build (forward, reverse) tool-name maps for a single request.
@@ -1544,7 +1535,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         callers that need to compute the maps from the raw OpenAI shape --
         e.g. test setup or future pre-mapping consumers.
 
-        See _build_anthropic_tool_name_maps for the collision rules. Pulls
+        See build_anthropic_tool_name_maps for the collision rules. Pulls
         the original name out of either ``{"function": {"name": ...}}``
         (legacy OpenAI shape) or ``{"name": ...}`` (rare top-level shape).
         """
@@ -1557,7 +1548,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 original = tool.get("name")
             if isinstance(original, str) and original:
                 original_names.append(original)
-        return _build_anthropic_tool_name_maps(original_names)
+        return build_anthropic_tool_name_maps(original_names)
 
     @staticmethod
     def _sanitize_tool_names_in_request(
@@ -1585,7 +1576,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         # 1. Collect originals from the Anthropic-shaped custom-tool entries.
         #    Order matters: the first occurrence wins the canonical slot;
         #    later collisions get numeric suffixes (see
-        #    ``_build_anthropic_tool_name_maps``).
+        #    ``build_anthropic_tool_name_maps``).
         original_names: Final[list[str]] = []
         for t in tools:
             if not isinstance(t, dict):
@@ -1599,7 +1590,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         if not original_names:
             return {}, {}
 
-        forward, reverse = _build_anthropic_tool_name_maps(original_names)
+        forward, reverse = build_anthropic_tool_name_maps(original_names)
         if not forward:
             # Every name was already valid -- nothing to do.
             return forward, reverse
@@ -2563,7 +2554,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         # The reverse map only contains entries for names that were actually
         # rewritten -- so a tool legitimately named ``foo_bar`` is never
         # incorrectly retyped to ``foo/bar`` on the response side.
-        # See _build_anthropic_tool_name_maps for the collision-handling
+        # See build_anthropic_tool_name_maps for the collision-handling
         # rules and rationale.
         _name_forward_map, _name_reverse_map = self._sanitize_tool_names_in_request(
             optional_params=optional_params,
@@ -3262,7 +3253,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         # Reverse-map rewritten tool names back to caller's originals so a
         # downstream OpenAI-style dispatcher can match on the registered name.
-        # See _build_anthropic_tool_name_maps for why this is keyed on the
+        # See build_anthropic_tool_name_maps for why this is keyed on the
         # per-request reverse map (so a tool legitimately named `foo_bar` is
         # never incorrectly retyped to `foo/bar`). No-op when the map is
         # empty (the common case).
@@ -3274,11 +3265,6 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 _name = fn.get("name")
                 if isinstance(_name, str) and _name in tool_name_reverse_map:
                     fn["name"] = tool_name_reverse_map[_name]
-        caller_tool_results: Final = (
-            [_tool_result_with_caller_names(result, tool_name_reverse_map) for result in tool_results]
-            if tool_name_reverse_map and tool_results
-            else tool_results
-        )
 
         if (
             prefix_prompt is not None
@@ -3294,7 +3280,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             citations,
             thinking_blocks,
             web_search_results,
-            caller_tool_results,
+            tool_results,
             compaction_blocks,
             tool_calls,
             server_tool_use_ids,

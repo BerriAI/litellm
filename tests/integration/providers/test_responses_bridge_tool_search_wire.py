@@ -1050,6 +1050,21 @@ def test_a_tool_name_anthropic_rewrites_comes_back_and_is_replayed_under_the_cal
         ], blocks
 
 
+@pytest.mark.parametrize("stream", [False, True], ids=["sync", "stream"])
+@pytest.mark.parametrize("provider", ["anthropic", "bedrock_invoke"])
+def test_the_tool_search_output_lists_the_callers_tool_when_anthropic_rewrites_its_name(
+    gateway: Gateway, provider: Provider, stream: bool
+) -> None:
+    marker: Final = uuid.uuid4().hex
+    vendor: Final = _Vendor(tool_use_name="weather_get", found_tool="weather_get")
+    tools: Final = (_tool_search(), {**_function_tool(), "name": "weather.get"})
+    with wire_server(vendor.respond) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(scenario, provider, wire.url, gateway.upstream_url)
+        items: Final = _tool_items(_raw_answer(gateway, _responses_body(model, marker, tools, stream)).payload)
+        (search_output,) = [item for item in items if item["type"] == "tool_search_output"]
+        assert [tool["name"] for tool in _ITEMS.validate_python(search_output["tools"])] == ["weather.get"], items
+
+
 def test_chat_completions_drop_a_replayed_search_call_that_has_no_result(gateway: Gateway) -> None:
     marker: Final = uuid.uuid4().hex
     with wire_server(_Vendor().respond) as wire, gateway.scenario() as scenario:
