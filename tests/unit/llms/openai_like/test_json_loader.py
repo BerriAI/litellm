@@ -4,10 +4,16 @@ Tests for Crusoe provider integration
 
 import asyncio
 import importlib
+import json
 import os
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
+from pathlib import Path
+from typing import Final
 from unittest import mock
 
 import pytest
+import respx
 
 import litellm
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
@@ -124,6 +130,157 @@ def setup_and_teardown(event_loop):
         task.cancel()
     if pending:
         event_loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+
+
+_EXTERNAL_SLUG: Final = "external_openai_like"
+_EXTERNAL_BASE: Final = "https://llm.example.test/v1"
+_EXTERNAL_KEY_ENV: Final = "EXTERNAL_OPENAI_LIKE_API_KEY"
+
+
+def _providers_file(path: Path, providers: Mapping[str, Mapping[str, object]]) -> Path:
+    path.write_text(json.dumps(providers))
+    return path
+
+
+def _external_provider(base_url: str = _EXTERNAL_BASE) -> Mapping[str, Mapping[str, object]]:
+    entry: Final = {
+        "base_url": base_url,
+        "api_key_env": _EXTERNAL_KEY_ENV,
+        "constraints": {"temperature_max": 0.2},
+        "param_mappings": {"max_completion_tokens": "max_tokens"},
+    }
+    return {_EXTERNAL_SLUG: entry}
+
+
+@contextmanager
+def _registry_snapshot() -> Iterator[None]:
+    from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+    before: Final = dict(JSONProviderRegistry._providers)
+    try:
+        yield
+    finally:
+        JSONProviderRegistry._providers.clear()
+        JSONProviderRegistry._providers.update(before)
+
+
+def test_external_providers_file_resolves_base_url_and_api_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+    from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+    path: Final = _providers_file(tmp_path / "providers.json", _external_provider())
+    monkeypatch.setenv(_EXTERNAL_KEY_ENV, "sk-external")
+    assert JSONProviderRegistry.exists(_EXTERNAL_SLUG) is False
+    with _registry_snapshot():
+        JSONProviderRegistry.load_file(str(path))
+        assert JSONProviderRegistry.exists("crusoe") is True
+        model, provider, api_key, api_base = get_llm_provider(f"{_EXTERNAL_SLUG}/demo-model")
+    assert model == "demo-model"
+    assert provider == _EXTERNAL_SLUG
+    assert api_base == _EXTERNAL_BASE
+    assert api_key == "sk-external"
+
+
+def test_later_providers_file_replaces_the_same_slug(tmp_path: Path) -> None:
+    from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+    first: Final = _providers_file(tmp_path / "first.json", _external_provider())
+    second: Final = _providers_file(
+        tmp_path / "second.json",
+        _external_provider(base_url="https://two.example.test/v1"),
+    )
+    with _registry_snapshot():
+        JSONProviderRegistry.load_file(str(first))
+        JSONProviderRegistry.load_file(str(second))
+        loaded: Final = JSONProviderRegistry.get(_EXTERNAL_SLUG)
+        assert loaded is not None
+        assert loaded.base_url == "https://two.example.test/v1"
+        assert JSONProviderRegistry.exists("crusoe") is True
+
+
+def test_relative_providers_path_loads(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+    monkeypatch.chdir(tmp_path)
+    _providers_file(Path("providers.json"), _external_provider())
+    with _registry_snapshot():
+        JSONProviderRegistry.load_file("providers.json")
+        loaded: Final = JSONProviderRegistry.get(_EXTERNAL_SLUG)
+        assert loaded is not None
+        assert loaded.base_url == _EXTERNAL_BASE
+
+
+def test_missing_providers_file_raises_not_found(tmp_path: Path) -> None:
+    from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+    missing: Final = tmp_path / "missing.json"
+    with pytest.raises(Exception, match=f"Providers file not found: {missing}"):
+        JSONProviderRegistry.load_file(str(missing))
+
+
+@pytest.mark.parametrize(
+    "contents",
+    [
+        "{",
+        "[]",
+        json.dumps({"external_openai_like": {"base_url": "https://llm.example.test/v1"}}),
+    ],
+)
+def test_bad_providers_file_names_the_path(tmp_path: Path, contents: str) -> None:
+    from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+    path: Final = tmp_path / "providers.json"
+    path.write_text(contents)
+    with pytest.raises(Exception, match=f"Error loading providers file {path}"):
+        JSONProviderRegistry.load_file(str(path))
+
+
+def test_empty_providers_file_keeps_bundled_providers(tmp_path: Path) -> None:
+    from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+    path: Final = _providers_file(tmp_path / "providers.json", {})
+    with _registry_snapshot():
+        JSONProviderRegistry.load_file(str(path))
+        assert JSONProviderRegistry.exists("crusoe") is True
+        assert JSONProviderRegistry.exists(_EXTERNAL_SLUG) is False
+
+
+def test_external_provider_completion_uses_file_base_url_and_temperature_cap(tmp_path: Path) -> None:
+    from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+    path: Final = _providers_file(tmp_path / "providers.json", _external_provider())
+    with _registry_snapshot():
+        JSONProviderRegistry.load_file(str(path))
+        with respx.mock() as upstream:
+            route: Final = upstream.post(f"{_EXTERNAL_BASE}/chat/completions").respond(
+                200,
+                json={
+                    "id": "chatcmpl-test",
+                    "object": "chat.completion",
+                    "created": 1,
+                    "model": "demo-model",
+                    "choices": [
+                        {"index": 0, "message": {"role": "assistant", "content": "hello"}, "finish_reason": "stop"}
+                    ],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+                },
+            )
+            response: Final = litellm.completion(
+                model=f"{_EXTERNAL_SLUG}/demo-model",
+                api_key="sk-external",
+                messages=[{"role": "user", "content": "Say hello"}],
+                temperature=1.5,
+                max_completion_tokens=7,
+            )
+    request: Final = route.calls.last.request
+    body: Final = json.loads(request.content)
+    assert str(request.url) == f"{_EXTERNAL_BASE}/chat/completions"
+    assert request.headers["authorization"] == "Bearer sk-external"
+    assert body["model"] == "demo-model"
+    assert body["temperature"] == 0.2
+    assert body["max_tokens"] == 7
+    assert "max_completion_tokens" not in body
+    assert response.choices[0].message.content == "hello"
 
 
 _SCALAR_DEFAULTS = {

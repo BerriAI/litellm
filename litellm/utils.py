@@ -5541,13 +5541,13 @@ def get_optional_params(
     # OpenAI param.
     passed_params.pop("base_model", None)
     passed_params.pop("model_info", None)
-    provider_config: BaseConfig | None = None
-    if custom_llm_provider is not None and custom_llm_provider in [provider.value for provider in LlmProviders]:
-        provider_config = ProviderConfigManager.get_provider_chat_config(
-            model=model,
-            provider=LlmProviders(custom_llm_provider),
-            base_model=base_model,
-        )
+    from litellm.llms.openai_like.dynamic_config import provider_chat_config
+
+    provider_config: Final[BaseConfig | None] = (
+        provider_chat_config(model=model, custom_llm_provider=custom_llm_provider, base_model=base_model)
+        if custom_llm_provider
+        else None
+    )
     non_default_params: Final = pre_process_non_default_params(
         passed_params=passed_params,
         special_params=special_params,

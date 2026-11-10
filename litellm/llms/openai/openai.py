@@ -26,7 +26,6 @@ from pydantic import BaseModel, TypeAdapter
 from typing_extensions import overload
 
 import litellm
-from litellm import LlmProviders
 from litellm._logging import verbose_logger
 from litellm.constants import DEFAULT_MAX_RETRIES
 from litellm.exceptions import UnsupportedParamsError
@@ -50,7 +49,6 @@ from litellm.types.utils import (
 )
 from litellm.utils import (
     CustomStreamWrapper,
-    ProviderConfigManager,
     convert_to_model_response_object,
     get_base_model_from_metadata,
 )
@@ -741,19 +739,14 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             inference_params = optional_params.copy()
             stream_options: Final[dict | None] = inference_params.pop("stream_options", None)
             stream: Final[bool | None] = inference_params.pop("stream", False)
-            provider_config: BaseConfig | None = None
+            from litellm.llms.openai_like.dynamic_config import provider_chat_config
 
-            if custom_llm_provider is not None and model is not None:
-                try:
-                    provider_config = ProviderConfigManager.get_provider_chat_config(
-                        model=model, provider=LlmProviders(custom_llm_provider)
-                    )
-                except ValueError:
-                    # JSON-configured providers may not be in LlmProviders enum
-                    provider_config = None
-
-            if provider_config is None:
-                provider_config = OpenAIConfig()
+            resolved_provider_config: Final = (
+                provider_chat_config(model=model, custom_llm_provider=custom_llm_provider)
+                if custom_llm_provider is not None and model is not None
+                else None
+            )
+            provider_config: Final = resolved_provider_config or OpenAIConfig()
 
             if provider_config:
                 fake_stream = provider_config.should_fake_stream(

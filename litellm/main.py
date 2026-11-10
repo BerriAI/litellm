@@ -5978,13 +5978,13 @@ def completion(
             ),
         )
 
-        provider_config: BaseConfig | None = None
-        if custom_llm_provider is not None and custom_llm_provider in [provider.value for provider in LlmProviders]:
-            provider_config = ProviderConfigManager.get_provider_chat_config(
-                model=model,
-                provider=LlmProviders(custom_llm_provider),
-                base_model=base_model,
-            )
+        from litellm.llms.openai_like.dynamic_config import provider_chat_config
+
+        provider_config: Final[BaseConfig | None] = provider_chat_config(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            base_model=base_model if isinstance(base_model, str) else None,
+        )
 
         if provider_config is not None:
             translated_messages: Final = list(

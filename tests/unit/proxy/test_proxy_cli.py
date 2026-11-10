@@ -4565,3 +4565,73 @@ def test_migration_data_check_requires_database_url(monkeypatch):
 
     with pytest.raises(click.UsageError, match="requires DATABASE_URL"):
         ProxyInitializationHelpers.run_migration_data_check(use_migrate=True)
+
+
+def _external_providers_file(path: Path) -> Path:
+    path.write_text(
+        json.dumps(
+            {
+                "external_openai_like": {
+                    "base_url": "https://llm.example.test/v1",
+                    "api_key_env": "EXTERNAL_OPENAI_LIKE_API_KEY",
+                }
+            }
+        )
+    )
+    return path
+
+
+def _restore_external_provider() -> None:
+    from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+    JSONProviderRegistry._providers.pop("external_openai_like", None)
+    os.environ.pop("PROVIDERS_FILE_PATH", None)
+
+
+def test_providers_flag_help_matches_config_usage() -> None:
+    from click.testing import CliRunner
+
+    result: Final = CliRunner().invoke(run_server, ["--help"])
+    help_text: Final = " ".join(result.output.split())
+    assert result.exit_code == 0
+    assert "litellm --config config.yaml" in help_text
+    assert "litellm --providers providers.json" in help_text
+
+
+def test_providers_flag_missing_file_fails_like_a_missing_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from click.testing import CliRunner
+
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("DIRECT_URL", raising=False)
+    monkeypatch.delenv("PROVIDERS_FILE_PATH", raising=False)
+    missing: Final = tmp_path / "missing.json"
+    result: Final = CliRunner().invoke(run_server, ["--providers", str(missing), "--skip_server_startup"])
+    try:
+        assert result.exit_code != 0
+        assert f"Providers file not found: {missing}" in f"{result.output}{result.exception}"
+        assert os.environ.get("PROVIDERS_FILE_PATH") is None
+    finally:
+        _restore_external_provider()
+
+
+def test_providers_flag_loads_file_before_server_start(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from click.testing import CliRunner
+
+    from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("DIRECT_URL", raising=False)
+    monkeypatch.delenv("PROVIDERS_FILE_PATH", raising=False)
+    path: Final = _external_providers_file(tmp_path / "providers.json")
+    result: Final = CliRunner().invoke(run_server, ["--providers", str(path), "--skip_server_startup"])
+    try:
+        assert result.exit_code == 0, result.output
+        assert "Skipping server startup" in result.output
+        loaded: Final = JSONProviderRegistry.get("external_openai_like")
+        assert loaded is not None
+        assert loaded.base_url == "https://llm.example.test/v1"
+        assert os.environ.get("PROVIDERS_FILE_PATH") == str(path)
+    finally:
+        _restore_external_provider()

@@ -1677,6 +1677,11 @@ async def _proxy_lifespan(app: FastAPI, resources: AsyncExitStack) -> AsyncGener
 
     ## CHECK MASTER KEY IN ENVIRONMENT ##
     master_key = get_secret_str("LITELLM_MASTER_KEY")
+    providers_file: Final = get_secret_str("PROVIDERS_FILE_PATH")
+    if providers_file:
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+        JSONProviderRegistry.load_file(providers_file)
     ### LOAD CONFIG ###
     worker_config: str | dict | None = get_secret("WORKER_CONFIG")
     env_config_yaml: Final[str | None] = get_secret_str("CONFIG_FILE_PATH")
