@@ -5,7 +5,7 @@ import sys
 from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from functools import cache, lru_cache
-from itertools import accumulate, chain, repeat
+from itertools import accumulate, chain, product, repeat
 from logging import Logger
 from types import MappingProxyType
 from typing import Any, Final, Literal, Protocol, TypeAlias
@@ -542,7 +542,24 @@ def _team_public_model_groups(model_groups: frozenset[str], llm_router: Router) 
     deployments: Final = chain.from_iterable(
         registry.deployments(public_name, source="all", team_id=team_id) for team_id, public_name in matches
     )
-    return frozenset(deployment["model_name"] for deployment in deployments)
+    exact: Final = frozenset(deployment["model_name"] for deployment in deployments)
+    wildcard_teams: Final = frozenset(
+        team_id for team_id, public_name in registry.index("team_model") if "*" in public_name
+    )
+    if not wildcard_teams:
+        return exact
+    wildcard_models: Final = (
+        model
+        for model in model_groups
+        if model not in registry.names(kind="group_set") and registry.routing_group(model) is None
+    )
+    wildcard_deployments: Final = chain.from_iterable(
+        registry.deployments(model, source="wildcard", team_id=team_id)
+        for model, team_id in product(wildcard_models, wildcard_teams)
+    )
+    return exact | frozenset(
+        name for deployment in wildcard_deployments if isinstance(name := deployment.get("model_name"), str)
+    )
 
 
 def _team_opt_in_hop(
