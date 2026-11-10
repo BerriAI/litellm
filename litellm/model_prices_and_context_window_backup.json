@@ -83449,13 +83449,16 @@
         "cache_creation_input_token_cost": 2.5e-05,
         "cache_creation_input_token_cost_above_12hr": 5e-05,
         "cache_read_input_token_cost": 2e-06,
+        "cache_read_input_token_cost_above_272k_tokens": 4e-06,
         "input_cost_per_token": 2e-05,
+        "input_cost_per_token_above_272k_tokens": 4e-05,
         "litellm_provider": "openai",
         "max_input_tokens": 922000,
         "max_output_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 0.0001,
-        "source": "https://developers.openai.com/api/docs/models/gpt-6-cyber",
+        "output_cost_per_token_above_272k_tokens": 0.00015,
+        "source": "https://developers.openai.com/api/docs/pricing",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/responses"
