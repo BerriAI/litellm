@@ -356,6 +356,10 @@ include = [
 exclude = [
     "litellm/deploy",
     "litellm/deploy/**",
+    "litellm/ui",
+    "litellm/ui/**",
+    "litellm/vscode-extension",
+    "litellm/vscode-extension/**",
     "litellm/proxy/discovery_endpoints/skill_scanner_adapter",
     "litellm/proxy/discovery_endpoints/skill_scanner_adapter/**",
     "litellm/proxy/enterprise",
@@ -425,6 +429,7 @@ version_files = [
 ]
 
 [tool.pytest.ini_options]
+norecursedirs = ["*.egg", ".*", "_darcs", "build", "CVS", "dist", "node_modules", "venv", "{arch}", "**/litellm/ui", "**/litellm/vscode-extension"]
 pythonpath = ["scripts"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "session"
@@ -522,7 +527,7 @@ lint.external = [
 ]
 line-length = 120
 
-extend-exclude = ["litellm/deploy", "litellm/proxy/discovery_endpoints/skill_scanner_adapter"]
+extend-exclude = ["litellm/deploy", "litellm/ui", "litellm/vscode-extension", "litellm/proxy/discovery_endpoints/skill_scanner_adapter"]
 
 format.exclude = ["**/enterprise/**"]
 
@@ -554,7 +559,7 @@ banned-module-level-imports = ["prisma"]
 [tool.pyright]
 include = ["litellm", "litellm_cli"]
 ignore = []
-exclude = ["**/node_modules", "**/__pycache__", "tests/e2e/claude_code", "tests/e2e_harness/claude_code", "tests/e2e/ui", "litellm/types/utils.py", "litellm/proxy/_types.py", "litellm/deploy", "litellm/proxy/discovery_endpoints/skill_scanner_adapter"]
+exclude = ["**/node_modules", "**/__pycache__", "tests/e2e/claude_code", "tests/e2e_harness/claude_code", "tests/e2e/ui", "litellm/types/utils.py", "litellm/proxy/_types.py", "litellm/deploy", "litellm/ui", "litellm/vscode-extension", "litellm/proxy/discovery_endpoints/skill_scanner_adapter"]
 pythonVersion = "3.12"
 typeCheckingMode = "strict"
 enableTypeIgnoreComments = false

@@ -127,12 +127,22 @@ def _run_verifier(
 
 def test_accepts_expected_release_wheel_tags(tmp_path: Path) -> None:
     wheel: Final = _write_wheel(tmp_path, filename_tag=_EXPECTED_TAG)
+    with zipfile.ZipFile(wheel, "a") as archive:
+        archive.writestr("litellm/proxy/_experimental/out/index.html", "built dashboard")
 
     assert _run_verifier(wheel) == 0
 
 
-@pytest.mark.parametrize("member", ("litellm/deploy/docker/Dockerfile",))
-def test_rejects_deployment_sources_in_the_wheel(
+@pytest.mark.parametrize(
+    "member",
+    (
+        "litellm/deploy/docker/Dockerfile",
+        "litellm/ui/litellm-dashboard/package.json",
+        "litellm/ui/litellm-dashboard/node_modules/example/index.js",
+        "litellm/vscode-extension/package.json",
+    ),
+)
+def test_rejects_repository_sources_in_the_wheel(
     tmp_path: Path, member: str, capsys: pytest.CaptureFixture[str]
 ) -> None:
     wheel: Final = _write_wheel(tmp_path, filename_tag=_EXPECTED_TAG)

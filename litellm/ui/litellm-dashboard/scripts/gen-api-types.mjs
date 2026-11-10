@@ -17,7 +17,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const dashboardDir = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const repoRoot = resolve(dashboardDir, "..", "..");
+const repoRoot = resolve(dashboardDir, "..", "..", "..");
 const outPath = join(dashboardDir, "src", "lib", "http", "schema.d.ts");
 const specDir = mkdtempSync(join(tmpdir(), "litellm-openapi-"));
 const specPath = join(specDir, "openapi.json");

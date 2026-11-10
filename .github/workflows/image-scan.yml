@@ -26,8 +26,8 @@ on:
       - litellm-proxy-extras/**
       - tests/integration/database/image/**
       - uv.lock
-      - ui/litellm-dashboard/package-lock.json
-      - ui/nginx.conf
+      - litellm/ui/litellm-dashboard/package-lock.json
+      - litellm/ui/nginx.conf
       - .github/workflows/image-scan.yml
       - .github/grype.yaml
   schedule:

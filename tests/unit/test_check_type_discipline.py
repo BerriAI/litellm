@@ -1036,8 +1036,12 @@ def test_worker_count_never_exceeds_the_cap():
     assert checker._worker_count(100_000) <= checker.MAX_WORKERS
 
 
-def test_standalone_scanner_adapter_is_outside_the_package_lint_scope(tmp_path: Path) -> None:
-    adapter: Final = tmp_path / "litellm" / "proxy" / "discovery_endpoints" / "skill_scanner_adapter"
+@pytest.mark.parametrize(
+    "source",
+    ("proxy/discovery_endpoints/skill_scanner_adapter", "ui", "ui/node_modules/dependency", "vscode-extension"),
+)
+def test_non_sdk_sources_are_outside_the_package_lint_scope(tmp_path: Path, source: str) -> None:
+    adapter: Final = tmp_path / "litellm" / source
     adapter.mkdir(parents=True)
     server: Final = adapter / "server.py"
     server.write_text("value = []\n")
