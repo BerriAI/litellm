@@ -20,6 +20,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import EditHashicorpVaultModal from "./EditHashicorpVaultModal";
 import HashicorpVaultEmptyPlaceholder from "./HashicorpVaultEmptyPlaceholder";
 import { FIELD_LABELS, SENSITIVE_FIELDS } from "./constants";
+import { productNames } from "@/i18n/untranslated/productNames";
 
 function detectAuthMethod(values: Record<string, unknown>, t: TFunction): string {
   if (values.approle_role_id || values.approle_secret_id) return "AppRole";
@@ -142,7 +143,7 @@ export default function HashicorpVault() {
               <KeyRound className="size-6 text-muted-foreground" />
               <div>
                 <CardTitle>
-                  <h3>Hashicorp Vault</h3>
+                  <h3>{productNames.hashicorpVault}</h3>
                 </CardTitle>
                 <CardDescription>{t("adminPanel.hashicorpVault.description")}</CardDescription>
               </div>

@@ -1,6 +1,7 @@
 "use client";
 
 import dayjs from "dayjs";
+import utc from "dayjs/plugin/utc";
 import { CircleHelp } from "lucide-react";
 
 import { getBudgetDurationLabel } from "@/components/common_components/budget_duration_dropdown";
@@ -16,20 +17,21 @@ export interface BudgetPeriodTooltipProps {
   budgetResetAt: string | null | undefined;
 }
 
-const formatPeriodDate = (iso: string): string => dayjs(iso).format("MMM D, YYYY HH:mm");
+dayjs.extend(utc);
+
+const formatPeriodDate = (iso: string): string => dayjs.utc(iso).format("MMM D, YYYY HH:mm");
 
 const describePeriod = (budgetDuration: string, budgetResetAt: string | null | undefined): string | null => {
-  const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
   const period = budgetPeriodRange(budgetDuration, budgetResetAt);
   if (period) {
     return i18n.t("shared.budgetPeriodTooltip.budgetPeriod", {
       start: formatPeriodDate(period.start),
       end: formatPeriodDate(period.end),
-      timeZone,
+      timeZone: "UTC",
     });
   }
-  if (budgetResetAt && dayjs(budgetResetAt).isValid()) {
-    return i18n.t("shared.budgetPeriodTooltip.nextReset", { date: formatPeriodDate(budgetResetAt), timeZone });
+  if (budgetResetAt && dayjs.utc(budgetResetAt).isValid()) {
+    return i18n.t("shared.budgetPeriodTooltip.nextReset", { date: formatPeriodDate(budgetResetAt), timeZone: "UTC" });
   }
   return null;
 };

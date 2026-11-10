@@ -27,6 +27,7 @@ import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useZodForm } from "@/lib/forms/useZodForm";
 import i18n from "@/i18n/i18n";
+import { codeSamples } from "@/i18n/untranslated/codeSamples";
 
 const HTTP_METHODS = ["GET", "POST", "PUT", "DELETE", "PATCH"] as const;
 const HTTP_METHOD_OPTIONS = HTTP_METHODS.map((method) => ({ label: method, value: method }));
@@ -183,7 +184,7 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
                       {({ value, onChange, ...field }) => (
                         <Input
                           {...field}
-                          placeholder="bria"
+                          placeholder={codeSamples.passThrough.targetPrefix}
                           value={value ?? ""}
                           onChange={(event) => {
                             const raw = event.target.value;

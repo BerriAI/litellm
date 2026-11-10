@@ -15,6 +15,7 @@ import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { useZodForm } from "@/lib/forms/useZodForm";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import i18n from "@/i18n/i18n";
+import { productNames } from "@/i18n/untranslated/productNames";
 
 const cloudZeroSettingsSchema = z.object({
   api_key: z.string().min(1, { error: () => i18n.t("usage.cloudzero.validation.apiKeyRequired") }),
@@ -219,7 +220,7 @@ const CloudZeroExportModal: React.FC<CloudZeroExportModalProps> = ({ isOpen, onC
         <div className="flex items-center gap-2">
           <img
             src="/cloudzero.png"
-            alt="CloudZero"
+            alt={productNames.cloudZero}
             className="w-5 h-5"
             onError={(e) => {
               // Fallback to text if image fails to load

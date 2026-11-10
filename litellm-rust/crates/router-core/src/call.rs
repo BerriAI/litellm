@@ -1037,8 +1037,13 @@ impl Core {
                 self.log_retry(target, at, 0, &failed.error);
             }
             let named = failure.failed_deployment_id.as_ref();
-            if let (Some(status), Some(id)) =
-                (failure.status, named.or(failed.deployment_id.as_ref()))
+            let failed_on = named.or(failed.deployment_id.as_ref());
+            if let Some(id) = failed_on
+                && !inputs.failed_ids.contains(id)
+            {
+                inputs.failed_ids.push(id.clone());
+            }
+            if let (Some(status), Some(id)) = (failure.status, failed_on)
                 && !should_retry_status(status)
                 && !inputs.skipped_ids.contains(id)
             {

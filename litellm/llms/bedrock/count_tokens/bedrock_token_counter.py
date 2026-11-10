@@ -30,7 +30,7 @@ from litellm.llms.bedrock.common_utils import (
     BedrockError,
     get_bedrock_base_model,
 )
-from litellm.llms.bedrock.count_tokens.handler import BedrockCountTokensHandler
+from litellm.llms.bedrock.count_tokens.handler import BedrockCountTokensHandler, BedrockCountTokensRequestError
 from litellm.llms.bedrock.count_tokens.mantle_handler import BedrockMantleCountTokensHandler
 from litellm.llms.bedrock_mantle.common_utils import is_mantle_claude_model
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
@@ -64,6 +64,7 @@ class CountTokensFailure:
     status_code: int
     message: str
     tokenizer_type: str
+    rejected_before_provider_call: bool = False
 
 
 CountTokensOutcome = CountedTokens | CountTokensFailure
@@ -105,6 +106,7 @@ def _claude_options_provider(route: tuple[str, str] | None, use_mantle: bool) ->
 def _runtime_rejected_claude_model(outcome: CountTokensOutcome, resolved_model: str) -> bool:
     return (
         isinstance(outcome, CountTokensFailure)
+        and not outcome.rejected_before_provider_call
         and outcome.status_code in _RUNTIME_FALLBACK_STATUSES
         and is_mantle_claude_model(resolved_model)
     )
@@ -232,6 +234,13 @@ class BedrockTokenCounter(BaseTokenCounter):
         try:
             result: Final = await count
             reply: Final = _CountTokensReply.model_validate(result)
+        except BedrockCountTokensRequestError as e:
+            return CountTokensFailure(
+                status_code=e.status_code,
+                message=e.message,
+                tokenizer_type=tokenizer_type,
+                rejected_before_provider_call=True,
+            )
         except BedrockError as e:
             verbose_logger.debug(
                 "%s CountTokens API error: status=%s, message=%s", tokenizer_type, e.status_code, e.message
@@ -379,6 +388,7 @@ class BedrockTokenCounter(BaseTokenCounter):
                     error_message=outcome.message,
                     status_code=outcome.status_code,
                     carried_request_options=claude_options.carries_request_options,
+                    rejected_before_provider_call=outcome.rejected_before_provider_call,
                 )
             case _:
                 assert_never(outcome)
