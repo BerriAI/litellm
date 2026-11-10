@@ -103,6 +103,8 @@ def route_entry_points_to_stubs(router: _RouterDouble) -> _RouterDouble:
             return router.get_routable_upstream_provider(name, **_given(team_id=team_id))
         if kind == "search_tool_support":
             return router.get_search_tool_support(name, **_given(team_id=team_id))
+        if kind == "upstreams":
+            return router.get_routable_upstreams(name, **_given(team_id=team_id))
         if kind == "from_id":
             # The old call sites passed the provider positionally, exactly when the new ones pass it.
             if custom_llm_provider is _NOT_GIVEN:
