@@ -6,7 +6,6 @@ import asyncio
 import inspect
 import json
 import os
-import re
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import datetime, timezone
 from types import MappingProxyType, UnionType
@@ -2370,8 +2369,6 @@ _SECRET_HEADER_MARKERS: Final = ("authorization", "cookie", "key", "token", "sec
 
 _KEY_TOKEN_FIELDS: Final[frozenset[str]] = frozenset({"user_api_key", "user_api_key_hash"})
 
-_HASHED_KEY: Final = re.compile(r"^(hashed-jwt-)?[0-9a-f]{64}$")
-
 
 def _is_secret_header(name: str) -> bool:
     lowered: Final = name.lower()
@@ -2386,14 +2383,10 @@ def _is_json_safe(value: object) -> bool:
     return True
 
 
-def _already_hashed(value: str) -> bool:
-    return _HASHED_KEY.match(value) is not None
-
-
 def _forwarded_identity_value(key: str, value: object) -> object:
     if key == "headers":
         return {name: item for name, item in _metadata_fields(value).items() if not _is_secret_header(name)}
-    if key not in _KEY_TOKEN_FIELDS or not isinstance(value, str) or _already_hashed(value):
+    if key not in _KEY_TOKEN_FIELDS or not isinstance(value, str):
         return value
     return hash_token(value)
 

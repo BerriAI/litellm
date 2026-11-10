@@ -2499,13 +2499,10 @@ def test_the_authenticated_key_identity_replaces_the_caller_version() -> None:
 
 
 def test_the_bare_key_hash_cannot_come_from_the_caller() -> None:
-    """A digest already in the proxy's metadata is sent as it stands, since hashing it twice would
-    stop it matching the spend logs it lines up with."""
     from litellm.types.proxy.auth.user_api_key_auth import hash_token
 
-    digest: Final = hash_token("sk-the-real-key")
-    metadata: Final = _guardrail_request_metadata({"user_api_key": "spoof"}, {"user_api_key": digest})
-    assert metadata == {"user_api_key": digest}
+    metadata: Final = _guardrail_request_metadata({"user_api_key": "spoof"}, {"user_api_key": "proxy-value"})
+    assert metadata == {"user_api_key": hash_token("proxy-value")}
 
 
 def test_the_end_user_comes_from_the_proxy_not_the_caller() -> None:
@@ -2623,16 +2620,18 @@ def test_the_authenticated_key_object_is_left_behind() -> None:
     assert metadata == {"user_api_key_alias": "billing-app"}
 
 
-def test_a_key_field_that_is_not_already_hashed_is_hashed_before_it_leaves() -> None:
-    """Under custom_auth these hold the bearer token itself, which a guardrail vendor must not see."""
+def test_a_key_field_is_hashed_before_it_leaves_whatever_it_looks_like() -> None:
+    """Under custom_auth these hold the bearer token itself, and a token can look like a digest,
+    so the shape of the string says nothing about whether it is safe to send."""
     from litellm.types.proxy.auth.user_api_key_auth import hash_token
 
+    digest_shaped: Final = "a" * 64
     metadata: Final = _guardrail_request_metadata(
-        {}, {"user_api_key": "tok-not-an-sk-key", "user_api_key_hash": "tok-not-an-sk-key"}
+        {}, {"user_api_key": "tok-not-an-sk-key", "user_api_key_hash": digest_shaped}
     )
     assert metadata == {
         "user_api_key": hash_token("tok-not-an-sk-key"),
-        "user_api_key_hash": hash_token("tok-not-an-sk-key"),
+        "user_api_key_hash": hash_token(digest_shaped),
     }
 
 
