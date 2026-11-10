@@ -830,6 +830,15 @@ def _drop_blank_client_oauth_pair(
     )
 
 
+def _drop_blank_client_oauth_pair_in_fallbacks(target: Mapping[str, object]) -> None:
+    for key in _REQUEST_FALLBACK_KEYS:
+        entries: object = target.get(key)
+        if isinstance(entries, list):
+            _drop_blank_client_oauth_pair_in_entries(
+                cast("Sequence[object]", entries)  # cast-ok: request fallback lists hold mixed entry shapes
+            )
+
+
 def _drop_blank_client_oauth_pair_in_entries(entries: Sequence[object]) -> None:
     for entry in entries:
         if isinstance(entry, dict):
@@ -843,6 +852,7 @@ def _drop_blank_client_oauth_pair_in_entry(
 ) -> None:
     _drop_blank_client_oauth_pair(entry)
     if "model" in entry:
+        _drop_blank_client_oauth_pair_in_fallbacks(entry)
         return
     for chain in entry.values():
         if isinstance(chain, list):
@@ -855,12 +865,12 @@ def _strip_blank_client_oauth_pair(
     data: dict[str, object],  # mutable-ok: strips in place on the request body the pre-call pipeline threads through
 ) -> None:
     _drop_blank_client_oauth_pair(data)
-    for key in _REQUEST_FALLBACK_KEYS:
-        entries: object = data.get(key)
-        if isinstance(entries, list):
-            _drop_blank_client_oauth_pair_in_entries(
-                cast("Sequence[object]", entries)  # cast-ok: request fallback lists hold mixed entry shapes
-            )
+    _drop_blank_client_oauth_pair_in_fallbacks(data)
+    router_settings_override: Final = data.get("router_settings_override")
+    if isinstance(router_settings_override, dict):
+        _drop_blank_client_oauth_pair_in_fallbacks(
+            cast("Mapping[str, object]", router_settings_override)  # cast-ok: the override is a str-keyed JSON object
+        )
 
 
 def _strip_client_pricing_overrides(data: dict[str, object]) -> None:

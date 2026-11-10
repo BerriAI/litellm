@@ -8270,6 +8270,26 @@ async def test_add_litellm_data_to_request_drops_blank_caller_oauth_pair_in_grou
 
 
 @pytest.mark.asyncio
+async def test_add_litellm_data_to_request_drops_blank_caller_oauth_pair_in_nested_and_override_fallbacks():
+    updated: Final = await _pre_call_body(
+        {
+            "fallbacks": [
+                {
+                    "model": "outer-model",
+                    "fallbacks": [{"model": "nested-blank-model", "client_id": "", "client_secret": ""}],
+                }
+            ],
+            "router_settings_override": {
+                "fallbacks": [{"primary-model": [{"model": "override-blank-model", "client_id": None}]}]
+            },
+        }
+    )
+
+    assert updated["fallbacks"] == [{"model": "outer-model", "fallbacks": [{"model": "nested-blank-model"}]}]
+    assert updated["router_settings_override"] == {"fallbacks": [{"primary-model": [{"model": "override-blank-model"}]}]}
+
+
+@pytest.mark.asyncio
 async def test_add_litellm_data_to_request_omits_trusted_callback_vars_without_team_callbacks():
     """Without team/key callback settings the trusted field must not exist for a callback to read."""
     data = {
