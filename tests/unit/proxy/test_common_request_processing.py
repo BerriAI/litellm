@@ -419,6 +419,9 @@ _S3_VALUES_ON_NON_MEDIA_ROUTES: Final = (
 )
 
 
+_AWS_IDENTITY_ENV_VARS: Final = ("AWS_WEB_IDENTITY_TOKEN", "AWS_ROLE_NAME", "AWS_SESSION_NAME", "AWS_PROFILE_NAME")
+
+
 async def _send_s3_media(
     route_type: _S3MediaRoute,
     path: str,
@@ -427,6 +430,7 @@ async def _send_s3_media(
     general_settings: dict[str, object],
     managed_files: CustomLogger | None = None,
     client_auth_params: tuple[str, ...] = (),
+    deployments_aws_params: tuple[Mapping[str, str], ...] = (MappingProxyType({}),),
 ) -> object:
     from litellm.proxy.proxy_server import ProxyConfig as RealProxyConfig
 
@@ -442,8 +446,10 @@ async def _send_s3_media(
                     "model": "bedrock/us.amazon.nova-2-lite-v1:0",
                     "mock_response": "a cat",
                     "configurable_clientside_auth_params": list(client_auth_params),
+                    **deployment_aws_params,
                 },
             }
+            for deployment_aws_params in deployments_aws_params
         ]
     )
     return await ProxyBaseLLMRequestProcessing(data={"model": "nova", **body}).base_process_llm_request(
@@ -842,16 +848,27 @@ class TestProxyBaseLLMRequestProcessing:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        ("param", "value"),
+        ("param", "value", "deployments_aws_params"),
         [
-            pytest.param("aws_role_name", "arn:aws:iam::111122223333:role/reader", id="role"),
-            pytest.param("aws_web_identity_token", "oidc-token", id="web-identity-token"),
-            pytest.param("aws_profile_name", "reader", id="profile"),
+            pytest.param("aws_role_name", "arn:aws:iam::111122223333:role/reader", ({},), id="role"),
+            pytest.param(
+                "aws_web_identity_token",
+                "oidc-token",
+                ({"aws_role_name": "arn:aws:iam::111122223333:role/web", "aws_session_name": "proxy"},),
+                id="web-identity-token-with-the-deployment-role-and-session",
+            ),
+            pytest.param("aws_profile_name", "reader", ({},), id="profile"),
         ],
     )
     async def test_non_admin_s3_media_read_with_a_client_aws_identity_the_deployment_admits_needs_no_listed_bucket(
-        self, param: str, value: str
+        self,
+        param: str,
+        value: str,
+        deployments_aws_params: tuple[dict[str, str], ...],
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
+        for env_var in _AWS_IDENTITY_ENV_VARS:
+            monkeypatch.delenv(env_var, raising=False)
         response: Final = await _send_s3_media(
             "acompletion",
             "/v1/chat/completions",
@@ -859,9 +876,57 @@ class TestProxyBaseLLMRequestProcessing:
             LitellmUserRoles.INTERNAL_USER,
             {},
             client_auth_params=(param,),
+            deployments_aws_params=deployments_aws_params,
         )
 
         assert "a cat" in str(response)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("identity", "admitted", "deployments_aws_params"),
+        [
+            pytest.param(
+                {"aws_web_identity_token": "oidc-token"},
+                ("aws_web_identity_token",),
+                ({},),
+                id="web-identity-token-without-a-role-and-session",
+            ),
+            pytest.param(
+                {"aws_profile_name": "reader"},
+                ("aws_profile_name",),
+                ({"aws_role_name": "arn:aws:iam::111122223333:role/deployment"},),
+                id="profile-under-a-deployment-role",
+            ),
+            pytest.param(
+                {"aws_profile_name": "reader"},
+                ("aws_profile_name",),
+                ({}, {"aws_role_name": "arn:aws:iam::111122223333:role/deployment"}),
+                id="profile-under-a-role-on-one-deployment-of-the-group",
+            ),
+        ],
+    )
+    async def test_non_admin_s3_media_is_refused_when_the_admitted_client_aws_field_does_not_pick_the_credentials(
+        self,
+        identity: dict[str, str],
+        admitted: tuple[str, ...],
+        deployments_aws_params: tuple[dict[str, str], ...],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        for env_var in _AWS_IDENTITY_ENV_VARS:
+            monkeypatch.delenv(env_var, raising=False)
+        with pytest.raises(HTTPException) as refused:
+            await _send_s3_media(
+                "acompletion",
+                "/v1/chat/completions",
+                {**_chat_image("s3://media-bucket/dir/cat.png"), **identity},
+                LitellmUserRoles.INTERNAL_USER,
+                {},
+                client_auth_params=admitted,
+                deployments_aws_params=deployments_aws_params,
+            )
+
+        assert refused.value.status_code == status.HTTP_403_FORBIDDEN, refused.value.detail
+        assert "general_settings.allowed_client_side_s3_buckets" in str(refused.value.detail)
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
