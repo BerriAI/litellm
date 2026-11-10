@@ -181,7 +181,7 @@ def test_minimax_flash_cost_map_entry_is_a_priced_reasoning_model(local_model_co
     entries: Final = tuple(
         json.loads(path.read_text())["minimax/MiniMax-M3.1-Flash"]
         for path in (
-            repo_root / "model_prices_and_context_window.json",
+            repo_root / "litellm/data/model_prices_and_context_window.json",
             repo_root / "litellm/model_prices_and_context_window_backup.json",
         )
     )

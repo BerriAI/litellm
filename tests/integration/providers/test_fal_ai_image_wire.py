@@ -22,7 +22,7 @@ _PNG_BYTES: Final = (
     b"\x89\x99=\x1d\x00\x00\x00\x00IEND\xaeB`\x82"
 )
 _PROMPT: Final = "a red circle on a blue background"
-_COST_MAP_PATH: Final = Path(__file__).resolve().parents[3] / "model_prices_and_context_window.json"
+_COST_MAP_PATH: Final = Path(__file__).resolve().parents[3] / "litellm/data/model_prices_and_context_window.json"
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 _COST_MAP: Final = TypeAdapter(dict[str, dict[str, object]])
 

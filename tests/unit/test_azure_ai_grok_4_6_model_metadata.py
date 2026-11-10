@@ -38,7 +38,7 @@ def test_azure_ai_grok_4_6_is_priced_and_routed() -> None:
 
 
 def test_azure_ai_grok_4_6_entry_source_and_backup_match() -> None:
-    main_entry = _cost_map_entry(REPO_ROOT / "model_prices_and_context_window.json")
+    main_entry = _cost_map_entry(REPO_ROOT / "litellm/data/model_prices_and_context_window.json")
     backup_entry = _cost_map_entry(REPO_ROOT / "litellm" / "model_prices_and_context_window_backup.json")
 
     assert backup_entry == main_entry

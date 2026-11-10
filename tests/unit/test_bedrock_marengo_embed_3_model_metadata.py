@@ -6,7 +6,7 @@ import pytest
 from litellm.constants import bedrock_embedding_models
 
 REPO_ROOT = Path(__file__).parents[2]
-MAIN_PATH = REPO_ROOT / "model_prices_and_context_window.json"
+MAIN_PATH = REPO_ROOT / "litellm/data/model_prices_and_context_window.json"
 BACKUP_PATH = REPO_ROOT / "litellm" / "model_prices_and_context_window_backup.json"
 
 BASE_MODEL = "twelvelabs.marengo-embed-3-0-v1:0"

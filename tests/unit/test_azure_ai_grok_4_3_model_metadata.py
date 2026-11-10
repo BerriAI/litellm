@@ -18,7 +18,7 @@ def _load_model_cost(path: Path) -> dict:
 @pytest.fixture(autouse=True)
 def reload_model_costs():
     original_model_cost = litellm.model_cost
-    json_path = Path(__file__).parents[2] / "model_prices_and_context_window.json"
+    json_path = Path(__file__).parents[2] / "litellm/data/model_prices_and_context_window.json"
     litellm.model_cost = _load_model_cost(json_path)
     get_model_info.cache_clear()
     yield
@@ -28,7 +28,7 @@ def reload_model_costs():
 
 def test_azure_ai_grok_4_3_backup_matches_main():
     repo_root = Path(__file__).parents[2]
-    main_path = repo_root / "model_prices_and_context_window.json"
+    main_path = repo_root / "litellm/data/model_prices_and_context_window.json"
     backup_path = repo_root / "litellm" / "model_prices_and_context_window_backup.json"
 
     main_cost = _load_model_cost(main_path)

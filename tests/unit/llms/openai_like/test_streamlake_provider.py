@@ -252,7 +252,7 @@ def _streamlake_keys(cost_map: dict[str, object]) -> tuple[str, ...]:
 
 
 def test_root_and_backup_cost_maps_carry_the_same_streamlake_rows() -> None:
-    root: Final = json.loads((REPO_ROOT / "model_prices_and_context_window.json").read_text())
+    root: Final = json.loads((REPO_ROOT / "litellm/data/model_prices_and_context_window.json").read_text())
     backup: Final = json.loads((REPO_ROOT / "litellm" / "model_prices_and_context_window_backup.json").read_text())
 
     assert _streamlake_keys(root)

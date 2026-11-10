@@ -29,7 +29,7 @@ const ladder = () =>
   );
 
 const catalog: Record<string, { mode?: string; litellm_provider?: string }> = JSON.parse(
-  readFileSync(new URL("../../../../../../model_prices_and_context_window.json", import.meta.url), "utf8"),
+  readFileSync(new URL("../../../../../data/model_prices_and_context_window.json", import.meta.url), "utf8"),
 );
 const catalogOpusModels = Object.entries(catalog).filter(
   ([id, metadata]) => metadata.mode === "chat" && /claude-opus-\d/.test(id) && !/-(?:fast|think)$/.test(id),

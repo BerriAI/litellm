@@ -14,7 +14,7 @@ pub const RETRYABLE_STATUSES: [u16; 5] = [429, 500, 502, 503, 504];
 
 /// Main's default `LITELLM_MODEL_COST_MAP_URL`
 pub const DEFAULT_REGISTRY_URL: &str =
-    "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json";
+    "https://raw.githubusercontent.com/BerriAI/litellm/main/litellm/data/model_prices_and_context_window.json";
 
 impl RetryPolicy {
     pub(crate) fn backoff(&self) -> ExponentialBackoff {

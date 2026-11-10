@@ -797,7 +797,7 @@ def test_a_five_kilobyte_prompt_with_a_system_message_reaches_the_classifier_who
 
 def _typesafe_cost() -> float:
     prices: Final = object_value(
-        json.loads(Path("model_prices_and_context_window.json").read_text())[f"typesafe/{_TYPESAFE_MODEL}"]
+        json.loads(Path("litellm/data/model_prices_and_context_window.json").read_text())[f"typesafe/{_TYPESAFE_MODEL}"]
     )
     return _number(_USAGE["input_tokens"]) * _number(prices["input_cost_per_token"]) + _number(
         _USAGE["output_tokens"]

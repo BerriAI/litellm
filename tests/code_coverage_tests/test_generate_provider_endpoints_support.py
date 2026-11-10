@@ -141,10 +141,11 @@ def test_cost_map_provider_without_file_entry_is_an_error() -> None:
 
 
 def test_check_reports_stale_output_without_writing(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    (tmp_path / "litellm/data").mkdir(parents=True)
     cost_map: Final = {"example/model": {"litellm_provider": "example", "mode": "chat"}}
     current_json: Final = _current_json({"example": _provider()})
-    (tmp_path / "model_prices_and_context_window.json").write_text(json.dumps(cost_map), encoding="utf-8")
-    source_path: Final = tmp_path / "provider_endpoints_support.json"
+    (tmp_path / "litellm/data/model_prices_and_context_window.json").write_text(json.dumps(cost_map), encoding="utf-8")
+    source_path: Final = tmp_path / "litellm/data/provider_endpoints_support.json"
     source_content: Final = json.dumps(current_json)
     source_path.write_text(source_content, encoding="utf-8")
 
@@ -159,16 +160,17 @@ def test_check_reports_stale_output_without_writing(tmp_path: Path, capsys: pyte
 
 
 def test_check_reports_stale_backup_without_writing(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    (tmp_path / "litellm/data").mkdir(parents=True)
     cost_map: Final = {"example/model": {"litellm_provider": "example", "mode": "chat"}}
     current_json: Final = _current_json({"example": _provider()})
     generated: Final = generate_provider_endpoints_support(cost_map, current_json)
     generated_content: Final = json.dumps(generated, indent=2, ensure_ascii=False) + "\n"
-    source_path: Final = tmp_path / "provider_endpoints_support.json"
+    source_path: Final = tmp_path / "litellm/data/provider_endpoints_support.json"
     backup_path: Final = tmp_path / "litellm/provider_endpoints_support_backup.json"
     backup_content: Final = "stale\n"
-    (tmp_path / "model_prices_and_context_window.json").write_text(json.dumps(cost_map), encoding="utf-8")
+    (tmp_path / "litellm/data/model_prices_and_context_window.json").write_text(json.dumps(cost_map), encoding="utf-8")
     source_path.write_text(generated_content, encoding="utf-8")
-    backup_path.parent.mkdir()
+    backup_path.parent.mkdir(exist_ok=True)
     backup_path.write_text(backup_content, encoding="utf-8")
 
     result: Final = main(["--check"], repo_root=tmp_path)

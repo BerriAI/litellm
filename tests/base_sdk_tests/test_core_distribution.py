@@ -102,7 +102,7 @@ def test_staging_stamps_release_version_without_modifying_sources(
             (stage / name).exists()
             for name in (
                 "litellm/rust", "litellm/rust/.cargo/config.toml", "litellm/rust/rust-toolchain.toml",
-                "model_prices_and_context_window.json",
+                "litellm/data/model_prices_and_context_window.json",
             )
         )
     assert manifest.read_bytes() == original
@@ -206,7 +206,7 @@ def test_core_artifacts_exclude_local_configuration(distributions: tuple[Path, P
 
 @pytest.mark.parametrize(
     "relative_path",
-    ["litellm/rust/rust-toolchain.toml", "litellm/rust/.cargo/config.toml", "model_prices_and_context_window.json"],
+    ["litellm/rust/rust-toolchain.toml", "litellm/rust/.cargo/config.toml", "litellm/data/model_prices_and_context_window.json"],
 )
 def test_core_sdist_preserves_native_build_configuration(distribution_directory: Path, relative_path: str) -> None:
     sdists: Final = tuple(distribution_directory.glob("litellm_core-*.tar.gz"))
@@ -245,7 +245,7 @@ def test_staging_copies_sources_without_build_artifacts(tmp_path: Path, source_r
 
     source: Final = source_repository
     for name in SOURCES:
-        (source / name).mkdir()
+        (source / name).mkdir(parents=True, exist_ok=True)
         (source / name / "shared.txt").write_text("source payload")
         (source / name / "stale.so").write_text("old native extension")
         (source / name / "__pycache__").mkdir()
@@ -267,7 +267,7 @@ def test_staging_preserves_gitignore_rules(tmp_path: Path, source_repository: Pa
 
     source: Final = source_repository
     for name in SOURCES:
-        (source / name).mkdir()
+        (source / name).mkdir(parents=True, exist_ok=True)
         (source / name / "shared.txt").write_text("shared payload")
     (source / "pyproject.toml").write_text('[project]\nname = "litellm"\nversion = "1.2.3"\n')
     manifest: Final = source / "litellm/packaging/litellm-core/pyproject.toml"

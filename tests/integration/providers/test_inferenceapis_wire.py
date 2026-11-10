@@ -29,7 +29,7 @@ _WEATHER_TOOL: Final[JsonValue] = {
         "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]},
     },
 }
-_COST_MAP_PATH: Final = Path(__file__).resolve().parents[3] / "model_prices_and_context_window.json"
+_COST_MAP_PATH: Final = Path(__file__).resolve().parents[3] / "litellm/data/model_prices_and_context_window.json"
 _ENDPOINT_SUPPORT_PATH: Final = Path(__file__).resolve().parents[3] / "litellm/provider_endpoints_support_backup.json"
 _COST_MAP: Final = TypeAdapter(dict[str, dict[str, JsonValue]])
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])

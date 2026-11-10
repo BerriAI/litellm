@@ -37,7 +37,7 @@ export default function RecommendedReplacement({ recommendation }: { recommendat
             {t("alerts.recommendation.source")}{" "}
             {source === "model_cost_map" ? (
               <a
-                href="https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json"
+                href="https://github.com/BerriAI/litellm/blob/main/litellm/data/model_prices_and_context_window.json"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="underline underline-offset-2"

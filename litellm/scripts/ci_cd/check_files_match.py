@@ -8,7 +8,7 @@ def main(argv=None):
         "Comparing model_prices_and_context_window and litellm/model_prices_and_context_window_backup.json files... checking if they match."
     )
 
-    file1 = "model_prices_and_context_window.json"
+    file1 = "litellm/data/model_prices_and_context_window.json"
     file2 = "litellm/model_prices_and_context_window_backup.json"
 
     cmp_result = filecmp.cmp(file1, file2, shallow=False)

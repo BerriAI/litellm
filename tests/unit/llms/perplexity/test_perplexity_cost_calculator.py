@@ -40,7 +40,7 @@ class TestPerplexityCostCalculator:
 
         # Load the model cost map
         try:
-            with open("model_prices_and_context_window.json", "r") as f:
+            with open("litellm/data/model_prices_and_context_window.json", "r") as f:
                 model_cost_map = json.load(f)
             litellm.model_cost = model_cost_map
         except FileNotFoundError:

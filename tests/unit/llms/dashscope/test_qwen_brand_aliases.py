@@ -345,7 +345,7 @@ class TestQwenBrandUserFacingNames:
         "matrix_path",
         [
             Path(litellm.__file__).parent / "provider_endpoints_support_backup.json",
-            Path(litellm.__file__).parent.parent / "provider_endpoints_support.json",
+            Path(litellm.__file__).parent.parent / "litellm/data/provider_endpoints_support.json",
         ],
         ids=["backup", "root"],
     )

@@ -19,7 +19,7 @@ from litellm.utils import get_model_info
 
 @pytest.fixture(scope="module")
 def model_data():
-    json_path = os.path.join(os.path.dirname(__file__), "../../model_prices_and_context_window.json")
+    json_path = os.path.join(os.path.dirname(__file__), "../../litellm/data/model_prices_and_context_window.json")
     with open(json_path) as f:
         return json.load(f)
 

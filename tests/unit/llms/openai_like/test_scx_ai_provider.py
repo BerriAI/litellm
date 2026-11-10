@@ -159,7 +159,7 @@ class TestSCXAIModelMetadata:
 
 
     def test_scx_ai_models_synced_to_backup(self):
-        model_cost = self._load(("model_prices_and_context_window.json",))
+        model_cost = self._load(("litellm/data/model_prices_and_context_window.json",))
         backup = self._load(("litellm", "model_prices_and_context_window_backup.json"))
         for model in self.SCX_MODELS:
             assert model in backup, f"{model} missing from backup json"

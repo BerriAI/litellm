@@ -14,7 +14,7 @@ describe("recommended replacement", () => {
     expect(screen.getByText("new-model")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "LiteLLM model cost map" })).toHaveAttribute(
       "href",
-      "https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json",
+      "https://github.com/BerriAI/litellm/blob/main/litellm/data/model_prices_and_context_window.json",
     );
     expect(screen.getByRole("link", { name: /Provider deprecation notice/ })).toHaveAttribute(
       "href",

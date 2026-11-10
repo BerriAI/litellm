@@ -70,7 +70,7 @@ def checks(info: dict[str, object], inclusive: bool) -> list[list[object]]:
 
 
 def main() -> None:
-    registry: Final = json.loads((REPO_ROOT / "model_prices_and_context_window.json").read_text())
+    registry: Final = json.loads((REPO_ROOT / "litellm/data/model_prices_and_context_window.json").read_text())
     entries: Final = tuple(
         (token_rates(entry), entry.get("litellm_provider") in INCLUSIVE_PROVIDERS)
         for name, entry in registry.items()

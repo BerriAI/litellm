@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).parents[4]
-PRICES_PATH = REPO_ROOT / "model_prices_and_context_window.json"
+PRICES_PATH = REPO_ROOT / "litellm/data/model_prices_and_context_window.json"
 BACKUP_PRICES_PATH = REPO_ROOT / "litellm" / "model_prices_and_context_window_backup.json"
 
 # https://docs.x.ai/developers/model-capabilities/text/multi-agent

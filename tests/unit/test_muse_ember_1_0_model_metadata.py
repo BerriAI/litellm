@@ -11,7 +11,7 @@ MUSE_EMBER = "meta/muse-ember-1.0"
 LONG_CONTEXT_THRESHOLD = 200_000
 
 
-def _load_cost_map(filename: str = "model_prices_and_context_window.json") -> dict:
+def _load_cost_map(filename: str = "litellm/data/model_prices_and_context_window.json") -> dict:
     with open(Path(__file__).parents[2] / filename) as f:
         return json.load(f)
 

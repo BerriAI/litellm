@@ -18,7 +18,7 @@ from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.types.utils import SearchFreeRequests
 
 REPO_ROOT = Path(__file__).parents[2]
-PRICES_PATH = REPO_ROOT / "model_prices_and_context_window.json"
+PRICES_PATH = REPO_ROOT / "litellm/data/model_prices_and_context_window.json"
 BACKUP_PRICES_PATH = REPO_ROOT / "litellm" / "model_prices_and_context_window_backup.json"
 
 

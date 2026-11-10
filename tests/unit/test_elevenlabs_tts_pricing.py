@@ -34,7 +34,7 @@ def local_model_cost_map(monkeypatch):
 
 @pytest.mark.parametrize("model, per_character", PRICES.items())
 def test_metadata_and_backup(model, per_character):
-    main = json.loads((REPO_ROOT / "model_prices_and_context_window.json").read_text())
+    main = json.loads((REPO_ROOT / "litellm/data/model_prices_and_context_window.json").read_text())
     backup = json.loads((REPO_ROOT / "litellm/model_prices_and_context_window_backup.json").read_text())
     assert main[model] == backup[model]
     info = litellm.get_model_info(model)

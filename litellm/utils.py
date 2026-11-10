@@ -6659,7 +6659,7 @@ def get_max_tokens(model: str) -> int | None:
         return None
     except Exception:
         raise Exception(
-            f"Model {model} isn't mapped yet. Add it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json"
+            f"Model {model} isn't mapped yet. Add it here - https://github.com/BerriAI/litellm/blob/main/litellm/data/model_prices_and_context_window.json"
         )
 
 
@@ -7070,7 +7070,7 @@ _ABOVE_THRESHOLD_COST_KEY: Final = ABOVE_THRESHOLD_COST_KEY_PATTERN
 def _model_not_mapped_message(model: str, custom_llm_provider: str | None) -> str:
     return (
         f"This model isn't mapped yet. model={model}, custom_llm_provider={custom_llm_provider}. "
-        "Add it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json."
+        "Add it here - https://github.com/BerriAI/litellm/blob/main/litellm/data/model_prices_and_context_window.json."
     )
 
 

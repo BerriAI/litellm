@@ -149,6 +149,9 @@ def test_accepts_expected_release_wheel_tags(tmp_path: Path) -> None:
         "litellm/runtime/backend/main.py",
         "litellm/runtime/gateway/launch.py",
         "litellm/schema.prisma",
+        "litellm/data/model_prices_and_context_window.json",
+        "litellm/data/policy_templates.json",
+        "litellm/data/provider_endpoints_support.json",
     ),
 )
 def test_rejects_repository_sources_in_the_wheel(

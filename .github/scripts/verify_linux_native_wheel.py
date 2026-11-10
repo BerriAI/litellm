@@ -140,6 +140,9 @@ def main(
                     "litellm/scripts/",
                     "litellm/runtime/",
                     "litellm/schema.prisma",
+                    "litellm/data/model_prices_and_context_window.json",
+                    "litellm/data/policy_templates.json",
+                    "litellm/data/provider_endpoints_support.json",
                 )
             )
             or any(part.endswith(".dSYM") for part in PurePosixPath(member.filename).parts)

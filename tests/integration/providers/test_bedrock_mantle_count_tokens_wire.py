@@ -75,7 +75,7 @@ _SCRIPTED_STATUS: Final = re.compile(r"status=(\d{3})")
 _STARTED_WORKER: Final = re.compile(r"Started server process \[(\d+)\]")
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 _JSON_LIST: Final = TypeAdapter(list[JsonValue])
-_COST_MAP_PATH: Final = Path(__file__).resolve().parents[3] / "model_prices_and_context_window.json"
+_COST_MAP_PATH: Final = Path(__file__).resolve().parents[3] / "litellm/data/model_prices_and_context_window.json"
 _COST_MAP: Final = TypeAdapter(dict[str, dict[str, JsonValue]])
 
 

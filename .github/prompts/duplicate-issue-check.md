@@ -27,7 +27,7 @@ Call it a duplicate only when one fix closes both: the same root cause in the sa
 
 These are NOT duplicates:
 
-- two requests to add different models to `model_prices_and_context_window.json` (the same model under two names IS a duplicate)
+- two requests to add different models to `litellm/data/model_prices_and_context_window.json` (the same model under two names IS a duplicate)
 - two bugs in the same file or the same request path with different root causes, such as "this request should not be routed here at all" versus "the translation this route performs drops a field"
 - the same symptom on a different provider, endpoint, or model, unless the broken code is plainly shared
 - the same general area ("spend tracking is wrong", "streaming is broken") with different root causes

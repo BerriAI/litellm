@@ -292,7 +292,7 @@ def _expected_spend(provider: _Provider) -> float:
         return provider.provider_reported_cost
     if provider.cost_map_key is None:
         return 0.0
-    cost_map: Final = _JSON_OBJECT.validate_json(Path("model_prices_and_context_window.json").read_bytes())
+    cost_map: Final = _JSON_OBJECT.validate_json(Path("litellm/data/model_prices_and_context_window.json").read_bytes())
     prices: Final = object_value(cost_map[provider.cost_map_key])
     input_key: Final = (
         "input_cost_per_token_decisions" if "input_cost_per_token_decisions" in prices else "input_cost_per_token"

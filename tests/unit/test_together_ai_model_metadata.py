@@ -70,7 +70,7 @@ DEPRECATED_MODELS: Final = {
 
 @pytest.fixture(scope="module")
 def cost_map() -> CostMap:
-    with open(REPO_ROOT / "model_prices_and_context_window.json") as f:
+    with open(REPO_ROOT / "litellm/data/model_prices_and_context_window.json") as f:
         return COST_MAP_ADAPTER.validate_python(json.load(f))
 
 

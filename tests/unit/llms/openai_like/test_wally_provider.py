@@ -168,7 +168,7 @@ def test_wally_model_missing_from_cost_map_uses_provider_defaults():
 
 def test_wally_backup_registry_mirrors_cost_map():
     package_root: Final = Path(litellm.__file__).parent
-    cost_map: Final = json.loads((package_root.parent / "model_prices_and_context_window.json").read_text())
+    cost_map: Final = json.loads((package_root.parent / "litellm/data/model_prices_and_context_window.json").read_text())
     backup: Final = json.loads((package_root / "model_prices_and_context_window_backup.json").read_text())
     wally_entries: Final = {name: entry for name, entry in cost_map.items() if name.startswith("wally/")}
 
@@ -193,7 +193,7 @@ def test_wally_is_available_in_add_model_form():
 
 def test_wally_supported_endpoints():
     backup_path: Final = Path(litellm.__file__).parent / "provider_endpoints_support_backup.json"
-    root_path: Final = Path(litellm.__file__).parent.parent / "provider_endpoints_support.json"
+    root_path: Final = Path(litellm.__file__).parent.parent / "litellm/data/provider_endpoints_support.json"
 
     backup: Final = json.loads(backup_path.read_text())["providers"]["wally"]["endpoints"]
     root: Final = json.loads(root_path.read_text())["providers"]["wally"]["endpoints"]

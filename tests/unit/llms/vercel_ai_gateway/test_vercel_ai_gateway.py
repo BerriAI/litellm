@@ -281,7 +281,7 @@ def test_vercel_ai_gateway_models_endpoint_failure():
 def test_vercel_ai_gateway_glm46_cost_math():
     """Test the cost math for glm-4.6"""
 
-    with open("model_prices_and_context_window.json", "r") as f:
+    with open("litellm/data/model_prices_and_context_window.json", "r") as f:
         litellm.model_cost = json.load(f)
 
     key = "vercel_ai_gateway/zai/glm-4.6"

@@ -75,7 +75,7 @@ def test_prism_model_cost_and_capabilities(model: str):
 
 def test_prism_backup_registry_mirrors_cost_map():
     package_root = Path(litellm.__file__).parent
-    cost_map = json.loads((package_root.parent / "model_prices_and_context_window.json").read_text())
+    cost_map = json.loads((package_root.parent / "litellm/data/model_prices_and_context_window.json").read_text())
     backup = json.loads((package_root / "model_prices_and_context_window_backup.json").read_text())
     prism_entries = {name: entry for name, entry in cost_map.items() if name.startswith("prism/")}
 

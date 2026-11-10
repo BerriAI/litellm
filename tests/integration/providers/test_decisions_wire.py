@@ -205,7 +205,7 @@ def _expected_spend(provider: _Provider) -> float:
     if provider.cost_map_key is None:
         return 0.0
     prices: Final = object_value(
-        json.loads(Path("model_prices_and_context_window.json").read_text())[provider.cost_map_key]
+        json.loads(Path("litellm/data/model_prices_and_context_window.json").read_text())[provider.cost_map_key]
     )
     return _number(_USAGE["input_tokens"]) * _number(prices["input_cost_per_token"]) + _number(
         _USAGE["output_tokens"]

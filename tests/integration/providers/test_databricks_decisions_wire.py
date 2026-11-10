@@ -97,7 +97,7 @@ def _number(value: JsonValue) -> float:
 
 def _endpoint_spend() -> float:
     prices: Final = object_value(
-        json.loads(Path("model_prices_and_context_window.json").read_text())[f"databricks/{_ENDPOINT}"]
+        json.loads(Path("litellm/data/model_prices_and_context_window.json").read_text())[f"databricks/{_ENDPOINT}"]
     )
     return _number(_USAGE["input_tokens"]) * _number(prices["input_cost_per_token"]) + _number(
         _USAGE["output_tokens"]

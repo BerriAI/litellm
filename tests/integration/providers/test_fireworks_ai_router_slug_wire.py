@@ -14,7 +14,7 @@ _ROUTER_RESOURCE: Final = "accounts/fireworks/routers/glm-latest"
 _FIREROUTER_SLUGS: Final = ("firerouter", "firerouter/kimi-k3/deepseek-v4")
 _API_KEY: Final = "synthetic-fireworks-key"
 _PROMPT: Final = "route me through the router"
-_COST_MAP_PATH: Final = Path(__file__).resolve().parents[3] / "model_prices_and_context_window.json"
+_COST_MAP_PATH: Final = Path(__file__).resolve().parents[3] / "litellm/data/model_prices_and_context_window.json"
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 _COST_MAP: Final = TypeAdapter(dict[str, dict[str, object]])
 

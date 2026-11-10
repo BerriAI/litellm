@@ -213,7 +213,7 @@ def test_reasoning_effort_is_advertised_only_for_reasoning_models(local_model_co
 
 
 def test_cost_map_rows_match_the_backup_and_resolve_their_effort_levels() -> None:
-    rows: Final = _clf_rows(REPO_ROOT / "model_prices_and_context_window.json")
+    rows: Final = _clf_rows(REPO_ROOT / "litellm/data/model_prices_and_context_window.json")
     assert rows
     assert rows == _clf_rows(REPO_ROOT / "litellm" / "model_prices_and_context_window_backup.json")
     for key, row in rows.items():

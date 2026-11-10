@@ -28,7 +28,7 @@ CACHED_TOKENS: Final = 4352
 CACHE_WRITE_TOKENS: Final = 5
 COMPLETION_TOKENS: Final = 20
 REASONING_TOKENS: Final = 12
-COST_MAP: Final = Path(__file__).resolve().parents[3] / "model_prices_and_context_window.json"
+COST_MAP: Final = Path(__file__).resolve().parents[3] / "litellm/data/model_prices_and_context_window.json"
 LEAK_FIELDS: Final = frozenset(
     {"litellm_params", "litellm_logging_obj", "litellm_call_id", "litellm_metadata", "proxy_server_request"}
 )

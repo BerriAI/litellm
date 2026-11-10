@@ -424,7 +424,7 @@ const ProviderSpecificFieldsContent: React.FC<ProviderSpecificFieldsProps> = ({
                   components={{
                     docs: (
                       <a
-                        href="https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json"
+                        href="https://github.com/BerriAI/litellm/blob/main/litellm/data/model_prices_and_context_window.json"
                         target="_blank"
                         rel="noopener noreferrer"
                         className="text-primary underline-offset-4 hover:underline"

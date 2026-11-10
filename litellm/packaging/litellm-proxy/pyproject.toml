@@ -18,5 +18,5 @@ editable-profile = "dev"
 include = [
     { path = "litellm/rust/rust-toolchain.toml", format = "sdist" },
     { path = "litellm/rust/.cargo/config.toml", format = "sdist" },
-    { path = "model_prices_and_context_window.json", format = "sdist" },
+    { path = "litellm/data/model_prices_and_context_window.json", format = "sdist" },
 ]

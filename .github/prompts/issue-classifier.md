@@ -8,7 +8,7 @@ Answer with one JSON object matching the schema you were given. Every field is r
 
 Pick the domain whose code would change to fix the issue. The symptom decides, not the file the reporter guesses at. A path belongs to exactly one domain.
 
-- `cost-map`: a model is missing, priced wrong, or has a stale capability flag or context limit. No code change, only `model_prices_and_context_window.json`.
+- `cost-map`: a model is missing, priced wrong, or has a stale capability flag or context limit. No code change, only `litellm/data/model_prices_and_context_window.json`.
 - `llm-translation`: a specific provider returns the wrong shape, drops a param, breaks on streaming, tools, images or reasoning, or maps an error badly. Also every bridge between API shapes: Responses to Chat, Messages to Chat, batches, files, images, audio, realtime. Prompt caching lives here, not in caching: it is a per-provider header translation.
 - `routing`: the wrong deployment was picked, a fallback did not fire or fired wrongly, retries or cooldowns misbehave, a model group alias resolves wrong, the auto router chose badly. Router-level tpm/rpm used to pick a deployment is routing.
 - `caching`: a response was served from cache when it should not have been, or not cached when it should; Redis or semantic cache misconfigured; cache keys collide across keys or users. Response cache only: `cache_hit` in the logs means this, a provider's prompt cache is llm-translation.

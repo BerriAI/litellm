@@ -9,7 +9,7 @@ from pydantic import JsonValue, TypeAdapter
 
 _MODEL: Final = "fal-ai/moondream3-preview/query"
 _PROMPT: Final = "what is in this image?"
-_COST_MAP_PATH: Final = Path(__file__).resolve().parents[3] / "model_prices_and_context_window.json"
+_COST_MAP_PATH: Final = Path(__file__).resolve().parents[3] / "litellm/data/model_prices_and_context_window.json"
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 _COST_MAP: Final = TypeAdapter(dict[str, dict[str, object]])
 

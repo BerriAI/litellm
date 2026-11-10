@@ -19,7 +19,7 @@ import litellm
 
 ROOT_MAP = os.path.join(
     os.path.dirname(os.path.dirname(litellm.__file__)),
-    "model_prices_and_context_window.json",
+    "litellm/data/model_prices_and_context_window.json",
 )
 BACKUP_MAP = os.path.join(
     os.path.dirname(litellm.__file__),

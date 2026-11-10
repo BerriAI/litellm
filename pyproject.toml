@@ -351,9 +351,12 @@ include = [
     "litellm/proxy/common_utils/codex_bundled_models_0.166.0.json",
     "litellm/proxy/common_utils/codex_bedrock_mantle_models_0.166.0.json",
     "litellm/proxy/common_utils/codex_bedrock_runtime_models_0.166.0.json",
-    { path = "model_prices_and_context_window.json", format = "sdist" },
+    { path = "litellm/data/model_prices_and_context_window.json", format = "sdist" },
 ]
 exclude = [
+    { path = "litellm/data/model_prices_and_context_window.json", format = "wheel" },
+    "litellm/data/policy_templates.json",
+    "litellm/data/provider_endpoints_support.json",
     "litellm/scripts",
     "litellm/scripts/**",
     "litellm/runtime",
@@ -397,7 +400,7 @@ cache-keys = [
     { file = "litellm/rust/Cargo.lock" },
     { file = "litellm/rust/Cargo.toml" },
     { file = "litellm/rust/crates/**/*" },
-    { file = "model_prices_and_context_window.json" },
+    { file = "litellm/data/model_prices_and_context_window.json" },
 ]
 constraint-dependencies = [
     "tornado>=6.5.8",

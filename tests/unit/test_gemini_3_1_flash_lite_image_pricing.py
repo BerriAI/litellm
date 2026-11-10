@@ -6,7 +6,7 @@ import pytest
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 
 REPO_ROOT = Path(__file__).parents[2]
-MAIN_PATH = REPO_ROOT / "model_prices_and_context_window.json"
+MAIN_PATH = REPO_ROOT / "litellm/data/model_prices_and_context_window.json"
 BACKUP_PATH = REPO_ROOT / "litellm" / "model_prices_and_context_window_backup.json"
 
 UNPREFIXED = "gemini-3.1-flash-lite-image"

@@ -20,7 +20,7 @@ import litellm
 @pytest.fixture(scope="module")
 def model_cost_maps():
     root = Path(__file__).resolve().parents[2]
-    main_path = root / "model_prices_and_context_window.json"
+    main_path = root / "litellm/data/model_prices_and_context_window.json"
     backup_path = root / "litellm" / "model_prices_and_context_window_backup.json"
 
     with open(main_path, "r", encoding="utf-8") as f:

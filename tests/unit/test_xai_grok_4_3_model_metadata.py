@@ -5,7 +5,7 @@ from pathlib import Path
 def test_xai_grok_4_3_backup_matches_main():
     """Ensure the bundled model cost map stays in sync with the canonical file."""
     repo_root = Path(__file__).parents[2]
-    main_path = repo_root / "model_prices_and_context_window.json"
+    main_path = repo_root / "litellm/data/model_prices_and_context_window.json"
     backup_path = repo_root / "litellm" / "model_prices_and_context_window_backup.json"
 
     with open(main_path) as f:

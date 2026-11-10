@@ -402,7 +402,7 @@ def test_exact_entries_fill_only_missing_fields(restore_generalizations, monkeyp
 
 @pytest.mark.parametrize(
     "cost_map_path",
-    ["model_prices_and_context_window.json", "litellm/model_prices_and_context_window_backup.json"],
+    ["litellm/data/model_prices_and_context_window.json", "litellm/model_prices_and_context_window_backup.json"],
 )
 def test_every_shipped_rule_installs_without_a_skip_warning(
     restore_generalizations: Callable[[list | None], None], warning_messages: list[str], cost_map_path: str

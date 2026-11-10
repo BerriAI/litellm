@@ -6,9 +6,6 @@
   "Makefile": "Root entry points for workspace development and testing.",
   "README.md": "Repository overview consumed by hosting and package builds.",
   "litellm": "Python SDK and consolidated project sources.",
-  "model_prices_and_context_window.json": "Published model metadata consumed by the SDK and external readers.",
-  "policy_templates.json": "Published policy templates retained at their existing root URL.",
-  "provider_endpoints_support.json": "Published provider endpoint metadata retained at its existing root URL.",
   "pyproject.toml": "Root Python package manifest and workspace configuration.",
   "tests": "Repository-wide test suites and test infrastructure.",
   "uv.lock": "Locked dependency graph for the root Python workspace."

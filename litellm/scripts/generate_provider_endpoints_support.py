@@ -12,8 +12,8 @@ from typing import Final
 from pydantic import JsonValue, TypeAdapter
 
 ROOT: Final = Path(__file__).resolve().parents[2]
-COST_MAP_PATH: Final = ROOT / "model_prices_and_context_window.json"
-SOURCE_PATH: Final = ROOT / "provider_endpoints_support.json"
+COST_MAP_PATH: Final = ROOT / "litellm/data/model_prices_and_context_window.json"
+SOURCE_PATH: Final = ROOT / "litellm/data/provider_endpoints_support.json"
 OUTPUT_PATHS: Final = (
     SOURCE_PATH,
     ROOT / "litellm/provider_endpoints_support_backup.json",
@@ -231,13 +231,13 @@ def main(argv: Sequence[str] | None = None, *, repo_root: Path = ROOT) -> int:
     parser: Final = argparse.ArgumentParser(description="Generate provider endpoint support from the model cost map")
     parser.add_argument("--check", action="store_true", help="fail if either generated file is stale")
     args: Final = parser.parse_args(argv)
-    cost_map: Final = JSON_OBJECT.validate_json((repo_root / COST_MAP_PATH.name).read_bytes())
-    current_json: Final = JSON_OBJECT.validate_json((repo_root / SOURCE_PATH.name).read_bytes())
+    cost_map: Final = JSON_OBJECT.validate_json((repo_root / COST_MAP_PATH.relative_to(ROOT)).read_bytes())
+    current_json: Final = JSON_OBJECT.validate_json((repo_root / SOURCE_PATH.relative_to(ROOT)).read_bytes())
     return generate_files(
         cost_map,
         current_json,
         (
-            repo_root / SOURCE_PATH.name,
+            repo_root / SOURCE_PATH.relative_to(ROOT),
             repo_root / OUTPUT_PATHS[1].relative_to(ROOT),
         ),
         args.check,

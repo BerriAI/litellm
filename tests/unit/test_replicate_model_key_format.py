@@ -7,7 +7,7 @@ import pytest
 
 @pytest.fixture()
 def model_cost() -> dict[str, Any]:
-    json_path = Path(__file__).parents[2] / "model_prices_and_context_window.json"
+    json_path = Path(__file__).parents[2] / "litellm/data/model_prices_and_context_window.json"
     with open(json_path, encoding="utf-8") as f:
         return json.load(f)
 
@@ -22,7 +22,7 @@ def test_replicate_models_have_valid_key_prefix(model_cost: dict[str, Any]) -> N
 
 def test_replicate_backup_matches_main() -> None:
     repo_root = Path(__file__).parents[2]
-    main_path = repo_root / "model_prices_and_context_window.json"
+    main_path = repo_root / "litellm/data/model_prices_and_context_window.json"
     backup_path = repo_root / "litellm" / "model_prices_and_context_window_backup.json"
 
     with open(main_path, encoding="utf-8") as f:

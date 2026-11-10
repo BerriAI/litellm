@@ -60,7 +60,7 @@ class TestContentFilterPathTraversal:
     def test_every_category_file_published_in_policy_templates_resolves(self, monkeypatch, tmp_path):
         """The proxy fetches policy_templates.json from main, so every path in it must exist in the package."""
         monkeypatch.chdir(tmp_path)
-        published = os.path.join(os.path.dirname(os.path.dirname(litellm.__file__)), "policy_templates.json")
+        published = os.path.join(os.path.dirname(os.path.dirname(litellm.__file__)), "litellm/data/policy_templates.json")
         category_files = re.findall(r'"category_file":\s*"([^"]+)"', open(published).read())
         assert category_files
         guardrail = self._get_guardrail()

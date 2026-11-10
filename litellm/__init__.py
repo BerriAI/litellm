@@ -408,7 +408,7 @@ aclient_session: Optional[Union[httpx.AsyncClient, DefaultAsyncHttpxClient]] = N
 model_fallbacks: Optional[List] = None  # Deprecated for 'litellm.fallbacks'
 model_cost_map_url: str = os.getenv(
     "LITELLM_MODEL_COST_MAP_URL",
-    "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json",
+    "https://raw.githubusercontent.com/BerriAI/litellm/main/litellm/data/model_prices_and_context_window.json",
 )
 blog_posts_url: str = os.getenv(
     "LITELLM_BLOG_POSTS_URL",

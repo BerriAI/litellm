@@ -23,7 +23,7 @@ REPO_ROOT = os.path.join(os.path.dirname(__file__), "../..")
 
 
 def _load_root_cost_map() -> dict:
-    json_path = os.path.join(REPO_ROOT, "model_prices_and_context_window.json")
+    json_path = os.path.join(REPO_ROOT, "litellm/data/model_prices_and_context_window.json")
     with open(json_path) as f:
         return json.load(f)
 

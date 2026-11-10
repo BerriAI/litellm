@@ -12,7 +12,7 @@ ROOT: Final = Path(__file__).resolve().parents[2]
 SOURCES: Final = (
     "litellm",
     "litellm/rust",
-    "model_prices_and_context_window.json",
+    "litellm/data/model_prices_and_context_window.json",
     "README.md",
     "LICENSE",
 )
@@ -57,7 +57,7 @@ def stage_core_distribution(source: Path, destination: Path, *, package: str = "
         workspace_sources: Final = (
             {
                 "enterprise", "proxy-extras", "packaging", "rust", "cli", "scripts", "runtime",
-                "schema.prisma", "ui", "vscode-extension", "deploy",
+                "schema.prisma", "ui", "vscode-extension", "deploy", "data",
             }
             if Path(directory) == source / "litellm"
             else set()
@@ -75,6 +75,7 @@ def stage_core_distribution(source: Path, destination: Path, *, package: str = "
                 ignore=ignored_sources,
             )
         else:
+            (destination / name).parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(path, destination / name)
     template: Final = (source / "litellm" / "packaging" / package / "pyproject.toml").read_text()
     if package == "litellm-proxy" and IN_TREE_RUST_PATH not in template:

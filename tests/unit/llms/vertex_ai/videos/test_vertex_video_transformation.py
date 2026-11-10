@@ -24,7 +24,7 @@ from litellm.types.videos.main import VideoObject
 
 VEO_31_LITE_VERTEX_MODEL = "vertex_ai/veo-3.1-lite-generate-001"
 ROOT_MODEL_COST_PATH = (
-    Path(__file__).parents[5] / "model_prices_and_context_window.json"
+    Path(__file__).parents[5] / "litellm/data/model_prices_and_context_window.json"
 )
 BACKUP_MODEL_COST_PATH = (
     Path(__file__).parents[5]

@@ -380,7 +380,7 @@ def test_coralbricks_rows_are_listed_for_wildcard_expansion():
 
 def test_coralbricks_cost_map_backup_mirrors_main():
     main_map: Final = json.loads(
-        (Path(litellm.__file__).parent.parent / "model_prices_and_context_window.json").read_text()
+        (Path(litellm.__file__).parent.parent / "litellm/data/model_prices_and_context_window.json").read_text()
     )
     backup_map: Final = json.loads(
         (Path(litellm.__file__).parent / "model_prices_and_context_window_backup.json").read_text()
@@ -398,7 +398,7 @@ def test_coralbricks_cost_map_rows_declare_same_endpoints_as_providers_json():
     )
     declared: Final = providers_json["coralbricks"]["supported_endpoints"]
     cost_map_paths: Final = (
-        Path(litellm.__file__).parent.parent / "model_prices_and_context_window.json",
+        Path(litellm.__file__).parent.parent / "litellm/data/model_prices_and_context_window.json",
         Path(litellm.__file__).parent / "model_prices_and_context_window_backup.json",
     )
     for cost_map_path in cost_map_paths:

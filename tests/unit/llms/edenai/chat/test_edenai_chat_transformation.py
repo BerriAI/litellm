@@ -431,7 +431,7 @@ class TestDashboardRegistration:
     @pytest.mark.parametrize(
         "matrix_path",
         [
-            REPO_ROOT / "provider_endpoints_support.json",
+            REPO_ROOT / "litellm/data/provider_endpoints_support.json",
             REPO_ROOT / "litellm" / "provider_endpoints_support_backup.json",
         ],
         ids=["root", "backup"],

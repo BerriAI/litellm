@@ -17,7 +17,7 @@ const PROVIDER_CREATE_FIELDS: { provider: string; provider_display_name: string;
   );
 
 const BUNDLED_MODEL_MAP: Record<string, { litellm_provider?: string }> = JSON.parse(
-  readFileSync(resolve(__dirname, "../../../../../model_prices_and_context_window.json"), "utf8"),
+  readFileSync(resolve(__dirname, "../../../../data/model_prices_and_context_window.json"), "utf8"),
 );
 
 describe("provider_info_helpers", () => {

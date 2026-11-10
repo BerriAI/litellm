@@ -67,6 +67,6 @@ A new `N`, image size or resolution in an existing key shape parses with no Rust
 
 ## Tests
 
-`BUNDLED_REGISTRY` embeds the root `model_prices_and_context_window.json`, so the tests over it fail a JSON change with a bad value or a key no type reads
+`BUNDLED_REGISTRY` embeds `litellm/data/model_prices_and_context_window.json`, so the tests over it fail a JSON change with a bad value or a key no type reads
 
 `Catalog::problems` is the one definition of a mergeable cost map. The bundled test asserts it is empty, and the cost map guard workflow runs it on a pull request's JSON through `cargo run --bin check-registry <path>`

@@ -10,7 +10,7 @@ from litellm.caching.llm_caching_handler import LLMClientCache
 from litellm.proxy.auth.model_checks import get_provider_models
 
 _REPO_ROOT: Final = Path(__file__).resolve().parents[4]
-_PRIMARY_PRICES: Final = json.loads((_REPO_ROOT / "model_prices_and_context_window.json").read_text())
+_PRIMARY_PRICES: Final = json.loads((_REPO_ROOT / "litellm/data/model_prices_and_context_window.json").read_text())
 _BACKUP_PRICES: Final = json.loads((_REPO_ROOT / "litellm" / "model_prices_and_context_window_backup.json").read_text())
 _CATALOG_MODELS: Final = tuple(
     key for key, row in _PRIMARY_PRICES.items() if isinstance(row, dict) and row.get("litellm_provider") == "openinfer"

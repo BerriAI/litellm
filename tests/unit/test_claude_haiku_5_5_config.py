@@ -45,7 +45,7 @@ def local_model_cost_map(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
 
 
 def _load_root_cost_map() -> dict[str, dict[str, object]]:
-    json_path: Final = os.path.join(REPO_ROOT, "model_prices_and_context_window.json")
+    json_path: Final = os.path.join(REPO_ROOT, "litellm/data/model_prices_and_context_window.json")
     with open(json_path) as f:
         return cast(dict[str, dict[str, object]], json.load(f))
 

@@ -7,7 +7,7 @@ import zipfile
 from pathlib import Path
 from typing import Final
 
-COST_MAP: Final = Path(__file__).resolve().parents[2] / "model_prices_and_context_window.json"
+COST_MAP: Final = Path(__file__).resolve().parents[2] / "litellm/data/model_prices_and_context_window.json"
 
 CHILD_SCRIPT: Final = """
 from importlib.util import module_from_spec, spec_from_file_location

@@ -133,7 +133,7 @@ CHAT_USAGE: Final[dict[str, JsonValue]] = {
 }
 
 
-COST_MAP: Final = JSON.validate_json(Path("model_prices_and_context_window.json").read_bytes())
+COST_MAP: Final = JSON.validate_json(Path("litellm/data/model_prices_and_context_window.json").read_bytes())
 
 
 RESPONSES_PATH: Final = "/openai/v1/responses"

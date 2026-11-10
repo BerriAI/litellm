@@ -29,7 +29,7 @@ from .conftest import VOLATILE_KEYS, normalize
 _VOLATILE = VOLATILE_KEYS | frozenset({"timestamp"})
 
 _SERVED_ETAG = 'W/"cost-map-etag"'
-_ROOT_COST_MAP = Path(__file__).resolve().parents[4] / "model_prices_and_context_window.json"
+_ROOT_COST_MAP = Path(__file__).resolve().parents[4] / "litellm/data/model_prices_and_context_window.json"
 
 
 # ---------------------------------------------------------------------------

@@ -351,7 +351,7 @@ def get_supports_system_message(
             supports_system_message = True
     except Exception as e:
         verbose_logger.warning(
-            "Unable to identify if system message supported. Defaulting to 'False'. Received error message - %s\nAdd it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json",
+            "Unable to identify if system message supported. Defaulting to 'False'. Received error message - %s\nAdd it here - https://github.com/BerriAI/litellm/blob/main/litellm/data/model_prices_and_context_window.json",
             e,
         )
         supports_system_message = False

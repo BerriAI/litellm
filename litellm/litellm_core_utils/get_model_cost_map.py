@@ -1,5 +1,5 @@
 """
-Pulls the cost + context window + provider route for known models from https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json
+Pulls the cost + context window + provider route for known models from https://github.com/BerriAI/litellm/blob/main/litellm/data/model_prices_and_context_window.json
 
 This can be disabled by setting the LITELLM_LOCAL_MODEL_COST_MAP environment variable to True.
 The ``lite`` and ``litellm-proxy`` CLI entry points also use the bundled map without fetching.

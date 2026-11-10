@@ -177,7 +177,7 @@ def _answered_probability(route: Route, text: str) -> JsonValue:
 
 
 def _price() -> dict[str, JsonValue]:
-    cost_map: Final = _JSON_OBJECT.validate_json(Path("model_prices_and_context_window.json").read_bytes())
+    cost_map: Final = _JSON_OBJECT.validate_json(Path("litellm/data/model_prices_and_context_window.json").read_bytes())
     priced: Final = cost_map.get(_COST_MAP_KEY)
     assert priced is not None, f"{_COST_MAP_KEY} has no cost map entry"
     return object_value(priced)

@@ -178,7 +178,7 @@ def _number(value: JsonValue) -> float:
 
 
 def _expected_spend(cost_map_key: str) -> float:
-    cost_map: Final = _JSON_OBJECT.validate_json(Path("model_prices_and_context_window.json").read_bytes())
+    cost_map: Final = _JSON_OBJECT.validate_json(Path("litellm/data/model_prices_and_context_window.json").read_bytes())
     priced: Final = cost_map.get(cost_map_key)
     assert priced is not None, f"{cost_map_key} has no cost map entry"
     return _INPUT_TOKENS * _number(object_value(priced)["input_cost_per_token"])

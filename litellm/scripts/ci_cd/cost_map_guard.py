@@ -25,8 +25,8 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final
 
-COST_MAP_PATH: Final = "model_prices_and_context_window.json"
-COST_MAP_PATHS: Final = ("litellm/data/model_prices_and_context_window.json", COST_MAP_PATH)
+COST_MAP_PATH: Final = "litellm/data/model_prices_and_context_window.json"
+COST_MAP_PATHS: Final = (COST_MAP_PATH, "model_prices_and_context_window.json")
 BACKUP_PATH: Final = "litellm/model_prices_and_context_window_backup.json"
 PINS_PATH: Final = "litellm/scripts/ci_cd/cost_map_pins.json"
 PINS_PATHS: Final = (

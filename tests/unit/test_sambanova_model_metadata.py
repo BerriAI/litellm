@@ -6,7 +6,7 @@ from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 
 def test_sambanova_minimax_m27_model_info():
     model = "sambanova/MiniMax-M2.7"
-    json_path = Path(__file__).parents[2] / "model_prices_and_context_window.json"
+    json_path = Path(__file__).parents[2] / "litellm/data/model_prices_and_context_window.json"
     with open(json_path) as f:
         model_cost = json.load(f)
 

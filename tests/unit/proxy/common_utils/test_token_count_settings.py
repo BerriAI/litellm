@@ -19,7 +19,7 @@ _DEFAULT: Final = {
     "token_count_framing": 97,
     "token_count_model": {"model": "anthropic.claude-opus-5-5", "region": "us-east-1"},
 }
-_COST_MAP: Final = Path(__file__).parents[4] / "model_prices_and_context_window.json"
+_COST_MAP: Final = Path(__file__).parents[4] / "litellm/data/model_prices_and_context_window.json"
 
 
 def _in_us_west_2() -> str:

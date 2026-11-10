@@ -1432,7 +1432,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
     If this test fails after you update the json, you need to update the schema or correct the change you made.
     """
 
-    prod_json = os.path.join(os.path.dirname(__file__), "..", "..", "model_prices_and_context_window.json")
+    prod_json = os.path.join(os.path.dirname(__file__), "..", "..", "litellm/data/model_prices_and_context_window.json")
     with open(prod_json, "r") as model_prices_file:
         actual_json = json.load(model_prices_file)
     assert isinstance(actual_json, dict)
@@ -1512,7 +1512,7 @@ def test_max_tokens_consistency():
     from pathlib import Path
 
     # Load the model configuration
-    config_path = Path(__file__).parent.parent.parent / "model_prices_and_context_window.json"
+    config_path = Path(__file__).parent.parent.parent / "litellm/data/model_prices_and_context_window.json"
     with open(config_path, "r") as f:
         models = json.load(f)
 

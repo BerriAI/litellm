@@ -36,7 +36,7 @@ def test_gemini_4_argon_routes_to_its_provider_on_the_thinking_level_path(
 
 @pytest.mark.parametrize("model", [row[0] for row in MODELS])
 def test_gemini_4_argon_entry_source_and_backup_match(model: str) -> None:
-    main_entry = _cost_map_entry(REPO_ROOT / "model_prices_and_context_window.json", model)
+    main_entry = _cost_map_entry(REPO_ROOT / "litellm/data/model_prices_and_context_window.json", model)
     backup_entry = _cost_map_entry(REPO_ROOT / "litellm" / "model_prices_and_context_window_backup.json", model)
 
     assert backup_entry == main_entry

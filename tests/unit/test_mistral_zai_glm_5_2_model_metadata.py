@@ -6,7 +6,7 @@ import pytest
 import litellm
 
 REPO_ROOT = Path(__file__).parents[2]
-MAIN_PATH = REPO_ROOT / "model_prices_and_context_window.json"
+MAIN_PATH = REPO_ROOT / "litellm/data/model_prices_and_context_window.json"
 BACKUP_PATH = REPO_ROOT / "litellm" / "model_prices_and_context_window_backup.json"
 
 GLM_5_2_MODELS = ("mistral/zai-glm-5-2", "mistral/glm-5-2")
