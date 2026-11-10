@@ -33,7 +33,8 @@ ingress:
   # UI / gateway / backend path is still rendered, these entries are placed
   # after them and before the backend catch-all, and an entry that repeats a
   # path the chart already routes is rejected at render time rather than
-  # silently taking it over.
+  # silently taking it over. An entry that sends a built-in gateway path to the
+  # gateway is skipped, so values written for an older chart keep rendering.
   #
   # The chart's built-in gateway prefix list is a snapshot of the data-plane
   # surface at release time. Use extraPaths for passthrough routes it does not
@@ -48,7 +49,7 @@ ingress:
   # The target component only answers paths its own route allowlist keeps, so
   # a path here still has to be one that component serves.
   extraPaths: []
-  # - path: /watsonx
+  # - path: /hosted_vllm
   #   pathType: Prefix
   #   service: gateway
 
