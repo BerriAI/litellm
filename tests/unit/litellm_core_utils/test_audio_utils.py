@@ -26,6 +26,29 @@ from litellm.litellm_core_utils.audio_utils.utils import (
     get_audio_file_name,
     process_audio_file,
 )
+from litellm.types.utils import FileTypes
+
+
+@pytest.mark.parametrize(
+    ("upload", "expected"),
+    (
+        (("recording.wav", b"synthetic audio"), "recording.wav"),
+        (("recording.mp3", b"synthetic audio", "audio/mpeg"), "recording.mp3"),
+        (("recording.wav", b"synthetic audio", "audio/wav", {"X-Test": "synthetic"}), "recording.wav"),
+        ((None, b"synthetic audio"), "audio.wav"),
+        (b"synthetic audio", "audio.wav"),
+    ),
+)
+def test_audio_filename_does_not_include_upload_contents(upload: FileTypes, expected: str) -> None:
+    assert get_audio_file_name(upload) == expected
+
+
+def test_audio_filename_preserves_named_file_without_consuming_it() -> None:
+    with tempfile.NamedTemporaryFile(suffix=".wav") as upload:
+        upload.write(b"synthetic audio")
+        upload.seek(0)
+        assert get_audio_file_name(upload) == upload.name
+        assert upload.read() == b"synthetic audio"
 
 
 def _encoded_audio(seconds: int, sample_rate: int, channels: int, container: str) -> str:

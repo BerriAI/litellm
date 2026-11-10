@@ -1230,8 +1230,12 @@ class Logging(LiteLLMLoggingBaseClass):
             self.model = model
         self.user = user
         self.litellm_params = {
-            **self.litellm_params,
-            **scrub_sensitive_keys_in_metadata(litellm_params),
+            key: value
+            for key, value in {
+                **self.litellm_params,
+                **scrub_sensitive_keys_in_metadata(litellm_params),
+            }.items()
+            if key != "litellm_logging_obj"
         }
         self.litellm_request_debug = litellm_params.get("litellm_request_debug", False)
         self.logger_fn = litellm_params.get("logger_fn", None)

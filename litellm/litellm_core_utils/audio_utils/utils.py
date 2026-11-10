@@ -176,14 +176,12 @@ def normalize_transcription_language_to_bcp47(language: str) -> str:
 
 def get_audio_file_name(file_obj: FileTypes) -> str:
     """
-    Safely get the name of a file-like object or return its string representation.
-
-    Args:
-        file_obj (Any): A file-like object or any other object.
-
-    Returns:
-        str: The name of the file if available, otherwise a string representation of the object.
+    Return an upload filename without including its audio contents.
     """
+    if isinstance(file_obj, tuple):
+        return file_obj[0] or "audio.wav"
+    if isinstance(file_obj, bytes):
+        return "audio.wav"
     if hasattr(file_obj, "name"):
         return getattr(file_obj, "name")
     elif hasattr(file_obj, "__str__"):
