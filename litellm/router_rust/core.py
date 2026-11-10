@@ -2760,6 +2760,7 @@ class RustCore(
             **({"decisions_media": True} if decisions_media else {}),
             # `batch_create_routing`: a batch create and its file upload keep to the deployments that can run batches.
             **({"batch_create": True} if _routes_as_batch_create(plan, request) else {}),
+            **({"batch_upload": True} if plan.kind == "create_file" and is_batch_upload(request) else {}),
             # `deployments_admitting_embedding_batch`: an embedding keeps to the deployments admitting its input.
             **({"embedding_batch": True} if plan.kind == "embedding" else {}),
         }

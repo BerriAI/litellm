@@ -8063,7 +8063,7 @@ async def test_a_failed_batch_file_upload_tries_the_batch_deployment_once_and_le
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("status", [429, 401])
-async def test_a_batch_file_upload_the_batch_deployment_refuses_is_never_stored_on_chat(
+async def test_a_batch_file_upload_the_batch_deployment_refuses_stays_off_chat_and_leaves_chat_serving(
     monkeypatch: pytest.MonkeyPatch, status: int
 ):
     from io import BytesIO
@@ -8082,13 +8082,56 @@ async def test_a_batch_file_upload_the_batch_deployment_refuses_is_never_stored_
         batch_upload: Final = respx_mock.post(host="batch-sku.openai.azure.com").mock(
             return_value=httpx.Response(status, json={"error": {"code": str(status), "message": "upload refused"}})
         )
+        chat_upload: Final = respx_mock.post(host="chat-sku.openai.azure.com", path__regex=r"/files").mock(
+            return_value=httpx.Response(200, json=_AZURE_FILE_CREATED)
+        )
+        chat_completions: Final = respx_mock.post(host="chat-sku.openai.azure.com", path__regex=r"/chat/completions").mock(
+            return_value=httpx.Response(200, json=_AZURE_CHAT_COMPLETION)
+        )
+        with pytest.raises(RouterRateLimitError, match="No deployments available"):
+            await router.acreate_file(model="gpt-mixed", purpose="batch", file=BytesIO(json.dumps(batch_row).encode()))
+        await asyncio.gather(*(task for task in asyncio.all_tasks() if task is not asyncio.current_task()))
+        for _ in range(3):
+            await router.acompletion(model="gpt-mixed", messages=[{"role": "user", "content": "hi"}])
+
+    assert (batch_upload.call_count, chat_upload.call_count, chat_completions.call_count) == (1, 0, 3)
+
+
+@pytest.mark.asyncio
+async def test_a_batch_file_upload_whose_batch_deployment_cools_down_after_the_pick_stays_off_chat(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from io import BytesIO
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = litellm.Router(
+        model_list=[
+            _ordered(_azure_sku_deployment("gpt-mixed", "chat-sku", "chat", id="chat-deployment"), 1),
+            _ordered(_azure_sku_deployment("gpt-mixed", "batch-sku", "batch", id="batch-deployment"), 2),
+        ],
+        num_retries=0,
+    )
+
+    class _ConcurrentBatchFailure(CustomLogger):
+        async def async_pre_call_check(self, deployment, parent_otel_span):
+            _cool_down(router, "batch-deployment")
+
+    batch_row: Final = {"custom_id": "1", "method": "POST", "url": "/chat/completions", "body": {"model": "gpt-mixed"}}
+
+    with (
+        patch.object(litellm, "callbacks", [_ConcurrentBatchFailure()]),  # test-quality-ok: router reads this global
+        respx.mock(assert_all_called=False) as respx_mock,
+    ):
+        batch_upload: Final = respx_mock.post(host="batch-sku.openai.azure.com").mock(
+            return_value=httpx.Response(200, json=_AZURE_FILE_CREATED)
+        )
         chat_upload: Final = respx_mock.post(host="chat-sku.openai.azure.com").mock(
             return_value=httpx.Response(200, json=_AZURE_FILE_CREATED)
         )
         with pytest.raises(RouterRateLimitError, match="No deployments available"):
             await router.acreate_file(model="gpt-mixed", purpose="batch", file=BytesIO(json.dumps(batch_row).encode()))
 
-    assert (batch_upload.call_count, chat_upload.call_count) == (1, 0)
+    assert (batch_upload.call_count, chat_upload.call_count) == (0, 0)
 
 
 def _azure_wildcard_deployment(sku_host: str, mode: str) -> dict[str, object]:
