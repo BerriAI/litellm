@@ -1,10 +1,12 @@
 import asyncio
 import json
+import logging
 from itertools import chain
 from typing import Final
 
 import httpx
 import pytest
+from prometheus_client import REGISTRY
 
 from litellm.tracing.exporter import MAX_BUFFER_EVENTS, MAX_EVENT_BYTES, ExportFailure, LensExporter, encode_record
 
@@ -306,3 +308,51 @@ def test_serialization_rejects_recursive_payloads() -> None:
 @pytest.mark.parametrize("value", (float("nan"), object(), "\ud800"), ids=("nan", "unsupported", "surrogate"))
 def test_serialization_returns_a_failure_for_invalid_payloads(value: object) -> None:
     assert encode_record({"value": value}) is ExportFailure.INVALID
+
+
+def _counter_value(name: str) -> float:
+    return REGISTRY.get_sample_value(name) or 0.0
+
+
+async def _drained(exporter: LensExporter) -> None:
+    while exporter.buffered_events:
+        await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
+async def test_written_and_dropped_rows_are_exported_as_prometheus_counters() -> None:
+    statuses: Final = iter((204, 500))
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(next(statuses))
+
+    written_before: Final = _counter_value("litellm_lens_export_rows_written_total")
+    dropped_before: Final = _counter_value("litellm_lens_export_rows_dropped_total")
+    async with httpx.AsyncClient(base_url="http://lens", transport=httpx.MockTransport(answer)) as client:
+        exporter: Final = LensExporter(client)
+        exporter.start()
+        for request_id in ("accepted", "rejected"):
+            await exporter.async_log_success_event(
+                {"standard_logging_object": {"id": request_id, "response_cost": 0.1}}, None, None, None
+            )
+            await _drained(exporter)
+        await exporter.aclose()
+    assert (exporter.rows_written, exporter.rows_dropped) == (1, 1)
+    assert _counter_value("litellm_lens_export_rows_written_total") - written_before == exporter.rows_written
+    assert _counter_value("litellm_lens_export_rows_dropped_total") - dropped_before == exporter.rows_dropped
+
+
+@pytest.mark.asyncio
+async def test_a_rejecting_store_is_logged_as_an_error_naming_lens(caplog: pytest.LogCaptureFixture) -> None:
+    def reject(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500)
+
+    with caplog.at_level(logging.ERROR, logger="LiteLLM Proxy"):
+        async with httpx.AsyncClient(base_url="http://lens", transport=httpx.MockTransport(reject)) as client:
+            exporter: Final = LensExporter(client)
+            assert exporter.enqueue(b"{}")
+            exporter.start()
+            await exporter.aclose()
+    failures: Final = [record.getMessage() for record in caplog.records if record.levelno == logging.ERROR]
+    assert len(failures) == 1
+    assert "lens" in failures[0] and "HTTP 500" in failures[0]

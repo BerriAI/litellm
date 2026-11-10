@@ -1,11 +1,16 @@
-from typing import FrozenSet
+from datetime import datetime, timedelta, timezone
+from itertools import chain
+from typing import Final, FrozenSet
 
 import pytest
 
 from litellm.proxy.utils import hash_token
 
-from tests.integration._support.actors import TEAM_ALPHA, Actor
+from tests.integration._support.actors import TEAM_ALPHA, Actor, ManagementDatabase, ScratchResources
 from tests.integration._support.actors import create_scratch_key
+from tests.integration._support.client import Gateway, Scenario
+from litellm.repositories.table_repositories import DeletedVerificationTokenRepository
+from litellm.repositories.verification_token_repository import VerificationTokenRepository
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
@@ -202,3 +207,74 @@ async def test_key_list_non_admin_cannot_filter_other_team(gateway_client, actor
         },
     )
     assert resp.status_code == 403, resp.text
+
+
+@pytest.mark.parametrize(
+    "field", ("expires", "last_active", "budget_reset_at", "total_spend", "tpm_limit", "rpm_limit")
+)
+@pytest.mark.parametrize("direction", ("asc", "desc"))
+@pytest.mark.parametrize("deleted", (False, True), ids=("live", "deleted"))
+async def test_key_list_sorts_across_pages_with_nulls_last(
+    field: str,
+    direction: str,
+    deleted: bool,
+    gateway: Gateway,
+    scenario: Scenario,
+    db: ManagementDatabase,
+    resources: ScratchResources,
+) -> None:
+    team_admin: Final = scenario.user(user_role="internal_user")
+    owner: Final = scenario.user(user_role="internal_user")
+    team_id: Final = scenario.team(
+        members_with_roles=[{"user_id": team_admin, "role": "admin"}, {"user_id": owner, "role": "user"}]
+    )
+    team_admin_key: Final = scenario.key(user_id=team_admin)
+    table: Final = (
+        DeletedVerificationTokenRepository(db.prisma).table if deleted else VerificationTokenRepository(db.prisma).table
+    )
+    values: Final = (20, 3, 3, 100, 0 if field == "total_spend" else None)
+    tokens: Final = tuple(hash_token(f"{resources.prefix}-{index}") for index in range(len(values)))
+    rows: Final = [
+        {
+            "token": token,
+            "key_alias": resources.prefix,
+            "team_id": team_id,
+            "user_id": owner,
+            field: (
+                datetime(2030, 1, 1, tzinfo=timezone.utc) + timedelta(days=value)
+                if field in ("expires", "last_active", "budget_reset_at") and value is not None
+                else value
+            ),
+        }
+        for token, value in zip(tokens, values, strict=True)
+    ]
+    await table.create_many(rows)
+    try:
+        valued: Final = tuple((value, token) for value, token in zip(values, tokens, strict=True) if value is not None)
+        expected: Final = [
+            token
+            for _, token in sorted(valued, key=lambda item: (item[0] if direction == "asc" else -item[0], item[1]))
+        ] + [token for value, token in zip(values, tokens, strict=True) if value is None]
+        for caller in (gateway.key, team_admin_key):
+            pages: Final = [
+                gateway.client.get(
+                    "/key/list",
+                    headers={"Authorization": f"Bearer {caller}"},
+                    params={
+                        "key_alias": resources.prefix,
+                        "team_id": team_id,
+                        "include_team_keys": "true",
+                        "sort_by": field,
+                        "sort_order": direction,
+                        "size": "2",
+                        "page": str(page),
+                        **({"status": "deleted"} if deleted else {}),
+                    },
+                )
+                for page in (1, 2, 3)
+            ]
+            assert all(page.status_code == 200 for page in pages), [page.text for page in pages]
+            assert all(page.json()["total_count"] == len(tokens) for page in pages)
+            assert list(chain.from_iterable(page.json()["keys"] for page in pages)) == expected
+    finally:
+        await table.delete_many(where={"token": {"in": tokens}})

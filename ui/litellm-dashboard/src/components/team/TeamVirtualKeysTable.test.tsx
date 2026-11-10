@@ -1,12 +1,13 @@
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi, MockedFunction } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, MockedFunction } from "vitest";
 import { QueryClient, QueryObserver } from "@tanstack/react-query";
-import { fireEvent, renderWithProviders, screen, waitFor, within } from "../../../tests/test-utils";
+import { chooseSelectOption, fireEvent, renderWithProviders, screen, waitFor, within } from "../../../tests/test-utils";
 import { TeamVirtualKeysTable } from "./TeamVirtualKeysTable";
 import { KeysResponse, useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 import { useTeamMemberBudgets } from "@/app/(dashboard)/hooks/teams/useTeamMemberBudgets";
 import { KeyResponse } from "../key_team_helpers/key_list";
 import { Organization } from "../networking";
+import KeyInfoView from "../templates/key_info_view";
 
 vi.mock("@/app/(dashboard)/hooks/keys/useKeys", () => ({
   useKeys: vi.fn(),
@@ -183,6 +184,33 @@ describe("TeamVirtualKeysTable", () => {
     expect(screen.getByText("bob_key_team1")).toBeInTheDocument();
   });
 
+  describe("Budget Reset column", () => {
+    const originalTimezone: string | undefined = process.env.TZ;
+
+    afterEach(() => {
+      if (originalTimezone === undefined) {
+        delete process.env.TZ;
+        return;
+      }
+      process.env.TZ = originalTimezone;
+    });
+
+    it("shows the reset time in UTC with a UTC label for a viewer in another timezone", async () => {
+      process.env.TZ = "America/Los_Angeles";
+      const keysResponse: KeysResponse = {
+        keys: [createMockKey({ budget_reset_at: "2026-11-01T00:00:00Z" })],
+        total_count: 1,
+        current_page: 1,
+        total_pages: 1,
+      };
+      mockUseKeys.mockReturnValue(createKeysQueryResult(keysResponse));
+
+      renderWithProviders(<TeamVirtualKeysTable {...defaultProps} />);
+
+      expect(await screen.findByText("Nov 1, 00:00:00 UTC")).toBeInTheDocument();
+    });
+  });
+
   it("shows the team member budget for budgetless keys and keeps each key's own budget", async () => {
     const keysResponse: KeysResponse = {
       keys: [
@@ -281,6 +309,53 @@ describe("TeamVirtualKeysTable", () => {
         expect.objectContaining({ sortBy: "created_at", sortOrder: "asc" }),
       ),
     );
+  });
+
+  it.each([
+    ["expires", "Expires", "asc"],
+    ["last_active", "Last Active", "asc"],
+    ["budget_reset_at", "Budget Reset", "asc"],
+    ["total_spend", "Lifetime Spend", "desc"],
+  ])("sorts %s in both directions while preserving the team scope", async (field, label, direction) => {
+    const user = userEvent.setup();
+    renderWithProviders(<TeamVirtualKeysTable {...defaultProps} />);
+    await user.click(screen.getByRole("button", { name: label, exact: true }));
+    await waitFor(() => {
+      expect(mockUseKeys).toHaveBeenLastCalledWith(
+        1,
+        50,
+        expect.objectContaining({ teamID: "team-1", sortBy: field, sortOrder: direction }),
+      );
+    });
+    await user.click(screen.getByRole("button", { name: label, exact: true }));
+    await waitFor(() => {
+      expect(mockUseKeys).toHaveBeenLastCalledWith(
+        1,
+        50,
+        expect.objectContaining({ teamID: "team-1", sortBy: field, sortOrder: direction === "asc" ? "desc" : "asc" }),
+      );
+    });
+  });
+
+  it.each([
+    ["TPM", "tpm_limit"],
+    ["RPM", "rpm_limit"],
+  ])("sorts by %s through the rate-limit menu", async (label, field) => {
+    const user = userEvent.setup();
+    renderWithProviders(<TeamVirtualKeysTable {...defaultProps} />);
+    await chooseSelectOption(
+      user,
+      screen.getByRole("button", { name: "Sort options for TPM or RPM" }),
+      `${label} ascending`,
+      "menuitem",
+    );
+    await waitFor(() => {
+      expect(mockUseKeys).toHaveBeenLastCalledWith(
+        1,
+        50,
+        expect.objectContaining({ teamID: "team-1", sortBy: field, sortOrder: "asc" }),
+      );
+    });
   });
 
   it("resets to the first page when the sort changes", async () => {
@@ -440,6 +515,22 @@ describe("TeamVirtualKeysTable", () => {
     await waitFor(() => {
       expect(screen.getByText("Key Info View")).toBeInTheDocument();
     });
+  });
+
+  it("should open a key without its own organization without the team's organization", async () => {
+    const keyWithoutOrganization = {
+      keys: [createMockKey({ token: "sk-no-org", key_alias: "no_org_key", organization_id: null })],
+      total_count: 1,
+      current_page: 1,
+      total_pages: 1,
+    };
+    mockUseKeys.mockReturnValue(createKeysQueryResult(keyWithoutOrganization));
+    renderWithProviders(<TeamVirtualKeysTable {...defaultProps} organization={mockOrganization} />);
+
+    await userEvent.click(await screen.findByRole("button", { name: /sk-no-org/ }));
+
+    await screen.findByText("Key Info View");
+    expect(vi.mocked(KeyInfoView).mock.lastCall?.[0].keyData).toMatchObject({ organization_id: null });
   });
 
   describe("entity links out of the key rows", () => {

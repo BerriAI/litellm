@@ -24,6 +24,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.caching.redis_cache import log_redis_failure
 from litellm.constants import BATCH_ENQUEUED_TOKEN_LIMIT_METADATA_KEY, BATCH_ENQUEUED_TOKEN_TTL_SECONDS
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.redis.stores.rate_limits import RATE_LIMITS_TARGET
 from litellm.types.llms.base import LiteLLMBaseModel
 
 if TYPE_CHECKING:
@@ -107,6 +108,7 @@ _RESERVE_RESULT_ADAPTER: Final = TypeAdapter(tuple[int, int])
 _POPPED_VALUE_ADAPTER: Final = TypeAdapter(str | bytes | None)
 _STORED_COUNTER_ADAPTER: Final = TypeAdapter(int | None)
 _RESERVATION_ADAPTER: Final = TypeAdapter(BatchEnqueuedTokenReservation)
+_LOCAL_RECORD_ADAPTER: Final = TypeAdapter(object)
 
 
 class _ScriptRunner(Protocol):
@@ -223,7 +225,7 @@ class BatchEnqueuedTokenStore:
     def _record_key(batch_id: str) -> str:
         return f"batch_enqueued_token_reservation:{batch_id}"
 
-    @with_service_target("rate_limits")
+    @with_service_target(RATE_LIMITS_TARGET)
     async def reserve(
         self,
         tokens: int,
@@ -328,7 +330,7 @@ class BatchEnqueuedTokenStore:
             tokens=tokens, scopes=scopes, backend="memory", owner=self._owner_token, reserved_at_monotonic=started
         )
 
-    @with_service_target("rate_limits")
+    @with_service_target(RATE_LIMITS_TARGET)
     async def refund(
         self,
         reservation: BatchEnqueuedTokenReservation,
@@ -367,7 +369,7 @@ class BatchEnqueuedTokenStore:
                 "Redis enqueued-token refund failed; leaked increments expire with the TTL: %s", str(e)
             )
 
-    @with_service_target("rate_limits")
+    @with_service_target(RATE_LIMITS_TARGET)
     async def save_reservation(
         self,
         batch_id: str,
@@ -400,7 +402,7 @@ class BatchEnqueuedTokenStore:
             local_only=True,
         )
 
-    @with_service_target("rate_limits")
+    @with_service_target(RATE_LIMITS_TARGET)
     async def pop_reservation(
         self,
         batch_id: str,
@@ -445,10 +447,12 @@ class BatchEnqueuedTokenStore:
 
     async def _pop_local_record(self, batch_id: str, span: "Span | None") -> object:
         async with self._lock:
-            stored = await self.internal_usage_cache.async_get_cache(
-                key=self._record_key(batch_id),
-                litellm_parent_otel_span=span,
-                local_only=True,
+            stored: Final = _LOCAL_RECORD_ADAPTER.validate_python(
+                await self.internal_usage_cache.async_get_cache(
+                    key=self._record_key(batch_id),
+                    litellm_parent_otel_span=span,
+                    local_only=True,
+                )
             )
             if stored is None:
                 return None
@@ -456,12 +460,16 @@ class BatchEnqueuedTokenStore:
         return stored
 
     async def _get_local_counter(self, scope: BatchEnqueuedTokenScope, span: "Span | None") -> int:
-        stored = await self.internal_usage_cache.async_get_cache(
-            key=self._counter_key(scope),
-            litellm_parent_otel_span=span,
-            local_only=True,
+        return (
+            _STORED_COUNTER_ADAPTER.validate_python(
+                await self.internal_usage_cache.async_get_cache(
+                    key=self._counter_key(scope),
+                    litellm_parent_otel_span=span,
+                    local_only=True,
+                )
+            )
+            or 0
         )
-        return _STORED_COUNTER_ADAPTER.validate_python(stored) or 0
 
     async def _set_local_counter(self, scope: BatchEnqueuedTokenScope, value: int, span: "Span | None") -> None:
         await self.internal_usage_cache.async_set_cache(

@@ -24,7 +24,7 @@ export interface PaginatedModelInfoResponse {
   size: number;
 }
 
-const modelKeys = createQueryKeys("models");
+export const modelKeys = createQueryKeys("models");
 const modelHubKeys = createQueryKeys("modelHub");
 const allProxyModelsKeys = createQueryKeys("allProxyModels");
 const selectedTeamModelsKeys = createQueryKeys("selectedTeamModels");
@@ -44,6 +44,8 @@ export const useModelsInfo = (
   modelName?: string,
   accessGroup?: string,
   wildcardOnly: boolean = false,
+  blocked?: boolean,
+  options: { useStoredParams?: boolean } = {},
 ) => {
   const { accessToken, userId, userRole } = useAuthorized();
   return useQuery<PaginatedModelInfoResponse>({
@@ -56,6 +58,7 @@ export const useModelsInfo = (
         ...(search && { search }),
         ...(modelName && { modelName }),
         ...(modelId && { modelId }),
+        useStoredParams: Boolean(options.useStoredParams),
         ...(teamId && { teamId }),
         ...(sortBy && { sortBy }),
         ...(sortOrder && { sortOrder }),
@@ -64,6 +67,8 @@ export const useModelsInfo = (
         ...(excludeAutoRouters && { excludeAutoRouters: "true" }),
         ...(accessGroup && { accessGroup }),
         ...(wildcardOnly && { wildcardOnly: "true" }),
+        // `blocked !== undefined` (not truthiness): false is a meaningful filter value.
+        ...(blocked !== undefined && { blocked }),
       },
     }),
     queryFn: async () =>
@@ -82,6 +87,8 @@ export const useModelsInfo = (
         modelName,
         accessGroup,
         wildcardOnly,
+        blocked,
+        options,
       ),
     enabled: Boolean(accessToken && userId && userRole),
   });
@@ -102,6 +109,7 @@ export interface AutoRouterDeployment extends AutoRouterCandidateDeployment {
     model?: string | null;
     base_model?: string | null;
     custom_llm_provider?: string | null;
+    switchyard_router_config?: unknown;
     complexity_router_config?: unknown;
     complexity_router_default_model?: string | null;
     auto_router_config?: unknown;
@@ -117,6 +125,7 @@ export interface AutoRouterDeployment extends AutoRouterCandidateDeployment {
     /** False for config.yaml-defined deployments, which the update and delete routes refuse. */
     db_model?: boolean | null;
     base_model?: string | null;
+    blocked?: boolean | null;
     mode?: string | null;
     created_at?: string | null;
     updated_at?: string | null;

@@ -7,6 +7,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
@@ -20,6 +21,7 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
 _PERPLEXITY_ATTRIBUTION_HEADERS: Final[Mapping[str, str]] = MappingProxyType({"X-Pplx-Integration": "litellm"})
+_JSON_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True, hide_input_in_errors=True))
 
 
 class PerplexityChatConfig(OpenAIGPTConfig):
@@ -110,7 +112,7 @@ class PerplexityChatConfig(OpenAIGPTConfig):
 
         # Extract and enhance usage with Perplexity-specific fields
         try:
-            raw_response_json: Final = raw_response.json()
+            raw_response_json: Final = _JSON_OBJECT.validate_python(raw_response.json())
             self._enhance_usage_with_perplexity_fields(model_response, raw_response_json)
             self._add_citations_as_annotations(model_response, raw_response_json)
         except Exception as e:

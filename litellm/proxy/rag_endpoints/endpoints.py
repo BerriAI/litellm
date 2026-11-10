@@ -11,10 +11,12 @@ import json
 from collections.abc import Mapping
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
+from urllib.parse import urlsplit
 
 import orjson
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import ORJSONResponse, StreamingResponse
+from pydantic import TypeAdapter
 from starlette.datastructures import UploadFile
 
 import litellm
@@ -38,6 +40,20 @@ from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # leg
     read_request_body,
     safe_get_request_headers,
 )
+from litellm.proxy.openai_files_endpoints.common_utils import (
+    EXPLICIT_CREDENTIAL_KEYS,
+    ManagedProviderFileRegistrar,
+    ManagedResourceAccessChecker,
+    TeamProviderDeployment,
+    authorize_managed_resource_id,
+    detect_content_type_from_filename,
+    explicit_request_credentials,
+    get_team_provider_deployment,
+    is_base64_encoded_unified_file_id,
+    managed_file_copy_on_deployment,
+    provider_file_id_from_managed_id,
+    team_deployment_the_caller_may_use,
+)
 from litellm.proxy.rag_endpoints.upload_security import (
     MAX_UPLOAD_SIZE_BYTES,
     EicarTestMalwareScanner,
@@ -48,18 +64,26 @@ from litellm.proxy.rag_endpoints.upload_security import (
 from litellm.proxy.vector_store_endpoints.endpoints import (
     build_request_data_from_managed_vector_store,
     reject_caller_embedding_selection_params,
+    reject_caller_opensearch_index_name,
 )
 from litellm.proxy.vector_store_endpoints.utils import (
     assert_user_can_access_vector_store_id,
+    with_managed_search_file_ids,
 )
 from litellm.rag.main import get_ingestion_class
+from litellm.rag.rag_query import RAGQuery
 from litellm.repositories.table_repositories import ManagedVectorStoresRepository
-from litellm.types.utils import ModelResponse
+from litellm.types.rag import RAGIngestResponse
+from litellm.types.utils import Choices, ModelResponse
 
 if TYPE_CHECKING:
+    from litellm import Router
     from litellm.proxy.utils import PrismaClient
 
 router: Final = APIRouter()
+_TEAM_PROVIDER_CREDENTIALS_ADAPTER: Final = TypeAdapter(dict[str, object])
+_EMPTY_TEAM_PROVIDER_CREDENTIALS: Final[Mapping[str, object]] = MappingProxyType({})
+_TEAM_CREDENTIAL_PROVIDER: Final = "openai"
 
 
 def _as_string_keyed_mapping(value: object) -> Mapping[str, object] | None:
@@ -186,22 +210,176 @@ def _caller_vector_store_options(
     managed_store: LiteLLM_ManagedVectorStore | None,
 ) -> Mapping[str, object]:
     if managed_store is None:
-        return request_vector_store_config
+        return _without_blank_credentials(request_vector_store_config)
     return MappingProxyType(
         {key: value for key, value in request_vector_store_config.items() if key in _MANAGED_STORE_CALLER_OPTIONS}
     )
 
 
+def _is_blank(value: object) -> bool:
+    return value is None or (isinstance(value, str) and not value.strip())
+
+
+def _without_blank_credentials(config: Mapping[str, object]) -> Mapping[str, object]:
+    return MappingProxyType(
+        {key: value for key, value in config.items() if key not in EXPLICIT_CREDENTIAL_KEYS or not _is_blank(value)}
+    )
+
+
+def _store_provider(config: Mapping[str, object]) -> object:
+    provider: Final = config.get("custom_llm_provider")
+    return _TEAM_CREDENTIAL_PROVIDER if provider is None else provider
+
+
 def _managed_store_overrides(managed_store: LiteLLM_ManagedVectorStore | None) -> Mapping[str, object]:
     if managed_store is None:
         return MappingProxyType({})
-    return MappingProxyType(
-        {
-            key: value
-            for key, value in build_request_data_from_managed_vector_store(managed_store).items()
-            if value is not None
-        }
+    stored: Final = build_request_data_from_managed_vector_store(managed_store)
+    return _without_blank_credentials({key: value for key, value in stored.items() if value is not None})
+
+
+def _forwarded_store_credentials(
+    vector_store_config: Mapping[str, object], request_data: Mapping[str, object]
+) -> Mapping[str, object]:
+    if _store_provider(vector_store_config) != _TEAM_CREDENTIAL_PROVIDER:
+        return _EMPTY_TEAM_PROVIDER_CREDENTIALS
+    return explicit_request_credentials(request_data)
+
+
+def _with_body_drop_params(request_data: Mapping[str, object], body: Mapping[str, object]) -> Mapping[str, object]:
+    if body.get("drop_params") is not True:
+        return request_data
+    return MappingProxyType({**request_data, "drop_params": True})
+
+
+async def _rag_ingest_body(request: Request) -> Mapping[str, object]:
+    body: Final = _TEAM_PROVIDER_CREDENTIALS_ADAPTER.validate_python(await read_request_body(request))
+    if "multipart/form-data" not in request.headers.get("content-type", ""):
+        return body
+    form_request: Final = body.get("request")
+    parsed: Final[object] = (
+        orjson.loads(form_request) if isinstance(form_request, (str, bytes)) and form_request else None
     )
+    return (
+        _TEAM_PROVIDER_CREDENTIALS_ADAPTER.validate_python(parsed) if isinstance(parsed, dict) else MappingProxyType({})
+    )
+
+
+def _with_request_credentials(
+    team_credentials: Mapping[str, object], request_data: Mapping[str, object]
+) -> Mapping[str, object]:
+    if not team_credentials:
+        return team_credentials
+    return MappingProxyType({**team_credentials, **explicit_request_credentials(request_data)})
+
+
+def _team_provider_deployment(
+    effective_config: Mapping[str, object],
+    llm_router: "Router | None",
+    user_api_key_dict: UserAPIKeyAuth,
+) -> TeamProviderDeployment | None:
+    if not EXPLICIT_CREDENTIAL_KEYS.isdisjoint(effective_config):
+        return None
+
+    if _store_provider(effective_config) != _TEAM_CREDENTIAL_PROVIDER:
+        return None
+
+    return get_team_provider_deployment(
+        llm_router=llm_router,
+        user_api_key_dict=user_api_key_dict,
+        custom_llm_provider=_TEAM_CREDENTIAL_PROVIDER,
+    )
+
+
+def _team_provider_credentials(deployment: TeamProviderDeployment | None) -> Mapping[str, object]:
+    if deployment is None:
+        return _EMPTY_TEAM_PROVIDER_CREDENTIALS
+    return MappingProxyType(
+        {key: value for key, value in deployment.credentials.items() if key not in {"custom_llm_provider", "model"}}
+    )
+
+
+async def _provider_file_id_for_ingest(
+    file_id: str | None,
+    deployment: TeamProviderDeployment | None,
+    managed_files_obj: object | None,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> str | None:
+    if file_id is None or not is_base64_encoded_unified_file_id(file_id):
+        return file_id
+    if not isinstance(managed_files_obj, ManagedResourceAccessChecker):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "This proxy does not accept LiteLLM managed file ids. Send the provider's file id instead."
+            },
+        )
+    await authorize_managed_resource_id(file_id, "file", user_api_key_dict, managed_files_obj)
+    deployment_copy: Final = await managed_file_copy_on_deployment(
+        file_id, deployment, managed_files_obj, user_api_key_dict.parent_otel_span
+    )
+    return deployment_copy or provider_file_id_from_managed_id(file_id)
+
+
+def _first_choice_search_results(response: ModelResponse) -> Mapping[str, object] | None:
+    first_choice: Final = response.choices[0] if response.choices else None
+    if not isinstance(first_choice, Choices) or first_choice.message.provider_specific_fields is None:
+        return None
+    return _as_string_keyed_mapping(first_choice.message.provider_specific_fields.get("search_results"))
+
+
+async def _with_managed_search_result_ids(
+    response: ModelResponse,
+    managed_files_obj: object | None,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> ModelResponse:
+    search_results: Final = _first_choice_search_results(response)
+    if search_results is None:
+        return response
+    managed_results: Final = await with_managed_search_file_ids(search_results, managed_files_obj, user_api_key_dict)
+    if managed_results is search_results:
+        return response
+    return RAGQuery.add_search_results_to_response(response, managed_results)
+
+
+def _uploaded_content_type(file_data: tuple[str, bytes, str] | None, file_url: str | None) -> str:
+    if file_data is not None:
+        return file_data[2]
+    return detect_content_type_from_filename(urlsplit(file_url or "").path.rsplit("/", 1)[-1])
+
+
+def _with_caller_file_id(response: RAGIngestResponse, caller_file_id: str | None) -> RAGIngestResponse:
+    caller_response: Final[RAGIngestResponse] = {**response, "file_id": caller_file_id}
+    return caller_response
+
+
+async def _with_registered_upload(
+    response: RAGIngestResponse,
+    *,
+    upload_deployment: TeamProviderDeployment | None,
+    content_type: str,
+    managed_files_obj: object | None,
+    user_api_key_dict: UserAPIKeyAuth,
+    llm_router: "Router | None",
+) -> RAGIngestResponse:
+    provider_file_id: Final = response.get("file_id")
+    if (
+        upload_deployment is None
+        or provider_file_id is None
+        or not isinstance(managed_files_obj, ManagedProviderFileRegistrar)
+    ):
+        return response
+    managed_file_id: Final = await managed_files_obj.register_provider_file(
+        provider_file_id=provider_file_id,
+        content_type=content_type,
+        deployment=upload_deployment,
+        owner=user_api_key_dict,
+        llm_router=llm_router,
+    )
+    if managed_file_id is None:
+        return response
+    managed_response: Final[RAGIngestResponse] = {**response, "file_id": managed_file_id}
+    return managed_response
 
 
 def _build_file_metadata_entry(
@@ -582,6 +760,7 @@ async def rag_ingest(
         llm_router,
         prisma_client,
         proxy_config,
+        proxy_logging_obj,
         version,
     )
 
@@ -590,18 +769,6 @@ async def rag_ingest(
         ingest_options, file_data, file_url, file_id = await parse_rag_ingest_request(
             request, scanner=EicarTestMalwareScanner()
         )
-
-        # INTERNAL_USER_VIEW_ONLY can ingest to existing vector stores only
-        if user_api_key_dict.user_role == LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value and not ingest_options.get(
-            "vector_store", {}
-        ).get("vector_store_id"):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail={
-                    "error": "internal_user_viewer role can only ingest files to an existing vector store. "
-                    "Provide 'vector_store_id' in ingest_options.vector_store."
-                },
-            )
 
         resolved_stores: Final = await _authorize_nested_vector_store_ids(
             payload=ingest_options,
@@ -620,9 +787,26 @@ async def rag_ingest(
             raise HTTPException(status_code=400, detail={"error": str(e)})
 
         managed_store: Final = resolved_stores.get(request_vector_store_config.get("vector_store_id"))
-        merged_vector_store_config: Final = {
+        base: Final = {
             **_caller_vector_store_options(request_vector_store_config, managed_store),
             **_managed_store_overrides(managed_store),
+        }
+        request_data: Final[dict[str, Any]] = await add_litellm_data_to_request(
+            data={},
+            request=request,
+            general_settings=general_settings,
+            user_api_key_dict=user_api_key_dict,
+            version=version,
+            proxy_config=proxy_config,
+        )
+        forwarded_credentials: Final = _forwarded_store_credentials(
+            base, _with_body_drop_params(request_data, await _rag_ingest_body(request))
+        )
+        team_deployment: Final = _team_provider_deployment(base, llm_router, user_api_key_dict)
+        merged_vector_store_config: Final = {
+            **_team_provider_credentials(team_deployment),
+            **forwarded_credentials,
+            **base,
         }
         merged_ingest_options: Final = {
             **ingest_options,
@@ -636,31 +820,46 @@ async def rag_ingest(
                 detail={"error": provider_error},
             )
 
-        # Add litellm data
-        request_data: dict[str, Any] = {}
-        request_data = await add_litellm_data_to_request(
-            data=request_data,
-            request=request,
-            general_settings=general_settings,
-            user_api_key_dict=user_api_key_dict,
-            version=version,
-            proxy_config=proxy_config,
-        )
-
         verbose_proxy_logger.debug(
             "RAG Ingest - options: %s, custom_llm_provider: %s",
             ingest_options,
             merged_vector_store_config.get("custom_llm_provider", "openai"),
         )
 
+        managed_files_obj: Final = proxy_logging_obj.get_proxy_hook("managed_files")
+        credential_deployment: Final = None if forwarded_credentials else team_deployment
+        upload_deployment: Final = await team_deployment_the_caller_may_use(
+            credential_deployment, llm_router, user_api_key_dict
+        )
+        ingest_file_id: Final = await _provider_file_id_for_ingest(
+            file_id, credential_deployment, managed_files_obj, user_api_key_dict
+        )
+
         # Call ingest
-        response: Final = await litellm.aingest(
+        ingest_response: Final = await litellm.aingest(
             ingest_options=merged_ingest_options,
             file_data=file_data,
             file_url=file_url,
-            file_id=file_id,
+            file_id=ingest_file_id,
             router=llm_router,
             **request_data,
+        )
+        if ingest_response.get("status") == "failed":
+            raise HTTPException(
+                status_code=ingest_response.get("error_status_code") or 500,
+                detail={"id": ingest_response.get("id"), "status": "failed", "error": ingest_response.get("error")},
+            )
+        response: Final = (
+            await _with_registered_upload(
+                ingest_response,
+                upload_deployment=upload_deployment,
+                content_type=_uploaded_content_type(file_data, file_url),
+                managed_files_obj=managed_files_obj,
+                user_api_key_dict=user_api_key_dict,
+                llm_router=llm_router,
+            )
+            if file_data is not None or bool(file_url)
+            else _with_caller_file_id(ingest_response, file_id)
         )
 
         # Save vector store to database if it was newly created and prisma_client is available
@@ -766,6 +965,7 @@ async def rag_query(
         general_settings,
         llm_router,
         proxy_config,
+        proxy_logging_obj,
         select_data_generator,
         version,
     )
@@ -777,7 +977,7 @@ async def rag_query(
         # Extract required fields
         model: Final = data.get("model")
         messages: Final = data.get("messages")
-        retrieval_config: Final = data.get("retrieval_config")
+        raw_retrieval_config: Final = data.get("retrieval_config")
         rerank: Final = data.get("rerank")
         stream: Final = data.get("stream", False)
 
@@ -792,20 +992,27 @@ async def rag_query(
                 status_code=400,
                 detail={"error": "messages is required"},
             )
-        if not retrieval_config:
+        if not raw_retrieval_config:
             raise HTTPException(
                 status_code=400,
                 detail={"error": "retrieval_config is required"},
             )
-        if not isinstance(retrieval_config, dict):
+        if not isinstance(raw_retrieval_config, dict):
             raise HTTPException(
                 status_code=400,
                 detail={"error": "retrieval_config must be an object"},
             )
+        retrieval_config: Final = _TEAM_PROVIDER_CREDENTIALS_ADAPTER.validate_python(raw_retrieval_config)
         if "vector_store_id" not in retrieval_config:
             raise HTTPException(
                 status_code=400,
                 detail={"error": "retrieval_config must contain 'vector_store_id'"},
+            )
+        vector_store_id: Final = retrieval_config.get("vector_store_id")
+        if not isinstance(vector_store_id, str):
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "vector_store_id must be a non-empty string"},
             )
         reject_caller_embedding_selection_params(payload=retrieval_config, source="retrieval_config")
         resolved_stores: Final = await _authorize_nested_vector_store_ids(
@@ -817,26 +1024,45 @@ async def rag_query(
         # model, credentials, ...) from the registry: the same source the direct
         # /vector_stores/{id}/search endpoint uses. Store-managed keys win on
         # conflict so callers cannot override the store's provider or credentials.
-        managed_store: Final = resolved_stores.get(retrieval_config["vector_store_id"])
-        store_data: Final = (
+        managed_store: Final = resolved_stores.get(vector_store_id)
+        store_data: Final[Mapping[str, object]] = (
             build_request_data_from_managed_vector_store(managed_store)
             if managed_store is not None
-            else MappingProxyType({})
+            else _EMPTY_TEAM_PROVIDER_CREDENTIALS
         )
+        managed_store_params: Final = _managed_store_overrides(managed_store)
         merged_retrieval_config: Final = {
             **retrieval_config,
             **store_data,
         }
-
-        # Add litellm data
-        request_data: dict[str, object] = {}
-        request_data = await add_litellm_data_to_request(
-            data=request_data,
+        reject_caller_opensearch_index_name(
+            caller_body=retrieval_config,
+            request_fields=merged_retrieval_config,
+            source="retrieval_config",
+        )
+        effective_vector_store_config: Final = (
+            managed_store_params
+            if managed_store is not None
+            else MappingProxyType(
+                {key: value for key, value in retrieval_config.items() if key not in EXPLICIT_CREDENTIAL_KEYS}
+            )
+        )
+        request_data: Final[dict[str, object]] = await add_litellm_data_to_request(
+            data={},
             request=request,
             general_settings=general_settings,
             user_api_key_dict=user_api_key_dict,
             version=version,
             proxy_config=proxy_config,
+        )
+        team_credentials: Final = _with_request_credentials(
+            _team_provider_credentials(
+                _team_provider_deployment(effective_vector_store_config, llm_router, user_api_key_dict)
+            ),
+            _with_body_drop_params(request_data, data),
+        )
+        vector_store_params: Final = (
+            {**team_credentials, **managed_store_params} if managed_store is not None else team_credentials
         )
 
         verbose_proxy_logger.debug(
@@ -851,7 +1077,7 @@ async def rag_query(
                 model=model,
                 messages=messages,
                 retrieval_config=merged_retrieval_config,
-                vector_store_params=store_data,
+                vector_store_params=vector_store_params,
                 rerank=rerank,
                 stream=stream,
                 router=llm_router,
@@ -893,7 +1119,9 @@ async def rag_query(
 
         response: Final = await query()
         fastapi_response.headers.update(custom_headers_for(response))
-        return response
+        return await _with_managed_search_result_ids(
+            response, proxy_logging_obj.get_proxy_hook("managed_files"), user_api_key_dict
+        )
 
     except HTTPException:
         raise

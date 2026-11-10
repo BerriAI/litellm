@@ -18,7 +18,7 @@ from __future__ import annotations
 import hashlib
 import uuid
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Final, TypedDict
+from typing import TYPE_CHECKING, ClassVar, Final, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
@@ -29,6 +29,10 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+from litellm.llms.bedrock.web_identity_session_policy import (
+    S3_VECTORS_INGESTION_SESSION_POLICY,
+    WebIdentitySessionPolicy,
+)
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -37,7 +41,7 @@ from litellm.llms.s3_vectors.vector_stores.transformation import (
     s3_vectors_ingest_embedding_options,
     s3_vectors_ingest_target,
 )
-from litellm.rag.ingestion.base_ingestion import BaseRAGIngestion
+from litellm.rag.ingestion.base_ingestion import BaseRAGIngestion, RAGIngestBadRequestError
 
 if TYPE_CHECKING:
     import httpx
@@ -84,6 +88,8 @@ class S3VectorsRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
     - distance_metric: "cosine" or "euclidean" (default: S3_VECTORS_DEFAULT_DISTANCE_METRIC)
     - non_filterable_metadata_keys: List of metadata keys to exclude from filtering
     """
+
+    _web_identity_session_policy: ClassVar[WebIdentitySessionPolicy] = S3_VECTORS_INGESTION_SESSION_POLICY
 
     def __init__(
         self,
@@ -269,13 +275,13 @@ class S3VectorsRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
 
         # Validate bucket name (AWS S3 naming rules)
         if len(self.vector_bucket_name) < 3:
-            raise ValueError(
+            raise RAGIngestBadRequestError(
                 f"Invalid vector_bucket_name '{self.vector_bucket_name}': "
                 f"AWS S3 bucket names must be at least 3 characters long. "
                 f"Please provide a valid bucket name (e.g., 'my-vector-bucket')."
             )
         if not self.vector_bucket_name.replace("-", "").replace(".", "").isalnum():
-            raise ValueError(
+            raise RAGIngestBadRequestError(
                 f"Invalid vector_bucket_name '{self.vector_bucket_name}': "
                 f"AWS S3 bucket names can only contain lowercase letters, numbers, hyphens, and periods. "
                 f"Please provide a valid bucket name (e.g., 'my-vector-bucket')."

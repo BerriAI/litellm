@@ -2,7 +2,7 @@
 Types and field definitions for router settings management endpoints
 """
 
-from typing import Any, Final, Literal
+from typing import Final, Literal
 
 from pydantic import Field, field_validator
 
@@ -72,9 +72,9 @@ class FallbackDeleteResponse(LiteLLMBaseModel):
 class RouterSettingsField(LiteLLMBaseModel):
     field_name: str
     field_type: str
-    field_value: Any
+    field_value: object
     field_description: str
-    field_default: Any = None
+    field_default: object = None
     options: list[str] | None = None  # For fields with predefined options/enum values
     ui_field_name: str  # User-friendly display name
     link: str | None = None  # Documentation link for the field

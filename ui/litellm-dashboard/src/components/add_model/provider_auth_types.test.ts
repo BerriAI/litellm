@@ -28,6 +28,7 @@ describe("provider auth types", () => {
       "token_exchange_audience",
       "api_key",
     ]);
+    expect(authTypeFieldKeys("GITHUB_COPILOT")).toContain("github_copilot_host");
   });
 
   it("infers auth types from required fields and falls back when only optional defaults are present", () => {
@@ -85,6 +86,9 @@ describe("provider auth types", () => {
     expect(inferAuthTypeId(authTypes, { api_key: "" })).toBe("shared_device_login");
     expect(inferAuthTypeId(authTypes, { github_copilot_auth_type: "per_user_oauth" })).toBe("per_user_oauth");
     expect(hiddenAuthFieldKeys(authTypes, "per_user_oauth")).toEqual(["api_base", "api_key"]);
-    expect(hiddenAuthFieldKeys(authTypes, "shared_device_login")).toEqual(["github_copilot_auth_type"]);
+    expect(hiddenAuthFieldKeys(authTypes, "shared_device_login")).toEqual([
+      "github_copilot_auth_type",
+      "github_copilot_host",
+    ]);
   });
 });

@@ -56,8 +56,8 @@ If `db.useStackgresOperator` is used (not yet implemented):
 
 | `billingMetrics.enabled`    | Enable enterprise billable-request metering. Requires an enterprise license.                                                                                                                                                                  | `false`                   |
 | `billingMetrics.endpoint`   | Collector that the billable-request counter is pushed to.                                                                                                                                                                                    | `https://telemetry.litellm.ai` |
-| `billingMetrics.secretName` | Name of an existing Secret holding the mTLS client certificate, under the keys `tls.crt` and `tls.key`.                                                                                                                                       | `litellm-billing-metrics-mtls` |
-| `billingMetrics.caSecretName` | Name of an existing Secret holding a CA bundle under the key `ca.crt`. Only needed for a private or test collector whose server certificate is not on the public web PKI.                                                                    | `""`                      |
+| `billingMetrics.tokenUrl`   | Cognito OAuth2 client-credentials token endpoint.                                                                                                                                                                                               | `https://litellm-prod.auth.us-west-1.amazoncognito.com/oauth2/token` |
+| `billingMetrics.secretName` | Name of an existing Secret with `client-id` and `client-secret` keys.                                                                                                                                                                           | `litellm-billing-metrics` |
 | `billingMetrics.exportIntervalMs` | How often the counter is pushed, in milliseconds. The proxy defaults to `60000` when unset.                                                                                                                                             | `""`                      |
 
 #### Example `proxy_config` ConfigMap from values (default):
@@ -70,11 +70,18 @@ proxyConfigMap:
 proxy_config:
   general_settings:
     master_key: os.environ/PROXY_MASTER_KEY
+  model_list: []
+```
+
+The chart ships no models, so add them under `proxy_config.model_list` or from the Admin UI with `store_model_in_db: true`
+
+```
+proxy_config:
   model_list:
-    - model_name: gpt-3.5-turbo
+    - model_name: gpt-5.6
       litellm_params:
-        model: gpt-3.5-turbo
-        api_key: eXaMpLeOnLy
+        model: openai/gpt-5.6
+        api_key: os.environ/OPENAI_API_KEY
 ```
 
 #### Example using existing `proxyConfigMap` instead of creating it:
@@ -102,10 +109,10 @@ type: Opaque
 
 #### Enterprise billable-request metering
 
-Enterprise licenses meter billable requests by pushing a counter to LiteLLM's collector over mutual TLS. The chart does not create the client certificate; it mounts one you already hold, read-only, so the private key is never exposed through the environment. Create the Secret under the name the chart expects, then turn the block on:
+Enterprise licenses meter billable requests by pushing a counter to LiteLLM's collector with Cognito bearer authentication. Create a Secret with `client-id` and `client-secret` keys, then enable the chart values:
 
 ```
-kubectl create secret tls litellm-billing-metrics-mtls --cert=client.crt --key=client.key
+kubectl create secret generic litellm-billing-metrics --from-literal=client-id=... --from-literal=client-secret=...
 ```
 
 ```
@@ -113,7 +120,8 @@ billingMetrics:
   enabled: true
 ```
 
-Set `billingMetrics.caSecretName` only when the collector is a private or test one whose server certificate is not on the public web PKI; the production collector needs no CA override. The chart fails the render rather than deploying a proxy that silently never exports, so a missing `secretName` or an emptied `endpoint` surfaces at `helm install` time.
+The endpoint and token URL must use HTTPS. The chart requires both URLs and
+the Secret name when billing metrics are enabled
 
 ### Database Settings
 
@@ -126,6 +134,11 @@ Set `billingMetrics.caSecretName` only when the collector is a private or test o
 | `db.secret.name`          | If `db.useExisting` is `true`, the name of the Kubernetes Secret that contains credentials.                                                                                                                                                                                               | `postgres`                                                                                 |
 | `db.secret.usernameKey`   | If `db.useExisting` is `true`, the name of the key within the Kubernetes Secret that holds the username for authenticating with the Postgres instance.                                                                                                                                    | `username`                                                                                 |
 | `db.secret.passwordKey`   | If `db.useExisting` is `true`, the name of the key within the Kubernetes Secret that holds the password associates with the above user.                                                                                                                                                   | `password`                                                                                 |
+| `db.username`             | If `db.useExisting` is `true`, the database user as a plain value. When set, `db.secret.usernameKey` is not read.                                                                                                                                                                        | `""`                                                                                       |
+| `db.port`                 | If `db.useExisting` is `true` with token auth, the Postgres port used to build the connection URL. Password auth takes the port from `db.url`.                                                                                                                                           | `5432`                                                                                     |
+| `db.schema`               | With token auth, the Postgres schema holding the LiteLLM tables, rendered as `DATABASE_SCHEMA` when the tables are not in `public`. Ignored with password auth, where the schema stays in `db.url` as `?schema=`.                                                                        | `""`                                                                                       |
+| `db.useIAMAuth`           | If `db.useExisting` is `true` and `db.deployStandalone` is `false`, authenticate with an AWS RDS IAM token instead of a password. See [Token auth](#token-auth-to-an-existing-postgres-rds-iam-or-microsoft-entra-id).                                                                  | `false`                                                                                    |
+| `db.useAzureEntraAuth`    | If `db.useExisting` is `true` and `db.deployStandalone` is `false`, authenticate with a Microsoft Entra ID token instead of a password. Mutually exclusive with `db.useIAMAuth`.                                                                                                        | `false`                                                                                    |
 | `db.useStackgresOperator` | Not yet implemented.                                                                                                                                                                                                                                                                      | `false`                                                                                    |
 | `db.deployStandalone`     | Deploy a standalone, single instance deployment of Postgres, using the Bitnami postgresql chart. This is useful for getting started but doesn't provide HA or (by default) data backups.                                                                                                  | `true`                                                                                     |
 | `postgresql.*`            | If `db.deployStandalone` is `true`, configuration passed to the Bitnami postgresql chart. See the [Bitnami Documentation](https://github.com/bitnami/charts/tree/main/bitnami/postgresql) for full configuration details. See [values.yaml](./values.yaml) for the default configuration. | See [values.yaml](./values.yaml)                                                           |
@@ -155,6 +168,22 @@ data:
   password: <some secure password, base64 encoded>
 type: Opaque
 ```
+
+#### Token auth to an existing Postgres (RDS IAM or Microsoft Entra ID)
+
+When the database accepts short-lived tokens instead of a password (AWS RDS or Aurora with IAM database authentication, or Azure Database for PostgreSQL with Microsoft Entra ID), there is no password to put in a Secret. Turn on `db.useIAMAuth` or `db.useAzureEntraAuth` and the chart stops referencing `db.secret.passwordKey` and `db.url`. It sets `IAM_TOKEN_DB_AUTH` (or `AZURE_POSTGRESQL_AUTH`) and emits `DATABASE_HOST`, `DATABASE_PORT`, `DATABASE_USERNAME` and `DATABASE_NAME` for the proxy, the migrations job and the collector sidecar. Each of them mints its own token at startup and builds `DATABASE_URL` from those parts, and the in-container pgbouncer (`db.connectionPool`) refreshes the token before it expires.
+
+```yaml
+db:
+  useExisting: true
+  deployStandalone: false
+  useIAMAuth: true
+  endpoint: litellm.cluster-abc123.us-west-1.rds.amazonaws.com
+  database: litellm
+  username: litellm_iam   # the role granted rds_iam; no db.secret needed
+```
+
+The pod needs cloud credentials for the token: on EKS use IRSA or Pod Identity on the chart's `serviceAccount` (and `migrationJob.serviceAccountName` when the Helm hook runs before the ServiceAccount exists), on AKS use workload identity. Set `AWS_RDS_REGION` under `envVars` when the RDS hostname is not a standard regional endpoint (the token must be signed for the region the database lives in). TLS options that would otherwise go in `db.url` are set as `DATABASE_SSLMODE` and `DATABASE_SSLROOTCERT` under `envVars`. Leaving `db.username` empty reads the user from `db.secret.usernameKey` as before.
 
 #### Examples for `environmentSecrets` and `environemntConfigMaps`
 
@@ -228,6 +257,10 @@ itself.
 
 ## Connect Lens
 
-`lensWorker.mode` selects `disabled`, `bundled` or `external`. Bundled mode generates separate service and identity-signing credentials. External mode requires `lensWorker.gateway.secretName` and `lensWorker.serviceTokenSecret.name`; their keys default to `gateway-secret` and `service-token`. Provision distinct values matching the external Lens deployment
+This chart does not deploy Lens. Deploy Lens from [its own chart](https://github.com/BerriAI/lens/tree/main/helm/lens), then set `lens.enabled: true`, `lens.url`, `lens.publicUrl`, `lens.gatewaySecret.name` and `lens.serviceTokenSecret.name`. The secret keys default to `gateway-secret` and `service-token`. Set `lens.service.name` when that Lens runs in this release's namespace and the chart ingress should route `/lens-ingest` to it. The old `lensWorker` values are no longer read, and enabling them fails the render
 
-Follow the [Lens Helm connection guide](https://github.com/BerriAI/lens/blob/main/helm/lens/README.md#connect-a-gateway) for complete values, verification, GitOps credential requirements and existing-data migration. Source-chart installation requires a built Lens image until the first signed Lens release is published
+## Shutdown accounting
+
+`GRACEFUL_SHUTDOWN_TIMEOUT` defaults to 30 seconds. Pending success callbacks share the time remaining since SIGTERM or the first `/health/drain` call. Callback flushing reserves the existing 10-second teardown headroom for cancellation, tracked accounting tasks and persistence. Exhausting this budget can discard callbacks, which is logged
+
+Set `terminationGracePeriodSeconds` to at least `GRACEFUL_SHUTDOWN_TIMEOUT + 10`, allowing additional time for preStop hooks and database writes. This is not a hard shutdown bound or a guarantee of persistence. Database retries retain their own limits, and cancellation-resistant callbacks can remain alive. The existing preStop hook can also be followed by Uvicorn's separate connection drain, as described in `values.yaml`

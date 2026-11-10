@@ -34,12 +34,15 @@ import json
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Final, Literal, cast
 
+from pydantic import TypeAdapter
+
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.db.db_span import db_span
 
 if TYPE_CHECKING:
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.utils import PrismaClient
+    from litellm.repositories.prisma_protocols import TableActions
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (  # noqa: F401  # legacy module exports
     _ALGO_AES_GCM,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _ENCRYPTION_ALGORITHM_SETTING,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -56,6 +59,8 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (  # noqa: F401  # 
 )
 
 ValueClass = Literal["migrated", "legacy", "plaintext", "undecryptable", "not-a-string"]
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 @dataclass
@@ -233,7 +238,7 @@ async def _migrate_config_settings_row(
 
     settings = record.param_value
     if isinstance(settings, str):
-        settings = json.loads(settings)
+        settings = _DECODED_JSON.validate_python(json.loads(settings))
     if not isinstance(settings, dict):
         return report
 
@@ -286,7 +291,7 @@ async def _migrate_sso_config(prisma_client: object, dry_run: bool) -> LocationR
 
     settings = record.sso_settings
     if isinstance(settings, str):
-        settings = json.loads(settings)
+        settings = _DECODED_JSON.validate_python(json.loads(settings))
     if not isinstance(settings, dict):
         return report
 
@@ -389,7 +394,8 @@ async def _migrate_callback_vars_table(
         # Real run: re-encrypt the legacy ciphertext to AES via the proven
         # selective transforms and persist. Never drop a row on failure.
         try:
-            re_encrypted = encrypt_callback_vars(decrypt_callback_vars(metadata))
+            decrypted_metadata = _DECODED_JSON.validate_python(decrypt_callback_vars(metadata))
+            re_encrypted = _DECODED_JSON.validate_python(encrypt_callback_vars(decrypted_metadata))
         except Exception as e:  # pragma: no cover - defensive; never drop a row
             verbose_proxy_logger.warning(
                 "Skipping %s row %s callback_vars (transform failed): %s",
@@ -518,7 +524,7 @@ async def _scan_one_table(
     scalar_columns: tuple,
 ) -> LocationReport:
     report: Final = LocationReport(location=location)
-    table: Final = getattr(prisma_client.db, db_attr, None)
+    table: Final[TableActions[object] | None] = getattr(prisma_client.db, db_attr, None)
     if table is None:
         return report
     try:
@@ -528,7 +534,7 @@ async def _scan_one_table(
         return report
     for row in rows or []:
         for col in json_columns:
-            raw = getattr(row, col, None)
+            raw: object = getattr(row, col, None)
             if raw is None:
                 continue
             if db_attr == "litellm_mcpservertable" and col in ("static_headers", "env"):
@@ -536,7 +542,7 @@ async def _scan_one_table(
                 continue
             if isinstance(raw, str):
                 try:
-                    raw = json.loads(raw)
+                    raw = _DECODED_JSON.validate_python(json.loads(raw))
                 except (ValueError, TypeError):
                     pass
             for s in _iter_encrypted_strings(raw):
@@ -561,7 +567,7 @@ async def _scan_config_env_vars(prisma_client: object) -> LocationReport:
     value = record.param_value
     if isinstance(value, str):
         try:
-            value = json.loads(value)
+            value = _DECODED_JSON.validate_python(json.loads(value))
         except (ValueError, TypeError):
             value = {}
     for s in _iter_encrypted_strings(value):

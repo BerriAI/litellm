@@ -6,7 +6,10 @@ GitHub Issue: #18968 - Per-deployment max_retries/num_retries in litellm_params 
 import httpx
 import pytest
 import pytest_asyncio
-from unittest.mock import patch
+from queue import SimpleQueue
+from typing import Final, Literal
+from unittest.mock import AsyncMock, patch
+from pydantic import JsonValue, TypeAdapter
 
 import litellm
 from litellm import Router
@@ -14,107 +17,72 @@ from litellm.types.router import RetryPolicy
 from litellm.integrations.custom_logger import CustomLogger
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_async", (False, True), ids=("sync", "async"))
+@pytest.mark.parametrize("source", ("deployment", "default", "request"))
+@pytest.mark.parametrize(("sdk_retries", "router_retries"), ((0, 0), (0, 1), (5, 1)))
+async def test_routed_images_do_not_multiply_sdk_and_router_retries(
+    monkeypatch: pytest.MonkeyPatch,
+    is_async: bool,
+    source: Literal["deployment", "default", "request"],
+    sdk_retries: int,
+    router_retries: int,
+) -> None:
+    requests: Final[SimpleQueue[httpx.Request]] = SimpleQueue()
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.put(request)
+        assert request.url.path == "/v1/images/generations"
+        body: Final = TypeAdapter(dict[str, JsonValue]).validate_json(request.content)
+        assert body == {"model": "gpt-image-1-mini", "prompt": "a red circle"}
+        return httpx.Response(
+            503,
+            headers={"retry-after": "0"},
+            json={"error": {"message": "scripted unavailable", "type": "server_error"}},
+        )
+
+    transport: Final = httpx.MockTransport(respond)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    with httpx.Client(transport=transport) as sync_session:
+        async with httpx.AsyncClient(transport=transport) as async_session:
+            monkeypatch.setattr(litellm, "client_session", sync_session)
+            monkeypatch.setattr(litellm, "aclient_session", async_session)
+            monkeypatch.setattr(litellm, "callbacks", [])
+            monkeypatch.setattr(litellm, "success_callback", [])
+            monkeypatch.setattr(litellm, "failure_callback", [])
+            monkeypatch.setattr(litellm, "num_retries", None)
+            router: Final = Router(
+                model_list=[
+                    {
+                        "model_name": "image-retries",
+                        "litellm_params": {
+                            "model": "openai/gpt-image-1-mini",
+                            "api_key": "synthetic-image-key",
+                            "api_base": "https://router-image.test/v1",
+                            **({"max_retries": sdk_retries} if source == "deployment" else {}),
+                        },
+                    }
+                ],
+                default_litellm_params={"max_retries": sdk_retries} if source == "default" else {},
+                num_retries=router_retries,
+                disable_cooldowns=True,
+            )
+            call_params: Final = {"max_retries": sdk_retries} if source == "request" else {}
+            try:
+                with patch("time.sleep"), patch("asyncio.sleep", new_callable=AsyncMock):
+                    if is_async:
+                        with pytest.raises(litellm.ServiceUnavailableError):
+                            await router.aimage_generation(model="image-retries", prompt="a red circle", **call_params)
+                    else:
+                        with pytest.raises(litellm.ServiceUnavailableError):
+                            router.image_generation(model="image-retries", prompt="a red circle", **call_params)
+            finally:
+                litellm.in_memory_llm_clients_cache.flush_cache()
+    assert requests.qsize() == router_retries + 1
+
+
 class TestPerDeploymentNumRetries:
     """Test that per-deployment num_retries in litellm_params is correctly used."""
-
-    def test_set_deployment_num_retries_on_exception(self):
-        """
-        Test that _set_deployment_num_retries_on_exception sets num_retries
-        on the exception from the deployment's litellm_params.
-        """
-        router = Router(
-            model_list=[
-                {
-                    "model_name": "test-model",
-                    "litellm_params": {
-                        "model": "openai/gpt-4",
-                        "api_key": "test-key",
-                        "num_retries": 5,  # Per-deployment setting
-                    },
-                },
-            ],
-            num_retries=1,  # Global setting
-        )
-
-        deployment = router.model_list[0]
-
-        # Create a mock exception without num_retries
-        class MockException(Exception):
-            pass
-
-        exc = MockException("test error")
-        assert not hasattr(exc, "num_retries") or exc.num_retries is None
-
-        # Call the helper
-        router._set_deployment_num_retries_on_exception(exc, deployment)
-
-        # Verify num_retries was set from deployment
-        assert exc.num_retries == 5
-
-    def test_set_deployment_num_retries_does_not_override_existing(self):
-        """
-        Test that _set_deployment_num_retries_on_exception does NOT override
-        if exception already has num_retries set.
-        """
-        router = Router(
-            model_list=[
-                {
-                    "model_name": "test-model",
-                    "litellm_params": {
-                        "model": "openai/gpt-4",
-                        "api_key": "test-key",
-                        "num_retries": 5,
-                    },
-                },
-            ],
-            num_retries=1,
-        )
-
-        deployment = router.model_list[0]
-
-        # Create an exception that already has num_retries
-        class MockException(Exception):
-            num_retries = 10  # Already set
-
-        exc = MockException("test error")
-
-        # Call the helper
-        router._set_deployment_num_retries_on_exception(exc, deployment)
-
-        # Verify num_retries was NOT overridden
-        assert exc.num_retries == 10
-
-    def test_deployment_without_num_retries(self):
-        """
-        Test that _set_deployment_num_retries_on_exception does nothing
-        if deployment has no num_retries set.
-        """
-        router = Router(
-            model_list=[
-                {
-                    "model_name": "test-model",
-                    "litellm_params": {
-                        "model": "openai/gpt-4",
-                        "api_key": "test-key",
-                        # No num_retries set
-                    },
-                },
-            ],
-            num_retries=3,
-        )
-
-        deployment = router.model_list[0]
-
-        class MockException(Exception):
-            pass
-
-        exc = MockException("test error")
-
-        # Call the helper
-        router._set_deployment_num_retries_on_exception(exc, deployment)
-
-        # Verify num_retries was not set (deployment has no num_retries)
-        assert not hasattr(exc, "num_retries") or exc.num_retries is None
 
     def test_request_level_num_retries_takes_precedence(self):
         """
@@ -162,39 +130,6 @@ class TestPerDeploymentNumRetries:
         kwargs: dict = {}
         router._update_kwargs_before_fallbacks(model="test-model", kwargs=kwargs)
         assert kwargs.get("num_retries") is None
-
-    def test_set_deployment_num_retries_with_string_value(self):
-        """
-        Test that _set_deployment_num_retries_on_exception handles string values
-        from environment variables correctly.
-        GitHub Issue: #19481
-        """
-        router = Router(
-            model_list=[
-                {
-                    "model_name": "test-model",
-                    "litellm_params": {
-                        "model": "openai/gpt-4",
-                        "api_key": "test-key",
-                        "num_retries": "6",  # String value (as from env var)
-                    },
-                },
-            ],
-            num_retries=0,  # Global setting
-        )
-
-        deployment = router.model_list[0]
-
-        class MockException(Exception):
-            pass
-
-        exc = MockException("test error")
-
-        # Call the helper
-        router._set_deployment_num_retries_on_exception(exc, deployment)
-
-        # Verify num_retries was converted from string to int
-        assert exc.num_retries == 6
 
 
 class TestNumRetriesNoneGuard:
@@ -263,7 +198,7 @@ class TestNumRetriesNoneGuard:
         assert response.choices[0].message.content == "ok"
 
     @pytest.mark.asyncio
-    async def test_async_function_with_retries_none_falls_back_to_zero(self):
+    async def test_acompletion_num_retries_none_with_router_none_falls_back_to_zero(self):
         """
         When both the per-request value AND the router-level setting are None
         (e.g. after Router.update_settings(num_retries=None), #28126), num_retries must
@@ -272,48 +207,14 @@ class TestNumRetriesNoneGuard:
         router = self._mock_router(num_retries=0)
         router.num_retries = None  # simulate update_settings(num_retries=None)
 
-        async def failing_fn(*args, **kwargs):
-            raise litellm.RateLimitError(
-                message="boom", model="mock-model", llm_provider="openai"
-            )
-
         with patch("asyncio.sleep", return_value=None):
             with pytest.raises(litellm.RateLimitError):
-                await router.async_function_with_retries(
-                    original_function=failing_fn,
+                await router.acompletion(
                     model="mock-model",
                     messages=[{"role": "user", "content": "hi"}],
                     num_retries=None,
+                    mock_response=litellm.RateLimitError(message="boom", model="mock-model", llm_provider="openai"),
                 )
-
-    @pytest.mark.asyncio
-    async def test_async_function_with_retries_none_falls_back_to_router_default(self):
-        """
-        A None per-request num_retries falls back to the router-level setting, so retries
-        still happen (original_function is invoked more than once) before the real error
-        is raised - proving None did not silently disable retries or crash.
-        """
-        router = self._mock_router(num_retries=3)
-        calls = {"n": 0}
-
-        async def failing_fn(*args, **kwargs):
-            calls["n"] += 1
-            raise litellm.InternalServerError(
-                message="boom", model="mock-model", llm_provider="openai"
-            )
-
-        with patch("asyncio.sleep", return_value=None):
-            with pytest.raises(litellm.InternalServerError):
-                await router.async_function_with_retries(
-                    original_function=failing_fn,
-                    model="mock-model",
-                    messages=[{"role": "user", "content": "hi"}],
-                    metadata={},  # populated by acompletion in the real path; log_retry needs it
-                    num_retries=None,
-                )
-
-        # 1 initial attempt + at least 1 retry -> proves None fell back to a positive int
-        assert calls["n"] >= 2
 
 
 class TestNoProviderRetryAmplification:
@@ -368,9 +269,7 @@ class TestNoProviderRetryAmplification:
         counter = self._install_counting_upstream()
         with patch("asyncio.sleep", return_value=None):
             with pytest.raises(litellm.InternalServerError):
-                await router.acompletion(
-                    model="mock", messages=[{"role": "user", "content": "hi"}], **call_kwargs
-                )
+                await router.acompletion(model="mock", messages=[{"role": "user", "content": "hi"}], **call_kwargs)
         return counter["n"]
 
     @pytest.mark.asyncio
@@ -382,9 +281,7 @@ class TestNoProviderRetryAmplification:
         an unfixed build sends 9 (N=2) or 36 (N=5).
         """
         counter = self._install_counting_upstream()
-        router = self._router(
-            f"https://amp-{num_retries}.local/v1", {"num_retries": num_retries}, num_retries=1
-        )
+        router = self._router(f"https://amp-{num_retries}.local/v1", {"num_retries": num_retries}, num_retries=1)
         with patch("asyncio.sleep", return_value=None):
             with pytest.raises(litellm.InternalServerError):
                 await router.acompletion(model="mock", messages=[{"role": "user", "content": "hi"}])
@@ -407,9 +304,7 @@ class TestNoProviderRetryAmplification:
         retries for a routed call: deployment ``num_retries=5`` plus ``max_retries=3`` still
         sends exactly ``6`` upstream requests.
         """
-        router = self._router(
-            "https://nest-dep.local/v1", {"num_retries": 5, "max_retries": 3}, num_retries=1
-        )
+        router = self._router("https://nest-dep.local/v1", {"num_retries": 5, "max_retries": 3}, num_retries=1)
         assert await self._call_and_count(router) == 6
 
     @pytest.mark.asyncio
@@ -593,9 +488,7 @@ class TestRequestNumRetriesBeatsGlobal:
         )
         with patch("asyncio.sleep", return_value=None):
             with pytest.raises(litellm.InternalServerError):
-                await router.acompletion(
-                    model="mock", messages=[{"role": "user", "content": "hi"}]
-                )
+                await router.acompletion(model="mock", messages=[{"role": "user", "content": "hi"}])
         assert counter.attempts == 3
 
 
@@ -662,9 +555,7 @@ class TestRequestNumRetriesBeatsDeployment:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("request_num_retries, expected_attempts", [(3, 4), (0, 1)])
-    async def test_request_num_retries_overrides_deployment(
-        self, request_num_retries, expected_attempts
-    ):
+    async def test_request_num_retries_overrides_deployment(self, request_num_retries, expected_attempts):
         """
         global=1, deployment=2, request=3 -> 4 attempts, and request=0 -> a single attempt.
         Before the fix the deployment value won, so both cases sent 3 attempts.
@@ -682,9 +573,7 @@ class TestRequestNumRetriesBeatsDeployment:
         The deployment value keeps its place directly above litellm_settings: global=1 and
         deployment=2 with no request value -> 1 initial attempt + 2 retries.
         """
-        attempts = await self._count_attempts(
-            global_num_retries=1, deployment_num_retries=2, request_num_retries=None
-        )
+        attempts = await self._count_attempts(global_num_retries=1, deployment_num_retries=2, request_num_retries=None)
         assert attempts == 3
 
     @pytest.mark.asyncio

@@ -17,9 +17,11 @@ NEXT: Final = Migration(
     "CREATE TABLE migration_next (id int PRIMARY KEY); INSERT INTO migration_next VALUES (2);",
 )
 FATAL: Final = Migration(COMPLETE.name, "DO $$ BEGIN RAISE EXCEPTION 'MIGRATION_TEST_FATAL'; END $$;")
-GATED: Final = Migration(
-    COMPLETE.name, f"SELECT pg_advisory_lock({GATE_KEY}); {COMPLETE.script} SELECT pg_advisory_unlock({GATE_KEY});"
+_GATED_SQL: Final = (
+    f"SELECT pg_advisory_lock({GATE_KEY}); {COMPLETE.script} SELECT pg_advisory_unlock({GATE_KEY});"
 )
+GATED: Final = Migration(COMPLETE.name, f"SET LOCAL lock_timeout = '10s';\n{_GATED_SQL}")
+GATED_WITH_SHORT_LOCK_TIMEOUT: Final = Migration(COMPLETE.name, f"SET LOCAL lock_timeout = '2s';\n{_GATED_SQL}")
 
 
 @step("Start {count} proxy containers on the test database")

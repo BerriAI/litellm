@@ -31,16 +31,8 @@ const endpoint = {
   methods: ["GET"],
 };
 
-const renderView = (premiumUser = true, data = endpoint) =>
-  renderWithProviders(
-    <PassThroughInfoView
-      endpointData={data}
-      onClose={vi.fn()}
-      accessToken="test-token"
-      isAdmin
-      premiumUser={premiumUser}
-    />,
-  );
+const renderView = (data = endpoint) =>
+  renderWithProviders(<PassThroughInfoView endpointData={data} onClose={vi.fn()} accessToken="test-token" isAdmin />);
 
 const openEditForm = async (user: User) => {
   await user.click(screen.getByRole("tab", { name: "Settings" }));
@@ -122,20 +114,34 @@ describe("pass_through_info update payload", () => {
     expect(lastPayload().headers).toStrictEqual({ "x-api-key": "k" });
   });
 
-  it("sends auth undefined for a non-premium user", async () => {
+  it.each([true, false])("loads auth %s and persists the opposite choice", async (auth) => {
     const user = setup();
-    renderView(false);
+    renderView({ ...endpoint, headers: {}, auth });
     await openEditForm(user);
 
+    const toggle = screen.getByRole("switch", { name: "Require LiteLLM authentication" });
+    if (auth) {
+      expect(toggle).toBeChecked();
+    } else {
+      expect(toggle).not.toBeChecked();
+    }
+    await user.click(toggle);
     await save(user);
 
-    await waitFor(() => expect(updatePassThroughEndpoint).toHaveBeenCalled());
-    expect(lastPayload().auth).toBeUndefined();
+    await waitFor(() => expect(updatePassThroughEndpoint).toHaveBeenCalledOnce());
+    expect(lastPayload()).toMatchObject({ headers: {}, auth: !auth });
+    await openEditForm(user);
+    const savedToggle = screen.getByRole("switch", { name: "Require LiteLLM authentication" });
+    if (auth) {
+      expect(savedToggle).not.toBeChecked();
+    } else {
+      expect(savedToggle).toBeChecked();
+    }
   });
 
   it("sends methods undefined when the endpoint has none", async () => {
     const user = setup();
-    renderView(true, { ...endpoint, methods: [] });
+    renderView({ ...endpoint, methods: [] });
     await openEditForm(user);
 
     await save(user);

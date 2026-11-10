@@ -4,7 +4,7 @@ import json
 import logging
 import os
 from collections.abc import AsyncIterator, Iterator, Sequence
-from typing import Final, TypedDict
+from typing import Awaitable, Final, TypedDict, TypeVar
 from unittest.mock import AsyncMock
 
 import httpx
@@ -20,8 +20,21 @@ from litellm.integrations.gcs_pubsub.pub_sub import *
 from litellm.integrations.generic_api.generic_api_callback import LOG_FORMAT_TYPES, GenericAPILogger
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
+from litellm.types.proxy.carried_budget_state import CommittedBudgetSpend, EntitySpendCounterKeys
 from litellm.types.utils import StandardLoggingPayload
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
+
+
+_T = TypeVar("_T")
+
+
+async def _await_with_spawned_tasks(call: Awaitable[_T]) -> _T:
+    before: Final = asyncio.all_tasks()
+    result: Final = await call
+    spawned: Final = asyncio.all_tasks() - before - {asyncio.current_task()}
+    await asyncio.wait_for(asyncio.gather(*spawned), timeout=5)
+    return result
 
 
 @pytest.fixture(autouse=True)
@@ -51,20 +64,22 @@ async def test_generic_api_callback():
     os.environ["GENERIC_LOGGER_ENDPOINT"] = test_endpoint
 
     # Initialize the GenericAPILogger and set the mock
-    generic_logger = GenericAPILogger(endpoint=test_endpoint, headers=test_headers, flush_interval=1)
+    generic_logger = GenericAPILogger(endpoint=test_endpoint, headers=test_headers, flush_interval=3600)
     generic_logger.async_httpx_client.post = mock_post
     litellm.callbacks = [generic_logger]
 
     # Make the completion call
-    response = await litellm.acompletion(
-        model="gpt-5.5",
-        messages=[{"role": "user", "content": "Hello, world!"}],
-        mock_response="hi",
-        user="test_user",
+    response = await _await_with_spawned_tasks(
+        litellm.acompletion(
+            model="gpt-5.5",
+            messages=[{"role": "user", "content": "Hello, world!"}],
+            mock_response="hi",
+            user="test_user",
+        )
     )
 
-    # Wait for async flush
-    await asyncio.sleep(3)
+    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=LOGGING_WORKER_DRAIN_TIMEOUT_SECONDS)
+    await generic_logger.flush_queue()
 
     # Assert httpx post was called
     mock_post.assert_called_once()
@@ -130,21 +145,23 @@ async def test_generic_api_callback_multiple_logs():
     os.environ["GENERIC_LOGGER_ENDPOINT"] = test_endpoint
 
     # Initialize the GenericAPILogger and set the mock
-    generic_logger = GenericAPILogger(endpoint=test_endpoint, headers=test_headers, flush_interval=5)
+    generic_logger = GenericAPILogger(endpoint=test_endpoint, headers=test_headers, flush_interval=3600)
     generic_logger.async_httpx_client.post = mock_post
     litellm.callbacks = [generic_logger]
 
     # Make the completion call
     for _ in range(10):
-        response = await litellm.acompletion(
-            model="gpt-5.5",
-            messages=[{"role": "user", "content": "Hello, world!"}],
-            mock_response="hi",
-            user="test_user",
+        response = await _await_with_spawned_tasks(
+            litellm.acompletion(
+                model="gpt-5.5",
+                messages=[{"role": "user", "content": "Hello, world!"}],
+                mock_response="hi",
+                user="test_user",
+            )
         )
 
-    # Wait for async flush
-    await asyncio.sleep(6)
+    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=LOGGING_WORKER_DRAIN_TIMEOUT_SECONDS)
+    await generic_logger.flush_queue()
 
     # Assert httpx post was called
     mock_post.assert_called_once()
@@ -208,7 +225,7 @@ async def test_generic_api_callback_ndjson_format():
     generic_logger = GenericAPILogger(
         endpoint=test_endpoint,
         headers=test_headers,
-        flush_interval=1,
+        flush_interval=3600,
         log_format="ndjson",  # Set NDJSON format
     )
     generic_logger.async_httpx_client.post = mock_post
@@ -216,15 +233,17 @@ async def test_generic_api_callback_ndjson_format():
 
     # Make multiple completion calls to generate multiple logs
     for i in range(3):
-        response = await litellm.acompletion(
-            model="gpt-5.5",
-            messages=[{"role": "user", "content": f"Hello, world! {i}"}],
-            mock_response="hi",
-            user="test_user",
+        response = await _await_with_spawned_tasks(
+            litellm.acompletion(
+                model="gpt-5.5",
+                messages=[{"role": "user", "content": f"Hello, world! {i}"}],
+                mock_response="hi",
+                user="test_user",
+            )
         )
 
-    # Wait for async flush
-    await asyncio.sleep(3)
+    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=LOGGING_WORKER_DRAIN_TIMEOUT_SECONDS)
+    await generic_logger.flush_queue()
 
     # Assert httpx post was called
     mock_post.assert_called_once()
@@ -277,7 +296,7 @@ async def test_generic_api_callback_single_format():
     generic_logger = GenericAPILogger(
         endpoint=test_endpoint,
         headers=test_headers,
-        flush_interval=1,  # Quick flush to trigger batch send
+        flush_interval=3600,
         log_format="single",  # Set single format
     )
     generic_logger.async_httpx_client.post = mock_post
@@ -285,15 +304,17 @@ async def test_generic_api_callback_single_format():
 
     # Make 3 completion calls
     for i in range(3):
-        response = await litellm.acompletion(
-            model="gpt-5.5",
-            messages=[{"role": "user", "content": f"Hello, world! {i}"}],
-            mock_response="hi",
-            user="test_user",
+        response = await _await_with_spawned_tasks(
+            litellm.acompletion(
+                model="gpt-5.5",
+                messages=[{"role": "user", "content": f"Hello, world! {i}"}],
+                mock_response="hi",
+                user="test_user",
+            )
         )
 
-    # Wait for async flush
-    await asyncio.sleep(3)
+    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=LOGGING_WORKER_DRAIN_TIMEOUT_SECONDS)
+    await generic_logger.flush_queue()
 
     # Assert httpx post was called 3 times (once per log in batch)
     assert mock_post.call_count == 3, f"Expected 3 calls, got {mock_post.call_count}"
@@ -336,7 +357,7 @@ async def test_generic_api_callback_json_array_format_explicit():
     generic_logger = GenericAPILogger(
         endpoint=test_endpoint,
         headers=test_headers,
-        flush_interval=1,
+        flush_interval=3600,
         log_format="json_array",  # Explicitly set json_array
     )
     generic_logger.async_httpx_client.post = mock_post
@@ -344,15 +365,17 @@ async def test_generic_api_callback_json_array_format_explicit():
 
     # Make multiple completion calls
     for i in range(5):
-        response = await litellm.acompletion(
-            model="gpt-5.5",
-            messages=[{"role": "user", "content": f"Hello, world! {i}"}],
-            mock_response="hi",
-            user="test_user",
+        response = await _await_with_spawned_tasks(
+            litellm.acompletion(
+                model="gpt-5.5",
+                messages=[{"role": "user", "content": f"Hello, world! {i}"}],
+                mock_response="hi",
+                user="test_user",
+            )
         )
 
-    # Wait for async flush
-    await asyncio.sleep(3)
+    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=LOGGING_WORKER_DRAIN_TIMEOUT_SECONDS)
+    await generic_logger.flush_queue()
 
     # Assert httpx post was called once (batched)
     mock_post.assert_called_once()
@@ -386,7 +409,7 @@ async def test_generic_api_callback_sumologic_uses_ndjson():
     os.environ["SUMOLOGIC_WEBHOOK_URL"] = "https://collectors.sumologic.com/receiver/v1/http/test123"
 
     # Initialize using callback_name (loads from JSON config)
-    generic_logger = GenericAPILogger(callback_name="sumologic", flush_interval=1)
+    generic_logger = GenericAPILogger(callback_name="sumologic", flush_interval=3600)
     generic_logger.async_httpx_client.post = mock_post
     litellm.callbacks = [generic_logger]
 
@@ -395,15 +418,17 @@ async def test_generic_api_callback_sumologic_uses_ndjson():
 
     # Make completion calls
     for i in range(2):
-        await litellm.acompletion(
-            model="gpt-5.5",
-            messages=[{"role": "user", "content": f"Test {i}"}],
-            mock_response="response",
-            user="test_user",
+        await _await_with_spawned_tasks(
+            litellm.acompletion(
+                model="gpt-5.5",
+                messages=[{"role": "user", "content": f"Test {i}"}],
+                mock_response="response",
+                user="test_user",
+            )
         )
 
-    # Wait for async flush
-    await asyncio.sleep(3)
+    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=LOGGING_WORKER_DRAIN_TIMEOUT_SECONDS)
+    await generic_logger.flush_queue()
 
     # Assert httpx post was called
     mock_post.assert_called_once()
@@ -418,6 +443,42 @@ async def test_generic_api_callback_sumologic_uses_ndjson():
     this_test_messages: Final = [[{"role": "user", "content": f"Test {i}"}] for i in range(2)]
     mine: Final = [record for record in records if record.get("messages") in this_test_messages]
     assert len(mine) == 2, f"Expected this test's 2 calls as NDJSON lines, got {len(mine)} of {len(records)}"
+
+
+@pytest.mark.asyncio
+async def test_generic_api_callback_sends_queued_events_on_its_own(monkeypatch: pytest.MonkeyPatch):
+    mock_post = AsyncMock()
+    mock_post.return_value.status_code = 200
+    mock_post.return_value.text = "OK"
+
+    test_endpoint = "https://example.com/api/logs"
+    test_headers = {"Authorization": "Bearer test_token"}
+    monkeypatch.setenv("GENERIC_LOGGER_ENDPOINT", test_endpoint)
+
+    generic_logger = GenericAPILogger(endpoint=test_endpoint, headers=test_headers, flush_interval=0.05)
+    generic_logger.async_httpx_client.post = mock_post
+    monkeypatch.setattr(litellm, "callbacks", [generic_logger])
+
+    for i in range(3):
+        await litellm.acompletion(
+            model="gpt-5.5",
+            messages=[{"role": "user", "content": f"Hello, world! {i}"}],
+            mock_response="hi",
+            user="test_user",
+        )
+
+    async def _poll() -> None:
+        while sum(len(json.loads(call.kwargs["data"])) for call in mock_post.call_args_list) < 3:
+            await asyncio.sleep(0.01)
+
+    await asyncio.wait_for(_poll(), timeout=10)
+
+    posted_bodies: Final = [json.loads(call.kwargs["data"]) for call in mock_post.call_args_list]
+    for body in posted_bodies:
+        assert isinstance(body, list), "Each posted body should be a JSON array"
+    posted_items: Final = sum(posted_bodies, [])
+    contents: Final = sorted(item["messages"][0]["content"] for item in posted_items)
+    assert contents == [f"Hello, world! {i}" for i in range(3)]
 
 
 @pytest.mark.asyncio
@@ -736,3 +797,27 @@ async def test_generic_api_concurrent_flushes_deliver_each_event_once(log_format
             task.cancel()
         await asyncio.gather(*owned_tasks, return_exceptions=True)
         await handler.close()
+
+
+@pytest.mark.asyncio
+async def test_v1_payload_of_a_chat_row_never_shows_the_committed_spend_auth_read() -> None:
+    counter_keys: Final = EntitySpendCounterKeys.of(
+        token="hashed-token", team_id="t1", user_id=None, org_id=None, end_user_id=None
+    )
+    auth: Final = UserAPIKeyAuth(
+        api_key="hashed-token",
+        team_id="t1",
+        committed_budget_spend=CommittedBudgetSpend(counter_keys=counter_keys, key=0.123456, team=0.654321),
+    )
+    generic_logger: Final = GenericAPILogger(endpoint="https://example.com/api/logs", flush_interval=3600)
+
+    payload: Final = generic_logger._get_v1_logging_payload(
+        kwargs={"litellm_params": {"metadata": {"user_api_key_auth": auth}}},
+        response_obj={"usage": {}},
+        start_time=None,
+        end_time=None,
+    )
+
+    assert "team_id='t1'" in payload["metadata"]
+    assert "0.123456" not in payload["metadata"]
+    assert str(counter_keys.team) not in payload["metadata"]

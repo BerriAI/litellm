@@ -5,7 +5,7 @@ use pyo3::types::PyDict;
 
 /// Converts requests, responses, stream values and errors at the Python boundary.
 pub trait PythonBinding: PythonOwned {
-    type Protocol: Protocol<Error: std::fmt::Display>;
+    type Protocol: Protocol<Error: std::error::Error>;
 
     /// The public exception a native failure maps to, kept as a value until the driver
     /// raises it.
@@ -28,6 +28,11 @@ pub trait PythonBinding: PythonOwned {
     ) -> PyResult<Py<PyAny>>;
 
     /// What the stream carries at hand-off, as the caller's stream receives it.
+    /// The unary response after the deployment transform, before success hooks run.
+    fn deliver_response(&mut self, _py: Python<'_>, _response: &Bound<'_, PyAny>) -> PyResult<()> {
+        Ok(())
+    }
+
     fn encode_stream_head(
         &mut self,
         py: Python<'_>,
