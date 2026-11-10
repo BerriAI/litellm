@@ -12,11 +12,13 @@ from integration._support.client import Gateway, eventually
 from integration._support.database import read_rows, write_rows
 from integration._support.scim import (
     PATCH_OP_SCHEMA,
+    TAKE_TEAM_LOCK_SQL,
     TAKE_USER_ROW_LOCK_SQL,
     create_group,
     created_team,
     seed_users,
     users_referencing,
+    waiters_on_lock_held_by,
     waiters_on_rows_locked_by,
 )
 
@@ -28,6 +30,19 @@ PROFILE_NAME: Final = "Race"
 USER_ALIAS_SQL: Final = 'SELECT user_alias FROM "LiteLLM_UserTable" WHERE user_id = %s'
 DROP_TEAM_SQL: Final = 'UPDATE "LiteLLM_UserTable" SET teams = array_remove(teams, %s) WHERE user_id = %s'
 APPEND_TEAM_SQL: Final = 'UPDATE "LiteLLM_UserTable" SET teams = array_append(teams, %s) WHERE user_id = %s'
+DROP_FROM_ROSTER_SQL: Final = """
+UPDATE "LiteLLM_TeamTable"
+SET members_with_roles = COALESCE(
+    (SELECT jsonb_agg(member) FROM jsonb_array_elements(members_with_roles::jsonb) AS member
+     WHERE member->>'user_id' IS DISTINCT FROM %(user)s),
+    '[]'::jsonb
+)
+WHERE team_id = %(team)s
+"""
+READD_TEAM_SQL: Final = 'UPDATE "LiteLLM_UserTable" SET teams = array_append(teams, %(team)s) WHERE user_id = %(user)s'
+TEAM_ENTRIES_SQL: Final = (
+    'SELECT cardinality(array_positions(teams, %s))::text AS entries FROM "LiteLLM_UserTable" WHERE user_id = %s'
+)
 
 
 def _put_profile(candidate: Gateway, user: str, email: str) -> httpx.Response:
@@ -136,3 +151,35 @@ def test_a_scim_user_write_naming_a_team_repairs_a_member_whose_teams_lost_it(
 
         assert response.status_code == 200, response.text
         assert users_referencing(team) == frozenset({user})
+
+
+@contextmanager
+def _held_team_lock(team: str) -> Generator[psycopg.Connection]:
+    with psycopg.connect(os.environ["DATABASE_URL"]) as holder:
+        holder.execute(TAKE_TEAM_LOCK_SQL, (team,))
+        yield holder
+
+
+@pytest.mark.parametrize(
+    ("concurrent_write", "expected_entries"),
+    [(DROP_FROM_ROSTER_SQL, "0"), (READD_TEAM_SQL, "1")],
+    ids=["removed_from_roster", "team_readded"],
+)
+def test_a_member_repair_rereads_the_roster_and_teams_under_the_team_lock(
+    gateway: Gateway, concurrent_write: str, expected_entries: str
+) -> None:
+    with gateway.scenario() as scenario, ThreadPoolExecutor(max_workers=1) as pool:
+        (user,) = seed_users(scenario, 1)
+        team: Final = created_team(scenario, create_group(gateway, (user,)))
+        write_rows(DROP_TEAM_SQL, (team, user))
+
+        with _held_team_lock(team) as holder:
+            pending: Final = pool.submit(_put_with_group, gateway, user, team)
+            eventually(
+                lambda: waiters_on_lock_held_by(holder.info.backend_pid), lambda waiting: waiting >= 1, seconds=30
+            )
+            holder.execute(concurrent_write, {"team": team, "user": user})
+        response: Final = pending.result()
+
+        assert response.status_code == 200, response.text
+        assert read_rows(TEAM_ENTRIES_SQL, (team, user)) == [{"entries": expected_entries}]
