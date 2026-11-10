@@ -72,6 +72,19 @@ describe("provider_info_helpers", () => {
     expect(getPlaceholder(Providers.AIAND)).toBe("aiand/openai/gpt-oss-120b");
   });
 
+  it("resolves ResetData name, logo and model placeholder", () => {
+    expect(provider_map.RESETDATA).toBe("resetdata");
+    expect(getProviderLogoAndName("resetdata")).toEqual({
+      displayName: "ResetData",
+      logo: providerLogoMap[Providers.RESETDATA],
+    });
+    expect(getProviderLogoAndName("RESETDATA")).toEqual(
+      getProviderLogoAndName("resetdata"),
+    );
+    expect(providerLogoMap[Providers.RESETDATA]).toContain("resetdata");
+    expect(getPlaceholder(Providers.RESETDATA)).toBe("resetdata/zai/glm-5.3");
+  });
+
   it("maps Microsoft 365 Copilot to its chat model provider and placeholder", () => {
     expect(provider_map.MICROSOFT_365_COPILOT).toBe("microsoft_365_copilot");
     expect(getPlaceholder(Providers.MICROSOFT_365_COPILOT)).toBe("microsoft_365_copilot/chat");

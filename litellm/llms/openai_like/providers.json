@@ -171,6 +171,12 @@
       "max_completion_tokens": "max_tokens"
     }
   },
+  "resetdata": {
+    "base_url": "https://api.resetdata.ai/api/v1",
+    "api_key_env": "RESETDATA_API_KEY",
+    "api_base_env": "RESETDATA_API_BASE",
+    "supported_endpoints": ["/v1/chat/completions"]
+  },
   "empiriolabs": {
     "base_url": "https://api.empiriolabs.ai/v1",
     "api_key_env": "EMPIRIOLABS_API_KEY",
