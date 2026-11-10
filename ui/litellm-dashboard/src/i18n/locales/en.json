@@ -14887,6 +14887,7 @@
         "keyHash": "Key Hash",
         "keyAlias": "Key Alias",
         "model": "Model",
+        "moreModelsNotShown": "More models not shown",
         "tokens": "Tokens",
         "internalUser": "Internal User",
         "endUser": "End User",
@@ -15624,6 +15625,11 @@
       "showZeroSpend": "Show Zero Spend",
       "showUnknown": "Show Unknown",
       "showUnknownHint": "Requests that failed to route to a provider"
+    },
+    "customerTeamSpend": {
+      "title": "Spend by team",
+      "attributionNote": "Uses each key's current team, or its last team when deleted. This is not historical team ownership.",
+      "noData": "No customer spend for this period"
     },
     "teamUserSpend": {
       "columns": {

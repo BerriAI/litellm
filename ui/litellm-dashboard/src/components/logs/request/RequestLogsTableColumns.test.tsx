@@ -368,7 +368,24 @@ describe("Request ID column", () => {
 });
 
 describe("Model column", () => {
-  it("lists every model used across a conversation, not only the representative call's model", () => {
+  it("keeps a long conversation's inline cell to the latest call's model", () => {
+    const conversationCall: Partial<LogEntry> = {
+      request_id: "req-session",
+      model: "gpt-5.6",
+      session_id: "sess-1",
+      session_total_count: 4,
+      session_models: ["claude-sonnet-5", "gemini-3-pro", "gpt-5.6", "o4-mini"],
+    };
+    renderRows([logEntry(conversationCall)]);
+
+    expect(screen.getByText("gpt-5.6")).toBeInTheDocument();
+    for (const otherModel of ["claude-sonnet-5", "gemini-3-pro", "o4-mini"]) {
+      expect(screen.queryByText(otherModel)).not.toBeInTheDocument();
+    }
+  });
+
+  it("reveals the conversation's other models in the hover popup", async () => {
+    const user = userEvent.setup();
     const conversationCall: Partial<LogEntry> = {
       request_id: "req-session",
       model: "gpt-5.6",
@@ -378,12 +395,14 @@ describe("Model column", () => {
     };
     renderRows([logEntry(conversationCall)]);
 
-    expect(screen.getByText("claude-sonnet-5, gpt-5.6")).toBeInTheDocument();
-    expect(screen.queryByText("gpt-5.6")).not.toBeInTheDocument();
+    await user.hover(screen.getByText("+1"));
+
+    expect(await screen.findByText("claude-sonnet-5")).toBeInTheDocument();
   });
 
-  it("marks a conversation whose model list was capped by the server", () => {
-    const cappedCall = {
+  it("flags a conversation whose model list was capped by the server", async () => {
+    const user = userEvent.setup();
+    const cappedCall: Partial<LogEntry> = {
       request_id: "req-capped",
       model: "gpt-5.6",
       session_id: "sess-2",
@@ -393,13 +412,16 @@ describe("Model column", () => {
     };
     renderRows([logEntry(cappedCall)]);
 
-    expect(screen.getByText("claude-sonnet-5, gpt-5.6, ...")).toBeInTheDocument();
+    await user.hover(screen.getByText("+1"));
+
+    expect(await screen.findByText("More models not shown")).toBeInTheDocument();
   });
 
-  it("keeps a single call's own model", () => {
+  it("keeps a single call's own model and shows no overflow marker", () => {
     renderRows([logEntry({ request_id: "req-single", model: "gpt-5.6" })]);
 
     expect(screen.getByText("gpt-5.6")).toBeInTheDocument();
+    expect(screen.queryByText(/^\+\d+$/)).not.toBeInTheDocument();
   });
 });
 

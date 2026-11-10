@@ -13,7 +13,7 @@ import pytest
 
 from litellm.redis.stores.connection import connect
 from litellm.redis.stores.spend_counters import SpendCounterStore
-from fastapi import HTTPException
+from fastapi import FastAPI, HTTPException
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -35,6 +35,7 @@ from litellm.proxy.hooks.proxy_track_cost_callback import (
     run_spend_event,
 )
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
+from litellm.proxy.pass_through_endpoints.pass_through_endpoints import InitPassThroughEndpointHelpers
 from litellm.proxy.spend_tracking.spend_event import SpendEventDecodeError, build_spend_event, decode_spend_event
 from litellm.proxy.spend_tracking.spend_event_producer import SpendEventProducer, UnixAddress
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
@@ -44,6 +45,7 @@ from litellm.proxy.utils import (
     BilledFailedAttempt,
     ProxyUpdateSpend,
 )
+from litellm.types.proxy.carried_budget_state import CommittedBudgetSpend, EntitySpendCounterKeys
 from litellm.types.router import Deployment, LiteLLM_Params
 from litellm.types.utils import CallTypes, LiteLLMBatch, ModelResponse, PromptTokensDetailsWrapper, Usage
 from litellm.types.videos.main import VideoObject
@@ -908,6 +910,74 @@ async def test_async_post_call_failure_hook_non_llm_route():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    ("route", "call_type", "written"),
+    [
+        ("/azure-search", CallTypes.pass_through.value, True),
+        ("/unregistered-search", CallTypes.acompletion.value, False),
+        ("/key/generate", CallTypes.pass_through.value, False),
+        ("/team/new", CallTypes.pass_through.value, False),
+        ("/unregistered-search", CallTypes.pass_through.value, False),
+        ("/azure-search/", CallTypes.pass_through.value, True),
+        ("/configured-search/indexes/docs", CallTypes.pass_through.value, True),
+        (None, CallTypes.acompletion.value, True),
+    ],
+)
+async def test_async_post_call_failure_hook_tracks_config_defined_pass_through_route(
+    route: str | None, call_type: str, written: bool
+) -> None:
+    api_base: Final = "http://upstream.example/indexes/x/docs/search"
+    request_data: Final = {
+        "model": "azure-search",
+        "call_type": call_type,
+        "litellm_params": {"api_base": api_base, "metadata": {}},
+    }
+    user_api_key_dict: Final = UserAPIKeyAuth(
+        api_key="test_api_key",
+        request_route=route,
+    )
+
+    spend_writer: Final = create_autospec(DBSpendUpdateWriter, instance=True)
+    with patch.dict(
+        "litellm.proxy.pass_through_endpoints.pass_through_endpoints._registered_pass_through_routes", clear=True
+    ):
+        InitPassThroughEndpointHelpers.add_exact_path_route(
+            app=FastAPI(),
+            path="/azure-search",
+            target=api_base,
+            custom_headers={},
+            forward_headers=False,
+            merge_query_params=False,
+            dependencies=[],
+            cost_per_request=None,
+            endpoint_id="configured-exact",
+        )
+        InitPassThroughEndpointHelpers.add_subpath_route(
+            app=FastAPI(),
+            path="/configured-search",
+            target=api_base,
+            custom_headers={},
+            forward_headers=False,
+            merge_query_params=False,
+            dependencies=[],
+            cost_per_request=None,
+            endpoint_id="configured-subpath",
+        )
+        await ProxyDBLogger(spend_writer=lambda: spend_writer).async_post_call_failure_hook(
+            request_data=request_data,
+            original_exception=Exception("Provider error"),
+            user_api_key_dict=user_api_key_dict,
+        )
+
+        assert spend_writer.update_database.await_count == (1 if written else 0)
+        if not written:
+            return
+        call_args: Final = spend_writer.update_database.call_args
+        assert call_args.kwargs["kwargs"]["litellm_params"]["api_base"] == api_base
+        assert call_args.kwargs["kwargs"]["litellm_params"]["metadata"]["status"] == "failure"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     ("team_id", "route", "written"),
     [
         ("litellm-dashboard", "/key/list", False),
@@ -1130,6 +1200,95 @@ def test_get_budget_reservation_from_metadata_handles_dict_auth_object():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("metadata", "expected_scope"),
+    [
+        (
+            {
+                "user_api_key_auth": UserAPIKeyAuth(
+                    committed_budget_spend=CommittedBudgetSpend(
+                        counter_keys=EntitySpendCounterKeys(key="spend:key:test_api_key")
+                    )
+                )
+            },
+            EntitySpendCounterKeys(key="spend:key:test_api_key"),
+        ),
+        ({}, EntitySpendCounterKeys()),
+    ],
+)
+async def test_charge_moves_only_the_committed_counters_auth_named_as_budgeted(metadata, expected_scope):
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.db_spend_update_writer.update_database = AsyncMock()
+    increment_spend_counters = AsyncMock()
+
+    await _update_database_and_spend_counters(
+        proxy_logging_obj=proxy_logging_obj,
+        increment_spend_counters=increment_spend_counters,
+        user_api_key="test_api_key",
+        user_id="test_user_id",
+        end_user_id=None,
+        team_id="test_team_id",
+        org_id="test_org_id",
+        kwargs={"litellm_params": {"metadata": metadata}},
+        completion_response=None,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+        response_cost=0.2,
+        budget_reservation=None,
+    )
+
+    assert increment_spend_counters.await_args.kwargs["committed_spend_scope"] == expected_scope
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("tracked", "expected_key", "expected_org"),
+    [(True, pytest.approx(1.2), pytest.approx(2.2)), (False, 1.0, 2.0)],
+)
+async def test_charge_with_no_auth_on_its_row_moves_the_committed_counters_that_exist(
+    tracked, expected_key, expected_org
+):
+    """A background response is billed from its creator's stored attribution, after the request's auth is gone."""
+    from litellm.proxy.proxy_server import increment_spend_counters
+
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.db_spend_update_writer.update_database = AsyncMock()
+    spend_counter_store: Final = SpendCounterStore(connect(None).spend_counters())
+    spend_counter_store.set_local("spend:committed:key:test_api_key", 1.0)
+    spend_counter_store.set_local("spend:committed:org:test_org_id", 2.0)
+
+    with (
+        patch("litellm.proxy.hooks.proxy_track_cost_callback.committed_spend_tracked", return_value=tracked),
+        patch("litellm.proxy.proxy_server.spend_counter_store", spend_counter_store),
+        patch(
+            "litellm.proxy.spend_tracking.committed_spend.SpendCounterReseed.from_db",
+            AsyncMock(return_value=50.0),
+        ),
+    ):
+        await _update_database_and_spend_counters(
+            proxy_logging_obj=proxy_logging_obj,
+            increment_spend_counters=increment_spend_counters,
+            user_api_key="test_api_key",
+            user_id="test_user_id",
+            end_user_id=None,
+            team_id="test_team_id",
+            org_id="test_org_id",
+            kwargs={"litellm_params": {"metadata": {"user_api_key_hash": "test_api_key"}}},
+            completion_response=None,
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+            response_cost=0.2,
+            budget_reservation=None,
+        )
+
+    cached: Final = spend_counter_store.get_local
+    assert cached("spend:committed:key:test_api_key") == expected_key
+    assert cached("spend:committed:org:test_org_id") == expected_org
+    assert cached("spend:committed:team:test_team_id") is None
+    assert cached("spend:committed:user:test_user_id") is None
+
+
+@pytest.mark.asyncio
 async def test_update_database_and_spend_counters_releases_reservation_when_db_update_fails():
     proxy_logging_obj = MagicMock()
     proxy_logging_obj.db_spend_update_writer.update_database = AsyncMock(side_effect=Exception("db unavailable"))
@@ -1257,6 +1416,7 @@ async def test_update_database_and_spend_counters_updates_counters_after_db_upda
         request_started_at=start_time,
         model_access_groups=("premium",),
         project_id=None,
+        committed_spend_scope=EntitySpendCounterKeys(),
     )
 
 
@@ -2776,7 +2936,9 @@ _LIVE_COUNTERS: Final = {
 }
 
 
-async def _fail_request(logger: ProxyDBLogger, failure: Mapping[str, object]) -> None:
+async def _fail_request(
+    logger: ProxyDBLogger, failure: Mapping[str, object], committed: CommittedBudgetSpend | None = None
+) -> None:
     await logger.async_post_call_failure_hook(
         request_data={
             "model": "gpt-4.1",
@@ -2793,6 +2955,7 @@ async def _fail_request(logger: ProxyDBLogger, failure: Mapping[str, object]) ->
             end_user_id="end-user-1",
             org_id="org-1",
             project_id="project-1",
+            committed_budget_spend=committed,
         ),
     )
 
@@ -2828,6 +2991,43 @@ async def test_failure_spend_rows_raise_the_live_spend_counters_by_their_cost(
 
     assert await _counter_values(live_spend_counters) == pytest.approx(
         {key: spend + charged for key, spend in _LIVE_COUNTERS.items()}
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("failure", "charged"),
+    [
+        ({"combined_usage_object": Usage(prompt_tokens=30), "response_cost": 0.125}, 0.125),
+        (_failure_with_billed_attempts(), 1.25),
+        ({"standard_logging_object": {"cost_finalized": True, "response_cost": 0.125}}, 0.125),
+    ],
+    ids=["recovered_stream_cost", "billed_retries", "completed_cost"],
+)
+async def test_a_failed_charge_moves_only_the_committed_counters_auth_named_as_budgeted(
+    live_spend_counters: SpendCounterStore, failure: Mapping[str, object], charged: float
+):
+    """The remaining budget gauges read the committed counters, so a charge missing from them shows as budget the
+    request never left behind, until the next reseed from the database."""
+    budgeted: Final = EntitySpendCounterKeys.of(
+        token="hashed-key", team_id="team-1", user_id=None, org_id=None, end_user_id=None
+    )
+    starting: Final = {
+        "spend:committed:key:hashed-key": 0.2,
+        "spend:committed:team:team-1": 0.3,
+        "spend:committed:user:user-1": 0.4,
+    }
+    for key, spend in starting.items():
+        live_spend_counters.set_local(key, spend)
+
+    await _fail_request(ProxyDBLogger(), failure, CommittedBudgetSpend(counter_keys=budgeted))
+
+    assert {key: live_spend_counters.get_local(key) for key in starting} == pytest.approx(
+        {
+            "spend:committed:key:hashed-key": 0.2 + charged,
+            "spend:committed:team:team-1": 0.3 + charged,
+            "spend:committed:user:user-1": 0.4,
+        }
     )
 
 

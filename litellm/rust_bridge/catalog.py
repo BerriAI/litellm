@@ -39,7 +39,7 @@ class Feature(str, Enum):
     PROXY_MCP_TOOLS = "proxy_mcp_tools"
     """litellm_proxy MCP tools that Python expands and may auto-execute."""
     CALLER_CLIENT = "caller_client"
-    """A caller-supplied HTTP client or shared session that Python sends through."""
+    """A caller-supplied HTTP client that Python sends through."""
     TIMEOUT_VARIANTS = "timeout_variants"
     """request_timeout, stream_timeout or httpx.Timeout phases beyond a plain timeout."""
     DROP_PARAMS = "drop_params"
@@ -172,7 +172,7 @@ CHAT_PYTHON_FEATURES: Final = COMMON_PYTHON_FEATURES | {
     Feature.MODEL_ALIAS_MAP,
 }
 
-MESSAGES_PYTHON_FEATURES: Final = COMMON_PYTHON_FEATURES | {
+MESSAGES_PYTHON_FEATURES: Final = (COMMON_PYTHON_FEATURES - {Feature.TIMEOUT_VARIANTS}) | {
     Feature.PROVIDER_AFFINITY,
     Feature.FOUNDRY_BETA_ROW,
     Feature.SAFEGUARDS_CLASSIFIER,

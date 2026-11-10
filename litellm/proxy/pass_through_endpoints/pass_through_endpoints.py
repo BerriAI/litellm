@@ -134,6 +134,7 @@ from litellm.proxy.common_utils.sse_keepalive import (
     wrap_passthrough_sse_bytes_with_keepalive_pings,
 )
 from litellm.proxy.litellm_pre_call_utils import (  # noqa: F401  # legacy module exports
+    ROUTER_RESERVED_METADATA_FIELDS,
     LiteLLMProxyRequestSetup,
     _get_dynamic_logging_metadata,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _key_or_team_allows_client_pricing_override,  # pyright: ignore[reportPrivateUsage]  # reuse the proxy's pricing trust policy
@@ -165,6 +166,8 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     WebSocketSessionUsage,
     WebsocketUpstreamFrameKind,
 )
+from litellm.types.proxy.auth.user_api_key_auth import COMMITTED_BUDGET_SPEND_PARAM
+from litellm.types.proxy.carried_budget_state import CommittedBudgetSpend
 from litellm.types.utils import TRUSTED_CALLBACK_VARS_FIELD, CallTypes, Usage
 
 from .llm_provider_handlers.tinyfish_passthrough_logging_handler import (
@@ -194,7 +197,11 @@ _PRICING_MODEL_OVERRIDE_PARAMS: Final = frozenset(("base_model",))
 
 
 def _is_mergeable_client_metadata(key: str, value: object) -> bool:
-    return not key.startswith("user_api_key_") and (key != "model_info" or isinstance(value, Mapping))
+    return (
+        not key.startswith("user_api_key_")
+        and key not in ROUTER_RESERVED_METADATA_FIELDS
+        and (key != "model_info" or isinstance(value, Mapping))
+    )
 
 
 def _request_body_fields(parsed: object) -> Mapping[str, object]:
@@ -779,6 +786,7 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
             "litellm_params": {
                 **litellm_params_in_body,
                 "metadata": _metadata,
+                COMMITTED_BUDGET_SPEND_PARAM: user_api_key_dict.committed_budget_spend or CommittedBudgetSpend(),
                 "proxy_server_request": {
                     "url": str(request.url),
                     "method": request.method,
@@ -961,11 +969,16 @@ def _build_passthrough_failure_request_payload(
     model and provider. A user-defined route never gets that, since its URL
     names an upstream model rather than a LiteLLM-managed one.
     """
-    request_payload: Final[dict] = dict(cast(Mapping[str, object], parsed_body or {}))  # cast-ok: json body
+    request_payload: Final = dict(cast(Mapping[str, object], parsed_body or {}))  # cast-ok: json body
     if kwargs:
-        request_payload.update(kwargs)
+        request_payload.update(_json_object(_DECODED_JSON.validate_python(kwargs)))
     if logging_obj is not None:
         request_payload["litellm_logging_obj"] = logging_obj
+        logging_litellm_params: Final = _json_object(logging_obj.model_call_details.get("litellm_params"))
+        existing_litellm_params: Final = _json_object(request_payload.get("litellm_params"))
+        api_base: Final = logging_litellm_params.get("api_base")
+        if isinstance(api_base, str) and api_base and "api_base" not in existing_litellm_params:
+            request_payload["litellm_params"] = {**existing_litellm_params, "api_base": api_base}
     url_route: Final = str(url) if url is not None else ""
     google_provider: Final = (
         _passthrough_google_provider(url_route, custom_llm_provider) if builtin_provider_route else None

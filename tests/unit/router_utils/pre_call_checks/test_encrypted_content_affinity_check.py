@@ -2639,7 +2639,7 @@ async def test_affinity_strips_and_dispatches_when_origin_already_failed_this_re
         request_kwargs={"litellm_metadata": {}, "input": reasoning_input, **failed_in_request, **continuing},
     )
 
-    assert result is group
+    assert [deployment["model_info"]["id"] for deployment in result] == ["region-b"]
     assert reasoning_input[0] == {"type": "reasoning", "summary": [{"type": "summary_text", "text": "scattering"}]}
 
 
@@ -2692,6 +2692,32 @@ async def test_affinity_keeps_reasoning_when_every_deployment_already_refused_th
 
     assert [deployment["model_info"]["id"] for deployment in result] == ["region-a"]
     assert reasoning_input[0] == original_reasoning
+
+
+@pytest.mark.asyncio
+async def test_retry_leaves_the_pinned_origin_after_a_server_error():
+    def deployment(region: str, mock_response: object) -> dict[str, object]:
+        base: Final = _region_deployment(region)
+        return {**base, "litellm_params": {**base["litellm_params"], "mock_response": mock_response}}
+
+    router: Final = litellm.Router(
+        model_list=[
+            deployment("region-a", Exception("upstream 500")),
+            deployment("region-b", "ok"),
+            deployment("region-c", "ok"),
+        ],
+        disable_cooldowns=True,
+        num_retries=3,
+        retry_after=0,
+        optional_pre_call_checks=["encrypted_content_affinity"],
+    )
+    try:
+        response: Final = await router.aresponses(
+            model="gpt-5.4", input=_reasoning_input_minted_by("region-a"), litellm_metadata={}
+        )
+        assert response._hidden_params["model_id"] in {"region-b", "region-c"}
+    finally:
+        router.discard()
 
 
 def _default_endpoint_deployment(model_id: str, litellm_params: Mapping[str, object]) -> dict[str, object]:
@@ -3293,3 +3319,192 @@ async def test_a_changed_named_credential_moves_the_pin_within_the_secret_manage
     assert pin_before_the_change == [peer]
     assert pin_after_the_change == [other_org]
     assert reasoning_after_the_change == _reasoning_input_minted_by("origin")[0]
+
+
+# ---------------------------------------------------------------------------
+# Operator-declared encryption boundary (model_info.encrypted_content_boundary)
+# ---------------------------------------------------------------------------
+
+
+def _regional_deployment(model_name: str, region: str, boundary: str | None) -> dict:
+    return {
+        "model_name": model_name,
+        "litellm_params": {
+            "model": "openai/gpt-5.6",
+            "api_base": f"https://{region}.example.invalid/v1",
+            "api_key": "sk-one-org",
+        },
+        "model_info": {"id": region} | ({} if boundary is None else {"encrypted_content_boundary": boundary}),
+    }
+
+
+async def _forwarded_reasoning_after_model_switch(origin_boundary: str | None, peer_boundary: str | None) -> tuple:
+    router: Final = litellm.Router(
+        model_list=[
+            _regional_deployment("reasoning-a", "region-1", origin_boundary),
+            _regional_deployment("reasoning-b", "region-2", peer_boundary),
+        ],
+        optional_pre_call_checks=["encrypted_content_affinity"],
+        num_retries=0,
+    )
+    handler: Final = AsyncMock(return_value=_build_mock_response(output_items=[], response_id="resp_second"))
+    with patch(
+        "litellm.llms.custom_httpx.llm_http_handler.BaseLLMHTTPHandler.async_response_api_handler",
+        new=handler,
+    ):
+        response: Final = await router.aresponses(
+            model="reasoning-b",
+            input=[
+                {
+                    "type": "reasoning",
+                    "summary": [],
+                    "encrypted_content": ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id(
+                        "blob-from-region-1", "region-1"
+                    ),
+                },
+                {"role": "user", "content": "follow-up"},
+            ],
+            litellm_metadata={},
+        )
+    forwarded_reasoning: Final = handler.await_args.kwargs["input"][0]
+    return response._hidden_params["model_id"], forwarded_reasoning.get("encrypted_content")
+
+
+@pytest.mark.asyncio
+async def test_declared_boundary_keeps_reasoning_across_endpoints_with_different_api_bases():
+    assert await _forwarded_reasoning_after_model_switch("org-1", "org-1") == ("region-2", "blob-from-region-1")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("origin_boundary", "peer_boundary"),
+    [(None, None), ("org-1", "org-2"), ("org-1", None), (None, "org-1")],
+    ids=["undeclared", "different-boundaries", "only-origin-declared", "only-peer-declared"],
+)
+async def test_reasoning_is_stripped_unless_both_deployments_declare_the_same_boundary(origin_boundary, peer_boundary):
+    assert await _forwarded_reasoning_after_model_switch(origin_boundary, peer_boundary) == ("region-2", None)
+
+
+def test_declared_boundary_overrides_a_shared_api_base_and_key():
+    origin: Final = _make_originating_mock("https://region-1.example.invalid/v1", "sk-one-org")
+    origin.model_info = litellm.types.router.ModelInfo(id="region-1", encrypted_content_boundary="org-1")
+    check: Final = EncryptedContentAffinityCheck(ctx=_make_router_mock_with_cooldown(origin))
+    other_org: Final = {
+        "model_info": {"id": "region-1-org-2", "encrypted_content_boundary": "org-2"},
+        "litellm_params": {"api_base": "https://region-1.example.invalid/v1", "api_key": "sk-one-org"},
+    }
+
+    matches, _ = check._find_deployments_on_same_encryption_boundary([other_org], "region-1")
+
+    assert matches == []
+
+
+@pytest.mark.asyncio
+async def test_boundary_pin_only_selects_deployments_that_declare_the_origins_boundary():
+    origin: Final = _make_originating_mock("https://region-1.example.invalid/v1", "sk-one-org")
+    origin.model_info = litellm.types.router.ModelInfo(id="region-1", encrypted_content_boundary="org-1")
+    check: Final = EncryptedContentAffinityCheck(ctx=_make_router_mock_with_cooldown(origin))
+    peer: Final = _regional_deployment("reasoning-b", "region-2", "org-1")
+    stranger: Final = _regional_deployment("reasoning-b", "region-3", "org-2")
+    request_kwargs: Final = {
+        "input": [
+            {
+                "type": "reasoning",
+                "encrypted_content": ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id(
+                    "blob-from-region-1", "region-1"
+                ),
+            }
+        ]
+    }
+
+    result: Final = await check.async_filter_deployments(
+        model="reasoning-b",
+        healthy_deployments=[stranger, peer],
+        messages=None,
+        request_kwargs=request_kwargs,
+    )
+
+    assert result == [peer]
+    assert request_kwargs["input"][0]["encrypted_content"] == (
+        ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id("blob-from-region-1", "region-1")
+    )
+
+
+def test_a_boundary_declared_on_one_side_keeps_the_shared_api_base_and_key_match():
+    origin: Final = _make_originating_mock("https://region-1.example.invalid/v1", "sk-one-org")
+    origin.model_info = litellm.types.router.ModelInfo(id="region-1", encrypted_content_boundary="org-1")
+    check: Final = EncryptedContentAffinityCheck(ctx=_make_router_mock_with_cooldown(origin))
+    undeclared_twin: Final = {
+        "model_info": {"id": "region-1-twin"},
+        "litellm_params": {"api_base": "https://region-1.example.invalid/v1", "api_key": "sk-one-org"},
+    }
+
+    matches, _ = check._find_deployments_on_same_encryption_boundary([undeclared_twin], "region-1")
+
+    assert matches == [undeclared_twin]
+
+
+def test_declared_boundary_matches_deployments_whose_credentials_cannot_be_resolved():
+    origin: Final = _make_originating_mock("https://region-1.example.invalid/v1", "")
+    origin.litellm_params.model_dump.return_value = {"api_base": "https://region-1.example.invalid/v1"}
+    origin.model_info = litellm.types.router.ModelInfo(id="region-1", encrypted_content_boundary="org-1")
+    check: Final = EncryptedContentAffinityCheck(ctx=_make_router_mock_with_cooldown(origin))
+    peer: Final = {
+        "model_info": {"id": "region-2", "encrypted_content_boundary": "org-1"},
+        "litellm_params": {"api_base": "https://region-2.example.invalid/v1"},
+    }
+
+    matches, _ = check._find_deployments_on_same_encryption_boundary([peer], "region-1")
+
+    assert matches == [peer]
+
+
+async def _forwarded_reasoning_after_order_fallback(boundary: str | None) -> tuple:
+    primary: Final = _regional_deployment("reasoning", "region-1", boundary)
+    backup: Final = _regional_deployment("reasoning", "region-3", boundary)
+    router: Final = litellm.Router(
+        model_list=[
+            primary | {"litellm_params": primary["litellm_params"] | {"order": 1}},
+            backup | {"litellm_params": backup["litellm_params"] | {"order": 2}},
+        ],
+        optional_pre_call_checks=["encrypted_content_affinity"],
+        disable_cooldowns=True,
+        num_retries=0,
+    )
+
+    async def upstream(*, litellm_params, **_kwargs):
+        if "region-1" in litellm_params.api_base:
+            raise litellm.InternalServerError("upstream 500", llm_provider="openai", model="gpt-5.6")
+        return _build_mock_response(output_items=[], response_id="resp_second")
+
+    handler: Final = AsyncMock(side_effect=upstream)
+    with patch(
+        "litellm.llms.custom_httpx.llm_http_handler.BaseLLMHTTPHandler.async_response_api_handler",
+        new=handler,
+    ):
+        response: Final = await router.aresponses(
+            model="reasoning",
+            input=[
+                {
+                    "type": "reasoning",
+                    "summary": [],
+                    "encrypted_content": ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id(
+                        "blob-from-region-1", "region-1"
+                    ),
+                },
+                {"role": "user", "content": "follow-up"},
+            ],
+            litellm_metadata={},
+        )
+    forwarded_reasoning: Final = handler.await_args.kwargs["input"][0]
+    return response._hidden_params["model_id"], forwarded_reasoning.get("encrypted_content")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("boundary", "expected_reasoning"),
+    [("org-1", "blob-from-region-1"), (None, None)],
+    ids=["declared", "undeclared"],
+)
+async def test_order_fallback_keeps_reasoning_only_on_a_declared_boundary_peer(boundary, expected_reasoning):
+    assert await _forwarded_reasoning_after_order_fallback(boundary) == ("region-3", expected_reasoning)

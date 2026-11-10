@@ -399,8 +399,16 @@ where
             Ok(step) => step,
             Err(error) => return self.failure(error, FailureOrigin::Host).await,
         };
-        match self.settle(step).await {
-            Ok(response) => self.succeeded(response).await,
+        let response = match self.settle(step).await {
+            Ok(response) => response,
+            Err(error) => return self.failure(error, FailureOrigin::Host).await,
+        };
+        let delivered = {
+            let mut parts = self.parts();
+            Python::attach(|py| parts.binding.deliver_response(py, response.bind(py)))
+        };
+        match delivered {
+            Ok(()) => self.succeeded(response).await,
             Err(error) => self.failure(error, FailureOrigin::Host).await,
         }
     }

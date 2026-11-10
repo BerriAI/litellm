@@ -135,6 +135,7 @@ from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
 from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
 from litellm.proxy.common_utils.json_merge_patch import apply_json_merge_patch
 from litellm.proxy.common_utils.openai_error_payload import proxy_exception_for
+from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time, keeps_due_budget_reset
 from litellm.proxy.common_utils.user_api_key_cache import (
     UserApiKeyCache,
     team_membership_auth_cache_key,
@@ -226,12 +227,14 @@ from litellm.proxy.management_helpers.utils import (
     add_new_member,
     management_endpoint_wrapper,
 )
+from litellm.proxy.spend_tracking.committed_spend import drop_committed_spend
 from litellm.proxy.utils import (
     PrismaClient,
     ProxyLogging,
     handle_exception_on_proxy,
     query_raw_within_statement_timeout,
 )
+from litellm.redis.stores.spend_counters import team_counter
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.chunked_in import delete_many_in, find_many_in
 from litellm.repositories.daily_activity_buckets import api_key_from_bucket
@@ -2772,7 +2775,7 @@ async def update_team(
             )
 
         # Check budget_duration and budget_reset_at
-        _set_budget_reset_at(data, updated_kv)
+        _set_budget_reset_at(data, updated_kv, existing_team)
 
         _team_member_fields_in_request: Final = {
             field
@@ -3000,19 +3003,16 @@ async def patch_team(
         raise handle_exception_on_proxy(e)
 
 
-def _set_budget_reset_at(data: UpdateTeamRequest, updated_kv: dict) -> None:
+def _set_budget_reset_at(data: UpdateTeamRequest, updated_kv: dict, existing_team: LiteLLM_TeamTable) -> None:
     """Set budget_reset_at in updated_kv if budget_duration is provided."""
-    if data.budget_duration is not None:
-        from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
-
-        reset_at: Final = get_budget_reset_time(budget_duration=data.budget_duration)
-        updated_kv["budget_reset_at"] = reset_at
+    if data.budget_duration is not None and not keeps_due_budget_reset(
+        data.budget_duration, existing_team.budget_duration, existing_team.budget_reset_at
+    ):
+        updated_kv["budget_reset_at"] = get_budget_reset_time(budget_duration=data.budget_duration)
     elif "budget_duration" in updated_kv and updated_kv["budget_duration"] is None:
         updated_kv["budget_reset_at"] = None
 
     if data.budget_limits is not None and len(data.budget_limits) > 0:
-        from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
-
         initialized_windows: Final = []
         for window in data.budget_limits:
             w = window if isinstance(window, dict) else window.model_dump()
@@ -4863,6 +4863,7 @@ async def delete_validated_team_rows(
     """
     from litellm.proxy.proxy_server import (
         proxy_logging_obj,
+        spend_counter_store,
         user_api_key_cache,
     )
 
@@ -4934,7 +4935,9 @@ async def delete_validated_team_rows(
         _emit_team_members_metric(deleted_team.model_copy(update={"members_with_roles": ()}))
         await sync_team_access_group_membership(prisma_client=prisma_client, team_id=deleted_team.team_id)
 
-    return DeletedTeams(team_ids=tuple(team.team_id for team in locked))
+    deleted_team_ids: Final = tuple(team.team_id for team in locked)
+    await drop_committed_spend(spend_counter_store, tuple(team_counter(team_id) for team_id in deleted_team_ids))
+    return DeletedTeams(team_ids=deleted_team_ids)
 
 
 def _locked_roster_user_ids(locked: Sequence[LiteLLM_TeamTable]) -> tuple[str, ...]:
