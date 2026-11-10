@@ -269,7 +269,7 @@ async def latest_release_info(
     if isinstance(cached, LatestReleaseInfo):
         return cached
     if isinstance(cached, LatestReleaseUnavailable):
-        raise HTTPException(status_code=502, detail=f"Latest release info unavailable: {cached.reason}")
+        raise HTTPException(status_code=502, detail="Latest release info unavailable")
     if not fetch_lock.locked():
         background_tasks.add_task(refresh_latest_release_info, client, cache, fetch_lock)
     return None

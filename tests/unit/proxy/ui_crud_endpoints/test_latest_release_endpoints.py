@@ -488,7 +488,7 @@ class TestLatestReleaseInfoEndpoint:
         assert (first.status_code, first.json()) == (200, None)
         later: Final = [http_client.get("/get/latest_release_info") for _ in range(2)]
         assert [response.status_code for response in later] == [502, 502]
-        assert "ConnectError" in later[0].json()["detail"]
+        assert later[0].json() == {"detail": "Latest release info unavailable"}
         assert len(client.calls) == 1
 
     def test_release_with_no_countable_notes_is_still_announced_with_zero_counts(self, http_client):
