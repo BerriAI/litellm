@@ -143,6 +143,19 @@ async def test_without_a_key_only_the_signed_in_identity_that_created_a_thread_c
     assert not await allows(ownership, bob, "msg_signed_in")
 
 
+@pytest.mark.asyncio
+async def test_without_a_key_one_managed_agent_cannot_continue_another_agents_thread() -> None:
+    ownership: Final = hook()
+    planner: Final = UserAPIKeyAuth(agent_id="agent-planner")
+    coder: Final = UserAPIKeyAuth(agent_id="agent-coder")
+    await ownership.async_post_call_success_hook(
+        data={"thread": CREATE}, user_api_key_dict=planner, response=anthropic_message("msg_agent")
+    )
+
+    assert await allows(ownership, planner, "msg_agent")
+    assert not await allows(ownership, coder, "msg_agent")
+
+
 @pytest.mark.parametrize("call_type", ("anthropic_messages", "acompletion", "aresponses"))
 @pytest.mark.asyncio
 async def test_a_continue_naming_a_message_this_proxy_never_served_in_a_thread_is_thread_not_found(

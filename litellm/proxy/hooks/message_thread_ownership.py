@@ -140,6 +140,7 @@ def _owner(user_api_key_dict: "UserAPIKeyAuth") -> str:
             user_api_key_dict.team_id,
             user_api_key_dict.end_user_id,
             user_api_key_dict.org_id,
+            user_api_key_dict.agent_id,
         ]
     )
 
