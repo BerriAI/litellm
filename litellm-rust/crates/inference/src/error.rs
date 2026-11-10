@@ -146,6 +146,42 @@ impl Error {
         }
     }
 
+    /// The provider's response headers on an upstream failure; empty for every other error.
+    pub fn upstream_headers(&self) -> &[(String, String)] {
+        match self {
+            Self::Llm(error) => error.upstream_headers(),
+            Self::Http(error) => error.upstream_headers(),
+            _ => &[],
+        }
+    }
+
+    /// A read of a streamed body timed out after the response head arrived.
+    pub fn body_read_timeout(&self) -> bool {
+        match self {
+            Self::Llm(error) => error.is_body_read_timeout(),
+            Self::Http(error) => error.is_body_read_timeout(),
+            _ => false,
+        }
+    }
+
+    pub fn body_cut(&self) -> Option<litellm_http::BodyCut> {
+        match self {
+            Self::Llm(error) => error.body_cut(),
+            Self::Http(error) => error.body_cut(),
+            _ => None,
+        }
+    }
+
+    /// `Some(connect)` when the call timed out, where `connect` says the connection was never
+    /// established; `None` for every other error.
+    pub fn timeout(&self) -> Option<bool> {
+        match self {
+            Self::Llm(error) => error.is_timeout(),
+            Self::Http(error) if error.is_timeout() => Some(error.is_connect_timeout()),
+            _ => None,
+        }
+    }
+
     pub fn upstream_response(&self) -> Option<(u16, &str)> {
         match self {
             Self::Llm(error) => error.upstream_response(),

@@ -5,7 +5,7 @@ import httpx
 import pytest
 
 import litellm
-from litellm.router_utils.get_retry_from_policy import get_num_retries_from_retry_policy
+from litellm.litellm_core_utils.get_retry_from_policy import get_num_retries_from_retry_policy
 from litellm.types.router import RetryPolicy
 
 _EXCEPTION_FOR_FIELD: Final = MappingProxyType(

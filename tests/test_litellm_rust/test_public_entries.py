@@ -1,3 +1,4 @@
+import asyncio
 import inspect
 from collections.abc import Awaitable, Callable, Iterator, Mapping
 from contextlib import contextmanager
@@ -29,7 +30,10 @@ Served: TypeAlias = Callable[[object], bool]
 
 @dataclass(frozen=True, slots=True)
 class Entry:
-    """``python`` is ``None`` for a route with no Python implementation, which only RUST_REQUIRED rules serve."""
+    """``python`` is ``None`` for a route with no Python implementation, which only RUST_REQUIRED rules serve.
+
+    ``executor_hop`` is whether the route's Python async entry left the loop through run_in_executor before it built the request.
+    """
 
     route: Route
     sync: Callable[..., object]
@@ -40,6 +44,7 @@ class Entry:
     arguments: Mapping[str, object]
     positional: int
     python: Served | None
+    executor_hop: bool
 
     def args(self) -> tuple[object, ...]:
         return tuple(self.arguments.values())[: self.positional]
@@ -79,6 +84,7 @@ ENTRIES: Final = (
         arguments={"model": "openai/gpt-4o", "messages": MESSAGES, "mock_response": "python"},
         positional=2,
         python=_chat,
+        executor_hop=True,
     ),
     Entry(
         route=Route.EMBEDDINGS,
@@ -90,6 +96,7 @@ ENTRIES: Final = (
         arguments={"model": "openai/text-embedding-3-small", "input": ["hi"], "mock_response": [0.5]},
         positional=2,
         python=_embedding,
+        executor_hop=True,
     ),
     Entry(
         route=Route.RESPONSES,
@@ -101,6 +108,7 @@ ENTRIES: Final = (
         arguments={"input": "hi", "model": "openai/gpt-4o", "mock_response": "python"},
         positional=2,
         python=_responses,
+        executor_hop=True,
     ),
     Entry(
         route=Route.MESSAGES,
@@ -117,6 +125,7 @@ ENTRIES: Final = (
         },
         positional=0,
         python=_messages,
+        executor_hop=True,
     ),
     Entry(
         route=Route.OCR,
@@ -128,6 +137,7 @@ ENTRIES: Final = (
         arguments={"model": "mistral/mistral-ocr-latest", "document": {"type": "file", "file": b"pdf"}},
         positional=2,
         python=None,
+        executor_hop=False,
     ),
 )
 
@@ -285,3 +295,27 @@ async def test_sync_entry_with_flag_true_raises_setup_errors_at_await(entry: Ent
         assert inspect.iscoroutine(pending)
         with pytest.raises(RuntimeError, match="is unavailable"):
             await pending
+
+
+@pytest.mark.parametrize("entry", ENTRIES, ids=entry_id)
+async def test_async_entry_runs_native_through_the_client_wrapper_steps(entry: Entry) -> None:
+    scheduled: Final[list[str]] = []
+
+    async def failing(native_call: NativeCall) -> ModelResponse:
+        scheduled.append("native")
+        raise litellm.Timeout(message="timed out", model="model", llm_provider="openai")
+
+    async def started_before() -> None:
+        scheduled.append("task")
+
+    entry.async_binding.override(failing)
+    task: Final = asyncio.create_task(started_before())
+    try:
+        with scenario_rules(entry, SCENARIOS["required"]), pytest.raises(litellm.Timeout) as raised:
+            await entry.asynchronous(*entry.args(), **entry.kwargs(timeout=30.0, num_retries=0))
+    finally:
+        entry.async_binding.reset()
+        await task
+
+    assert (getattr(raised.value, "timeout", None), getattr(raised.value, "num_retries", None)) == (30.0, 0)
+    assert scheduled == (["task", "native"] if entry.executor_hop else ["native", "task"])

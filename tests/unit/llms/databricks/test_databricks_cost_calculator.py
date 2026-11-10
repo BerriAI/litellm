@@ -6,6 +6,7 @@ from typing import Final
 import pytest
 
 import litellm
+from litellm.litellm_core_utils.get_model_cost_map import AliasedCostEntry
 from litellm.llms.databricks.cost_calculator import cost_per_token
 from litellm.types.utils import ModelInfo, Usage
 
@@ -213,6 +214,7 @@ def test_every_model_without_published_cache_dbu_bills_cache_writes_at_its_own_i
         if model.startswith("databricks/")
         and info.get("input_cost_per_token")
         and model not in PUBLISHED_DBU_PER_MILLION
+        and not (isinstance(info, AliasedCostEntry) and info.names[0] != model)
     ]
 
     for model in without_published_rates:
