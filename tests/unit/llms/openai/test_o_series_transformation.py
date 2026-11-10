@@ -1,3 +1,4 @@
+from typing import Final
 from unittest.mock import patch
 
 import pytest
@@ -96,6 +97,39 @@ async def test_o1_handle_system_role(model):
             assert request_body["messages"] == [
                 {"role": "user", "content": "Be a good bot!"}
             ]
+
+
+_SYSTEM_PROMPT_FIRST: Final = (
+    {"role": "system", "content": "Be a good bot!"},
+    {"role": "user", "content": "hi"},
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+async def test_system_message_goes_out_as_user_without_rewriting_the_callers_messages(is_async: bool) -> None:
+    config: Final = OpenAIOSeriesConfig()
+    messages: Final = [dict(message) for message in _SYSTEM_PROMPT_FIRST]
+    request: Final = (
+        await config.async_transform_request(
+            model="test-model-without-system-messages",
+            messages=messages,
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+        if is_async
+        else config.transform_request(
+            model="test-model-without-system-messages",
+            messages=messages,
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+    )
+
+    assert [message["role"] for message in request["messages"]] == ["user", "user"]
+    assert messages == list(_SYSTEM_PROMPT_FIRST)
 
 
 @pytest.mark.parametrize(
