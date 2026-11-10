@@ -1,6 +1,8 @@
 import base64
 import json
 import os
+from types import MappingProxyType
+from typing import Final, cast
 
 import httpx
 import pytest
@@ -324,3 +326,37 @@ class TestOptionalParams:
 
 class TestModelCostEntry:
     REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../.."))
+
+
+_LABEL_FIELDS: Final = ("user_api_key_alias", "user_api_key_team_alias", "spend_logs_metadata")
+_IDENTITY: Final = MappingProxyType({"user_api_key_alias": "chargeback-key", "user_api_key_team_alias": "ai-platform"})
+_PROXY_METADATA: Final = MappingProxyType({**_IDENTITY, "spend_logs_metadata": {"cost-center": "cc-1"}})
+
+
+def _transcription_request_body() -> dict[str, object]:
+    data: Final = (
+        VertexGeminiAudioTranscriptionConfig()
+        .transform_audio_transcription_request(
+            model="gemini-3.5-transcribe-preview",
+            audio_file=AUDIO_BYTES,
+            optional_params={"language": "en"},
+            litellm_params={"metadata": dict(_PROXY_METADATA)},
+        )
+        .data
+    )
+    assert isinstance(data, dict)
+    return data
+
+
+def test_gemini_transcription_carries_identity_labels_only_while_the_setting_is_on(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", None)
+    setting_off: Final = _transcription_request_body()
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", _LABEL_FIELDS)
+    setting_on: Final = _transcription_request_body()
+
+    assert "labels" not in setting_off
+    assert {key: value for key, value in setting_on.items() if key != "labels"} == setting_off
+    assert setting_on["labels"] == {**_IDENTITY, "cost-center": "cc-1"}
+    assert list(cast(dict[str, str], setting_on["labels"])) == [*_IDENTITY, "cost-center"]

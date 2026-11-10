@@ -20,7 +20,8 @@ from litellm.llms.vertex_ai.audio_transcription.transformation import (
     validate_vertex_transcription_location,
     validate_vertex_transcription_project_id,
 )
-from litellm.llms.vertex_ai.common_utils import VertexAIError, get_vertex_base_url
+from litellm.llms.vertex_ai.common_utils import VertexAIError, get_vertex_base_url, pop_vertex_request_labels
+from litellm.llms.vertex_ai.request_labels import vertex_request_label_fields
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -169,7 +170,8 @@ class VertexGeminiAudioTranscriptionConfig(BaseAudioTranscriptionConfig, VertexB
                 audioTranscriptionConfig=_audio_transcription_config(optional_params.get("language"))
             ),
         )
-        return AudioTranscriptionRequestData(data=dict(request_body))
+        labels: Final = pop_vertex_request_labels(None, dict(litellm_params)) if vertex_request_label_fields() else None
+        return AudioTranscriptionRequestData(data={**request_body, "labels": labels} if labels else dict(request_body))
 
     def transform_audio_transcription_response(
         self,

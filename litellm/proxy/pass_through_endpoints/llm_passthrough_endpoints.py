@@ -2577,7 +2577,7 @@ def _upstream_headers_for_vertex_route(endpoint: str, headers: Mapping[str, str]
 
 
 _VERTEX_BODY_LABELLED_METHODS: Final = frozenset(
-    {"generateContent", "streamGenerateContent", "predict", "batchPredictionJobs"}
+    {"generateContent", "streamGenerateContent", "predict", "predictLongRunning", "batchPredictionJobs"}
 )
 _VERTEX_HEADER_LABELLED_METHODS: Final = frozenset({"rawPredict", "streamRawPredict"})
 _VERTEX_HEADER_LABELLED_PUBLISHERS: Final = frozenset({"anthropic", "mistralai"})

@@ -22,7 +22,9 @@ from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
 from litellm.llms.vertex_ai.common_utils import (
     convert_vertex_datetime_to_openai_datetime,
     get_vertex_base_url,
+    pop_vertex_request_labels,
 )
+from litellm.llms.vertex_ai.request_labels import vertex_request_label_fields
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.videos.main import VideoCreateOptionalRequestParams, VideoObject
@@ -368,6 +370,9 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         # Build instance with prompt
         instance_dict: Final[dict[str, object]] = {"prompt": prompt}
         params_copy: Final = video_create_optional_request_params.copy()
+        labels: Final = (
+            pop_vertex_request_labels(params_copy, dict(litellm_params)) if vertex_request_label_fields() else None
+        )
 
         # Check if user wants to provide full instance dict
         if "instances" in params_copy and isinstance(params_copy["instances"], dict):
@@ -412,6 +417,8 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         # Only add parameters if there are any
         if vertex_params:
             request_data["parameters"] = vertex_params
+        if labels:
+            request_data["labels"] = labels
 
         # Append :predictLongRunning endpoint to api_base
         url: Final = f"{api_base}:predictLongRunning"

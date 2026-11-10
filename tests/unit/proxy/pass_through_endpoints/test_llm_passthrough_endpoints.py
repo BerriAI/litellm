@@ -431,9 +431,10 @@ def test_vertex_gemini_pass_through_forwards_the_body_untouched_with_the_setting
     "endpoint",
     [
         f"{_VERTEX_GEMINI_MODEL_PATH}:predict",
+        f"{_VERTEX_GEMINI_MODEL_PATH}:predictLongRunning",
         "v1/projects/deployment-project/locations/global/batchPredictionJobs",
     ],
-    ids=["predict", "batch-prediction-job"],
+    ids=["predict", "predict-long-running", "batch-prediction-job"],
 )
 def test_vertex_pass_through_adds_identity_labels_to_predict_and_batch_jobs(
     vertex_proxy: TestClient, respx_mock: "respx.MockRouter", monkeypatch: pytest.MonkeyPatch, endpoint: str

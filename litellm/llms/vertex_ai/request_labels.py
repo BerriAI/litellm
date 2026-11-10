@@ -64,12 +64,12 @@ def _is_reserved(key: str) -> bool:
     return key.strip().lower().startswith(VERTEX_REQUEST_LABEL_IDENTITY_PREFIX)
 
 
-def _metadata_sources(litellm_params: Mapping[str, object]) -> tuple[Mapping[object, object], ...]:
+def vertex_metadata_sources(litellm_params: Mapping[str, object]) -> tuple[Mapping[object, object], ...]:
     candidates: Final = (litellm_params.get(name) for name in _METADATA_PARAM_NAMES)
     return tuple(_ANY_MAPPING.validate_python(source) for source in candidates if isinstance(source, Mapping))
 
 
-def _text_labels(source: object) -> tuple[Label, ...]:
+def string_labels(source: object) -> tuple[Label, ...]:
     if not isinstance(source, Mapping):
         return ()
     pairs: Final = _ANY_MAPPING.validate_python(source).items()
@@ -96,7 +96,7 @@ def _identity_labels(
 
 def _spend_logs_labels(sources: tuple[Mapping[object, object], ...]) -> tuple[Label, ...]:
     pairs: Final = chain.from_iterable(
-        _text_labels(source.get(VERTEX_REQUEST_LABEL_CLIENT_FIELD)) for source in sources
+        string_labels(source.get(VERTEX_REQUEST_LABEL_CLIENT_FIELD)) for source in sources
     )
     candidates: Final = (_normalized_label(key, value) for key, value in pairs)
     return tuple(label for label in candidates if label is not None)
@@ -119,9 +119,9 @@ def resolve_vertex_request_labels(
     Identity comes first, then the caller's string labels minus the reserved prefix, then ``spend_logs_metadata``
     pairs when allowed, each key keeping its first value, up to ``max_labels``.
     """
-    sources: Final = _metadata_sources(litellm_params)
+    sources: Final = vertex_metadata_sources(litellm_params)
     spend_logs: Final = _spend_logs_labels(sources) if VERTEX_REQUEST_LABEL_CLIENT_FIELD in allowed_fields else ()
-    client: Final = tuple(label for label in (*_text_labels(caller_labels), *spend_logs) if not _is_reserved(label[0]))
+    client: Final = tuple(label for label in (*string_labels(caller_labels), *spend_logs) if not _is_reserved(label[0]))
     return _first_occurrences((*_identity_labels(sources, allowed_fields), *client), max_labels)
 
 

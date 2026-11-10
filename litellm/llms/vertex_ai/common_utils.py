@@ -20,6 +20,8 @@ from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.vertex_ai.request_labels import (
     VERTEX_REQUEST_LABELS_MAX,
     resolve_vertex_request_labels,
+    string_labels,
+    vertex_metadata_sources,
     vertex_request_label_fields,
 )
 from litellm.types.llms.openai import AllMessageValues
@@ -171,6 +173,7 @@ def redact_vertex_ai_metadata_from_litellm_params(model_call_details: dict) -> N
 
 
 _LITELLM_PARAMS: Final = TypeAdapter(Mapping[str, object])
+_CALLER_LABELS: Final = TypeAdapter(object)
 
 
 def vertex_request_labels_from_litellm_params(
@@ -182,23 +185,9 @@ def vertex_request_labels_from_litellm_params(
     using ``requester_metadata`` string key-value pairs (same convention as Gemini).
     ``metadata`` is tried first when both are present.
     """
-    if not litellm_params:
-        return None
-    for key in ("metadata", "litellm_metadata"):
-        if key not in litellm_params:
-            continue
-        metadata = litellm_params[key]
-        if metadata is None or not isinstance(metadata, dict):
-            continue
-        if "requester_metadata" not in metadata:
-            continue
-        rm = metadata["requester_metadata"]
-        if not isinstance(rm, dict):
-            continue
-        labels = {k: v for k, v in rm.items() if isinstance(k, str) and isinstance(v, str)}
-        if labels:
-            return labels
-    return None
+    sources: Final = vertex_metadata_sources(litellm_params or {})
+    candidates: Final = (dict(string_labels(source.get("requester_metadata"))) for source in sources)
+    return next((labels for labels in candidates if labels), None)
 
 
 def pop_vertex_caller_labels(
@@ -209,11 +198,10 @@ def pop_vertex_caller_labels(
     Pop the caller's optional ``labels`` (Gemini-style), falling back to ``requester_metadata``
     on ``litellm_params["metadata"]`` / ``litellm_params["litellm_metadata"]``.
     """
-    raw: Final = optional_params.pop("labels", None) if optional_params is not None else None
-    labels: Final = (
-        {k: v for k, v in raw.items() if isinstance(k, str) and isinstance(v, str)} if isinstance(raw, dict) else None
+    raw: Final = (
+        _CALLER_LABELS.validate_python(optional_params.pop("labels", None)) if optional_params is not None else None
     )
-    return labels or vertex_request_labels_from_litellm_params(litellm_params)
+    return dict(string_labels(raw)) or vertex_request_labels_from_litellm_params(litellm_params)
 
 
 def pop_vertex_request_labels(
