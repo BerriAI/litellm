@@ -18,8 +18,13 @@ from litellm.litellm_core_utils.core_helpers import (
 from litellm.types.interactions import InteractionsAPIResponse
 
 
-class BudgetReservationReconcileLogger(CustomLogger):
+class _PROXY_BudgetReservationReconcileLogger(CustomLogger):
     """Settle auth's spend-counter reservation on success when ProxyDBLogger is absent.
+
+    Named with ``_PROXY_`` so ``Logging.should_run_callback`` still invokes this
+    accounting hook when a request sets ``no-log: true``. ``callback_bound=True``
+    also skips request-end cleanup, so a suppressed callback would pin a shared
+    key's reservation until TTL.
 
     With ``custom_auth_run_common_checks`` and no ``database_url``, auth still reserves
     spend in the in-memory counter and ``bind_budget_reservation_to_callbacks`` marks
@@ -82,3 +87,6 @@ class BudgetReservationReconcileLogger(CustomLogger):
             )
 
             await release_or_invalidate_budget_reservation(budget_reservation=budget_reservation)
+
+
+BudgetReservationReconcileLogger: Final = _PROXY_BudgetReservationReconcileLogger
