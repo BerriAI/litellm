@@ -9,7 +9,8 @@ from types import MappingProxyType
 from typing import Annotated, Final, Literal, Protocol, TypeAlias
 
 import httpx
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Response, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 
 from litellm._logging import verbose_proxy_logger
@@ -249,12 +250,11 @@ async def refresh_latest_release_info(client: _AsyncGetClient, cache: InMemoryCa
 )
 async def latest_release_info(
     background_tasks: BackgroundTasks,
-    response: Response,
     client: Annotated[_AsyncGetClient, Depends(_default_client)],
     cache: Annotated[InMemoryCache, Depends(_default_cache)],
     fetch_lock: Annotated[asyncio.Lock, Depends(_default_fetch_lock)],
     release_check_enabled: Annotated[bool, Depends(_default_release_check_enabled)],
-) -> LatestReleaseInfo | None:
+) -> LatestReleaseInfo | JSONResponse | None:
     """
     Newest stable release on the LiteLLM changelog, linked to its changelog page, with the PR count of its whole
     minor line (e.g. v1.105.0 + v1.105.1) from GitHub split into new features, bug fixes and other updates.
@@ -274,5 +274,4 @@ async def latest_release_info(
         raise HTTPException(status_code=502, detail="Latest release info unavailable")
     if not fetch_lock.locked():
         background_tasks.add_task(refresh_latest_release_info, client, cache, fetch_lock)
-    response.status_code = status.HTTP_202_ACCEPTED
-    return None
+    return JSONResponse(status_code=status.HTTP_202_ACCEPTED, content=None)
