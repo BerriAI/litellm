@@ -91,10 +91,13 @@ def openai_endpoint_for_bedrock_job_model(
     if not model_id:
         return "/v1/chat/completions"
     try:
-        mode: Final = get_cached_model_info()(model=model_id, custom_llm_provider="bedrock").get("mode")
+        model_info: Final = get_cached_model_info()(model=model_id, custom_llm_provider="bedrock")
     except ModelNotMappedError:
         return "/v1/chat/completions"
-    return "/v1/embeddings" if mode == "embedding" else "/v1/chat/completions"
+    is_embedding_model: Final = (
+        model_info.get("mode") == "embedding" or model_info.get("output_vector_size") is not None
+    )
+    return "/v1/embeddings" if is_embedding_model else "/v1/chat/completions"
 
 
 def titan_embedding_usage_from_batch_output(model_output: Mapping[str, object]) -> Usage | None:

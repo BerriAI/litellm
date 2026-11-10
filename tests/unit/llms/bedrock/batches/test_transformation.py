@@ -24,6 +24,7 @@ from botocore.auth import SigV4Auth
 from botocore.awsrequest import AWSRequest
 from botocore.credentials import Credentials
 
+import litellm
 from litellm.llms.bedrock.batches.transformation import BedrockBatchesConfig
 from litellm.types.utils import LlmProviders
 
@@ -938,6 +939,20 @@ def test_retrieve_response_endpoint_follows_the_job_models_mode(
         litellm_params={},
     )
     assert out.endpoint == expected_endpoint
+
+
+def test_retrieve_response_endpoint_survives_a_batch_deployment_overriding_the_models_mode(
+    config: BedrockBatchesConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    job_model_id = "amazon.titan-embed-text-v2:0"
+    monkeypatch.setitem(litellm.model_cost, job_model_id, {**litellm.model_cost[job_model_id], "mode": "batch"})
+    out = config.transform_retrieve_batch_response(
+        model=None,
+        raw_response=_raw({"jobArn": ARN, "status": "InProgress", "modelId": job_model_id}),
+        logging_obj=MagicMock(),
+        litellm_params={},
+    )
+    assert out.endpoint == "/v1/embeddings"
 
 
 def test_retrieve_response_enriches_metadata(config):
