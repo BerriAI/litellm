@@ -1,3 +1,5 @@
+use std::time::{Duration, Instant};
+
 use testcontainers_modules::testcontainers::{
     ContainerAsync, GenericImage, ImageExt,
     core::{IntoContainerPort, WaitFor},
@@ -5,12 +7,14 @@ use testcontainers_modules::testcontainers::{
 };
 
 use crate::{
-    Error,
+    ClientConnection, Error,
+    deployment::parse_client_list,
     ports::{HOST, start_on_free_ports, wait_for_pong},
     standalone::REDIS_TAG,
 };
 
 const READY: &str = "redis-testing cluster ready";
+const ANNOUNCE_TIMEOUT: Duration = Duration::from_secs(30);
 
 const START_CLUSTER: &str = r#"
 set -e
@@ -68,6 +72,69 @@ impl RedisCluster {
 
     pub fn nodes(&self) -> impl Iterator<Item = (&'static str, u16)> + '_ {
         self.ports.iter().map(|&port| (HOST, port))
+    }
+
+    /// One redis-cli reply per node, in `nodes()` order.
+    pub async fn cli_outputs(&self, args: &[&str]) -> Result<Vec<String>, Error> {
+        let mut replies = Vec::with_capacity(self.ports.len());
+        for port in self.ports {
+            replies.push(crate::exec::run(&self.container, crate::exec::cli(port, args)).await?);
+        }
+        Ok(replies)
+    }
+
+    pub async fn cli_on_every_node(&self, args: &[&str]) -> Result<(), Error> {
+        for port in self.ports {
+            crate::exec::run(&self.container, crate::exec::cli(port, args)).await?;
+        }
+        Ok(())
+    }
+
+    pub async fn cli_on_node(&self, port: u16, args: &[&str]) -> Result<String, Error> {
+        crate::exec::run(&self.container, crate::exec::cli(port, args)).await
+    }
+
+    /// Makes each node tell clients it is at the port of `ports` in `nodes()` order, such as a
+    /// `TcpProxy` in front of it, and returns once every node lists every announced port, so slot
+    /// maps and redirects only lead a client to those ports.
+    pub async fn announce_ports(&self, ports: [u16; 3]) -> Result<(), Error> {
+        for (node, announced) in self.ports.into_iter().zip(ports) {
+            self.cli_on_node(
+                node,
+                &[
+                    "CONFIG",
+                    "SET",
+                    "cluster-announce-port",
+                    &announced.to_string(),
+                ],
+            )
+            .await?;
+        }
+        let deadline = Instant::now() + ANNOUNCE_TIMEOUT;
+        loop {
+            let views = self.cli_outputs(&["CLUSTER", "NODES"]).await?;
+            let learned = views
+                .iter()
+                .all(|view| ports.iter().all(|port| view.contains(&format!(":{port}@"))));
+            if learned {
+                return Ok(());
+            }
+            if Instant::now() > deadline {
+                return Err(Error::Announce);
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+
+    pub async fn clients(&self) -> Result<Vec<ClientConnection>, Error> {
+        let mut clients = Vec::new();
+        for port in self.ports {
+            let reply =
+                crate::exec::run(&self.container, crate::exec::cli(port, &["CLIENT", "LIST"]))
+                    .await?;
+            clients.extend(parse_client_list(port, &reply));
+        }
+        Ok(clients)
     }
 
     pub async fn restart(&self) -> Result<(), Error> {

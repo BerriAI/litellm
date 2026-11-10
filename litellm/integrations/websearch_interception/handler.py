@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, TypedDict, TypeVar, cast
 from typing_extensions import Never, ReadOnly
 
 import litellm
+from litellm._internal_context import billed_separately
 from litellm._logging import verbose_logger
 from litellm.anthropic_interface import messages as anthropic_messages
 from litellm.constants import LITELLM_WEB_SEARCH_TOOL_NAME
@@ -398,14 +399,17 @@ class WebSearchInterceptionLogger(CustomLogger):
             (t for t in tools if is_anthropic_native_web_search_tool(t)),
             None,
         )
+        emit_native_blocks: Final = native_tool is not None or (
+            kwargs is not None and bool(kwargs.get(WEBSEARCH_EMIT_NATIVE_BLOCKS_KEY))
+        )
 
         outcome: Final = await self._short_circuit_search_outcome(query, kwargs=kwargs)
         search_result_text: Final = WebSearchTransformation.search_outcome_text(outcome)
 
         content: Final[list[dict[str, object]]] = []
-        if native_tool is not None:
+        if emit_native_blocks:
             tool_use_id: Final = f"srvtoolu_{uuid.uuid4().hex}"
-            tool_name: Final = native_tool.get("name") or "web_search"
+            tool_name: Final = (native_tool.get("name") if native_tool is not None else None) or "web_search"
             content.append(
                 {
                     "type": "server_tool_use",
@@ -415,10 +419,10 @@ class WebSearchInterceptionLogger(CustomLogger):
                 }
             )
             content.append(
-                WebSearchTransformation.build_web_search_outcome_block(tool_use_id=tool_use_id, outcome=outcome)
+                WebSearchTransformation.build_web_search_outcome_block(
+                    tool_use_id=tool_use_id, outcome=outcome, with_snippets=False
+                )
             )
-        # Keep the text block so non-native short-circuit callers (Claude Code,
-        # github_copilot, etc.) see the same payload they always have.
         content.append({"type": "text", "text": search_result_text})
 
         response: Final[dict[str, object]] = {
@@ -435,7 +439,7 @@ class WebSearchInterceptionLogger(CustomLogger):
         verbose_logger.debug(
             "WebSearchInterception: Short-circuit search completed, returning synthetic response (%s chars, native_blocks=%s)",
             len(search_result_text),
-            native_tool is not None,
+            emit_native_blocks,
         )
         return response
 
@@ -1625,19 +1629,20 @@ class WebSearchInterceptionLogger(CustomLogger):
             search_kwargs: Final = MappingProxyType(
                 {**configured_search_kwargs, **parent_correlation.as_search_kwargs()}
             )
-            result: Final = (
-                await litellm.asearch(
-                    query=query_arg, search_provider=search_provider, **_NO_ASEARCH_NAMED, **search_kwargs
+            with billed_separately():
+                result: Final = (
+                    await litellm.asearch(
+                        query=query_arg, search_provider=search_provider, **_NO_ASEARCH_NAMED, **search_kwargs
+                    )
+                    if search_metadata is None
+                    else await litellm.asearch(
+                        query=query_arg,
+                        search_provider=search_provider,
+                        litellm_metadata=search_metadata,
+                        **_NO_ASEARCH_NAMED,
+                        **search_kwargs,
+                    )
                 )
-                if search_metadata is None
-                else await litellm.asearch(
-                    query=query_arg,
-                    search_provider=search_provider,
-                    litellm_metadata=search_metadata,
-                    **_NO_ASEARCH_NAMED,
-                    **search_kwargs,
-                )
-            )
 
             # Format using transformation function
             search_result_text: Final = WebSearchTransformation.format_search_response(result)
@@ -1697,6 +1702,7 @@ class WebSearchInterceptionLogger(CustomLogger):
         )
         return {
             **user_api_key_metadata,
+            **LiteLLMProxyRequestSetup.get_tenant_logging_metadata(user_api_key_auth),
             **parent_correlation.as_search_metadata(),
             "model_group": search_tool_name,
             "user_api_key": LiteLLMProxyRequestSetup.get_logged_api_key(user_api_key_auth),

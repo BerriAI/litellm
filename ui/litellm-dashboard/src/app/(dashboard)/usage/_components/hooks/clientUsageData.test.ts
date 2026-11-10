@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import i18n from "@/i18n/i18n";
 import {
   clientUsageFromLogs,
   identifyUsageClient,
@@ -115,7 +116,7 @@ describe("client usage from request logs", () => {
     "should refuse totals for a partial page %j",
     (overrides) => {
       const result = clientUsageFromLogs(page([log()], overrides), scope);
-      expect(result.error).toBe(INCOMPLETE_CLIENT_USAGE);
+      expect(result.error).toBe(i18n.t(INCOMPLETE_CLIENT_USAGE));
       expect(result.data.results).toEqual([]);
       expect(result.data.metadata?.total_spend).toBe(0);
     },

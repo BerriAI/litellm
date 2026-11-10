@@ -4,6 +4,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders, screen, waitFor, within } from "../../tests/test-utils";
 import Navbar from "./navbar";
 
+vi.mock("next/navigation", () => ({ usePathname: () => "/api-keys", useRouter: () => ({ push: vi.fn() }) }));
+
 // Mock the hooks and utilities
 vi.mock("@/components/networking", () => ({
   getProxyBaseUrl: vi.fn(() => "http://localhost:4000"),

@@ -3,7 +3,7 @@ raw HTTP client imports (requests, urllib.request, httpx, aiohttp, http.client) 
 banned in suite code, and tests/e2e_harness, which tests that harness, is held to the
 same ban. Importing requests' exception types for catching is fine anywhere; a small
 allowlist grandfathers the files that legitimately make raw calls (the transport
-itself, the root conftest liveness probe, the claude_code version resolver's constant
+itself, the root conftest liveness probe, the cli_harness npm version resolver's constant
 registry URL fetch, and the mcp OAuth client, whose httpx client is the object the
 official mcp SDK's streamable_http_client requires and so cannot go through the sync
 requests transport). Referenced by tests/e2e/AGENTS.md."""
@@ -24,7 +24,7 @@ BANNED_MODULES = ("requests", "urllib.request", "http.client", "httpx", "aiohttp
 ALLOWED_RAW_CLIENT_FILES = {
     "e2e/e2e_http.py": ("requests",),
     "e2e/conftest.py": ("requests",),
-    "e2e/claude_code/pr_gate_version_resolver.py": ("urllib.request",),
+    "e2e/cli_harness/npm_version_resolver.py": ("urllib.request",),
 }
 
 EXCEPTION_ONLY_NAMES = frozenset({"RequestException", "ConnectionError", "Timeout", "HTTPError"})

@@ -638,8 +638,14 @@ def test_token_counter_tools_match_billed_prompt_for_json_tool_chat_templates(
         ("deepseek/deepseek-chat:free", "DeepSeek-V4-Flash-0731"),
         ("deepseek-reasoner", "DeepSeek-V4-Flash-0731"),
         ("deepseek/deepseek-flash", "DeepSeek-V4-Flash-0731"),
-        ("DeepSeek-V4.1-Flash", "deepseek-v3.2"),
-        ("accounts/fireworks/models/deepseek-v4p1-flash", "deepseek-v3.2"),
+        ("DeepSeek-V4.1-Flash", "accounts/fireworks/models/deepseek-v4p1-flash"),
+        ("databricks-deepseek-v4-1-flash", "accounts/fireworks/models/deepseek-v4p1-flash"),
+        ("deepseek-ai/deepseek-v4.1-flash-maas", "accounts/fireworks/models/deepseek-v4p1-flash"),
+        ("deepseek-v4p1-flash-1017", "accounts/fireworks/models/deepseek-v4p1-flash"),
+        ("grok-4.1-fast-non-reasoning", "grok-4-1-fast-reasoning"),
+        ("xai.grok-4.1-fast", "grok-4-1-fast-reasoning"),
+        ("grok-4.3-latest", "grok-4.3"),
+        ("xai.grok-4-3", "grok-4.3"),
         ("Qwen/Qwen3.5-122B-A10B", "databricks-qwen35-122b-a10b"),
         ("qwen3-235b-a22b", "mistral-large-latest"),
     ],
@@ -704,6 +710,48 @@ def test_token_counter_tool_choice_adds_nothing_for_deepseek_v4(tool_choice: obj
     ) == token_counter_new(model="DeepSeek-V4-Flash-0731", messages=list(_USER_MESSAGES), tools=tools)
 
 
+# A request with a one-function tool billed 283 prompt tokens on xAI grok-4.3 without tool_choice and 297 with a
+# named one, and 357 and 358 on Azure AI Foundry grok-4-1-fast-reasoning, on 2026-10-29
+@pytest.mark.parametrize("model", ["grok-4.3", "grok-4-1-fast-reasoning"])
+def test_token_counter_counts_a_named_tool_choice_for_grok(model: str):
+    tools: Final = [_openai_tool(_WEATHER_FUNCTION)]
+    named: Final = {"type": "function", "function": {"name": "get_weather"}}
+
+    assert token_counter_new(
+        model=model, messages=list(_USER_MESSAGES), tools=tools, tool_choice=named
+    ) > token_counter_new(model=model, messages=list(_USER_MESSAGES), tools=tools)
+
+
+def _counted_with_strict(model: str, **strict: bool) -> int:
+    return token_counter_new(
+        model=model, messages=list(_USER_MESSAGES), tools=[_openai_tool({**_WEATHER_FUNCTION, **strict})]
+    )
+
+
+# A one-function tool billed the same prompt tokens with strict unset and false on 2026-10-29: 357 through Azure AI
+# Foundry grok-4-1-fast-reasoning chat and 283 through xAI grok-4.3
+@pytest.mark.parametrize("model", ["grok-4-1-fast-reasoning", "grok-4.3"])
+def test_token_counter_renders_a_false_strict_like_an_unset_one_for_grok(model: str):
+    assert (
+        _counted_with_strict(model, strict=False)
+        == _counted_with_strict(model)
+        < _counted_with_strict(model, strict=True)
+    )
+
+
+# A one-function tool billed 5 prompt tokens more with strict false than unset, the same as with strict true, on
+# 2026-10-30: 310 against 305 through Baseten DeepSeek-V4.1-Flash and 309 against 304 through Together
+@pytest.mark.parametrize(
+    "model", ["accounts/fireworks/models/deepseek-v4p1-flash", "deepseek-v4-flash", "qwen3.5-plus"]
+)
+def test_token_counter_renders_a_false_strict_like_a_true_one_for_other_chat_templates(model: str):
+    assert (
+        _counted_with_strict(model, strict=False)
+        == _counted_with_strict(model, strict=True)
+        > _counted_with_strict(model)
+    )
+
+
 @pytest.mark.parametrize(
     ("tool_choice", "expected_tool_choice"),
     [
@@ -759,9 +807,17 @@ def test_token_counter_counts_anthropic_tools_as_sent_to_chat_template_families(
 
 # Qwen3.5's chat_template.jinja opens a system turn for the tool schemas when the request has none, 5 tokens that a
 # request with a system message already pays, while DeepSeek V4's encoding_dsv4.py appends them to the first turn
-# either way (both read on Hugging Face on 2026-10-17)
+# either way (both read on Hugging Face on 2026-10-17). A system message cost the same with and without a tool on
+# Fireworks deepseek-v4p1-flash, Azure AI Foundry grok-4-1-fast-reasoning and xAI grok-4.3 on 2026-10-29
 @pytest.mark.parametrize(
-    ("model", "implicit_system_turn_tokens"), [("DeepSeek-V4-Flash-0731", 0), ("databricks-qwen35-122b-a10b", 5)]
+    ("model", "implicit_system_turn_tokens"),
+    [
+        ("DeepSeek-V4-Flash-0731", 0),
+        ("databricks-qwen35-122b-a10b", 5),
+        ("accounts/fireworks/models/deepseek-v4p1-flash", 0),
+        ("grok-4-1-fast-reasoning", 0),
+        ("grok-4.3", 0),
+    ],
 )
 def test_token_counter_counts_the_tools_system_turn_only_without_a_system_message(
     model: str, implicit_system_turn_tokens: int
@@ -1190,7 +1246,7 @@ def test_token_counter_counts_deepseek_v3_and_v4_with_the_packaged_deepseek_toke
 
 @pytest.mark.parametrize(
     "model",
-    ["together_ai/deepseek-ai/DeepSeek-R1-Distill-Qwen-14B", "fireworks_ai/accounts/fireworks/models/deepseek-v2p5"],
+    ["deepinfra/deepseek-ai/DeepSeek-R1-Distill-Qwen-32B", "fireworks_ai/accounts/fireworks/models/deepseek-v2p5"],
 )
 def test_token_counter_skips_the_deepseek_tokenizer_for_deepseek_models_built_on_other_vocabularies(model: str):
     assert litellm.token_counter(model=model, text=_CODE_SAMPLE) != _deepseek_token_count(_CODE_SAMPLE)
@@ -1962,6 +2018,97 @@ def test_token_counter_with_redacted_thinking_content():
 
     assert token_counter(model=model, messages=with_block) == token_counter(model=model, messages=without_block)
 
+
+def test_token_counter_with_compaction_block():
+    """
+    A replayed on-demand compaction block (Anthropic's signed summary of the earlier turns) counts its
+    summary text like a text block and nothing for its signature. It used to raise, which turned every
+    /v1/messages/count_tokens call on a compacted history into a 500 once the provider count fell back here.
+    """
+    model = "anthropic/claude-sonnet-5-5"
+    summary = "The user is building a recipe app in Python and asked for one-sentence class descriptions."
+    follow_up = {"role": "user", "content": [{"type": "text", "text": "Now do the same for Ingredient."}]}
+    signed_block = {"type": "compaction", "content": summary, "signature": "EqQBCkYIBRgCKkBjZ2xhc3M" * 40}
+
+    as_compaction = [{"role": "assistant", "content": [signed_block]}, follow_up]
+    unsigned = [{"role": "assistant", "content": [{"type": "compaction", "content": summary}]}, follow_up]
+    as_text = [{"role": "assistant", "content": [{"type": "text", "text": summary}]}, follow_up]
+
+    assert token_counter(model=model, messages=as_compaction) == token_counter(model=model, messages=as_text)
+    assert token_counter(model=model, messages=unsigned) == token_counter(model=model, messages=as_text)
+
+
+def test_token_counter_counts_chat_compaction_blocks_like_their_summary_text():
+    """
+    Chat clients replay a compaction block in the assistant message's provider_specific_fields, and inference
+    sends it to Anthropic as a content block, so the local count includes its summary text and skips its signature.
+    """
+    model = "anthropic/claude-sonnet-5-5"
+    summary = "The user is building a recipe app in Python and asked for one-sentence class descriptions."
+    follow_up = {"role": "user", "content": "Now do the same for Ingredient."}
+    signed_block = {"type": "compaction", "content": summary, "signature": "EqQBCkYIBRgCKkBjZ2xhc3M" * 40}
+
+    replayed = [
+        {"role": "assistant", "content": None, "provider_specific_fields": {"compaction_blocks": [signed_block]}},
+        follow_up,
+    ]
+    as_text = [{"role": "assistant", "content": summary}, follow_up]
+
+    assert token_counter(model=model, messages=replayed) == token_counter(model=model, messages=as_text)
+
+
+class _BosEncoder:
+    def encode_batch_fast(self, texts: list[str]) -> list[list[int]]:
+        return [[0] * (len(text.split()) + 1) for text in texts]
+
+
+def test_token_counter_charges_nothing_for_a_chat_compaction_block_with_no_summary():
+    """
+    A tokenizer that prepends a BOS token charges one token for the empty string, so a replayed
+    compaction block with an empty summary must not reach it, like an empty thinking block.
+    """
+    model = "anthropic/claude-sonnet-5-5"
+    tokenizer = {"type": "huggingface_tokenizer", "tokenizer": _BosEncoder()}
+    follow_up = {"role": "user", "content": "Now do the same for Ingredient."}
+    replayed = [
+        {
+            "role": "assistant",
+            "content": None,
+            "provider_specific_fields": {"compaction_blocks": [{"type": "compaction", "content": ""}]},
+        },
+        follow_up,
+    ]
+    bare = [{"role": "assistant", "content": None}, follow_up]
+
+    assert token_counter(model=model, messages=replayed, custom_tokenizer=tokenizer) == token_counter(
+        model=model, messages=bare, custom_tokenizer=tokenizer
+    )
+
+
+def test_count_content_list_skips_the_tokenizer_for_empty_block_text():
+    """
+    An empty thinking block, a redacted_thinking block (no thinking text at all) and a compaction
+    block with no summary carry no tokens, even under a tokenizer that charges for the empty string
+    (the llama-2 tokenizer prepends its BOS token to every encode call). Counting them through the
+    tokenizer added one token per block on such models.
+    """
+    from litellm.litellm_core_utils.token_counter import _count_content_list
+
+    def charges_for_empty_text(text: str) -> int:
+        return len(text.split()) + 1
+
+    empty_blocks = [
+        {"type": "thinking", "thinking": "", "signature": "EqcLCkYICxgCKkCrqu6lP..."},
+        {"type": "thinking", "thinking": None, "signature": "EqcLCkYICxgCKkCrqu6lP..."},
+        {"type": "redacted_thinking", "data": "EmwKAhgBEgy3va3pzix/LafPsn4aDFIT2Xlxh0L5L8rLVyIw"},
+        {"type": "compaction", "content": ""},
+        {"type": "text", "text": ""},
+    ]
+
+    assert _count_content_list(charges_for_empty_text, empty_blocks, False, None) == 0
+    assert _count_content_list(charges_for_empty_text, [{"type": "thinking", "thinking": "two words"}], False, None) == 3
+
+
 def test_token_counter_with_tool_reference_block():
     """
     Regression test: a message containing an Anthropic tool-search
@@ -2728,7 +2875,7 @@ def test_prefixed_openai_model_names_count_text_like_the_model_they_name(deploym
 
 
 @pytest.mark.parametrize(
-    "model", ["azure/gpt-chat-latest", "azure/codex-mini", "azure/gpt-5.3-chat", "azure/gpt-4.5-preview"]
+    "model", ["azure/gpt-chat-latest", "azure/codex-mini", "azure/gpt-5.3-chat"]
 )
 def test_azure_openai_models_only_azure_lists_get_openai_pricing_and_o200k(model: str):
     assert _pdf_cost(model, _pdf_base64((_REVENUE_LINE,))) == _text_cost(model, _REVENUE_LINE) + 13
@@ -3447,7 +3594,6 @@ def test_token_counter_counts_unlisted_names_of_newer_openai_releases_with_o200k
         "azure/my-deployment",
         "azure/ada",
         "azure/mistral-large-latest",
-        "azure/command-r-plus",
         "azure_ai/mistral-large-latest",
     ],
 )

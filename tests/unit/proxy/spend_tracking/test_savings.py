@@ -137,6 +137,34 @@ def test_compression_savings_priced_at_input_rate():
     assert result.prompt_caching == 0.0
 
 
+def test_an_overflowing_deployment_price_records_finite_savings() -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "overflowing-sonnet",
+                "litellm_params": {
+                    "model": "anthropic/claude-sonnet-5-5",
+                    "input_cost_per_token": 1e308,
+                    "cache_read_input_token_cost": 1e-07,
+                },
+            },
+        ]
+    )
+    deployment_id: Final = router.get_model_list(model_name="overflowing-sonnet")[0]["model_info"]["id"]
+
+    result: Final = compute_savings_spend(
+        model="claude-sonnet-5-5",
+        custom_llm_provider="anthropic",
+        compression_saved_tokens=4389,
+        gateway_injected_cache=True,
+        usage_object=_caching_usage(read=1000, written=0),
+        model_id=deployment_id,
+        llm_router=lambda: router,
+    )
+
+    assert result == (0.0, 0.0, 0.0, 0.0)
+
+
 def test_prompt_caching_savings_priced_at_input_minus_cache_read():
     input_cost, cache_read_cost = _anthropic_costs("claude-sonnet-5")
     # A model that supports prompt caching must charge less to read from cache;

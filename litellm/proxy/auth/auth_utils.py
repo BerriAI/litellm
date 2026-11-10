@@ -2,15 +2,15 @@ import importlib.util
 import os
 import re
 import sys
-from collections.abc import Collection, Iterator, Mapping
-from functools import lru_cache
+from collections.abc import Collection, Iterator, Mapping, Sequence
+from functools import lru_cache, partial
 from itertools import accumulate, chain, repeat
 from logging import Logger
 from types import MappingProxyType
-from typing import Any, Final, Protocol
+from typing import Any, Final, Literal, Protocol, TypeAlias
 
 from fastapi import HTTPException, Request, status
-from pydantic import PositiveInt, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, PositiveInt, TypeAdapter, ValidationError
 
 import litellm
 from litellm import Router, constants, provider_list
@@ -22,6 +22,7 @@ from litellm.constants import (
     MINIMUM_CUSTOM_KEY_LENGTH,
     STANDARD_CUSTOMER_ID_HEADERS,
 )
+from litellm.litellm_core_utils.cloud_storage_security import REQUEST_S3_BUCKET_PARAMS, STORED_S3_BUCKET_PARAM
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor, reject_api_key_secret_reference
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.litellm_core_utils.url_utils import (
@@ -442,6 +443,10 @@ _BANNED_REQUEST_BODY_PARAMS: Final[tuple[str, ...]] = (
     # S3; ``sagemaker_base_url`` redirects all SageMaker traffic;
     # ``deployment_url`` redirects SAP deployments.
     "s3_endpoint_url",
+    "s3_bucket_name",
+    "s3_output_bucket_name",
+    STORED_S3_BUCKET_PARAM,
+    "allow_legacy_cloud_file_ids",
     "sagemaker_base_url",
     "deployment_url",
     # NVIDIA Riva fields consumed by the audio-transcription handler
@@ -479,6 +484,58 @@ _BANNED_REQUEST_BODY_PARAMS: Final[tuple[str, ...]] = (
 )
 
 
+_ClientSideAllowlistSetting: TypeAlias = Literal[
+    "allowed_client_side_s3_buckets", "allowed_client_side_s3_endpoint_urls"
+]
+
+_PROXY_ALLOWLIST_SETTING_BY_PARAM: Final[Mapping[str, _ClientSideAllowlistSetting]] = MappingProxyType(
+    {
+        "s3_bucket_name": "allowed_client_side_s3_buckets",
+        "s3_output_bucket_name": "allowed_client_side_s3_buckets",
+        "s3_endpoint_url": "allowed_client_side_s3_endpoint_urls",
+    }
+)
+
+TEAM_S3_BUCKET_ALLOWLIST_METADATA_KEY: Final = "allowed_s3_buckets"
+_BUCKET_NAMES: Final = TypeAdapter(tuple[str, ...])
+
+
+class _ClientSideStorageAllowlist(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    allowed_client_side_s3_buckets: tuple[str, ...] | None = None
+    allowed_client_side_s3_endpoint_urls: tuple[str, ...] | None = None
+
+    def admits(self, setting: _ClientSideAllowlistSetting, value: object) -> bool:
+        match setting:
+            case "allowed_client_side_s3_buckets":
+                return value in (self.allowed_client_side_s3_buckets or ())
+            case "allowed_client_side_s3_endpoint_urls":
+                return value in (self.allowed_client_side_s3_endpoint_urls or ())
+
+
+def _banned_param_error(param: str) -> ValueError:
+    setting: Final = _PROXY_ALLOWLIST_SETTING_BY_PARAM.get(param)
+    team_hint: Final = (
+        f" or in the team's `metadata.{TEAM_S3_BUCKET_ALLOWLIST_METADATA_KEY}`"
+        if param in REQUEST_S3_BUCKET_PARAMS
+        else ""
+    )
+    allowlist_hint: Final = (
+        ""
+        if setting is None
+        else f" To allow specific values only, list them in `general_settings.{setting}`{team_hint}."
+    )
+    return ValueError(
+        f"Rejected Request: {param} is not allowed in request body. "
+        "Clientside passthrough requires explicit admin opt-in via "
+        "either `general_settings.allow_client_side_credentials = true` "
+        "(proxy-wide) or `configurable_clientside_auth_params` on the "
+        "deployment in your proxy config.yaml. "
+        f"Relevant Issue: https://huntr.com/bounties/4001e1a2-7b7a-4776-a3ae-e6692ec3d997{allowlist_hint}",
+    )
+
+
 def _check_banned_params(
     body: Mapping[str, object],
     general_settings: dict,
@@ -487,11 +544,13 @@ def _check_banned_params(
     *,
     manages_deployments: bool = False,
     mcp_server_fields_allowed: bool = False,
+    defer_s3_buckets: bool = False,
 ) -> None:
     """Raise ``ValueError`` if ``body`` carries a banned param without admin opt-in.
 
     Shared between the root-level check and the nested-config check so a
-    new banned param only needs to be added in one place.
+    new banned param only needs to be added in one place. ``defer_s3_buckets`` lets
+    bucket params through for handlers that check them against the caller team's allowlist.
     """
     wif_body: Final[Mapping[str, object]] = (
         MappingProxyType({key: value for key, value in body.items() if key not in oauth_token_exchange_litellm_params})
@@ -509,6 +568,12 @@ def _check_banned_params(
             # entirely so the rest of the loop doesn't waste work.
             return
         if (
+            setting := _PROXY_ALLOWLIST_SETTING_BY_PARAM.get(param)
+        ) is not None and _ClientSideStorageAllowlist.model_validate(general_settings).admits(setting, body[param]):
+            continue
+        if defer_s3_buckets and param in REQUEST_S3_BUCKET_PARAMS:
+            continue
+        if (
             _allow_model_level_clientside_configurable_parameters(
                 model=model,
                 param=param,
@@ -523,14 +588,7 @@ def _check_banned_params(
             # ``api_base`` with an unallowed ``langfuse_host`` is still
             # rejected for the second field.
             continue
-        raise ValueError(
-            f"Rejected Request: {param} is not allowed in request body. "
-            "Clientside passthrough requires explicit admin opt-in via "
-            "either `general_settings.allow_client_side_credentials = true` "
-            "(proxy-wide) or `configurable_clientside_auth_params` on the "
-            "deployment in your proxy config.yaml. "
-            "Relevant Issue: https://huntr.com/bounties/4001e1a2-7b7a-4776-a3ae-e6692ec3d997",
-        )
+        raise _banned_param_error(param)
 
 
 _FALLBACK_FIELDS: Final[tuple[str, ...]] = (
@@ -662,6 +720,7 @@ def is_request_body_safe(
     model: str,
     *,
     route: str | None = None,
+    defer_s3_buckets: bool = False,
 ) -> bool:
     """
     Check if the request body is safe.
@@ -691,33 +750,28 @@ def is_request_body_safe(
     if "model_list" in request_body:
         raise ValueError("Rejected Request: model_list is not allowed in the request body.")
     manages_deployments: Final = route_manages_deployments(route)
-    _check_banned_params(
-        request_body,
-        general_settings,
-        llm_router,
-        model,
+    check_banned_params: Final = partial(
+        _check_banned_params,
+        general_settings=general_settings,
+        llm_router=llm_router,
+        model=model,
         manages_deployments=manages_deployments,
-        mcp_server_fields_allowed=route_manages_mcp_servers(route),
+        defer_s3_buckets=defer_s3_buckets,
     )
+    check_banned_params(request_body, mcp_server_fields_allowed=route_manages_mcp_servers(route))
     for nested_key in _NESTED_CONFIG_KEYS:
         nested = _coerce_metadata_to_dict(request_body.get(nested_key))
         if nested is not None:
-            _check_banned_params(nested, general_settings, llm_router, model, manages_deployments=manages_deployments)
+            check_banned_params(nested)
     for metadata_key in _NESTED_METADATA_KEYS:
         metadata = _coerce_metadata_to_dict(request_body.get(metadata_key))
         if metadata is not None:
-            _check_banned_params(metadata, general_settings, llm_router, model, manages_deployments=manages_deployments)
+            check_banned_params(metadata)
         if any(isinstance(key, str) and key.startswith(f"{metadata_key}[") for key in request_body):
-            _check_banned_params(
-                extract_nested_form_metadata(form_data=request_body, prefix=f"{metadata_key}["),
-                general_settings,
-                llm_router,
-                model,
-                manages_deployments=manages_deployments,
-            )
+            check_banned_params(extract_nested_form_metadata(form_data=request_body, prefix=f"{metadata_key}["))
     for target in iter_request_fallback_targets(request_body):
         if isinstance(target, dict):
-            _check_banned_params(target, general_settings, llm_router, model, manages_deployments=manages_deployments)
+            check_banned_params(target)
             target_model = target.get("model")
             if isinstance(target_model, str):
                 _reject_url_valued_fallback_target(target_model)
@@ -730,9 +784,7 @@ def is_request_body_safe(
         _reject_request_credential_params(litellm_params, manages_deployments=manages_deployments)
         litellm_params_metadata: Final = _coerce_metadata_to_dict(litellm_params.get("metadata"))
         if litellm_params_metadata is not None:
-            _check_banned_params(
-                litellm_params_metadata, general_settings, llm_router, model, manages_deployments=manages_deployments
-            )
+            check_banned_params(litellm_params_metadata)
     for user_config_params in _user_config_litellm_params(request_body):  # pyright: ignore[reportUnknownArgumentType]  # request_body is an untyped dict
         reject_api_key_secret_reference(user_config_params)
     return True
@@ -804,6 +856,48 @@ def _coerce_metadata_to_dict(value: object) -> dict[str, object] | None:
     return None
 
 
+def _team_s3_buckets(team_metadata: Mapping[str, object] | None) -> tuple[str, ...]:
+    if team_metadata is None:
+        return ()
+    try:
+        return _BUCKET_NAMES.validate_python(team_metadata.get(TEAM_S3_BUCKET_ALLOWLIST_METADATA_KEY) or ())
+    except ValidationError:
+        return ()
+
+
+_TEAM_S3_BUCKET_ROUTE_TEMPLATES: Final = frozenset(
+    {"/v1/files", "/files", "/{provider}/v1/files", "/v1/batches", "/batches", "/{provider}/v1/batches"}
+)
+
+
+def checks_team_s3_buckets_in_handler(request: Request) -> bool:
+    """File upload and batch create check request buckets against the caller team's allowlist themselves."""
+    return get_request_route_template(request) in _TEAM_S3_BUCKET_ROUTE_TEMPLATES and request.method == "POST"
+
+
+def enforce_team_s3_bucket_allowlist(
+    request_body: Mapping[str, object],
+    general_settings: Mapping[str, object],
+    llm_router: Router | None,
+    team_metadata: Mapping[str, object] | None,
+) -> None:
+    """Re-run the request body check that auth relaxed for bucket params, now admitting the caller team's buckets."""
+    proxy_buckets: Final = _ClientSideStorageAllowlist.model_validate(general_settings).allowed_client_side_s3_buckets
+    model: Final = request_body.get("model")
+    try:
+        is_request_body_safe(
+            request_body=dict(request_body),
+            general_settings={
+                **general_settings,
+                "allowed_client_side_s3_buckets": (*(proxy_buckets or ()), *_team_s3_buckets(team_metadata)),
+            },
+            llm_router=llm_router,
+            model=model if isinstance(model, str) else "",
+        )
+    except ValueError as rejection:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=f"Authentication Error, {rejection}")
+
+
 async def pre_db_read_auth_checks(
     request: Request,
     request_data: dict,
@@ -821,7 +915,7 @@ async def pre_db_read_auth_checks(
     Raises:
     - HTTPException if request fails initial auth checks
     """
-    from litellm.proxy.proxy_server import general_settings, llm_router, premium_user
+    from litellm.proxy.proxy_server import general_settings, llm_router
 
     # Check 1. request size
     await check_if_request_size_is_safe(request=request)
@@ -833,6 +927,7 @@ async def pre_db_read_auth_checks(
         llm_router=llm_router,
         model=request_data.get("model", ""),  # [TODO] use model passed in url as well (azure openai routes)
         route=route,
+        defer_s3_buckets=checks_team_s3_buckets_in_handler(request),
     )
 
     # Check 3. Check if IP address is allowed
@@ -849,19 +944,12 @@ async def pre_db_read_auth_checks(
         )
 
     # Check 4. Check if request route is an allowed route on the proxy
-    if "allowed_routes" in general_settings:
-        _allowed_routes: Final = general_settings["allowed_routes"]
-        if premium_user is not True:
-            verbose_proxy_logger.error(
-                "Trying to set allowed_routes. This is an Enterprise feature. %s",
-                CommonProxyErrors.not_premium_user.value,
-            )
-        if route not in _allowed_routes:
-            verbose_proxy_logger.error("Route %s not in allowed_routes=%s", route, _allowed_routes)
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Access forbidden: Route {route} not allowed",
-            )
+    if not RouteChecks.is_allowed_on_proxy(route):
+        verbose_proxy_logger.error("Route %s not in allowed_routes=%s", route, general_settings["allowed_routes"])
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Access forbidden: Route {route} not allowed",
+        )
 
 
 def route_in_additonal_public_routes(current_route: str):
@@ -1487,6 +1575,9 @@ class BatchLimitRequest(Protocol):
     def model_fields_set(self) -> Collection[str]: ...
 
 
+_ADMIN_ONLY_METADATA_KEYS: Final = (*ADMIN_ONLY_BATCH_LIMIT_METADATA_KEYS, TEAM_S3_BUCKET_ALLOWLIST_METADATA_KEY)
+
+
 def enforce_batch_limits_are_admin_only(
     data: BatchLimitRequest,
     existing_metadata: Mapping[str, object] | None,
@@ -1497,7 +1588,8 @@ def enforce_batch_limits_are_admin_only(
 
     Every key in ``ADMIN_ONLY_BATCH_LIMIT_METADATA_KEYS`` caps what the holder
     may do with batches, so a holder-writable copy would let a caller lift their
-    own quota. Gated on the resulting value rather than on presence, so a form
+    own quota, and the S3 bucket list grants access to buckets with the proxy's
+    own credentials. Gated on the resulting value rather than on presence, so a form
     resending the stored value stays a no-op.
     """
     if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
@@ -1507,16 +1599,60 @@ def enforce_batch_limits_are_admin_only(
         (data.metadata or EMPTY_MAPPING) if "metadata" in data.model_fields_set else stored
     )
     changed: Final = next(
-        (key for key in ADMIN_ONLY_BATCH_LIMIT_METADATA_KEYS if requested.get(key) != stored.get(key)),
+        (key for key in _ADMIN_ONLY_METADATA_KEYS if requested.get(key) != stored.get(key)),
         None,
     )
     if changed is None:
         return
+    reason: Final = (
+        "It lets the holder read and write those buckets with the proxy's AWS credentials."
+        if changed == TEAM_S3_BUCKET_ALLOWLIST_METADATA_KEY
+        else "It limits what the holder can do with batches, so the holder cannot raise it."
+    )
+    raise HTTPException(
+        status_code=403,
+        detail={"error": f"Only proxy admins can set {changed} on a {entity}. {reason}"},
+    )
+
+
+VECTOR_STORE_INDEX_GRANTS_METADATA_KEY: Final = "allowed_vector_store_indexes"
+
+
+def _stored_vector_store_index_grants(existing_metadata: Mapping[str, object] | None) -> object:
+    if existing_metadata is None:
+        return None
+    return existing_metadata.get(VECTOR_STORE_INDEX_GRANTS_METADATA_KEY) or None
+
+
+def _requested_vector_store_index_grants(
+    data: BatchLimitRequest,
+    top_level_grants: Sequence[AllowedVectorStoreIndexItem] | None,
+    stored_grants: object,
+) -> object:
+    if top_level_grants is not None:
+        return [grant.model_dump() for grant in top_level_grants] or None
+    if "metadata" in data.model_fields_set:
+        return (data.metadata or EMPTY_MAPPING).get(VECTOR_STORE_INDEX_GRANTS_METADATA_KEY) or None
+    return stored_grants
+
+
+def enforce_vector_store_index_grants_are_admin_only(
+    data: BatchLimitRequest,
+    top_level_grants: Sequence[AllowedVectorStoreIndexItem] | None,
+    existing_metadata: Mapping[str, object] | None,
+    user_api_key_dict: UserAPIKeyAuth,
+    entity: Literal["key", "team"],
+) -> None:
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
+        return
+    stored_grants: Final = _stored_vector_store_index_grants(existing_metadata)
+    if _requested_vector_store_index_grants(data, top_level_grants, stored_grants) == stored_grants:
+        return
     raise HTTPException(
         status_code=403,
         detail={
-            "error": f"Only proxy admins can set {changed} on a {entity}. "
-            "It limits what the holder can do with batches, so the holder cannot raise it."
+            "error": f"Only proxy admins can set {VECTOR_STORE_INDEX_GRANTS_METADATA_KEY} on a {entity}. "
+            "It grants read and write access to vector store indexes, so the holder cannot widen it."
         },
     )
 
@@ -1971,6 +2107,7 @@ _MODEL_ROUTING_COMPLETION_MODEL_ROUTE_MARKERS: Final = ("/evals",)
 # can_key_call_model() validates the real target model.
 _MODEL_ROUTING_SESSION_MODEL_ROUTE_MARKERS: Final = (
     "/realtime/client_secrets",
+    "/realtime/translations/client_secrets",
     "/realtime/calls",
 )
 _MODEL_ROUTING_ID_FIELDS: Final = (
@@ -2088,7 +2225,7 @@ def _extract_models_from_managed_resource_id(
                 decoded_video: Final = decode_video_id_with_provider(resource_id)
                 _append_model_candidates(
                     candidates=candidates,
-                    value=_video_access_group(decoded_video, llm_router) or decoded_video.get("model_id"),
+                    value=video_access_group(decoded_video, llm_router) or decoded_video.get("model_id"),
                 )
             else:
                 model_id = decode_character_id_with_provider(resource_id).get("model_id")
@@ -2102,7 +2239,9 @@ def _extract_models_from_managed_resource_id(
     return _dedupe_model_candidates(candidates)
 
 
-def _video_access_group(decoded_video: DecodedVideoId, llm_router: Router | None) -> str | None:
+def video_access_group(
+    decoded_video: DecodedVideoId, llm_router: Router | None, *, resolved_model: str | None = None
+) -> str | None:
     """
     The group a key must be allowed to call to use a video: the creating deployment's group, or, while router
     fallbacks skip model access checks, the group whose router fallback created it.
@@ -2110,7 +2249,9 @@ def _video_access_group(decoded_video: DecodedVideoId, llm_router: Router | None
     from litellm.proxy.auth.fallback_model_access import router_fallback_access_check
     from litellm.proxy.video_endpoints.utils import video_model_group
 
-    creating_group: Final = video_model_group(decoded_video, llm_router)
+    creating_group: Final = (
+        resolved_model if resolved_model is not None else video_model_group(decoded_video, llm_router)
+    )
     requested_model: Final = decoded_video.get("requested_model")
     if llm_router is None or creating_group is None or requested_model is None:
         return creating_group

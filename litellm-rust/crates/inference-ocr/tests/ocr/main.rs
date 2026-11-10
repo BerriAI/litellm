@@ -80,7 +80,7 @@ fn wire(model: &str, base: &str, document: Value, options: Value) -> OcrWireRequ
     OcrWireRequest {
         model: model.into(),
         document,
-        api_key: Some(litellm_auth::SecretValue::new("test-key")),
+        api_key: Some(litellm_secret_value::SecretValue::new("test-key")),
         api_base: Some(base.into()),
         custom_llm_provider: None,
         extra_headers: None,
