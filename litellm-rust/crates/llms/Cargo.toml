@@ -26,6 +26,7 @@ litellm-router-types.workspace = true
 base64.workspace = true
 bytes.workspace = true
 data-url = "0.3.2"
+fancy-regex.workspace = true
 futures-util.workspace = true
 reqwest.workspace = true
 serde.workspace = true

@@ -18,6 +18,7 @@ import litellm
 from litellm.litellm_core_utils import exception_mapping_utils
 from litellm.litellm_core_utils.core_helpers import (
     as_str_mapping,
+    drops_unsupported_params,
     normalize_drop_params,
     proxy_request_headers,
     stream_cost_injection_requested,
@@ -95,6 +96,7 @@ class MessagesSettings:
     reasoning_auto_summary: bool
     additional_drop_params: Sequence[str]
     request_timeout: float | None
+    drops_unsupported_params: bool
     model: str | None = None
     mock_response: Mapping[str, object] | None = None
     stream_cost_model: str | None = None
@@ -528,6 +530,7 @@ def settings(kwargs: Mapping[str, object], request: Mapping[str, object] | None 
         reasoning_auto_summary=is_reasoning_auto_summary_enabled(),
         additional_drop_params=handler.additional_drop_paths(kwargs),
         request_timeout=get_configured_request_timeout(),
+        drops_unsupported_params=drops_unsupported_params(kwargs.get("drop_params")),
     )
     return asdict(configured if request is None else _with_call_settings(configured, request))
 

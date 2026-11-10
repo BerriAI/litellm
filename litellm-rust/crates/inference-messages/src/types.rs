@@ -80,6 +80,8 @@ pub struct MessagesSettings {
     pub whole_sse_frames: bool,
     #[serde(default)]
     pub presanitized: bool,
+    #[serde(default)]
+    pub drops_unsupported_params: bool,
 }
 
 impl MessagesSettings {
@@ -156,7 +158,8 @@ mod tests {
             "drop_params": true,
             "reasoning_auto_summary": true,
             "additional_drop_params": ["metadata.user_id", "thinking"],
-            "request_timeout": 1800.0
+            "request_timeout": 1800.0,
+            "drops_unsupported_params": true
         }),
         MessagesShaping {
             settings: MessagesSettings {
@@ -164,6 +167,7 @@ mod tests {
                 reasoning_auto_summary: true,
                 additional_drop_params: vec!["metadata.user_id".to_string(), "thinking".to_string()],
                 request_timeout: Some(1800.0),
+                drops_unsupported_params: true,
                 ..MessagesSettings::default()
             },
             capabilities: MessagesModelCapabilities {
@@ -201,6 +205,10 @@ mod tests {
         assert_eq!(
             serialized["reasoning_auto_summary"],
             json!(expected.settings.reasoning_auto_summary)
+        );
+        assert_eq!(
+            serialized["drops_unsupported_params"],
+            json!(expected.settings.drops_unsupported_params)
         );
         assert_eq!(
             serialized["additional_drop_params"],
