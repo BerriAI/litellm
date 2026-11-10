@@ -14,10 +14,13 @@ from typing import Final
 import pytest
 
 from litellm._internal_context import (
+    current_request_parent_otel_span,
     current_service_caller,
     current_service_target,
+    request_parent_otel_span,
     service_caller,
     service_target,
+    set_request_parent_otel_span,
     with_service_target,
 )
 
@@ -82,6 +85,7 @@ _IN_MEMORY_ONLY_CALLERS: Final = frozenset(
         "litellm/proxy/spend_tracking/key_metadata_recovery.py",
         "litellm/proxy/ui_crud_endpoints/latest_release_endpoints.py",
         "litellm/responses/litellm_completion_transformation/transformation.py",
+        "litellm/router_rust/surface/model_info.py",
         "litellm/router_utils/client_initalization_utils.py",
         "litellm/router_utils/pre_call_checks/prompt_caching_deployment_check.py",
         "litellm/router_utils/router_callbacks/track_deployment_metrics.py",
@@ -193,6 +197,29 @@ def test_service_caller_restores_the_outer_value(value: str | None) -> None:
 class _Suspend:
     def __await__(self) -> Generator[None]:
         yield
+
+
+def test_an_sdk_callers_span_anchors_the_block_and_the_tasks_it_starts_and_nothing_after() -> None:
+    sdk_span: Final = object()
+
+    async def sdk_call() -> tuple[object, object, object]:
+        with request_parent_otel_span(sdk_span):  # pyright: ignore[reportArgumentType]  # any object stands in for a span
+            inside: Final = current_request_parent_otel_span()
+            background: Final = asyncio.create_task(asyncio.to_thread(current_request_parent_otel_span))
+        return inside, await background, current_request_parent_otel_span()
+
+    assert asyncio.run(sdk_call()) == (sdk_span, sdk_span, None)
+
+
+def test_a_request_that_anchored_its_own_span_keeps_it_over_one_an_sdk_caller_passes() -> None:
+    proxy_span: Final = object()
+
+    def proxy_request() -> object:
+        set_request_parent_otel_span(proxy_span)  # pyright: ignore[reportArgumentType]  # any object stands in for a span
+        with request_parent_otel_span(object()):  # pyright: ignore[reportArgumentType]  # any object stands in for a span
+            return current_request_parent_otel_span()
+
+    assert contextvars.copy_context().run(proxy_request) is proxy_span
 
 
 def test_a_targeted_coroutine_closed_from_another_context_does_not_raise() -> None:

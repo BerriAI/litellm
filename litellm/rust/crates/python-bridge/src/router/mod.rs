@@ -31,7 +31,7 @@ use pyo3::{
 };
 use serde_json::Value;
 
-use litellm_redis_store::router_usage::{Counter, Kind};
+use litellm_redis_store::router_usage::{Counter, Kind, Scope};
 
 use self::host::{
     CacheOp, CacheOutcome, DriveError, Driver, Finish, HostCall, HostCallResponse,
@@ -383,21 +383,6 @@ impl RouterCoreHandle {
             .iter()
             .map(|tiers| to_py(py, tiers))
             .collect()
-    }
-
-    /// The key deployment `id` serving litellm `model` counts `metric` (`tpm`, `rpm`, `itpm` or
-    /// `otpm`) under in `minute` (`HH-MM`), as the usage store spells it.
-    fn usage_key(&self, id: &str, model: &str, metric: &str, minute: &str) -> PyResult<String> {
-        let kind: Kind = metric
-            .parse()
-            .map_err(|_| PyValueError::new_err(format!("`{metric}` is not a usage metric")))?;
-        Ok(Counter {
-            deployment_id: id.to_owned(),
-            model: Some(model.to_owned()),
-            minute: minute.to_owned(),
-            kind,
-        }
-        .key())
     }
 
     /// Keep the providers `other`'s build resolved for the deployments this router serves too.
@@ -1348,9 +1333,10 @@ fn cache_outcome(op: CacheOp, outcome: Option<Bound<'_, PyAny>>) -> PyResult<Cac
 
 fn tokens_key(window: UsageWindow) -> String {
     Counter {
+        scope: Scope::GlobalRouter,
         deployment_id: window.deployment_id,
         model: Some(window.model),
-        minute: window.minute,
+        window: window.minute,
         kind: Kind::Tpm,
     }
     .key()

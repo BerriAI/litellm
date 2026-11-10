@@ -34,7 +34,7 @@ from typing import TYPE_CHECKING, Annotated, Final, Literal, Protocol, TypeAlias
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, field_validator, model_validator
 from typing_extensions import assert_never
 
-from litellm._internal_context import service_target
+from litellm._internal_context import request_parent_otel_span, service_target
 from litellm.constants import DEFAULT_COOLDOWN_TIME_SECONDS
 from litellm.integrations.custom_guardrail import is_guardrail_intervention
 from litellm.litellm_core_utils.add_retry_fallback_headers import (
@@ -1373,6 +1373,10 @@ class _EndpointPort:
         return self._core._cache  # pyright: ignore[reportPrivateUsage]  # see the class docstring
 
     @property
+    def router_usage(self) -> RouterUsage:
+        return self._core._usage  # pyright: ignore[reportPrivateUsage]  # see the class docstring
+
+    @property
     def selectors(self) -> StrategySelectors:
         return self._core._selectors  # pyright: ignore[reportPrivateUsage]  # see the class docstring
 
@@ -1497,7 +1501,7 @@ class RustCore(
         # document router-core last received for them.
         self._index_written: frozenset[str] = frozenset()
         self._index_sent: Mapping[str, object] | None = None
-        self._selectors: Final = StrategySelectors(host, self._cache)
+        self._selectors: Final = StrategySelectors(host, self._cache, self._usage)
         self._selectors.init_default(resolved.routing_strategy, resolved.routing_strategy_args)
         self._selectors.init_groups(_group_selectors(resolved.routing_groups))
         self._port: Final = _EndpointPort(self)
@@ -1544,7 +1548,7 @@ class RustCore(
         self._hosted._core_routing_plugins = list(resolved.routing_plugins)  # pyright: ignore[reportPrivateUsage]  # the core fills its own host registry
         self._rebuild()
         self._join_callback_holders()
-        self._checks: Final = OptionalChecks(self, host, self._cache, self._hosted, ctx, config.arguments)
+        self._checks: Final = OptionalChecks(self, host, self._cache, self._usage, self._hosted, ctx, config.arguments)
         self._hosted.checks = self._checks
         strategies.ensure_affinity = self._checks.ensure_deployment_affinity_callback
         strategies.hand_over_affinity(self._checks.adopt)
@@ -2959,7 +2963,10 @@ class RustCore(
             overrides if passthrough is None else {**(overrides or {}), "passthrough_on_no_deployment": True}
         )
         # `owning_picks`: least-busy frees every pick this request made but never started.
-        with owning_picks(self._selectors.reservations, call_id_of(CALL_IDENTITY.validate_python(request))):
+        with (
+            request_parent_otel_span(get_parent_otel_span_from_kwargs(request)),
+            owning_picks(self._selectors.reservations, call_id_of(CALL_IDENTITY.validate_python(request))),
+        ):
             call, prepared = self._start(plan, request, routed, prepared_already=prepared_already)
             arm_compaction_state(self._port, plan, prepared)  # pyright: ignore[reportArgumentType]  # the call's own dict
             with (
@@ -3037,7 +3044,10 @@ class RustCore(
         self, plan: Plan, request: Mapping[str, object], overrides: Mapping[str, object] | None = None
     ) -> object:
         # The sync routed calls pick with `picks_reserve(True)` inside `owning_picks`.
-        with owning_picks(self._selectors.reservations, call_id_of(CALL_IDENTITY.validate_python(request))):
+        with (
+            request_parent_otel_span(get_parent_otel_span_from_kwargs(request)),
+            owning_picks(self._selectors.reservations, call_id_of(CALL_IDENTITY.validate_python(request))),
+        ):
             call, prepared = self._start(plan, request, overrides)
             with picks_reserve(plan.endpoint not in _UNRESERVED_OPS):
                 driver, step = self._run_sync(plan, call, prepared, fresh=True)
@@ -5209,16 +5219,16 @@ class _Driver:
         """What a failed or cancelled attempt still holds, whatever its logging object (shared across
         attempts, it logs only the first failure). Tokens a provider already spent are kept counted."""
         core: Final = self._core
-        releases: Final = (
-            release_started_attempt(core._selectors.reservations, core._cache, attempt.attempt_id),  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core
-            release_io_token_reservation(
-                core._cache,  # pyright: ignore[reportPrivateUsage]  # see above
-                call.kwargs,  # pyright: ignore[reportArgumentType]  # the call's kwargs dict
-                parent_otel_span=get_parent_otel_span_from_kwargs(call.kwargs),
+        with request_parent_otel_span(get_parent_otel_span_from_kwargs(call.kwargs)):
+            releases: Final = (
+                release_started_attempt(core._selectors.reservations, core._cache, attempt.attempt_id),  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core
+                release_io_token_reservation(
+                    core._usage,  # pyright: ignore[reportPrivateUsage]  # see above
+                    call.kwargs,  # pyright: ignore[reportArgumentType]  # the call's kwargs dict
+                )
+                if refund_io_tokens
+                else None,
             )
-            if refund_io_tokens
-            else None,
-        )
         return tuple(release for release in releases if release is not None)
 
     async def _routed_attempt(self, step: Mapping[str, object], attempt: RoutedAttempt) -> Mapping[str, object]:

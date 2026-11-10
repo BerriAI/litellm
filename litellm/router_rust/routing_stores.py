@@ -55,7 +55,7 @@ class UsageWindow(_Step):
     minute: str
 
     def counter(self, kind: CounterKind) -> UsageCounter:
-        return UsageCounter(self.deployment_id, self.model, self.minute, kind)
+        return UsageCounter("global_router", self.deployment_id, self.model, self.minute, kind)
 
 
 class CooldownsStep(_Step):
