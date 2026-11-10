@@ -109,6 +109,7 @@ from litellm.proxy.auth.auth_object_prefetch import (
 )
 from litellm.proxy.auth.auth_utils import (
     abbreviate_api_key,
+    checks_team_s3_buckets_in_handler,
     fallback_target_model_name,
     get_end_user_id_from_request_body,
     get_model_from_request,
@@ -3696,6 +3697,7 @@ async def run_centralized_common_checks(
             model=body_model if isinstance(body_model, str) else "",
             route=route,
             team_id=user_api_key_auth_obj.team_id,
+            defer_s3_buckets=checks_team_s3_buckets_in_handler(request),
         )
 
     # Public routes (e.g. /health/liveness) are exempt from

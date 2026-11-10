@@ -125,6 +125,32 @@ async def test_acreate_file_sends_target_model_names_to_a_litellm_proxy_deployme
     assert dict(host.calls[0].kwargs["extra_body"]) == {"keep": 1, "target_model_names": "remote-model"}  # pyright: ignore[reportArgumentType]  # a mapping
 
 
+@pytest.mark.parametrize(
+    "request_bucket,expected_bucket", [({}, "model-bucket"), ({"s3_bucket_name": "team-a-bucket"}, "team-a-bucket")]
+)
+async def test_acreate_file_prefers_the_request_s3_bucket_over_the_deployment_bucket(
+    make_core: MakeCore, host: EndpointHost, request_bucket: dict[str, str], expected_bucket: str
+):
+    core: Final = make_core(model_list=[deployment("g", "d1", s3_bucket_name="model-bucket")])
+    await core.acreate_file(model="g", file=_jsonl(), purpose="batch", **request_bucket)
+    assert host.calls[0].kwargs["s3_bucket_name"] == expected_bucket
+
+
+@pytest.mark.parametrize(
+    "request_bucket,expected_bucket",
+    [({}, "model-bucket"), ({"s3_output_bucket_name": "team-a-bucket"}, "team-a-bucket")],
+)
+async def test_acreate_batch_prefers_the_request_output_bucket_over_the_deployment_bucket(
+    make_core: MakeCore, host: EndpointHost, request_bucket: dict[str, str], expected_bucket: str
+):
+    host.answer("openai/d1", _batch())
+    core: Final = make_core(model_list=[deployment("g", "d1", s3_output_bucket_name="model-bucket")])
+    await core.acreate_batch(
+        model="g", input_file_id="f", endpoint="/v1/chat/completions", completion_window="24h", **request_bucket
+    )
+    assert host.calls[0].kwargs["s3_output_bucket_name"] == expected_bucket
+
+
 async def test_acreate_file_sends_the_deployment_gcs_bucket_in_litellm_metadata(
     make_core: MakeCore, host: EndpointHost
 ):

@@ -3508,3 +3508,215 @@ async def _forwarded_reasoning_after_order_fallback(boundary: str | None) -> tup
 )
 async def test_order_fallback_keeps_reasoning_only_on_a_declared_boundary_peer(boundary, expected_reasoning):
     assert await _forwarded_reasoning_after_order_fallback(boundary) == ("region-3", expected_reasoning)
+
+
+def _tagged_deployment(
+    vendor: str, boundary: str | None = None, tags: tuple[str, ...] = ("default",)
+) -> dict[str, object]:
+    return {
+        "model_name": "tagged-group",
+        "litellm_params": {
+            "model": "openai/gpt-5.6",
+            "api_base": f"https://{vendor}.example.invalid/v1",
+            "api_key": f"sk-{vendor}",
+            "tags": [*tags, f"vendor:{vendor}"],
+        },
+        "model_info": {"id": vendor} | ({} if boundary is None else {"encrypted_content_boundary": boundary}),
+    }
+
+
+async def _tagged_followup(
+    tags: list[str] | None, peer_boundary: str | None = None, origin_tags: tuple[str, ...] = ("default",)
+) -> tuple[str, object]:
+    router: Final = litellm.Router(
+        model_list=[_tagged_deployment("a", "org-a", origin_tags), _tagged_deployment("b", peer_boundary)],
+        enable_tag_filtering=True,
+        optional_pre_call_checks=["encrypted_content_affinity"],
+        num_retries=0,
+    )
+    handler: Final = AsyncMock(return_value=_build_mock_response(output_items=[], response_id="resp_tagged"))
+    with patch(
+        "litellm.llms.custom_httpx.llm_http_handler.BaseLLMHTTPHandler.async_response_api_handler",
+        new=handler,
+    ):
+        response: Final = await router.aresponses(
+            model="tagged-group",
+            input=[
+                {"role": "user", "content": "first question"},
+                {
+                    "type": "reasoning",
+                    "summary": [{"type": "summary_text", "text": "thought about it"}],
+                    "encrypted_content": ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id(
+                        "blob-from-a", "a"
+                    ),
+                },
+                {"role": "user", "content": "follow-up"},
+            ],
+            litellm_metadata={} if tags is None else {"tags": tags},
+        )
+    return response._hidden_params["model_id"], handler.await_args.kwargs["input"][1]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tags", [None, ["vendor:a"]], ids=["untagged", "tag-matches-pin"])
+async def test_tagged_followup_stays_on_the_deployment_that_minted_its_reasoning(tags: list[str] | None) -> None:
+    served_by, reasoning = await _tagged_followup(tags)
+
+    assert served_by == "a"
+    assert reasoning["encrypted_content"] == "blob-from-a"
+
+
+@pytest.mark.asyncio
+async def test_untagged_followup_stays_pinned_when_only_another_deployment_is_tagged_default() -> None:
+    served_by, reasoning = await _tagged_followup(None, origin_tags=())
+
+    assert served_by == "a"
+    assert reasoning["encrypted_content"] == "blob-from-a"
+
+
+@pytest.mark.asyncio
+async def test_routing_tag_that_excludes_the_pin_routes_to_the_tagged_deployment_without_its_reasoning() -> None:
+    served_by, reasoning = await _tagged_followup(["vendor:b"])
+
+    assert served_by == "b"
+    assert "encrypted_content" not in reasoning
+    assert reasoning["summary"] == [{"type": "summary_text", "text": "thought about it"}]
+
+
+@pytest.mark.asyncio
+async def test_routing_tag_that_picks_an_encryption_boundary_peer_keeps_the_reasoning() -> None:
+    served_by, reasoning = await _tagged_followup(["vendor:b"], peer_boundary="org-a")
+
+    assert served_by == "b"
+    assert reasoning["encrypted_content"] == "blob-from-a"
+
+
+@pytest.mark.asyncio
+async def test_routing_tag_left_to_fail_open_keeps_the_pin_when_only_a_cooled_deployment_opts_in() -> None:
+    router: Final = litellm.Router(
+        model_list=[
+            _tagged_deployment("a"),
+            _tagged_deployment("opted-in") | {"model_info": {"id": "opted-in", "allow_fail_open": True}},
+        ],
+        enable_tag_filtering=True,
+        optional_pre_call_checks=["encrypted_content_affinity"],
+        num_retries=0,
+    )
+    router.cooldown_cache.add_deployment_to_cooldown(
+        model_id="opted-in", original_exception=RuntimeError("unavailable"), exception_status=500, cooldown_time=3600
+    )
+    handler: Final = AsyncMock(return_value=_build_mock_response(output_items=[], response_id="resp_fail_open"))
+    with patch(
+        "litellm.llms.custom_httpx.llm_http_handler.BaseLLMHTTPHandler.async_response_api_handler",
+        new=handler,
+    ):
+        response: Final = await router.aresponses(
+            model="tagged-group",
+            input=[
+                {
+                    "type": "reasoning",
+                    "summary": [],
+                    "encrypted_content": ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id(
+                        "blob-from-a", "a"
+                    ),
+                },
+                {"role": "user", "content": "follow-up"},
+            ],
+            litellm_metadata={"tags": ["!default"], "inherited_tags": []},
+        )
+
+    assert response._hidden_params["model_id"] == "a"
+    assert handler.await_args.kwargs["input"][0]["encrypted_content"] == "blob-from-a"
+
+
+@pytest.mark.asyncio
+async def test_routing_tag_strips_reasoning_only_a_rejected_boundary_peer_could_decrypt() -> None:
+    shares_only_a_credentials: Final = _tagged_deployment("a", tags=()) | {
+        "model_name": "other-group",
+        "model_info": {"id": "c"},
+    }
+    router: Final = litellm.Router(
+        model_list=[_tagged_deployment("a", "org-a"), _tagged_deployment("b", "org-a"), shares_only_a_credentials],
+        enable_tag_filtering=True,
+        optional_pre_call_checks=["encrypted_content_affinity"],
+        num_retries=0,
+    )
+    handler: Final = AsyncMock(return_value=_build_mock_response(output_items=[], response_id="resp_peer"))
+    with patch(
+        "litellm.llms.custom_httpx.llm_http_handler.BaseLLMHTTPHandler.async_response_api_handler",
+        new=handler,
+    ):
+        response: Final = await router.aresponses(
+            model="tagged-group",
+            input=[
+                {
+                    "type": "reasoning",
+                    "summary": [{"type": "summary_text", "text": "from a"}],
+                    "encrypted_content": ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id(
+                        "blob-from-a", "a"
+                    ),
+                },
+                {
+                    "type": "reasoning",
+                    "summary": [{"type": "summary_text", "text": "from c"}],
+                    "encrypted_content": ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id(
+                        "blob-from-c", "c"
+                    ),
+                },
+                {"role": "user", "content": "follow-up"},
+            ],
+            litellm_metadata={"tags": ["vendor:b"]},
+        )
+    forwarded: Final = handler.await_args.kwargs["input"]
+
+    assert response._hidden_params["model_id"] == "b"
+    assert [item.get("encrypted_content") for item in forwarded[:2]] == ["blob-from-a", None]
+
+
+def _boundary_peer(name: str, tags: list[str], model_info: Mapping[str, object]) -> dict[str, object]:
+    return {
+        "model_name": "tagged-group",
+        "litellm_params": {
+            "model": "openai/gpt-5.6",
+            "api_base": f"https://{name}.example.invalid/v1",
+            "api_key": f"sk-{name}",
+            "tags": tags,
+        },
+        "model_info": {"id": name, "encrypted_content_boundary": "org-a", **model_info},
+    }
+
+
+@pytest.mark.asyncio
+async def test_routing_tags_that_fail_open_onto_a_boundary_peer_are_served_by_it() -> None:
+    router: Final = litellm.Router(
+        model_list=[
+            _boundary_peer("a", ["z"], {}) | {"model_name": "other-group"},
+            _boundary_peer("default-peer", ["default", "x"], {"allow_fail_open": True}),
+            _boundary_peer("y-peer", ["y"], {}),
+        ],
+        enable_tag_filtering=True,
+        optional_pre_call_checks=["encrypted_content_affinity"],
+        num_retries=0,
+    )
+    handler: Final = AsyncMock(return_value=_build_mock_response(output_items=[], response_id="resp_fail_open"))
+    with patch(
+        "litellm.llms.custom_httpx.llm_http_handler.BaseLLMHTTPHandler.async_response_api_handler",
+        new=handler,
+    ):
+        response: Final = await router.aresponses(
+            model="tagged-group",
+            input=[
+                {
+                    "type": "reasoning",
+                    "summary": [],
+                    "encrypted_content": ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id(
+                        "blob-from-a", "a"
+                    ),
+                },
+                {"role": "user", "content": "follow-up"},
+            ],
+            litellm_metadata={"tags": ["&x", "&y"], "inherited_tags": []},
+        )
+
+    assert response._hidden_params["model_id"] == "default-peer"
+    assert handler.await_args.kwargs["input"][0]["encrypted_content"] == "blob-from-a"

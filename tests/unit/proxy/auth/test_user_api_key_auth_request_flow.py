@@ -3279,7 +3279,9 @@ class TestJWTOAuth2Coexistence:
     async def test_auto_register_passes_validated_org_context_to_generated_key(self):
         jwt_token = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyMSJ9.signature"
         general_settings = {"enable_jwt_auth": True}
-        user_api_key_cache: Final = _validated_jwt_admission_cache(org_id="validated-org", end_user_id="validated-end-user")
+        user_api_key_cache: Final = _validated_jwt_admission_cache(
+            org_id="validated-org", end_user_id="validated-end-user"
+        )
         prisma_client = MagicMock()
         jwt_handler = MagicMock()
         jwt_handler.is_jwt.return_value = True
@@ -4855,6 +4857,8 @@ def _proxy_attrs_for_centralized_checks(user_custom_auth=None, flag=False, maste
 @pytest.mark.parametrize(
     "route, include_model, path_params",
     [
+        ("/v1/files", True, {}),
+        ("/v1/batches", True, {}),
         ("/v1/chat/completions", True, {}),
         ("/v1beta/models/chat:generateContent", False, {"model_name": "chat"}),
         ("/openai/deployments/chat/chat/completions", False, {"model": "chat"}),
@@ -4903,13 +4907,24 @@ async def test_deferred_body_check_uses_only_the_authenticated_teams_deployments
     for name, value in attributes.items():
         monkeypatch.setattr(litellm.proxy.proxy_server, name, value)
     request: Final = Request(
-        {"type": "http", "method": "POST", "path": route, "headers": [], "path_params": path_params},
+        {
+            "type": "http",
+            "method": "POST",
+            "path": route,
+            "headers": [],
+            "path_params": path_params,
+            "route": SimpleNamespace(path=route),
+        },
         receive=AsyncMock(
             return_value={
                 "type": "http.request",
                 "more_body": False,
                 "body": json.dumps(
-                    {"vertex_location": "us-central1", **({"model": "chat"} if include_model else {})}
+                    {
+                        "vertex_location": "us-central1",
+                        **({"model": "chat"} if include_model else {}),
+                        **({"s3_bucket_name": "team-bucket"} if route in {"/v1/files", "/v1/batches"} else {}),
+                    }
                 ).encode(),
             }
         ),
@@ -5627,8 +5642,6 @@ async def _run_centralized_checks_for_end_user(
     finally:
         for attribute, value in originals.items():
             setattr(_proxy_server_mod, attribute, value)
-
-
 
 
 @pytest.mark.parametrize(
