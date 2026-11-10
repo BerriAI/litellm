@@ -2,7 +2,7 @@ use crate::cache::{CacheCall, Cached, PythonCache, Selection};
 use litellm_host_python::{PythonHostCalls, PythonOwned};
 
 use bytes::Bytes;
-use litellm_host_python::{InvokeError, PythonBinding, from_py, to_py};
+use litellm_host_python::{InvokeError, PythonBinding, effective_py_args, from_py, to_py};
 use litellm_inference_messages::{
     Error, MessagesCall, MessagesSettings, MessagesShaping, litellm_params, messages_body,
     route::{Messages, MessagesStreamHead},
@@ -72,6 +72,7 @@ fn project_litellm_params<'py>(
 pub(super) struct MessagesPythonHost {
     view: RequestView,
     cache: PythonCache,
+    asynchronous: bool,
 }
 
 impl MessagesPythonHost {
@@ -79,7 +80,23 @@ impl MessagesPythonHost {
         Self {
             view,
             cache: PythonCache::new(asynchronous),
+            asynchronous,
         }
+    }
+
+    /// The body fields `body_params` keeps from the keywords the call would send. Python's
+    /// sync and async entries prepare prompt caching differently, so it is told which ran.
+    fn body_params(
+        &self,
+        py: Python<'_>,
+        arguments: &Bound<'_, PyDict>,
+    ) -> PyResult<Map<String, Value>> {
+        let request = effective_py_args(self.view.request(py)?, arguments)?;
+        from_py(
+            &py.import(ROUTE_HOST_MODULE)?
+                .getattr("body_params")?
+                .call1((request, self.asynchronous))?,
+        )
     }
 
     fn projection(
@@ -93,10 +110,19 @@ impl MessagesPythonHost {
         };
         let model = string("model")?.ok_or(ArgumentError::Required("model"))?;
         let messages = argument("messages")?.ok_or(ArgumentError::Required("messages"))?;
-        let fields = self.view.body_params(py, arguments, ROUTE_HOST_MODULE)?;
+        let mut fields = self.body_params(py, arguments)?;
+        // `body_params` answers `messages` only when it prepared them as Python's handler does,
+        // normalized and with prompt-cache breakpoints injected, so shaping must not sanitize
+        // them again.
+        let prepared = fields.remove("messages");
+        let presanitized = prepared.is_some();
+        let messages = match prepared {
+            Some(messages) => messages,
+            None => from_py(&messages)?,
+        };
         let body = [
             ("model".to_string(), Value::String(model.clone())),
-            ("messages".to_string(), from_py(&messages)?),
+            ("messages".to_string(), messages),
         ]
         .into_iter()
         .chain(fields)
@@ -117,7 +143,8 @@ impl MessagesPythonHost {
                 .call1((&model, api_base.as_deref()))?
                 .extract()?,
         };
-        let shaping = self.shaping(py, &model, custom_llm_provider.as_deref(), arguments)?;
+        let mut shaping = self.shaping(py, &model, custom_llm_provider.as_deref(), arguments)?;
+        shaping.settings.presanitized = presanitized;
         let extra_headers = self.merged_headers(py, arguments)?;
         let provider_specific_header = self.provider_specific_header(py, arguments)?;
         let litellm_params = project_litellm_params(argument, |name| module_global(py, name))?;

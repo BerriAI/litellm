@@ -4,7 +4,7 @@ use litellm_llms_types::formats::messages::{
 use litellm_router_types::LitellmParams;
 use serde_json::Value;
 
-use super::context::MessagesTransformContext;
+use super::context::{MessagesShapeOptions, MessagesTransformContext};
 
 pub use crate::base_llm::auth::{Headers, ValidatedEnvironment};
 use crate::{Error, base_llm::messages::streaming::StreamDecoder};
@@ -13,7 +13,7 @@ pub trait BaseMessagesConfig: Sync {
     fn shape_request(
         &self,
         request: MessagesRequest,
-        _reasoning_auto_summary: bool,
+        _options: MessagesShapeOptions,
     ) -> Result<MessagesRequest, Error> {
         Ok(request)
     }
@@ -149,9 +149,10 @@ mod tests {
     }
 
     #[rstest]
-    #[case::disabled(false)]
-    #[case::enabled(true)]
-    fn default_shaping_preserves_provider_policy_inputs(#[case] reasoning_auto_summary: bool) {
+    fn default_shaping_preserves_provider_policy_inputs(
+        #[values(false, true)] reasoning_auto_summary: bool,
+        #[values(false, true)] presanitized: bool,
+    ) {
         let request: MessagesRequest = serde_json::from_value(serde_json::json!({
             "model": "test-model",
             "metadata": {"user_id": 7, "extra": "keep"},
@@ -160,7 +161,13 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(
-            DefaultsConfig.shape_request(request.clone(), reasoning_auto_summary),
+            DefaultsConfig.shape_request(
+                request.clone(),
+                MessagesShapeOptions {
+                    reasoning_auto_summary,
+                    presanitized
+                }
+            ),
             Ok(request)
         );
         assert_eq!(

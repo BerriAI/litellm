@@ -11,7 +11,7 @@ use litellm_router_types::LitellmParams;
 use serde_json::{Map, Value, json};
 
 use super::{handler::shape_anthropic_messages_request, thinking::translate_thinking};
-use crate::base_llm::messages::context::MessagesTransformContext;
+use crate::base_llm::messages::context::{MessagesShapeOptions, MessagesTransformContext};
 use crate::{
     Error,
     anthropic::common_utils::{
@@ -35,9 +35,9 @@ impl BaseMessagesConfig for AnthropicMessagesConfig {
     fn shape_request(
         &self,
         request: MessagesRequest,
-        reasoning_auto_summary: bool,
+        options: MessagesShapeOptions,
     ) -> Result<MessagesRequest, Error> {
-        shape_anthropic_messages_request(request, reasoning_auto_summary)
+        shape_anthropic_messages_request(request, options)
     }
 
     fn get_complete_url(

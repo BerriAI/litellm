@@ -2,7 +2,10 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use litellm_host::call::CallOutput;
-use litellm_llms::{ErrorDetail, base_llm::messages::context::MessagesModelCapabilities};
+use litellm_llms::{
+    ErrorDetail,
+    base_llm::messages::context::{MessagesModelCapabilities, MessagesShapeOptions},
+};
 use litellm_llms_types::{
     formats::messages::{MessagesRequest, MessagesResponse},
     headers::ProviderSpecificHeaders,
@@ -71,9 +74,20 @@ pub struct MessagesSettings {
     pub additional_drop_params: Vec<String>,
     #[serde(default)]
     pub request_timeout: Option<f64>,
+    /// The host already normalized the messages, as Python's handler does before it injects
+    /// prompt-cache breakpoints.
+    #[serde(default)]
+    pub presanitized: bool,
 }
 
 impl MessagesSettings {
+    pub fn shape_options(&self) -> MessagesShapeOptions {
+        MessagesShapeOptions {
+            reasoning_auto_summary: self.reasoning_auto_summary,
+            presanitized: self.presanitized,
+        }
+    }
+
     pub fn request_timeout(&self) -> Option<Duration> {
         self.request_timeout
             .and_then(|secs| Duration::try_from_secs_f64(secs).ok())
@@ -148,6 +162,7 @@ mod tests {
                 reasoning_auto_summary: true,
                 additional_drop_params: vec!["metadata.user_id".to_string(), "thinking".to_string()],
                 request_timeout: Some(1800.0),
+                presanitized: false,
             },
             capabilities: MessagesModelCapabilities {
                 supports_reasoning: true,

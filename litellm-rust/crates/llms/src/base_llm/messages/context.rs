@@ -23,6 +23,16 @@ impl SupportedEffortTiers {
     }
 }
 
+/// What an adapter's `shape_request` reads from the call's settings.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MessagesShapeOptions {
+    /// Marks active thinking as summarized, as Python's `is_reasoning_auto_summary_enabled` asks.
+    pub reasoning_auto_summary: bool,
+    /// The host already normalized the messages, as Python's handler does before it injects
+    /// prompt-cache breakpoints, so shaping only strips provider-specific fields.
+    pub presanitized: bool,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MessagesModelCapabilities {
     #[serde(default)]

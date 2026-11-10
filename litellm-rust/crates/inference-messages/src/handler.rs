@@ -129,7 +129,7 @@ async fn provider_call(
 
     let sanitized = config.shape_request(
         MessagesRequest { model, ..body },
-        shaping.settings.reasoning_auto_summary,
+        shaping.settings.shape_options(),
     )?;
     let transform_context =
         MessagesTransformContext::new(shaping.capabilities, shaping.settings.drop_params);
