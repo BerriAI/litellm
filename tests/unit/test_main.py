@@ -36,6 +36,7 @@ from litellm import (
 from litellm import main as litellm_main
 from litellm.caching.base_cache import BaseCache
 from litellm.caching.caching import Cache
+from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import CONTROL_OPTIONS_KEY
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.custom_prompt_management import CustomPromptManagement
@@ -4905,7 +4906,7 @@ def test_speech_gemini_tts_honors_the_request_cache_controls(
 
 @pytest.mark.parametrize(
     "malformed_controls",
-    [{"caching": "yes"}, {"caching": 1}, {"cache": {1: True}}, {"extra_headers": {"x-gateway-key": 5}}],
+    [{"caching": "yes"}, {"caching": 1}, {"cache": {1: True}}],
 )
 def test_speech_gemini_tts_without_a_cache_ignores_malformed_controls(
     respx_mock: respx.MockRouter,
@@ -4927,6 +4928,61 @@ def test_speech_gemini_tts_without_a_cache_ignores_malformed_controls(
 
     assert route.call_count == 1
     assert response.content.startswith(b"RIFF")
+
+
+@pytest.mark.parametrize("ttl", [60, "60"])
+def test_speech_gemini_tts_keeps_cached_audio_only_for_the_request_ttl(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, ttl: int | str
+):
+    now: Final = [0.0]
+    cache: Final = Cache(type="local")
+    cache.cache = InMemoryCache(clock=lambda: now[0])
+    monkeypatch.setattr(litellm, "cache", cache)
+    route: Final = respx_mock.post(url__regex=GEMINI_DEFAULT_GENERATE_CONTENT_URL).mock(
+        return_value=httpx.Response(200, json=_gemini_tts_generate_content_response())
+    )
+
+    def speak() -> None:
+        litellm.speech(
+            model=f"gemini/{GEMINI_TTS_MODEL}", input="hello", voice="Kore", api_key="fake-gemini-key", ttl=ttl
+        )
+
+    speak()
+    now[0] = 30.0
+    speak()
+    assert route.call_count == 1
+    now[0] = 61.0
+    speak()
+    assert route.call_count == 2
+
+
+def test_speech_gemini_tts_fails_like_chat_on_a_non_string_deployment_header(respx_mock: respx.MockRouter):
+    route: Final = respx_mock.post(url__regex=GEMINI_DEFAULT_GENERATE_CONTENT_URL).mock(
+        return_value=httpx.Response(200, json=_gemini_tts_generate_content_response())
+    )
+    deployment_headers: Final = {"x-gateway-key": "gateway-secret", "x-org-id": 12345}
+
+    with pytest.raises(litellm.APIConnectionError) as chat_error:
+        litellm.completion(
+            model=f"gemini/{GEMINI_TTS_MODEL}",
+            messages=[{"role": "user", "content": "hello"}],
+            modalities=["audio"],
+            audio={"voice": "Kore", "format": "pcm16"},
+            api_key="fake-gemini-key",
+            extra_headers=deployment_headers,
+        )
+    with pytest.raises(litellm.APIConnectionError) as speech_error:
+        litellm.speech(
+            model=f"gemini/{GEMINI_TTS_MODEL}",
+            input="hello",
+            voice="Kore",
+            api_key="fake-gemini-key",
+            extra_headers=deployment_headers,
+        )
+
+    assert "Header value must be str or bytes" in str(chat_error.value)
+    assert "Header value must be str or bytes" in str(speech_error.value)
+    assert route.call_count == 0
 
 
 FOUNDRY_HOST: Final = "https://my-project.services.ai.azure.com"

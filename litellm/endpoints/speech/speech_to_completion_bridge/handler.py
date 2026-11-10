@@ -90,7 +90,7 @@ class SpeechToCompletionBridgeHandler:
         logging_obj: "LiteLLMLoggingObj",
         custom_llm_provider: str,
         api_base: str | None,
-        extra_headers: Mapping[str, str] | None,
+        extra_headers: Mapping[str, object] | None,
         timeout: "float | httpx.Timeout | None",
         cache_controls: "CacheControlsHint",
     ) -> "HttpxBinaryResponseContent":

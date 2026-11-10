@@ -88,7 +88,7 @@ class SpeechToCompletionBridgeTransformationHandler:
         headers: dict,
         litellm_logging_obj: "LiteLLMLoggingObj",
         custom_llm_provider: str,
-    ) -> dict:
+    ) -> Mapping[str, object]:
         self._validate_response_format(model, custom_llm_provider, optional_params)
         user_message: Final[ChatCompletionUserMessage] = {"role": "user", "content": input}
         return_kwargs: Final = {
