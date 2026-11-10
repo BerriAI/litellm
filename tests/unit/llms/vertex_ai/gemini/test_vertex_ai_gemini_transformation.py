@@ -3908,3 +3908,41 @@ def test_calls_whose_ids_embed_thought_signatures_dedup_by_their_call_id(
     assert _function_call_parts(parts) == expected_call_parts, (
         f"a call id replayed with a different embedded signature must be sent once, got {parts}"
     )
+
+
+@pytest.mark.parametrize(
+    ("content", "reasoning_content", "expected_parts"),
+    [
+        (
+            "42",
+            "Compute 6 * 7.",
+            [{"thought": True, "text": "Compute 6 * 7."}, {"text": "42", "thoughtSignature": "EoUMCoIM=="}],
+        ),
+        (
+            [{"type": "text", "text": "42", "cache_control": {"type": "ephemeral"}}],
+            "Compute 6 * 7.",
+            [{"thought": True, "text": "Compute 6 * 7."}, {"text": "42", "thoughtSignature": "EoUMCoIM=="}],
+        ),
+        (
+            None,
+            "Truncated during thought.",
+            [{"thought": True, "text": "Truncated during thought.", "thoughtSignature": "EoUMCoIM=="}],
+        ),
+    ],
+    ids=["str-content", "list-content-with-cache-control", "thinking-only-no-text"],
+)
+def test_gemini_convert_messages_replays_recovered_message_thought_signature(
+    content: object, reasoning_content: str, expected_parts: list[dict[str, object]]
+) -> None:
+    messages: Final = [
+        {"role": "user", "content": "What is 6 * 7?"},
+        {
+            "role": "assistant",
+            "content": content,
+            "reasoning_content": reasoning_content,
+            "provider_specific_fields": {"thought_signatures": ["EoUMCoIM=="]},
+        },
+        {"role": "user", "content": "Continue."},
+    ]
+    converted: Final = gemini_convert_messages_with_history(messages=messages, model="gemini-3.8-flash")
+    assert converted[1]["parts"] == expected_parts
