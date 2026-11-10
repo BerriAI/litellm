@@ -10230,8 +10230,8 @@ async def test_microsoft_login_asks_for_offline_access_only_while_an_id_jag_serv
     ],
 )
 async def test_login_redirect_keeps_the_client_secret_read_with_its_client_id_when_a_sync_removes_both(
-    client_id_kwarg, environment, upstream_redirect
-):
+    client_id_kwarg: str, environment: Mapping[str, str], upstream_redirect: str
+) -> None:
     """A config sync can remove an SSO client's environment variables while a sign-in that already read
     the client id is waiting on the refresh-token check. The redirect must use the secret that belonged
     to that client id instead of failing because the secret is gone by then."""
@@ -10239,11 +10239,8 @@ async def test_login_redirect_keeps_the_client_secret_read_with_its_client_id_wh
 
     from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
 
-    seen: dict[str, object] = {}
-
-    async def fake_redirect(self, *, redirect_uri=None, params=None, state=None):
-        seen["client_secret"] = self.client_secret
-        return RedirectResponse(url="https://idp.example/authorize")
+    client_id: Final = next(value for key, value in environment.items() if key.endswith("_CLIENT_ID"))
+    client_secret: Final = next(value for key, value in environment.items() if key.endswith("_SECRET"))
 
     async def sync_removes_the_client() -> bool:
         for key in environment:
@@ -10253,18 +10250,21 @@ async def test_login_redirect_keeps_the_client_secret_read_with_its_client_id_wh
     with (
         patch.dict(os.environ, environment),
         patch(  # test-quality-ok: stubs the upstream IdP authorization boundary, where the request leaves
-            upstream_redirect, autospec=True, side_effect=fake_redirect
-        ),
+            upstream_redirect,
+            autospec=True,
+            return_value=RedirectResponse(url="https://idp.example/authorize"),
+        ) as idp_redirect,
     ):
-        client_id: Final = next(value for key, value in environment.items() if key.endswith("_CLIENT_ID"))
-        response = await SSOAuthenticationHandler.get_sso_login_redirect(
+        response: Final = await SSOAuthenticationHandler.get_sso_login_redirect(
             redirect_url="http://localhost:4000/sso/callback",
             retention_enabled=sync_removes_the_client,
             **{client_id_kwarg: client_id},
         )
 
     assert response is not None
-    assert seen["client_secret"] == next(value for key, value in environment.items() if key.endswith("_SECRET"))
+    idp_redirect.assert_awaited_once()
+    provider: Final = idp_redirect.await_args.args[0]
+    assert (provider.client_id, provider.client_secret) == (client_id, client_secret)
 
 
 @pytest.mark.asyncio
