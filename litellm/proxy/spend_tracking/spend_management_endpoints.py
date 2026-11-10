@@ -283,11 +283,6 @@ _UNBOUNDED_SPEND_LOG_WINDOW: Final = _SpendLogWindow()
 def _spend_log_id_filter(
     id_column: _SpendLogIdColumn, lookup_id: str, window: _SpendLogWindow
 ) -> tuple[str, tuple[object, ...]]:
-    """
-    Match ``id_column`` against ``lookup_id`` as ``$1``. A ``litellm_call_id`` match
-    is also limited to the caller's ``startTime`` window, so without its index the
-    read covers that window instead of the whole table.
-    """
     match id_column:
         case "request_id":
             return "request_id = $1", (lookup_id,)
@@ -4953,9 +4948,7 @@ async def _assert_user_can_view_request_id(
     caller their own. Raises HTTP 403 when none of the matching rows is theirs to
     view, including when no row exists at all (e.g. it was pruned by retention),
     so a missing row can't be used to read a payload out of cold storage via the
-    detail endpoint. The ``request_id`` rows are checked first, a primary key hit, so
-    the ``litellm_call_id`` read, a scan of ``window`` without its index, only runs
-    when none of them is the caller's.
+    detail endpoint.
     """
     if not (
         await _user_can_view_spend_log_by_id(prisma_client, user_api_key_dict, "request_id", request_id, window)
@@ -5043,11 +5036,6 @@ async def _query_spend_log_payload(
 async def _fetch_spend_log_payload_rows(
     prisma_client: PrismaClient, lookup_id: str, scope: ReadScope, window: _SpendLogWindow
 ) -> Sequence[Mapping[str, object]]:
-    """
-    Prefer the row whose ``request_id`` is the lookup id, a primary key hit, over
-    rows that merely carry it as their client-set ``litellm_call_id``, which is
-    only read when no ``request_id`` row is visible to the caller.
-    """
     by_request_id: Final = await _query_spend_log_payload(prisma_client, "request_id", lookup_id, scope, window)
     if by_request_id:
         return by_request_id

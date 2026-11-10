@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import uuid
@@ -19,11 +20,13 @@ from psycopg.types.json import Jsonb
 from pydantic import TypeAdapter
 
 from litellm.proxy.auth.authorization import AllRows, OwnedRows, ReadScope
+from litellm.proxy.db.prisma_client import PrismaWrapper
 from litellm.proxy.spend_tracking.spend_management_endpoints import (
     _spend_log_payload_query,
     _SpendLogWindow,
     read_scope_sql,
 )
+from litellm.proxy.utils import query_raw_within_statement_timeout
 
 
 @dataclass(frozen=True, slots=True)
@@ -239,6 +242,31 @@ async def test_payload_sql_reads_through_an_index_without_the_call_id_index(
     plan: Final = await _plan_without_seq_scans(spend_database, query, params)
     assert "Seq Scan" not in plan, plan
     assert "Index Cond" in plan, plan
+
+
+@dataclass(frozen=True, slots=True)
+class _ReadTarget:
+    read_db: PrismaWrapper
+
+
+@pytest.mark.asyncio
+async def test_statement_timeout_read_waits_for_a_busy_connection() -> None:
+    parsed: Final = urlsplit(os.environ["DATABASE_URL"])
+    one_connection_url: Final = urlunsplit(
+        parsed._replace(query=urlencode({**dict(parse_qsl(parsed.query)), "connection_limit": 1, "pool_timeout": 60}))
+    )
+    database: Final = Prisma(datasource={"url": one_connection_url})
+    await database.connect()
+    try:
+        holder: Final = asyncio.create_task(database.query_raw("SELECT pg_sleep(3)::text AS slept"))
+        await asyncio.sleep(0.5)
+        rows: Final = await query_raw_within_statement_timeout(
+            _ReadTarget(PrismaWrapper(original_prisma=database, iam_token_db_auth=False)), "SELECT 1 AS ready"
+        )
+        await holder
+    finally:
+        await database.disconnect()
+    assert rows == [{"ready": 1}]
 
 
 def _delete_session(session_id: str) -> None:

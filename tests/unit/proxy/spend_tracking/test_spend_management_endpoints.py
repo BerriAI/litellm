@@ -7915,7 +7915,7 @@ class _SpendLogsWithoutCallIdIndex:
         by_call_id: Final = "litellm_call_id" in where
         if by_call_id and not statement_timeout_set:
             raise AssertionError("unbounded full scan of LiteLLM_SpendLogs")
-        if by_call_id and '"startTime" >=' not in where:
+        if by_call_id and '"startTime"' not in where:
             raise statement_timeout_error()
         matches: Final = (
             [row for row in self.rows if row["litellm_call_id"] == params[0] and _started_at_or_after(row, params[1])]
