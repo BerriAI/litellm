@@ -1056,7 +1056,7 @@ class TestToolResultItemsReachTextsGuardrails:
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "output_type",
-        ["local_shell_call_output", "shell_call_output", "apply_patch_call_output"],
+        ["local_shell_call_output", "apply_patch_call_output"],
     )
     async def test_shell_and_patch_tool_outputs_are_scanned_and_rewritten_in_place(
         self, output_type: str
@@ -1079,7 +1079,6 @@ class TestToolResultItemsReachTextsGuardrails:
             "custom_tool_call_output",
             "tool_result",
             "local_shell_call_output",
-            "shell_call_output",
             "apply_patch_call_output",
         ],
     )
@@ -1121,7 +1120,7 @@ class TestToolResultItemsReachTextsGuardrails:
                     "output": "long output 1",
                 },
                 {
-                    "type": "shell_call_output",
+                    "type": "apply_patch_call_output",
                     "call_id": "call_2",
                     "output": "long output 2",
                 },
@@ -1148,7 +1147,129 @@ class TestToolResultItemsReachTextsGuardrails:
         assert result.get("custom_metadata") == {"source": "terminal", "session": "abc123"}
         assert result["input"] == [
             {"type": "local_shell_call_output", "id": "lso_1", "output": "short output 1"},
-            {"type": "shell_call_output", "call_id": "call_2", "output": "short output 2"},
+            {"type": "apply_patch_call_output", "call_id": "call_2", "output": "short output 2"},
+        ]
+
+    @pytest.mark.asyncio
+    async def test_shell_call_output_scans_and_rewrites_chunks_preserving_structure(self) -> None:
+        guardrail: Final = RecordingMaskingGuardrail(guardrail_name="test")
+        chunks: Final[list[dict[str, object]]] = [
+            {
+                "outcome": {"type": "exit", "exit_code": 0},
+                "stdout": "SECRET stdout 1",
+                "stderr": "SECRET stderr 1",
+                "created_by": "user_1",
+            },
+            {
+                "outcome": {"type": "timeout"},
+                "stdout": "SECRET stdout 2",
+                "stderr": "",
+            },
+        ]
+        request: Final[dict[str, object]] = {
+            "model": "gpt-5.4-mini",
+            "input": [
+                {
+                    "type": "shell_call_output",
+                    "id": "sho_1",
+                    "call_id": "call_1",
+                    "output": chunks,
+                }
+            ],
+        }
+
+        result: Final = await OpenAIResponsesHandler().process_input_messages(request, guardrail)
+
+        assert guardrail.seen_texts == [["SECRET stdout 1", "SECRET stderr 1", "SECRET stdout 2"]]
+        assert result["input"] == [
+            {
+                "type": "shell_call_output",
+                "id": "sho_1",
+                "call_id": "call_1",
+                "output": [
+                    {
+                        "outcome": {"type": "exit", "exit_code": 0},
+                        "stdout": "SECRET stdout 1 [GUARDRAILED]",
+                        "stderr": "SECRET stderr 1 [GUARDRAILED]",
+                        "created_by": "user_1",
+                    },
+                    {
+                        "outcome": {"type": "timeout"},
+                        "stdout": "SECRET stdout 2 [GUARDRAILED]",
+                        "stderr": "",
+                    },
+                ],
+            }
+        ]
+
+    @pytest.mark.asyncio
+    async def test_headroom_compresses_shell_call_output_preserving_chunk_array_structure(self) -> None:
+        from litellm.proxy.guardrails.guardrail_hooks.headroom.headroom import HeadroomGuardrail
+
+        guardrail: Final = HeadroomGuardrail(
+            api_base="https://headroom.test",
+            api_key="hr-test",
+            guardrail_name="headroom",
+        )
+        request: Final[dict[str, object]] = {
+            "model": "gpt-5.4-mini",
+            "input": [
+                {
+                    "type": "shell_call_output",
+                    "id": "sho_1",
+                    "call_id": "call_1",
+                    "output": [
+                        {
+                            "outcome": {"type": "exit", "exit_code": 0},
+                            "stdout": "very long output line 1\nline 2",
+                            "stderr": "",
+                            "created_by": "user_1",
+                        },
+                        {
+                            "outcome": {"type": "timeout"},
+                            "stdout": "timed out after 30s",
+                            "stderr": "error buffer",
+                            "created_by": "user_1",
+                        },
+                    ],
+                }
+            ],
+        }
+        mock_response: Final = httpx.Response(
+            200,
+            json={
+                "messages": [
+                    {"role": "tool", "content": "compressed summary", "tool_call_id": "call_1"},
+                ]
+            },
+            request=httpx.Request("POST", "https://headroom.test/v1/compress"),
+        )
+
+        with patch.object(
+            guardrail.async_handler, "post", new_callable=AsyncMock, return_value=mock_response
+        ):
+            result: Final = await OpenAIResponsesHandler().process_input_messages(request, guardrail)
+
+        assert result["input"] == [
+            {
+                "type": "shell_call_output",
+                "id": "sho_1",
+                "call_id": "call_1",
+                "output": [
+                    {
+                        "outcome": {"type": "exit", "exit_code": 0},
+                        "stdout": "compressed summary",
+                        "stderr": "",
+                        "created_by": "user_1",
+                    },
+                    {
+                        "outcome": {"type": "timeout"},
+                        "stdout": "",
+                        "stderr": "",
+                        "created_by": "user_1",
+                    },
+                ],
+            }
         ]
 
     @pytest.mark.asyncio
