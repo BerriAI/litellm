@@ -31,6 +31,33 @@ if TYPE_CHECKING:
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 
 
+_RESPONSE_CHOICES: Final = TypeAdapter(tuple[Mapping[str, object], ...], config=ConfigDict(hide_input_in_errors=True))
+
+
+def _non_streaming_error(raw_response: httpx.Response) -> OpenRouterException | None:
+    response: Final = _JSON_OBJECT.validate_python(raw_response.json())
+    choices: Final = _RESPONSE_CHOICES.validate_python(response.get("choices") or ())
+    choice: Final = next(
+        (choice for choice in choices if choice.get("finish_reason") == "error" or choice.get("error")), None
+    )
+    if choice is None:
+        return None
+    error: Final = choice.get("error")
+    details: Final[Mapping[str, object]] = _JSON_OBJECT.validate_python(error) if isinstance(error, Mapping) else {}
+    code: Final = details.get("code")
+    message: Final = details.get("message")
+    return OpenRouterException(
+        status_code=code if isinstance(code, int) and 400 <= code < 600 else 502,
+        message=(
+            message
+            if isinstance(message, str) and message
+            else "OpenRouter returned finish_reason 'error': the provider failed during generation"
+        ),
+        headers=raw_response.headers,
+        body=dict(response),
+    )
+
+
 class CacheControlSupportedModels(str, Enum):
     """Models that support cache_control in content blocks."""
 
@@ -242,6 +269,11 @@ class OpenrouterConfig(OpenAIGPTConfig):
         except Exception:
             # If we can't extract cost, continue without it - don't fail the response
             pass
+
+        response_error: Final = _non_streaming_error(raw_response)
+        if response_error is not None:
+            logging_obj.record_assembled_response_for_failure(model_response)
+            raise response_error
 
         return model_response
 
