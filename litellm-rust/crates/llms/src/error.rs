@@ -103,6 +103,13 @@ impl Error {
         matches!(self, Self::Http(error) if error.is_body_read_timeout())
     }
 
+    pub fn body_cut(&self) -> Option<litellm_http::BodyCut> {
+        match self {
+            Self::Http(error) => error.body_cut(),
+            _ => None,
+        }
+    }
+
     pub fn is_timeout(&self) -> Option<bool> {
         match self {
             Self::Http(error) if error.is_timeout() => Some(error.is_connect_timeout()),
