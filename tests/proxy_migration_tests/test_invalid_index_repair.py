@@ -8,6 +8,7 @@ from typing import Final
 
 import pytest
 from litellm_proxy_extras.migration_lock import MIGRATION_LOCK_KEY
+from litellm_proxy_extras.request_log_indexes import REQUEST_LOG_INDEXES
 from litellm_proxy_extras.utils import INDEX_REPAIR_ADVISORY_LOCK_KEY, ProxyExtrasDBManager, _InvalidIndex
 
 psycopg = pytest.importorskip("psycopg")
@@ -113,6 +114,48 @@ def test_repair_rebuilds_invalid_litellm_indexes_and_leaves_lookalike_tables_alo
     assert ProxyExtrasDBManager.repair_invalid_indexes() is True
 
     assert _index_validity(scratch_schema) == {HEALTH_INDEX: True, LOOKALIKE_INDEX: False}
+
+
+@requires_db
+@pytest.mark.parametrize("partitioned", (False, True))
+def test_startup_repair_defers_managed_indexes_but_repairs_other_indexes(
+    scratch_schema: str, partitioned: bool
+) -> None:
+    table: Final = "LiteLLM_DifferentlyNamedLeaf" if partitioned else "LiteLLM_SpendLogs"
+    managed: Final = REQUEST_LOG_INDEXES[0]
+    name: Final = managed.partition_index_name(table) if partitioned else managed.name
+    with psycopg.connect(_base_url(), autocommit=True) as connection:
+        connection.execute(
+            f'CREATE TABLE "{scratch_schema}"."LiteLLM_SpendLogs" '
+            '(api_key TEXT, "startTime" TIMESTAMPTZ, litellm_call_id TEXT)'
+            + (' PARTITION BY RANGE ("startTime")' if partitioned else '')
+        )
+        if partitioned:
+            connection.execute(
+                f'CREATE TABLE "{scratch_schema}"."{table}" PARTITION OF '
+                f'"{scratch_schema}"."LiteLLM_SpendLogs" FOR VALUES FROM (MINVALUE) TO (MAXVALUE)'
+            )
+    _leave_invalid_index(scratch_schema, table, name, managed.definition.strip("()"))
+    _leave_invalid_index(scratch_schema, HEALTH_TABLE, HEALTH_INDEX, HEALTH_INDEX_COLUMNS)
+
+    assert ProxyExtrasDBManager.repair_invalid_indexes(skip_request_log_indexes=True) is True
+    assert _index_validity(scratch_schema) == {name: False, HEALTH_INDEX: True}
+
+    assert ProxyExtrasDBManager.build_request_log_indexes() is True
+    assert all(_index_validity(scratch_schema).values())
+
+
+@requires_db
+def test_database_setup_leaves_managed_repair_to_the_request_log_builder(fresh_database: str) -> None:
+    assert ProxyExtrasDBManager.setup_database(use_migrate=True) is True
+    managed: Final = REQUEST_LOG_INDEXES[0]
+    _leave_invalid_index(fresh_database, managed.table, managed.name, managed.definition.strip("()"))
+
+    assert ProxyExtrasDBManager.setup_database(use_migrate=True) is True
+    assert _index_validity(fresh_database)[managed.name] is False
+
+    assert ProxyExtrasDBManager.build_request_log_indexes() is True
+    assert all(_index_validity(fresh_database)[index.name] for index in REQUEST_LOG_INDEXES)
 
 
 @requires_db

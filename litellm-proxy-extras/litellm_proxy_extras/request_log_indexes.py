@@ -67,6 +67,14 @@ _CREATE_INDEX_STATEMENT: Final = re.compile(
     re.IGNORECASE,
 )
 _TABLE_KIND_SQL: Final = "SELECT c.relkind = 'p' AS partitioned FROM pg_class c WHERE c.oid = to_regclass(%s)"
+_REQUEST_LOG_TABLES_SQL: Final = (
+    "WITH RECURSIVE tables AS ("
+    "SELECT c.oid, c.relname, c.relnamespace FROM pg_class c "
+    "JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = %s AND c.relname = ANY(%s) "
+    "UNION SELECT c.oid, c.relname, c.relnamespace FROM tables p "
+    "JOIN pg_inherits h ON h.inhparent = p.oid JOIN pg_class c ON c.oid = h.inhrelid"
+    ") SELECT t.relname FROM tables t JOIN pg_namespace n ON n.oid = t.relnamespace WHERE n.nspname = %s"
+)
 _CHILDREN_WITHOUT_THE_INDEX_SQL: Final = (
     "SELECT child.relname AS name, n.nspname AS schema, child.relkind = 'p' AS partitioned "
     "FROM pg_inherits i JOIN pg_class child ON child.oid = i.inhrelid "
@@ -171,6 +179,15 @@ def ensure_request_log_indexes(
         return False
     logger.info("Request-log indexes are all in place")
     return True
+
+
+def request_log_index_names(connection: "psycopg.Connection[tuple[object, ...]]", schema: str) -> frozenset[str]:
+    tables: Final = connection.execute(
+        _REQUEST_LOG_TABLES_SQL, (schema, sorted(frozenset(index.table for index in REQUEST_LOG_INDEXES)), schema)
+    ).fetchall()
+    return frozenset(index.name for index in REQUEST_LOG_INDEXES) | frozenset(
+        index.partition_index_name(str(table[0])) for table in tables for index in REQUEST_LOG_INDEXES
+    )
 
 
 def _under_migration_lock(connection: "psycopg.Connection[tuple[object, ...]]", step: Callable[[], bool]) -> bool:

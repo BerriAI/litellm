@@ -26,7 +26,11 @@ from litellm_proxy_extras.replica_identity import (
     REPLICA_IDENTITY_FULL_ENV_VAR,
     apply_replica_identity_full,
 )
-from litellm_proxy_extras.request_log_indexes import ensure_request_log_indexes, filter_request_log_index_diff
+from litellm_proxy_extras.request_log_indexes import (
+    ensure_request_log_indexes,
+    filter_request_log_index_diff,
+    request_log_index_names,
+)
 
 if TYPE_CHECKING:
     import psycopg
@@ -840,6 +844,8 @@ class ProxyExtrasDBManager:
     def repair_invalid_indexes(
         lock_timeout: str = "30s",
         repair: "Callable[[psycopg.Connection[tuple[str, str, str]], _InvalidIndex], None] | None" = None,
+        *,
+        skip_request_log_indexes: bool = False,
     ) -> bool:
         """Rebuild LiteLLM indexes an interrupted CREATE INDEX CONCURRENTLY left
         INVALID (a migration deadlock between replicas is the usual cause; the
@@ -851,7 +857,8 @@ class ProxyExtrasDBManager:
         lock and REINDEX CONCURRENTLY all need one server session, which a
         transaction pooler does not give. Each rebuild holds the migration
         coordinator lock on its own, like the migration job's index build, so a resolver
-        booting on another replica waits for one index at most."""
+        booting on another replica waits for one index at most. Database setup skips
+        managed request-log indexes so their builder owns repair without delaying serving startup."""
         prisma_url: Final = os.getenv("DATABASE_URL")
         if not prisma_url:
             return False
@@ -872,7 +879,11 @@ class ProxyExtrasDBManager:
             with psycopg.connect(cleaned_url, connect_timeout=10, autocommit=True) as conn:
                 conn.execute("SET statement_timeout = 0")
                 conn.execute(sql.SQL("SET lock_timeout = {}").format(sql.Literal(lock_timeout)))
-                found: Final = ProxyExtrasDBManager._invalid_litellm_indexes(conn, schema)
+                deferred: Final = request_log_index_names(conn, schema) if skip_request_log_indexes else frozenset()
+                found: Final = tuple(
+                    index for index in ProxyExtrasDBManager._invalid_litellm_indexes(conn, schema)
+                    if index.name not in deferred
+                )
                 if not found:
                     return True
                 logger.warning(
@@ -894,7 +905,10 @@ class ProxyExtrasDBManager:
                 )
                 if not repaired:
                     return False
-                remaining: Final = ProxyExtrasDBManager._invalid_litellm_indexes(conn, schema)
+                remaining: Final = tuple(
+                    index for index in ProxyExtrasDBManager._invalid_litellm_indexes(conn, schema)
+                    if index.name not in deferred
+                )
         except psycopg.Error as e:
             logger.warning(
                 "Could not check for invalid indexes, will retry on the next database setup run. Error: %s", e
@@ -1281,7 +1295,7 @@ class ProxyExtrasDBManager:
         )
         if not migrated:
             return False
-        ProxyExtrasDBManager.repair_invalid_indexes()
+        ProxyExtrasDBManager.repair_invalid_indexes(skip_request_log_indexes=True)
         ProxyExtrasDBManager.apply_replica_identity_full_if_requested()
         return True
 
