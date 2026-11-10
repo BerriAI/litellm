@@ -15,6 +15,7 @@ import pytest
 
 from litellm.integrations.otel import GenAIOperation
 from litellm.integrations.otel.mappers import (
+    GenAIMapper,
     LangfuseMapper,
     LangtraceMapper,
     OpenInferenceMapper,
@@ -717,13 +718,22 @@ NOT_JSON_ENCODABLE: Final = object()
     ("message", "expected_prompt"),
     [
         ({"role": "user", "content": "weather in sf?"}, {"role": "user", "content": "weather in sf?"}),
+        (
+            {"role": "user", "content": "weather in sf?", 1: "one"},
+            {"role": "user", "content": "weather in sf?", "1": "one"},
+        ),
         (LITELLM_USER_MESSAGE, LITELLM_USER_MESSAGE.model_dump(mode="json")),
         (
             Message(role="user", content="weather in sf?", trace_handle=NOT_JSON_ENCODABLE),
             {**LITELLM_USER_MESSAGE.model_dump(mode="json"), "trace_handle": str(NOT_JSON_ENCODABLE)},
         ),
     ],
-    ids=["dict_message", "litellm_message_object", "litellm_message_with_value_json_cannot_encode"],
+    ids=[
+        "dict_message",
+        "dict_message_with_int_key",
+        "litellm_message_object",
+        "litellm_message_with_value_json_cannot_encode",
+    ],
 )
 def test_vendor_mappers_keep_the_prompt_of_litellm_message_objects(
     message: Mapping[str, object] | Message, expected_prompt: Mapping[str, object]
@@ -738,13 +748,37 @@ def test_vendor_mappers_keep_the_prompt_of_litellm_message_objects(
     data: Final = LLMCallSpanData.from_standard_logging_payload(payload, capture_content=True)
 
     assert {
+        "genai": json.loads(str(GenAIMapper().map(data)["gen_ai.input.messages"])),
         "langfuse": json.loads(str(LangfuseMapper().map(data)["langfuse.observation.input"])),
         "langtrace": json.loads(str(LangtraceMapper().map(data)["llm.prompts"])),
         "openinference": json.loads(str(OpenInferenceMapper().map(data)["input.value"])),
     } == {
+        "genai": [expected_prompt],
         "langfuse": [expected_prompt],
         "langtrace": [expected_prompt],
         "openinference": [{"role": "user", "content": "weather in sf?"}],
+    }
+
+
+def test_vendor_mappers_keep_the_span_when_a_litellm_message_cannot_be_dumped() -> None:
+    payload: Final = {
+        "call_type": "acompletion",
+        "custom_llm_provider": "openai",
+        "model": "gpt-5.4-nano",
+        "messages": [
+            {"role": "system", "content": "be brief"},
+            Message(role="user", content="weather in sf?", audio_bytes=b"\xff\xfe"),
+        ],
+        "response": {"choices": [{"finish_reason": "stop", "message": {"role": "assistant", "content": "Sunny."}}]},
+    }
+    attrs: Final = LangfuseMapper().map(LLMCallSpanData.from_standard_logging_payload(payload, capture_content=True))
+
+    assert {
+        "input": json.loads(str(attrs["langfuse.observation.input"])),
+        "output": json.loads(str(attrs["langfuse.observation.output"])),
+    } == {
+        "input": [{"role": "system", "content": "be brief"}],
+        "output": [{"role": "assistant", "content": "Sunny."}],
     }
 
 

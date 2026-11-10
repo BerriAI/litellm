@@ -784,12 +784,18 @@ def _dicts(value: object) -> tuple[Mapping[str, object], ...]:
 
 
 _OBJECTS: Final = TypeAdapter(tuple[object, ...])
+_ANY_KEY_MAPPING: Final = TypeAdapter(Mapping[object, object])
 
 
 def _message_dict(message: object) -> Mapping[str, object] | None:
-    if isinstance(message, BaseModel):
+    if isinstance(message, dict):
+        return {str(key): value for key, value in _ANY_KEY_MAPPING.validate_python(message).items()}
+    if not isinstance(message, BaseModel):
+        return None
+    try:
         return message.model_dump(mode="json", fallback=str)
-    return as_str_mapping(message)
+    except ValueError:
+        return None
 
 
 def _message_dicts(value: object) -> tuple[Mapping[str, object], ...]:
