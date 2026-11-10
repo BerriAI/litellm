@@ -49,11 +49,12 @@ from litellm.llms.custom_httpx.llm_http_handler import (
     _merge_messages_header_sources as _merged_headers,  # pyright: ignore[reportPrivateUsage]  # the handler's own header merge
 )
 from litellm.rust_bridge import detectors, failures
-from litellm.rust_bridge.host import callbacks_legacy_python, http_transport
+from litellm.rust_bridge.host import cache, callbacks_legacy_python, http_transport
 from litellm.rust_bridge.public_call import NativeCall, known_params, optional_str
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
 from litellm.types.router import GenericLiteLLMParams
-from litellm.types.utils import ProviderSpecificHeader
+from litellm.types.utils import CallTypes, ProviderSpecificHeader
+from litellm.utils import clamp_max_tokens
 
 _METADATA: Final = TypeAdapter(dict[str, object])
 _BODY_FIELDS: Final = frozenset(
@@ -112,6 +113,17 @@ def inferred_provider(model: str, api_base: str | None) -> str | None:
     except litellm.BadRequestError:
         return None
     return provider
+
+
+def modify_max_tokens(
+    model: object,
+    args: tuple[object, ...],
+    kwargs: dict[str, object],  # mutable-ok: the call's keyword view, rewritten in place as `@client` does
+) -> None:
+    unclamped: Final = kwargs.get("max_tokens")
+    clamp_max_tokens(model, args, kwargs, CallTypes.anthropic_messages.value)
+    if kwargs.get("max_tokens") != unclamped:
+        cache.remember_unclamped(kwargs.get("litellm_logging_obj"), unclamped)
 
 
 def _body_fields(request: Mapping[str, object]) -> Mapping[str, object]:

@@ -28,7 +28,7 @@ use crate::{
     routes::RequestView,
 };
 
-const ROUTE_HOST_MODULE: &str = "litellm.rust_bridge.host.routes.messages";
+pub(super) const ROUTE_HOST_MODULE: &str = "litellm.rust_bridge.host.routes.messages";
 const MODEL_CAPABILITIES_MODULE: &str = "litellm.rust_bridge.host.model_capabilities";
 
 fn merge_headers(

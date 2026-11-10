@@ -166,6 +166,7 @@ THINKING_REPLAY: Final[tuple[JsonValue, ...]] = (
     {"role": "user", "content": "And Germany?"},
 )
 
+_MODIFY_PARAMS: Final[Mapping[str, object]] = MappingProxyType({"modify_params": True})
 NO_INPUT: Final[Mapping[str, JsonValue]] = MappingProxyType({})
 PNG_PIXEL: Final = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
 
@@ -329,7 +330,7 @@ class Case:
     gaps: Mapping[str, str | None] = field(default_factory=lambda: MappingProxyType({}))
 
     def params(self) -> Iterator[object]:
-        for aspect in ASPECTS:
+        for aspect in (*ASPECTS, "cached") if self.cache is not None else ASPECTS:
             gap = {**KNOWN_GAPS.get(self.name, {}), **self.gaps}.get(aspect)
             marks = () if not gap else (pytest.mark.xfail(reason=gap, strict=True),)
             yield pytest.param(self, aspect, id=f"{self.name}-{aspect}", marks=marks)
@@ -911,7 +912,72 @@ FALLBACK_CASES: Final = (
             _ok(),
         ),
     ),
-    Case("modify_params", _kw(max_tokens=1), settings=MappingProxyType({"modify_params": True})),
+    Case("modify_params", _kw(max_tokens=1), settings=_MODIFY_PARAMS),
+    Case("modify_params_clamps_max_tokens", _kw(max_tokens=200_000), settings=_MODIFY_PARAMS),
+    Case(
+        "modify_params_clamps_streamed_max_tokens",
+        _kw(stream=True, max_tokens=200_000),
+        upstream=(_stream(TEXT_STREAM),),
+        settings=_MODIFY_PARAMS,
+    ),
+    Case(
+        "modify_params_clamps_tool_turns",
+        _kw(messages=list(TOOL_TURNS), tools=[dict(WEATHER_TOOL)], max_tokens=200_000),
+        upstream=(_ok(TOOL_USE_RESPONSE),),
+        settings=_MODIFY_PARAMS,
+    ),
+    Case(
+        "modify_params_clamps_thinking",
+        _kw(thinking={"type": "enabled", "budget_tokens": 2048}, max_tokens=200_000),
+        upstream=(_ok(THINKING_RESPONSE),),
+        settings=_MODIFY_PARAMS,
+    ),
+    Case(
+        "modify_params_image_content",
+        _kw(
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": PNG_PIXEL}},
+                        {"type": "text", "text": "What is this?"},
+                    ],
+                }
+            ],
+            max_tokens=200_000,
+        ),
+        settings=_MODIFY_PARAMS,
+    ),
+    Case(
+        "modify_params_unknown_model",
+        _kw(max_tokens=200_000),
+        model="anthropic/claude-parity-unknown",
+        settings=_MODIFY_PARAMS,
+    ),
+    Case("modify_params_hf_model_name", _kw(max_tokens=200_000, hf_model_name="gpt2"), settings=_MODIFY_PARAMS),
+    Case(
+        "modify_params_cache_write_without_read",
+        _kw(max_tokens=200_000, cache={"no-cache": True}),
+        upstream=(_ok(), _ok()),
+        settings=_MODIFY_PARAMS,
+        cache=Cache,
+    ),
+    Case(
+        "modify_params_clamped_call_never_hits_the_cache",
+        _kw(max_tokens=200_000),
+        upstream=(_ok(), _ok()),
+        settings=_MODIFY_PARAMS,
+        cache=Cache,
+    ),
+    Case(
+        "modify_params_unclamped_call_hits_the_cache",
+        _kw(max_tokens=10),
+        upstream=(_ok(), _ok()),
+        settings=_MODIFY_PARAMS,
+        cache=Cache,
+    ),
+    Case("cache_write_without_read", _kw(cache={"no-cache": True}), upstream=(_ok(), _ok()), cache=Cache),
+    Case("modify_params_sync", _kw(max_tokens=200_000), sync=True, settings=_MODIFY_PARAMS),
     Case("request_timeout_kwarg", _kw(request_timeout=30)),
     Case("stream_timeout_kwarg", _kw(stream=True, stream_timeout=30), upstream=(_stream(TEXT_STREAM),)),
 )
@@ -1047,6 +1113,7 @@ class Leg:
     hidden_params: Mapping[str, object]
     logged: Mapping[str, object]
     callback_kwargs: Mapping[str, object]
+    cached: tuple[str, ...] = ()
 
 
 @dataclass(slots=True)
@@ -1325,6 +1392,7 @@ async def _leg(case: Case, server: RecordingServer, probe: FallbackProbe | None)
             hidden_params=hidden,
             logged=logged,
             callback_kwargs=callback_kwargs,
+            cached=() if litellm.cache is None else tuple(sorted(litellm.cache.cache.cache_dict)),
         )
 
 
@@ -1371,6 +1439,8 @@ async def test_native_messages_match_python(
             assert native.hidden_params == python.hidden_params
         case "logged":
             assert native.logged == python.logged
+        case "cached":
+            assert native.cached == python.cached
         case _:
             assert native.callback_kwargs.get(aspect) == python.callback_kwargs.get(aspect)
 
