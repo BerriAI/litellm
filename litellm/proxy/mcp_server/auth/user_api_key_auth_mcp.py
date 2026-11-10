@@ -45,10 +45,10 @@ from litellm.proxy.agent_endpoints.auth.agent_access_groups import (
 )
 from litellm.proxy.agent_endpoints.auth.agent_caller import agent_caller_auth
 from litellm.proxy.agent_endpoints.auth.managed_authorization import managed_agent_policy
+from litellm.proxy.auth.core.credential import litellm_header_token
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.proxy.auth.oauth2_check import OAuth2TokenValidationError
 from litellm.proxy.auth.user_api_key_auth import (  # noqa: F401  # legacy module exports
-    _get_bearer_token_or_received_api_key,  # pyright: ignore[reportPrivateUsage]  # shared x-litellm-api-key parser lives with user_api_key_auth
     _run_centralized_common_checks,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     oauth2_introspection_applies,
     run_centralized_common_checks,
@@ -110,7 +110,7 @@ _CACHED_VALUE: Final = TypeAdapter(object)
 
 
 def _normalize_caller_admission_credential(value: str) -> str:
-    return _get_bearer_token_or_received_api_key(strip_auth_scheme(value, "Bearer")).strip()
+    return litellm_header_token(strip_auth_scheme(value, "Bearer")).strip()
 
 
 def _admission_request(scope: Scope) -> Request:
@@ -797,7 +797,7 @@ class MCPRequestHandler:
                 # for a delegated server, so validate it: identity / spend / rate
                 # limits resolve and any stored upstream token can be forwarded.
                 validated_user_api_key_auth = await user_api_key_auth(
-                    api_key=f"Bearer {_get_bearer_token_or_received_api_key(litellm_api_key)}",
+                    api_key=f"Bearer {litellm_header_token(litellm_api_key)}",
                     request=request,
                 )
             elif MCPRequestHandler._target_servers_are_true_passthrough(
@@ -1278,7 +1278,7 @@ class MCPRequestHandler:
         permissions, budgets, rate limits) and the sealed upstream token is injected under the
         server's per-server auth-header key, while the leak-defense chokepoint strips the envelope
         ``Authorization`` itself from egress."""
-        presented_token: Final = _get_bearer_token_or_received_api_key(litellm_api_key)
+        presented_token: Final = litellm_header_token(litellm_api_key)
         explicit_auth: Final = await user_api_key_auth(api_key=f"Bearer {presented_token}", request=request)
         result: Final = await MCPRequestHandler._open_dcr_bridge_envelope(
             server=server,

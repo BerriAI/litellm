@@ -6720,6 +6720,53 @@ def _apply_budget_exceeded_throttle(valid_token: UserAPIKeyAuth) -> bool:
     return True
 
 
+def send_token_budget_alert(
+    valid_token: UserAPIKeyAuth,
+    spend: float,
+    proxy_logging_obj: ProxyLogging,
+    user_obj: LiteLLM_UserTable | None,
+) -> None:
+    call_info: Final = CallInfo(
+        token=valid_token.token,
+        spend=spend,
+        max_budget=valid_token.max_budget,
+        soft_budget=valid_token.soft_budget,
+        user_id=valid_token.user_id,
+        team_id=valid_token.team_id,
+        organization_id=valid_token.org_id,
+        user_email=user_obj.user_email if user_obj is not None else None,
+        key_alias=valid_token.key_alias,
+        event_group=Litellm_EntityType.KEY,
+    )
+    asyncio.create_task(
+        proxy_logging_obj.budget_alerts(
+            type="token_budget",
+            user_info=call_info,
+        )
+    )
+
+
+def key_budget_exceeded_error(
+    valid_token: UserAPIKeyAuth, spend: float, max_budget: float
+) -> litellm.BudgetExceededError:
+    # This message is returned to the caller, and key_name has no enforced
+    # shape (a direct DB write bypasses abbreviate_api_key), so echo it only
+    # when it still looks masked and fall back to the alias otherwise.
+    key_label: Final = valid_token.key_alias or "key"
+    key_descriptor: Final = (
+        f"{key_label} ({valid_token.key_name})"
+        if valid_token.key_name and _MASKED_KEY_NAME_RE.fullmatch(valid_token.key_name)
+        else key_label
+    )
+    return litellm.BudgetExceededError(
+        current_cost=spend,
+        max_budget=max_budget,
+        message=f"Budget has been exceeded! Key={key_descriptor} Current cost: {spend}, Max budget: {max_budget}",
+        entity_type=Litellm_EntityType.KEY.value,
+        entity_id=valid_token.token,
+    )
+
+
 async def virtual_key_max_budget_check(
     valid_token: UserAPIKeyAuth,
     proxy_logging_obj: ProxyLogging,
@@ -6734,47 +6781,13 @@ async def virtual_key_max_budget_check(
     if valid_token.max_budget is not None:
         from litellm.proxy.proxy_server import get_current_spend
 
-        fallback_spend: Final = valid_token.spend or 0.0
-        counter_key: Final = key_counter(str(valid_token.token))
-
         # Read spend from cross-pod counter (Redis-first) or cached object (fallback)
         spend: Final = await get_current_spend(
-            counter_key=counter_key,
-            fallback_spend=fallback_spend,
+            counter_key=key_counter(str(valid_token.token)),
+            fallback_spend=valid_token.spend or 0.0,
             max_budget=valid_token.max_budget,
         )
-
-        ####################################
-        # collect information for alerting #
-        ####################################
-
-        user_email = None
-        # Check if the token has any user id information
-        if user_obj is not None:
-            user_email = user_obj.user_email
-
-        call_info: Final = CallInfo(
-            token=valid_token.token,
-            spend=spend,
-            max_budget=valid_token.max_budget,
-            soft_budget=valid_token.soft_budget,
-            user_id=valid_token.user_id,
-            team_id=valid_token.team_id,
-            organization_id=valid_token.org_id,
-            user_email=user_email,
-            key_alias=valid_token.key_alias,
-            event_group=Litellm_EntityType.KEY,
-        )
-        asyncio.create_task(
-            proxy_logging_obj.budget_alerts(
-                type="token_budget",
-                user_info=call_info,
-            )
-        )
-
-        ####################################
-        # collect information for alerting #
-        ####################################
+        send_token_budget_alert(valid_token, spend, proxy_logging_obj, user_obj)
 
         # Defense-in-depth (GHSA-2rv4-xv66-fpjg): spend >= NaN is always False,
         # so a NaN max_budget would silently disable enforcement.  Treat a
@@ -6782,22 +6795,7 @@ async def virtual_key_max_budget_check(
         if math.isfinite(valid_token.max_budget) and spend >= valid_token.max_budget:
             if _apply_budget_exceeded_throttle(valid_token):
                 return
-            # This message is returned to the caller, and key_name has no enforced
-            # shape (a direct DB write bypasses abbreviate_api_key), so echo it only
-            # when it still looks masked and fall back to the alias otherwise.
-            key_label: Final = valid_token.key_alias or "key"
-            key_descriptor: Final = (
-                f"{key_label} ({valid_token.key_name})"
-                if valid_token.key_name and _MASKED_KEY_NAME_RE.fullmatch(valid_token.key_name)
-                else key_label
-            )
-            raise litellm.BudgetExceededError(
-                current_cost=spend,
-                max_budget=valid_token.max_budget,
-                message=f"Budget has been exceeded! Key={key_descriptor} Current cost: {spend}, Max budget: {valid_token.max_budget}",
-                entity_type=Litellm_EntityType.KEY.value,
-                entity_id=valid_token.token,
-            )
+            raise key_budget_exceeded_error(valid_token, spend, valid_token.max_budget)
 
 
 _virtual_key_max_budget_check: Final = virtual_key_max_budget_check
@@ -6858,32 +6856,39 @@ async def virtual_key_soft_budget_check(
     """
 
     if valid_token.soft_budget and valid_token.spend >= valid_token.soft_budget:
-        verbose_proxy_logger.debug(
-            "Crossed Soft Budget for token %s, spend %s, soft_budget %s",
-            valid_token.token,
-            valid_token.spend,
-            valid_token.soft_budget,
-        )
-        call_info: Final = CallInfo(
-            token=valid_token.token,
-            spend=valid_token.spend,
-            max_budget=valid_token.max_budget,
-            soft_budget=valid_token.soft_budget,
-            user_id=valid_token.user_id,
-            team_id=valid_token.team_id,
-            team_alias=valid_token.team_alias,
-            organization_id=valid_token.org_id,
-            user_email=user_obj.user_email if user_obj else None,
-            key_alias=valid_token.key_alias,
-            event_group=Litellm_EntityType.KEY,
-        )
+        send_soft_budget_alert(valid_token, proxy_logging_obj, user_obj)
 
-        asyncio.create_task(
-            proxy_logging_obj.budget_alerts(
-                type="soft_budget",
-                user_info=call_info,
-            )
+
+def send_soft_budget_alert(
+    valid_token: UserAPIKeyAuth,
+    proxy_logging_obj: ProxyLogging,
+    user_obj: LiteLLM_UserTable | None,
+) -> None:
+    verbose_proxy_logger.debug(
+        "Crossed Soft Budget for token %s, spend %s, soft_budget %s",
+        valid_token.token,
+        valid_token.spend,
+        valid_token.soft_budget,
+    )
+    call_info: Final = CallInfo(
+        token=valid_token.token,
+        spend=valid_token.spend,
+        max_budget=valid_token.max_budget,
+        soft_budget=valid_token.soft_budget,
+        user_id=valid_token.user_id,
+        team_id=valid_token.team_id,
+        team_alias=valid_token.team_alias,
+        organization_id=valid_token.org_id,
+        user_email=user_obj.user_email if user_obj else None,
+        key_alias=valid_token.key_alias,
+        event_group=Litellm_EntityType.KEY,
+    )
+    asyncio.create_task(
+        proxy_logging_obj.budget_alerts(
+            type="soft_budget",
+            user_info=call_info,
         )
+    )
 
 
 _virtual_key_soft_budget_check: Final = virtual_key_soft_budget_check

@@ -611,6 +611,9 @@ jobs:
       - name: check_telemetry_imports
         run: uv run --no-sync python ./tests/code_coverage_tests/check_telemetry_imports.py
 
+      - name: check_auth_core_is_pure
+        run: uv run --no-sync python ./tests/code_coverage_tests/check_auth_core_is_pure.py
+
       - name: ban_copy_deepcopy_kwargs
         run: uv run --no-sync python ./tests/code_coverage_tests/ban_copy_deepcopy_kwargs.py
 

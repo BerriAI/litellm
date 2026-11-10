@@ -3877,6 +3877,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "litellm-gateway-auth-core"
+version = "0.1.0"
+dependencies = [
+ "litellm-secret-value",
+ "rstest",
+ "strum",
+ "tokio",
+]
+
+[[package]]
 name = "litellm-gateway-forward"
 version = "0.1.0"
 dependencies = [
