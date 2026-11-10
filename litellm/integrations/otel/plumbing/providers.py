@@ -492,6 +492,13 @@ class _CountedSpanView(_SpanView):
         return self._dropped_counts[2]
 
 
+def span_limits(span: object) -> SpanLimits:
+    """The limits ``span`` was built with; the env-configured defaults for a span the SDK did not build."""
+    if not isinstance(span, SDKSpan):
+        return SpanLimits()
+    return span._limits  # pyright: ignore[reportPrivateUsage]  # the SDK has no public accessor for a span's limits
+
+
 class _PendingMetadataSpan(_CountedSpanView):
     """``inner`` as it ended, carrying the destination metadata added once the destination's view is built."""
 
@@ -508,26 +515,23 @@ def with_destination_metadata(
 
     Bound when the span ends, so a tree held for sampling keeps its own request's values, along
     with the span limits it ended under. :func:`with_pending_metadata` adds them once the
-    destination's view is built. An attribute the span already carries wins, so a destination key
-    never replaces a value the global allowlist or the proxy's identity wrote.
+    destination's view is built.
     """
     if not metadata_keys:
         return span
-    attributes: Final = span.attributes or _NO_ATTRIBUTES
-    extra: Final = tuple(
-        (key, value) for key, value in promoted_metadata(metadata, metadata_keys).items() if key not in attributes
-    )
-    if not extra:
+    promoted: Final = tuple(promoted_metadata(metadata, metadata_keys).items())
+    if not promoted:
         return span
-    return _PendingMetadataSpan(span, extra, limits)
+    return _PendingMetadataSpan(span, promoted, limits)
 
 
 def with_pending_metadata(ended: ReadableSpan, exported: ReadableSpan) -> ReadableSpan:
     """``exported``, the destination's view of ``ended``, plus the metadata ``ended`` carries.
 
     Counted against what the destination exports rather than the span as it ended, since the view
-    can drop prompt content and backend-specific attributes. Values are cut to the length limit,
-    and keys past the count limit are dropped and counted, never evicting an exported attribute.
+    can drop prompt content and backend-specific attributes. An exported attribute always wins, so a
+    destination key never replaces a value the global allowlist or the proxy's identity wrote.
+    Values are cut to the length limit, and keys past the count limit are dropped and counted.
     """
     if not isinstance(ended, _PendingMetadataSpan):
         return exported
@@ -817,11 +821,11 @@ class TenantFanOutSpanProcessor(SpanProcessor):
         self._span_roots: weakref.WeakKeyDictionary[SDKSpan, int] = weakref.WeakKeyDictionary()
         self._verdicts: OrderedDict[_VerdictKey, bool] = OrderedDict()  # mutable-ok: bounded LRU
         self._drain: Final = drain_pool if drain_pool is not None else _DrainPool(capacity=pending_drains)
-        self._span_limits = SpanLimits()  # replaced by the provider's own limits from the first span that starts
+        self._span_limits = SpanLimits()
 
     def on_start(self, span: SDKSpan, parent_context: Context | None = None) -> None:
         context: Final = span.context
-        self._span_limits = span._limits  # pyright: ignore[reportPrivateUsage]  # the SDK has no public accessor for a span's limits
+        self._span_limits = span_limits(span)
         with self._lock:
             request: Final = self._request_of(span, trace.get_current_span(parent_context))
             if context is not None:

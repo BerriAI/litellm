@@ -83,18 +83,16 @@ _REQUEST_HEADERS_KEY: Final = "headers"
 
 def destination_metadata_keys_error(value: str) -> str | None:
     """Why ``value`` is not a usable destination ``baggage_metadata_keys`` list, or ``None``."""
-    keys: Final = tuple(key.strip() for key in value.split(","))
-    allowed: Final = f"a comma-separated list of {REQUESTER_METADATA_PATH}<key> entries"
-    if any(not key.startswith(REQUESTER_METADATA_PATH) or key == REQUESTER_METADATA_PATH for key in keys):
-        return f"Invalid baggage_metadata_keys {value!r}: use {allowed}"
-    reserved: Final = tuple(
-        key for key in keys if _is_reserved_metadata_name(key.removeprefix(REQUESTER_METADATA_PATH))
-    )
+    keys: Final = _listed_keys(value)
+    named: Final = tuple((key, key.removeprefix(REQUESTER_METADATA_PATH)) for key in keys)
+    if any(name == key or not name for key, name in named):
+        return f"Invalid baggage_metadata_keys {value!r}: use a comma-separated list of {REQUESTER_METADATA_PATH}<key> entries"
+    reserved: Final = tuple(key for key, name in named if _is_reserved_metadata_name(name))
     if reserved:
         return (
             f"Invalid baggage_metadata_keys {value!r}: {', '.join(reserved)} would overwrite a proxy identity attribute"
         )
-    headers: Final = tuple(key for key in keys if _is_request_header(key.removeprefix(REQUESTER_METADATA_PATH)))
+    headers: Final = tuple(key for key, name in named if _is_request_header(name))
     if headers:
         return (
             f"Invalid baggage_metadata_keys {value!r}: {', '.join(headers)} would export request headers, "
@@ -109,7 +107,11 @@ def parse_destination_metadata_keys(value: object) -> tuple[str, ...] | None:
     """A destination's ``baggage_metadata_keys`` as a key tuple, ``None`` when unset or invalid."""
     if not isinstance(value, str) or destination_metadata_keys_error(value) is not None:
         return None
-    return tuple(dict.fromkeys(key.strip() for key in value.split(",")))
+    return tuple(dict.fromkeys(_listed_keys(value)))
+
+
+def _listed_keys(value: str) -> tuple[str, ...]:
+    return tuple(key.strip() for key in value.split(","))
 
 
 def _is_reserved_metadata_name(name: str) -> bool:

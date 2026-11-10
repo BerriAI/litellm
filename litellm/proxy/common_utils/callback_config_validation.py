@@ -16,7 +16,6 @@ from pydantic import TypeAdapter, ValidationError
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.types.utils import (
     BAGGAGE_METADATA_KEYS_VAR,
-    CAPTURE_MESSAGE_CONTENT_VAR,
     EXCLUDED_SERVICES_VAR,
     OTEL_DESTINATION_VARS,
 )
@@ -47,20 +46,12 @@ def callback_config_error(
     )
     if langfuse_error is not None:
         return langfuse_error
-    from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
-        validate_baggage_metadata_keys_value,
-        validate_capture_message_content_value,
-        validate_excluded_services_value,
-    )
+    from litellm.litellm_core_utils.initialize_dynamic_callback_params import OTEL_DESTINATION_VALIDATORS
 
     destination_setting_error: Final = next(
         (
             error
-            for variable_name, validator in (
-                (CAPTURE_MESSAGE_CONTENT_VAR, validate_capture_message_content_value),
-                (EXCLUDED_SERVICES_VAR, validate_excluded_services_value),
-                (BAGGAGE_METADATA_KEYS_VAR, validate_baggage_metadata_keys_value),
-            )
+            for variable_name, validator in OTEL_DESTINATION_VALIDATORS.items()
             if (
                 error := _destination_setting_error(
                     variable_name, callback_name, callback_vars, callback_type, validator

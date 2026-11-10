@@ -636,46 +636,14 @@ class TestFanOut:
             if key.startswith("litellm.metadata.")
         ] == []
 
-    def test_destination_metadata_key_never_replaces_an_attribute_the_span_carries(self):
-        team: Final = InMemorySpanExporter()
-        provider: Final = TracerProvider()
-        provider.add_span_processor(TenantFanOutSpanProcessor(processor_factory=lambda _: SimpleSpanProcessor(team)))
-
-        def run():
-            set_request_destinations(
-                (OtelDestination(endpoint="http://team.local", metadata_keys=("requester_metadata.tenant_id",)),)
-            )
-            set_request_metadata(MappingProxyType({"requester_metadata.tenant_id": "from-caller"}))
-            with get_tracer(provider, "litellm").start_as_current_span("chat gpt-4") as span:
-                span.set_attribute("litellm.metadata.tenant_id", "from-operator-allowlist")
-
-        in_fresh_context(run)
-
-        assert team.get_finished_spans()[0].attributes["litellm.metadata.tenant_id"] == "from-operator-allowlist"
-
-    def test_destination_metadata_obeys_the_span_value_length_limit(self, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.setenv("OTEL_SPAN_ATTRIBUTE_VALUE_LENGTH_LIMIT", "8")
-        team: Final = InMemorySpanExporter()
-        provider: Final = TracerProvider()
-        provider.add_span_processor(TenantFanOutSpanProcessor(processor_factory=lambda _: SimpleSpanProcessor(team)))
-
-        def run():
-            set_request_destinations(
-                (OtelDestination(endpoint="http://team.local", metadata_keys=("requester_metadata.tenant_id",)),)
-            )
-            set_request_metadata(MappingProxyType({"requester_metadata.tenant_id": "x" * 1_048_576}))
-            emit(provider)
-
-        in_fresh_context(run)
-
-        assert team.get_finished_spans()[0].attributes["litellm.metadata.tenant_id"] == "x" * 8
-
     @staticmethod
-    def _limited_team_export(
-        limits: SpanLimits, attributes: Mapping[str, str], metadata: Mapping[str, str]
+    def _team_export(
+        metadata: Mapping[str, str],
+        attributes: Mapping[str, str] = MappingProxyType({}),
+        limits: SpanLimits | None = None,
     ) -> ReadableSpan:
         team: Final = InMemorySpanExporter()
-        provider: Final = TracerProvider(span_limits=limits)
+        provider: Final = TracerProvider() if limits is None else TracerProvider(span_limits=limits)
         provider.add_span_processor(TenantFanOutSpanProcessor(processor_factory=lambda _: SimpleSpanProcessor(team)))
 
         def run():
@@ -687,11 +655,25 @@ class TestFanOut:
         in_fresh_context(run)
         return team.get_finished_spans()[0]
 
+    def test_destination_metadata_key_never_replaces_an_attribute_the_span_carries(self):
+        exported: Final = self._team_export(
+            {"requester_metadata.tenant_id": "from-caller"},
+            {"litellm.metadata.tenant_id": "from-operator-allowlist"},
+        )
+
+        assert (exported.attributes or {})["litellm.metadata.tenant_id"] == "from-operator-allowlist"
+
+    def test_destination_metadata_obeys_the_span_value_length_limit(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv("OTEL_SPAN_ATTRIBUTE_VALUE_LENGTH_LIMIT", "8")
+        exported: Final = self._team_export({"requester_metadata.tenant_id": "x" * 1_048_576})
+
+        assert (exported.attributes or {})["litellm.metadata.tenant_id"] == "x" * 8
+
     def test_destination_metadata_obeys_a_providers_own_span_limits(self):
-        exported: Final = self._limited_team_export(
-            SpanLimits(max_span_attributes=3, max_span_attribute_length=4),
-            {"litellm.team.id": "team-a", "litellm.metadata.correlation_id": "corr"},
+        exported: Final = self._team_export(
             {"requester_metadata.a": "abcdefgh", "requester_metadata.b": "2", "requester_metadata.c": "3"},
+            {"litellm.team.id": "team-a", "litellm.metadata.correlation_id": "corr"},
+            SpanLimits(max_span_attributes=3, max_span_attribute_length=4),
         )
 
         assert dict(exported.attributes or {}) == {
@@ -703,10 +685,8 @@ class TestFanOut:
 
     def test_destination_metadata_counts_against_the_view_after_content_is_redacted(self):
         prompt: Final = {f"llm.input_messages.{index}.message.content": "hello" for index in range(4)}
-        exported: Final = self._limited_team_export(
-            SpanLimits(max_span_attributes=4),
-            prompt,
-            {"requester_metadata.correlation_id": "corr-1"},
+        exported: Final = self._team_export(
+            {"requester_metadata.correlation_id": "corr-1"}, prompt, SpanLimits(max_span_attributes=4)
         )
 
         assert dict(exported.attributes or {}) == {"litellm.metadata.correlation_id": "corr-1"}

@@ -30,10 +30,8 @@ from typing_extensions import (
 from litellm._uuid import uuid
 from litellm.constants import DEFAULT_STAGGER_WINDOW_SECONDS, MCP_STDIO_ALLOWED_COMMANDS
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
+    OTEL_DESTINATION_VALIDATORS,
     validate_arize_otlp_protocol_value,
-    validate_baggage_metadata_keys_value,
-    validate_capture_message_content_value,
-    validate_excluded_services_value,
     validate_langfuse_environment_value,
     validate_langfuse_span_scope_value,
     validate_no_callback_env_reference,
@@ -96,9 +94,6 @@ from litellm.types.router import AllowedModelRegion, RouterErrors, UpdateRouterC
 from litellm.types.router_weights import validate_router_settings_dict
 from litellm.types.secret_managers.main import KeyManagementSystem
 from litellm.types.utils import (
-    BAGGAGE_METADATA_KEYS_VAR,
-    CAPTURE_MESSAGE_CONTENT_VAR,
-    EXCLUDED_SERVICES_VAR,
     OTEL_DESTINATION_VARS,
     AzureSpillover,
     CallTypes,
@@ -2129,12 +2124,8 @@ class AddTeamCallback(LiteLLMPydanticObjectBase):
                 validate_langfuse_span_scope_value(callback_vars[key])
             if key == "arize_otlp_protocol":
                 validate_arize_otlp_protocol_value(callback_vars[key])
-            if key == CAPTURE_MESSAGE_CONTENT_VAR:
-                validate_capture_message_content_value(callback_vars[key])
-            if key == EXCLUDED_SERVICES_VAR:
-                validate_excluded_services_value(callback_vars[key])
-            if key == BAGGAGE_METADATA_KEYS_VAR:
-                validate_baggage_metadata_keys_value(callback_vars[key])
+            if (destination_validator := OTEL_DESTINATION_VALIDATORS.get(key)) is not None:
+                destination_validator(callback_vars[key])
         return values
 
 
