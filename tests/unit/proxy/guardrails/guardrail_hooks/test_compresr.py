@@ -15,16 +15,20 @@ Tests cover:
 - fail_closed raises HTTPException; fail_open forwards uncompressed
 """
 
+import datetime
 import hashlib
 import json
 from types import SimpleNamespace
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, create_autospec, patch
 
 import httpx
 import pytest
 from fastapi import HTTPException
 
+import litellm
 from litellm.constants import PRE_CALL_EXECUTED_GUARDRAILS_KEY
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.proxy.guardrails.guardrail_hooks.compresr.compresr import (
     COMPRESR_RETRIEVE_TOOL_NAME,
     CompresrGuardrail,
@@ -33,7 +37,7 @@ from litellm.proxy.guardrails.guardrail_hooks.compresr.compresr import (
     _scoped_store_key,
     has_compresr_retrieve_tool,
 )
-from litellm.types.utils import GenericGuardrailAPIInputs
+from litellm.types.utils import CallTypes, GenericGuardrailAPIInputs
 
 FAKE_API_BASE = "https://compresr.example.com"
 FAKE_API_KEY = "cmp_test-key"
@@ -1433,6 +1437,57 @@ async def test_agentic_plan_builds_responses_followup_shape(
     assert output_item["type"] == "function_call_output"
     assert output_item["call_id"] == "fc_1"
     assert output_item["output"] == TOOL_OUTPUT
+
+
+@pytest.mark.asyncio
+async def test_responses_retrieval_followup_reuses_the_model_the_caller_requested(
+    guardrail: CompresrGuardrail,
+) -> None:
+    requested_model: Final = "bedrock/converse/us.anthropic.claude-sonnet-5-5"
+    hash_value: Final = "f" * 24
+    logging_obj: Final = Logging(
+        model=requested_model,
+        messages=[],
+        stream=False,
+        call_type=CallTypes.responses.value,
+        start_time=datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc),
+        litellm_call_id="call-1",
+        function_id="fn-compresr-followup",
+    )
+    litellm.responses(
+        model=requested_model,
+        input=USER_QUESTION,
+        mock_response="retrieving",
+        litellm_logging_obj=logging_obj,
+    )
+    guardrail._store_originals(_scoped_store_key(logging_obj), {hash_value: TOOL_OUTPUT})
+    response: Final = MagicMock()
+    response.output = [{"type": "function_call", "call_id": "fc_1"}]
+    response.content = None
+
+    plan: Final = await guardrail.async_build_agentic_loop_plan(
+        tools={
+            "tool_calls": [
+                {
+                    "id": "fc_1",
+                    "type": "function",
+                    "name": COMPRESR_RETRIEVE_TOOL_NAME,
+                    "arguments": {"hash": hash_value},
+                }
+            ]
+        },
+        model="converse/us.anthropic.claude-sonnet-5-5",
+        messages=[{"role": "user", "content": USER_QUESTION}],
+        response=response,
+        anthropic_messages_provider_config=None,
+        anthropic_messages_optional_request_params={},
+        logging_obj=logging_obj,
+        stream=False,
+        kwargs={},
+    )
+
+    assert plan.request_patch is not None
+    assert plan.request_patch.model == requested_model
 
 
 @pytest.mark.asyncio

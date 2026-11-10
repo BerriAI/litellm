@@ -11,6 +11,13 @@ from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
 
 
+def _supports_reasoning(model: str) -> bool:
+    try:
+        return litellm.supports_reasoning(model=model, custom_llm_provider="minimax")
+    except Exception:
+        return False
+
+
 class MinimaxChatConfig(OpenAIGPTConfig):
     """
     MiniMax OpenAI configuration that extends OpenAIGPTConfig.
@@ -81,16 +88,8 @@ class MinimaxChatConfig(OpenAIGPTConfig):
     def get_supported_openai_params(self, model: str) -> list:
         """
         Get supported OpenAI parameters for MiniMax.
-        Adds reasoning_split and thinking to the list of supported params.
+        Adds reasoning_split, plus thinking and reasoning_effort when the cost map, or its
+        minimax/ fallback rule for unlisted models, says the model supports reasoning.
         """
-        base_params: Final = super().get_supported_openai_params(model=model)
-        additional_params: Final = ["reasoning_split"]
-
-        # Add thinking parameter if model supports reasoning
-        try:
-            if litellm.supports_reasoning(model=model, custom_llm_provider="minimax"):
-                additional_params.append("thinking")
-        except Exception:
-            pass
-
-        return base_params + additional_params
+        reasoning_params: Final = ("thinking", "reasoning_effort") if _supports_reasoning(model) else ()
+        return [*super().get_supported_openai_params(model=model), "reasoning_split", *reasoning_params]

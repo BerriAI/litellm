@@ -119,7 +119,7 @@ class SpeechToCompletionBridgeHandler:
             voice=voice,
         )
 
-        with internal_sub_call():
+        with internal_sub_call(logging_obj.litellm_call_id):
             result: Final = completion(
                 **request_data,
             )

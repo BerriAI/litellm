@@ -27,7 +27,7 @@ JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 _ITEMS: Final = TypeAdapter(list[dict[str, JsonValue]])
 _CHAT_TARGET: Final = re.compile(r"^/openai/deployments/([^/]+)/chat/completions$")
 
-Mode: TypeAlias = Literal["search", "plain", "search-down", "followup-fails", "missing"]
+Mode: TypeAlias = Literal["search", "multi-search", "plain", "search-down", "followup-fails", "missing"]
 
 
 def deployment(mode: Mode) -> str:
@@ -42,8 +42,8 @@ def plain(name: str) -> str:
     return f"plain-{name}"
 
 
-def query(name: str) -> str:
-    return f"q-{name}"
+def query(name: str, turn: int = 1) -> str:
+    return f"q-{name}" if turn == 1 else f"q-{name}-{turn}"
 
 
 def _minted(prefix: str) -> str:
@@ -98,9 +98,20 @@ def _chat(name: str, body: Mapping[str, JsonValue]) -> Reply:
             content_type="text/event-stream", chunks=chat_stream(_minted(f"chatcmpl-{name}-s-"), "gpt-4o", plain(name))
         )
     messages: Final = _ITEMS.validate_python(body["messages"])
-    if any(message.get("role") == "tool" for message in messages):
+    tool_results: Final = tuple(message for message in messages if message.get("role") == "tool")
+    if tool_results:
         if name.endswith("-followup-fails"):
             return _azure_error(500, FOLLOWUP_FAILURE)
+        if name.endswith("-multi-search") and len(tool_results) == 1:
+            call: Final = {
+                "id": f"call_{name[4:36]}-2",
+                "type": "function",
+                "function": {"name": SEARCH_TOOL, "arguments": json.dumps({"query": query(name, turn=2)})},
+            }
+            message: Final = JSON_OBJECT.validate_python({"role": "assistant", "content": None, "tool_calls": [call]})
+            return _chat_completion(
+                _minted(f"chatcmpl-{name}-2-"), message, "tool_calls", FOLLOWUP_USAGE
+            )
         return _chat_completion(
             _minted(f"chatcmpl-{name}-2-"), {"role": "assistant", "content": answer(name)}, "stop", FOLLOWUP_USAGE
         )
@@ -153,9 +164,20 @@ def _responses(body: Mapping[str, JsonValue]) -> Reply:
             content_type="text/event-stream", chunks=responses_stream(_minted(f"resp_{name}_s_"), name, plain(name))
         )
     items: Final = _ITEMS.validate_python(body["input"]) if isinstance(body.get("input"), list) else []
-    if any(item.get("type") == "function_call_output" for item in items):
+    function_call_outputs: Final = tuple(item for item in items if item.get("type") == "function_call_output")
+    if function_call_outputs:
         if name.endswith("-followup-fails"):
             return _azure_error(500, FOLLOWUP_FAILURE)
+        if name.endswith("-multi-search") and len(function_call_outputs) == 1:
+            call: Final = {
+                "type": "function_call",
+                "id": f"fc_{name[4:36]}-2",
+                "call_id": f"call_{name[4:36]}-2",
+                "name": SEARCH_TOOL,
+                "arguments": json.dumps({"query": query(name, turn=2)}),
+                "status": "completed",
+            }
+            return _response(_minted(f"resp_{name}_2_"), name, (call,), RESPONSES_FOLLOWUP_USAGE)
         return _response(
             _minted(f"resp_{name}_2_"), name, (_text_item(f"{name}_2", answer(name)),), RESPONSES_FOLLOWUP_USAGE
         )
