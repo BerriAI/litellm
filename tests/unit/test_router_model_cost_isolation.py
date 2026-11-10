@@ -764,6 +764,58 @@ def test_a_withdrawn_box_questions_true_leaves_the_shared_key_once_no_sibling_se
         _restore_model_cost_entries(model_keys)
 
 
+def test_a_failed_set_model_list_takes_back_the_box_questions_true_its_aborted_build_registered() -> None:
+    backend_model: Final = "perplexity/box-withdraw-on-rollback"
+    model_keys: Final = {
+        key: copy.deepcopy(litellm.model_cost.get(key))
+        for key in ("unflagged-id", "false-id", "aborted-true-id", "unservable-id", backend_model)
+    }
+    unservable: Final = {
+        "model_name": "box-withdraw",
+        "litellm_params": {"model": backend_model, "input_cost_per_token": float("inf")},
+        "model_info": {"id": "unservable-id"},
+    }
+    try:
+        with _live_box_router(backend_model, (("unflagged-id", None), ("false-id", False))) as router:
+            with pytest.raises(ValueError, match="cannot be served"):
+                router.set_model_list(
+                    [
+                        _box_flag_deployment(backend_model, "unflagged-id", None),
+                        _box_flag_deployment(backend_model, "aborted-true-id", True),
+                        unservable,
+                    ]
+                )
+
+            assert sorted(
+                deployment["model_info"]["id"] for deployment in router.registry().deployments("box-withdraw")
+            ) == ["false-id", "unflagged-id"]
+            assert litellm.supports_box_questions(model=backend_model) is False
+    finally:
+        _restore_model_cost_entries(model_keys)
+
+
+def test_a_failed_set_model_list_writes_no_row_for_a_box_questions_true_it_never_built() -> None:
+    backend_model: Final = "perplexity/box-withdraw-on-rollback-served"
+    never_built_model: Final = "perplexity/box-withdraw-never-built"
+    model_keys: Final = {
+        key: copy.deepcopy(litellm.model_cost.get(key))
+        for key in ("unflagged-id", "unservable-id", "never-built-id", backend_model, never_built_model)
+    }
+    unservable: Final = {
+        "model_name": "box-withdraw",
+        "litellm_params": {"model": backend_model, "input_cost_per_token": float("inf")},
+        "model_info": {"id": "unservable-id"},
+    }
+    try:
+        with _live_box_router(backend_model, (("unflagged-id", None),)) as router:
+            with pytest.raises(ValueError, match="cannot be served"):
+                router.set_model_list([unservable, _box_flag_deployment(never_built_model, "never-built-id", True)])
+
+            assert never_built_model not in litellm.model_cost
+    finally:
+        _restore_model_cost_entries(model_keys)
+
+
 def test_a_box_questions_true_another_live_router_serves_stays_on_the_shared_key() -> None:
     backend_model: Final = "perplexity/box-withdraw-across-routers"
     model_keys: Final = {

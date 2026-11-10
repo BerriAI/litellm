@@ -587,6 +587,13 @@ def _distinct_withdrawals(entries: Iterable[Mapping[str, object]]) -> tuple[Mapp
     )
 
 
+def _row_sets_true(host: "PythonHost", key: str, fields: frozenset[str]) -> bool:
+    row: Final[object] = host.dynamic().model_cost.get(model_cost_registration_key(key))
+    return isinstance(row, dict) and any(
+        _MODEL_INFO_ADAPTER.validate_python(row).get(field) is True for field in fields
+    )
+
+
 def _catalog_sets_true(catalog: Mapping[str, Mapping[str, object]], catalog_keys: tuple[str, ...], field: str) -> bool:
     entry: Final = next((catalog[key] for key in catalog_keys if key in catalog), None)
     return entry is not None and entry.get(field) is True
@@ -599,8 +606,8 @@ def withdraw_shared_capabilities(
     served: Iterable[Mapping[str, object]],
 ) -> None:
     """For each ``SHARED_ONLY_WHEN_TRUE_CAPABILITY_FIELDS`` flag ``removed`` set ``True``, set the shared
-    ``litellm.model_cost`` row(s) ``removed`` registers onto to whether ``replacement``, a ``served`` deployment
-    registering onto one of them, or the catalog still sets it ``True``."""
+    ``litellm.model_cost`` row(s) ``removed`` registers onto that still hold it ``True`` to whether ``replacement``,
+    a ``served`` deployment registering onto one of them, or the catalog still sets it ``True``."""
     backend: Final = _entry_backend(removed)
     set_true: Final = _shared_capabilities_set_true(removed)
     if backend is None or not set_true:
@@ -612,7 +619,8 @@ def withdraw_shared_capabilities(
         else frozenset[str]()
     )
     withdrawn: Final = set_true - kept
-    if not withdrawn:
+    held: Final = tuple(key for key in _entry_backend_keys(removed) if _row_sets_true(host, key, withdrawn))
+    if not held:
         return
     candidates: Final = tuple(
         entry for entry in served if not withdrawn.isdisjoint(_shared_capabilities_set_true(entry))
@@ -633,9 +641,7 @@ def withdraw_shared_capabilities(
     restored: Final = {
         field: field in siblings_set_true or _catalog_sets_true(catalog, catalog_keys, field) for field in withdrawn
     }
-    host.invoke("register_model")(
-        model_cost={key: restored for key in _entry_backend_keys(removed)}, persist_across_reloads=False
-    )
+    host.invoke("register_model")(model_cost={key: restored for key in held}, persist_across_reloads=False)
 
 
 # -- the registry --------------------------------------------------------------------------------
@@ -941,9 +947,17 @@ class HostRegistry(HostModelInfo):
             self._replace_model_list(model_list)
         except Exception:
             self._replace_model_list(previous)
+            self._withdraw_shared_capabilities(
+                (entry for entry in map(as_str_mapping, model_list) if entry is not None),
+                self._served_by_live_routers(),
+            )
             raise
-        served: Final = self._served_by_live_routers()
-        for entry in _distinct_withdrawals(previous):
+        self._withdraw_shared_capabilities(previous, self._served_by_live_routers())
+
+    def _withdraw_shared_capabilities(
+        self, entries: Iterable[Mapping[str, object]], served: Sequence[Mapping[str, object]]
+    ) -> None:
+        for entry in _distinct_withdrawals(entries):
             withdraw_shared_capabilities(self._host, entry, None, served)
 
     def _replace_model_list(self, model_list: Sequence[object]) -> None:
@@ -1593,9 +1607,7 @@ class HostRegistry(HostModelInfo):
     def retire_shared_capabilities(self) -> None:
         """Take back the ``SHARED_ONLY_WHEN_TRUE_CAPABILITY_FIELDS`` flags this router's deployments put on shared
         ``litellm.model_cost`` rows that no other live router's deployment still sets (``retire``)."""
-        others: Final = self._served_by_other_routers()
-        for entry in _distinct_withdrawals(self._core_model_list):
-            withdraw_shared_capabilities(self._host, entry, None, others)
+        self._withdraw_shared_capabilities(self._core_model_list, self._served_by_other_routers())
 
     def _core_delete_deployment(self, id: str) -> UntypedEntry | None:
         """Remove one deployment and return its stored entry (``_delete_deployment``)."""

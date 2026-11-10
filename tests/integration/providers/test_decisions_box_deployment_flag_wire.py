@@ -354,11 +354,11 @@ async def test_a_router_deployment_flagged_false_refuses_boxes_even_when_its_bac
         ] * 2
 
 
-def _catalog_box_member() -> _Member:
+def _catalog_member(box_questions: bool) -> _Member:
     backend: Final = next(
         key
         for key in tuple(litellm.model_cost)
-        if key.startswith("typesafe/") and litellm.supports_box_questions(model=key)
+        if key.startswith("typesafe/") and litellm.supports_box_questions(model=key) is box_questions
     )
     return _Member(
         "typesafe",
@@ -373,7 +373,7 @@ def _catalog_box_member() -> _Member:
 def test_a_later_same_model_deployment_flag_never_takes_catalog_box_questions_from_an_unflagged_one(
     gateway: Gateway, sibling_flag: JsonValue
 ) -> None:
-    member: Final = _catalog_box_member()
+    member: Final = _catalog_member(box_questions=True)
     with wire_server(member.reply) as wire, gateway.scenario() as scenario:
         unflagged: Final = member.deployment(scenario, wire.url, None)
         member.deployment(scenario, wire.url, {"supports_box_questions": sibling_flag})
@@ -387,7 +387,7 @@ def test_a_later_same_model_deployment_flag_never_takes_catalog_box_questions_fr
 def test_an_unflagged_deployment_stops_sending_box_questions_once_its_last_true_sibling_is_deleted(
     gateway: Gateway,
 ) -> None:
-    member: Final = _perplexity()
+    member: Final = _catalog_member(box_questions=False)
     with wire_server(member.reply) as wire, gateway.scenario() as scenario:
         unflagged: Final = member.deployment(scenario, wire.url, None)
         with gateway.scenario() as sibling:
@@ -411,7 +411,7 @@ def test_an_unflagged_deployment_stops_sending_box_questions_once_its_last_true_
 def test_a_non_boolean_deployment_flag_keeps_the_catalog_box_questions_of_its_backend(
     gateway: Gateway, value: JsonValue
 ) -> None:
-    member: Final = _catalog_box_member()
+    member: Final = _catalog_member(box_questions=True)
     with wire_server(member.reply) as wire, gateway.scenario() as scenario:
         model: Final = member.deployment(scenario, wire.url, {"supports_box_questions": value})
         answered: Final = _decide(gateway, model)
