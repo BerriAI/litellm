@@ -2183,14 +2183,19 @@ async def _end_user_is_known_unrestricted(
     outside it is indistinguishable from one with no row at all. The skip is off whenever mere existence of
     the row is meaningful: ``max_end_user_budget_id`` or the key's ``end_user_budget_id`` grafts a
     default budget onto any row that exists, ``validate_end_user_id_in_db`` rejects ids that resolve
-    to no row, and a token-supplied ``end_user_max_budget`` (a ``user_custom_auth`` callable can set
-    one against an otherwise unrestricted row) is enforced against the row's recorded spend.
+    to no row, a token-supplied ``end_user_max_budget`` (a ``user_custom_auth`` callable can set
+    one against an otherwise unrestricted row) is enforced against the row's recorded spend, and
+    ``fail_closed_budget_enforcement`` rejects requests whose end user row cannot be found, so a
+    missing row must never be waved through as unrestricted.
     """
+    from litellm.proxy.proxy_server import general_settings
+
     if (
         litellm.max_end_user_budget_id is not None
         or key_end_user_budget_id is not None
         or litellm.validate_end_user_id_in_db
         or token_end_user_max_budget is not None
+        or general_settings.get("fail_closed_budget_enforcement") is True
     ):
         return False
 
@@ -2273,6 +2278,20 @@ async def get_end_user_object(
         )
 
         if response is None:
+            from litellm.proxy.proxy_server import general_settings
+
+            if general_settings.get("fail_closed_budget_enforcement") is True:
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail={
+                        "error": (
+                            "Budget enforcement unavailable: no end user with id "
+                            f"{end_user_id!r} exists, so its budget could not be "
+                            "evaluated, and fail_closed_budget_enforcement is "
+                            "enabled, so the request was rejected."
+                        )
+                    },
+                )
             return None
 
         end_user_row: Final = await _apply_default_budget_to_end_user(
@@ -2301,6 +2320,9 @@ async def get_end_user_object(
         )
 
     except Exception as e:
+        if isinstance(e, HTTPException):
+            raise
+
         from litellm.proxy.proxy_server import general_settings
 
         verbose_proxy_logger.warning(

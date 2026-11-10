@@ -8390,12 +8390,38 @@ async def test_get_end_user_object_db_error_returns_none_by_default(monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_get_end_user_object_missing_row_returns_none_when_fail_closed(monkeypatch):
+async def test_get_end_user_object_missing_row_fails_closed_when_enabled(monkeypatch):
     import litellm.proxy.proxy_server as proxy_server
+    from fastapi import HTTPException
 
     from litellm.proxy.auth.auth_checks import get_end_user_object
 
     monkeypatch.setattr(proxy_server, "general_settings", {"fail_closed_budget_enforcement": True})
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_endusertable.find_unique = AsyncMock(return_value=None)
+
+    mock_cache = MagicMock()
+    mock_cache.async_get_cache = AsyncMock(return_value=None)
+    mock_cache.async_set_cache = AsyncMock()
+
+    with pytest.raises(HTTPException) as exc_info:
+        await get_end_user_object(
+            end_user_id="eu-missing",
+            prisma_client=mock_prisma_client,
+            user_api_key_cache=mock_cache,
+        )
+
+    assert exc_info.value.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
+
+
+@pytest.mark.asyncio
+async def test_get_end_user_object_missing_row_returns_none_by_default(monkeypatch):
+    import litellm.proxy.proxy_server as proxy_server
+
+    from litellm.proxy.auth.auth_checks import get_end_user_object
+
+    monkeypatch.setattr(proxy_server, "general_settings", {})
 
     mock_prisma_client = MagicMock()
     mock_prisma_client.db.litellm_endusertable.find_unique = AsyncMock(return_value=None)
