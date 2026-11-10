@@ -626,6 +626,8 @@ async def tripo_proxy_route(
         else {}
     )
     if not HttpPassThroughEndpointHelpers.is_multipart(request):
+        if is_passthrough_request_streaming(await read_request_body(request)):
+            raise HTTPException(status_code=400, detail="Streaming is not supported for Tripo requests")
         setattr(request.state, LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY, await request.body())
     try:
         return await pass_through_request(
