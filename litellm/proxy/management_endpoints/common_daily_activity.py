@@ -1025,6 +1025,7 @@ async def _user_entity_metadata(
         }
     )
 
+
 async def get_daily_activity_aggregated(
     repository: DailyActivityRepository,
     scope: DailyActivityScope,
