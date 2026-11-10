@@ -16,7 +16,7 @@ import logging
 import time
 import weakref
 from collections.abc import Awaitable, Callable, Generator, Mapping, Sequence
-from contextvars import ContextVar, Token, copy_context
+from contextvars import ContextVar, Token
 from dataclasses import dataclass, field
 from datetime import timedelta
 from enum import Enum, auto
@@ -528,7 +528,6 @@ class RequestRedisBatches:
         "_deadline",
         "_deadline_flush",
         "_native",
-        "_native_context",
         "_native_factory",
         "_native_flush_hooks",
         "_native_misses",
@@ -552,7 +551,6 @@ class RequestRedisBatches:
         self._native_factory: Final = native_factory
         self._native_send_factory: Final = native_send_factory
         self._native: NativeRequestRedis | None = None
-        self._native_context: Final = copy_context()
         self._native_flush_hooks: Final[list[Callable[[], None]]] = []  # mutable-ok: append-only registry
         self._native_misses: frozenset[str] = frozenset()
         self._deadline: asyncio.TimerHandle | None = None
@@ -582,12 +580,9 @@ class RequestRedisBatches:
         return batch
 
     def native(self) -> NativeRequestRedis:
-        """The request's native batches, built on first use so requests that touch no native store pay nothing.
-
-        They keep a copy of the context they are built in, and the cycle collector cannot see through native
-        objects, so they are built in the context this scope was opened from, which cannot reach the scope."""
+        """The request's native batches, built on first use so requests that touch no native store pay nothing."""
         if self._native is None:
-            self._native = self._native_context.run(self._native_factory, self.post_call_deadline)
+            self._native = self._native_factory(self.post_call_deadline)
         return self._native
 
     def native_post_call(self) -> NativeRequestRedis:

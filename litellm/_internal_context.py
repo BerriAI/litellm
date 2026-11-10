@@ -198,6 +198,20 @@ def current_request_parent_otel_span() -> Span | None:
 
 
 @contextmanager
+def request_parent_otel_span(span: Span | None) -> Generator[None]:
+    """Anchor the datastore service spans made inside this block, and by the tasks it starts, under the span an SDK
+    caller passed. A request that already anchored its own, as the proxy does at auth, keeps it."""
+    if span is None or _request_parent_otel_span.get() is not None:
+        yield
+        return
+    token: Final = _request_parent_otel_span.set(span)
+    try:
+        yield
+    finally:
+        _restore(_request_parent_otel_span, token)
+
+
+@contextmanager
 def outside_mirrored_call() -> Generator[None]:
     """Logging a mirrored call: the calls its callbacks start are not mirrors themselves."""
     token: Final = _mirrored_call.set(False)
